@@ -126,6 +126,9 @@ func (b *testBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainPara
 func (b *testBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	return b.witnesses, nil
 }
+func (b *testBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	return b.witnesses, nil
+}
 func (b *testBackend) NextMaintenanceTime() int64 { return b.nextMaint }
 func (b *testBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	return 0, nil

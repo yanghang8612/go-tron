@@ -44,6 +44,7 @@ type solidTestBackend struct {
 	lastBurnAt         uint64
 	lastBandwidthAt    uint64
 	lastEnergyAt       uint64
+	lastWitnessesAt    uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -63,6 +64,7 @@ type solidTestBackend struct {
 	liveBurn           int
 	liveBandwidth      int
 	liveEnergy         int
+	liveWitnesses      int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -82,6 +84,7 @@ type solidTestBackend struct {
 	burnAt             int64
 	bandwidthAt        string
 	energyAt           string
+	witnessesAt        []*tronapi.WitnessInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -336,6 +339,19 @@ func (b *solidTestBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 		return b.energyAt, nil
 	}
 	return b.testBackend.GetEnergyPricesAt(blockNum)
+}
+
+func (b *solidTestBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
+	b.liveWitnesses++
+	return b.testBackend.ListWitnesses()
+}
+
+func (b *solidTestBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	b.lastWitnessesAt = blockNum
+	if b.witnessesAt != nil {
+		return b.witnessesAt, nil
+	}
+	return b.testBackend.ListWitnessesAt(blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -882,6 +898,41 @@ func TestSolidity_ListWitnesses_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestSolidity_ListWitnessesUsesSolidBoundArchivePath(t *testing.T) {
+	addr := common.Address{0x41, 0x33}
+	backend := &solidTestBackend{
+		solidNum: 97,
+		witnessesAt: []*tronapi.WitnessInfo{{
+			Address:   hex.EncodeToString(addr.Bytes()),
+			VoteCount: 77,
+			URL:       "solid-witness",
+			IsJobs:    true,
+		}},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.ListWitnesses(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("ListWitnesses: %v", err)
+	}
+	if len(resp.GetWitnesses()) != 1 {
+		t.Fatalf("witness count = %d, want 1", len(resp.GetWitnesses()))
+	}
+	got := resp.GetWitnesses()[0]
+	if string(got.GetUrl()) != "solid-witness" || got.GetVoteCount() != 77 || !got.GetIsJobs() {
+		t.Fatalf("witness = %+v, want solid-bound sentinel", got)
+	}
+	if common.BytesToAddress(got.GetAddress()) != addr {
+		t.Fatalf("witness address = %x, want %x", got.GetAddress(), addr.Bytes())
+	}
+	if backend.lastWitnessesAt != 97 {
+		t.Fatalf("ListWitnessesAt block = %d, want solid block 97", backend.lastWitnessesAt)
+	}
+	if backend.liveWitnesses != 0 {
+		t.Fatalf("live ListWitnesses called %d times, want 0", backend.liveWitnesses)
 	}
 }
 

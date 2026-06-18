@@ -144,7 +144,7 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 // ── Witness / asset queries ────────────────────────────────────────────────────
 
 func (s *SolidityServer) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage) (*apipb.WitnessList, error) {
-	witnesses, err := s.backend.ListWitnesses()
+	witnesses, err := s.backend.ListWitnessesAt(s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

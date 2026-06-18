@@ -414,6 +414,146 @@ func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	w1 := testInsertAddr(31)
+	w2 := testInsertAddr(32)
+	voter := testInsertAddr(33)
+
+	root := bc.StateRootAtBlock(0)
+	commitWitnesses := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+
+		switch n {
+		case 1:
+			w := types.NewWitness(w1, "witness-one")
+			w.SetVoteCount(10)
+			w.SetTotalProduced(1)
+			w.SetLatestBlockNum(1)
+			if err := statedb.SetWitnessCapsule(w); err != nil {
+				t.Fatalf("set witness1 block %d: %v", n, err)
+			}
+			if err := statedb.WriteWitnessIndex([]tcommon.Address{w1}); err != nil {
+				t.Fatalf("write witness index block %d: %v", n, err)
+			}
+			if err := statedb.WriteActiveWitnesses([]tcommon.Address{w1}); err != nil {
+				t.Fatalf("write active witnesses block %d: %v", n, err)
+			}
+			if err := statedb.WriteVotes(voter, &corepb.Votes{
+				Address:  voter.Bytes(),
+				NewVotes: []*corepb.Vote{{VoteAddress: w1.Bytes(), VoteCount: 5}},
+			}); err != nil {
+				t.Fatalf("write votes block %d: %v", n, err)
+			}
+		case 2:
+			wOne := types.NewWitness(w1, "witness-one-updated")
+			wOne.SetVoteCount(20)
+			wOne.SetTotalProduced(2)
+			wOne.SetLatestBlockNum(2)
+			if err := statedb.SetWitnessCapsule(wOne); err != nil {
+				t.Fatalf("set witness1 block %d: %v", n, err)
+			}
+			wTwo := types.NewWitness(w2, "witness-two")
+			wTwo.SetVoteCount(30)
+			wTwo.SetTotalMissed(3)
+			wTwo.SetLatestSlotNum(4)
+			if err := statedb.SetWitnessCapsule(wTwo); err != nil {
+				t.Fatalf("set witness2 block %d: %v", n, err)
+			}
+			if err := statedb.WriteWitnessIndex([]tcommon.Address{w1, w2}); err != nil {
+				t.Fatalf("write witness index block %d: %v", n, err)
+			}
+			if err := statedb.WriteActiveWitnesses([]tcommon.Address{w2}); err != nil {
+				t.Fatalf("write active witnesses block %d: %v", n, err)
+			}
+			if err := statedb.WriteVotes(voter, &corepb.Votes{
+				Address:  voter.Bytes(),
+				OldVotes: []*corepb.Vote{{VoteAddress: w1.Bytes(), VoteCount: 5}},
+				NewVotes: []*corepb.Vote{{VoteAddress: w2.Bytes(), VoteCount: 7}},
+			}); err != nil {
+				t.Fatalf("write votes block %d: %v", n, err)
+			}
+		}
+
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit witness state block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitWitnesses(block1, 1)
+	root = commitWitnesses(block2, 2)
+
+	list1, err := b.ListWitnessesAt(block1.Number())
+	if err != nil {
+		t.Fatalf("ListWitnessesAt(block1): %v", err)
+	}
+	if len(list1) != 1 {
+		t.Fatalf("block1 witness count = %d, want 1", len(list1))
+	}
+	if list1[0].Address != hex.EncodeToString(w1.Bytes()) ||
+		list1[0].URL != "witness-one" ||
+		list1[0].VoteCount != 15 ||
+		!list1[0].IsJobs ||
+		list1[0].TotalProduced != 1 ||
+		list1[0].LatestBlockNum != 1 {
+		t.Fatalf("block1 witness = %+v, want witness1 with pending +5", list1[0])
+	}
+
+	list2, err := b.ListWitnessesAt(block2.Number())
+	if err != nil {
+		t.Fatalf("ListWitnessesAt(block2): %v", err)
+	}
+	if len(list2) != 2 {
+		t.Fatalf("block2 witness count = %d, want 2", len(list2))
+	}
+	if list2[0].Address != hex.EncodeToString(w1.Bytes()) ||
+		list2[0].URL != "witness-one-updated" ||
+		list2[0].VoteCount != 15 ||
+		list2[0].IsJobs {
+		t.Fatalf("block2 witness1 = %+v, want updated inactive witness1 with pending -5", list2[0])
+	}
+	if list2[1].Address != hex.EncodeToString(w2.Bytes()) ||
+		list2[1].URL != "witness-two" ||
+		list2[1].VoteCount != 37 ||
+		!list2[1].IsJobs ||
+		list2[1].TotalMissed != 3 ||
+		list2[1].LatestSlotNum != 4 {
+		t.Fatalf("block2 witness2 = %+v, want active witness2 with pending +7", list2[1])
+	}
+}
+
 func TestArchiveQuery_AccountByIdAtUsesSystemAccountIndexHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

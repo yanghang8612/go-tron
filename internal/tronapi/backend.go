@@ -173,6 +173,7 @@ type Backend interface {
 	GetChainParameters() []ChainParameter
 	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
+	ListWitnessesAt(blockNum uint64) ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64
 	NextMaintenanceTimeAt(blockNum uint64) (int64, error)
 

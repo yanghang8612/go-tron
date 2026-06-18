@@ -27,7 +27,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getreward", api.getSolidReward)
 	mux.HandleFunc("/walletsolidity/getaccountbyid", api.getSolidAccountById)
 	mux.HandleFunc("/walletsolidity/getaccountnet", api.getSolidAccountNet)
-	mux.HandleFunc("/walletsolidity/listwitnesses", api.listWitnesses)
+	mux.HandleFunc("/walletsolidity/listwitnesses", api.getSolidWitnesses)
 	mux.HandleFunc("/walletsolidity/getchainparameters", api.getSolidChainParameters)
 	mux.HandleFunc("/walletsolidity/getnextmaintenancetime", api.getSolidNextMaintenanceTime)
 	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getTransactionByID)
@@ -59,7 +59,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getreward", api.getPbftReward)
 	mux.HandleFunc("/walletpbft/getaccountbyid", api.getPbftAccountById)
 	mux.HandleFunc("/walletpbft/getaccountnet", api.getPbftAccountNet)
-	mux.HandleFunc("/walletpbft/listwitnesses", api.listWitnesses)
+	mux.HandleFunc("/walletpbft/listwitnesses", api.getPbftWitnesses)
 	mux.HandleFunc("/walletpbft/getchainparameters", api.getPbftChainParameters)
 	mux.HandleFunc("/walletpbft/getnextmaintenancetime", api.getPbftNextMaintenanceTime)
 	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getTransactionByID)
@@ -133,6 +133,14 @@ func (api *API) getSolidAccountNet(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getPbftAccountNet(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountNet(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidWitnesses(w http.ResponseWriter, r *http.Request) {
+	api.handleListWitnesses(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftWitnesses(w http.ResponseWriter, r *http.Request) {
+	api.handleListWitnesses(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidChainParameters(w http.ResponseWriter, r *http.Request) {

@@ -1066,7 +1066,19 @@ func (api *API) handleGetChainParameters(w http.ResponseWriter, r *http.Request,
 }
 
 func (api *API) listWitnesses(w http.ResponseWriter, r *http.Request) {
-	witnesses, err := api.backend.ListWitnesses()
+	api.handleListWitnesses(w, r, nil)
+}
+
+func (api *API) handleListWitnesses(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		witnesses []*WitnessInfo
+		err       error
+	)
+	if boundFn == nil {
+		witnesses, err = api.backend.ListWitnesses()
+	} else {
+		witnesses, err = api.backend.ListWitnessesAt(boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

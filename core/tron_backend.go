@@ -567,11 +567,7 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	}
 	witnessAddrs := statedb.ReadWitnessIndex()
 	pendingDeltas, _ := pendingVoteDeltas(statedb)
-	activeSet := b.chain.ActiveWitnesses()
-	activeMap := make(map[tcommon.Address]bool, len(activeSet))
-	for _, a := range activeSet {
-		activeMap[a] = true
-	}
+	activeMap := activeWitnessMap(b.chain.ActiveWitnesses())
 
 	var result []*tronapi.WitnessInfo
 	for _, addr := range witnessAddrs {
@@ -591,6 +587,58 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+func (b *TronBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	witnessAddrs, err := session.reader.WitnessIndexAt(blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read witness index at block %d: %w", blockNum, err)
+	}
+	pendingDeltas, _, err := session.reader.PendingVoteDeltasAt(blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read pending vote deltas at block %d: %w", blockNum, err)
+	}
+	activeSet, err := session.reader.ActiveWitnessesAt(blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read active witnesses at block %d: %w", blockNum, err)
+	}
+	activeMap := activeWitnessMap(activeSet)
+
+	result := make([]*tronapi.WitnessInfo, 0, len(witnessAddrs))
+	for _, addr := range witnessAddrs {
+		w, err := session.reader.WitnessAt(addr, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read witness %s at block %d: %w", addr.Hex(), blockNum, err)
+		}
+		if w == nil {
+			continue
+		}
+		result = append(result, &tronapi.WitnessInfo{
+			Address:        hex.EncodeToString(addr[:]),
+			VoteCount:      w.VoteCount() + pendingDeltas[addr],
+			URL:            w.URL(),
+			IsJobs:         activeMap[addr],
+			TotalProduced:  w.TotalProduced(),
+			TotalMissed:    w.TotalMissed(),
+			LatestBlockNum: w.LatestBlockNum(),
+			LatestSlotNum:  w.LatestSlotNum(),
+		})
+	}
+	return result, nil
+}
+
+func activeWitnessMap(activeSet []tcommon.Address) map[tcommon.Address]bool {
+	activeMap := make(map[tcommon.Address]bool, len(activeSet))
+	for _, a := range activeSet {
+		activeMap[a] = true
+	}
+	return activeMap
 }
 
 func (b *TronBackend) NextMaintenanceTime() int64 {

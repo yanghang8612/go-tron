@@ -130,6 +130,8 @@ type isolationStubBackend struct {
 	accountNetAtBlock        uint64
 	liveChainParameterCalls  int
 	chainParametersAtBlock   uint64
+	liveWitnessCalls         int
+	witnessesAtBlock         uint64
 	liveNextMaintenanceCalls int
 	nextMaintenanceAtBlock   uint64
 	liveAssetIDCalls         int
@@ -191,6 +193,25 @@ func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
 func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	s.chainParametersAtBlock = blockNum
 	return []tronapi.ChainParameter{{Key: "bound_param", Value: 99}}, nil
+}
+
+func (s *isolationStubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
+	s.liveWitnessCalls++
+	return []*tronapi.WitnessInfo{{
+		Address:   hex.EncodeToString(common.Address{0x41, 0x31}.Bytes()),
+		VoteCount: 1,
+		URL:       "live-witness",
+	}}, nil
+}
+
+func (s *isolationStubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	s.witnessesAtBlock = blockNum
+	return []*tronapi.WitnessInfo{{
+		Address:   hex.EncodeToString(common.Address{0x41, 0x32}.Bytes()),
+		VoteCount: 9,
+		URL:       "bound-witness",
+		IsJobs:    true,
+	}}, nil
 }
 
 func (s *isolationStubBackend) NextMaintenanceTime() int64 {
@@ -551,6 +572,57 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityListWitnessesUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertListWitnessesUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftListWitnessesUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertListWitnessesUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertListWitnessesUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/listwitnesses")
+	if err != nil {
+		t.Fatalf("listwitnesses request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("listwitnesses status: %d", resp.StatusCode)
+	}
+	var got struct {
+		Witnesses []tronapi.WitnessInfo `json:"witnesses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Witnesses) != 1 || got.Witnesses[0].URL != "bound-witness" || got.Witnesses[0].VoteCount != 9 {
+		t.Fatalf("witnesses = %+v, want bound sentinel", got.Witnesses)
+	}
+	if !got.Witnesses[0].IsJobs {
+		t.Fatalf("witness IsJobs = false, want true")
+	}
+	if stub.witnessesAtBlock != wantBlock {
+		t.Fatalf("ListWitnessesAt block = %d, want %d", stub.witnessesAtBlock, wantBlock)
+	}
+	if stub.liveWitnessCalls != 0 {
+		t.Fatalf("live ListWitnesses called %d times, want 0", stub.liveWitnessCalls)
 	}
 }
 
