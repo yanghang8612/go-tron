@@ -383,6 +383,8 @@ def parse_stage_status(path):
             "hash": fields.get("hash", ""),
             "verified": verified,
             "canonicalHash": fields.get("canonicalHash", ""),
+            "stagedBlock": fields.get("stagedBlock", ""),
+            "stagedHash": fields.get("stagedHash", ""),
         }
         if not present:
             entry["status"] = fields.get("status", "missing")
@@ -394,12 +396,20 @@ def parse_stage_status(path):
         elif verified == "missing-canonical":
             row["stageMissingCanonicalRows"] += 1
         elif verified.startswith("staged-"):
-            row["stageStagedBodyIssueRows"] += 1
-            row["stageStagedBodyIssueDetails"].append({
+            detail = {
                 "stage": name,
                 "value": value,
                 "verified": verified,
-            })
+            }
+            if fields.get("stagedBlock", ""):
+                try:
+                    detail["stagedBlock"] = int(fields.get("stagedBlock", "-1"))
+                except Exception:
+                    detail["stagedBlock"] = fields.get("stagedBlock", "")
+            if fields.get("stagedHash", ""):
+                detail["stagedHash"] = fields.get("stagedHash", "")
+            row["stageStagedBodyIssueRows"] += 1
+            row["stageStagedBodyIssueDetails"].append(detail)
 
     stage_fields = {
         "SyncInventory": "stageSyncInventory",

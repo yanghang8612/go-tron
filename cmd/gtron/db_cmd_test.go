@@ -868,6 +868,36 @@ func TestDBStageStatusVerifyChecksSyncBodiesStagedRow(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerifyShowsSyncBodiesStagedMismatchDetails(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodies staged-body status=hash-mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies hash mismatch", err)
+	}
+	want := fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-hash-mismatch stagedBlock=1 stagedHash=%x", rawdb.StageSyncBodies, common.Hash{0xee}, block1.Hash())
+	if !strings.Contains(output, want) {
+		t.Fatalf("verify output missing SyncBodies staged mismatch details %q:\n%s", want, output)
+	}
+}
+
 func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
 	dataDir := t.TempDir()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -900,6 +930,9 @@ func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
 	}
 	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-hash-mismatch", rawdb.StageSyncBodiesReady, common.Hash{0xee})) {
 		t.Fatalf("verify output missing SyncBodiesReady staged hash mismatch:\n%s", output)
+	}
+	if !strings.Contains(output, fmt.Sprintf("stagedBlock=1 stagedHash=%x", block1.Hash())) {
+		t.Fatalf("verify output missing SyncBodiesReady staged row details:\n%s", output)
 	}
 }
 

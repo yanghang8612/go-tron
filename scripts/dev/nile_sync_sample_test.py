@@ -1175,7 +1175,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     [
                         "Stage status: datadir=/tmp/nile known=32 rows=6",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=staged-missing",
-                        "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=staged-hash-mismatch",
+                        "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=staged-hash-mismatch stagedBlock=100 stagedHash=cc",
                         "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
                         "Stage progress: group=sync name=SyncExecution value=100 hash=dd verified=canonical",
                         "Stage progress: group=sync name=SyncCommitment value=100 hash=ee verified=canonical",
@@ -1214,9 +1214,11 @@ class NileSyncSampleTest(unittest.TestCase):
                 row["stageStagedBodyIssueDetails"],
                 [
                     {"stage": "SyncBodies", "value": 100, "verified": "staged-missing"},
-                    {"stage": "SyncBodiesReady", "value": 100, "verified": "staged-hash-mismatch"},
+                    {"stage": "SyncBodiesReady", "value": 100, "verified": "staged-hash-mismatch", "stagedBlock": 100, "stagedHash": "cc"},
                 ],
             )
+            self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedBlock"], "100")
+            self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedHash"], "cc")
             self.assertEqual(row["fullStagedSyncStatus"], "hash-issue")
             self.assertEqual(
                 row["fullStagedSyncHashIssues"],

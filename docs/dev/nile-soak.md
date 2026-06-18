@@ -337,7 +337,8 @@ alert fields in the row. The row keeps both aggregate counts and detail arrays:
 enable that flag against a live Pebble datadir unless the DB can be opened by
 the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
-body progress rows fail staged-body verification.
+body progress rows fail staged-body verification, including `stagedBlock` and
+`stagedHash` when the referenced staged row can be decoded.
 
 ## Shielded TRC20 Replay Recovery
 

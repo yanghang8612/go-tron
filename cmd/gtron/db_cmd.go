@@ -574,6 +574,7 @@ type dbStageStatusRow struct {
 	progress      rawdb.StageProgress
 	verified      string
 	canonicalHash common.Hash
+	details       []string
 }
 
 type dbStageStatusOptions struct {
@@ -606,6 +607,9 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 			row.group, row.stage, row.progress.BlockNum, row.progress.BlockHash, row.verified)
 		if row.canonicalHash != (common.Hash{}) && row.verified != "canonical" {
 			fmt.Printf(" canonicalHash=%x", row.canonicalHash)
+		}
+		for _, detail := range row.details {
+			fmt.Printf(" %s", detail)
 		}
 		fmt.Println()
 	}
@@ -993,31 +997,33 @@ func dbStageStatusRowFor(stage rawdb.StageID, progress rawdb.StageProgress, pres
 		return row
 	}
 	row.progress = progress
-	row.verified, row.canonicalHash = dbStageStatusVerification(stage, progress, db, canonical)
+	row.verified, row.canonicalHash, row.details = dbStageStatusVerification(stage, progress, db, canonical)
 	return row
 }
 
-func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress, db ethdb.KeyValueReader, canonical ethdb.KeyValueReader) (string, common.Hash) {
+func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress, db ethdb.KeyValueReader, canonical ethdb.KeyValueReader) (string, common.Hash, []string) {
 	if !progress.HasBlockHash {
-		return "unbound", common.Hash{}
+		return "unbound", common.Hash{}, nil
 	}
 	switch stage {
 	case rawdb.StageSyncBodies:
-		return dbStageStatusStagedBodyProgressVerification(syncdl.ReadStagedBodyProgress(db, rawdb.StageSyncBodies)), common.Hash{}
+		check := syncdl.ReadStagedBodyProgress(db, rawdb.StageSyncBodies)
+		return dbStageStatusStagedBodyProgressVerification(check), common.Hash{}, dbStageStatusStagedBodyProgressDetails(check)
 	case rawdb.StageSyncBodiesReady:
-		return dbStageStatusStagedBodyReadyVerification(syncdl.ReadStagedBodyReadyDrainLimit(db, progress.BlockNum)), common.Hash{}
+		ready := syncdl.ReadStagedBodyReadyDrainLimit(db, progress.BlockNum)
+		return dbStageStatusStagedBodyReadyVerification(ready), common.Hash{}, dbStageStatusStagedBodyReadyDetails(ready)
 	}
 	if canonical == nil {
-		return "unchecked", common.Hash{}
+		return "unchecked", common.Hash{}, nil
 	}
 	canonicalHash := rawdb.ReadBlockHashByNumber(canonical, progress.BlockNum)
 	if canonicalHash == (common.Hash{}) {
-		return "missing-canonical", canonicalHash
+		return "missing-canonical", canonicalHash, nil
 	}
 	if canonicalHash != progress.BlockHash {
-		return "mismatch", canonicalHash
+		return "mismatch", canonicalHash, nil
 	}
-	return "canonical", canonicalHash
+	return "canonical", canonicalHash, nil
 }
 
 func dbStageStatusStagedBodyProgressVerification(progress syncdl.StagedBodyProgressCheck) string {
@@ -1036,6 +1042,30 @@ func dbStageStatusStagedBodyReadyVerification(ready syncdl.StagedBodyReadyLimit)
 
 func dbStageStatusStagedBodyVerificationLabel(status string) string {
 	return "staged-" + strings.TrimPrefix(status, "staged-")
+}
+
+func dbStageStatusStagedBodyProgressDetails(progress syncdl.StagedBodyProgressCheck) []string {
+	if progress.Valid() {
+		return nil
+	}
+	return dbStageStatusStagedBodyDetails(progress.StagedRow.Number, progress.StagedHash)
+}
+
+func dbStageStatusStagedBodyReadyDetails(ready syncdl.StagedBodyReadyLimit) []string {
+	if ready.Valid() {
+		return nil
+	}
+	return dbStageStatusStagedBodyDetails(ready.StagedRow.Number, ready.StagedHash)
+}
+
+func dbStageStatusStagedBodyDetails(stagedBlock uint64, stagedHash common.Hash) []string {
+	if stagedBlock == 0 && stagedHash == (common.Hash{}) {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("stagedBlock=%d", stagedBlock),
+		fmt.Sprintf("stagedHash=%x", stagedHash),
+	}
 }
 
 func dbStageStatusGroup(stage rawdb.StageID) string {
