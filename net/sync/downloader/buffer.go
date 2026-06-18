@@ -917,6 +917,11 @@ type StagedBodyDrainApplyResult struct {
 	Batch                BufferedBatch
 }
 
+// Failed reports whether the pre-import staged-body drain preparation failed.
+func (r StagedBodyDrainApplyResult) Failed() bool {
+	return r.HasReadyRefresh && r.ReadyRefresh.Failed()
+}
+
 // StagedBodyDrainPlanApplier performs the persistence/runtime operations named
 // by a staged-body drain plan. SyncService owns DB handles and in-memory maps;
 // downloader owns the ordered local import preparation.

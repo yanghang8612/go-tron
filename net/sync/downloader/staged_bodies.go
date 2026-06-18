@@ -111,6 +111,12 @@ type StagedBodyDrainRunResult struct {
 	Batch BufferedBatch
 }
 
+// Failed reports whether local staged-body drain preparation failed before a
+// batch could be safely imported.
+func (r StagedBodyDrainRunResult) Failed() bool {
+	return r.Apply.Failed()
+}
+
 // Valid reports whether the row can cap a local import drain.
 func (l StagedBodyReadyLimit) Valid() bool {
 	return l.Status == StagedBodyReadyLimitValid

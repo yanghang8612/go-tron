@@ -639,10 +639,21 @@ func PlanLocalDrainEntry(in LocalDrainEntryInput) LocalDrainEntryPlan {
 }
 
 // PlanLocalDrainRun derives the local drain branch from the full staged-body
-// drain result. This keeps the "empty vs importable" decision next to the
-// staged-body drain planner instead of re-deriving it in SyncService.
+// drain result. This keeps the "failed vs empty vs importable" decision next
+// to the staged-body drain planner instead of re-deriving it in SyncService.
 func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
 	batch := in.Drain.Batch
+	if in.Drain.Failed() {
+		return LocalDrainRunPlan{
+			Drain: in.Drain,
+			Batch: batch,
+			Iteration: LocalDrainIterationPlan{
+				Action:   LocalDrainIterationStop,
+				StopLoop: true,
+				Steps:    []LocalDrainIterationStep{{Action: LocalDrainIterationStop}},
+			},
+		}
+	}
 	return LocalDrainRunPlan{
 		Drain: in.Drain,
 		Batch: batch,

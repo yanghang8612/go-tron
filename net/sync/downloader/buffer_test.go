@@ -1730,6 +1730,9 @@ func TestApplyStagedBodyDrainPlanStopsAfterReadyRefreshFailure(t *testing.T) {
 	if !got.HasReadyRefresh || !got.ReadyRefresh.Failed() || got.ReadyRefresh.WriteError != readyErr {
 		t.Fatalf("ready refresh = %+v set=%v, want failed refresh", got.ReadyRefresh, got.HasReadyRefresh)
 	}
+	if !got.Failed() {
+		t.Fatalf("drain apply result = %+v, want failed preparation", got)
+	}
 	if got.HasStagedBodyRestore || len(got.Batch.Buffered) != 0 || len(got.UnknownSteps) != 0 {
 		t.Fatalf("result after ready refresh failure = %+v, want no restore/pop/unknown", got)
 	}

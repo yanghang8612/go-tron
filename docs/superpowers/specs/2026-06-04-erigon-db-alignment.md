@@ -424,6 +424,9 @@ Status:
   `SyncBodiesReady` row before import: if the repair refresh fails, the drain
   does not restore or pop buffered bodies against a stale or unverified ready
   frontier.
+- The higher local-drain session branch now treats that pre-import ready repair
+  failure as a stop condition instead of an empty drain, so it will not refill
+  fetch slots or probe peers as though the stage table were merely empty.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

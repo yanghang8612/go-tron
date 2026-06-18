@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -376,6 +377,26 @@ func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 		stoppedRun.Iteration.Steps[0].Action != LocalDrainIterationStop {
 		t.Fatalf("stopped drain run = %+v, want stop branch even with buffered batch", stoppedRun)
 	}
+
+	readyErr := errors.New("ready refresh failed")
+	failedRun := PlanLocalDrainRun(LocalDrainRunInput{
+		Progress: active,
+		Drain: StagedBodyDrainRunResult{
+			Apply: StagedBodyDrainApplyResult{
+				HasReadyRefresh: true,
+				ReadyRefresh:    StagedBodyReadyProgressRefresh{WriteError: readyErr},
+			},
+		},
+	})
+	if !failedRun.Drain.Failed() ||
+		!failedRun.Iteration.StopLoop ||
+		failedRun.Iteration.EmptyDrain ||
+		failedRun.Iteration.ImportBatch ||
+		failedRun.Iteration.Action != LocalDrainIterationStop ||
+		len(failedRun.Iteration.Steps) != 1 ||
+		failedRun.Iteration.Steps[0].Action != LocalDrainIterationStop {
+		t.Fatalf("failed drain run = %+v, want stop branch on ready repair failure", failedRun)
+	}
 }
 
 func TestApplyLocalDrainRunPlan(t *testing.T) {
@@ -466,6 +487,28 @@ func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
 		!reflect.DeepEqual(stoppedResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationStop}) ||
 		len(stoppedResult.Iteration.UnknownSteps) != 0 {
 		t.Fatalf("stopped local drain run = %+v, want stop branch", stoppedResult)
+	}
+
+	readyErr := errors.New("ready refresh failed")
+	failedInput := LocalDrainRunInput{
+		Progress: active,
+		Drain: StagedBodyDrainRunResult{
+			Apply: StagedBodyDrainApplyResult{
+				HasReadyRefresh: true,
+				ReadyRefresh:    StagedBodyReadyProgressRefresh{WriteError: readyErr},
+			},
+		},
+	}
+	failedResult := ApplyLocalDrainRun(failedInput)
+	if !reflect.DeepEqual(failedResult.Plan, PlanLocalDrainRun(failedInput)) ||
+		!failedResult.Drain.Failed() ||
+		!failedResult.Iteration.StopLoop ||
+		failedResult.Iteration.EmptyDrain ||
+		failedResult.Iteration.ImportBatch ||
+		failedResult.Iteration.Action != LocalDrainIterationStop ||
+		!reflect.DeepEqual(failedResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationStop}) ||
+		len(failedResult.Iteration.UnknownSteps) != 0 {
+		t.Fatalf("failed local drain run = %+v, want stop branch", failedResult)
 	}
 }
 
