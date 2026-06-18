@@ -613,7 +613,8 @@ Status:
   while genesis chain rows remain covered by the cold freezer plus chain-index
   check. Snapshot managers now prove continuous chain-freezer, chain-index, and
   indexed log coverage for the whole tail range instead of only probing
-  endpoints. Tests pin
+  endpoints, and generic cold `AncientReader` fallbacks verify every chain-freezer
+  row range with `AncientRange` rather than trusting first/last rows. Tests pin
   missing-stage no-ops, lookup-stage caps, event-log-stage caps,
   retention-window caps, ancient-head caps, short-chain behavior, DB-backed
   stage reads, successful tail truncation, no-op behavior when cold coverage is

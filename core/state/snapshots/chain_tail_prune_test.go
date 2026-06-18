@@ -521,6 +521,25 @@ func TestApplyChainFreezerTailPruneRejectsUnreadableColdCoverageSegment(t *testi
 	}
 }
 
+func TestVerifyColdChainFreezerTailCoverageRejectsGenericMiddleGap(t *testing.T) {
+	cold := newChainTailPruneTestAncient()
+	for _, table := range chainTailPruneAncientTables() {
+		cold.put(table, 0, []byte(table+"-0"))
+		cold.put(table, 2, []byte(table+"-2"))
+	}
+
+	if err := verifyColdChainFreezerTailCoverage(cold, 0, 3); !errors.Is(err, rawdb.ErrNotInAncient) {
+		t.Fatalf("verifyColdChainFreezerTailCoverage with middle gap = %v, want ErrNotInAncient", err)
+	}
+
+	for _, table := range chainTailPruneAncientTables() {
+		cold.put(table, 1, []byte(table+"-1"))
+	}
+	if err := verifyColdChainFreezerTailCoverage(cold, 0, 3); err != nil {
+		t.Fatalf("verifyColdChainFreezerTailCoverage complete generic reader = %v, want nil", err)
+	}
+}
+
 func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	root := t.TempDir()
 	ancientDir := filepath.Join(root, "ancient")
@@ -683,4 +702,89 @@ func largeChainFreezerPayload(label string, n uint64) []byte {
 		out[i] = seed + byte(i*17) + byte((i*i)%251)
 	}
 	return out
+}
+
+func chainTailPruneAncientTables() []string {
+	return []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable}
+}
+
+type chainTailPruneTestAncient struct {
+	rows map[string]map[uint64][]byte
+}
+
+func newChainTailPruneTestAncient() *chainTailPruneTestAncient {
+	return &chainTailPruneTestAncient{rows: make(map[string]map[uint64][]byte)}
+}
+
+func (a *chainTailPruneTestAncient) put(kind string, number uint64, data []byte) {
+	if a.rows[kind] == nil {
+		a.rows[kind] = make(map[uint64][]byte)
+	}
+	a.rows[kind][number] = append([]byte(nil), data...)
+}
+
+func (a *chainTailPruneTestAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	table := a.rows[kind]
+	if table == nil {
+		return nil, rawdb.ErrNotInAncient
+	}
+	data, ok := table[number]
+	if !ok {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return append([]byte(nil), data...), nil
+}
+
+func (a *chainTailPruneTestAncient) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	var (
+		out        [][]byte
+		totalBytes uint64
+	)
+	for i := uint64(0); i < count; i++ {
+		number := start + i
+		if number < start {
+			break
+		}
+		data, err := a.Ancient(kind, number)
+		if err != nil {
+			if len(out) > 0 && errors.Is(err, rawdb.ErrNotInAncient) {
+				break
+			}
+			return nil, err
+		}
+		if maxBytes > 0 && len(out) > 0 && totalBytes+uint64(len(data)) > maxBytes {
+			break
+		}
+		out = append(out, data)
+		totalBytes += uint64(len(data))
+	}
+	if len(out) == 0 {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return out, nil
+}
+
+func (a *chainTailPruneTestAncient) AncientCount(kind string) (uint64, error) {
+	var count uint64
+	for number := range a.rows[kind] {
+		tail := number + 1
+		if tail > count {
+			count = tail
+		}
+	}
+	return count, nil
+}
+
+func (a *chainTailPruneTestAncient) HasAncient(kind string, number uint64) (bool, error) {
+	_, err := a.Ancient(kind, number)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, rawdb.ErrNotInAncient) {
+		return false, nil
+	}
+	return false, err
 }

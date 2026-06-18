@@ -19,6 +19,8 @@ const (
 	chainFreezerTailPruneReasonMissingColdCoverage  = "missing cold chain-freezer coverage"
 	chainFreezerTailPruneReasonMissingChainIndex    = "missing cold chain-index coverage"
 	chainFreezerTailPruneReasonMissingEventLogCold  = "missing cold indexed event-log coverage"
+
+	chainFreezerTailCoverageChunk = 1024
 )
 
 // ChainFreezerTailPrunePlanInput describes the inclusive stage progress and
@@ -317,21 +319,25 @@ func verifyColdChainFreezerTailCoverage(cold rawdb.AncientReader, fromTail, toTa
 		}
 		return nil
 	}
-	for _, number := range coldCoverageProbeBlocks(fromTail, last) {
+	for start := fromTail; start <= last; {
+		remaining := last - start + 1
+		chunk := minUint64(remaining, chainFreezerTailCoverageChunk)
 		for _, table := range []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable} {
-			if _, err := cold.Ancient(table, number); err != nil {
+			rows, err := cold.AncientRange(table, start, chunk, 0)
+			if err != nil {
 				return err
 			}
+			if uint64(len(rows)) != chunk {
+				return rawdb.ErrNotInAncient
+			}
+		}
+		prev := start
+		start += chunk
+		if start <= prev {
+			break
 		}
 	}
 	return nil
-}
-
-func coldCoverageProbeBlocks(first, last uint64) []uint64 {
-	if first == last {
-		return []uint64{first}
-	}
-	return []uint64{first, last}
 }
 
 func retainedHistoryTail(headBlock, retainBlocks uint64) uint64 {
