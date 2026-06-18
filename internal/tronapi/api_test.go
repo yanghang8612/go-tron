@@ -263,6 +263,12 @@ func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessa
 	}
 	return nil, nil
 }
+func (s *stubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	if s.accountNet != nil {
+		return s.accountNet, nil
+	}
+	return nil, nil
+}
 
 // --- M5.1 PR-2: Transaction builders ---
 func (s *stubBackend) BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {

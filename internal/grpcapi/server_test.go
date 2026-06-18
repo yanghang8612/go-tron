@@ -231,6 +231,9 @@ func (b *testBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*type
 func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
 	return nil, nil
 }
+func (b *testBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	return nil, nil
+}
 func (b *testBackend) BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
 	return nil, nil
 }

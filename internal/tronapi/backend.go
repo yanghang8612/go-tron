@@ -251,6 +251,7 @@ type Backend interface {
 	GetAccountById(accountID []byte) (*types.Account, error)
 	GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error)
 	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
+	GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error)
 
 	// Generic contract transaction builder (M5.1 PR-3+)
 	// Wraps tronapi.BuildTransaction with head-block context from the chain.

@@ -1260,7 +1260,34 @@ func (b *TronBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*type
 }
 
 func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMessage, error) {
-	root := b.chain.HeadStateRoot()
+	return b.accountNetAtRoot(addr, b.chain.HeadStateRoot())
+}
+
+func (b *TronBackend) GetAccountNetAt(addr tcommon.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	if blockNum == session.headNum {
+		root := b.chain.StateRootAtBlock(session.headNum)
+		if root == (tcommon.Hash{}) {
+			return nil, fmt.Errorf("no state root for block %d", session.headNum)
+		}
+		return b.accountNetAtRoot(addr, root)
+	}
+	acc, err := session.reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account net at block %d: %w", blockNum, err)
+	}
+	dynProps, err := b.dynamicPropertiesAt(session.reader, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct dynamic properties at block %d: %w", blockNum, err)
+	}
+	return accountNetFromAccount(acc, dynProps), nil
+}
+
+func (b *TronBackend) accountNetAtRoot(addr tcommon.Address, root tcommon.Hash) (*apipb.AccountNetMessage, error) {
 	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -1269,22 +1296,32 @@ func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMess
 	if acc == nil {
 		return nil, nil
 	}
-	// Read rooted dynprops at the head root (same statedb) for a consistent
-	// net-limit computation.
-	dynProps := state.LoadDynamicProperties(b.chain.db, statedb)
-	frozenBW := statedb.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH)
-	var netLimit int64
-	if total := dynProps.TotalNetWeight(); total > 0 {
-		netLimit = frozenBW * dynProps.TotalNetLimit() / total
+	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
+	return accountNetFromAccount(acc, dynProps), nil
+}
+
+func accountNetFromAccount(acc *types.Account, dynProps *state.DynamicProperties) *apipb.AccountNetMessage {
+	if acc == nil {
+		return nil
 	}
-	return &apipb.AccountNetMessage{
-		FreeNetUsed:    statedb.GetFreeNetUsage(addr),
-		FreeNetLimit:   dynProps.FreeNetLimit(),
-		NetUsed:        statedb.GetNetUsage(addr),
-		NetLimit:       netLimit,
-		TotalNetLimit:  dynProps.TotalNetLimit(),
-		TotalNetWeight: dynProps.TotalNetWeight(),
-	}, nil
+	frozenBW := acc.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
+	var netLimit int64
+	if dynProps != nil {
+		if total := dynProps.TotalNetWeight(); total > 0 {
+			netLimit = frozenBW * dynProps.TotalNetLimit() / total
+		}
+	}
+	msg := &apipb.AccountNetMessage{
+		FreeNetUsed: acc.FreeNetUsage(),
+		NetUsed:     acc.NetUsage(),
+		NetLimit:    netLimit,
+	}
+	if dynProps != nil {
+		msg.FreeNetLimit = dynProps.FreeNetLimit()
+		msg.TotalNetLimit = dynProps.TotalNetLimit()
+		msg.TotalNetWeight = dynProps.TotalNetWeight()
+	}
+	return msg
 }
 
 // ── M5.1 PR-3+: Generic contract builder ────────────────────────────────

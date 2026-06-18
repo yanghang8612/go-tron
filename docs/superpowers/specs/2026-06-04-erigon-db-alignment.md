@@ -697,7 +697,11 @@ Status:
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend
   coverage now also exercises temporal `SystemAccountIndex` history by resolving
-  the same account ID to different accounts at block 1 and block 2.
+  the same account ID to different accounts at block 1 and block 2. HTTP
+  solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
+  backend implementation reconstructs account bandwidth usage from the shared
+  archive session and reuses the same dynamic-property history boundary as
+  `getaccountresource`.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	tronapi "github.com/tronprotocol/go-tron/internal/tronapi"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -124,6 +125,8 @@ type isolationStubBackend struct {
 	gotAt                    uint64 // last blockNum passed to GetAccountAt
 	liveAccountIDCalls       int
 	accountIDAtBlock         uint64
+	liveAccountNetCalls      int
+	accountNetAtBlock        uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -147,6 +150,16 @@ func (s *isolationStubBackend) GetAccountById(accountID []byte) (*types.Account,
 func (s *isolationStubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
 	s.accountIDAtBlock = blockNum
 	return types.NewAccount(s.solidAddr, corepb.AccountType_Normal), nil
+}
+
+func (s *isolationStubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	s.liveAccountNetCalls++
+	return &apipb.AccountNetMessage{FreeNetUsed: 1}, nil
+}
+
+func (s *isolationStubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	s.accountNetAtBlock = blockNum
+	return &apipb.AccountNetMessage{FreeNetUsed: 9, NetUsed: 99}, nil
 }
 
 func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -321,6 +334,60 @@ func TestPbftAccountByIdUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountIDCalls != 0 {
 		t.Fatalf("live GetAccountById called %d times, want 0", stub.liveAccountIDCalls)
+	}
+}
+
+func TestSolidityAccountNetUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getaccountnet", "application/json", strings.NewReader(`{"address":"411234567890"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["freeNetUsed"] != "9" || got["NetUsed"] != "99" {
+		t.Fatalf("getaccountnet = %+v, want bound sentinel freeNetUsed=9 NetUsed=99", got)
+	}
+	if stub.accountNetAtBlock != 42 {
+		t.Fatalf("GetAccountNetAt block = %d; want solidNum=42", stub.accountNetAtBlock)
+	}
+	if stub.liveAccountNetCalls != 0 {
+		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/getaccountnet", "application/json", strings.NewReader(`{"address":"411234567890"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["freeNetUsed"] != "9" || got["NetUsed"] != "99" {
+		t.Fatalf("getaccountnet = %+v, want bound sentinel freeNetUsed=9 NetUsed=99", got)
+	}
+	if stub.accountNetAtBlock != 13 {
+		t.Fatalf("GetAccountNetAt block = %d; want pbftNum=13", stub.accountNetAtBlock)
+	}
+	if stub.liveAccountNetCalls != 0 {
+		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
 	}
 }
 

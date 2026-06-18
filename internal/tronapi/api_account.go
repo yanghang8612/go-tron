@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/tronprotocol/go-tron/core/types"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -242,6 +243,10 @@ func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, bou
 }
 
 func (api *API) getAccountNet(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountNet(w, r, nil)
+}
+
+func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -265,7 +270,12 @@ func (api *API) getAccountNet(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	msg, err := api.backend.GetAccountNet(addr)
+	var msg *apipb.AccountNetMessage
+	if boundFn != nil {
+		msg, err = api.backend.GetAccountNetAt(addr, boundFn())
+	} else {
+		msg, err = api.backend.GetAccountNet(addr)
+	}
 	if err != nil || msg == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

@@ -263,6 +263,14 @@ func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
 		t.Fatalf("GetAccountResourceAt(sender, 1) usage free=%d net=%d, want free=%d net=%d",
 			got.FreeNetUsed, got.NetUsed, wantAcc.FreeNetUsage(), wantAcc.NetUsage())
 	}
+	gotNet, err := b.GetAccountNetAt(sender, 1)
+	if err != nil {
+		t.Fatalf("GetAccountNetAt(sender, 1): %v", err)
+	}
+	if gotNet.GetFreeNetUsed() != wantAcc.FreeNetUsage() || gotNet.GetNetUsed() != wantAcc.NetUsage() {
+		t.Fatalf("GetAccountNetAt(sender, 1) usage free=%d net=%d, want free=%d net=%d",
+			gotNet.GetFreeNetUsed(), gotNet.GetNetUsed(), wantAcc.FreeNetUsage(), wantAcc.NetUsage())
+	}
 }
 
 func TestArchiveQuery_AccountByIdAtUsesSystemAccountIndexHistory(t *testing.T) {
