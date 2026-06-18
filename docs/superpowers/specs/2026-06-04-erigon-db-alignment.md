@@ -810,10 +810,12 @@ Status:
   bytes through `retiredPrune*` JSON fields. Each sample now also runs
   `gtron db storage-alerts` before the JSONL row is emitted and records
   `freezerAlertStatus`, `freezerAlertIssues`,
-  `freezerAlertHiddenBytes`, `stageVerifyStatus`, `stageVerifyIssues`,
-  `snapshotAlertStatus`, `snapshotAlertIssues`, and the `snapshotRetired*`
+  `freezerAlertHiddenBytes`, `freezerAlertDetails`, `stageVerifyStatus`,
+  `stageVerifyIssues`, `stageVerifyDetails`, `snapshotAlertStatus`,
+  `snapshotAlertIssues`, `snapshotAlertDetails`, and the `snapshotRetired*`
   counters, so critical freezer, stage, prune, and cold-coverage regressions
-  fail the sample before it is used for Erigon-style storage comparisons.
+  fail the sample before it is used for Erigon-style storage comparisons while
+  warning rows keep the exact alert detail in JSONL.
 
 Remaining:
 

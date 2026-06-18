@@ -64,10 +64,13 @@ The output path is printed at startup. Each JSON row contains:
 - `freezerAlertStatus`
 - `freezerAlertIssues`
 - `freezerAlertHiddenBytes`
+- `freezerAlertDetails`
 - `stageVerifyStatus`
 - `stageVerifyIssues`
+- `stageVerifyDetails`
 - `snapshotAlertStatus`
 - `snapshotAlertIssues`
+- `snapshotAlertDetails`
 - `snapshotRetiredSegments`
 - `snapshotRetiredFiles`
 - `snapshotRetiredMissing`

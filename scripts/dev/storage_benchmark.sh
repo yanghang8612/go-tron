@@ -62,10 +62,13 @@ RUN_TAIL_PRUNED_FILES=0
 RUN_FREEZER_ALERT_STATUS="not-run"
 RUN_FREEZER_ALERT_ISSUES=-1
 RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
+RUN_FREEZER_ALERT_DETAILS="[]"
 RUN_STAGE_VERIFY_STATUS="not-run"
 RUN_STAGE_VERIFY_ISSUES=-1
+RUN_STAGE_VERIFY_DETAILS="[]"
 RUN_SNAPSHOT_ALERT_STATUS="not-run"
 RUN_SNAPSHOT_ALERT_ISSUES=-1
+RUN_SNAPSHOT_ALERT_DETAILS="[]"
 RUN_SNAPSHOT_RETIRED_SEGMENTS=-1
 RUN_SNAPSHOT_RETIRED_FILES=-1
 RUN_SNAPSHOT_RETIRED_MISSING=-1
@@ -225,10 +228,13 @@ reset_run_metrics() {
   RUN_FREEZER_ALERT_STATUS="not-run"
   RUN_FREEZER_ALERT_ISSUES=-1
   RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
+  RUN_FREEZER_ALERT_DETAILS="[]"
   RUN_STAGE_VERIFY_STATUS="not-run"
   RUN_STAGE_VERIFY_ISSUES=-1
+  RUN_STAGE_VERIFY_DETAILS="[]"
   RUN_SNAPSHOT_ALERT_STATUS="not-run"
   RUN_SNAPSHOT_ALERT_ISSUES=-1
+  RUN_SNAPSHOT_ALERT_DETAILS="[]"
   RUN_SNAPSHOT_RETIRED_SEGMENTS=-1
   RUN_SNAPSHOT_RETIRED_FILES=-1
   RUN_SNAPSHOT_RETIRED_MISSING=-1
@@ -488,6 +494,36 @@ run_logged() {
   return 1
 }
 
+storage_alert_detail_json() {
+  local alert_out="$1"
+  python3 - "$alert_out" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+freezer = []
+stage = []
+snapshot = []
+for line in text.splitlines():
+    m = re.match(r"Storage freezer alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+    if m:
+        freezer.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
+        continue
+    m = re.match(r"Storage stage alert: severity=([^ ]+) detail=(.*)$", line)
+    if m:
+        stage.append({"severity": m.group(1), "detail": m.group(2)})
+        continue
+    m = re.match(r"Storage snapshot alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+    if m:
+        snapshot.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
+print(json.dumps(freezer, separators=(",", ":")))
+print(json.dumps(stage, separators=(",", ":")))
+print(json.dumps(snapshot, separators=(",", ":")))
+PY
+}
+
 run_storage_alert_gate() {
   local mode="$1"
   local role="$2"
@@ -524,6 +560,11 @@ run_storage_alert_gate() {
   RUN_SNAPSHOT_RETIRED_MISSING="${retired_missing:--1}"
   RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE="${retired_skipped:--1}"
   RUN_SNAPSHOT_RETIRED_BYTES="${retired_bytes:--1}"
+  local detail_json
+  detail_json="$(storage_alert_detail_json "$alert_out")"
+  RUN_FREEZER_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '1p')"
+  RUN_STAGE_VERIFY_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '2p')"
+  RUN_SNAPSHOT_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '3p')"
   if [ "$ok" -ne 1 ]; then
     die "storage-alerts reported critical storage state for $mode/$role; see $log_path"
   fi
@@ -679,8 +720,9 @@ emit_result() {
     "$RUN_RETIRED_PRUNE_BYTES_DELETED" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
-    "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" \
-    "$RUN_SNAPSHOT_ALERT_STATUS" "$RUN_SNAPSHOT_ALERT_ISSUES" \
+    "$RUN_FREEZER_ALERT_DETAILS" \
+    "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" "$RUN_STAGE_VERIFY_DETAILS" \
+    "$RUN_SNAPSHOT_ALERT_STATUS" "$RUN_SNAPSHOT_ALERT_ISSUES" "$RUN_SNAPSHOT_ALERT_DETAILS" \
     "$RUN_SNAPSHOT_RETIRED_SEGMENTS" "$RUN_SNAPSHOT_RETIRED_FILES" \
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
@@ -704,8 +746,9 @@ keys = [
     "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
-    "stageVerifyStatus", "stageVerifyIssues",
-    "snapshotAlertStatus", "snapshotAlertIssues", "snapshotRetiredSegments",
+    "freezerAlertDetails", "stageVerifyStatus", "stageVerifyIssues",
+    "stageVerifyDetails", "snapshotAlertStatus", "snapshotAlertIssues",
+    "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes",
     "datadir", "log",
@@ -733,6 +776,12 @@ ints = {
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
     row[key] = int(value) if key in ints else value
+for key in ("freezerAlertDetails", "stageVerifyDetails", "snapshotAlertDetails"):
+    try:
+        parsed = json.loads(row.get(key, "[]"))
+    except Exception:
+        parsed = []
+    row[key] = parsed if isinstance(parsed, list) else []
 line = json.dumps(row, sort_keys=True)
 with open(out, "a", encoding="utf-8") as fh:
     fh.write(line + "\n")
