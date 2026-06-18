@@ -635,14 +635,18 @@ Status:
   continuing linearly. Tests prove the accessor build/check/verify path, range
   reads across segment boundaries, `maxBytes` truncation, gap handling, and that
   Manager can serve a row even when full segment scanning would reject trailing
-  bytes. Chain-freezer cold coverage gates now cross-check any registered
-  accessor sidecar against the freezer segment contents, so format-valid but
-  stale offset tables cannot satisfy minimal-mode tail-prune or stage-status
-  verification. Signed/local manifest verification now runs the same
-  chain-freezer sidecar cross-checks for active `chain-index` and
-  `chain-freezer-accessor` refs, so `gtron snapshot verify`, fetch, bootstrap,
-  and restore fail before trusting a catalog whose sidecars are format-valid
-  but point at different freezer contents.
+  bytes. `Manager.HasAncient` now proves the requested cold row is actually
+  readable instead of trusting only the manifest range, so advertised but
+  missing chain-freezer files surface as archive data errors before callers
+  treat them as usable ancient coverage. Chain-freezer cold coverage gates now
+  cross-check any registered accessor sidecar against the freezer segment
+  contents, so format-valid but stale offset tables cannot satisfy minimal-mode
+  tail-prune or stage-status verification. Signed/local manifest verification
+  now runs the same chain-freezer sidecar cross-checks for active
+  `chain-index` and `chain-freezer-accessor` refs, so
+  `gtron snapshot verify`, fetch, bootstrap, and restore fail before trusting a
+  catalog whose sidecars are format-valid but point at different freezer
+  contents.
 - Minimal-mode runtime now registers a chain-freezer tail-prune lifecycle when
   the local freezer is open. It advances the freezer's virtual tail only after
   the planner allows it and cold segment coverage is readable. When the

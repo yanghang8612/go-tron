@@ -362,16 +362,14 @@ func (m *Manager) HasAncient(kind string, number uint64) (bool, error) {
 	if !isChainFreezerAncientKind(kind) {
 		return false, nil
 	}
-	manifest, err := m.currentManifest()
-	if err != nil || manifest == nil {
-		return false, err
+	_, err := m.Ancient(kind, number)
+	if err == nil {
+		return true, nil
 	}
-	for _, ref := range chainFreezerRefs(manifest) {
-		if number >= ref.FromTxNum && number <= ref.ToTxNum {
-			return true, nil
-		}
+	if errors.Is(err, rawdb.ErrNotInAncient) {
+		return false, nil
 	}
-	return false, nil
+	return false, err
 }
 
 func (m *Manager) ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error) {

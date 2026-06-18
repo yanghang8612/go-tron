@@ -542,6 +542,38 @@ func TestManagerAncientRangeStreamsAcrossChainFreezerSegments(t *testing.T) {
 	}
 }
 
+func TestManagerHasAncientRequiresReadableChainFreezerSegment(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerTestRows(t, src, 0, 0)
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{freezerRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	ok, err := mgr.HasAncient(rawdb.AncientBlocksTable, 0)
+	if err != nil || !ok {
+		t.Fatalf("HasAncient readable segment = %v/%v, want true/nil", ok, err)
+	}
+	if err := os.Remove(filepath.Join(snapshotDir, freezerRef.Path)); err != nil {
+		t.Fatalf("remove chain-freezer segment: %v", err)
+	}
+	ok, err = mgr.HasAncient(rawdb.AncientBlocksTable, 0)
+	if err == nil || ok {
+		t.Fatalf("HasAncient missing advertised segment = %v/%v, want false/error", ok, err)
+	}
+}
+
 func TestManagerAncientRangeStopsAtChainFreezerSegmentGap(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
