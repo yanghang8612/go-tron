@@ -1726,20 +1726,20 @@ func RepairSyncPipelineProgressOrderFromDB(db ethdb.KeyValueStore, opts SyncPipe
 }
 
 func repairSyncBodiesProgressFromReady(db ethdb.KeyValueStore, ready rawdb.StageProgress, issue SyncPipelineProgressOrderIssue) (SyncPipelineProgressOrderRepair, bool) {
-	if !ready.HasBlockHash {
+	limit := ReadStagedBodyReadyDrainLimit(db, ready.BlockNum)
+	if !limit.Valid() {
 		return SyncPipelineProgressOrderRepair{}, false
 	}
-	row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, ready.BlockNum)
-	if err != nil || !ok || row.Hash != ready.BlockHash {
+	if limit.StageRow.BlockNum != ready.BlockNum || limit.StageRow.BlockHash != ready.BlockHash {
 		return SyncPipelineProgressOrderRepair{}, false
 	}
 	repair := SyncPipelineProgressOrderRepair{
 		Stage:   rawdb.StageSyncBodies,
-		Row:     ready,
+		Row:     limit.StageRow,
 		Issue:   issue,
 		Updated: true,
 	}
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, ready.BlockNum, ready.BlockHash); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, limit.Limit, limit.StageRow.BlockHash); err != nil {
 		repair.WriteError = err
 	}
 	return repair, true

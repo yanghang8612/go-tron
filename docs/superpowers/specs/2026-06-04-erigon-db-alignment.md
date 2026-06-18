@@ -424,6 +424,10 @@ Status:
   `SyncBodiesReady` row before import: if the repair refresh fails, the drain
   does not restore or pop buffered bodies against a stale or unverified ready
   frontier.
+- Sync-pipeline startup order repair also reuses the same validated
+  `SyncBodiesReady` drain-limit check before repairing `SyncBodies` from the
+  ready row, so a ready row whose staged body is missing or hash-mismatched is
+  deleted as downstream tail instead of promoted.
 - The higher local-drain session branch now treats that pre-import ready repair
   failure as a stop condition instead of an empty drain, so it will not refill
   fetch slots or probe peers as though the stage table were merely empty.

@@ -1553,6 +1553,35 @@ func TestRepairSyncPipelineProgressOrderFromDBAdvancesBodiesFromVerifiedReady(t 
 	}
 }
 
+func TestRepairSyncPipelineProgressOrderFromDBDeletesHashMismatchedReady(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block7 := testBufferedBlock(7)
+	block8 := testBufferedBlock(8)
+	if err := rawdb.WriteSyncStagedBlock(db, block8); err != nil {
+		t.Fatalf("write staged block8: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block7.Number(), block7.Hash()); err != nil {
+		t.Fatalf("write bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block8.Number(), tcommon.Hash{0xff}); err != nil {
+		t.Fatalf("write mismatched ready progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Interrupted || got.Deleted != 1 || got.Updated != 0 || len(got.Repairs) != 1 || got.Repairs[0].Stage != rawdb.StageSyncBodiesReady {
+		t.Fatalf("repair result = %+v, want one SyncBodiesReady delete", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncBodiesReady {
+		t.Fatalf("before issues = %+v, want ready ahead of bodies", got.Before.Issues)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies); err != nil || !ok || row.BlockNum != block7.Number() || row.BlockHash != block7.Hash() {
+		t.Fatalf("SyncBodies after repair = %+v ok=%v err=%v, want block7", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after repair = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestRepairSyncPipelineProgressOrderFromDBDeletesImportTailAfterReadyLag(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	hash := tcommon.Hash{0x0a}
