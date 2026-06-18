@@ -1236,7 +1236,10 @@ Status:
   through the sorted ETL collector. `--db.replay.dir` makes that replay database
   persistent and resumable from its canonical head; one-shot runs can still use
   `--db.replay.tempdir`. Existing differing trace rows are rejected unless the
-  operator explicitly passes `--db.balance-trace.overwrite`.
+  operator explicitly passes `--db.balance-trace.overwrite`. Replay output and
+  target hot/cold `BlockBalanceTrace` rows are now checked through the strict
+  rawdb trace reader, so malformed or block-mismatched trace payloads fail the
+  backfill instead of being treated as missing rows and republished into Pebble.
 - `gtron db backfill-balance-traces` can also seed an empty/genesis-only replay
   database from a verified signed snapshot before replay starts. Passing
   `--snapshot.dir` plus the trusted catalog key flags restores latest

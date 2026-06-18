@@ -155,6 +155,37 @@ func TestBackfillBalanceTracesByReplayHonorsColdTargetTraceRows(t *testing.T) {
 	}
 }
 
+func TestBackfillBalanceTracesByReplayRejectsCorruptColdTargetTrace(t *testing.T) {
+	sourceDB, _, genesis, _ := newBalanceTraceBackfillSource(t)
+	cold := newBalanceTraceBackfillColdTraceReader()
+	cold.putBlockTrace(1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Number: 2,
+			Hash:   []byte{0x02},
+		},
+	})
+	targetReader := rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{})
+	targetReader.SetBalanceTraceReader(cold)
+
+	_, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		sourceDB,
+		ethrawdb.NewMemoryDatabase(),
+		genesis,
+		BalanceTraceReplayBackfillOptions{
+			FromBlock:         1,
+			ToBlock:           1,
+			TargetTraceReader: targetReader,
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "target BlockBalanceTrace at block 1 is corrupt") {
+		t.Fatalf("BackfillBalanceTracesByReplay corrupt cold target error = %v, want corrupt target trace error", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 1); got != nil {
+		t.Fatalf("hot target BlockBalanceTrace = %+v, want nil after corrupt cold target rejection", got)
+	}
+}
+
 func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
 	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
 	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)

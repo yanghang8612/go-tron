@@ -173,8 +173,11 @@ func cloneBalanceTraceBackfillGenesis(genesis *params.Genesis) *params.Genesis {
 }
 
 func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, targetTraceReader ethdb.KeyValueReader, replay ethdb.KeyValueStore, blockNum uint64, blockHash tcommon.Hash, overwrite bool, collector *rawdb.DerivedIndexCollector, result *BalanceTraceReplayBackfillResult) error {
-	trace := rawdb.ReadBlockBalanceTrace(rawdb.NewChainDB(replay, rawdb.NoopAncient{}), int64(blockNum))
-	if trace == nil {
+	trace, ok, err := rawdb.ReadBlockBalanceTraceStrict(rawdb.NewChainDB(replay, rawdb.NoopAncient{}), int64(blockNum))
+	if err != nil {
+		return fmt.Errorf("core: replay BlockBalanceTrace at block %d is corrupt: %w", blockNum, err)
+	}
+	if !ok {
 		return fmt.Errorf("core: replay produced no BlockBalanceTrace for block %d", blockNum)
 	}
 	if id := trace.GetBlockIdentifier(); id == nil {
@@ -185,15 +188,18 @@ func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, targetTraceRead
 		return fmt.Errorf("core: replay BlockBalanceTrace payload hash %x does not match canonical block %d hash %x", id.GetHash(), blockNum, blockHash)
 	}
 
-	existing := rawdb.ReadBlockBalanceTrace(targetTraceReader, int64(blockNum))
-	if existing != nil {
+	existing, exists, err := rawdb.ReadBlockBalanceTraceStrict(targetTraceReader, int64(blockNum))
+	if err != nil {
+		return fmt.Errorf("core: target BlockBalanceTrace at block %d is corrupt: %w", blockNum, err)
+	}
+	if exists {
 		if proto.Equal(existing, trace) {
 			result.ExistingBlockTraces++
 		} else if !overwrite {
 			return fmt.Errorf("core: target BlockBalanceTrace at block %d differs from replay output", blockNum)
 		}
 	}
-	if existing == nil || overwrite {
+	if !exists || overwrite {
 		if err := collector.PutBlockBalanceTrace(int64(blockNum), trace); err != nil {
 			return fmt.Errorf("collect BlockBalanceTrace block %d: %w", blockNum, err)
 		}
