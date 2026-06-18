@@ -259,6 +259,32 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBReferences(t, root, derivedHotRowIteratorReferences(), map[string]map[string]struct{}{
+		"core/balance_trace_backfill.go": {
+			"IterateAccountTraceRows": {},
+		},
+		"core/state/snapshots/balance_trace_prune.go": {
+			"IterateAccountTraceRows":      {},
+			"IterateBlockBalanceTraceRows": {},
+		},
+		"core/state/snapshots/balance_trace_segment.go": {
+			"IterateAccountTraceRows":      {},
+			"IterateBlockBalanceTraceRows": {},
+		},
+		"core/state/snapshots/section_bloom_prune.go": {
+			"IterateSectionBloomRows": {},
+		},
+		"core/state/snapshots/section_bloom_segment.go": {
+			"IterateSectionBloomRows": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production derived hot-row iterators must stay behind snapshot build/prune/backfill boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditForbiddenRawDBReferences(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
@@ -282,6 +308,32 @@ func TestProductionStateLatestReadsStayBehindStateBoundaries(t *testing.T) {
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production archive/API code must use state.Database or state.HistoryReader instead of raw state latest readers:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestDerivedHotRowIteratorAuditRejectsAPIBoundaryBypass(t *testing.T) {
+	root := writeAuditFixture(t, "core/tron_backend.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var iterAccountTrace = rawdb.IterateAccountTraceRows
+
+func query(db any) {
+	_ = rawdb.IterateBlockBalanceTraceRows(db, 1, 2, nil)
+	_ = rawdb.IterateSectionBloomRows(db, nil)
+	_ = iterAccountTrace(db, 1, 2, nil)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, derivedHotRowIteratorReferences(), nil)
+	if len(offenders) != 3 {
+		t.Fatalf("offenders = %+v, want hot derived iterator function value and direct calls rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.IterateAccountTraceRows", "rawdb.IterateBlockBalanceTraceRows", "rawdb.IterateSectionBloomRows"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
 	}
 }
 
@@ -1117,6 +1169,14 @@ func stateLatestRawDBReferences() map[string]struct{} {
 		"ReadStateCode":                  {},
 		"ReadStateKVGeneration":          {},
 		"ReadStateKVLatest":              {},
+	}
+}
+
+func derivedHotRowIteratorReferences() map[string]struct{} {
+	return map[string]struct{}{
+		"IterateAccountTraceRows":      {},
+		"IterateBlockBalanceTraceRows": {},
+		"IterateSectionBloomRows":      {},
 	}
 }
 
