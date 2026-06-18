@@ -193,7 +193,9 @@ type Backend interface {
 
 	// Delegation/resource queries (Stake 2.0)
 	GetDelegatedResourceV2(from, to common.Address) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*DelegatedResourceInfo, error)
 	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)
+	GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*DelegationIndexInfo, error)
 	CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error)
 	GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error)
 	GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error)

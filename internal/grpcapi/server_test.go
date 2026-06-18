@@ -137,7 +137,13 @@ func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return 
 func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	return b.delegatedResources, nil
 }
+func (b *testBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
 func (b *testBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
 	return nil, nil
 }
 func (b *testBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {

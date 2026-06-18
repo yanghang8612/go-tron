@@ -126,7 +126,13 @@ func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return 
 func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	return s.delegatedResources, nil
 }
+func (s *stubBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
 func (s *stubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
+	return s.delegationIndex, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
 	return s.delegationIndex, nil
 }
 func (s *stubBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {

@@ -687,7 +687,12 @@ Status:
   in-memory `httptest` handlers. gRPC `WalletSolidity` account and reward
   methods now also dispatch through the solid-block `GetAccountAt`/`GetRewardAt`
   backend paths instead of live-head reads, with tests pinning that route to
-  the shared archive/as-of state session boundary.
+  the shared archive/as-of state session boundary. Delegation V2 solidity/PBFT
+  HTTP routes and gRPC `WalletSolidity` delegation methods now use
+  `GetDelegatedResourceV2At`/`GetDelegatedResourceAccountIndexV2At` at the
+  solid/PBFT bound instead of live-head SystemDelegation rows. Backend archive
+  coverage writes V2 delegation buckets and delegation indexes through temporal
+  SystemDelegation history and verifies block-1/block-2 as-of reads diverge.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

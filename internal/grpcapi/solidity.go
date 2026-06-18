@@ -202,7 +202,7 @@ func (s *SolidityServer) GetDelegatedResourceV2(_ context.Context, in *apipb.Del
 	}
 	from := common.BytesToAddress(in.FromAddress)
 	to := common.BytesToAddress(in.ToAddress)
-	infos, err := s.backend.GetDelegatedResourceV2(from, to)
+	infos, err := s.backend.GetDelegatedResourceV2At(from, to, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -232,7 +232,7 @@ func (s *SolidityServer) GetDelegatedResourceAccountIndexV2(_ context.Context, i
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	idx, err := s.backend.GetDelegatedResourceAccountIndexV2(addr)
+	idx, err := s.backend.GetDelegatedResourceAccountIndexV2At(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -724,6 +725,40 @@ func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) ([]*trona
 	return resources, nil
 }
 
+func (b *TronBackend) GetDelegatedResourceV2At(from, to tcommon.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	resources := make([]*tronapi.DelegatedResourceInfo, 0, 2)
+	for _, locked := range []bool{false, true} {
+		dr, err := readDelegatedResourceV2At(session.reader, from, to, locked, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read delegated resource v2 at block %d: %w", blockNum, err)
+		}
+		if !nonEmptyDelegatedResource(dr) {
+			continue
+		}
+		resources = append(resources, delegatedResourceInfo(from, to, dr))
+	}
+	return resources, nil
+}
+
+func readDelegatedResourceV2At(reader *state.PersistentHistoryReader, from, to tcommon.Address, locked bool, blockNum uint64) (*rawdb.DelegatedResource, error) {
+	key := rawdb.DelegatedResourceV2StateKey(from, to, locked)
+	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	dr := &rawdb.DelegatedResource{}
+	if err := json.Unmarshal(data, dr); err != nil {
+		return nil, err
+	}
+	return dr, nil
+}
+
 func nonEmptyDelegatedResource(dr *rawdb.DelegatedResource) bool {
 	return dr != nil &&
 		(dr.FrozenBalanceForBandwidth != 0 ||
@@ -757,6 +792,42 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 		Account:     hex.EncodeToString(addr[:]),
 		ToAddresses: toAddresses,
 	}, nil
+}
+
+func (b *TronBackend) GetDelegatedResourceAccountIndexV2At(addr tcommon.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	receivers, err := readDelegationIndexAt(session.reader, addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read delegation index at block %d: %w", blockNum, err)
+	}
+	toAddresses := make([]string, len(receivers))
+	for i, r := range receivers {
+		toAddresses[i] = hex.EncodeToString(r[:])
+	}
+	return &tronapi.DelegationIndexInfo{
+		Account:     hex.EncodeToString(addr[:]),
+		ToAddresses: toAddresses,
+	}, nil
+}
+
+func readDelegationIndexAt(reader *state.PersistentHistoryReader, addr tcommon.Address, blockNum uint64) ([]tcommon.Address, error) {
+	key := rawdb.DelegationIndexStateKey(addr)
+	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	count := len(data) / tcommon.AddressLength
+	addrs := make([]tcommon.Address, count)
+	for i := range addrs {
+		start := i * tcommon.AddressLength
+		copy(addrs[i][:], data[start:start+tcommon.AddressLength])
+	}
+	return addrs, nil
 }
 
 func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {

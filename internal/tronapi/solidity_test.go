@@ -119,9 +119,13 @@ func TestSolidityAccount_routeExists(t *testing.T) {
 // inspect the JSON response and verify routing.
 type isolationStubBackend struct {
 	solidStubBackend
-	liveAddr  common.Address
-	solidAddr common.Address
-	gotAt     uint64 // last blockNum passed to GetAccountAt
+	liveAddr                 common.Address
+	solidAddr                common.Address
+	gotAt                    uint64 // last blockNum passed to GetAccountAt
+	liveDelegatedCalls       int
+	liveDelegationIndexCalls int
+	delegatedAtBlock         uint64
+	delegationIndexAtBlock   uint64
 }
 
 func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, error) {
@@ -131,6 +135,42 @@ func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, 
 func (s *isolationStubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	s.gotAt = blockNum
 	return types.NewAccount(s.solidAddr, corepb.AccountType_Normal), nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	s.liveDelegatedCalls++
+	return []*tronapi.DelegatedResourceInfo{{
+		FromAddress:               hex.EncodeToString(from.Bytes()),
+		ToAddress:                 hex.EncodeToString(to.Bytes()),
+		FrozenBalanceForBandwidth: 1,
+	}}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	s.delegatedAtBlock = blockNum
+	return []*tronapi.DelegatedResourceInfo{{
+		FromAddress:            hex.EncodeToString(from.Bytes()),
+		ToAddress:              hex.EncodeToString(to.Bytes()),
+		FrozenBalanceForEnergy: 9,
+		ExpireTimeForEnergy:    99,
+		ExpireTimeForBandwidth: 88,
+	}}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
+	s.liveDelegationIndexCalls++
+	return &tronapi.DelegationIndexInfo{
+		Account:     hex.EncodeToString(addr.Bytes()),
+		ToAddresses: []string{hex.EncodeToString(common.Address{0x41, 0x7f}.Bytes())},
+	}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
+	s.delegationIndexAtBlock = blockNum
+	return &tronapi.DelegationIndexInfo{
+		Account:     hex.EncodeToString(addr.Bytes()),
+		ToAddresses: []string{hex.EncodeToString(common.Address{0x41, 0x8f}.Bytes())},
+	}, nil
 }
 
 // TestSolidityAccount_isolation verifies the audit's P1 fix:
@@ -203,5 +243,95 @@ func TestPbftAccount_isolation(t *testing.T) {
 	}
 	if stub.gotAt != 13 {
 		t.Fatalf("GetAccountAt called with blockNum=%d; want pbftNum=13", stub.gotAt)
+	}
+}
+
+func TestSolidityDelegationRoutesUseSolidBoundArchivePath(t *testing.T) {
+	from := common.Address{0x41, 0x10}
+	to := common.Address{0x41, 0x20}
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	body := `{"fromAddress":"` + hex.EncodeToString(from.Bytes()) + `","toAddress":"` + hex.EncodeToString(to.Bytes()) + `"}`
+	resp, err := http.Post(srv.URL+"/walletsolidity/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var got struct {
+		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DelegatedResource) != 1 || got.DelegatedResource[0].FrozenBalanceForEnergy != 9 {
+		t.Fatalf("delegatedResource = %+v, want solid-bound sentinel", got.DelegatedResource)
+	}
+	if stub.delegatedAtBlock != 42 {
+		t.Fatalf("GetDelegatedResourceV2At block = %d, want solidNum=42", stub.delegatedAtBlock)
+	}
+	if stub.liveDelegatedCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceV2 called %d times, want 0", stub.liveDelegatedCalls)
+	}
+
+	indexBody := `{"value":"` + hex.EncodeToString(from.Bytes()) + `"}`
+	resp, err = http.Post(srv.URL+"/walletsolidity/getdelegatedresourceaccountindexv2", "application/json", strings.NewReader(indexBody))
+	if err != nil {
+		t.Fatalf("index request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var idx tronapi.DelegationIndexInfo
+	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.ToAddresses) != 1 || !strings.EqualFold(idx.ToAddresses[0], hex.EncodeToString(common.Address{0x41, 0x8f}.Bytes())) {
+		t.Fatalf("delegation index = %+v, want solid-bound sentinel", idx)
+	}
+	if stub.delegationIndexAtBlock != 42 {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2At block = %d, want solidNum=42", stub.delegationIndexAtBlock)
+	}
+	if stub.liveDelegationIndexCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", stub.liveDelegationIndexCalls)
+	}
+}
+
+func TestPbftDelegationRoutesUsePbftBoundArchivePath(t *testing.T) {
+	from := common.Address{0x41, 0x30}
+	to := common.Address{0x41, 0x40}
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	body := `{"fromAddress":"` + hex.EncodeToString(from.Bytes()) + `","toAddress":"` + hex.EncodeToString(to.Bytes()) + `"}`
+	resp, err := http.Post(srv.URL+"/walletpbft/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var got struct {
+		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DelegatedResource) != 1 || got.DelegatedResource[0].FrozenBalanceForEnergy != 9 {
+		t.Fatalf("delegatedResource = %+v, want pbft-bound sentinel", got.DelegatedResource)
+	}
+	if stub.delegatedAtBlock != 13 {
+		t.Fatalf("GetDelegatedResourceV2At block = %d, want pbftNum=13", stub.delegatedAtBlock)
+	}
+	if stub.liveDelegatedCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceV2 called %d times, want 0", stub.liveDelegatedCalls)
 	}
 }

@@ -1175,6 +1175,10 @@ func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceV2(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResourceV2(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		FromAddress string `json:"fromAddress"`
 		ToAddress   string `json:"toAddress"`
@@ -1194,7 +1198,12 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "toAddress", err)
 		return
 	}
-	list, err := api.backend.GetDelegatedResourceV2(from, to)
+	var list []*DelegatedResourceInfo
+	if boundFn != nil {
+		list, err = api.backend.GetDelegatedResourceV2At(from, to, boundFn())
+	} else {
+		list, err = api.backend.GetDelegatedResourceV2(from, to)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1208,6 +1217,10 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndexV2(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1225,7 +1238,12 @@ func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *htt
 		httpFieldErr(w, "value", err)
 		return
 	}
-	info, err := api.backend.GetDelegatedResourceAccountIndexV2(addr)
+	var info *DelegationIndexInfo
+	if boundFn != nil {
+		info, err = api.backend.GetDelegatedResourceAccountIndexV2At(addr, boundFn())
+	} else {
+		info, err = api.backend.GetDelegatedResourceAccountIndexV2(addr)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -265,6 +265,110 @@ func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	from := testInsertAddr(30)
+	to1 := testInsertAddr(31)
+	to2 := testInsertAddr(32)
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitDelegation := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+		if err := statedb.WriteDelegatedResourceV2(from, to1, false, &rawdb.DelegatedResource{
+			From:                      from,
+			To:                        to1,
+			FrozenBalanceForBandwidth: n * 100,
+			ExpireTimeForBandwidth:    n * 1000,
+		}); err != nil {
+			t.Fatalf("write unlocked delegation block %d: %v", n, err)
+		}
+		receivers := []tcommon.Address{to1}
+		if n == 2 {
+			if err := statedb.WriteDelegatedResourceV2(from, to1, true, &rawdb.DelegatedResource{
+				From:                   from,
+				To:                     to1,
+				FrozenBalanceForEnergy: 222,
+				ExpireTimeForEnergy:    333,
+			}); err != nil {
+				t.Fatalf("write locked delegation block %d: %v", n, err)
+			}
+			receivers = append(receivers, to2)
+		}
+		if err := statedb.WriteDelegationIndex(from, receivers); err != nil {
+			t.Fatalf("write delegation index block %d: %v", n, err)
+		}
+		root, err := statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit delegation block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitDelegation(block1, 1)
+	root = commitDelegation(block2, 2)
+
+	block1Resources, err := b.GetDelegatedResourceV2At(from, to1, block1.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceV2At(block1): %v", err)
+	}
+	if len(block1Resources) != 1 || block1Resources[0].FrozenBalanceForBandwidth != 100 || block1Resources[0].FrozenBalanceForEnergy != 0 {
+		t.Fatalf("block1 delegated resources = %+v, want one unlocked bandwidth record", block1Resources)
+	}
+	block2Resources, err := b.GetDelegatedResourceV2At(from, to1, block2.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceV2At(block2): %v", err)
+	}
+	if len(block2Resources) != 2 || block2Resources[0].FrozenBalanceForBandwidth != 200 || block2Resources[1].FrozenBalanceForEnergy != 222 {
+		t.Fatalf("block2 delegated resources = %+v, want updated unlocked plus locked record", block2Resources)
+	}
+
+	block1Index, err := b.GetDelegatedResourceAccountIndexV2At(from, block1.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2At(block1): %v", err)
+	}
+	if len(block1Index.ToAddresses) != 1 || block1Index.ToAddresses[0] != hex.EncodeToString(to1[:]) {
+		t.Fatalf("block1 delegation index = %+v, want only %x", block1Index, to1[:])
+	}
+	block2Index, err := b.GetDelegatedResourceAccountIndexV2At(from, block2.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2At(block2): %v", err)
+	}
+	if len(block2Index.ToAddresses) != 2 ||
+		block2Index.ToAddresses[0] != hex.EncodeToString(to1[:]) ||
+		block2Index.ToAddresses[1] != hex.EncodeToString(to2[:]) {
+		t.Fatalf("block2 delegation index = %+v, want %x,%x", block2Index, to1[:], to2[:])
+	}
+}
+
 func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	b, _, _ := archiveBackend(t)
 

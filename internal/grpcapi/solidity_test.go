@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"encoding/hex"
 	"net"
 	"testing"
 
@@ -25,10 +26,16 @@ type solidTestBackend struct {
 	lastNumQueried   uint64
 	lastAccountAt    uint64
 	lastRewardAt     uint64
+	lastDelegatedAt  uint64
+	lastDelegIndexAt uint64
 	liveAccountCalls int
 	liveRewardCalls  int
+	liveDelegCalls   int
+	liveIndexCalls   int
 	accountAt        *types.Account
 	rewardAt         *tronapi.RewardInfo
+	delegatedAt      []*tronapi.DelegatedResourceInfo
+	delegIndexAt     *tronapi.DelegationIndexInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -62,6 +69,32 @@ func (b *solidTestBackend) GetRewardAt(addr common.Address, blockNum uint64) (*t
 		return b.rewardAt, nil
 	}
 	return b.testBackend.GetRewardAt(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	b.liveDelegCalls++
+	return b.testBackend.GetDelegatedResourceV2(from, to)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	b.lastDelegatedAt = blockNum
+	if b.delegatedAt != nil {
+		return b.delegatedAt, nil
+	}
+	return b.testBackend.GetDelegatedResourceV2At(from, to, blockNum)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
+	b.liveIndexCalls++
+	return b.testBackend.GetDelegatedResourceAccountIndexV2(addr)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
+	b.lastDelegIndexAt = blockNum
+	if b.delegIndexAt != nil {
+		return b.delegIndexAt, nil
+	}
+	return b.testBackend.GetDelegatedResourceAccountIndexV2At(addr, blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -224,6 +257,63 @@ func TestSolidity_GetRewardInfoUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveRewardCalls != 0 {
 		t.Fatalf("live GetReward called %d times, want 0", backend.liveRewardCalls)
+	}
+}
+
+func TestSolidity_GetDelegatedResourceV2UsesSolidBoundArchivePath(t *testing.T) {
+	from := solidityTestAddress(0x44)
+	to := solidityTestAddress(0x55)
+	backend := &solidTestBackend{
+		solidNum: 66,
+		delegatedAt: []*tronapi.DelegatedResourceInfo{{
+			FrozenBalanceForEnergy:    700,
+			ExpireTimeForEnergy:       800,
+			FrozenBalanceForBandwidth: 900,
+		}},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetDelegatedResourceV2(context.Background(), &apipb.DelegatedResourceMessage{
+		FromAddress: from,
+		ToAddress:   to,
+	})
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceV2: %v", err)
+	}
+	if len(resp.GetDelegatedResource()) != 1 || resp.GetDelegatedResource()[0].GetFrozenBalanceForEnergy() != 700 {
+		t.Fatalf("GetDelegatedResourceV2 = %+v, want solid-bound sentinel", resp.GetDelegatedResource())
+	}
+	if backend.lastDelegatedAt != 66 {
+		t.Fatalf("GetDelegatedResourceV2At block = %d, want solid block 66", backend.lastDelegatedAt)
+	}
+	if backend.liveDelegCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceV2 called %d times, want 0", backend.liveDelegCalls)
+	}
+}
+
+func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x66)
+	to := solidityTestAddress(0x77)
+	backend := &solidTestBackend{
+		solidNum: 77,
+		delegIndexAt: &tronapi.DelegationIndexInfo{
+			ToAddresses: []string{hex.EncodeToString(to)},
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetDelegatedResourceAccountIndexV2(context.Background(), &apipb.BytesMessage{Value: addr})
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2: %v", err)
+	}
+	if len(resp.GetToAccounts()) != 1 || hex.EncodeToString(resp.GetToAccounts()[0]) != hex.EncodeToString(to) {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2 = %+v, want solid-bound sentinel %x", resp.GetToAccounts(), to)
+	}
+	if backend.lastDelegIndexAt != 77 {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2At block = %d, want solid block 77", backend.lastDelegIndexAt)
+	}
+	if backend.liveIndexCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", backend.liveIndexCalls)
 	}
 }
 
