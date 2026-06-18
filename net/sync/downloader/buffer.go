@@ -441,7 +441,8 @@ type ImportBatchRunPlanApplier interface {
 
 // ImportBatchRunResult reports the outcome of applying an import-batch run
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
-// means canonical import failed and the caller should leave the drain loop.
+// means canonical import failed or the imported-prefix progress could not be
+// durably recorded, so the caller should leave the drain loop.
 type ImportBatchRunResult struct {
 	Plan                 ImportBatchRunPlan
 	Decode               BufferedBatchDecodeResult
@@ -471,6 +472,12 @@ type ImportBatchRunApplyResult struct {
 	Settlement     ImportBatchRunSettlementPlan
 	DrainLoop      ImportBatchDrainLoopPlan
 	DrainLoopApply ImportBatchDrainLoopApplyResult
+}
+
+// RecordWriteFailed reports whether the accepted prefix reached canonical
+// insertion but failed to persist the corresponding sync-stage boundary.
+func (r ImportBatchRunResult) RecordWriteFailed() bool {
+	return r.HasRecord && r.RecordApply.ProgressApply.WriteFailed()
 }
 
 // ImportBatchRunSettlementAction names the local drain-loop branch selected
@@ -658,7 +665,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.Outcome.Pause {
 				applier.PauseImport(result.Outcome.PausePeer, result.Outcome.PauseNum, insertErr)
 			}
-			result.StopDrain = result.Outcome.StopDrain
+			result.StopDrain = result.Outcome.StopDrain || result.RecordWriteFailed()
 		}
 	}
 	return result
@@ -666,8 +673,9 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 
 // PlanImportBatchRunSettlement derives the drain-loop branch after applying an
 // import-batch run plan. Decode-only drops and successful imports both keep the
-// local drain loop moving; canonical import failures stop so the sticky pause
-// can be observed by the session.
+// local drain loop moving; canonical import failures and persisted progress
+// failures stop so the sticky pause or storage warning can be observed by the
+// session before another chunk advances.
 func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
 	if result.StopDrain {
 		return ImportBatchRunSettlementPlan{

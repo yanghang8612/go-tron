@@ -1148,6 +1148,39 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	}
 }
 
+func TestApplyImportBatchRunStopsDrainWhenProgressWriteFails(t *testing.T) {
+	block := testBufferedBlock(1)
+	stageWriteErr := errors.New("stage write failed")
+	applier := &recordingImportBatchRunApplier{
+		recordApply: ImportedBatchRecordApplyResult{
+			HasProgress: true,
+			ProgressApply: ImportedBatchProgressApplyResult{
+				HasWriteResult: true,
+				WriteResult: rawdb.SyncImportProgressWriteResult{
+					ProgressError: stageWriteErr,
+				},
+			},
+		},
+	}
+
+	result := ApplyImportBatchRun(testImportRunBatch(t, block), applier)
+
+	if !result.Run.HasRecord || !result.Run.RecordWriteFailed() {
+		t.Fatalf("record = %+v has=%v, want failed imported-prefix progress write", result.Run.RecordApply, result.Run.HasRecord)
+	}
+	if result.Run.Outcome.Pause || result.Run.Outcome.StopDrain {
+		t.Fatalf("outcome = %+v, want successful canonical import without sticky pause", result.Run.Outcome)
+	}
+	if !result.Run.StopDrain ||
+		result.Settlement.Action != ImportBatchRunSettlementStopDrain ||
+		!result.Settlement.StopDrain ||
+		!result.DrainLoop.StopLoop ||
+		result.DrainLoopApply.Action != ImportBatchDrainLoopStop {
+		t.Fatalf("settlement run=%+v settlement=%+v drain=%+v apply=%+v, want stop after progress write failure",
+			result.Run, result.Settlement, result.DrainLoop, result.DrainLoopApply)
+	}
+}
+
 func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *testing.T) {
 	block := testBufferedBlock(1)
 	applier := &recordingImportBatchRunApplier{
