@@ -928,8 +928,9 @@ type StagedBodyDrainPlanApplier interface {
 
 // PlanStagedBodyDrain decides how many staged bodies the local importer may
 // restore and pop. Only a valid SyncBodiesReady row clamps the chunk; invalid
-// rows first refresh the ready frontier, then fall back to an uncapped local
-// drain so the caller can still import any already-contiguous in-memory prefix.
+// rows first refresh the ready frontier; if that repair succeeds, the caller
+// may fall back to an uncapped local drain so any already-contiguous in-memory
+// prefix can still import.
 func PlanStagedBodyDrain(next uint64, max int, ready StagedBodyReadyLimit) StagedBodyDrainPlan {
 	var plan StagedBodyDrainPlan
 	if ready.Valid() {
@@ -980,6 +981,9 @@ func ApplyStagedBodyDrainPlan(plan StagedBodyDrainPlan, applier StagedBodyDrainP
 			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
 			result.HasReadyRefresh = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.ReadyRefresh.Failed() {
+				return result
+			}
 		case StagedBodyDrainRestoreBodies:
 			result.StagedBodyRestore = applier.RestoreStagedBodies(step.From, step.Limit, step.PruneStaleTail)
 			result.HasStagedBodyRestore = true

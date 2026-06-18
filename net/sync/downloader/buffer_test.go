@@ -1701,6 +1701,40 @@ func TestApplyStagedBodyDrainPlan(t *testing.T) {
 	}
 }
 
+func TestApplyStagedBodyDrainPlanStopsAfterReadyRefreshFailure(t *testing.T) {
+	readyErr := errors.New("ready refresh failed")
+	refresh := StagedBodyReadyProgressRefresh{
+		Frontier:   StagedBodyReadyFrontier{Have: true, Number: 12, Hash: tcommon.Hash{0x0c}},
+		Updated:    true,
+		WriteError: readyErr,
+	}
+	plan := StagedBodyDrainPlan{
+		Steps: []StagedBodyDrainStep{
+			{Action: StagedBodyDrainRefreshReady},
+			{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 3, PruneStaleTail: true},
+			{Action: StagedBodyDrainStepAction(255)},
+			{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 3},
+		},
+	}
+	applier := &recordingStagedBodyDrainApplier{readyRefresh: refresh}
+
+	got := ApplyStagedBodyDrainPlan(plan, applier)
+
+	wantCalls := []recordedStagedBodyDrainCall{{action: StagedBodyDrainRefreshReady}}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want refresh only", applier.calls)
+	}
+	if !reflect.DeepEqual(got.AppliedSteps, []StagedBodyDrainStepAction{StagedBodyDrainRefreshReady}) {
+		t.Fatalf("applied steps = %+v, want refresh only", got.AppliedSteps)
+	}
+	if !got.HasReadyRefresh || !got.ReadyRefresh.Failed() || got.ReadyRefresh.WriteError != readyErr {
+		t.Fatalf("ready refresh = %+v set=%v, want failed refresh", got.ReadyRefresh, got.HasReadyRefresh)
+	}
+	if got.HasStagedBodyRestore || len(got.Batch.Buffered) != 0 || len(got.UnknownSteps) != 0 {
+		t.Fatalf("result after ready refresh failure = %+v, want no restore/pop/unknown", got)
+	}
+}
+
 type recordedStagedBodyDrainCall struct {
 	action StagedBodyDrainStepAction
 	from   uint64

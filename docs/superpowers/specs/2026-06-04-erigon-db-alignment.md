@@ -420,6 +420,10 @@ Status:
   failures too: the record scheduler suppresses stats/report output and the
   local drain loop stops before attempting another chunk, preserving the same
   stage-before-downstream-view ordering for ready-frontier writes.
+- Local staged-body drain startup uses the same rule when repairing an invalid
+  `SyncBodiesReady` row before import: if the repair refresh fails, the drain
+  does not restore or pop buffered bodies against a stale or unverified ready
+  frontier.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
