@@ -428,6 +428,9 @@ Status:
   `SyncBodiesReady` drain-limit check before repairing `SyncBodies` from the
   ready row, so a ready row whose staged body is missing or hash-mismatched is
   deleted as downstream tail instead of promoted.
+- Session startup now records the `SyncBodiesReady` refresh result and stops
+  before downstream order repair/check/cursor derivation if that refresh cannot
+  be persisted, preserving stage-before-view ordering across restart recovery.
 - The higher local-drain session branch now treats that pre-import ready repair
   failure as a stop condition instead of an empty drain, so it will not refill
   fetch slots or probe peers as though the stage table were merely empty.

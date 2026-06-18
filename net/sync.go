@@ -454,8 +454,8 @@ func (a syncSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, p
 	return a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
 }
 
-func (a syncSessionStartupApplier) RefreshBodiesReady() {
-	a.service.writeSyncBodiesReadyProgress()
+func (a syncSessionStartupApplier) RefreshBodiesReady() syncdl.StagedBodyReadyProgressRefresh {
+	return a.service.writeSyncBodiesReadyProgress()
 }
 
 func (a syncSessionStartupApplier) RepairSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderRepairResult {
@@ -605,12 +605,13 @@ func (ss *SyncService) repairSyncPipelineProgressOrder() syncdl.SyncPipelineProg
 }
 
 func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
-	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore && !result.HasSyncPipelineOrderRepair && !result.HasSyncPipelineOrder {
+	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore && !result.HasBodiesReadyRefresh && !result.HasSyncPipelineOrderRepair && !result.HasSyncPipelineOrder {
 		return
 	}
 	repair := result.SyncPipelineRepairResult
 	headCompletion := result.SyncPipelineHeadCompletion
 	restore := result.StagedBodyRestore
+	readyRefresh := result.BodiesReadyRefresh
 	orderRepair := result.SyncPipelineOrderRepair
 	cursor := result.SyncPipelineCursor
 	orderIssueCount := len(result.SyncPipelineOrderIssues)
@@ -672,6 +673,14 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupStagedPruneFrom", restore.PruneFrom,
 		"syncStartupStagedHaveLastRestored", restore.HaveLastRestored,
 		"syncStartupStagedLastRestored", restore.LastRestoredNum,
+		"syncStartupReadyRefreshChecked", result.HasBodiesReadyRefresh,
+		"syncStartupReadyRefreshUpdated", readyRefresh.Updated,
+		"syncStartupReadyRefreshDeleted", readyRefresh.Deleted,
+		"syncStartupReadyRefreshFailed", readyRefresh.Failed(),
+		"syncStartupReadyRefreshFrontier", readyRefresh.Frontier.Number,
+		"syncStartupReadyRefreshNextMissing", readyRefresh.Frontier.NextMissing,
+		"syncStartupInterrupted", result.Interrupted,
+		"syncStartupErrorStep", result.ErrorStep,
 	)
 }
 

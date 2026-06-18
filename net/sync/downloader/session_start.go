@@ -93,7 +93,7 @@ type SessionStartupPlanApplier interface {
 	RestoreInventoryTarget(inventoryFloor uint64)
 	DeleteImportedBodies(through uint64)
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
-	RefreshBodiesReady()
+	RefreshBodiesReady() StagedBodyReadyProgressRefresh
 	RepairSyncPipelineProgressOrder() SyncPipelineProgressOrderRepairResult
 	CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult
 }
@@ -131,6 +131,10 @@ type SessionStartupApplyResult struct {
 	HasSyncPipelineOrderRepair bool
 	StagedBodyRestore          StagedBodyRestoreResult
 	HasStagedBodyRestore       bool
+	BodiesReadyRefresh         StagedBodyReadyProgressRefresh
+	HasBodiesReadyRefresh      bool
+	Interrupted                bool
+	ErrorStep                  SessionStartupStepAction
 }
 
 // PlanSyncStartGate applies the StartSync pre-lock gate without observing or
@@ -236,8 +240,14 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.HasStagedBodyRestore = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRefreshBodiesReady:
-			applier.RefreshBodiesReady()
+			result.BodiesReadyRefresh = applier.RefreshBodiesReady()
+			result.HasBodiesReadyRefresh = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.BodiesReadyRefresh.Failed() {
+				result.Interrupted = true
+				result.ErrorStep = step.Action
+				return result
+			}
 		case SessionStartupRepairSyncPipelineOrder:
 			result.SyncPipelineOrderRepair = applier.RepairSyncPipelineProgressOrder()
 			result.HasSyncPipelineOrderRepair = true
