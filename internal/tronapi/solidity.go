@@ -24,6 +24,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	// response reflects the post-solidified state, not live head.
 	mux.HandleFunc("/walletsolidity/getaccount", api.getSolidAccount)
 	mux.HandleFunc("/walletsolidity/getaccountresource", api.getSolidAccountResource)
+	mux.HandleFunc("/walletsolidity/getcontract", api.getSolidContract)
 	mux.HandleFunc("/walletsolidity/getreward", api.getSolidReward)
 	mux.HandleFunc("/walletsolidity/getbrokerage", api.getSolidBrokerage)
 	mux.HandleFunc("/walletsolidity/getBrokerage", api.getSolidBrokerage)
@@ -58,6 +59,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getBlockByLimitNext)
 	mux.HandleFunc("/walletpbft/getaccount", api.getPbftAccount)
 	mux.HandleFunc("/walletpbft/getaccountresource", api.getPbftAccountResource)
+	mux.HandleFunc("/walletpbft/getcontract", api.getPbftContract)
 	mux.HandleFunc("/walletpbft/getreward", api.getPbftReward)
 	mux.HandleFunc("/walletpbft/getbrokerage", api.getPbftBrokerage)
 	mux.HandleFunc("/walletpbft/getBrokerage", api.getPbftBrokerage)
@@ -113,6 +115,14 @@ func (api *API) getSolidAccountResource(w http.ResponseWriter, r *http.Request) 
 
 func (api *API) getPbftAccountResource(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountResource(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidContract(w http.ResponseWriter, r *http.Request) {
+	api.handleGetContract(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftContract(w http.ResponseWriter, r *http.Request) {
+	api.handleGetContract(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidReward(w http.ResponseWriter, r *http.Request) {

@@ -124,6 +124,8 @@ type isolationStubBackend struct {
 	liveAddr                 common.Address
 	solidAddr                common.Address
 	gotAt                    uint64 // last blockNum passed to GetAccountAt
+	liveContractCalls        int
+	contractAtBlock          uint64
 	liveAccountIDCalls       int
 	accountIDAtBlock         uint64
 	liveAccountNetCalls      int
@@ -165,6 +167,24 @@ func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, 
 func (s *isolationStubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	s.gotAt = blockNum
 	return types.NewAccount(s.solidAddr, corepb.AccountType_Normal), nil
+}
+
+func (s *isolationStubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	s.liveContractCalls++
+	return &contractpb.SmartContract{
+		ContractAddress: s.liveAddr.Bytes(),
+		Name:            "live-contract",
+		Bytecode:        []byte{0x01},
+	}, nil
+}
+
+func (s *isolationStubBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
+	s.contractAtBlock = blockNum
+	return &contractpb.SmartContract{
+		ContractAddress: s.solidAddr.Bytes(),
+		Name:            "bound-contract",
+		Bytecode:        []byte{0x09},
+	}, nil
 }
 
 func (s *isolationStubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
@@ -584,6 +604,57 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityGetContractUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		solidAddr:        common.Address{0x41, 0x42},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertGetContractUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftGetContractUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		solidAddr:        common.Address{0x41, 0x13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertGetContractUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertGetContractUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/getcontract?value=411234567890")
+	if err != nil {
+		t.Fatalf("getcontract request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getcontract status: %d", resp.StatusCode)
+	}
+	var got struct {
+		Name     string `json:"name"`
+		Bytecode string `json:"bytecode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "bound-contract" {
+		t.Fatalf("contract name = %q, want bound-contract", got.Name)
+	}
+	if stub.contractAtBlock != wantBlock {
+		t.Fatalf("GetContractAt block = %d, want %d", stub.contractAtBlock, wantBlock)
+	}
+	if stub.liveContractCalls != 0 {
+		t.Fatalf("live GetContract called %d times, want 0", stub.liveContractCalls)
 	}
 }
 

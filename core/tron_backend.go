@@ -208,6 +208,20 @@ func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContra
 	return sc, nil
 }
 
+func (b *TronBackend) GetContractAt(addr tcommon.Address, blockNum uint64) (*contractpb.SmartContract, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	sc, err := session.reader.ContractAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read contract metadata at block %d: %w", blockNum, err)
+	}
+	return sc, nil
+}
+
 func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	current := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()

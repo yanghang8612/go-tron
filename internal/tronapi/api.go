@@ -354,6 +354,10 @@ func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
 }
 
 func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
+	api.handleGetContract(w, r, nil)
+}
+
+func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("value")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -377,8 +381,17 @@ func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	sc, err := api.backend.GetContract(addr)
+	var sc *contractpb.SmartContract
+	if boundFn == nil {
+		sc, err = api.backend.GetContract(addr)
+	} else {
+		sc, err = api.backend.GetContractAt(addr, boundFn())
+	}
 	if err != nil || sc == nil {
+		if boundFn != nil && err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return

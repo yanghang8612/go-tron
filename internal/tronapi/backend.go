@@ -139,6 +139,7 @@ type Backend interface {
 	GetNodeInfo() *NodeInfo
 	PendingTransactionCount() int
 	GetContract(addr common.Address) (*contractpb.SmartContract, error)
+	GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error)
 	TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*TriggerResult, error)
 
 	// Transaction queries

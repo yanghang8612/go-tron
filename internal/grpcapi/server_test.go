@@ -51,6 +51,9 @@ func (b *testBackend) PendingTransactionCount() int                     { return
 func (b *testBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	return b.contract, nil
 }
+func (b *testBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
+	return b.contract, nil
+}
 func (b *testBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	return nil, nil
 }

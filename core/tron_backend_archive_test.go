@@ -489,6 +489,73 @@ func TestArchiveQuery_BrokerageInfoAtUsesCycleHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_GetContractAtUsesMetadataHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	contractAddr := testInsertAddr(51)
+	root := bc.StateRootAtBlock(0)
+	commitContract := func(blk *types.Block, name string, code []byte) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", blk.Number(), err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, blk.Number(), blk.Hash())
+		statedb.SetContract(contractAddr, &contractpb.SmartContract{
+			ContractAddress: contractAddr.Bytes(),
+			Name:            name,
+			Bytecode:        code,
+		})
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit contract metadata block %d: %v", blk.Number(), err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", blk.Number(), err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitContract(block1, "contract-one", []byte{0x01, 0x02})
+	root = commitContract(block2, "contract-two", []byte{0x03, 0x04})
+
+	got1, err := b.GetContractAt(contractAddr, block1.Number())
+	if err != nil {
+		t.Fatalf("GetContractAt(block1): %v", err)
+	}
+	if got1 == nil || got1.Name != "contract-one" || !bytes.Equal(got1.Bytecode, []byte{0x01, 0x02}) {
+		t.Fatalf("GetContractAt(block1) = %+v, want contract-one", got1)
+	}
+	got2, err := b.GetContractAt(contractAddr, block2.Number())
+	if err != nil {
+		t.Fatalf("GetContractAt(block2): %v", err)
+	}
+	if got2 == nil || got2.Name != "contract-two" || !bytes.Equal(got2.Bytecode, []byte{0x03, 0x04}) {
+		t.Fatalf("GetContractAt(block2) = %+v, want contract-two", got2)
+	}
+}
+
 func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain
