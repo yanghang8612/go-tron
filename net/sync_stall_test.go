@@ -365,3 +365,85 @@ func TestInsertFailurePausesSync(t *testing.T) {
 		t.Fatal("StartSync should short-circuit while paused")
 	}
 }
+
+func TestStagedBodyProgressFailurePausesBeforeDrain(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "stage-fail-peer", false, nopHandler{})
+	peer.Start()
+	defer peer.Stop()
+
+	gotFrame := make(chan struct{}, 8)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := c2.Read(buf)
+			if err != nil {
+				return
+			}
+			if n > 0 {
+				select {
+				case gotFrame <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), block1, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("write corrupt staged block1: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+	block2 := stubBlock(2, block1.Hash())
+
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.syncPeer = peer
+	ps, _ := ss.addPeerStateLocked(peer)
+	markPendingLocked(ss, ps, block2.ID())
+	ss.mu.Unlock()
+
+	consumed := ss.HandleBlock(peer, block2, nil)
+	if !consumed {
+		t.Fatal("HandleBlock should consume the requested block while syncing")
+	}
+	if !ss.IsPaused() {
+		t.Fatal("staged-body progress failure should pause sync")
+	}
+	if ss.IsSyncing() {
+		t.Fatal("staged-body progress failure should reset active sync")
+	}
+	select {
+	case <-gotFrame:
+		t.Fatal("paused sync must not send follow-up fetch frames after staged-body failure")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	paused, atNum, _, err := ss.PausedStatus()
+	if !paused || atNum != block2.Number() || err == nil {
+		t.Fatalf("PausedStatus mismatch: paused=%v atNum=%d err=%v, want block2 staging error", paused, atNum, err)
+	}
+	ss.mu.Lock()
+	buffered := len(ss.blockBuffer)
+	_, hashBuffered := ss.bufferedHash[block2.Hash()]
+	ss.mu.Unlock()
+	if buffered != 0 || hashBuffered {
+		t.Fatalf("failed staged body entered drain buffer: buffered=%d hashBuffered=%v", buffered, hashBuffered)
+	}
+	if row, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), block2.Number()); err != nil || ok {
+		t.Fatalf("staged block2 after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || ok {
+		t.Fatalf("SyncBodies after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}

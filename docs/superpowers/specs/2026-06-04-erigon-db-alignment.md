@@ -432,6 +432,9 @@ Status:
   `SyncBodiesReady` refresh failure stops post-buffer refill/drain, keeps the
   block out of the in-memory drain buffer, and lets `SyncService` sticky-pause
   instead of continuing as if the downloader body stage were durable.
+  Net-level regression coverage now corrupts the ready frontier and proves the
+  real `HandleBlock` path pauses, sends no follow-up fetch frames, leaves no
+  in-memory drain entry, and clears the staged-body progress rows during reset.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
