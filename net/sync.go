@@ -1801,30 +1801,11 @@ type syncFetchReceiptSessionRunApplier struct {
 }
 
 func (a *syncFetchReceiptSessionRunApplier) PlanFetchedBlockBuffer(_ syncdl.FetchReceiptRunPlan) syncdl.FetchedBlockBufferPlan {
-	if a == nil || a.service == nil || a.service.chain == nil || a.block == nil {
+	if a == nil || a.service == nil || a.block == nil {
 		return syncdl.FetchedBlockBufferPlan{}
 	}
-	blockHash := a.block.Hash()
-	blockNum := a.block.Number()
-	head := a.service.chain.CurrentBlock()
-	if head == nil || blockNum <= head.Number() {
-		return syncdl.FetchedBlockBufferPlan{}
-	}
-	bid := types.BlockID{Hash: blockHash, Num: blockNum}
-	facts := syncdl.FetchedBlockBufferFacts{
-		ID:          bid,
-		CurrentHead: head.Number(),
-	}
-	if existing, ok := a.service.blockBuffer[blockNum]; ok {
-		facts.ExistingBuffered = true
-		facts.ExistingBufferedHash = existing.Hash
-	} else {
-		_, facts.HashBuffered = a.service.bufferedHash[blockHash]
-		if !facts.HashBuffered {
-			facts.ReservedPath = a.service.reserveBlockPathLocked(bid)
-		}
-	}
-	return syncdl.PlanFetchedBlockBuffer(facts)
+	bid := types.BlockID{Hash: a.block.Hash(), Num: a.block.Number()}
+	return syncdl.PlanFetchedBlockBufferFromReader(bid, syncFetchedBlockBufferFactReader{service: a.service})
 }
 
 func (a *syncFetchReceiptSessionRunApplier) FetchReceiptRunProgress() syncdl.SessionProgress {
@@ -1843,6 +1824,44 @@ func (a *syncFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(plan syn
 
 func (a *syncFetchReceiptSessionRunApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
 	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
+}
+
+type syncFetchedBlockBufferFactReader struct {
+	service *SyncService
+}
+
+func (r syncFetchedBlockBufferFactReader) CurrentFetchedBlockHead() (uint64, bool) {
+	if r.service == nil || r.service.chain == nil {
+		return 0, false
+	}
+	head := r.service.chain.CurrentBlock()
+	if head == nil {
+		return 0, false
+	}
+	return head.Number(), true
+}
+
+func (r syncFetchedBlockBufferFactReader) ExistingFetchedBlock(number uint64) (syncdl.BufferedBlock, bool) {
+	if r.service == nil {
+		return syncdl.BufferedBlock{}, false
+	}
+	block, ok := r.service.blockBuffer[number]
+	return block, ok
+}
+
+func (r syncFetchedBlockBufferFactReader) HasFetchedBlockHash(hash tcommon.Hash) bool {
+	if r.service == nil {
+		return false
+	}
+	_, ok := r.service.bufferedHash[hash]
+	return ok
+}
+
+func (r syncFetchedBlockBufferFactReader) ReserveFetchedBlockPath(id types.BlockID) bool {
+	if r.service == nil {
+		return false
+	}
+	return r.service.reserveBlockPathLocked(id)
 }
 
 type syncFetchedBlockBufferApplier struct {

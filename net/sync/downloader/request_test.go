@@ -691,6 +691,47 @@ func TestPlanFetchedBlockBuffer(t *testing.T) {
 	}
 }
 
+func TestPlanFetchedBlockBufferFromReader(t *testing.T) {
+	bid := queueID(10)
+	if got := PlanFetchedBlockBufferFromReader(bid, nil); got != (FetchedBlockBufferPlan{ID: bid}) {
+		t.Fatalf("nil reader plan = %+v, want ignore with id", got)
+	}
+
+	staleReader := &recordingFetchedBlockBufferFactReader{head: bid.Num, hasHead: true}
+	if got := PlanFetchedBlockBufferFromReader(bid, staleReader); got != (FetchedBlockBufferPlan{ID: bid}) || len(staleReader.reserved) != 0 {
+		t.Fatalf("stale reader plan/reserved = %+v/%+v, want ignore without reserve", got, staleReader.reserved)
+	}
+
+	conflictReader := &recordingFetchedBlockBufferFactReader{
+		head:    bid.Num - 1,
+		hasHead: true,
+		buffered: map[uint64]BufferedBlock{
+			bid.Num: {Hash: tcommon.Hash{0xee}, Num: bid.Num},
+		},
+	}
+	if got := PlanFetchedBlockBufferFromReader(bid, conflictReader); got != (FetchedBlockBufferPlan{Action: FetchedBlockBufferConflict, ID: bid, Kept: tcommon.Hash{0xee}}) || len(conflictReader.reserved) != 0 {
+		t.Fatalf("conflict reader plan/reserved = %+v/%+v, want conflict without reserve", got, conflictReader.reserved)
+	}
+
+	duplicateHashReader := &recordingFetchedBlockBufferFactReader{
+		head:     bid.Num - 1,
+		hasHead:  true,
+		hashSeen: map[tcommon.Hash]bool{bid.Hash: true},
+	}
+	if got := PlanFetchedBlockBufferFromReader(bid, duplicateHashReader); got != (FetchedBlockBufferPlan{ID: bid}) || len(duplicateHashReader.reserved) != 0 {
+		t.Fatalf("duplicate-hash reader plan/reserved = %+v/%+v, want ignore without reserve", got, duplicateHashReader.reserved)
+	}
+
+	stageReader := &recordingFetchedBlockBufferFactReader{
+		head:          bid.Num - 1,
+		hasHead:       true,
+		reserveResult: true,
+	}
+	if got := PlanFetchedBlockBufferFromReader(bid, stageReader); got != (FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: bid}) || !reflect.DeepEqual(stageReader.reserved, []types.BlockID{bid}) {
+		t.Fatalf("stage reader plan/reserved = %+v/%+v, want stage with reserve", got, stageReader.reserved)
+	}
+}
+
 func TestApplyFetchedBlockBufferPlan(t *testing.T) {
 	applier := new(recordingFetchedBlockBufferApplier)
 	conflict := FetchedBlockBufferPlan{
@@ -865,4 +906,34 @@ func (a *recordingFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan Fe
 
 func (a *recordingFetchedBlockBufferApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) {
 	a.staged = append(a.staged, plan)
+}
+
+type recordingFetchedBlockBufferFactReader struct {
+	head          uint64
+	hasHead       bool
+	buffered      map[uint64]BufferedBlock
+	hashSeen      map[tcommon.Hash]bool
+	reserveResult bool
+	reserved      []types.BlockID
+}
+
+func (r *recordingFetchedBlockBufferFactReader) CurrentFetchedBlockHead() (uint64, bool) {
+	return r.head, r.hasHead
+}
+
+func (r *recordingFetchedBlockBufferFactReader) ExistingFetchedBlock(number uint64) (BufferedBlock, bool) {
+	if r.buffered == nil {
+		return BufferedBlock{}, false
+	}
+	block, ok := r.buffered[number]
+	return block, ok
+}
+
+func (r *recordingFetchedBlockBufferFactReader) HasFetchedBlockHash(hash tcommon.Hash) bool {
+	return r.hashSeen[hash]
+}
+
+func (r *recordingFetchedBlockBufferFactReader) ReserveFetchedBlockPath(id types.BlockID) bool {
+	r.reserved = append(r.reserved, id)
+	return r.reserveResult
 }

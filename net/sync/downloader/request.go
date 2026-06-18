@@ -239,6 +239,15 @@ type FetchedBlockBufferFacts struct {
 	ReservedPath         bool
 }
 
+// FetchedBlockBufferFactReader supplies service-owned sync-buffer state to the
+// downloader-owned fetched-block buffer planner.
+type FetchedBlockBufferFactReader interface {
+	CurrentFetchedBlockHead() (uint64, bool)
+	ExistingFetchedBlock(number uint64) (BufferedBlock, bool)
+	HasFetchedBlockHash(hash tcommon.Hash) bool
+	ReserveFetchedBlockPath(id types.BlockID) bool
+}
+
 // FetchedBlockBufferPlan is the downloader-owned local buffer/stage decision.
 type FetchedBlockBufferPlan struct {
 	Action FetchedBlockBufferAction
@@ -585,6 +594,36 @@ func PlanFetchedBlockBuffer(f FetchedBlockBufferFacts) FetchedBlockBufferPlan {
 	}
 	plan.Action = FetchedBlockBufferStage
 	return plan
+}
+
+// PlanFetchedBlockBufferFromReader gathers the minimal service-owned facts
+// needed for the fetched-block buffer decision. The reader owns mutable path
+// reservation side effects; downloader owns when reservation is attempted.
+func PlanFetchedBlockBufferFromReader(id types.BlockID, reader FetchedBlockBufferFactReader) FetchedBlockBufferPlan {
+	if reader == nil {
+		return FetchedBlockBufferPlan{ID: id}
+	}
+	head, ok := reader.CurrentFetchedBlockHead()
+	if !ok {
+		return FetchedBlockBufferPlan{ID: id}
+	}
+	facts := FetchedBlockBufferFacts{
+		ID:          id,
+		CurrentHead: head,
+	}
+	if id.Num <= head {
+		return PlanFetchedBlockBuffer(facts)
+	}
+	if existing, ok := reader.ExistingFetchedBlock(id.Num); ok {
+		facts.ExistingBuffered = true
+		facts.ExistingBufferedHash = existing.Hash
+		return PlanFetchedBlockBuffer(facts)
+	}
+	facts.HashBuffered = reader.HasFetchedBlockHash(id.Hash)
+	if !facts.HashBuffered {
+		facts.ReservedPath = reader.ReserveFetchedBlockPath(id)
+	}
+	return PlanFetchedBlockBuffer(facts)
 }
 
 // ApplyFetchedBlockBufferPlan executes the downloader-owned local
