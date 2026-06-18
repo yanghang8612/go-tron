@@ -576,6 +576,54 @@ func TestReadBlockStateRootRaw_ColdIndexFallback(t *testing.T) {
 	}
 }
 
+func TestReadBlockStateRootIgnoresMalformedHotRowAndFallsBackToAncient(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(39, 0))
+	want := common.HexToHash("3939393939393939393939393939393939393939393939393939393939393939")
+	kv := NewMemoryDatabase()
+	if err := kv.Put(blockStateRootKey(block.Hash().Bytes()), []byte{0x01}); err != nil {
+		t.Fatalf("put malformed bsr: %v", err)
+	}
+	numBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(numBytes, 39)
+	if err := kv.Put(blockHashKey(block.Hash().Bytes()), numBytes); err != nil {
+		t.Fatalf("put bh: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientStateRoots, 39, want.Bytes())
+
+	cdb := NewChainDB(kv, anc)
+	if got := ReadBlockStateRoot(cdb, block.Hash()); got != want {
+		t.Fatalf("ReadBlockStateRoot malformed hot fallback = %x, want %x", got, want)
+	}
+	if got := ReadBlockStateRootRaw(cdb, block.Hash()); !bytes.Equal(got, want.Bytes()) {
+		t.Fatalf("ReadBlockStateRootRaw malformed hot fallback = %x, want %x", got, want.Bytes())
+	}
+}
+
+func TestReadBlockStateRootRejectsMalformedAncientRow(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(49, 0))
+	kv := NewMemoryDatabase()
+	numBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(numBytes, 49)
+	if err := kv.Put(blockHashKey(block.Hash().Bytes()), numBytes); err != nil {
+		t.Fatalf("put bh: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientStateRoots, 49, bytes.Repeat([]byte{0x49}, common.HashLength-1))
+
+	cdb := NewChainDB(kv, anc)
+	if got := ReadBlockStateRoot(cdb, block.Hash()); got != (common.Hash{}) {
+		t.Fatalf("ReadBlockStateRoot malformed ancient = %x, want zero", got)
+	}
+	if got := ReadBlockStateRootRaw(cdb, block.Hash()); got != nil {
+		t.Fatalf("ReadBlockStateRootRaw malformed ancient = %x, want nil", got)
+	}
+}
+
 // TestReadBlockStateRoot_KVPath proves the KV side is preferred when
 // the hot bsr-<hash> row exists, even with an ancient row present (so
 // any future race during slice-3 freezing won't accidentally serve

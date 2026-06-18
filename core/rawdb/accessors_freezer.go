@@ -112,7 +112,7 @@ func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 // row into the `state_roots` ancient table verbatim.
 func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, err := db.Get(blockStateRootKey(hash.Bytes()))
-	if err == nil {
+	if err == nil && len(data) == common.HashLength {
 		return data
 	}
 	if cdb, ok := db.(*ChainDB); ok {
@@ -120,7 +120,7 @@ func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 		if numPtr == nil {
 			return nil
 		}
-		if data, ok := readAncient(cdb, ancientStateRoots, *numPtr); ok {
+		if data, ok := readAncient(cdb, ancientStateRoots, *numPtr); ok && len(data) == common.HashLength {
 			return data
 		}
 	}

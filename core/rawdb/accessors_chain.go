@@ -177,7 +177,9 @@ const ancientStateRoots = AncientStateRootsTable
 // hot-block read path single-Get.
 func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
 	if data, err := db.Get(blockStateRootKey(blockHash.Bytes())); err == nil {
-		return common.BytesToHash(data)
+		if root, ok := decodeHashRow(data); ok {
+			return root
+		}
 	}
 	// KV miss: try the freezer via hash->number. Recent blocks use the hot
 	// bh-<hash> reverse index; historical blocks may resolve through the cold
@@ -187,7 +189,16 @@ func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
 		return common.Hash{}
 	}
 	if data, ok := readAncient(db, ancientStateRoots, *numPtr); ok {
-		return common.BytesToHash(data)
+		if root, ok := decodeHashRow(data); ok {
+			return root
+		}
 	}
 	return common.Hash{}
+}
+
+func decodeHashRow(data []byte) (common.Hash, bool) {
+	if len(data) != common.HashLength {
+		return common.Hash{}, false
+	}
+	return common.BytesToHash(data), true
 }
