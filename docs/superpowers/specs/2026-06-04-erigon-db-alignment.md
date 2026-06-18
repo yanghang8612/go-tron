@@ -636,12 +636,14 @@ Status:
   reads across segment boundaries, `maxBytes` truncation, gap handling, and that
   Manager can serve a row even when full segment scanning would reject trailing
   bytes. `Manager.HasAncient` now proves the requested cold row is actually
-  readable instead of trusting only the manifest range, so advertised but
-  missing chain-freezer files surface as archive data errors before callers
-  treat them as usable ancient coverage. Chain-freezer cold coverage gates now
-  cross-check any registered accessor sidecar against the freezer segment
-  contents, so format-valid but stale offset tables cannot satisfy minimal-mode
-  tail-prune or stage-status verification. Signed/local manifest verification
+  readable instead of trusting only the manifest range, and
+  `Manager.AncientCount` verifies the highest advertised cold row before
+  reporting a snapshot-backed ancient head. Missing chain-freezer files
+  therefore surface as archive data errors before callers treat them as usable
+  ancient coverage. Chain-freezer cold coverage gates now cross-check any
+  registered accessor sidecar against the freezer segment contents, so
+  format-valid but stale offset tables cannot satisfy minimal-mode tail-prune
+  or stage-status verification. Signed/local manifest verification
   now runs the same chain-freezer sidecar cross-checks for active
   `chain-index` and `chain-freezer-accessor` refs, so
   `gtron snapshot verify`, fetch, bootstrap, and restore fail before trusting a

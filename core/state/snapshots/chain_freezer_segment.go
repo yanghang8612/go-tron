@@ -348,12 +348,24 @@ func (m *Manager) AncientCount(kind string) (uint64, error) {
 	if err != nil || manifest == nil {
 		return 0, err
 	}
-	var count uint64
+	var (
+		count      uint64
+		highestRef SegmentRef
+		hasHighest bool
+	)
 	for _, ref := range chainFreezerRefs(manifest) {
 		tail := tailAfterInclusiveBlock(ref.ToTxNum)
 		if tail > count {
 			count = tail
+			highestRef = ref
+			hasHighest = true
 		}
+	}
+	if !hasHighest {
+		return 0, nil
+	}
+	if _, err := m.Ancient(kind, highestRef.ToTxNum); err != nil {
+		return 0, err
 	}
 	return count, nil
 }
