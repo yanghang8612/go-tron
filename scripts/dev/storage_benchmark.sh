@@ -74,6 +74,7 @@ RUN_SNAPSHOT_RETIRED_FILES=-1
 RUN_SNAPSHOT_RETIRED_MISSING=-1
 RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
 RUN_SNAPSHOT_RETIRED_BYTES=-1
+RUN_STORAGE_ALERT_FAILED=0
 
 usage() {
   cat <<'EOF'
@@ -240,6 +241,7 @@ reset_run_metrics() {
   RUN_SNAPSHOT_RETIRED_MISSING=-1
   RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
   RUN_SNAPSHOT_RETIRED_BYTES=-1
+  RUN_STORAGE_ALERT_FAILED=0
 }
 
 block_num() {
@@ -566,7 +568,7 @@ run_storage_alert_gate() {
   RUN_STAGE_VERIFY_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '2p')"
   RUN_SNAPSHOT_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '3p')"
   if [ "$ok" -ne 1 ]; then
-    die "storage-alerts reported critical storage state for $mode/$role; see $log_path"
+    RUN_STORAGE_ALERT_FAILED=1
   fi
 }
 
@@ -789,6 +791,23 @@ print(line)
 PY
 }
 
+storage_alert_result_status() {
+  if [ "$RUN_STORAGE_ALERT_FAILED" -ne 0 ]; then
+    echo "storage-alerts-critical"
+    return
+  fi
+  echo "ok"
+}
+
+fail_after_storage_alert_result_if_needed() {
+  local mode="$1"
+  local role="$2"
+  local log_path="$3"
+  if [ "$RUN_STORAGE_ALERT_FAILED" -ne 0 ]; then
+    die "storage-alerts reported critical storage state for $mode/$role; result row was emitted; see $log_path"
+  fi
+}
+
 run_producer_mode() {
   local mode="$1"
   local idx="$2"
@@ -810,7 +829,10 @@ run_producer_mode() {
   collect_event_log_index_stats "$datadir" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
   run_storage_alert_gate "$mode" "producer" "$datadir" "$log_path"
-  emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
+  local result_status
+  result_status="$(storage_alert_result_status)"
+  emit_result "$PROFILE" "$mode" "producer" "$result_status" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
+  fail_after_storage_alert_result_if_needed "$mode" "producer" "$log_path"
 }
 
 run_sync_mode() {
@@ -839,7 +861,10 @@ run_sync_mode() {
   stop_pid "$node_pid"
   stop_pid "$sr_pid"
   run_storage_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"
-  emit_result "$PROFILE" "$mode" "sync-follower" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$node_dir" "$node_log"
+  local result_status
+  result_status="$(storage_alert_result_status)"
+  emit_result "$PROFILE" "$mode" "sync-follower" "$result_status" "$TARGET_BLOCKS" "$height" "$elapsed" "$node_dir" "$node_log"
+  fail_after_storage_alert_result_if_needed "$mode" "sync-follower" "$node_log"
 }
 
 build_gtron

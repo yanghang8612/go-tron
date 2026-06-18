@@ -814,8 +814,9 @@ Status:
   `stageVerifyIssues`, `stageVerifyDetails`, `snapshotAlertStatus`,
   `snapshotAlertIssues`, `snapshotAlertDetails`, and the `snapshotRetired*`
   counters, so critical freezer, stage, prune, and cold-coverage regressions
-  fail the sample before it is used for Erigon-style storage comparisons while
-  warning rows keep the exact alert detail in JSONL.
+  are emitted as `status=storage-alerts-critical` rows before the harness exits
+  non-zero. Warning rows keep the exact alert detail in JSONL without failing
+  the run.
 
 Remaining:
 

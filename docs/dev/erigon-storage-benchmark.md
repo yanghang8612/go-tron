@@ -156,14 +156,15 @@ fresh follower is draining historical block rows into ancient files instead of
 leaking them in Pebble.
 
 `scripts/dev/storage_benchmark.sh` runs
-`gtron db storage-alerts --datadir <dir>` before emitting each JSONL row. The
-command returns non-zero when persisted freezer state is unsafe for
-prune/archive assumptions, including a recorded repair, a missing or impossible
-`ChainFreezer` stage, inconsistent per-table bounds, or a virtual tail past the
-append head. It also fails the sample if canonical/sync/snapshot/prune stage
-rows are hash-mismatched, out of order, or claim cold coverage that the local
-manifest cannot prove. It also warns when retired snapshot files still occupy
-disk after compaction or replacement. The JSONL row includes
+`gtron db storage-alerts --datadir <dir>` before emitting each JSONL row. When
+persisted freezer state is unsafe for prune/archive assumptions, including a
+recorded repair, a missing or impossible `ChainFreezer` stage, inconsistent
+per-table bounds, or a virtual tail past the append head, the harness writes a
+`status=storage-alerts-critical` JSONL row and then exits non-zero. It uses the
+same fail-after-row behavior if canonical/sync/snapshot/prune stage rows are
+hash-mismatched, out of order, or claim cold coverage that the local manifest
+cannot prove. It also warns when retired snapshot files still occupy disk after
+compaction or replacement. The JSONL row includes
 `freezerAlertStatus`, `freezerAlertIssues`, `freezerAlertHiddenBytes`,
 `freezerAlertDetails`, `stageVerifyStatus`, `stageVerifyIssues`,
 `stageVerifyDetails`, `snapshotAlertStatus`, `snapshotAlertIssues`,
