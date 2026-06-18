@@ -141,6 +141,7 @@ type Backend interface {
 	GetContract(addr common.Address) (*contractpb.SmartContract, error)
 	GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error)
 	TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*TriggerResult, error)
+	TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*TriggerResult, error)
 
 	// Transaction queries
 	GetTransactionByID(txHash common.Hash) (*corepb.Transaction, error)
@@ -158,6 +159,7 @@ type Backend interface {
 	BuildTriggerContractTransaction(owner, contract common.Address, data []byte,
 		feeLimit int64, callValue int64) (*corepb.Transaction, *TriggerResult, error)
 	EstimateEnergy(owner, contract common.Address, data []byte) (int64, error)
+	EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error)
 
 	// Resource & chain queries
 	GetAccountResource(addr common.Address) (*AccountResource, error)

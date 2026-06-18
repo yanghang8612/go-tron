@@ -556,6 +556,84 @@ func TestArchiveQuery_GetContractAtUsesMetadataHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_TriggerConstantContractAtUsesBlockStateRoot(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		if n == 1 {
+			block1 = blk
+		} else {
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	contractAddr := testInsertAddr(55)
+	runtimeReturning := func(v byte) []byte {
+		return []byte{0x60, v, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3}
+	}
+	root := bc.StateRootAtBlock(0)
+	commitRuntime := func(blk *types.Block, code []byte) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", blk.Number(), err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, blk.Number(), blk.Hash())
+		statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+		statedb.SetCode(contractAddr, code)
+		statedb.SetContract(contractAddr, &contractpb.SmartContract{
+			ContractAddress: contractAddr.Bytes(),
+			Name:            "runtime",
+			Bytecode:        code,
+		})
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit contract runtime block %d: %v", blk.Number(), err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", blk.Number(), err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitRuntime(block1, runtimeReturning(0x11))
+	root = commitRuntime(block2, runtimeReturning(0x22))
+
+	got1, err := b.TriggerConstantContractAt(witness, contractAddr, nil, 1_000_000, block1.Number())
+	if err != nil {
+		t.Fatalf("TriggerConstantContractAt(block1): %v", err)
+	}
+	if len(got1.Result) != 32 || got1.Result[31] != 0x11 {
+		t.Fatalf("TriggerConstantContractAt(block1) result = %x, want trailing 0x11", got1.Result)
+	}
+	got2, err := b.TriggerConstantContractAt(witness, contractAddr, nil, 1_000_000, block2.Number())
+	if err != nil {
+		t.Fatalf("TriggerConstantContractAt(block2): %v", err)
+	}
+	if len(got2.Result) != 32 || got2.Result[31] != 0x22 {
+		t.Fatalf("TriggerConstantContractAt(block2) result = %x, want trailing 0x22", got2.Result)
+	}
+	energy, err := b.EstimateEnergyAt(witness, contractAddr, nil, block1.Number())
+	if err != nil {
+		t.Fatalf("EstimateEnergyAt(block1): %v", err)
+	}
+	if energy <= 0 {
+		t.Fatalf("EstimateEnergyAt(block1) = %d, want positive energy", energy)
+	}
+}
+
 func TestArchiveQuery_ProposalsAtUsesSystemProposalHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

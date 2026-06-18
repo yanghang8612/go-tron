@@ -384,7 +384,7 @@ func (s *SolidityServer) TriggerConstantContract(_ context.Context, in *contract
 	}
 	owner := common.BytesToAddress(in.OwnerAddress)
 	contract := common.BytesToAddress(in.ContractAddress)
-	result, err := s.backend.TriggerConstantContract(owner, contract, in.Data, 30_000_000)
+	result, err := s.backend.TriggerConstantContractAt(owner, contract, in.Data, 30_000_000, s.solidNum())
 	ext := &apipb.TransactionExtention{
 		Result: &apipb.Return{Result: err == nil},
 	}
@@ -404,7 +404,7 @@ func (s *SolidityServer) EstimateEnergy(_ context.Context, in *contractpb.Trigge
 	}
 	owner := common.BytesToAddress(in.OwnerAddress)
 	contract := common.BytesToAddress(in.ContractAddress)
-	energy, err := s.backend.EstimateEnergy(owner, contract, in.Data)
+	energy, err := s.backend.EstimateEnergyAt(owner, contract, in.Data, s.solidNum())
 	if err != nil {
 		return &apipb.EstimateEnergyMessage{
 			Result: &apipb.Return{Result: false, Message: []byte(err.Error())},

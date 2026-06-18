@@ -48,8 +48,8 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
-	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateEnergy)
-	mux.HandleFunc("/walletsolidity/triggerconstantcontract", api.triggerConstantContract)
+	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateSolidEnergy)
+	mux.HandleFunc("/walletsolidity/triggerconstantcontract", api.triggerSolidConstantContract)
 }
 
 // RegisterPbftRoutes registers /walletpbft/ prefixed endpoints.
@@ -86,8 +86,8 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
-	mux.HandleFunc("/walletpbft/estimateenergy", api.estimateEnergy)
-	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerConstantContract)
+	mux.HandleFunc("/walletpbft/estimateenergy", api.estimatePbftEnergy)
+	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerPbftConstantContract)
 }
 
 // solidBoundNum returns the solid block number as the upper bound.
@@ -289,6 +289,22 @@ func (api *API) getSolidDelegatedResourceAccountIndexV2(w http.ResponseWriter, r
 
 func (api *API) getPbftDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceAccountIndexV2(w, r, api.pbftBoundNum)
+}
+
+func (api *API) triggerSolidConstantContract(w http.ResponseWriter, r *http.Request) {
+	api.handleTriggerConstantContract(w, r, api.solidBoundNum)
+}
+
+func (api *API) triggerPbftConstantContract(w http.ResponseWriter, r *http.Request) {
+	api.handleTriggerConstantContract(w, r, api.pbftBoundNum)
+}
+
+func (api *API) estimateSolidEnergy(w http.ResponseWriter, r *http.Request) {
+	api.handleEstimateEnergy(w, r, api.solidBoundNum)
+}
+
+func (api *API) estimatePbftEnergy(w http.ResponseWriter, r *http.Request) {
+	api.handleEstimateEnergy(w, r, api.pbftBoundNum)
 }
 
 // --- Solid-block variants ---

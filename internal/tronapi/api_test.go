@@ -72,6 +72,9 @@ func (s *stubBackend) GetContractAt(addr common.Address, blockNum uint64) (*cont
 func (s *stubBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	return nil, nil
 }
+func (s *stubBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
 	return nil, nil
 }
@@ -95,6 +98,9 @@ func (s *stubBackend) BuildTriggerContractTransaction(owner, contract common.Add
 	return nil, nil, nil
 }
 func (s *stubBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
+	return 0, nil
+}
+func (s *stubBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
 	return 0, nil
 }
 func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {

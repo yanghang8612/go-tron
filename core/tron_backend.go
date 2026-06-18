@@ -225,6 +225,33 @@ func (b *TronBackend) GetContractAt(addr tcommon.Address, blockNum uint64) (*con
 func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	current := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()
+	return b.triggerConstantContractAtRoot(owner, contractAddr, data, energyLimit, root, current, nil, 0)
+}
+
+func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	block, err := b.GetBlockByNumber(blockNum)
+	if err != nil || block == nil {
+		return nil, fmt.Errorf("block %d not found", blockNum)
+	}
+	root := b.chain.StateRootAtBlock(blockNum)
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("state root for block %d not available", blockNum)
+	}
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	return b.triggerConstantContractAtRoot(owner, contractAddr, data, energyLimit, root, block, session.reader, blockNum)
+}
+
+func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.Address, data []byte, energyLimit int64, root tcommon.Hash, block *types.Block, history *state.PersistentHistoryReader, historyBlock uint64) (*tronapi.TriggerResult, error) {
+	if block == nil {
+		return nil, fmt.Errorf("block context not available")
+	}
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("state root for block %d not available", block.Number())
+	}
 	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -235,16 +262,22 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 	if err != nil {
 		return nil, fmt.Errorf("copy state: %w", err)
 	}
+	if history != nil {
+		statedbCopy.SetHistoricalLatestView(history, historyBlock)
+	}
 
 	if energyLimit <= 0 {
 		energyLimit = 30_000_000 // default max energy for constant calls
 	}
 
-	dp := b.chain.DynProps()
-	cfg := vm.NewTVMConfig(current.Number(), dp)
+	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+	dp.SetLatestBlockHeaderNumber(int64(block.Number()))
+	dp.SetLatestBlockHeaderTimestamp(block.Timestamp())
+	dp.SetLatestBlockHeaderHash(block.Hash())
+	cfg := vm.NewTVMConfig(block.Number(), dp)
 	cfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
-	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
+	evm := vm.NewTVM(statedbCopy, dp, owner, block.Number(), block.Timestamp(), tcommon.Address{}, 1, cfg)
 
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)
@@ -393,6 +426,14 @@ func (b *TronBackend) BuildTriggerContractTransaction(owner, contract tcommon.Ad
 
 func (b *TronBackend) EstimateEnergy(owner, contract tcommon.Address, data []byte) (int64, error) {
 	result, err := b.TriggerConstantContract(owner, contract, data, 30_000_000)
+	if err != nil {
+		return 0, err
+	}
+	return result.EnergyUsed, nil
+}
+
+func (b *TronBackend) EstimateEnergyAt(owner, contract tcommon.Address, data []byte, blockNum uint64) (int64, error) {
+	result, err := b.TriggerConstantContractAt(owner, contract, data, 30_000_000, blockNum)
 	if err != nil {
 		return 0, err
 	}

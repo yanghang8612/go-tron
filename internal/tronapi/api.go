@@ -400,6 +400,10 @@ func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundF
 }
 
 func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) {
+	api.handleTriggerConstantContract(w, r, nil)
+}
+
+func (api *API) handleTriggerConstantContract(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -453,7 +457,12 @@ func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	result, err := api.backend.TriggerConstantContract(owner, contract, data, 30_000_000)
+	var result *TriggerResult
+	if boundFn == nil {
+		result, err = api.backend.TriggerConstantContract(owner, contract, data, 30_000_000)
+	} else {
+		result, err = api.backend.TriggerConstantContractAt(owner, contract, data, 30_000_000, boundFn())
+	}
 
 	resp := map[string]interface{}{
 		"result": map[string]interface{}{
@@ -638,6 +647,10 @@ func (api *API) triggerSmartContract(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
+	api.handleEstimateEnergy(w, r, nil)
+}
+
+func (api *API) handleEstimateEnergy(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -685,7 +698,12 @@ func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	energy, err := api.backend.EstimateEnergy(owner, contract, data)
+	var energy int64
+	if boundFn == nil {
+		energy, err = api.backend.EstimateEnergy(owner, contract, data)
+	} else {
+		energy, err = api.backend.EstimateEnergyAt(owner, contract, data, boundFn())
+	}
 	resp := map[string]interface{}{
 		"result": map[string]interface{}{
 			"result": err == nil,

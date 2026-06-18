@@ -46,6 +46,8 @@ type solidTestBackend struct {
 	lastEnergyAt       uint64
 	lastWitnessesAt    uint64
 	lastBrokerageAt    uint64
+	lastConstantAt     uint64
+	lastEstimateAt     uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -67,6 +69,8 @@ type solidTestBackend struct {
 	liveEnergy         int
 	liveWitnesses      int
 	liveBrokerage      int
+	liveConstant       int
+	liveEstimate       int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -88,6 +92,8 @@ type solidTestBackend struct {
 	energyAt           string
 	witnessesAt        []*tronapi.WitnessInfo
 	brokerageAt        int64
+	constantAt         *tronapi.TriggerResult
+	estimateAt         int64
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -370,6 +376,32 @@ func (b *solidTestBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint
 	return b.testBackend.GetBrokerageInfoAt(addr, blockNum)
 }
 
+func (b *solidTestBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
+	b.liveConstant++
+	return b.testBackend.TriggerConstantContract(owner, contract, data, energyLimit)
+}
+
+func (b *solidTestBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	b.lastConstantAt = blockNum
+	if b.constantAt != nil {
+		return b.constantAt, nil
+	}
+	return b.testBackend.TriggerConstantContractAt(owner, contract, data, energyLimit, blockNum)
+}
+
+func (b *solidTestBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
+	b.liveEstimate++
+	return b.testBackend.EstimateEnergy(owner, contract, data)
+}
+
+func (b *solidTestBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
+	b.lastEstimateAt = blockNum
+	if b.estimateAt != 0 {
+		return b.estimateAt, nil
+	}
+	return b.testBackend.EstimateEnergyAt(owner, contract, data, blockNum)
+}
+
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
@@ -578,6 +610,58 @@ func TestSolidity_GetBrokerageInfoUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveBrokerage != 0 {
 		t.Fatalf("live GetBrokerageInfo called %d times, want 0", backend.liveBrokerage)
+	}
+}
+
+func TestSolidity_TriggerConstantContractUsesSolidBoundArchivePath(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:   91,
+		constantAt: &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 123},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.TriggerConstantContract(context.Background(), &contractpb.TriggerSmartContract{
+		OwnerAddress:    solidityTestAddress(0x35),
+		ContractAddress: solidityTestAddress(0x36),
+		Data:            []byte{0x01},
+	})
+	if err != nil {
+		t.Fatalf("TriggerConstantContract: %v", err)
+	}
+	if resp.GetEnergyUsed() != 123 || len(resp.GetConstantResult()) != 1 || string(resp.GetConstantResult()[0]) != "bound" {
+		t.Fatalf("TriggerConstantContract = %+v, want solid-bound sentinel", resp)
+	}
+	if backend.lastConstantAt != 91 {
+		t.Fatalf("TriggerConstantContractAt block = %d, want solid block 91", backend.lastConstantAt)
+	}
+	if backend.liveConstant != 0 {
+		t.Fatalf("live TriggerConstantContract called %d times, want 0", backend.liveConstant)
+	}
+}
+
+func TestSolidity_EstimateEnergyUsesSolidBoundArchivePath(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:   92,
+		estimateAt: 456,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.EstimateEnergy(context.Background(), &contractpb.TriggerSmartContract{
+		OwnerAddress:    solidityTestAddress(0x37),
+		ContractAddress: solidityTestAddress(0x38),
+		Data:            []byte{0x02},
+	})
+	if err != nil {
+		t.Fatalf("EstimateEnergy: %v", err)
+	}
+	if resp.GetEnergyRequired() != 456 || !resp.GetResult().GetResult() {
+		t.Fatalf("EstimateEnergy = %+v, want solid-bound sentinel", resp)
+	}
+	if backend.lastEstimateAt != 92 {
+		t.Fatalf("EstimateEnergyAt block = %d, want solid block 92", backend.lastEstimateAt)
+	}
+	if backend.liveEstimate != 0 {
+		t.Fatalf("live EstimateEnergy called %d times, want 0", backend.liveEstimate)
 	}
 }
 

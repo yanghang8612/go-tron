@@ -126,6 +126,10 @@ type isolationStubBackend struct {
 	gotAt                    uint64 // last blockNum passed to GetAccountAt
 	liveContractCalls        int
 	contractAtBlock          uint64
+	liveConstantCalls        int
+	constantAtBlock          uint64
+	liveEstimateCalls        int
+	estimateAtBlock          uint64
 	liveAccountIDCalls       int
 	accountIDAtBlock         uint64
 	liveAccountNetCalls      int
@@ -191,6 +195,26 @@ func (s *isolationStubBackend) GetContractAt(addr common.Address, blockNum uint6
 		Name:            "bound-contract",
 		Bytecode:        []byte{0x09},
 	}, nil
+}
+
+func (s *isolationStubBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
+	s.liveConstantCalls++
+	return &tronapi.TriggerResult{Result: []byte("live"), EnergyUsed: 1}, nil
+}
+
+func (s *isolationStubBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	s.constantAtBlock = blockNum
+	return &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 99}, nil
+}
+
+func (s *isolationStubBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
+	s.liveEstimateCalls++
+	return 1, nil
+}
+
+func (s *isolationStubBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
+	s.estimateAtBlock = blockNum
+	return 88, nil
 }
 
 func (s *isolationStubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
@@ -691,6 +715,80 @@ func assertGetContractUsesBound(t *testing.T, prefix string, stub *isolationStub
 	}
 	if stub.liveContractCalls != 0 {
 		t.Fatalf("live GetContract called %d times, want 0", stub.liveContractCalls)
+	}
+}
+
+func TestSolidityConstantExecutionUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertConstantExecutionUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftConstantExecutionUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertConstantExecutionUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertConstantExecutionUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	body := `{"owner_address":"411111111111111111111111111111111111111111","contract_address":"412222222222222222222222222222222222222222","data":"00"}`
+	resp, err := http.Post(prefix+"/triggerconstantcontract", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("triggerconstantcontract request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("triggerconstantcontract status: %d", resp.StatusCode)
+	}
+	var trigger struct {
+		EnergyUsed     int64    `json:"energy_used"`
+		ConstantResult []string `json:"constant_result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&trigger); err != nil {
+		t.Fatal(err)
+	}
+	if trigger.EnergyUsed != 99 || len(trigger.ConstantResult) != 1 || trigger.ConstantResult[0] != "626f756e64" {
+		t.Fatalf("trigger response = %+v, want bound result/energy", trigger)
+	}
+	if stub.constantAtBlock != wantBlock {
+		t.Fatalf("TriggerConstantContractAt block = %d, want %d", stub.constantAtBlock, wantBlock)
+	}
+	if stub.liveConstantCalls != 0 {
+		t.Fatalf("live TriggerConstantContract called %d times, want 0", stub.liveConstantCalls)
+	}
+
+	resp, err = http.Post(prefix+"/estimateenergy", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("estimateenergy request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("estimateenergy status: %d", resp.StatusCode)
+	}
+	var estimate struct {
+		EnergyRequired int64 `json:"energy_required"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&estimate); err != nil {
+		t.Fatal(err)
+	}
+	if estimate.EnergyRequired != 88 {
+		t.Fatalf("energy_required = %d, want 88", estimate.EnergyRequired)
+	}
+	if stub.estimateAtBlock != wantBlock {
+		t.Fatalf("EstimateEnergyAt block = %d, want %d", stub.estimateAtBlock, wantBlock)
+	}
+	if stub.liveEstimateCalls != 0 {
+		t.Fatalf("live EstimateEnergy called %d times, want 0", stub.liveEstimateCalls)
 	}
 }
 
