@@ -771,10 +771,24 @@ func TestDBStageStatusCmd(t *testing.T) {
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageHeaders, block1.Number(), block1.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress Headers: %v", err)
 	}
-	mismatchHash := common.Hash{0xee}
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), mismatchHash); err != nil {
+	stagedBlock1 := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(block1.Number()),
+				Timestamp: 40_000 + int64(block1.Number()),
+			},
+		},
+	})
+	if stagedBlock1.Hash() == block1.Hash() {
+		t.Fatal("staged block hash unexpectedly matches canonical block")
+	}
+	if err := rawdb.WriteSyncStagedBlock(db, stagedBlock1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, stagedBlock1.Number(), stagedBlock1.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
 	}
+	mismatchHash := common.Hash{0xee}
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, block1.Number(), mismatchHash); err != nil {
 		t.Fatalf("WriteStageProgress SyncImport: %v", err)
 	}
@@ -799,7 +813,7 @@ func TestDBStageStatusCmd(t *testing.T) {
 		"Stage status:",
 		"known=",
 		fmt.Sprintf("group=canonical name=%s value=1 hash=%x verified=canonical", rawdb.StageHeaders, block1.Hash()),
-		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncBodies, mismatchHash, block1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncBodies, stagedBlock1.Hash(), block1.Hash()),
 		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncImport, mismatchHash, block1.Hash()),
 		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
 		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
@@ -822,6 +836,32 @@ func TestDBStageStatusCmd(t *testing.T) {
 	}
 	if !strings.Contains(verifyOutput, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
 		t.Fatalf("verify output missing SyncBodies line:\n%s", verifyOutput)
+	}
+}
+
+func TestDBStageStatusVerifyChecksSyncBodiesStagedRow(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodies staged-body status=staged-missing") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies staged missing", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
+		t.Fatalf("verify output missing SyncBodies line:\n%s", output)
 	}
 }
 

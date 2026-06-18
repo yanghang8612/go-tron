@@ -647,20 +647,28 @@ func dbStageStatusStagedBodyIssues(db ethdb.KeyValueReader, rows []dbStageStatus
 	if db == nil {
 		return nil
 	}
+	var issues []string
 	for _, row := range rows {
-		if row.stage != rawdb.StageSyncBodiesReady || !row.present {
+		if !row.present {
 			continue
 		}
-		ready := syncdl.ReadStagedBodyReadyDrainLimit(db, row.progress.BlockNum)
-		if ready.Valid() {
-			return nil
+		switch row.stage {
+		case rawdb.StageSyncBodies:
+			progress := syncdl.ReadStagedBodyProgress(db, rawdb.StageSyncBodies)
+			if !progress.Valid() {
+				issues = append(issues, dbStageStatusStagedBodyProgressIssue(rawdb.StageSyncBodies, progress))
+			}
+		case rawdb.StageSyncBodiesReady:
+			ready := syncdl.ReadStagedBodyReadyDrainLimit(db, row.progress.BlockNum)
+			if !ready.Valid() {
+				issues = append(issues, dbStageStatusStagedBodyReadyIssue(ready))
+			}
 		}
-		return []string{dbStageStatusStagedBodyIssue(ready)}
 	}
-	return nil
+	return issues
 }
 
-func dbStageStatusStagedBodyIssue(ready syncdl.StagedBodyReadyLimit) string {
+func dbStageStatusStagedBodyReadyIssue(ready syncdl.StagedBodyReadyLimit) string {
 	parts := []string{
 		fmt.Sprintf("%s staged-body status=%s block=%d", rawdb.StageSyncBodiesReady, dbStageStatusStagedBodyStatus(ready.Status), ready.StageRow.BlockNum),
 	}
@@ -675,6 +683,25 @@ func dbStageStatusStagedBodyIssue(ready syncdl.StagedBodyReadyLimit) string {
 	}
 	if ready.ReadError != nil {
 		parts = append(parts, fmt.Sprintf("readError=%q", ready.ReadError.Error()))
+	}
+	return strings.Join(parts, " ")
+}
+
+func dbStageStatusStagedBodyProgressIssue(stage rawdb.StageID, progress syncdl.StagedBodyProgressCheck) string {
+	parts := []string{
+		fmt.Sprintf("%s staged-body status=%s block=%d", stage, dbStageStatusStagedBodyProgressStatus(progress.Status), progress.StageRow.BlockNum),
+	}
+	if progress.StageRow.HasBlockHash {
+		parts = append(parts, fmt.Sprintf("hash=%x", progress.StageRow.BlockHash))
+	}
+	if progress.StagedRow.Number != 0 || progress.StagedHash != (common.Hash{}) {
+		parts = append(parts, fmt.Sprintf("stagedBlock=%d stagedHash=%x", progress.StagedRow.Number, progress.StagedHash))
+	}
+	if progress.StageError != nil {
+		parts = append(parts, fmt.Sprintf("stageError=%q", progress.StageError.Error()))
+	}
+	if progress.ReadError != nil {
+		parts = append(parts, fmt.Sprintf("readError=%q", progress.ReadError.Error()))
 	}
 	return strings.Join(parts, " ")
 }
@@ -698,6 +725,29 @@ func dbStageStatusStagedBodyStatus(status syncdl.StagedBodyReadyLimitStatus) str
 	case syncdl.StagedBodyReadyLimitHashMismatch:
 		return "hash-mismatch"
 	case syncdl.StagedBodyReadyLimitValid:
+		return "valid"
+	default:
+		return "unknown"
+	}
+}
+
+func dbStageStatusStagedBodyProgressStatus(status syncdl.StagedBodyProgressStatus) string {
+	switch status {
+	case syncdl.StagedBodyProgressMissing:
+		return "missing"
+	case syncdl.StagedBodyProgressReadError:
+		return "progress-read-error"
+	case syncdl.StagedBodyProgressUnbound:
+		return "unbound"
+	case syncdl.StagedBodyProgressStagedReadError:
+		return "staged-read-error"
+	case syncdl.StagedBodyProgressStagedMissing:
+		return "staged-missing"
+	case syncdl.StagedBodyProgressNumberMismatch:
+		return "number-mismatch"
+	case syncdl.StagedBodyProgressHashMismatch:
+		return "hash-mismatch"
+	case syncdl.StagedBodyProgressValid:
 		return "valid"
 	default:
 		return "unknown"

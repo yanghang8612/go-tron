@@ -119,11 +119,37 @@ const (
 	StagedBodyReadyLimitValid
 )
 
+// StagedBodyProgressStatus explains whether a downloader stage progress row
+// points to a readable staged-body row with the same block number and hash.
+type StagedBodyProgressStatus uint8
+
+const (
+	StagedBodyProgressMissing StagedBodyProgressStatus = iota
+	StagedBodyProgressReadError
+	StagedBodyProgressUnbound
+	StagedBodyProgressStagedReadError
+	StagedBodyProgressStagedMissing
+	StagedBodyProgressNumberMismatch
+	StagedBodyProgressHashMismatch
+	StagedBodyProgressValid
+)
+
 // StagedBodyReadyLimit is the validation result for a persisted
 // SyncBodiesReady row.
 type StagedBodyReadyLimit struct {
 	Status     StagedBodyReadyLimitStatus
 	Limit      uint64
+	StageRow   rawdb.StageProgress
+	StagedRow  rawdb.SyncStagedBlockRow
+	StageError error
+	ReadError  error
+	StagedHash tcommon.Hash
+}
+
+// StagedBodyProgressCheck is the validation result for a downloader stage
+// progress row that should be backed by the sync-staged body table.
+type StagedBodyProgressCheck struct {
+	Status     StagedBodyProgressStatus
 	StageRow   rawdb.StageProgress
 	StagedRow  rawdb.SyncStagedBlockRow
 	StageError error
@@ -155,6 +181,12 @@ func (r StagedBodyDrainRunResult) Failed() bool {
 // Valid reports whether the row can cap a local import drain.
 func (l StagedBodyReadyLimit) Valid() bool {
 	return l.Status == StagedBodyReadyLimitValid
+}
+
+// Valid reports whether the stage row is hash-bound and backed by a matching
+// sync-staged body row.
+func (c StagedBodyProgressCheck) Valid() bool {
+	return c.Status == StagedBodyProgressValid
 }
 
 // FindStagedBodyReadyFrontier scans staged bodies from start until the first
@@ -320,6 +352,31 @@ func ReadStagedBodyReadyDrainLimit(db ethdb.KeyValueReader, next uint64) StagedB
 	return ValidateStagedBodyReadyDrainLimit(next, row, ok, staged, stagedOK, readErr)
 }
 
+// ReadStagedBodyProgress reads a downloader stage progress row and validates
+// that its hash-bound block points to the same row in sync-staged body storage.
+func ReadStagedBodyProgress(db ethdb.KeyValueReader, stage rawdb.StageID) StagedBodyProgressCheck {
+	if db == nil {
+		return ValidateStagedBodyProgress(rawdb.StageProgress{Stage: stage}, false, rawdb.SyncStagedBlockRow{}, false, nil)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+	if err != nil {
+		return StagedBodyProgressCheck{
+			Status:     StagedBodyProgressReadError,
+			StageRow:   rawdb.StageProgress{Stage: stage},
+			StageError: err,
+		}
+	}
+	var (
+		staged   rawdb.SyncStagedBlockRow
+		stagedOK bool
+		readErr  error
+	)
+	if ok && row.HasBlockHash {
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	}
+	return ValidateStagedBodyProgress(row, ok, staged, stagedOK, readErr)
+}
+
 // ReadStagedBodyDrainPlan reads SyncBodiesReady and derives the local
 // staged-body drain plan in one downloader-owned decision point.
 func ReadStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int) StagedBodyDrainReadPlan {
@@ -383,5 +440,42 @@ func ValidateStagedBodyReadyDrainLimit(next uint64, row rawdb.StageProgress, hav
 	}
 	result.Status = StagedBodyReadyLimitValid
 	result.Limit = row.BlockNum
+	return result
+}
+
+// ValidateStagedBodyProgress checks that a downloader progress row is
+// hash-bound and still matches the staged body row it points at.
+func ValidateStagedBodyProgress(row rawdb.StageProgress, haveRow bool, staged rawdb.SyncStagedBlockRow, haveStaged bool, readErr error) StagedBodyProgressCheck {
+	result := StagedBodyProgressCheck{
+		StageRow:   row,
+		StagedRow:  staged,
+		ReadError:  readErr,
+		StagedHash: staged.Hash,
+	}
+	if !haveRow {
+		result.Status = StagedBodyProgressMissing
+		return result
+	}
+	if !row.HasBlockHash {
+		result.Status = StagedBodyProgressUnbound
+		return result
+	}
+	if readErr != nil {
+		result.Status = StagedBodyProgressStagedReadError
+		return result
+	}
+	if !haveStaged {
+		result.Status = StagedBodyProgressStagedMissing
+		return result
+	}
+	if staged.Number != row.BlockNum {
+		result.Status = StagedBodyProgressNumberMismatch
+		return result
+	}
+	if staged.Hash != row.BlockHash {
+		result.Status = StagedBodyProgressHashMismatch
+		return result
+	}
+	result.Status = StagedBodyProgressValid
 	return result
 }

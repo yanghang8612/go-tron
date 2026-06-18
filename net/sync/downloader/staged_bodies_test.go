@@ -498,6 +498,44 @@ func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 	}
 }
 
+func TestValidateStagedBodyProgress(t *testing.T) {
+	readErr := errors.New("read staged")
+	row := rawdb.StageProgress{
+		Stage:        rawdb.StageSyncBodies,
+		BlockNum:     7,
+		BlockHash:    tcommon.Hash{0x07},
+		HasBlockHash: true,
+	}
+	staged := rawdb.SyncStagedBlockRow{Number: 7, Hash: row.BlockHash}
+	tests := []struct {
+		name       string
+		row        rawdb.StageProgress
+		haveRow    bool
+		staged     rawdb.SyncStagedBlockRow
+		haveStaged bool
+		readErr    error
+		status     StagedBodyProgressStatus
+		valid      bool
+	}{
+		{name: "missing", status: StagedBodyProgressMissing},
+		{name: "unbound", row: rawdb.StageProgress{Stage: rawdb.StageSyncBodies, BlockNum: 7}, haveRow: true, status: StagedBodyProgressUnbound},
+		{name: "read error", row: row, haveRow: true, readErr: readErr, status: StagedBodyProgressStagedReadError},
+		{name: "staged missing", row: row, haveRow: true, status: StagedBodyProgressStagedMissing},
+		{name: "number mismatch", row: row, haveRow: true, staged: rawdb.SyncStagedBlockRow{Number: 8, Hash: row.BlockHash}, haveStaged: true, status: StagedBodyProgressNumberMismatch},
+		{name: "hash mismatch", row: row, haveRow: true, staged: rawdb.SyncStagedBlockRow{Number: 7, Hash: tcommon.Hash{0xff}}, haveStaged: true, status: StagedBodyProgressHashMismatch},
+		{name: "valid", row: row, haveRow: true, staged: staged, haveStaged: true, status: StagedBodyProgressValid, valid: true},
+	}
+	for _, tt := range tests {
+		got := ValidateStagedBodyProgress(tt.row, tt.haveRow, tt.staged, tt.haveStaged, tt.readErr)
+		if got.Status != tt.status || got.Valid() != tt.valid {
+			t.Fatalf("%s: result = %+v, want status %v valid %v", tt.name, got, tt.status, tt.valid)
+		}
+		if tt.readErr != nil && !errors.Is(got.ReadError, tt.readErr) {
+			t.Fatalf("%s: ReadError = %v, want %v", tt.name, got.ReadError, tt.readErr)
+		}
+	}
+}
+
 func TestReadStagedBodyReadyDrainLimit(t *testing.T) {
 	block := testBufferedBlock(7)
 	tests := []struct {
@@ -597,9 +635,101 @@ func TestReadStagedBodyReadyDrainLimit(t *testing.T) {
 	}
 }
 
+func TestReadStagedBodyProgress(t *testing.T) {
+	block := testBufferedBlock(7)
+	tests := []struct {
+		name   string
+		setup  func(*testing.T, ethdb.KeyValueStore)
+		status StagedBodyProgressStatus
+		valid  bool
+	}{
+		{
+			name:   "missing",
+			status: StagedBodyProgressMissing,
+		},
+		{
+			name: "valid",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+					t.Fatalf("write staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write stage progress: %v", err)
+				}
+			},
+			status: StagedBodyProgressValid,
+			valid:  true,
+		},
+		{
+			name: "unbound",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodies, block.Number()); err != nil {
+					t.Fatalf("write stage progress: %v", err)
+				}
+			},
+			status: StagedBodyProgressUnbound,
+		},
+		{
+			name: "staged missing",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write stage progress: %v", err)
+				}
+			},
+			status: StagedBodyProgressStagedMissing,
+		},
+		{
+			name: "staged read error",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlockRaw(db, block, []byte{0x01, 0x02}); err != nil {
+					t.Fatalf("write corrupt staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write stage progress: %v", err)
+				}
+			},
+			status: StagedBodyProgressStagedReadError,
+		},
+		{
+			name: "hash mismatch",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+					t.Fatalf("write staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block.Number(), tcommon.Hash{0xff}); err != nil {
+					t.Fatalf("write stage progress: %v", err)
+				}
+			},
+			status: StagedBodyProgressHashMismatch,
+		},
+	}
+	for _, tt := range tests {
+		db := rawdb.NewMemoryDatabase()
+		if tt.setup != nil {
+			tt.setup(t, db)
+		}
+		got := ReadStagedBodyProgress(db, rawdb.StageSyncBodies)
+		if got.Status != tt.status || got.Valid() != tt.valid {
+			t.Fatalf("%s: result = %+v, want status %v valid %v", tt.name, got, tt.status, tt.valid)
+		}
+	}
+}
+
 func TestReadStagedBodyReadyDrainLimitProgressReadError(t *testing.T) {
 	got := ReadStagedBodyReadyDrainLimit(corruptStageProgressReader{}, 7)
 	if got.Status != StagedBodyReadyLimitProgressReadError || got.StageError == nil {
+		t.Fatalf("result = %+v, want progress read error", got)
+	}
+}
+
+func TestReadStagedBodyProgressReadError(t *testing.T) {
+	got := ReadStagedBodyProgress(corruptStageProgressReader{}, rawdb.StageSyncBodies)
+	if got.Status != StagedBodyProgressReadError || got.StageError == nil {
 		t.Fatalf("result = %+v, want progress read error", got)
 	}
 }
