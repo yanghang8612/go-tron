@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // Archive-query RPC surface over flat temporal state history.
@@ -696,6 +698,141 @@ func TestArchiveQuery_ListExchangesAtUsesSystemExchangeHistory(t *testing.T) {
 		block2Exchanges[1].GetExchangeId() != 2 ||
 		block2Exchanges[1].GetFirstTokenBalance() != 400 {
 		t.Fatalf("block2 exchanges = %+v, want V2 post-AllowSameTokenName exchanges", block2Exchanges)
+	}
+}
+
+func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	issuer := testInsertAddr(70)
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	asset := func(id int64, name string, supply int64) *contractpb.AssetIssueContract {
+		return &contractpb.AssetIssueContract{
+			Id:           strconv.FormatInt(id, 10),
+			OwnerAddress: issuer[:],
+			Name:         []byte(name),
+			TotalSupply:  supply,
+			TrxNum:       1,
+			Num:          1,
+		}
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitAssets := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetTokenIdNum(firstAssetTokenID + n - 1)
+		if n == 2 {
+			dynProps.SetAllowSameTokenName(true)
+		}
+		if err := dynProps.FlushRooted(statedb); err != nil {
+			t.Fatalf("flush dynamic properties block %d: %v", n, err)
+		}
+
+		if n == 1 {
+			v2 := asset(firstAssetTokenID, "TOKEN", 101)
+			legacy := asset(firstAssetTokenID, "TOKEN", 100)
+			if err := statedb.WriteAssetIssue(firstAssetTokenID, v2); err != nil {
+				t.Fatalf("write v2 asset block %d: %v", n, err)
+			}
+			if err := statedb.WriteAssetIssueByName([]byte("TOKEN"), legacy); err != nil {
+				t.Fatalf("write legacy asset block %d: %v", n, err)
+			}
+			if err := statedb.WriteAssetNameIndex([]byte("TOKEN"), firstAssetTokenID); err != nil {
+				t.Fatalf("write name index block %d: %v", n, err)
+			}
+		} else {
+			if err := statedb.WriteAssetIssue(firstAssetTokenID, asset(firstAssetTokenID, "TOKEN", 201)); err != nil {
+				t.Fatalf("write updated v2 asset block %d: %v", n, err)
+			}
+			if err := statedb.WriteAssetIssue(firstAssetTokenID+1, asset(firstAssetTokenID+1, "TOKEN2", 300)); err != nil {
+				t.Fatalf("write second v2 asset block %d: %v", n, err)
+			}
+		}
+
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit assets block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitAssets(block1, 1)
+	root = commitAssets(block2, 2)
+
+	block1ByID, err := b.GetAssetIssueByIDAt(firstAssetTokenID, block1.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByIDAt(block1): %v", err)
+	}
+	if block1ByID == nil || block1ByID.GetTotalSupply() != 101 {
+		t.Fatalf("block1 by id = %+v, want V2 supply 101", block1ByID)
+	}
+	block1ByName, err := b.GetAssetIssueByNameAt([]byte("TOKEN"), block1.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByNameAt(block1): %v", err)
+	}
+	if block1ByName == nil || block1ByName.GetTotalSupply() != 100 {
+		t.Fatalf("block1 by name = %+v, want legacy supply 100", block1ByName)
+	}
+	block1List, err := b.GetAssetIssueListAt(block1.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueListAt(block1): %v", err)
+	}
+	if len(block1List) != 1 || block1List[0].GetTotalSupply() != 100 {
+		t.Fatalf("block1 asset list = %+v, want legacy list", block1List)
+	}
+
+	block2ByName, err := b.GetAssetIssueByNameAt([]byte("TOKEN2"), block2.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByNameAt(block2): %v", err)
+	}
+	if block2ByName == nil || block2ByName.GetId() != strconv.FormatInt(firstAssetTokenID+1, 10) || block2ByName.GetTotalSupply() != 300 {
+		t.Fatalf("block2 by name = %+v, want V2 TOKEN2", block2ByName)
+	}
+	block2List, err := b.GetAssetIssueListAt(block2.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueListAt(block2): %v", err)
+	}
+	if len(block2List) != 2 ||
+		block2List[0].GetTotalSupply() != 201 ||
+		block2List[1].GetTotalSupply() != 300 {
+		t.Fatalf("block2 asset list = %+v, want V2 list", block2List)
+	}
+	block2Page, err := b.GetAssetIssueListPaginatedAt(1, 1, block2.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueListPaginatedAt(block2): %v", err)
+	}
+	if len(block2Page) != 1 || block2Page[0].GetTotalSupply() != 300 {
+		t.Fatalf("block2 asset page = %+v, want second V2 asset", block2Page)
 	}
 }
 

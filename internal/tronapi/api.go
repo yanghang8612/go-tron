@@ -1476,6 +1476,10 @@ func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByID(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByID(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Value interface{} `json:"value"`
 	}
@@ -1501,7 +1505,18 @@ func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	asset := api.backend.GetAssetIssueByID(id)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset = api.backend.GetAssetIssueByID(id)
+	} else {
+		var err error
+		blockNum := boundFn()
+		asset, err = api.backend.GetAssetIssueByIDAt(id, blockNum)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1511,6 +1526,10 @@ func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByName(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByName(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1528,7 +1547,18 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName(nameBytes)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset = api.backend.GetAssetIssueByName(nameBytes)
+	} else {
+		var err error
+		blockNum := boundFn()
+		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, blockNum)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1538,7 +1568,23 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueList(w http.ResponseWriter, r *http.Request) {
-	assets := api.backend.GetAssetIssueList()
+	api.handleGetAssetIssueList(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		assets []*contractpb.AssetIssueContract
+		err    error
+	)
+	if boundFn == nil {
+		assets = api.backend.GetAssetIssueList()
+	} else {
+		assets, err = api.backend.GetAssetIssueListAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	var list []map[string]any
 	for _, a := range assets {
 		list = append(list, marshalMessage(a.ProtoReflect()))
@@ -1553,6 +1599,10 @@ func (api *API) getAssetIssueList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedAssetIssueList(w, r, nil)
+}
+
+func (api *API) handleGetPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Offset int `json:"offset"`
 		Limit  int `json:"limit"`
@@ -1564,7 +1614,19 @@ func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Reques
 	if body.Limit <= 0 {
 		body.Limit = 20
 	}
-	assets := api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+	var (
+		assets []*contractpb.AssetIssueContract
+		err    error
+	)
+	if boundFn == nil {
+		assets = api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+	} else {
+		assets, err = api.backend.GetAssetIssueListPaginatedAt(body.Offset, body.Limit, boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	var list []map[string]any
 	for _, a := range assets {
 		list = append(list, marshalMessage(a.ProtoReflect()))

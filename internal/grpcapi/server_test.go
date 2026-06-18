@@ -159,13 +159,25 @@ func (b *testBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error
 func (b *testBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error)  { return nil, nil }
-func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                        { return nil, nil }
-func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract      { return nil }
+func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) { return nil, nil }
+func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                       { return nil, nil }
+func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract     { return nil }
+func (b *testBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract { return nil }
-func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract            { return nil }
+func (b *testBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract { return nil }
+func (b *testBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
 	return nil
+}
+func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
 func (b *testBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
 	return nil

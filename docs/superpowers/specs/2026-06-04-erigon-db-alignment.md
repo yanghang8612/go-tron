@@ -712,7 +712,13 @@ Status:
   at the bound; the backend reads `latest_exchange_num` and
   `allow_same_token_name` from the same historical dynamic-property snapshot so
   pre-fork reads enumerate V1 exchanges and post-fork reads enumerate V2
-  exchanges, matching java-tron's final-store selection.
+  exchanges, matching java-tron's final-store selection. HTTP solidity/PBFT
+  TRC10 asset metadata routes (`getassetissuebyid`, `getassetissuebyname`,
+  `getassetissuelist`, `getpaginatedassetissuelist`) and gRPC
+  `WalletSolidity` asset methods now dispatch through `SystemAsset` history at
+  the bound; the backend reads historical `token_id_num` and
+  `allow_same_token_name` so pre-fork list/name reads use legacy records while
+  post-fork reads use V2 records.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

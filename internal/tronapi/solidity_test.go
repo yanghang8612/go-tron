@@ -13,6 +13,7 @@ import (
 	tronapi "github.com/tronprotocol/go-tron/internal/tronapi"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // solidStubBackend wraps stubBackend with a custom solid/pbft block number.
@@ -127,6 +128,14 @@ type isolationStubBackend struct {
 	accountIDAtBlock         uint64
 	liveAccountNetCalls      int
 	accountNetAtBlock        uint64
+	liveAssetIDCalls         int
+	assetIDAtBlock           uint64
+	liveAssetNameCalls       int
+	assetNameAtBlock         uint64
+	liveAssetListCalls       int
+	assetListAtBlock         uint64
+	liveAssetPageCalls       int
+	assetPageAtBlock         uint64
 	liveMarketOrderCalls     int
 	marketOrderAtBlock       uint64
 	liveMarketOrdersCalls    int
@@ -168,6 +177,57 @@ func (s *isolationStubBackend) GetAccountNet(addr common.Address) (*apipb.Accoun
 func (s *isolationStubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
 	s.accountNetAtBlock = blockNum
 	return &apipb.AccountNetMessage{FreeNetUsed: 9, NetUsed: 99}, nil
+}
+
+func assetSentinel(id string, supply int64) *contractpb.AssetIssueContract {
+	return &contractpb.AssetIssueContract{
+		Id:           id,
+		OwnerAddress: common.Address{0x41, 0x71}.Bytes(),
+		Name:         []byte(id),
+		TotalSupply:  supply,
+		TrxNum:       1,
+		Num:          1,
+	}
+}
+
+func (s *isolationStubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+	s.liveAssetIDCalls++
+	return assetSentinel("live-id", 1)
+}
+
+func (s *isolationStubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	s.assetIDAtBlock = blockNum
+	return assetSentinel("bound-id", 9), nil
+}
+
+func (s *isolationStubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+	s.liveAssetNameCalls++
+	return assetSentinel("live-name", 2)
+}
+
+func (s *isolationStubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	s.assetNameAtBlock = blockNum
+	return assetSentinel("bound-name", 99), nil
+}
+
+func (s *isolationStubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+	s.liveAssetListCalls++
+	return []*contractpb.AssetIssueContract{assetSentinel("live-list", 3)}
+}
+
+func (s *isolationStubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	s.assetListAtBlock = blockNum
+	return []*contractpb.AssetIssueContract{assetSentinel("bound-list", 11)}, nil
+}
+
+func (s *isolationStubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+	s.liveAssetPageCalls++
+	return []*contractpb.AssetIssueContract{assetSentinel("live-page", 4)}
+}
+
+func (s *isolationStubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	s.assetPageAtBlock = blockNum
+	return []*contractpb.AssetIssueContract{assetSentinel("bound-page", 12)}, nil
 }
 
 func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
@@ -467,6 +527,134 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityAssetRoutesUseSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAssetRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftAssetRoutesUsePbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAssetRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertAssetRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/getassetissuebyid", "application/json", strings.NewReader(`{"value":1000001}`))
+	if err != nil {
+		t.Fatalf("getassetissuebyid request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getassetissuebyid status: %d", resp.StatusCode)
+	}
+	var byID struct {
+		ID          string `json:"id"`
+		TotalSupply int64  `json:"total_supply"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&byID); err != nil {
+		t.Fatal(err)
+	}
+	if byID.ID != "bound-id" || byID.TotalSupply != 9 {
+		t.Fatalf("asset by id = %+v, want bound sentinel", byID)
+	}
+	if stub.assetIDAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueByIDAt block = %d, want %d", stub.assetIDAtBlock, wantBlock)
+	}
+	if stub.liveAssetIDCalls != 0 {
+		t.Fatalf("live GetAssetIssueByID called %d times, want 0", stub.liveAssetIDCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getassetissuebyname", "application/json", strings.NewReader(`{"value":"544f4b454e"}`))
+	if err != nil {
+		t.Fatalf("getassetissuebyname request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getassetissuebyname status: %d", resp.StatusCode)
+	}
+	var byName struct {
+		ID          string `json:"id"`
+		TotalSupply int64  `json:"total_supply"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&byName); err != nil {
+		t.Fatal(err)
+	}
+	if byName.ID != "bound-name" || byName.TotalSupply != 99 {
+		t.Fatalf("asset by name = %+v, want bound sentinel", byName)
+	}
+	if stub.assetNameAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueByNameAt block = %d, want %d", stub.assetNameAtBlock, wantBlock)
+	}
+	if stub.liveAssetNameCalls != 0 {
+		t.Fatalf("live GetAssetIssueByName called %d times, want 0", stub.liveAssetNameCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getassetissuelist")
+	if err != nil {
+		t.Fatalf("getassetissuelist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getassetissuelist status: %d", resp.StatusCode)
+	}
+	var list struct {
+		AssetIssue []struct {
+			ID          string `json:"id"`
+			TotalSupply int64  `json:"total_supply"`
+		} `json:"assetIssue"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.AssetIssue) != 1 || list.AssetIssue[0].ID != "bound-list" || list.AssetIssue[0].TotalSupply != 11 {
+		t.Fatalf("asset list = %+v, want bound sentinel", list.AssetIssue)
+	}
+	if stub.assetListAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueListAt block = %d, want %d", stub.assetListAtBlock, wantBlock)
+	}
+	if stub.liveAssetListCalls != 0 {
+		t.Fatalf("live GetAssetIssueList called %d times, want 0", stub.liveAssetListCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getpaginatedassetissuelist", "application/json", strings.NewReader(`{"offset":0,"limit":10}`))
+	if err != nil {
+		t.Fatalf("getpaginatedassetissuelist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getpaginatedassetissuelist status: %d", resp.StatusCode)
+	}
+	var page struct {
+		AssetIssue []struct {
+			ID          string `json:"id"`
+			TotalSupply int64  `json:"total_supply"`
+		} `json:"assetIssue"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.AssetIssue) != 1 || page.AssetIssue[0].ID != "bound-page" || page.AssetIssue[0].TotalSupply != 12 {
+		t.Fatalf("asset page = %+v, want bound sentinel", page.AssetIssue)
+	}
+	if stub.assetPageAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueListPaginatedAt block = %d, want %d", stub.assetPageAtBlock, wantBlock)
+	}
+	if stub.liveAssetPageCalls != 0 {
+		t.Fatalf("live GetAssetIssueListPaginated called %d times, want 0", stub.liveAssetPageCalls)
 	}
 }
 

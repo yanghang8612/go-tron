@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -29,6 +30,10 @@ type solidTestBackend struct {
 	lastRewardAt       uint64
 	lastDelegatedAt    uint64
 	lastDelegIndexAt   uint64
+	lastAssetIDAt      uint64
+	lastAssetNameAt    uint64
+	lastAssetListAt    uint64
+	lastAssetPageAt    uint64
 	lastMarketOrderAt  uint64
 	lastMarketOrdersAt uint64
 	lastMarketPriceAt  uint64
@@ -38,6 +43,10 @@ type solidTestBackend struct {
 	liveRewardCalls    int
 	liveDelegCalls     int
 	liveIndexCalls     int
+	liveAssetID        int
+	liveAssetName      int
+	liveAssetList      int
+	liveAssetPage      int
 	liveMarketOrder    int
 	liveMarketOrders   int
 	liveMarketPrice    int
@@ -47,6 +56,10 @@ type solidTestBackend struct {
 	rewardAt           *tronapi.RewardInfo
 	delegatedAt        []*tronapi.DelegatedResourceInfo
 	delegIndexAt       *tronapi.DelegationIndexInfo
+	assetIDAt          *contractpb.AssetIssueContract
+	assetNameAt        *contractpb.AssetIssueContract
+	assetListAt        []*contractpb.AssetIssueContract
+	assetPageAt        []*contractpb.AssetIssueContract
 	marketOrderAt      *corepb.MarketOrder
 	marketOrdersAt     []*corepb.MarketOrder
 	marketPriceAt      *corepb.MarketPriceList
@@ -123,6 +136,58 @@ func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2At(addr common.Addr
 		return b.delegIndexAt, nil
 	}
 	return b.testBackend.GetDelegatedResourceAccountIndexV2At(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+	b.liveAssetID++
+	return b.testBackend.GetAssetIssueByID(id)
+}
+
+func (b *solidTestBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	b.lastAssetIDAt = blockNum
+	if b.assetIDAt != nil {
+		return b.assetIDAt, nil
+	}
+	return b.testBackend.GetAssetIssueByIDAt(id, blockNum)
+}
+
+func (b *solidTestBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+	b.liveAssetName++
+	return b.testBackend.GetAssetIssueByName(name)
+}
+
+func (b *solidTestBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	b.lastAssetNameAt = blockNum
+	if b.assetNameAt != nil {
+		return b.assetNameAt, nil
+	}
+	return b.testBackend.GetAssetIssueByNameAt(name, blockNum)
+}
+
+func (b *solidTestBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+	b.liveAssetList++
+	return b.testBackend.GetAssetIssueList()
+}
+
+func (b *solidTestBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	b.lastAssetListAt = blockNum
+	if b.assetListAt != nil {
+		return b.assetListAt, nil
+	}
+	return b.testBackend.GetAssetIssueListAt(blockNum)
+}
+
+func (b *solidTestBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+	b.liveAssetPage++
+	return b.testBackend.GetAssetIssueListPaginated(offset, limit)
+}
+
+func (b *solidTestBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	b.lastAssetPageAt = blockNum
+	if b.assetPageAt != nil {
+		return b.assetPageAt, nil
+	}
+	return b.testBackend.GetAssetIssueListPaginatedAt(offset, limit, blockNum)
 }
 
 func (b *solidTestBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
@@ -419,6 +484,85 @@ func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t 
 	}
 	if backend.liveIndexCalls != 0 {
 		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", backend.liveIndexCalls)
+	}
+}
+
+func TestSolidity_AssetQueriesUseSolidBoundArchivePath(t *testing.T) {
+	asset := func(id string, supply int64) *contractpb.AssetIssueContract {
+		return &contractpb.AssetIssueContract{
+			Id:           id,
+			OwnerAddress: solidityTestAddress(0x81),
+			Name:         []byte(id),
+			TotalSupply:  supply,
+		}
+	}
+	backend := &solidTestBackend{
+		solidNum:    89,
+		assetIDAt:   asset("bound-id", 9),
+		assetNameAt: asset("bound-name", 99),
+		assetListAt: []*contractpb.AssetIssueContract{
+			asset("bound-list", 11),
+		},
+		assetPageAt: []*contractpb.AssetIssueContract{
+			asset("bound-page", 12),
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	byID, err := client.GetAssetIssueById(context.Background(), &apipb.BytesMessage{Value: []byte("1000001")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueById: %v", err)
+	}
+	if byID.GetId() != "bound-id" || byID.GetTotalSupply() != 9 {
+		t.Fatalf("GetAssetIssueById = %+v, want solid-bound sentinel", byID)
+	}
+	if backend.lastAssetIDAt != 89 {
+		t.Fatalf("GetAssetIssueByIDAt block = %d, want solid block 89", backend.lastAssetIDAt)
+	}
+	if backend.liveAssetID != 0 {
+		t.Fatalf("live GetAssetIssueByID called %d times, want 0", backend.liveAssetID)
+	}
+
+	byName, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueByName: %v", err)
+	}
+	if byName.GetId() != "bound-name" || byName.GetTotalSupply() != 99 {
+		t.Fatalf("GetAssetIssueByName = %+v, want solid-bound sentinel", byName)
+	}
+	if backend.lastAssetNameAt != 89 {
+		t.Fatalf("GetAssetIssueByNameAt block = %d, want solid block 89", backend.lastAssetNameAt)
+	}
+	if backend.liveAssetName != 0 {
+		t.Fatalf("live GetAssetIssueByName called %d times, want 0", backend.liveAssetName)
+	}
+
+	list, err := client.GetAssetIssueList(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("GetAssetIssueList: %v", err)
+	}
+	if len(list.GetAssetIssue()) != 1 || list.GetAssetIssue()[0].GetId() != "bound-list" {
+		t.Fatalf("GetAssetIssueList = %+v, want solid-bound sentinel", list.GetAssetIssue())
+	}
+	if backend.lastAssetListAt != 89 {
+		t.Fatalf("GetAssetIssueListAt block = %d, want solid block 89", backend.lastAssetListAt)
+	}
+	if backend.liveAssetList != 0 {
+		t.Fatalf("live GetAssetIssueList called %d times, want 0", backend.liveAssetList)
+	}
+
+	page, err := client.GetPaginatedAssetIssueList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetPaginatedAssetIssueList: %v", err)
+	}
+	if len(page.GetAssetIssue()) != 1 || page.GetAssetIssue()[0].GetId() != "bound-page" {
+		t.Fatalf("GetPaginatedAssetIssueList = %+v, want solid-bound sentinel", page.GetAssetIssue())
+	}
+	if backend.lastAssetPageAt != 89 {
+		t.Fatalf("GetAssetIssueListPaginatedAt block = %d, want solid block 89", backend.lastAssetPageAt)
+	}
+	if backend.liveAssetPage != 0 {
+		t.Fatalf("live GetAssetIssueListPaginated called %d times, want 0", backend.liveAssetPage)
 	}
 }
 

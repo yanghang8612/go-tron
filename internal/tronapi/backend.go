@@ -215,9 +215,13 @@ type Backend interface {
 
 	// Asset queries (TRC10)
 	GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
+	GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error)
 	GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract
+	GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error)
 	GetAssetIssueList() []*contractpb.AssetIssueContract
+	GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error)
 	GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract
+	GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error)
 	GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract
 
 	// Market queries (Phase 13)

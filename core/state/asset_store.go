@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/binary"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -97,6 +98,23 @@ func (s *StateDB) ReadAssetIssue(tokenID int64) *contractpb.AssetIssueContract {
 	return s.readAssetMeta(assetIDKey(assetV2Tag, tokenID))
 }
 
+func (r *PersistentHistoryReader) readAssetMetaAt(key []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAsset, key, blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	c := &contractpb.AssetIssueContract{}
+	if err := proto.Unmarshal(raw, c); err != nil {
+		return nil, nil
+	}
+	return c, nil
+}
+
+// AssetIssueAt reconstructs the rooted V2 AssetIssueContract at blockNum.
+func (r *PersistentHistoryReader) AssetIssueAt(tokenID int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return r.readAssetMetaAt(assetIDKey(assetV2Tag, tokenID), blockNum)
+}
+
 // WriteAssetIssue stages the V2 (ID-keyed) AssetIssueContract for tokenID.
 func (s *StateDB) WriteAssetIssue(tokenID int64, c *contractpb.AssetIssueContract) error {
 	return s.writeAssetMeta(assetIDKey(assetV2Tag, tokenID), c)
@@ -106,6 +124,12 @@ func (s *StateDB) WriteAssetIssue(tokenID int64, c *contractpb.AssetIssueContrac
 // or nil if absent. Mirrors java-tron's pre-AllowSameTokenName AssetIssueStore.
 func (s *StateDB) ReadAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
 	return s.readAssetMeta(assetBytesKey(assetLegacyTag, name))
+}
+
+// AssetIssueByNameAt reconstructs the rooted legacy AssetIssueContract at
+// blockNum.
+func (r *PersistentHistoryReader) AssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return r.readAssetMetaAt(assetBytesKey(assetLegacyTag, name), blockNum)
 }
 
 // WriteAssetIssueByName stages the legacy (name-keyed) AssetIssueContract.
@@ -187,6 +211,22 @@ func (s *StateDB) ListAssetsV2(firstTokenID, latestTokenID int64) []*contractpb.
 	return out
 }
 
+// ListAssetsV2At enumerates the V2 bucket over ids firstTokenID..latestTokenID
+// at blockNum.
+func (r *PersistentHistoryReader) ListAssetsV2At(firstTokenID, latestTokenID int64, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	var out []*contractpb.AssetIssueContract
+	for id := firstTokenID; id <= latestTokenID; id++ {
+		c, err := r.AssetIssueAt(id, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
 // ListAssetsLegacy enumerates the legacy (name-keyed) bucket over the same id
 // range by resolving each V2 record's Name and probing the legacy leg with it.
 // This works because the legacy and V2 buckets are written together while
@@ -204,4 +244,26 @@ func (s *StateDB) ListAssetsLegacy(firstTokenID, latestTokenID int64) []*contrac
 		}
 	}
 	return out
+}
+
+// ListAssetsLegacyAt enumerates the legacy bucket at blockNum.
+func (r *PersistentHistoryReader) ListAssetsLegacyAt(firstTokenID, latestTokenID int64, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	var out []*contractpb.AssetIssueContract
+	for id := firstTokenID; id <= latestTokenID; id++ {
+		v2, err := r.AssetIssueAt(id, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if v2 == nil {
+			continue
+		}
+		legacy, err := r.AssetIssueByNameAt(v2.Name, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if legacy != nil {
+			out = append(out, legacy)
+		}
+	}
+	return out, nil
 }

@@ -487,6 +487,11 @@ var exchangeDynamicPropertyKeys = []string{
 	"allow_same_token_name",
 }
 
+var assetDynamicPropertyKeys = []string{
+	"token_id_num",
+	"allow_same_token_name",
+}
+
 func (b *TronBackend) dynamicPropertiesAt(reader *state.PersistentHistoryReader, blockNum uint64) (*state.DynamicProperties, error) {
 	return b.dynamicPropertiesAtKeys(reader, blockNum, accountResourceDynamicPropertyKeys)
 }
@@ -980,6 +985,20 @@ func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
 	return sysKV.ReadAssetIssue(id)
 }
 
+func (b *TronBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	asset, err := session.reader.AssetIssueAt(id, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue id %d at block %d: %w", id, blockNum, err)
+	}
+	return asset, nil
+}
+
 func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
 	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
 	if sysKV == nil {
@@ -1010,8 +1029,59 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueCon
 	return match
 }
 
+func (b *TronBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, assetDynamicPropertyKeys)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct asset dynamic properties at block %d: %w", blockNum, err)
+	}
+	if !dynProps.AllowSameTokenName() {
+		asset, err := session.reader.AssetIssueByNameAt(name, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy asset issue name %q at block %d: %w", string(name), blockNum, err)
+		}
+		return asset, nil
+	}
+	assets, err := session.reader.ListAssetsV2At(firstAssetTokenID, dynProps.TokenIdNum(), blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue list at block %d: %w", blockNum, err)
+	}
+	var match *contractpb.AssetIssueContract
+	for _, asset := range assets {
+		if string(asset.Name) != string(name) {
+			continue
+		}
+		if match != nil {
+			return nil, nil
+		}
+		match = asset
+	}
+	if id, err := strconv.ParseInt(string(name), 10, 64); err == nil {
+		asset, err := session.reader.AssetIssueAt(id, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read asset issue id %d at block %d: %w", id, blockNum, err)
+		}
+		if asset != nil {
+			if match != nil && match.Id != asset.Id {
+				return nil, nil
+			}
+			match = asset
+		}
+	}
+	return match, nil
+}
+
 func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
 	return b.listAssetsAtHead()
+}
+
+func (b *TronBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return b.listAssetsAt(blockNum)
 }
 
 func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
@@ -1024,6 +1094,21 @@ func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractp
 		end = len(all)
 	}
 	return all[offset:end]
+}
+
+func (b *TronBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	all, err := b.listAssetsAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if offset >= len(all) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
 }
 
 // listAssetsAtHead enumerates the rooted TRC10 asset set at the head state root,
@@ -1048,6 +1133,31 @@ func (b *TronBackend) listAssetsAtHead() []*contractpb.AssetIssueContract {
 		return sysKV.ListAssetsLegacy(firstAssetTokenID, latest)
 	}
 	return sysKV.ListAssetsV2(firstAssetTokenID, latest)
+}
+
+func (b *TronBackend) listAssetsAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, assetDynamicPropertyKeys)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct asset dynamic properties at block %d: %w", blockNum, err)
+	}
+	if !dynProps.AllowSameTokenName() {
+		assets, err := session.reader.ListAssetsLegacyAt(firstAssetTokenID, dynProps.TokenIdNum(), blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy asset issue list at block %d: %w", blockNum, err)
+		}
+		return assets, nil
+	}
+	assets, err := session.reader.ListAssetsV2At(firstAssetTokenID, dynProps.TokenIdNum(), blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue v2 list at block %d: %w", blockNum, err)
+	}
+	return assets, nil
 }
 
 func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.AssetIssueContract {

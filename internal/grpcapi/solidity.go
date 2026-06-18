@@ -161,14 +161,21 @@ func (s *SolidityServer) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage)
 }
 
 func (s *SolidityServer) GetAssetIssueList(_ context.Context, _ *apipb.EmptyMessage) (*apipb.AssetIssueList, error) {
-	return &apipb.AssetIssueList{AssetIssue: s.backend.GetAssetIssueList()}, nil
+	assets, err := s.backend.GetAssetIssueListAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
 func (s *SolidityServer) GetPaginatedAssetIssueList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.AssetIssueList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	assets := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	assets, err := s.backend.GetAssetIssueListPaginatedAt(int(in.Offset), int(in.Limit), s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
@@ -176,7 +183,10 @@ func (s *SolidityServer) GetAssetIssueByName(_ context.Context, in *apipb.BytesM
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "asset name required")
 	}
-	ac := s.backend.GetAssetIssueByName(in.Value)
+	ac, err := s.backend.GetAssetIssueByNameAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
@@ -194,7 +204,10 @@ func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMes
 		}
 		id = id*10 + int64(b-'0')
 	}
-	ac := s.backend.GetAssetIssueByID(id)
+	ac, err := s.backend.GetAssetIssueByIDAt(id, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}

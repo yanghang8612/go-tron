@@ -167,14 +167,26 @@ func (s *stubBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 func (s *stubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
 	return nil
 }
+func (s *stubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
 	return nil
+}
+func (s *stubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
 func (s *stubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
 	return nil
 }
+func (s *stubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
 	return nil
+}
+func (s *stubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
 func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
 	return nil
