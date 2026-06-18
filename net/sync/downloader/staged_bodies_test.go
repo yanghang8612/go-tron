@@ -69,6 +69,62 @@ func TestFindStagedBodyReadyFrontierWithoutReader(t *testing.T) {
 	}
 }
 
+func TestStagedBodyAcceptanceFailureCoversStageProgressAndReady(t *testing.T) {
+	stageErr := errors.New("stage write")
+	progressReadErr := errors.New("progress read")
+	progressWriteErr := errors.New("progress write")
+	readyErr := errors.New("ready write")
+
+	tests := []struct {
+		name string
+		in   StagedBodyAcceptance
+		err  error
+	}{
+		{
+			name: "stage write",
+			in: StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+				StageError: stageErr,
+			}},
+			err: stageErr,
+		},
+		{
+			name: "progress read",
+			in: StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+				ProgressReadError: progressReadErr,
+			}},
+			err: progressReadErr,
+		},
+		{
+			name: "progress write",
+			in: StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+				ProgressWriteError: progressWriteErr,
+			}},
+			err: progressWriteErr,
+		},
+		{
+			name: "ready refresh",
+			in: StagedBodyAcceptance{Ready: StagedBodyReadyAfterStageRefresh{
+				Refreshed: true,
+				Refresh:   StagedBodyReadyProgressRefresh{WriteError: readyErr},
+			}},
+			err: readyErr,
+		},
+	}
+	for _, tt := range tests {
+		if !tt.in.Failed() || !errors.Is(tt.in.FailureError(), tt.err) {
+			t.Fatalf("%s acceptance failed=%v err=%v, want %v", tt.name, tt.in.Failed(), tt.in.FailureError(), tt.err)
+		}
+	}
+
+	skippedReady := StagedBodyAcceptance{Ready: StagedBodyReadyAfterStageRefresh{
+		Refresh: StagedBodyReadyProgressRefresh{WriteError: readyErr},
+		Skipped: true,
+	}}
+	if skippedReady.Failed() || skippedReady.FailureError() != nil {
+		t.Fatalf("skipped-ready acceptance failed=%v err=%v, want success", skippedReady.Failed(), skippedReady.FailureError())
+	}
+}
+
 func TestRefreshStagedBodyReadyProgressWritesContiguousFrontier(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	block2 := testBufferedBlock(2)

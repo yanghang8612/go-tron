@@ -52,6 +52,41 @@ type StagedBodyAcceptance struct {
 	Ready StagedBodyReadyAfterStageRefresh
 }
 
+// Failed reports whether accepting a fetched body failed before downstream
+// receipt settlement can safely refill fetch slots or drain local imports.
+func (a StagedBodyAcceptance) Failed() bool {
+	return a.Write.StageError != nil ||
+		a.Write.ProgressReadError != nil ||
+		a.Write.ProgressWriteError != nil ||
+		(a.Ready.Refreshed && a.Ready.Refresh.Failed())
+}
+
+// FailureError returns the first acceptance error in the stage-before-view
+// order used by fetched-body receipt settlement.
+func (a StagedBodyAcceptance) FailureError() error {
+	if a.Write.StageError != nil {
+		return a.Write.StageError
+	}
+	if a.Write.ProgressReadError != nil {
+		return a.Write.ProgressReadError
+	}
+	if a.Write.ProgressWriteError != nil {
+		return a.Write.ProgressWriteError
+	}
+	if a.Ready.Refreshed {
+		if a.Ready.Refresh.Frontier.Error != nil {
+			return a.Ready.Refresh.Frontier.Error
+		}
+		if a.Ready.Refresh.WriteError != nil {
+			return a.Ready.Refresh.WriteError
+		}
+		if a.Ready.Refresh.DeleteError != nil {
+			return a.Ready.Refresh.DeleteError
+		}
+	}
+	return nil
+}
+
 // StagedBodyTailPrune records a stale staged-body tail prune plus the
 // resulting ready-frontier refresh.
 type StagedBodyTailPrune struct {

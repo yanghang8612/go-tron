@@ -1316,6 +1316,11 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	}
 	ss.mu.Unlock()
 
+	if receiptRun.Buffer.StageFailed {
+		ss.pauseSync(peer, blockNum, receiptRun.Buffer.StageAcceptance.FailureError())
+		return true
+	}
+
 	syncdl.ApplyFetchReceiptSessionAfterUnlockPlan(receiptRun.Plan, receiptRun.OutboundRequests, receiptApplier, syncFetchReceiptDispatchApplier{service: ss, out: receiptApplier.out})
 	return true
 }
@@ -1825,8 +1830,8 @@ func (a *syncFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(plan syn
 	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.DropConflictingFetchedBlock(plan)
 }
 
-func (a *syncFetchReceiptSessionRunApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
-	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
+func (a *syncFetchReceiptSessionRunApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) syncdl.StagedBodyAcceptance {
+	return syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
 }
 
 type syncFetchedBlockBufferFactReader struct {
@@ -1879,10 +1884,14 @@ func (a syncFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan syncdl.F
 		"number", plan.ID.Num, "hash", plan.ID.Hash, "kept", plan.Kept, "peer", a.peer.ID())
 }
 
-func (a syncFetchedBlockBufferApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
-	a.service.stageSyncBody(a.block, a.raw)
+func (a syncFetchedBlockBufferApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) syncdl.StagedBodyAcceptance {
+	result := a.service.stageSyncBody(a.block, a.raw)
+	if result.Failed() {
+		return result
+	}
 	a.service.blockBuffer[plan.ID.Num] = syncdl.NewBufferedBlock(a.peer, a.block, a.raw)
 	a.service.bufferedHash[plan.ID.Hash] = struct{}{}
+	return result
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode
@@ -2029,22 +2038,28 @@ func (ss *SyncService) logImportedBatchRecordApplyResult(result syncdl.ImportedB
 	ss.logImportedBatchProgressApplyResult(result.ProgressApply)
 }
 
-func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
+func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) syncdl.StagedBodyAcceptance {
 	if ss == nil || ss.chain == nil || block == nil {
-		return
+		return syncdl.StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+			StageError: fmt.Errorf("sync: cannot stage fetched block without service, chain, or block"),
+		}}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return
+		return syncdl.StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+			StageError: fmt.Errorf("sync: cannot stage fetched block without database"),
+		}}
 	}
 	head := ss.chain.CurrentBlock()
 	if head == nil {
-		return
+		return syncdl.StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+			StageError: fmt.Errorf("sync: cannot stage fetched block without current head"),
+		}}
 	}
 	result := syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum)
 	if result.Write.StageError != nil {
 		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", result.Write.StageError)
-		return
+		return result
 	}
 	if result.Write.ProgressReadError != nil {
 		syncLog.Warn("Read sync bodies stage progress failed", "err", result.Write.ProgressReadError)
@@ -2055,6 +2070,7 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 	if result.Ready.Refreshed {
 		ss.logSyncBodiesReadyRefresh(result.Ready.Refresh)
 	}
+	return result
 }
 
 func (ss *SyncService) writeSyncBodiesReadyProgress() syncdl.StagedBodyReadyProgressRefresh {

@@ -266,8 +266,11 @@ type FetchedBlockBufferPlan struct {
 // FetchedBlockBufferApplyResult records local buffer/stage actions applied for
 // one accepted fetched block body.
 type FetchedBlockBufferApplyResult struct {
-	AppliedActions []FetchedBlockBufferAction
-	UnknownActions []FetchedBlockBufferAction
+	AppliedActions     []FetchedBlockBufferAction
+	UnknownActions     []FetchedBlockBufferAction
+	StageAcceptance    StagedBodyAcceptance
+	HasStageAcceptance bool
+	StageFailed        bool
 }
 
 // FetchedBlockBufferPlanApplier performs the side effects named by a fetched
@@ -275,7 +278,7 @@ type FetchedBlockBufferApplyResult struct {
 // buffer maps; downloader owns the action dispatch.
 type FetchedBlockBufferPlanApplier interface {
 	DropConflictingFetchedBlock(plan FetchedBlockBufferPlan)
-	StageFetchedBlock(plan FetchedBlockBufferPlan)
+	StageFetchedBlock(plan FetchedBlockBufferPlan) StagedBodyAcceptance
 }
 
 // AcknowledgeFetchReceipt removes a matching received block from the in-flight
@@ -398,6 +401,11 @@ func ApplyFetchReceiptSessionLockedRun(in FetchReceiptRunInput, applier FetchRec
 	plan = PlanFetchReceiptRunBuffer(plan, applier.PlanFetchedBlockBuffer(plan))
 	result.Plan = plan
 	result.Buffer = ApplyFetchReceiptRunLockedBufferPlan(plan, applier).Buffer
+	if result.Buffer.StageFailed {
+		plan = PlanFetchReceiptRunAfterBuffer(plan, result.Buffer)
+		result.Plan = plan
+		return result
+	}
 	post := ApplyFetchReceiptRunLockedPostBufferPlan(plan, applier)
 	result.LockedPostBuffer = post.LockedPostBuffer
 	result.OutboundRequests = post.LockedPostBuffer.OutboundRequests
@@ -563,6 +571,21 @@ func PlanFetchReceiptRunAfterDrain(plan FetchReceiptRunPlan, in FetchReceiptRunA
 	return plan
 }
 
+// PlanFetchReceiptRunAfterBuffer stops receipt settlement after a staged-body
+// write/ready failure. The receipt was already acknowledged, but downstream
+// refill and drain must not run against a body that was not durably staged.
+func PlanFetchReceiptRunAfterBuffer(plan FetchReceiptRunPlan, buffer FetchedBlockBufferApplyResult) FetchReceiptRunPlan {
+	if !plan.Settlement.Accepted || !buffer.StageFailed {
+		return plan
+	}
+	plan.Settlement.FillFetchSlots = false
+	plan.Settlement.DrainBuffered = false
+	plan.Settlement.LockedPostBuffer = nil
+	plan.Settlement.AfterUnlock = nil
+	plan.Dispatch = FetchReceiptDispatchPlan{}
+	return plan
+}
+
 func (p FetchReceiptDispatchPlan) withSteps() FetchReceiptDispatchPlan {
 	if p.SendOutboundRequests {
 		p.Steps = []FetchReceiptDispatchStep{{Action: FetchReceiptDispatchSendOutbound}}
@@ -655,7 +678,9 @@ func ApplyFetchedBlockBufferPlan(plan FetchedBlockBufferPlan, applier FetchedBlo
 		applier.DropConflictingFetchedBlock(plan)
 		result.AppliedActions = append(result.AppliedActions, plan.Action)
 	case FetchedBlockBufferStage:
-		applier.StageFetchedBlock(plan)
+		result.StageAcceptance = applier.StageFetchedBlock(plan)
+		result.HasStageAcceptance = true
+		result.StageFailed = result.StageAcceptance.Failed()
 		result.AppliedActions = append(result.AppliedActions, plan.Action)
 	case FetchedBlockBufferIgnore:
 	default:

@@ -1,10 +1,12 @@
 package downloader
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -418,6 +420,40 @@ func TestApplyFetchReceiptSessionLockedRunOrdersSettlementBufferAndRefill(t *tes
 	}) || result.OutboundRequests != 2 {
 		t.Fatalf("session post-buffer = %+v outbound=%d, want fill+mirror with two outbound requests",
 			result.LockedPostBuffer, result.OutboundRequests)
+	}
+}
+
+func TestApplyFetchReceiptSessionLockedRunStopsAfterStageFailure(t *testing.T) {
+	stageErr := errors.New("persist staged body")
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
+	applier := &recordingFetchReceiptSessionRunApplier{
+		buffer: buffer,
+		stageAcceptance: StagedBodyAcceptance{
+			Write: rawdb.SyncStagedBlockWriteResult{ProgressWriteError: stageErr},
+		},
+	}
+
+	result := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	}, applier)
+
+	wantEvents := []string{"delete", "advance", "inflight", "stop", "plan-buffer", "stage"}
+	if !reflect.DeepEqual(applier.events, wantEvents) {
+		t.Fatalf("stage-failed session events = %+v, want %+v", applier.events, wantEvents)
+	}
+	if !result.Buffer.StageFailed ||
+		!result.Buffer.HasStageAcceptance ||
+		!errors.Is(result.Buffer.StageAcceptance.FailureError(), stageErr) {
+		t.Fatalf("buffer result = %+v, want staged-body failure %v", result.Buffer, stageErr)
+	}
+	if len(result.LockedPostBuffer.AppliedSteps) != 0 || result.OutboundRequests != 0 {
+		t.Fatalf("post-buffer result = %+v outbound=%d, want skipped after stage failure", result.LockedPostBuffer, result.OutboundRequests)
+	}
+	if result.Plan.Settlement.FillFetchSlots ||
+		result.Plan.Settlement.DrainBuffered ||
+		len(result.Plan.Settlement.LockedPostBuffer) != 0 ||
+		len(result.Plan.Settlement.AfterUnlock) != 0 {
+		t.Fatalf("stage-failed plan settlement = %+v, want no refill or drain", result.Plan.Settlement)
 	}
 }
 
@@ -888,11 +924,12 @@ func (a *recordingFetchReceiptDispatchApplier) SendOutboundRequests() {
 }
 
 type recordingFetchReceiptSessionRunApplier struct {
-	buffer   FetchedBlockBufferPlan
-	progress SessionProgress
-	events   []string
-	inflight int
-	staged   []FetchedBlockBufferPlan
+	buffer          FetchedBlockBufferPlan
+	stageAcceptance StagedBodyAcceptance
+	progress        SessionProgress
+	events          []string
+	inflight        int
+	staged          []FetchedBlockBufferPlan
 }
 
 func (a *recordingFetchReceiptSessionRunApplier) DeleteRequestedHash() {
@@ -943,9 +980,10 @@ func (a *recordingFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(pla
 	a.events = append(a.events, "conflict")
 }
 
-func (a *recordingFetchReceiptSessionRunApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) {
+func (a *recordingFetchReceiptSessionRunApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) StagedBodyAcceptance {
 	a.events = append(a.events, "stage")
 	a.staged = append(a.staged, plan)
+	return a.stageAcceptance
 }
 
 type recordingFetchedBlockBufferApplier struct {
@@ -957,8 +995,9 @@ func (a *recordingFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan Fe
 	a.conflicts = append(a.conflicts, plan)
 }
 
-func (a *recordingFetchedBlockBufferApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) {
+func (a *recordingFetchedBlockBufferApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) StagedBodyAcceptance {
 	a.staged = append(a.staged, plan)
+	return StagedBodyAcceptance{}
 }
 
 type recordingFetchedBlockBufferFactReader struct {

@@ -427,6 +427,11 @@ Status:
 - The higher local-drain session branch now treats that pre-import ready repair
   failure as a stop condition instead of an empty drain, so it will not refill
   fetch slots or probe peers as though the stage table were merely empty.
+- Fetched-body receipt settlement now applies the same stage-before-downstream
+  rule at the body-ingress side: a raw body write, `SyncBodies` progress, or
+  `SyncBodiesReady` refresh failure stops post-buffer refill/drain, keeps the
+  block out of the in-memory drain buffer, and lets `SyncService` sticky-pause
+  instead of continuing as if the downloader body stage were durable.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
