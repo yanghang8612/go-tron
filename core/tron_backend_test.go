@@ -179,6 +179,53 @@ func TestTronBackend_GetBlockBalanceTrace(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetBlockBalanceTraceSurfacesColdMismatch(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	block1, _ := testBackendLogBlock(1, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	cold := newTestBackendBalanceTraceReader()
+	cold.putBlockTrace(1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   block1.Hash().Bytes(),
+			Number: int64(block1.Number() + 1),
+		},
+		Timestamp: 99_002,
+	})
+	bc.ChainDB().SetBalanceTraceReader(cold)
+
+	_, err := (&TronBackend{chain: bc}).GetBlockBalanceTrace(testBackendBalanceBlockID(block1))
+	if err == nil || !strings.Contains(err.Error(), "does not match key") {
+		t.Fatalf("GetBlockBalanceTrace cold mismatch error = %v, want strict balance-trace mismatch", err)
+	}
+}
+
+type testBackendBalanceTraceReader struct {
+	blockTraces map[int64]*contractpb.BlockBalanceTrace
+}
+
+func newTestBackendBalanceTraceReader() *testBackendBalanceTraceReader {
+	return &testBackendBalanceTraceReader{blockTraces: make(map[int64]*contractpb.BlockBalanceTrace)}
+}
+
+func (r *testBackendBalanceTraceReader) putBlockTrace(blockNum int64, trace *contractpb.BlockBalanceTrace) {
+	r.blockTraces[blockNum] = trace
+}
+
+func (r *testBackendBalanceTraceReader) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	trace, ok := r.blockTraces[blockNum]
+	return trace, ok, nil
+}
+
+func (r *testBackendBalanceTraceReader) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	return 0, 0, false, nil
+}
+
 // TestTronBackend_GetCode verifies GetCode returns nil for an account with no code.
 func TestTronBackend_GetCode(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)

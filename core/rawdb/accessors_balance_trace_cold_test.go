@@ -117,6 +117,9 @@ func TestBlockBalanceTraceRejectsColdBlockNumberMismatch(t *testing.T) {
 	if got := ReadBlockBalanceTrace(db, 12); got != nil {
 		t.Fatalf("ReadBlockBalanceTrace cold block-number mismatch = %+v, want nil", got)
 	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 12); err == nil || !ok || trace == nil {
+		t.Fatalf("ReadBlockBalanceTraceStrict cold block-number mismatch = trace %+v ok %v err %v, want trace/ok/error", trace, ok, err)
+	}
 }
 
 func TestAccountTrace_FallsThroughToColdReader(t *testing.T) {

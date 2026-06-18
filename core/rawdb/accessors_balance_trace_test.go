@@ -92,6 +92,9 @@ func TestBlockBalanceTrace_RejectsMismatchedHotRow(t *testing.T) {
 	if got := ReadBlockBalanceTrace(db, 1); got != nil {
 		t.Fatalf("ReadBlockBalanceTrace mismatched hot row = %+v, want nil", got)
 	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 1); err == nil || !ok || trace == nil {
+		t.Fatalf("ReadBlockBalanceTraceStrict mismatched hot row = trace %+v ok %v err %v, want trace/ok/error", trace, ok, err)
+	}
 }
 
 func TestBlockBalanceTrace_Delete(t *testing.T) {

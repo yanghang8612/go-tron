@@ -2101,8 +2101,11 @@ func (b *TronBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_Bloc
 	if err != nil {
 		return nil, err
 	}
-	trace := rawdb.ReadBlockBalanceTrace(b.chain.chaindb, int64(block.Number()))
-	if trace == nil {
+	trace, ok, err := rawdb.ReadBlockBalanceTraceStrict(b.chain.chaindb, int64(block.Number()))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, fmt.Errorf("block balance trace %d not found", block.Number())
 	}
 	return trace, nil

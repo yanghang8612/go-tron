@@ -1092,7 +1092,10 @@ Status:
   semantics. A registered `balance-trace` snapshot segment now freezes hot
   `BlockBalanceTrace` protobuf rows plus fixed-width account trace index rows,
   `snapshots.Manager` implements the cold reader, and runtime startup attaches
-  it to `ChainDB` alongside the chain-index sidecar.
+  it to `ChainDB` alongside the chain-index sidecar. Strict block-balance-trace
+  reads are now exported and the backend API uses them, so malformed or
+  mismatched cold trace rows surface as archive data errors instead of being
+  collapsed into a false "trace not found" result.
 - DB maintenance commands that rebuild, audit, or replay derived rows now open
   the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
   replay backfill uses that archive view when checking existing target rows, so

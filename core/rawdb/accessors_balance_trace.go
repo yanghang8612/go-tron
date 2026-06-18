@@ -27,11 +27,17 @@ func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *cont
 // ReadBlockBalanceTrace returns the BlockBalanceTrace for blockNum, or nil
 // if absent.
 func ReadBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.BlockBalanceTrace {
-	trace, ok, err := readBlockBalanceTraceStrict(db, blockNum)
+	trace, ok, err := ReadBlockBalanceTraceStrict(db, blockNum)
 	if err != nil || !ok {
 		return nil
 	}
 	return trace
+}
+
+// ReadBlockBalanceTraceStrict returns the BlockBalanceTrace plus an existence
+// flag and surfaces malformed or mismatched hot/cold rows as data errors.
+func ReadBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	return readBlockBalanceTraceStrict(db, blockNum)
 }
 
 // HasBlockBalanceTrace reports whether a trace is stored for blockNum.
