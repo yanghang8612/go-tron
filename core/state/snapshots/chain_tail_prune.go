@@ -54,8 +54,10 @@ type ChainFreezerTailPrunePlanInput struct {
 
 	// EventLogBuildBlock is the highest block whose logs have been published
 	// into cold event-log segments plus event-log-index sidecars. Minimal-mode
-	// tail pruning must not hide local freezer rows beyond this boundary, or
-	// archive log queries would be forced back to block/TransactionRet scans.
+	// tail pruning must not hide non-genesis local freezer rows beyond this
+	// boundary, or archive log queries would be forced back to
+	// block/TransactionRet scans. Genesis has no transaction logs and remains
+	// guarded by chain-freezer plus chain-index coverage.
 	EventLogBuildBlock    uint64
 	HasEventLogBuildBlock bool
 }
@@ -129,9 +131,6 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 	if !input.HasChainLookupPruneBlock {
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingLookupStage)
 	}
-	if !input.HasEventLogBuildBlock {
-		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogStage)
-	}
 	if input.RetainBlocks == 0 {
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonZeroRetainBlocks)
 	}
@@ -142,11 +141,20 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonTailAboveAncientHead)
 	}
 
-	coverageBlock := minUint64(minUint64(input.ChainFreezerBlock, input.ChainLookupPruneBlock), input.EventLogBuildBlock)
+	coverageBlock := minUint64(input.ChainFreezerBlock, input.ChainLookupPruneBlock)
 	coverageTail := tailAfterInclusiveBlock(coverageBlock)
 	retentionTail := retainedHistoryTail(input.HeadBlock, input.RetainBlocks)
 	targetTail := minUint64(coverageTail, retentionTail)
 	targetTail = minUint64(targetTail, input.AncientHead)
+	if targetTail > 1 {
+		if !input.HasEventLogBuildBlock {
+			return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogStage)
+		}
+		coverageBlock = minUint64(coverageBlock, input.EventLogBuildBlock)
+		coverageTail = tailAfterInclusiveBlock(coverageBlock)
+		targetTail = minUint64(coverageTail, retentionTail)
+		targetTail = minUint64(targetTail, input.AncientHead)
+	}
 
 	plan.CoverageBlock = coverageBlock
 	plan.HasCoverageBlock = true

@@ -192,12 +192,12 @@ continuous block-1 prefix of `event-log` segments and matching
 `event-log-index` sidecars. Snapshot restore/bootstrap derives the same stage
 from verified manifest indexed event-log coverage, combining adjacent index
 sidecars into one continuous block-1 boundary, and minimal-mode freezer tail
-pruning rechecks continuous
-cold chain-freezer, chain-index, and indexed event-log coverage before hiding
-or reclaiming local freezer rows. When a `chain-freezer-accessor` sidecar is
-present, cold chain-freezer coverage also verifies its offsets against the
-freezer segment contents. Event-log coverage starts at block 1; genesis remains
-guarded by the cold chain-freezer plus chain-index coverage check.
+pruning rechecks continuous cold chain-freezer, chain-index, and indexed
+event-log coverage before hiding or reclaiming non-genesis local freezer rows.
+When a `chain-freezer-accessor` sidecar is present, cold chain-freezer coverage
+also verifies its offsets against the freezer segment contents. Event-log
+coverage starts at block 1; genesis-only tail movement remains guarded by the
+cold chain-freezer plus chain-index coverage check.
 `gtron db stage-status --db.stage.verify` also reopens the local snapshot
 manifest and verifies indexed cold coverage for event-log build and freezer-tail
 prune stages by comparing `event-log-index` postings with the active event-log

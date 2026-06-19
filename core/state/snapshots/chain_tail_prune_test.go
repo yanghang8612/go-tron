@@ -15,6 +15,7 @@ func TestPlanChainFreezerTailPruneRequiresStages(t *testing.T) {
 		AncientHead:              100,
 		HeadBlock:                100,
 		RetainBlocks:             10,
+		ChainFreezerBlock:        90,
 		ChainLookupPruneBlock:    90,
 		HasChainLookupPruneBlock: true,
 		EventLogBuildBlock:       90,
@@ -34,6 +35,25 @@ func TestPlanChainFreezerTailPruneRequiresStages(t *testing.T) {
 	input.HasEventLogBuildBlock = false
 	if plan := PlanChainFreezerTailPrune(input); plan.CanPrune || plan.Reason != chainFreezerTailPruneReasonMissingEventLogStage {
 		t.Fatalf("plan without event-log stage = %+v, want missing event-log stage", plan)
+	}
+}
+
+func TestPlanChainFreezerTailPruneAllowsGenesisOnlyWithoutEventLogStage(t *testing.T) {
+	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
+		CurrentTail:              0,
+		AncientHead:              10,
+		HeadBlock:                100,
+		RetainBlocks:             10,
+		ChainFreezerBlock:        0,
+		HasChainFreezerBlock:     true,
+		ChainLookupPruneBlock:    0,
+		HasChainLookupPruneBlock: true,
+	})
+	if !plan.CanPrune || plan.TargetTail != 1 {
+		t.Fatalf("genesis-only plan = %+v, want target tail 1", plan)
+	}
+	if plan.CoverageBlock != 0 || plan.CoverageTail != 1 || plan.RetentionTail != 91 {
+		t.Fatalf("genesis-only bounds = %+v, want coverage block/tail 0/1 and retention tail 91", plan)
 	}
 }
 
@@ -188,6 +208,57 @@ func TestPlanChainFreezerTailPruneFromDBRequiresEventLogBuildStage(t *testing.T)
 	}
 	if plan.CanPrune || plan.Reason != chainFreezerTailPruneReasonMissingEventLogStage {
 		t.Fatalf("plan without event-log build stage = %+v, want missing event-log stage", plan)
+	}
+}
+
+func TestApplyChainFreezerTailPruneFromDBAllowsGenesisOnlyWithoutEventLogStage(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTailPruneBlockRows(t, f, 2)
+
+	snapshotDir := root + "/snapshot"
+	ref, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, ref, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 0); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 0); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	if err != nil {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
+	}
+	if !result.Applied || result.OldTail != 0 || result.NewTail != 1 || result.Plan.TargetTail != 1 {
+		t.Fatalf("apply result = %+v, want applied 0->1", result)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 1 {
+		t.Fatalf("freezer tail = %d/%v, want 1/nil", tail, err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || got != 0 {
+		t.Fatalf("StageSnapshotChainFreezerTailPrune = %d ok=%v err=%v, want 0", got, ok, err)
+	}
+	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 0); err != nil || ok {
+		t.Fatalf("HasAncient(0) = %v/%v, want false/nil", ok, err)
+	}
+	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 1); err != nil || !ok {
+		t.Fatalf("HasAncient(1) = %v/%v, want true/nil", ok, err)
 	}
 }
 

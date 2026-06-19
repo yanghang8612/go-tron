@@ -670,9 +670,11 @@ Status:
   reclaimed. The apply path verifies cold chain-freezer, chain-index, and
   indexed event-log coverage before calling runtime `TruncateTail`; indexed
   event-log coverage starts at block 1 because genesis has no transaction logs,
-  while genesis chain rows remain covered by the cold freezer plus chain-index
-  check. Snapshot managers now prove continuous chain-freezer, chain-index, and
-  indexed log coverage for the whole tail range instead of only probing
+  so genesis-only tail movement is allowed with cold freezer plus chain-index
+  coverage while non-genesis tail movement still requires the event-log build
+  stage and cold indexed log coverage. Snapshot managers now prove continuous
+  chain-freezer, chain-index, and indexed log coverage for the whole tail range
+  instead of only probing
   endpoints, and generic cold `AncientReader` fallbacks verify every chain-freezer
   row range with `AncientRange` rather than trusting first/last rows. Tests pin
   missing-stage no-ops, lookup-stage caps, event-log-stage caps,
