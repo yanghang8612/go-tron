@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"net"
 	"testing"
@@ -24,7 +25,10 @@ import (
 type solidTestBackend struct {
 	testBackend
 	solidNum           uint64
+	blockNumCalls      int
 	lastNumQueried     uint64
+	hashCalls          int
+	lastHashQueried    common.Hash
 	lastAccountAt      uint64
 	lastAccountIDAt    uint64
 	lastRewardAt       uint64
@@ -106,8 +110,15 @@ type solidTestBackend struct {
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
 
 func (b *solidTestBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
+	b.blockNumCalls++
 	b.lastNumQueried = n
 	return b.testBackend.GetBlockByNumber(n)
+}
+
+func (b *solidTestBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
+	b.hashCalls++
+	b.lastHashQueried = h
+	return b.testBackend.GetBlockByHash(h)
 }
 
 func (b *solidTestBackend) GetTransactionBlockNumByID(hash common.Hash) (uint64, bool, error) {
@@ -499,6 +510,112 @@ func TestSolidity_GetBlockByNum_AboveSolid(t *testing.T) {
 	_, err := client.GetBlockByNum(context.Background(), &apipb.NumberMessage{Num: 10})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound for block above solid, got %v", err)
+	}
+}
+
+func TestSolidity_GetBlockLatestUsesSolidBound(t *testing.T) {
+	solidBlock := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 10},
+		},
+	})
+	backend := &solidTestBackend{
+		testBackend: testBackend{block: solidBlock},
+		solidNum:    10,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "latest", Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock latest: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 10 {
+		t.Fatalf("block number = %d, want 10", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.lastNumQueried != 10 {
+		t.Fatalf("queried block %d, want solid block 10", backend.lastNumQueried)
+	}
+}
+
+func TestSolidity_GetBlockNumberRejectsAboveSolidBeforeBackend(t *testing.T) {
+	backend := &solidTestBackend{solidNum: 5}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "10", Detail: true})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for block above solid, got %v", err)
+	}
+	if backend.blockNumCalls != 0 {
+		t.Fatalf("GetBlock queried backend %d times for unsolidified number, want 0", backend.blockNumCalls)
+	}
+}
+
+func TestSolidity_GetBlockIDRejectsAboveSolidBeforeBackend(t *testing.T) {
+	hash := solidityBlockIDWithNumber(10)
+	backend := &solidTestBackend{solidNum: 5}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: hash.Hex(), Detail: true})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for block id above solid, got %v", err)
+	}
+	if backend.hashCalls != 0 {
+		t.Fatalf("GetBlock queried hash backend %d times for unsolidified id, want 0", backend.hashCalls)
+	}
+}
+
+func TestSolidity_GetBlockIDWithinSolidUsesHashLookup(t *testing.T) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 5},
+		},
+	})
+	backend := &solidTestBackend{
+		testBackend: testBackend{block: block},
+		solidNum:    5,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: block.Hash().Hex(), Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock by id: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 5 {
+		t.Fatalf("block number = %d, want 5", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.hashCalls != 1 || backend.lastHashQueried != block.Hash() {
+		t.Fatalf("hash lookup calls/hash = %d/%s, want 1/%s", backend.hashCalls, backend.lastHashQueried.Hex(), block.Hash().Hex())
+	}
+}
+
+func TestSolidity_GetBlockDetailFalseOmitsTransactionBody(t *testing.T) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 5},
+		},
+		Transactions: []*corepb.Transaction{{
+			RawData: &corepb.TransactionRaw{Timestamp: 9},
+		}},
+	})
+	backend := &solidTestBackend{
+		testBackend: testBackend{block: block},
+		solidNum:    5,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "5"})
+	if err != nil {
+		t.Fatalf("GetBlock detail=false: %v", err)
+	}
+	txs := resp.GetTransactions()
+	if len(txs) != 1 {
+		t.Fatalf("transaction count = %d, want 1", len(txs))
+	}
+	if txs[0].GetTransaction() != nil {
+		t.Fatal("detail=false returned full transaction body")
+	}
+	if len(txs[0].GetTxid()) != common.HashLength {
+		t.Fatalf("txid length = %d, want %d", len(txs[0].GetTxid()), common.HashLength)
 	}
 }
 
@@ -1216,5 +1333,11 @@ func solidityTestHash(fill byte) common.Hash {
 	for i := range hash {
 		hash[i] = fill
 	}
+	return hash
+}
+
+func solidityBlockIDWithNumber(num uint64) common.Hash {
+	hash := solidityTestHash(0xaa)
+	binary.BigEndian.PutUint64(hash[:8], num)
 	return hash
 }

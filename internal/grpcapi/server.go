@@ -139,13 +139,19 @@ func (s *Server) GetChainParameters(_ context.Context, _ *apipb.EmptyMessage) (*
 
 // blockToExtention converts a types.Block to a BlockExtention.
 func blockToExtention(block *types.Block) *apipb.BlockExtention {
+	return blockToExtentionWithDetail(block, true)
+}
+
+func blockToExtentionWithDetail(block *types.Block, detail bool) *apipb.BlockExtention {
 	id := block.ID()
 	txs := block.Transactions()
 	txExts := make([]*apipb.TransactionExtention, len(txs))
 	for i, tx := range txs {
 		txExts[i] = &apipb.TransactionExtention{
-			Transaction: tx.Proto(),
-			Txid:        tx.Hash().Bytes(),
+			Txid: tx.Hash().Bytes(),
+		}
+		if detail {
+			txExts[i].Transaction = tx.Proto()
 		}
 	}
 	return &apipb.BlockExtention{

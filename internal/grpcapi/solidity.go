@@ -2,6 +2,10 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
+	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
@@ -33,6 +37,92 @@ func (s *SolidityServer) solidNum() uint64 {
 }
 
 // ── Block queries (solid-bounded) ──────────────────────────────────────────────
+
+func (s *SolidityServer) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockExtention, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	idOrNum := strings.TrimSpace(in.GetIdOrNum())
+	if idOrNum == "" || strings.EqualFold(idOrNum, "latest") {
+		return s.getSolidBlockByNumber(s.solidNum(), in.GetDetail())
+	}
+	if strings.EqualFold(idOrNum, "earliest") {
+		return s.getSolidBlockByNumber(0, in.GetDetail())
+	}
+
+	if hash, hashBytes, ok, err := parseGRPCBlockID(idOrNum); ok || err != nil {
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		num, ok := blockNumberFromGRPCBlockIDBytes(hashBytes)
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		if num > s.solidNum() {
+			return nil, status.Error(codes.NotFound, "block not yet solidified")
+		}
+		block, err := s.backend.GetBlockByHash(hash)
+		if err != nil || block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		if block.Number() > s.solidNum() {
+			return nil, status.Error(codes.NotFound, "block not yet solidified")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	num, err := parseGRPCBlockNumber(idOrNum)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid block number")
+	}
+	return s.getSolidBlockByNumber(num, in.GetDetail())
+}
+
+func (s *SolidityServer) getSolidBlockByNumber(num uint64, detail bool) (*apipb.BlockExtention, error) {
+	if num > s.solidNum() {
+		return nil, status.Error(codes.NotFound, "block not yet solidified")
+	}
+	block, err := s.backend.GetBlockByNumber(num)
+	if err != nil || block == nil {
+		return nil, status.Error(codes.NotFound, "block not found")
+	}
+	return blockToExtentionWithDetail(block, detail), nil
+}
+
+func parseGRPCBlockID(value string) (common.Hash, []byte, bool, error) {
+	raw := value
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		raw = raw[2:]
+	}
+	if len(raw) != common.HashLength*2 {
+		return common.Hash{}, nil, false, nil
+	}
+	hashBytes, err := hex.DecodeString(raw)
+	if err != nil {
+		return common.Hash{}, nil, true, err
+	}
+	return common.BytesToHash(hashBytes), hashBytes, true, nil
+}
+
+func parseGRPCBlockNumber(value string) (uint64, error) {
+	raw := value
+	base := 10
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		raw = raw[2:]
+		base = 16
+	}
+	if raw == "" {
+		return 0, strconv.ErrSyntax
+	}
+	return strconv.ParseUint(raw, base, 64)
+}
+
+func blockNumberFromGRPCBlockIDBytes(hashBytes []byte) (uint64, bool) {
+	if len(hashBytes) < 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(hashBytes[:8]), true
+}
 
 func (s *SolidityServer) GetNowBlock(_ context.Context, _ *apipb.EmptyMessage) (*corepb.Block, error) {
 	// solidNum()==0 on a fresh chain → looks up genesis block (#0), matching

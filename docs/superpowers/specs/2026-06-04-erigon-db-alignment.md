@@ -1374,6 +1374,11 @@ Status:
 - gRPC `WalletSolidity.GetTransactionCountByBlockNum` now shares the same solid
   boundary as the other WalletSolidity block reads: requests above the solidified
   block return `NotFound` before the backend can read a live-head block.
+- gRPC `WalletSolidity.GetBlock(BlockReq)` now resolves `latest`, `earliest`,
+  block numbers, and java-tron BlockIds through the same solid boundary. BlockIds
+  expose their encoded height before any backend hash lookup, so requests above
+  the solidified block cannot read hot/cold block payloads accidentally; the
+  `detail=false` form returns transaction IDs without full transaction bodies.
 - HTTP `/walletsolidity` and `/walletpbft` block-by-id/range reads are now
   bound-aware too. `getblockbyid` extracts the java-tron BlockId height before
   any backend hash lookup, and `getblockbylimitnext` rejects ranges that cross
