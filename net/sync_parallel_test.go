@@ -134,11 +134,19 @@ func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
 	parent := bc.CurrentBlock().Hash()
 	block1 := stubBlock(1, parent)
 	block2 := stubBlock(2, tcommon.Hash{0xee})
+	raw1 := rawOf(t, block1)
+	raw2 := rawOf(t, block2)
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), block1, raw1); err != nil {
+		t.Fatalf("write staged block1: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), block2, raw2); err != nil {
+		t.Fatalf("write staged block2: %v", err)
+	}
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: rawOf(t, block1), Num: 1, Hash: block1.Hash(), Peer: peer}
-	ss.blockBuffer[2] = syncdl.BufferedBlock{Raw: rawOf(t, block2), Num: 2, Hash: block2.Hash(), Peer: peer}
+	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: raw1, Num: 1, Hash: block1.Hash(), Peer: peer}
+	ss.blockBuffer[2] = syncdl.BufferedBlock{Raw: raw2, Num: 2, Hash: block2.Hash(), Peer: peer}
 	ss.bufferedHash[block1.Hash()] = struct{}{}
 	ss.bufferedHash[block2.Hash()] = struct{}{}
 	ss.mu.Unlock()

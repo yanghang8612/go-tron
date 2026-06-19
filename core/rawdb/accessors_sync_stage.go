@@ -319,13 +319,19 @@ func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBloc
 // sync import prefix: delete imported staged body rows and persist hash-bound
 // sync pipeline progress rows. Backends with batch support flush all writes in
 // one batch.
-func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedBlockDelete, progress []StageProgress) SyncImportProgressWriteResult {
+func WriteSyncImportProgressBatch(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, deletes []SyncStagedBlockDelete, progress []StageProgress) SyncImportProgressWriteResult {
 	var result SyncImportProgressWriteResult
 	if db == nil || (len(deletes) == 0 && len(progress) == 0) {
 		return result
 	}
 	if err := validateSyncImportProgressRows(progress); err != nil {
 		result.ProgressError = err
+		return result
+	}
+	if result.DeleteErrors = validateSyncImportDeleteRows(db, deletes); len(result.DeleteErrors) > 0 {
 		return result
 	}
 	if batcher, ok := db.(ethdb.Batcher); ok {
@@ -378,6 +384,40 @@ func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedB
 		result.ProgressRows = len(progress)
 	}
 	return result
+}
+
+func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedBlockDelete) []SyncStagedBlockDeleteError {
+	if len(deletes) == 0 {
+		return nil
+	}
+	errs := make([]SyncStagedBlockDeleteError, 0)
+	for _, block := range deletes {
+		row, ok, err := ReadSyncStagedBlockRaw(db, block.Number)
+		if err != nil {
+			errs = append(errs, SyncStagedBlockDeleteError{
+				Number: block.Number,
+				Hash:   block.Hash,
+				Err:    fmt.Errorf("rawdb: validate sync staged block delete %d: %w", block.Number, err),
+			})
+			continue
+		}
+		if !ok {
+			errs = append(errs, SyncStagedBlockDeleteError{
+				Number: block.Number,
+				Hash:   block.Hash,
+				Err:    fmt.Errorf("rawdb: sync staged block %d missing for imported delete", block.Number),
+			})
+			continue
+		}
+		if row.Hash != block.Hash {
+			errs = append(errs, SyncStagedBlockDeleteError{
+				Number: block.Number,
+				Hash:   block.Hash,
+				Err:    fmt.Errorf("rawdb: sync staged block %d hash %x, want %x", block.Number, row.Hash, block.Hash),
+			})
+		}
+	}
+	return errs
 }
 
 func validateSyncImportProgressRows(rows []StageProgress) error {

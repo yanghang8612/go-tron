@@ -219,7 +219,14 @@ func seedBufferedSyncRange(t *testing.T, ss *SyncService, parentHash tcommon.Has
 	var last *types.Block
 	for n := start; n < start+count; n++ {
 		blk := stubBlock(int64(n), prev)
-		ss.blockBuffer[uint64(n)] = syncdl.BufferedBlock{Raw: rawOf(t, blk), Num: uint64(n), Hash: blk.Hash()}
+		raw := rawOf(t, blk)
+		if ss.chain == nil || ss.chain.DB() == nil {
+			t.Fatalf("seed buffered sync range requires chain database")
+		}
+		if err := rawdb.WriteSyncStagedBlockRaw(ss.chain.DB(), blk, raw); err != nil {
+			t.Fatalf("write staged block %d: %v", n, err)
+		}
+		ss.blockBuffer[uint64(n)] = syncdl.BufferedBlock{Raw: raw, Num: uint64(n), Hash: blk.Hash()}
 		ss.bufferedHash[blk.Hash()] = struct{}{}
 		ss.blockPath[uint64(n)] = blk.Hash()
 		prev = blk.Hash()

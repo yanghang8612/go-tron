@@ -177,7 +177,7 @@ func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *test
 			if err := WriteSyncStagedBlock(base, block); err != nil {
 				t.Fatalf("write staged block: %v", err)
 			}
-			db := &directSyncStageWriter{db: base}
+			db := &directSyncStageWriter{reader: base, writer: base}
 
 			result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
 				{Number: block.Number(), Hash: block.Hash()},
@@ -201,6 +201,63 @@ func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *test
 			}
 		})
 	}
+}
+
+func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T) {
+	t.Run("hash mismatch", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+		wrongHash := common.Hash{0xff}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: wrongHash},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if len(result.DeleteErrors) != 1 || result.DeleteErrors[0].Number != block.Number() || !strings.Contains(result.DeleteErrors[0].Err.Error(), "hash") {
+			t.Fatalf("result = %+v, want one delete hash mismatch", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || result.ProgressError != nil {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+			t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+		}
+		if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+			t.Fatalf("staged block after rejected delete ok=%v err=%v, want present", ok, err)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+			t.Fatalf("sync import progress after rejected delete = %+v ok=%v err=%v, want absent", row, ok, err)
+		}
+	})
+
+	t.Run("missing staged row", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		db := &directSyncStageWriter{reader: base, writer: base}
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: block.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if len(result.DeleteErrors) != 1 || result.DeleteErrors[0].Number != block.Number() || !strings.Contains(result.DeleteErrors[0].Err.Error(), "missing") {
+			t.Fatalf("result = %+v, want one missing staged row delete error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || result.ProgressError != nil {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.deletes != 0 || db.puts != 0 {
+			t.Fatalf("writer side effects deletes=%d puts=%d, want none", db.deletes, db.puts)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+			t.Fatalf("sync import progress after rejected delete = %+v ok=%v err=%v, want absent", row, ok, err)
+		}
+	})
 }
 
 func TestSyncStagedBlockRawIterate(t *testing.T) {
@@ -618,17 +675,26 @@ func (db *countingBatchStore) NewBatchWithSize(size int) ethdb.Batch {
 }
 
 type directSyncStageWriter struct {
-	db      ethdb.KeyValueWriter
+	reader  ethdb.KeyValueReader
+	writer  ethdb.KeyValueWriter
 	puts    int
 	deletes int
 }
 
+func (db *directSyncStageWriter) Has(key []byte) (bool, error) {
+	return db.reader.Has(key)
+}
+
+func (db *directSyncStageWriter) Get(key []byte) ([]byte, error) {
+	return db.reader.Get(key)
+}
+
 func (db *directSyncStageWriter) Put(key []byte, value []byte) error {
 	db.puts++
-	return db.db.Put(key, value)
+	return db.writer.Put(key, value)
 }
 
 func (db *directSyncStageWriter) Delete(key []byte) error {
 	db.deletes++
-	return db.db.Delete(key)
+	return db.writer.Delete(key)
 }
