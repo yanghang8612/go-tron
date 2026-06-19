@@ -271,9 +271,17 @@ func ReadStageProgressRow(db ethdb.KeyValueReader, stage StageID) (StageProgress
 	if db == nil || stage == "" {
 		return StageProgress{}, false, nil
 	}
-	data, err := db.Get(stageProgressKey(stage))
+	key := stageProgressKey(stage)
+	exists, err := db.Has(key)
 	if err != nil {
+		return StageProgress{}, false, err
+	}
+	if !exists {
 		return StageProgress{}, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return StageProgress{}, false, err
 	}
 	row, err := decodeStageProgress(stage, data)
 	if err != nil {

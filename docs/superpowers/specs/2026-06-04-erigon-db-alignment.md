@@ -285,6 +285,10 @@ Status:
   tx-info storage read error aborts the `ModifyAncients` batch and leaves hot
   rows intact, instead of being collapsed into a missing block or empty
   tx-info row before ancient append.
+- Stage progress reads now distinguish missing rows from storage read failures:
+  `ReadStageProgressRow` probes with `Has` before `Get` and propagates either
+  error. This keeps sync/freezer/snapshot/prune gates from silently treating an
+  unreadable stage boundary as if no boundary existed.
 
 Needed:
 

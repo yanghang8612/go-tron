@@ -8,6 +8,27 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+type stageProgressFailingReader struct {
+	has    bool
+	hasErr error
+	getErr error
+	data   []byte
+}
+
+func (r stageProgressFailingReader) Has([]byte) (bool, error) {
+	if r.hasErr != nil {
+		return false, r.hasErr
+	}
+	return r.has, nil
+}
+
+func (r stageProgressFailingReader) Get([]byte) ([]byte, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return append([]byte(nil), r.data...), nil
+}
+
 func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	db := NewMemoryDatabase()
 	if _, ok, err := ReadStageProgress(db, StageExecution); err != nil || ok {
@@ -45,6 +66,25 @@ func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadStageProgress(db, StageExecution); err != nil || ok {
 		t.Fatalf("deleted stage progress ok=%v err=%v", ok, err)
+	}
+}
+
+func TestReadStageProgressRowSurfacesStorageErrors(t *testing.T) {
+	if _, ok, err := ReadStageProgressRow(stageProgressFailingReader{
+		hasErr: errors.New("stage has failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage has failed") {
+		t.Fatalf("Has failure row ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadStageProgress(stageProgressFailingReader{
+		has:    true,
+		getErr: errors.New("stage get failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage get failed") {
+		t.Fatalf("Get failure progress ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(stageProgressFailingReader{
+		hasErr: errors.New("stage verify failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage verify failed") {
+		t.Fatalf("verified stage row read failure ok=%v err=%v, want storage error", ok, err)
 	}
 }
 
