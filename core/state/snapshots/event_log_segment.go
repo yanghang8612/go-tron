@@ -387,9 +387,6 @@ func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eve
 		}
 		hasMatch, err := eventLogSegmentHasFilterMatch(dir, ref, max(fromBlock, ref.FromTxNum), min(toBlock, ref.ToTxNum), filter)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
 			return err
 		}
 		if hasMatch {

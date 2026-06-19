@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -354,9 +355,6 @@ func TestEventLogManagerUsesGlobalIndexToSkipUnrelatedSegments(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref1, ref2, indexRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
-		t.Fatalf("remove unrelated event-log segment: %v", err)
-	}
 	mgr, err := OpenManager(dir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)
@@ -443,10 +441,6 @@ func TestEventLogManagerUsesAdjacentGlobalIndexesToSkipUnrelatedSegments(t *test
 	if err != nil || !covered {
 		t.Fatalf("EventLogIndexedRangeCovered adjacent indexes = %v/%v, want true/nil", covered, err)
 	}
-	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
-		t.Fatalf("remove unrelated event-log segment: %v", err)
-	}
-
 	filter := EventLogFilter{
 		Addresses: []common.Address{common.BytesToAddress(addrA)},
 		Topics:    [][]common.Hash{{topicA}},
@@ -880,6 +874,60 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 	})
 	if err == nil || covered {
 		t.Fatalf("EventLogRangeCoveredForFilter stale empty index = %v/%v, want false/error", covered, err)
+	}
+}
+
+func TestEventLogRangeCoveredForFilterRejectsMissingNonCandidateSegment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x48)
+	topic := common.Hash{0xd0}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x08}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	eventRef, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	emptyIndexRef, err := writeEventLogIndexSegment(dir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "log/event-log-index-empty-missing-noncandidate-1-1.idx",
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("writeEventLogIndexSegment empty: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, eventRef.Path)); err != nil {
+		t.Fatalf("remove event-log segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{eventRef, emptyIndexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}
+	covered, err := mgr.EventLogRangeCoveredForFilter(1, 1, filter)
+	if err == nil || !errors.Is(err, os.ErrNotExist) || covered {
+		t.Fatalf("EventLogRangeCoveredForFilter missing non-candidate = %v/%v, want false/not-exist error", covered, err)
+	}
+	if err := mgr.IterateEventLogs(1, 1, filter, func(EventLog) (bool, error) {
+		t.Fatal("callback called for missing non-candidate event-log segment")
+		return true, nil
+	}); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("IterateEventLogs missing non-candidate err = %v, want not-exist error", err)
 	}
 }
 
