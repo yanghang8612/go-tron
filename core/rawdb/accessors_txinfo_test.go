@@ -571,6 +571,32 @@ func TestReadTransactionInfoStrictSurfacesColdTransactionIndexError(t *testing.T
 	}
 }
 
+func TestReadTransactionInfoStrictSurfacesColdTransactionPositionError(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0xd0}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Id: txID, Fee: 700, BlockNumber: 7, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	wantErr := errors.New("cold tx position corrupt")
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(failingTxPositionChainIndex{
+		tx:     hash,
+		block:  7,
+		posErr: wantErr,
+	})
+
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo cold tx position error = %+v, want nil compatibility miss", got)
+	}
+	info, ok, err := ReadTransactionInfoStrict(db, txID)
+	if !errors.Is(err, wantErr) || ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict cold tx position error = %+v/%v/%v, want cold position error", info, ok, err)
+	}
+}
+
 func TestTransactionIndexRejectsMalformedHash(t *testing.T) {
 	db := NewMemoryChainDB()
 	txHash := []byte{0xcc}
@@ -615,4 +641,28 @@ func (f failingTxChainIndex) BlockNumberByHash(hash common.Hash) (uint64, bool, 
 
 func (f failingTxChainIndex) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error) {
 	return 0, false, f.err
+}
+
+type failingTxPositionChainIndex struct {
+	tx     common.Hash
+	block  uint64
+	posErr error
+}
+
+func (f failingTxPositionChainIndex) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+func (f failingTxPositionChainIndex) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	if hash == f.tx {
+		return f.block, true, nil
+	}
+	return 0, false, nil
+}
+
+func (f failingTxPositionChainIndex) TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, bool, error) {
+	if hash == f.tx {
+		return ChainIndexTxLookup{}, false, f.posErr
+	}
+	return ChainIndexTxLookup{}, false, nil
 }

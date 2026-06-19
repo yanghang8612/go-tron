@@ -1406,7 +1406,9 @@ Status:
   above the solid/PBFT boundary return the API's normal empty/not-found response
   without reading the full transaction, block body, or receipt; the strict
   payload readers still verify block-body/index consistency after the bound
-  admits the lookup.
+  admits the lookup. The strict transaction-info reader now also surfaces cold
+  chain-index block-local-position lookup errors instead of silently falling
+  back to a per-block receipt scan.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
   the lookup key, cold tx-info fallbacks must either carry no embedded block
