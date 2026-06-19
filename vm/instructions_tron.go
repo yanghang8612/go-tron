@@ -1283,8 +1283,13 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
 
-	frozen := in.tvm.StateDB.GetFrozenV2Amount(caller, resource)
-	if amount > frozen {
+	// java DelegateResourceProcessor.validate checks the USAGE-ADJUSTED available
+	// balance (frozenV2ForResource − v2Usage), not the raw frozen amount — the
+	// same value the getDelegatableResource precompile returns. go previously
+	// compared against raw frozen, so a contract that had consumed resource could
+	// delegate more than java permits. delegatableFrozenV2 mirrors java
+	// FreezeV2Util.queryDelegatableResource.
+	if amount > delegatableFrozenV2(in.tvm, caller, resource) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}

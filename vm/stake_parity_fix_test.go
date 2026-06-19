@@ -177,6 +177,44 @@ func TestDelegateResourceRejectsInvalidReceiver(t *testing.T) {
 	})
 }
 
+// TestDelegateResourceUsesUsageAdjustedAvailable pins java DelegateResourceProcessor.validate:
+// delegate gates on the USAGE-ADJUSTED available (frozenV2 − v2Usage, == the
+// getDelegatableResource precompile), NOT the raw frozen. go previously compared
+// against raw frozen, so a contract that had consumed energy could over-delegate.
+func TestDelegateResourceUsesUsageAdjustedAvailable(t *testing.T) {
+	owner := stakeAddr(0x31)
+	recv := stakeAddr(0x32)
+	const frozen = int64(100) * tvmTRXPrecision
+	setup := func(t *testing.T) (*TVM, int64) {
+		tvm, statedb, dp := newStakeParityTVM(t)
+		statedb.CreateAccount(owner, corepb.AccountType_Normal)
+		statedb.CreateAccount(recv, corepb.AccountType_Normal)
+		statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, frozen)
+		// Fresh (unrecovered) energy usage reduces the delegatable below raw frozen:
+		// weight==limit and usage 60 → balance 60 TRX → delegatable 40 TRX.
+		statedb.SetEnergyUsage(owner, 60)
+		statedb.SetLatestConsumeTimeForEnergy(owner, 0)
+		dp.SetTotalEnergyWeight(1000)
+		dp.SetTotalEnergyCurrentLimit(1000)
+		return tvm, delegatableFrozenV2(tvm, owner, corepb.ResourceCode_ENERGY)
+	}
+
+	tvm, avail := setup(t)
+	if avail <= tvmTRXPrecision || avail >= frozen {
+		t.Fatalf("setup: delegatable=%d, want a value in (1 TRX, %d) so usage reduced it", avail, frozen)
+	}
+	// amount == available → success.
+	if ret := callDelegateResource(t, tvm, owner, recv, corepb.ResourceCode_ENERGY, avail); ret != 1 {
+		t.Fatalf("delegate exactly-available %d: got %d, want 1", avail, ret)
+	}
+	// amount between available and raw frozen → java REVERTs; pre-fix go allowed it.
+	tvm2, avail2 := setup(t)
+	over := avail2 + tvmTRXPrecision
+	if ret := callDelegateResource(t, tvm2, owner, recv, corepb.ResourceCode_ENERGY, over); ret != 0 {
+		t.Fatalf("delegate over-available %d (frozen=%d avail=%d): got %d, want 0", over, frozen, avail2, ret)
+	}
+}
+
 // TestUnDelegateOpcodeReadsPerPairRecord locks the second half of F-1: the VM
 // UNDELEGATERESOURCE opcode must validate against and decrement the per-pair
 // record (not the aggregate), and remove the record + index when it hits zero.
