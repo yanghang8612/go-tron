@@ -1288,6 +1288,18 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
+	// java DelegateResourceProcessor.validate rejects (→ push 0) when the
+	// receiver is the owner itself, does not exist, or is a contract account
+	// ("Do not allow delegate resources to contract addresses"). go skipped
+	// these, so a contract delegating to a non-existent/self/contract receiver
+	// succeeded where java reverts — Nile 34,212,851 delegated to a non-existent
+	// account (expected REVERT, got SUCCESS). Use the account type, mirroring
+	// java receiverCapsule.getType() == Contract.
+	recvAccount := in.tvm.StateDB.GetAccount(receiver)
+	if receiver == caller || recvAccount == nil || recvAccount.Type() == corepb.AccountType_Contract {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	// java's DelegateResourceProcessor (VM native contract) does NOT recover or
 	// persist the owner's usage on delegate: validate() mutates a getAccount()
 	// byte-snapshot copy that is never put back, and execute() only adjusts the

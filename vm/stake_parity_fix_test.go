@@ -124,6 +124,59 @@ func TestDelegateOpcodeWritesPerPairRecordAndIndex(t *testing.T) {
 	}
 }
 
+// TestDelegateResourceRejectsInvalidReceiver pins java DelegateResourceProcessor.validate:
+// DELEGATERESOURCE must push 0 (→ contract revert) when the receiver is the owner,
+// does not exist, or is a contract. go lacked these checks — Nile 34,212,851 delegated
+// to a non-existent account and returned SUCCESS where java REVERTs.
+func TestDelegateResourceRejectsInvalidReceiver(t *testing.T) {
+	owner := stakeAddr(0x21)
+	setup := func(t *testing.T) (*TVM, *state.StateDB) {
+		tvm, statedb, _ := newStakeParityTVM(t)
+		statedb.CreateAccount(owner, corepb.AccountType_Normal)
+		statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision)
+		return tvm, statedb
+	}
+
+	t.Run("valid_existing_eoa_succeeds", func(t *testing.T) {
+		tvm, statedb := setup(t)
+		recv := stakeAddr(0x22)
+		statedb.CreateAccount(recv, corepb.AccountType_Normal)
+		if ret := callDelegateResource(t, tvm, owner, recv, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision); ret != 1 {
+			t.Fatalf("valid existing receiver: got %d, want 1", ret)
+		}
+	})
+
+	t.Run("nonexistent_receiver_rejected", func(t *testing.T) {
+		tvm, statedb := setup(t)
+		recv := stakeAddr(0x23) // never created
+		if ret := callDelegateResource(t, tvm, owner, recv, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision); ret != 0 {
+			t.Fatalf("non-existent receiver: got %d, want 0", ret)
+		}
+		if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 100*tvmTRXPrecision {
+			t.Fatalf("frozen mutated on rejected delegate: got %d, want %d", got, 100*tvmTRXPrecision)
+		}
+		if statedb.ReadDelegatedResourceV2(owner, recv, false) != nil {
+			t.Fatal("per-pair record written on rejected delegate")
+		}
+	})
+
+	t.Run("self_receiver_rejected", func(t *testing.T) {
+		tvm, _ := setup(t)
+		if ret := callDelegateResource(t, tvm, owner, owner, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision); ret != 0 {
+			t.Fatalf("self receiver: got %d, want 0", ret)
+		}
+	})
+
+	t.Run("contract_receiver_rejected", func(t *testing.T) {
+		tvm, statedb := setup(t)
+		recv := stakeAddr(0x24)
+		statedb.CreateAccount(recv, corepb.AccountType_Contract)
+		if ret := callDelegateResource(t, tvm, owner, recv, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision); ret != 0 {
+			t.Fatalf("contract receiver: got %d, want 0", ret)
+		}
+	})
+}
+
 // TestUnDelegateOpcodeReadsPerPairRecord locks the second half of F-1: the VM
 // UNDELEGATERESOURCE opcode must validate against and decrement the per-pair
 // record (not the aggregate), and remove the record + index when it hits zero.
