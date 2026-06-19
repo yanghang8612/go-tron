@@ -566,6 +566,10 @@ Status:
   hash-matching staged body rows before local import can drain them, and
   rejects cold-prune coverage violations such as
   `SnapshotChainLookupPrune` ahead of or present without `ChainFreezer`.
+  Canonical/cold coverage stage order checks also reject same-height
+  hash-bound mismatches, so `Execution=N/hashB` cannot be considered ordered
+  after `Bodies=N/hashA`, and freezer/prune coverage cannot claim the same
+  height on a different block hash than its upstream boundary.
   The verification gate now also opens the local snapshot manifest and checks
   actual readable cold coverage for `SnapshotEventLogBuild`,
   `SnapshotChainLookupPrune`, `SnapshotSectionBloomPrune`,

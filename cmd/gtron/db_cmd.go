@@ -795,6 +795,13 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 			continue
 		}
 		if down.progress.BlockNum <= up.progress.BlockNum {
+			if down.progress.BlockNum == up.progress.BlockNum &&
+				down.progress.HasBlockHash && up.progress.HasBlockHash &&
+				down.progress.BlockHash != up.progress.BlockHash {
+				issues = append(issues, fmt.Sprintf("%s=%d/%x hash does not match %s=%d/%x",
+					pair.downstream, down.progress.BlockNum, down.progress.BlockHash,
+					pair.upstream, up.progress.BlockNum, up.progress.BlockHash))
+			}
 			continue
 		}
 		issues = append(issues, fmt.Sprintf("%s=%d ahead of %s=%d",

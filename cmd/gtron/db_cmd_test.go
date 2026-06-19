@@ -1167,6 +1167,71 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		t.Fatalf("pipeline order issues with missing upstream = %#v, want none", issues)
 	}
 
+	hashA := common.Hash{0xaa}
+	hashB := common.Hash{0xbb}
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageBodies,
+				BlockNum:     12,
+				BlockHash:    hashA,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageExecution,
+				BlockNum:     12,
+				BlockHash:    hashB,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageFinish,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageFinish,
+				BlockNum:     20,
+				BlockHash:    hashA,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageChainFreezer,
+				BlockNum:     20,
+				BlockHash:    hashB,
+				HasBlockHash: true,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		fmt.Sprintf("Execution=12/%x hash does not match Bodies=12/%x", hashB, hashA),
+		fmt.Sprintf("ChainFreezer=20/%x hash does not match Finish=20/%x", hashB, hashA),
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing hash mismatch %q in %#v", want, issues)
+		}
+	}
+
 	rows = []dbStageStatusRow{
 		{
 			stage:   rawdb.StageSnapshotBuild,
