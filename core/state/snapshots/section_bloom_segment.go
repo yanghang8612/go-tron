@@ -74,7 +74,7 @@ func BuildSectionBloomSegmentFromDBWithOptions(db ethdb.Iteratee, dir, relPath s
 		ToTxNum:   toBlock,
 		Path:      filepath.ToSlash(relPath),
 	}
-	if err := validateSegmentRef(ref); err != nil {
+	if err := validateSectionBloomRef(ref); err != nil {
 		return SegmentRef{}, err
 	}
 	collector, err := etl.NewCollector(opts.collectorOptions())
@@ -474,6 +474,25 @@ func validateSectionBloomRef(ref SegmentRef) error {
 	}
 	if ref.normalizedDataset() != SegmentDatasetSectionBloom {
 		return fmt.Errorf("snapshots: section bloom segment %q dataset %q, want %q", ref.Path, ref.Dataset, SegmentDatasetSectionBloom)
+	}
+	if err := validateSectionBloomFullSectionRange(ref); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSectionBloomFullSectionRange(ref SegmentRef) error {
+	if ref.ToTxNum < ref.FromTxNum {
+		return fmt.Errorf("snapshots: section bloom segment %q range [%d,%d] is inverted", ref.Path, ref.FromTxNum, ref.ToTxNum)
+	}
+	blocksPerSection := uint64(rawdb.SectionBloomBlockPerSection)
+	if ref.FromTxNum%blocksPerSection != 0 {
+		return fmt.Errorf("snapshots: section bloom segment %q range [%d,%d] must start on a complete %d-block section boundary",
+			ref.Path, ref.FromTxNum, ref.ToTxNum, blocksPerSection)
+	}
+	if ref.ToTxNum == ^uint64(0) || (ref.ToTxNum+1)%blocksPerSection != 0 {
+		return fmt.Errorf("snapshots: section bloom segment %q range [%d,%d] must end on a complete %d-block section boundary",
+			ref.Path, ref.FromTxNum, ref.ToTxNum, blocksPerSection)
 	}
 	return nil
 }

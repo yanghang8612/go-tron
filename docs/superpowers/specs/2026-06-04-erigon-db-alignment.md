@@ -1063,6 +1063,10 @@ Status:
   Existing hot/cold section-bloom rows are now read through a strict accessor
   in this rebuild path, so cold sidecar errors abort the rebuild instead of
   being treated as missing rows that could clear unrelated block bits.
+  Cold section-bloom snapshot sidecars are accepted only when their block range
+  covers complete java-tron bloom sections (`from % 2048 == 0` and
+  `(to + 1) % 2048 == 0`), so manifests cannot advertise a partial section as
+  safe cold coverage before hot rows are pruned.
   The rebuild now rejects tx-bearing blocks whose `TransactionRet` coverage is
   missing, differs from the block's transaction list length, contains nil
   entries, points at a different block number, or carries a tx id that does not

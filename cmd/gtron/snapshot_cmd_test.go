@@ -896,16 +896,34 @@ func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildSectionBloomsCmdRejectsPartialSectionRange(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "0",
+		"--snapshot.to-block", fmt.Sprint(rawdb.SectionBloomBlockPerSection - 2),
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	if err := snapshotBuildSectionBloomsCmd(ctx); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("snapshotBuildSectionBloomsCmd partial range error = %v, want complete-section error", err)
+	}
+}
+
 func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
 	snapshotDir := filepath.Join(root, "snapshot")
 	etlTemp := filepath.Join(root, "snapshot-etl")
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection) - 1
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
 		"--snapshot.dir", snapshotDir,
-		"--snapshot.from-block", "12",
-		"--snapshot.to-block", "12",
+		"--snapshot.from-block", "0",
+		"--snapshot.to-block", fmt.Sprint(sectionEnd),
 		"--snapshot.etl.tempdir", etlTemp,
 		"--snapshot.etl.buffer", "1",
 		"--dev",
@@ -917,11 +935,28 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	}
 	owner := common.Address{0x41, 0xbb}
 	block12, txHash, _ := snapshotCmdBlockWithTx(t, 12)
+	for blockNum := uint64(0); blockNum <= sectionEnd; blockNum++ {
+		block := snapshotCmdBlock(blockNum)
+		timestamp := int64(30_000 + blockNum)
+		if blockNum == 12 {
+			block = block12
+			timestamp = 1200
+		}
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteBlockBalanceTrace(db, int64(blockNum), &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Hash:   append([]byte(nil), block.Hash().Bytes()...),
+				Number: int64(blockNum),
+			},
+			Timestamp: timestamp,
+		}); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", blockNum, err)
+		}
+	}
 	logAddress := []byte{0x41, 0x12, 0x13, 0x14, 0x15}
 	logTopic := common.Hash{0xdd}
-	if err := rawdb.WriteBlock(db, block12); err != nil {
-		t.Fatalf("WriteBlock: %v", err)
-	}
 	if err := rawdb.WriteTransactionInfosByBlock(db, 12, []*corepb.TransactionInfo{{
 		Id:          txHash[:],
 		BlockNumber: 12,
@@ -932,15 +967,6 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 		}},
 	}}); err != nil {
 		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
-	}
-	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
-		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
-			Hash:   append([]byte(nil), block12.Hash().Bytes()...),
-			Number: 12,
-		},
-		Timestamp: 1200,
-	}); err != nil {
-		t.Fatalf("WriteBlockBalanceTrace: %v", err)
 	}
 	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 910); err != nil {
 		t.Fatalf("WriteAccountTrace: %v", err)
@@ -1036,8 +1062,8 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 		t.Fatalf("reopen db: %v", err)
 	}
 	defer reopened.Close()
-	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 12 {
-		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 12", got, ok, err)
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != sectionEnd {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want %d", got, ok, err, sectionEnd)
 	}
 }
 

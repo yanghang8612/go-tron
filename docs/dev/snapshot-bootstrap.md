@@ -236,10 +236,13 @@ gtron snapshot prune-section-blooms \
 
 The prune commands recheck the signed catalog and compare each covered hot row
 against the cold segment before deleting anything. A missing or different cold
-row aborts the prune. Runtime snapshot/prune lifecycle also runs balance-trace
-and section-bloom pruning with persisted `SnapshotBalanceTracePrune` and
-`SnapshotSectionBloomPrune` stages, so already processed cold segments are
-skipped after restart. The manual prune commands update the same stages.
+row aborts the prune. Section-bloom cold segments must cover complete 2048-block
+java-tron bloom sections before they can enter the catalog, so a partial
+sidecar cannot claim coverage for the rest of its section. Runtime
+snapshot/prune lifecycle also runs balance-trace and section-bloom pruning with
+persisted `SnapshotBalanceTracePrune` and `SnapshotSectionBloomPrune` stages, so
+already processed cold segments are skipped after restart. The manual prune
+commands update the same stages.
 
 ## One-Step Bootstrap
 

@@ -72,7 +72,9 @@ writes to collector-backed loads.
   section-bloom rows from retained canonical blocks plus hot or ancient
   per-block `TransactionRet` log payloads. Partial-range rebuilds read existing
   section rows first and OR in new block offsets so they do not clear other
-  blocks in the same section.
+  blocks in the same section. Snapshot `section-bloom` sidecars are stricter:
+  they are published only for complete 2048-block bloom sections because cold
+  manifests and prune stages reason at section granularity.
 - `gtron db rebuild-section-blooms` exposes that section-bloom rebuild. It uses
   the same datadir, ancient freezer, range, and ETL scratch-space flags as
   `rebuild-tx-indexes`.

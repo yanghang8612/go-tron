@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -224,18 +225,27 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	bloomRow := sectionBloomTestEncodedBit(t, 9)
 	eventAddress := eventLogTestAddress(0x55)
 	eventTopic := common.Hash{0xee}
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection) - 1
 	eventBlock, eventInfos := eventLogTestBlock(t, 12, []*corepb.TransactionInfo_Log{
 		{Address: eventAddress, Topics: [][]byte{eventTopic[:]}, Data: []byte{0x12}},
 	})
 
-	if err := rawdb.WriteBlock(db, eventBlock); err != nil {
-		t.Fatalf("WriteBlock: %v", err)
+	for blockNum := uint64(0); blockNum <= sectionEnd; blockNum++ {
+		block := aggregatorTestBlock(blockNum)
+		timestamp := int64(30_000 + blockNum)
+		if blockNum == 12 {
+			block = eventBlock
+			timestamp = 1200
+		}
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteBlockBalanceTrace(db, int64(blockNum), balanceTraceTestBlockTrace(int64(blockNum), timestamp)); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", blockNum, err)
+		}
 	}
 	if err := rawdb.WriteTransactionInfosByBlock(db, 12, eventInfos); err != nil {
 		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
-	}
-	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
-		t.Fatalf("WriteBlockBalanceTrace: %v", err)
 	}
 	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 900); err != nil {
 		t.Fatalf("WriteAccountTrace: %v", err)
@@ -244,7 +254,7 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 		t.Fatalf("WriteSectionBloom: %v", err)
 	}
 
-	result, err := NewAggregator(dir).BuildDerivedIndexes(db, 12, 12, AggregatorBuildDerivedOptions{
+	result, err := NewAggregator(dir).BuildDerivedIndexes(db, 0, sectionEnd, AggregatorBuildDerivedOptions{
 		BalanceTraces: true,
 		SectionBlooms: true,
 		EventLogs:     true,
@@ -303,6 +313,17 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	if len(eventRows) != 1 || eventRows[0].BlockNum != 12 || !bytes.Equal(eventRows[0].Log.GetData(), []byte{0x12}) {
 		t.Fatalf("event rows = %+v, want one cold event log", eventRows)
 	}
+}
+
+func aggregatorTestBlock(number uint64) *coretypes.Block {
+	return coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+	})
 }
 
 func TestAggregatorBuildLatestOnly(t *testing.T) {

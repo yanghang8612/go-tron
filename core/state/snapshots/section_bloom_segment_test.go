@@ -117,6 +117,29 @@ func TestBuildSectionBloomSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	}
 }
 
+func TestBuildSectionBloomSegmentRejectsPartialSectionRange(t *testing.T) {
+	source := rawdb.NewMemoryChainDB()
+	if _, err := BuildSectionBloomSegmentFromDB(source, t.TempDir(), "", 1, rawdb.SectionBloomBlockPerSection-1); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("BuildSectionBloomSegmentFromDB partial start error = %v, want complete-section error", err)
+	}
+	if _, err := BuildSectionBloomSegmentFromDB(source, t.TempDir(), "", 0, rawdb.SectionBloomBlockPerSection-2); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("BuildSectionBloomSegmentFromDB partial end error = %v, want complete-section error", err)
+	}
+}
+
+func TestCheckSectionBloomSegmentRejectsPartialSectionRef(t *testing.T) {
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetSectionBloom,
+		Kind:      SegmentSectionBloom,
+		FromTxNum: 0,
+		ToTxNum:   rawdb.SectionBloomBlockPerSection - 2,
+		Path:      "log/section-bloom-0-partial.seg",
+	}
+	if err := CheckSectionBloomSegment(t.TempDir(), ref); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("CheckSectionBloomSegment partial ref error = %v, want complete-section error", err)
+	}
+}
+
 func TestBuildSectionBloomSegmentRejectsOversizedDecodedRow(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
