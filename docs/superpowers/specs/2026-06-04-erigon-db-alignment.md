@@ -1198,12 +1198,13 @@ Status:
   event-log and event-log-index sidecars in the same manifest generation as the
   state-history segment before hot prune runs, and both production and manual
   event-log builders now advance a block-valued `SnapshotEventLogBuild` stage
-  only when indexed cold log coverage exists, so operators can audit it against
-  the verified `Finish` boundary. Snapshot restore/bootstrap also derives that
-  stage from verified manifest `event-log` plus `event-log-index` coverage,
-  combining adjacent indexed sidecars into one continuous boundary, so restored
-  nodes can continue minimal-mode tail pruning without locally rebuilding log
-  sidecars. Runtime startup registers the manager on
+  only when indexed cold log coverage exists as a continuous prefix from block
+  1, so operators can audit it against the verified `Finish` boundary. Snapshot
+  restore/bootstrap also derives that stage from verified manifest `event-log`
+  plus `event-log-index` coverage, combining adjacent indexed sidecars into one
+  continuous block-1 prefix, so restored nodes can continue minimal-mode tail
+  pruning without locally rebuilding log sidecars. Runtime startup registers the
+  manager on
   `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments

@@ -91,12 +91,12 @@ writes to collector-backed loads.
   runs, using the same `RestoreETLOptions` scratch controls as manual snapshot
   builds when the lifecycle config supplies them. Event-log builder paths now
   advance `SnapshotEventLogBuild` only after writing matching event-log-index
-  coverage, and verification rebuilds address/topic postings from the active
-  event-log segments before trusting the sidecar, so stage-status automation
-  can compare indexed cold log coverage with the verified chain `Finish`
-  boundary. Filtered cold reads can compose adjacent `event-log-index`
-  sidecars across a query range, so unrelated segment files can be skipped even
-  when no single index sidecar spans the full request.
+  coverage as a continuous prefix from block 1, and verification rebuilds
+  address/topic postings from the active event-log segments before trusting the
+  sidecar, so stage-status automation can compare indexed cold log coverage
+  with the verified chain `Finish` boundary. Filtered cold reads can compose
+  adjacent `event-log-index` sidecars across a query range, so unrelated segment
+  files can be skipped even when no single index sidecar spans the full request.
   `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
   spans the query range; broader global/recsplit-style address/topic point
   indexes beyond segment-start fanout remain follow-up work.

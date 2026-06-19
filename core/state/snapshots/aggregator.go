@@ -448,9 +448,17 @@ func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
 	if len(refs) == 0 {
 		return 0, false
 	}
-	next := refs[0].FromTxNum
-	var block uint64
-	var ok bool
+	block, ok := eventLogCoverageBlockFromRefs(refs, 1)
+	if !ok {
+		return 0, false
+	}
+	indexedBlock, indexed := eventLogIndexedCoverageBlockFromRefs(eventLogIndexRefs(manifest), 1, block)
+	return indexedBlock, indexed
+}
+
+func eventLogCoverageBlockFromRefs(refs []SegmentRef, fromBlock uint64) (uint64, bool) {
+	sortSegmentRefsAscending(refs)
+	next := fromBlock
 	for _, ref := range refs {
 		if ref.ToTxNum < next {
 			continue
@@ -458,18 +466,15 @@ func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
 		if ref.FromTxNum > next {
 			break
 		}
-		block = ref.ToTxNum
-		ok = true
 		if ref.ToTxNum == ^uint64(0) {
-			break
+			return ref.ToTxNum, true
 		}
 		next = ref.ToTxNum + 1
 	}
-	if !ok {
+	if next == fromBlock {
 		return 0, false
 	}
-	indexedBlock, indexed := eventLogIndexedCoverageBlockFromRefs(eventLogIndexRefs(manifest), refs[0].FromTxNum, block)
-	return indexedBlock, indexed
+	return next - 1, true
 }
 
 func eventLogIndexedCoverageBlockFromRefs(indexRefs []SegmentRef, fromBlock, maxBlock uint64) (uint64, bool) {

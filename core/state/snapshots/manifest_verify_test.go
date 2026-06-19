@@ -228,6 +228,24 @@ func TestWriteSnapshotInstallProgressCombinesAdjacentEventLogIndexes(t *testing.
 	}
 }
 
+func TestWriteSnapshotInstallProgressRequiresEventLogCoverageFromBlockOne(t *testing.T) {
+	dir := t.TempDir()
+	ref := writeVerifiableEventLogSegment(t, dir, 10, 12)
+	index, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref, index})
+	db := rawdb.NewMemoryDatabase()
+
+	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
+		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || ok {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want absent for event-log coverage starting after block 1", got, ok, err)
+	}
+}
+
 func TestWriteSnapshotInstallProgressRequiresEventLogIndexCoverage(t *testing.T) {
 	dir := t.TempDir()
 	ref := writeVerifiableEventLogSegment(t, dir, 1, 2)

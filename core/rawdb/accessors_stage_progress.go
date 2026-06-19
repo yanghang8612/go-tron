@@ -65,8 +65,9 @@ const (
 	StageSnapshotLatestBuild StageID = "SnapshotLatestBuild"
 	// StageSnapshotEventLogBuild records the highest source block whose
 	// transaction logs have been published into registered cold event-log
-	// segments and global event-log-index sidecars. It is block-valued, unlike
-	// the txNum-valued state-domain snapshot stages.
+	// segments and global event-log-index sidecars as a continuous prefix from
+	// block 1. It is block-valued, unlike the txNum-valued state-domain snapshot
+	// stages.
 	StageSnapshotEventLogBuild StageID = "SnapshotEventLogBuild"
 
 	StageSnapshotLatest          StageID = "SnapshotLatest"

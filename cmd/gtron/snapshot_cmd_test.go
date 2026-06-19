@@ -1152,8 +1152,8 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 		t.Fatalf("reopen db: %v", err)
 	}
 	defer reopened.Close()
-	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 7 {
-		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 7", got, ok, err)
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || ok {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want absent without continuous event-log coverage from block 1", got, ok, err)
 	}
 
 	statsOutput, err := captureDBCmdStdout(t, func() error {
