@@ -331,8 +331,9 @@ Treat repeated repairs after a clean restart as a bug, not an expected steady
 state.
 
 When the node is stopped, add `--offline-db-check` to also run
-`gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
-alert fields in the row. The row keeps both aggregate counts and detail arrays:
+`gtron db storage-alerts --json --datadir <dir>` and include
+freezer/stage/snapshot alert fields in the row. The row keeps both aggregate
+counts and detail arrays:
 `freezerAlertDetails`, `stageVerifyDetails`, and `snapshotAlertDetails`. Do not
 enable that flag against a live Pebble datadir unless the DB can be opened by
 the diagnostic command. Captured `stage-status` files also populate

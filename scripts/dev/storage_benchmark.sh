@@ -534,6 +534,23 @@ freezer = []
 stage = []
 snapshot = []
 for line in text.splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        continue
+    try:
+        obj = json.loads(stripped)
+    except Exception:
+        continue
+    if not isinstance(obj, dict):
+        continue
+    freezer = obj.get("freezerAlertDetails", [])
+    stage = obj.get("stageVerifyDetails", [])
+    snapshot = obj.get("snapshotAlertDetails", [])
+    print(json.dumps(freezer if isinstance(freezer, list) else [], separators=(",", ":")))
+    print(json.dumps(stage if isinstance(stage, list) else [], separators=(",", ":")))
+    print(json.dumps(snapshot if isinstance(snapshot, list) else [], separators=(",", ":")))
+    raise SystemExit(0)
+for line in text.splitlines():
     m = re.match(r"Storage freezer alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
     if m:
         freezer.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
@@ -551,6 +568,36 @@ print(json.dumps(snapshot, separators=(",", ":")))
 PY
 }
 
+storage_alert_field() {
+  local alert_out="$1"
+  local key="$2"
+  local pattern="$3"
+  python3 - "$alert_out" "$key" "$pattern" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+key = sys.argv[2]
+pattern = sys.argv[3]
+for line in text.splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        continue
+    try:
+        obj = json.loads(stripped)
+    except Exception:
+        continue
+    if isinstance(obj, dict) and key in obj:
+        print(obj[key])
+        raise SystemExit(0)
+found = re.findall(pattern, text)
+if found:
+    print(found[-1])
+PY
+}
+
 run_storage_alert_gate() {
   local mode="$1"
   local role="$2"
@@ -559,22 +606,22 @@ run_storage_alert_gate() {
   local alert_out="$WORKDIR/$mode-$role-storage-alerts.out"
   echo "checking persisted storage alert conditions" >>"$log_path"
   local ok=1
-  if ! run_logged "$alert_out" "$GTRON" db storage-alerts --datadir "$datadir" >>"$log_path"; then
+  if ! run_logged "$alert_out" "$GTRON" db storage-alerts --json --datadir "$datadir" >>"$log_path"; then
     ok=0
   fi
   local freezer_status freezer_issues hidden stage_status stage_issues snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
-  freezer_status="$(sed -n 's/.* freezerStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
-  freezer_issues="$(sed -n 's/.* freezerIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  hidden="$(sed -n 's/.* hiddenSize=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  stage_status="$(sed -n 's/.* stageStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
-  stage_issues="$(sed -n 's/.* stageIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  snapshot_status="$(sed -n 's/.* snapshotStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
-  snapshot_issues="$(sed -n 's/.* snapshotIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  retired_segments="$(sed -n 's/.* retiredSegments=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  retired_files="$(sed -n 's/.* retiredFiles=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  retired_missing="$(sed -n 's/.* retiredMissing=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  retired_skipped="$(sed -n 's/.* retiredSkippedActive=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  retired_bytes="$(sed -n 's/.* retiredBytes=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  freezer_status="$(storage_alert_field "$alert_out" freezerStatus 'freezerStatus=([^ ]+)')"
+  freezer_issues="$(storage_alert_field "$alert_out" freezerIssues 'freezerIssues=([0-9]+)')"
+  hidden="$(storage_alert_field "$alert_out" freezerAlertHiddenBytes 'hiddenSize=([0-9]+)')"
+  stage_status="$(storage_alert_field "$alert_out" stageStatus 'stageStatus=([^ ]+)')"
+  stage_issues="$(storage_alert_field "$alert_out" stageIssues 'stageIssues=([0-9]+)')"
+  snapshot_status="$(storage_alert_field "$alert_out" snapshotStatus 'snapshotStatus=([^ ]+)')"
+  snapshot_issues="$(storage_alert_field "$alert_out" snapshotIssues 'snapshotIssues=([0-9]+)')"
+  retired_segments="$(storage_alert_field "$alert_out" snapshotRetiredSegments 'retiredSegments=([0-9]+)')"
+  retired_files="$(storage_alert_field "$alert_out" snapshotRetiredFiles 'retiredFiles=([0-9]+)')"
+  retired_missing="$(storage_alert_field "$alert_out" snapshotRetiredMissing 'retiredMissing=([0-9]+)')"
+  retired_skipped="$(storage_alert_field "$alert_out" snapshotRetiredSkippedActive 'retiredSkippedActive=([0-9]+)')"
+  retired_bytes="$(storage_alert_field "$alert_out" snapshotRetiredBytes 'retiredBytes=([0-9]+)')"
   RUN_FREEZER_ALERT_STATUS="${freezer_status:-unknown}"
   RUN_FREEZER_ALERT_ISSUES="${freezer_issues:--1}"
   RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"

@@ -166,7 +166,7 @@ if [ "$OFFLINE_DB_CHECK" -eq 1 ]; then
     offline_status="missing-gtron"
     offline_exit=127
     echo "gtron binary not executable: $GTRON" >"$storage_alerts_out"
-  elif "$GTRON" db storage-alerts --datadir "$DATADIR" >"$storage_alerts_out" 2>&1; then
+  elif "$GTRON" db storage-alerts --json --datadir "$DATADIR" >"$storage_alerts_out" 2>&1; then
     offline_status="ok"
   else
     offline_exit=$?
@@ -270,6 +270,38 @@ def parse_alerts(text):
         "snapshotRetiredBytes": -1,
         "freezerAlertDetails": [],
     }
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            obj = json.loads(stripped)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        scalar_fields = {
+            "freezerAlertStatus": "freezerStatus",
+            "freezerAlertIssues": "freezerIssues",
+            "freezerAlertHiddenBytes": "freezerAlertHiddenBytes",
+            "stageVerifyStatus": "stageStatus",
+            "stageVerifyIssues": "stageIssues",
+            "snapshotAlertStatus": "snapshotStatus",
+            "snapshotAlertIssues": "snapshotIssues",
+            "snapshotRetiredBytes": "snapshotRetiredBytes",
+        }
+        for row_key, json_key in scalar_fields.items():
+            if json_key in obj:
+                row[row_key] = obj[json_key]
+        detail_fields = {
+            "freezerAlertDetails": "freezerAlertDetails",
+            "stageVerifyDetails": "stageVerifyDetails",
+            "snapshotAlertDetails": "snapshotAlertDetails",
+        }
+        for row_key, json_key in detail_fields.items():
+            value = obj.get(json_key)
+            row[row_key] = value if isinstance(value, list) else []
+        return row
     patterns = {
         "freezerAlertStatus": r"freezerStatus=([^ ]+)",
         "freezerAlertIssues": r"freezerIssues=([0-9]+)",

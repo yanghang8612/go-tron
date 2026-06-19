@@ -916,6 +916,12 @@ Status:
   transaction infos, state roots, section blooms, balance traces, and account
   traces, so new production code cannot call those variants on a hot-only KV
   store and accidentally bypass registered cold sidecars.
+- `gtron db storage-alerts --json` now packages freezer, stage, and snapshot
+  health into one machine-readable report for soak/production monitors. The
+  JSON form preserves the same critical exit semantics as the text command and
+  includes freezer/stage/snapshot detail arrays plus hidden-freezer and retired
+  snapshot counters; the Nile sampler and storage benchmark harness request the
+  JSON form while retaining a legacy text parser fallback.
 
 Needed:
 
@@ -934,11 +940,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Add higher-level production alert packaging around the persisted freezer
-  `repair.json`, `ancient/repair/*`, `chain/freezer/*`, and
-  `gtron db storage-alerts` signals. Catalog/freezer sidecar mismatch is now
-  caught by signed/local manifest verification as well as tail-prune/stage-status
-  coverage gates.
+- Extend higher-level production alert packaging beyond the local JSON report
+  into the external monitor/alert routing used for long Nile/mainnet soaks.
+  Catalog/freezer sidecar mismatch is now caught by signed/local manifest
+  verification as well as tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

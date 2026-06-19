@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -755,6 +756,71 @@ func TestDBStorageAlertsCmdRejectsStageVerificationIssue(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Finish verified=mismatch") {
+		t.Fatalf("dbStorageAlertsCmd err = %v, want Finish mismatch", err)
+	}
+	var report dbStorageAlertsJSON
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("storage alerts json unmarshal failed: %v\n%s", err, output)
+	}
+	if report.Status != "critical" || report.StageStatus != "critical" || report.StageIssues < 1 {
+		t.Fatalf("unexpected storage alert status: %+v", report)
+	}
+	if report.FreezerStatus != "ok" || report.FreezerIssues != 0 || report.FreezerAlertHiddenBytes != 0 {
+		t.Fatalf("unexpected freezer alert fields: %+v", report)
+	}
+	if report.SnapshotStatus != "ok" || report.SnapshotIssues != 0 {
+		t.Fatalf("unexpected snapshot alert fields: %+v", report)
+	}
+	if len(report.StageVerifyDetails) != report.StageIssues {
+		t.Fatalf("unexpected stage verify details: %+v", report.StageVerifyDetails)
+	}
+	var foundFinishMismatch bool
+	for _, detail := range report.StageVerifyDetails {
+		if detail.Severity != "critical" {
+			t.Fatalf("unexpected stage verify severity: %+v", report.StageVerifyDetails)
+		}
+		if strings.Contains(detail.Detail, "Finish verified=mismatch") {
+			foundFinishMismatch = true
+		}
+	}
+	if !foundFinishMismatch {
+		t.Fatalf("stage verify details missing Finish mismatch: %+v", report.StageVerifyDetails)
+	}
+	if len(report.FreezerAlertDetails) != 0 || len(report.SnapshotAlertDetails) != 0 {
+		t.Fatalf("unexpected non-stage details: freezer=%+v snapshot=%+v", report.FreezerAlertDetails, report.SnapshotAlertDetails)
 	}
 }
 
@@ -1931,6 +1997,7 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbReplayDirFlag,
 		dbBalanceTraceOverwriteFlag,
 		dbStageVerifyFlag,
+		dbAlertJSONFlag,
 		snapshotDirFlag,
 		snapshotTrustedCatalogKeyFlag,
 		snapshotTrustedCatalogKeyFileFlag,

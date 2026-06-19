@@ -1458,9 +1458,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     [
                         "#!/usr/bin/env bash",
                         "cat <<'EOF'",
-                        "Storage alerts: datadir=/tmp/nile status=critical freezerStatus=ok freezerIssues=0 stageStatus=critical stageIssues=1 snapshotStatus=warning snapshotIssues=1 retiredSegments=1 retiredFiles=1 retiredMissing=0 retiredSkippedActive=0 retiredBytes=123 hiddenSize=0",
-                        "Storage stage alert: severity=critical detail=SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa",
-                        "Storage snapshot alert: severity=warning kind=retired-prune-pending detail=retired segment still present",
+                        '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
                         "EOF",
                         "exit 1",
                     ]

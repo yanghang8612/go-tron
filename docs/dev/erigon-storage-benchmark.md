@@ -163,7 +163,8 @@ fresh follower is draining historical block rows into ancient files instead of
 leaking them in Pebble.
 
 `scripts/dev/storage_benchmark.sh` runs
-`gtron db storage-alerts --datadir <dir>` before emitting each JSONL row. When
+`gtron db storage-alerts --json --datadir <dir>` before emitting each JSONL row.
+When
 persisted freezer state is unsafe for prune/archive assumptions, including a
 recorded repair, a missing or impossible `ChainFreezer` stage, inconsistent
 per-table bounds, or a virtual tail past the append head, the harness writes a

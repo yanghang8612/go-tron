@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -58,6 +59,10 @@ var (
 	dbStageVerifyFlag = &cli.BoolFlag{
 		Name:  "db.stage.verify",
 		Usage: "Fail stage-status when present stage rows are unverifiable or canonical/cold-coverage stages are not hash-bound",
+	}
+	dbAlertJSONFlag = &cli.BoolFlag{
+		Name:  "json",
+		Usage: "Emit machine-readable JSON alert output",
 	}
 )
 
@@ -197,6 +202,7 @@ func dbCommand() *cli.Command {
 					dbMemtableFlag,
 					dbL0CompactionFlag,
 					dbL0StopFlag,
+					dbAlertJSONFlag,
 				},
 				Action: dbStorageAlertsCmd,
 			},
@@ -259,6 +265,32 @@ type dbSnapshotAlertIssue struct {
 	severity string
 	kind     string
 	detail   string
+}
+
+type dbStorageAlertIssueJSON struct {
+	Severity string `json:"severity"`
+	Kind     string `json:"kind,omitempty"`
+	Detail   string `json:"detail"`
+}
+
+type dbStorageAlertsJSON struct {
+	Datadir                      string                    `json:"datadir"`
+	Status                       string                    `json:"status"`
+	FreezerStatus                string                    `json:"freezerStatus"`
+	FreezerIssues                int                       `json:"freezerIssues"`
+	FreezerAlertDetails          []dbStorageAlertIssueJSON `json:"freezerAlertDetails"`
+	FreezerAlertHiddenBytes      uint64                    `json:"freezerAlertHiddenBytes"`
+	StageStatus                  string                    `json:"stageStatus"`
+	StageIssues                  int                       `json:"stageIssues"`
+	StageVerifyDetails           []dbStorageAlertIssueJSON `json:"stageVerifyDetails"`
+	SnapshotStatus               string                    `json:"snapshotStatus"`
+	SnapshotIssues               int                       `json:"snapshotIssues"`
+	SnapshotAlertDetails         []dbStorageAlertIssueJSON `json:"snapshotAlertDetails"`
+	SnapshotRetiredSegments      int                       `json:"snapshotRetiredSegments"`
+	SnapshotRetiredFiles         int                       `json:"snapshotRetiredFiles"`
+	SnapshotRetiredMissing       int                       `json:"snapshotRetiredMissing"`
+	SnapshotRetiredSkippedActive int                       `json:"snapshotRetiredSkippedActive"`
+	SnapshotRetiredBytes         uint64                    `json:"snapshotRetiredBytes"`
 }
 
 func dbFreezerAlertsCmd(ctx *cli.Context) error {
@@ -353,6 +385,37 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	} else if freezerStatus == "warning" || snapshotStatus == "warning" {
 		status = "warning"
 	}
+	if ctx.Bool(dbAlertJSONFlag.Name) {
+		report := dbStorageAlertsJSON{
+			Datadir:                      cfg.DataDir,
+			Status:                       status,
+			FreezerStatus:                freezerStatus,
+			FreezerIssues:                len(freezerIssues),
+			FreezerAlertDetails:          dbFreezerAlertIssuesJSON(freezerIssues),
+			FreezerAlertHiddenBytes:      dbFreezerHiddenSize(stats),
+			StageStatus:                  stageStatus,
+			StageIssues:                  len(stageIssues),
+			StageVerifyDetails:           dbStageAlertIssuesJSON(stageIssues),
+			SnapshotStatus:               snapshotStatus,
+			SnapshotIssues:               len(snapshotIssues),
+			SnapshotAlertDetails:         dbSnapshotAlertIssuesJSON(snapshotIssues),
+			SnapshotRetiredSegments:      snapshotInspection.RetiredSegments,
+			SnapshotRetiredFiles:         snapshotInspection.FilesPresent,
+			SnapshotRetiredMissing:       snapshotInspection.FilesMissing,
+			SnapshotRetiredSkippedActive: snapshotInspection.FilesSkippedActive,
+			SnapshotRetiredBytes:         snapshotInspection.BytesPresent,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(report); err != nil {
+			return fmt.Errorf("encode storage alerts json: %w", err)
+		}
+		if status == "critical" {
+			return fmt.Errorf("storage alerts failed: freezer=%s stage=%s snapshot=%s",
+				dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbSnapshotAlertSummary(snapshotIssues))
+		}
+		return nil
+	}
 	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues),
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
@@ -372,6 +435,41 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 			dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbSnapshotAlertSummary(snapshotIssues))
 	}
 	return nil
+}
+
+func dbFreezerAlertIssuesJSON(issues []dbFreezerAlertIssue) []dbStorageAlertIssueJSON {
+	out := make([]dbStorageAlertIssueJSON, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, dbStorageAlertIssueJSON{
+			Severity: issue.severity,
+			Kind:     issue.kind,
+			Detail:   issue.detail,
+		})
+	}
+	return out
+}
+
+func dbStageAlertIssuesJSON(issues []string) []dbStorageAlertIssueJSON {
+	out := make([]dbStorageAlertIssueJSON, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, dbStorageAlertIssueJSON{
+			Severity: "critical",
+			Detail:   issue,
+		})
+	}
+	return out
+}
+
+func dbSnapshotAlertIssuesJSON(issues []dbSnapshotAlertIssue) []dbStorageAlertIssueJSON {
+	out := make([]dbStorageAlertIssueJSON, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, dbStorageAlertIssueJSON{
+			Severity: issue.severity,
+			Kind:     issue.kind,
+			Detail:   issue.detail,
+		})
+	}
+	return out
 }
 
 func dbFreezerAlertStatus(issues []dbFreezerAlertIssue) string {

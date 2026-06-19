@@ -48,9 +48,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     #!/usr/bin/env bash
                     if [ "${1:-}" = "db" ] && [ "${2:-}" = "storage-alerts" ]; then
                       cat <<'EOF'
-                    Storage alerts: datadir=/tmp/gtron status=critical freezerStatus=ok freezerIssues=0 stageStatus=critical stageIssues=1 snapshotStatus=warning snapshotIssues=1 retiredSegments=1 retiredFiles=1 retiredMissing=0 retiredSkippedActive=0 retiredBytes=123 hiddenSize=0
-                    Storage stage alert: severity=critical detail=SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa
-                    Storage snapshot alert: severity=warning kind=retired-prune-pending detail=retired segment still present
+                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
                     EOF
                       exit 1
                     fi
