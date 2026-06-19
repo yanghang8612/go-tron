@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -14,13 +15,18 @@ import (
 )
 
 type balanceTraceReaderStub struct {
-	owner   []byte
-	block   int64
-	balance int64
-	trace   *contractpb.BlockBalanceTrace
+	owner      []byte
+	block      int64
+	balance    int64
+	trace      *contractpb.BlockBalanceTrace
+	blockErr   error
+	accountErr error
 }
 
 func (r *balanceTraceReaderStub) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	if r.blockErr != nil {
+		return nil, false, r.blockErr
+	}
 	if r.trace == nil || blockNum != r.block {
 		return nil, false, nil
 	}
@@ -28,6 +34,9 @@ func (r *balanceTraceReaderStub) BlockBalanceTrace(blockNum int64) (*contractpb.
 }
 
 func (r *balanceTraceReaderStub) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	if r.accountErr != nil {
+		return 0, 0, false, r.accountErr
+	}
 	if blockNum < r.block || !bytes.Equal(owner, r.owner) {
 		return 0, 0, false, nil
 	}
@@ -57,12 +66,48 @@ func TestTxPrefixReadsColdBalanceTraceFromChainDB(t *testing.T) {
 	}
 	chainDB.SetBalanceTraceReader(reader)
 
-	got := txPrefix(7, 0, tx, target, chainDB)
+	got, err := txPrefix(7, 0, tx, target, chainDB)
+	if err != nil {
+		t.Fatalf("txPrefix: %v", err)
+	}
 	if !strings.Contains(got, "accountTraceBalance=1234") {
 		t.Fatalf("txPrefix = %q, want cold account trace balance", got)
 	}
 	if !strings.Contains(got, "balanceTraceOps=1:-55") {
 		t.Fatalf("txPrefix = %q, want cold block balance trace ops", got)
+	}
+}
+
+func TestTxPrefixReportsColdAccountTraceError(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	target := testAddress(0x33)
+	tx := testTransferTx(t, target, testAddress(0x44))
+	chainDB.SetBalanceTraceReader(&balanceTraceReaderStub{
+		owner:      append([]byte(nil), target.Bytes()...),
+		block:      7,
+		accountErr: errors.New("cold account trace corrupt"),
+	})
+
+	_, err := txPrefix(7, 0, tx, target, chainDB)
+	if err == nil || !strings.Contains(err.Error(), "account trace block 7") || !strings.Contains(err.Error(), "cold account trace corrupt") {
+		t.Fatalf("txPrefix account trace error = %v, want cold account trace corruption", err)
+	}
+}
+
+func TestTxPrefixReportsColdBlockBalanceTraceError(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	target := testAddress(0x55)
+	tx := testTransferTx(t, target, testAddress(0x66))
+	chainDB.SetBalanceTraceReader(&balanceTraceReaderStub{
+		owner:    append([]byte(nil), target.Bytes()...),
+		block:    7,
+		balance:  1234,
+		blockErr: errors.New("cold block trace corrupt"),
+	})
+
+	_, err := txPrefix(7, 0, tx, target, chainDB)
+	if err == nil || !strings.Contains(err.Error(), "block balance trace block 7") || !strings.Contains(err.Error(), "cold block trace corrupt") {
+		t.Fatalf("txPrefix block trace error = %v, want cold block trace corruption", err)
 	}
 }
 
