@@ -15,11 +15,10 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getblockbynum", api.getSolidBlockByNum)
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyblocknum", api.getSolidTxInfoByBlockNum)
 
-	// All other endpoints are identical to /wallet/ — re-register by reference.
-	// Block-by-hash and tx-by-hash lookups are state-independent (hash → block/tx
-	// already keyed in rawdb), so live and solid handlers return the same bytes.
-	mux.HandleFunc("/walletsolidity/getblockbyid", api.getBlockByID)
-	mux.HandleFunc("/walletsolidity/getblockbylimitnext", api.getBlockByLimitNext)
+	// Other block-returning endpoints are bound-aware too: block ids carry their
+	// number prefix, and block ranges must not cross the solid boundary.
+	mux.HandleFunc("/walletsolidity/getblockbyid", api.getSolidBlockByID)
+	mux.HandleFunc("/walletsolidity/getblockbylimitnext", api.getSolidBlockByLimitNext)
 	// State-dependent endpoints route through the solid bound so the
 	// response reflects the post-solidified state, not live head.
 	mux.HandleFunc("/walletsolidity/getaccount", api.getSolidAccount)
@@ -58,8 +57,8 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getblockbynum", api.getPbftBlockByNum)
 	mux.HandleFunc("/walletpbft/gettransactioninfobyblocknum", api.getPbftTxInfoByBlockNum)
 
-	mux.HandleFunc("/walletpbft/getblockbyid", api.getBlockByID)
-	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getBlockByLimitNext)
+	mux.HandleFunc("/walletpbft/getblockbyid", api.getPbftBlockByID)
+	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getPbftBlockByLimitNext)
 	mux.HandleFunc("/walletpbft/getaccount", api.getPbftAccount)
 	mux.HandleFunc("/walletpbft/getaccountresource", api.getPbftAccountResource)
 	mux.HandleFunc("/walletpbft/getcontract", api.getPbftContract)
@@ -345,6 +344,14 @@ func (api *API) getSolidBlockByNum(w http.ResponseWriter, r *http.Request) {
 	writeBlockJSON(w, block.Proto())
 }
 
+func (api *API) getSolidBlockByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockByIDAtBound(w, r, api.solidBoundNum, "block not yet solidified")
+}
+
+func (api *API) getSolidBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockByLimitNextAtBound(w, r, api.solidBoundNum, "block range exceeds solidified boundary")
+}
+
 func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -406,6 +413,14 @@ func (api *API) getPbftBlockByNum(w http.ResponseWriter, r *http.Request) {
 	writeBlockJSON(w, block.Proto())
 }
 
+func (api *API) getPbftBlockByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockByIDAtBound(w, r, api.pbftBoundNum, "block not yet pbft-confirmed")
+}
+
+func (api *API) getPbftBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockByLimitNextAtBound(w, r, api.pbftBoundNum, "block range exceeds pbft-confirmed boundary")
+}
+
 func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -427,4 +442,41 @@ func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	api.getTransactionInfoByBlockNum(w, r)
+}
+
+func (api *API) handleGetBlockByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
+	hash, hashBytes, ok := parseBlockIDRequest(w, r)
+	if !ok {
+		return
+	}
+	num, ok := blockNumberFromBlockIDBytes(hashBytes)
+	if !ok {
+		http.Error(w, "invalid block id", http.StatusBadRequest)
+		return
+	}
+	if num > boundFn() {
+		http.Error(w, notReadyMessage, http.StatusNotFound)
+		return
+	}
+	api.writeBlockByHash(w, hash)
+}
+
+func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
+	var body struct {
+		StartNum int64 `json:"startNum"`
+		EndNum   int64 `json:"endNum"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if body.StartNum < 0 || body.EndNum < 0 {
+		http.Error(w, "invalid block range", http.StatusBadRequest)
+		return
+	}
+	if uint64(body.EndNum) > boundFn()+1 {
+		http.Error(w, notReadyMessage, http.StatusNotFound)
+		return
+	}
+	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
 }

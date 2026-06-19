@@ -2,6 +2,7 @@ package tronapi
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -813,6 +814,14 @@ func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getBlockByID(w http.ResponseWriter, r *http.Request) {
+	hash, _, ok := parseBlockIDRequest(w, r)
+	if !ok {
+		return
+	}
+	api.writeBlockByHash(w, hash)
+}
+
+func parseBlockIDRequest(w http.ResponseWriter, r *http.Request) (common.Hash, []byte, bool) {
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -822,17 +831,28 @@ func (api *API) getBlockByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Value == "" {
 		http.Error(w, "value required", http.StatusBadRequest)
-		return
+		return common.Hash{}, nil, false
 	}
 	hashBytes, err := parseBytes(body.Value, false)
 	if err != nil {
 		httpFieldErr(w, "value", err)
-		return
+		return common.Hash{}, nil, false
 	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
+	return hash, hashBytes, true
+}
+
+func blockNumberFromBlockIDBytes(hashBytes []byte) (uint64, bool) {
+	if len(hashBytes) < 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(hashBytes[:8]), true
+}
+
+func (api *API) writeBlockByHash(w http.ResponseWriter, hash common.Hash) {
 	block, err := api.backend.GetBlockByHash(hash)
-	if err != nil {
+	if err != nil || block == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -849,7 +869,11 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	blocks, err := api.backend.GetBlocksByRange(uint64(body.StartNum), uint64(body.EndNum))
+	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
+}
+
+func (api *API) writeBlockRange(w http.ResponseWriter, start, end uint64) {
+	blocks, err := api.backend.GetBlocksByRange(start, end)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

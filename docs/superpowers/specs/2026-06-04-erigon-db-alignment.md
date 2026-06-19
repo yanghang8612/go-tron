@@ -1374,6 +1374,10 @@ Status:
 - gRPC `WalletSolidity.GetTransactionCountByBlockNum` now shares the same solid
   boundary as the other WalletSolidity block reads: requests above the solidified
   block return `NotFound` before the backend can read a live-head block.
+- HTTP `/walletsolidity` and `/walletpbft` block-by-id/range reads are now
+  bound-aware too. `getblockbyid` extracts the java-tron BlockId height before
+  any backend hash lookup, and `getblockbylimitnext` rejects ranges that cross
+  the solid/PBFT boundary before calling the range reader.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
   the lookup key, cold tx-info fallbacks must either carry no embedded block

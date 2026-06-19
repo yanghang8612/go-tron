@@ -26,6 +26,45 @@ type solidStubBackend struct {
 func (s *solidStubBackend) SolidifiedBlockNum() uint64 { return s.solidNum }
 func (s *solidStubBackend) LatestPbftBlockNum() int64  { return s.pbftNum }
 
+type boundBlockStubBackend struct {
+	solidStubBackend
+	block          *types.Block
+	hashCalls      int
+	rangeCalls     int
+	lastRangeStart uint64
+	lastRangeEnd   uint64
+}
+
+func (s *boundBlockStubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
+	s.hashCalls++
+	if s.block != nil && s.block.Hash() == hash {
+		return s.block, nil
+	}
+	return nil, nil
+}
+
+func (s *boundBlockStubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	s.rangeCalls++
+	s.lastRangeStart = start
+	s.lastRangeEnd = end
+	if s.block == nil {
+		return nil, nil
+	}
+	n := s.block.Number()
+	if n >= start && n < end {
+		return []*types.Block{s.block}, nil
+	}
+	return nil, nil
+}
+
+func testBlockWithNumber(number int64) *types.Block {
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: number},
+		},
+	})
+}
+
 func newSolidTestServer(t *testing.T, stub tronapi.Backend) *httptest.Server {
 	t.Helper()
 	api := tronapi.NewAPI(stub)
@@ -97,6 +136,88 @@ func TestPbftGetBlockByNum_rejectsAbovePbft(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for block above pbft, got %d", resp.StatusCode)
+	}
+}
+
+func TestSolidityGetBlockByIDRejectsAboveSolidBeforeBackend(t *testing.T) {
+	block := testBlockWithNumber(10)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: -1},
+		block:            block,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getblockbyid", "application/json", strings.NewReader(`{"value":"`+block.Hash().Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for block id above solid, got %d", resp.StatusCode)
+	}
+	if stub.hashCalls != 0 {
+		t.Fatalf("GetBlockByHash called %d times for unsolidified block id, want 0", stub.hashCalls)
+	}
+}
+
+func TestPbftGetBlockByIDRejectsAbovePbftBeforeBackend(t *testing.T) {
+	block := testBlockWithNumber(10)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 7},
+		block:            block,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/getblockbyid", "application/json", strings.NewReader(`{"value":"`+block.Hash().Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for block id above pbft, got %d", resp.StatusCode)
+	}
+	if stub.hashCalls != 0 {
+		t.Fatalf("GetBlockByHash called %d times for unconfirmed block id, want 0", stub.hashCalls)
+	}
+}
+
+func TestSolidityGetBlockByLimitNextRejectsAboveSolidBeforeBackend(t *testing.T) {
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: -1},
+		block:            testBlockWithNumber(5),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getblockbylimitnext", "application/json", strings.NewReader(`{"startNum":4,"endNum":7}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for range above solid, got %d", resp.StatusCode)
+	}
+	if stub.rangeCalls != 0 {
+		t.Fatalf("GetBlocksByRange called %d times for unsolidified range, want 0", stub.rangeCalls)
+	}
+}
+
+func TestPbftGetBlockByLimitNextRejectsAbovePbftBeforeBackend(t *testing.T) {
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 7},
+		block:            testBlockWithNumber(7),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/getblockbylimitnext", "application/json", strings.NewReader(`{"startNum":6,"endNum":9}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for range above pbft, got %d", resp.StatusCode)
+	}
+	if stub.rangeCalls != 0 {
+		t.Fatalf("GetBlocksByRange called %d times for unconfirmed range, want 0", stub.rangeCalls)
 	}
 }
 
