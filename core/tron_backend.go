@@ -2481,10 +2481,14 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		if err != nil {
 			return nil, err
 		}
-		if hasInfos {
-			if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
-				return nil, err
+		if !hasInfos {
+			if num == 0 {
+				continue
 			}
+			infos = nil
+		}
+		if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
+			return nil, err
 		}
 
 		logIndex := uint64(0)
