@@ -2,6 +2,8 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -29,6 +31,31 @@ func TestSyncStagedBlockReadWriteDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadSyncStagedBlock(db, 3); err != nil || ok {
 		t.Fatalf("deleted staged block ok=%v err=%v", ok, err)
+	}
+}
+
+func TestReadSyncStagedBlockSurfacesStorageErrors(t *testing.T) {
+	if _, ok, err := ReadSyncStagedBlock(stageProgressFailingReader{
+		hasErr: errors.New("staged body has failed"),
+	}, 3); err == nil || ok || !strings.Contains(err.Error(), "staged body has failed") {
+		t.Fatalf("ReadSyncStagedBlock Has failure ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadSyncStagedBlock(stageProgressFailingReader{
+		has:    true,
+		getErr: errors.New("staged body get failed"),
+	}, 3); err == nil || ok || !strings.Contains(err.Error(), "staged body get failed") {
+		t.Fatalf("ReadSyncStagedBlock Get failure ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadSyncStagedBlockRaw(stageProgressFailingReader{
+		hasErr: errors.New("staged raw has failed"),
+	}, 3); err == nil || ok || !strings.Contains(err.Error(), "staged raw has failed") {
+		t.Fatalf("ReadSyncStagedBlockRaw Has failure ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadSyncStagedBlockRaw(stageProgressFailingReader{
+		has:    true,
+		getErr: errors.New("staged raw get failed"),
+	}, 3); err == nil || ok || !strings.Contains(err.Error(), "staged raw get failed") {
+		t.Fatalf("ReadSyncStagedBlockRaw Get failure ok=%v err=%v, want storage error", ok, err)
 	}
 }
 

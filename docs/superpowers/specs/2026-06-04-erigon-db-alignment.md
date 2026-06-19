@@ -289,6 +289,10 @@ Status:
   `ReadStageProgressRow` probes with `Has` before `Get` and propagates either
   error. This keeps sync/freezer/snapshot/prune gates from silently treating an
   unreadable stage boundary as if no boundary existed.
+- Sync staged body reads now follow the same rule: `ReadSyncStagedBlock` and
+  `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
+  storage errors, so downloader restart and ready-frontier validation stop on
+  unreadable body staging data instead of assuming the table has a gap.
 
 Needed:
 
