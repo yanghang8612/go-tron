@@ -33,6 +33,13 @@ type boundBlockStubBackend struct {
 	rangeCalls     int
 	lastRangeStart uint64
 	lastRangeEnd   uint64
+	txBlockNum     uint64
+	txBlockOK      bool
+	txBlockCalls   int
+	txCalls        int
+	txInfoCalls    int
+	tx             *corepb.Transaction
+	txInfo         *corepb.TransactionInfo
 }
 
 func (s *boundBlockStubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
@@ -57,12 +64,35 @@ func (s *boundBlockStubBackend) GetBlocksByRange(start, end uint64) ([]*types.Bl
 	return nil, nil
 }
 
+func (s *boundBlockStubBackend) GetTransactionBlockNumByID(hash common.Hash) (uint64, bool, error) {
+	s.txBlockCalls++
+	return s.txBlockNum, s.txBlockOK, nil
+}
+
+func (s *boundBlockStubBackend) GetTransactionByID(hash common.Hash) (*corepb.Transaction, error) {
+	s.txCalls++
+	return s.tx, nil
+}
+
+func (s *boundBlockStubBackend) GetTransactionInfoByID(hash common.Hash) (*corepb.TransactionInfo, error) {
+	s.txInfoCalls++
+	return s.txInfo, nil
+}
+
 func testBlockWithNumber(number int64) *types.Block {
 	return types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{Number: number},
 		},
 	})
+}
+
+func testTransactionHash(fill byte) common.Hash {
+	var hash common.Hash
+	for i := range hash {
+		hash[i] = fill
+	}
+	return hash
 }
 
 func newSolidTestServer(t *testing.T, stub tronapi.Backend) *httptest.Server {
@@ -218,6 +248,110 @@ func TestPbftGetBlockByLimitNextRejectsAbovePbftBeforeBackend(t *testing.T) {
 	}
 	if stub.rangeCalls != 0 {
 		t.Fatalf("GetBlocksByRange called %d times for unconfirmed range, want 0", stub.rangeCalls)
+	}
+}
+
+func TestSolidityGetTransactionByIDRejectsAboveSolidBeforeBackend(t *testing.T) {
+	hash := testTransactionHash(0x01)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: -1},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		tx:               &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/gettransactionbyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with empty JSON for tx above solid, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txCalls != 0 {
+		t.Fatalf("GetTransactionByID called %d times for unsolidified tx, want 0", stub.txCalls)
+	}
+}
+
+func TestSolidityGetTransactionByIDWithinSolidReadsBackend(t *testing.T) {
+	hash := testTransactionHash(0x02)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 10, pbftNum: -1},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		tx:               &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/gettransactionbyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for tx within solid, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txCalls != 1 {
+		t.Fatalf("GetTransactionByID called %d times, want 1", stub.txCalls)
+	}
+}
+
+func TestPbftGetTransactionInfoByIDRejectsAbovePbftBeforeBackend(t *testing.T) {
+	hash := testTransactionHash(0x03)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 7},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		txInfo:           &corepb.TransactionInfo{Id: hash[:], BlockNumber: 10},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/gettransactioninfobyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with empty JSON for tx info above pbft, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txInfoCalls != 0 {
+		t.Fatalf("GetTransactionInfoByID called %d times for unconfirmed tx info, want 0", stub.txInfoCalls)
+	}
+}
+
+func TestPbftGetTransactionInfoByIDWithinPbftReadsBackend(t *testing.T) {
+	hash := testTransactionHash(0x04)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 10},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		txInfo:           &corepb.TransactionInfo{Id: hash[:], BlockNumber: 10},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/gettransactioninfobyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for tx info within pbft, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txInfoCalls != 1 {
+		t.Fatalf("GetTransactionInfoByID called %d times, want 1", stub.txInfoCalls)
 	}
 }
 

@@ -331,6 +331,11 @@ func (s *SolidityServer) GetTransactionById(_ context.Context, in *apipb.BytesMe
 		return nil, status.Error(codes.InvalidArgument, "tx hash required")
 	}
 	hash := common.BytesToHash(in.Value)
+	if ok, err := s.transactionWithinSolid(hash); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	} else if !ok {
+		return nil, status.Error(codes.NotFound, "transaction not found")
+	}
 	tx, err := s.backend.GetTransactionByID(hash)
 	if err != nil || tx == nil {
 		return nil, status.Error(codes.NotFound, "transaction not found")
@@ -343,11 +348,27 @@ func (s *SolidityServer) GetTransactionInfoById(_ context.Context, in *apipb.Byt
 		return nil, status.Error(codes.InvalidArgument, "tx hash required")
 	}
 	hash := common.BytesToHash(in.Value)
+	if ok, err := s.transactionWithinSolid(hash); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	} else if !ok {
+		return nil, status.Error(codes.NotFound, "transaction info not found")
+	}
 	info, err := s.backend.GetTransactionInfoByID(hash)
 	if err != nil || info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	return info, nil
+}
+
+func (s *SolidityServer) transactionWithinSolid(hash common.Hash) (bool, error) {
+	blockNum, ok, err := s.backend.GetTransactionBlockNumByID(hash)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	return blockNum <= s.solidNum(), nil
 }
 
 // ── Reward / brokerage ────────────────────────────────────────────────────────

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	"github.com/tronprotocol/go-tron/common"
 )
 
 // RegisterSolidityRoutes registers /walletsolidity/ and /walletpbft/ prefixed endpoints.
@@ -35,8 +37,8 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listproposals", api.getSolidProposals)
 	mux.HandleFunc("/walletsolidity/getproposalbyid", api.getSolidProposalByID)
 	mux.HandleFunc("/walletsolidity/getpaginatedproposallist", api.getSolidPaginatedProposalList)
-	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getTransactionByID)
-	mux.HandleFunc("/walletsolidity/gettransactioninfobyid", api.getTransactionInfoByID)
+	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getSolidTransactionByID)
+	mux.HandleFunc("/walletsolidity/gettransactioninfobyid", api.getSolidTransactionInfoByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyid", api.getSolidAssetIssueByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyname", api.getSolidAssetIssueByName)
 	mux.HandleFunc("/walletsolidity/getassetissuelist", api.getSolidAssetIssueList)
@@ -73,8 +75,8 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listproposals", api.getPbftProposals)
 	mux.HandleFunc("/walletpbft/getproposalbyid", api.getPbftProposalByID)
 	mux.HandleFunc("/walletpbft/getpaginatedproposallist", api.getPbftPaginatedProposalList)
-	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getTransactionByID)
-	mux.HandleFunc("/walletpbft/gettransactioninfobyid", api.getTransactionInfoByID)
+	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getPbftTransactionByID)
+	mux.HandleFunc("/walletpbft/gettransactioninfobyid", api.getPbftTransactionInfoByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyid", api.getPbftAssetIssueByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyname", api.getPbftAssetIssueByName)
 	mux.HandleFunc("/walletpbft/getassetissuelist", api.getPbftAssetIssueList)
@@ -352,6 +354,14 @@ func (api *API) getSolidBlockByLimitNext(w http.ResponseWriter, r *http.Request)
 	api.handleGetBlockByLimitNextAtBound(w, r, api.solidBoundNum, "block range exceeds solidified boundary")
 }
 
+func (api *API) getSolidTransactionByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionByIDAtBound(w, r, api.solidBoundNum)
+}
+
+func (api *API) getSolidTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionInfoByIDAtBound(w, r, api.solidBoundNum)
+}
+
 func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -421,6 +431,14 @@ func (api *API) getPbftBlockByLimitNext(w http.ResponseWriter, r *http.Request) 
 	api.handleGetBlockByLimitNextAtBound(w, r, api.pbftBoundNum, "block range exceeds pbft-confirmed boundary")
 }
 
+func (api *API) getPbftTransactionByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionByIDAtBound(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getPbftTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionInfoByIDAtBound(w, r, api.pbftBoundNum)
+}
+
 func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -479,4 +497,36 @@ func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.
 		return
 	}
 	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
+}
+
+func (api *API) transactionWithinBound(w http.ResponseWriter, hash common.Hash, boundFn func() uint64) bool {
+	blockNum, ok, err := api.backend.GetTransactionBlockNumByID(hash)
+	if err != nil || !ok || blockNum > boundFn() {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return false
+	}
+	return true
+}
+
+func (api *API) handleGetTransactionByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
+		return
+	}
+	if !api.transactionWithinBound(w, hash, boundFn) {
+		return
+	}
+	api.writeTransactionByID(w, hash)
+}
+
+func (api *API) handleGetTransactionInfoByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
+		return
+	}
+	if !api.transactionWithinBound(w, hash, boundFn) {
+		return
+	}
+	api.writeTransactionInfoByID(w, hash)
 }

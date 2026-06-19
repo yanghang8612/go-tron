@@ -146,6 +146,7 @@ type Backend interface {
 	// Transaction queries
 	GetTransactionByID(txHash common.Hash) (*corepb.Transaction, error)
 	GetTransactionInfoByID(txHash common.Hash) (*corepb.TransactionInfo, error)
+	GetTransactionBlockNumByID(txHash common.Hash) (uint64, bool, error)
 	GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error)
 
 	// Block queries

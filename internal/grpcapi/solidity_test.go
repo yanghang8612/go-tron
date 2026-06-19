@@ -48,6 +48,11 @@ type solidTestBackend struct {
 	lastBrokerageAt    uint64
 	lastConstantAt     uint64
 	lastEstimateAt     uint64
+	txBlockNum         uint64
+	txBlockOK          bool
+	txBlockCalls       int
+	txCalls            int
+	txInfoCalls        int
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -94,6 +99,8 @@ type solidTestBackend struct {
 	brokerageAt        int64
 	constantAt         *tronapi.TriggerResult
 	estimateAt         int64
+	txAt               *corepb.Transaction
+	txInfoAt           *corepb.TransactionInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -101,6 +108,27 @@ func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
 func (b *solidTestBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	b.lastNumQueried = n
 	return b.testBackend.GetBlockByNumber(n)
+}
+
+func (b *solidTestBackend) GetTransactionBlockNumByID(hash common.Hash) (uint64, bool, error) {
+	b.txBlockCalls++
+	return b.txBlockNum, b.txBlockOK, nil
+}
+
+func (b *solidTestBackend) GetTransactionByID(hash common.Hash) (*corepb.Transaction, error) {
+	b.txCalls++
+	if b.txAt != nil {
+		return b.txAt, nil
+	}
+	return b.testBackend.GetTransactionByID(hash)
+}
+
+func (b *solidTestBackend) GetTransactionInfoByID(hash common.Hash) (*corepb.TransactionInfo, error) {
+	b.txInfoCalls++
+	if b.txInfoAt != nil {
+		return b.txInfoAt, nil
+	}
+	return b.testBackend.GetTransactionInfoByID(hash)
 }
 
 func (b *solidTestBackend) GetAccount(addr common.Address) (*types.Account, error) {
@@ -492,6 +520,100 @@ func TestSolidity_GetTransactionCountByBlockNum_AboveSolid(t *testing.T) {
 	}
 	if backend.lastNumQueried != 0 {
 		t.Fatalf("backend queried block %d for unsolidified tx count, want no lookup", backend.lastNumQueried)
+	}
+}
+
+func TestSolidity_GetTransactionByIdRejectsAboveSolidBeforeBackend(t *testing.T) {
+	hash := solidityTestHash(0x01)
+	backend := &solidTestBackend{
+		solidNum:   5,
+		txBlockNum: 10,
+		txBlockOK:  true,
+		txAt:       &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for tx above solid, got %v", err)
+	}
+	if backend.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", backend.txBlockCalls)
+	}
+	if backend.txCalls != 0 {
+		t.Fatalf("GetTransactionByID called %d times for unsolidified tx, want 0", backend.txCalls)
+	}
+}
+
+func TestSolidity_GetTransactionByIdWithinSolidReadsBackend(t *testing.T) {
+	hash := solidityTestHash(0x02)
+	backend := &solidTestBackend{
+		solidNum:   10,
+		txBlockNum: 10,
+		txBlockOK:  true,
+		txAt:       &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
+	if err != nil {
+		t.Fatalf("GetTransactionById: %v", err)
+	}
+	if resp.GetRawData().GetTimestamp() != 2 {
+		t.Fatalf("GetTransactionById timestamp = %d, want 2", resp.GetRawData().GetTimestamp())
+	}
+	if backend.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", backend.txBlockCalls)
+	}
+	if backend.txCalls != 1 {
+		t.Fatalf("GetTransactionByID called %d times, want 1", backend.txCalls)
+	}
+}
+
+func TestSolidity_GetTransactionInfoByIdRejectsAboveSolidBeforeBackend(t *testing.T) {
+	hash := solidityTestHash(0x03)
+	backend := &solidTestBackend{
+		solidNum:   7,
+		txBlockNum: 8,
+		txBlockOK:  true,
+		txInfoAt:   &corepb.TransactionInfo{Id: hash[:]},
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for tx info above solid, got %v", err)
+	}
+	if backend.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", backend.txBlockCalls)
+	}
+	if backend.txInfoCalls != 0 {
+		t.Fatalf("GetTransactionInfoByID called %d times for unsolidified tx info, want 0", backend.txInfoCalls)
+	}
+}
+
+func TestSolidity_GetTransactionInfoByIdWithinSolidReadsBackend(t *testing.T) {
+	hash := solidityTestHash(0x04)
+	backend := &solidTestBackend{
+		solidNum:   9,
+		txBlockNum: 9,
+		txBlockOK:  true,
+		txInfoAt:   &corepb.TransactionInfo{Id: hash[:], BlockNumber: 9},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
+	if err != nil {
+		t.Fatalf("GetTransactionInfoById: %v", err)
+	}
+	if resp.GetBlockNumber() != 9 {
+		t.Fatalf("GetTransactionInfoById block = %d, want 9", resp.GetBlockNumber())
+	}
+	if backend.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", backend.txBlockCalls)
+	}
+	if backend.txInfoCalls != 1 {
+		t.Fatalf("GetTransactionInfoByID called %d times, want 1", backend.txInfoCalls)
 	}
 }
 
@@ -1087,4 +1209,12 @@ func solidityTestAddress(fill byte) []byte {
 		addr[i] = fill
 	}
 	return addr
+}
+
+func solidityTestHash(fill byte) common.Hash {
+	var hash common.Hash
+	for i := range hash {
+		hash[i] = fill
+	}
+	return hash
 }

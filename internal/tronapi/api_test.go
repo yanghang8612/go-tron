@@ -81,6 +81,9 @@ func (s *stubBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, er
 func (s *stubBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
 	return nil, nil
 }
+func (s *stubBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
 func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
 	return nil, nil
 }

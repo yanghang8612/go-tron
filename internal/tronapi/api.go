@@ -722,6 +722,14 @@ func (api *API) handleEstimateEnergy(w http.ResponseWriter, r *http.Request, bou
 }
 
 func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
+		return
+	}
+	api.writeTransactionByID(w, hash)
+}
+
+func parseTransactionIDRequest(w http.ResponseWriter, r *http.Request) (common.Hash, bool) {
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -731,7 +739,7 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Value == "" {
 		http.Error(w, "value required", http.StatusBadRequest)
-		return
+		return common.Hash{}, false
 	}
 	// tx hash is always hex on the wire — java-tron's HTTP doesn't support
 	// a visible variant for hashes. parseBytes still surfaces invalid-hex
@@ -739,12 +747,16 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 	hashBytes, err := parseBytes(body.Value, false)
 	if err != nil {
 		httpFieldErr(w, "value", err)
-		return
+		return common.Hash{}, false
 	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
+	return hash, true
+}
+
+func (api *API) writeTransactionByID(w http.ResponseWriter, hash common.Hash) {
 	tx, err := api.backend.GetTransactionByID(hash)
-	if err != nil {
+	if err != nil || tx == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -753,26 +765,16 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Value string `json:"value"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if body.Value == "" {
-		body.Value = r.URL.Query().Get("value")
-	}
-	if body.Value == "" {
-		http.Error(w, "value required", http.StatusBadRequest)
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
 		return
 	}
-	hashBytes, err := parseBytes(body.Value, false)
-	if err != nil {
-		httpFieldErr(w, "value", err)
-		return
-	}
-	var hash common.Hash
-	copy(hash[:], hashBytes)
+	api.writeTransactionInfoByID(w, hash)
+}
+
+func (api *API) writeTransactionInfoByID(w http.ResponseWriter, hash common.Hash) {
 	info, err := api.backend.GetTransactionInfoByID(hash)
-	if err != nil {
+	if err != nil || info == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
