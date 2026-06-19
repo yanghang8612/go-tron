@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 )
@@ -267,6 +269,10 @@ func TestApplyChainFreezerTailPruneFromDBAllowsGenesisOnlyWithoutEventLogStage(t
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || got != 0 {
 		t.Fatalf("StageSnapshotChainFreezerTailPrune = %d ok=%v err=%v, want 0", got, ok, err)
 	}
+	block0, _, _ := chainFreezerBlockWithTx(t, 0)
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block0.Hash() {
+		t.Fatalf("StageSnapshotChainFreezerTailPrune row = %+v ok=%v err=%v, want hash %x", row, ok, err, block0.Hash())
+	}
 	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 0); err != nil || ok {
 		t.Fatalf("HasAncient(0) = %v/%v, want false/nil", ok, err)
 	}
@@ -326,11 +332,58 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || got != 6 {
 		t.Fatalf("StageSnapshotChainFreezerTailPrune = %d ok=%v err=%v, want 6", got, ok, err)
 	}
+	block6, _, _ := chainFreezerBlockWithTx(t, 6)
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block6.Hash() {
+		t.Fatalf("StageSnapshotChainFreezerTailPrune row = %+v ok=%v err=%v, want hash %x", row, ok, err, block6.Hash())
+	}
 	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 6); err != nil || ok {
 		t.Fatalf("HasAncient(6) = %v/%v, want false/nil", ok, err)
 	}
 	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 7); err != nil || !ok {
 		t.Fatalf("HasAncient(7) = %v/%v, want true/nil", ok, err)
+	}
+}
+
+func TestApplyChainFreezerTailPruneFromDBRejectsStageHashConflictBeforeTruncate(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTailPruneBlockRows(t, f, 2)
+
+	snapshotDir := root + "/snapshot"
+	ref, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, ref, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 1); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 1); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainFreezerTailPrune, 0, common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
+	}
+
+	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	if err == nil || !strings.Contains(err.Error(), "does not match pruned block hash") {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB err = %v, want stage hash conflict", err)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 0 {
+		t.Fatalf("freezer tail after rejected prune = %d/%v, want 0/nil", tail, err)
 	}
 }
 

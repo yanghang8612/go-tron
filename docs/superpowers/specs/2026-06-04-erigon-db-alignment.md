@@ -761,7 +761,11 @@ Status:
   missing-stage no-ops, lookup-stage caps, event-log-stage caps,
   retention-window caps, ancient-head caps, short-chain behavior, DB-backed
   stage reads, successful tail truncation, no-op behavior when cold coverage is
-  missing, and rejection of gapped cold coverage.
+  missing, and rejection of gapped cold coverage. Successful tail pruning now
+  records `SnapshotChainFreezerTailPrune` as a hash-bound stage row using the
+  local freezer boundary block before truncation; legacy unbound rows at the
+  same height are upgraded, while same-height hash conflicts abort before the
+  freezer tail moves.
 - The snapshot `Manager` now implements the rawdb `AncientReader` shape for
   chain-freezer segments, and `rawdb.NewFallbackAncientReader` composes local
   freezer rows with verified cold snapshot files. Runtime startup wraps the

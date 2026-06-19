@@ -2,9 +2,12 @@ package snapshots
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 const (
@@ -245,6 +248,24 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogCold)
 		return result, nil
 	}
+	var (
+		stageBlock     uint64
+		stageHash      common.Hash
+		writeTailStage bool
+	)
+	if plan.TargetTail > 0 {
+		stageBlock = plan.TargetTail - 1
+		stageHash, err = chainFreezerTailPruneStageHash(freezer, stageBlock)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := db.(ethdb.KeyValueWriter); ok {
+			writeTailStage, err = shouldWriteSnapshotChainFreezerTailPruneStage(db, stageBlock, stageHash)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	oldTail, err := freezer.TruncateTail(plan.TargetTail)
 	if err != nil {
 		return nil, err
@@ -261,12 +282,46 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 	}
 	if plan.TargetTail > 0 {
 		if writer, ok := db.(ethdb.KeyValueWriter); ok {
-			if err := rawdb.WriteStageProgress(writer, rawdb.StageSnapshotChainFreezerTailPrune, plan.TargetTail-1); err != nil {
-				return nil, err
+			if writeTailStage {
+				if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageSnapshotChainFreezerTailPrune, stageBlock, stageHash); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 	return result, nil
+}
+
+func shouldWriteSnapshotChainFreezerTailPruneStage(reader ethdb.KeyValueReader, blockNum uint64, blockHash common.Hash) (bool, error) {
+	current, ok, err := rawdb.ReadStageProgressRow(reader, rawdb.StageSnapshotChainFreezerTailPrune)
+	if err != nil {
+		return false, err
+	}
+	if ok && current.BlockNum > blockNum {
+		return false, nil
+	}
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return false, fmt.Errorf("snapshots: %s stage %d hash %x does not match pruned block hash %x", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, current.BlockHash, blockHash)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func chainFreezerTailPruneStageHash(reader rawdb.AncientReader, blockNum uint64) (common.Hash, error) {
+	raw, err := reader.Ancient(rawdb.AncientBlocksTable, blockNum)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d from local freezer: %w", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, err)
+	}
+	block, err := types.UnmarshalBlock(raw)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: decode %s stage block %d: %w", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, err)
+	}
+	if block.Number() != blockNum {
+		return common.Hash{}, fmt.Errorf("snapshots: %s stage row %d contains block number %d", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, block.Number())
+	}
+	return block.Hash(), nil
 }
 
 func verifyColdEventLogTailCoverage(cold rawdb.AncientReader, fromTail, toTail uint64) error {
