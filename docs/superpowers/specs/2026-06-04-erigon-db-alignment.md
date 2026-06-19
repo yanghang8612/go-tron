@@ -1371,6 +1371,9 @@ Status:
   hot block bodies, block-hash lookups, tx lookups, and per-tx info rows are
   absent. This pins the archive transaction lookup path to cold chain-freezer
   rows plus the `chain-index` sidecar, matching the existing receipt coverage.
+- gRPC `WalletSolidity.GetTransactionCountByBlockNum` now shares the same solid
+  boundary as the other WalletSolidity block reads: requests above the solidified
+  block return `NotFound` before the backend can read a live-head block.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
   the lookup key, cold tx-info fallbacks must either carry no embedded block

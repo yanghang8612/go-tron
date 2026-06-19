@@ -474,6 +474,27 @@ func TestSolidity_GetBlockByNum_AboveSolid(t *testing.T) {
 	}
 }
 
+func TestSolidity_GetTransactionCountByBlockNum_AboveSolid(t *testing.T) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 10},
+		},
+	})
+	backend := &solidTestBackend{
+		testBackend: testBackend{block: block},
+		solidNum:    5,
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetTransactionCountByBlockNum(context.Background(), &apipb.NumberMessage{Num: 10})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for tx count above solid, got %v", err)
+	}
+	if backend.lastNumQueried != 0 {
+		t.Fatalf("backend queried block %d for unsolidified tx count, want no lookup", backend.lastNumQueried)
+	}
+}
+
 // TestSolidity_GetAccount_ReturnsEmpty verifies GetAccount returns an empty account
 // when the stub has no account.
 func TestSolidity_GetAccount_ReturnsEmpty(t *testing.T) {

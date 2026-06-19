@@ -98,6 +98,9 @@ func (s *SolidityServer) GetTransactionCountByBlockNum(_ context.Context, in *ap
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
+	if uint64(in.Num) > s.solidNum() {
+		return nil, status.Error(codes.NotFound, "block not yet solidified")
+	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
 	if err != nil || block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
