@@ -871,6 +871,9 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		}
 	}
 	check := func(stage rawdb.StageID, block uint64, label string, fromBlock uint64, covered func(uint64, uint64) (bool, error)) {
+		if block < fromBlock {
+			return
+		}
 		ok, err := covered(fromBlock, block)
 		if err != nil {
 			issues = append(issues, fmt.Sprintf("%s=%d cold %s coverage error: %v", stage, block, label, err))
@@ -903,7 +906,7 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		check(row.stage, row.progress.BlockNum, "section-bloom", 0, mgr.SectionBloomRangeCovered)
 	}
 	if row, ok := byStage[rawdb.StageSnapshotBalanceTracePrune]; ok {
-		check(row.stage, row.progress.BlockNum, "balance-trace", 0, mgr.BalanceTraceRangeCovered)
+		check(row.stage, row.progress.BlockNum, "balance-trace", 1, mgr.BalanceTraceRangeCovered)
 	}
 	if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
 		check(row.stage, row.progress.BlockNum, "chain-freezer", 0, mgr.ChainFreezerRangeCovered)

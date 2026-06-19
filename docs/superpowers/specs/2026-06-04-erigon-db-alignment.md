@@ -508,6 +508,8 @@ Status:
   missing/gapped/corrupt sidecars even when the stage rows themselves look
   ordered. Tail-prune verification checks the same chain-freezer, chain-index,
   and indexed event-log coverage triple required by the apply path.
+  Balance-trace stage coverage starts at block 1 because genesis has no
+  replayed `BlockBalanceTrace` row.
   Manifest-backed progress rows (`SnapshotLatest`, `SnapshotHistory`,
   `SnapshotAccessor`, `SnapshotCommitmentFlush`, and `SnapshotHotPrune`) are
   checked against the active manifest `progress` section as well, so automation

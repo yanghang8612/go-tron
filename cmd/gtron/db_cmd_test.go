@@ -1281,7 +1281,7 @@ func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
 		"SnapshotEventLogBuild=12 missing cold indexed event-log coverage [1,12]",
 		"SnapshotChainLookupPrune=12 missing cold chain-index coverage [0,12]",
 		fmt.Sprintf("SnapshotSectionBloomPrune=%d missing cold section-bloom coverage [0,%d]", rawdb.SectionBloomBlockPerSection-1, rawdb.SectionBloomBlockPerSection-1),
-		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [0,12]",
+		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [1,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold chain-freezer coverage [0,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold chain-index coverage [0,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold indexed event-log coverage [1,12]",
@@ -1296,6 +1296,35 @@ func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
 		if !found {
 			t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
 		}
+	}
+}
+
+func TestDBStageStatusBalanceTraceCoverageStartsAfterGenesis(t *testing.T) {
+	snapshotDir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{Timestamp: 100}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := statesnapshots.BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 1,
+			},
+		},
+	}
+	if issues := dbStageStatusSnapshotCoverageIssues(rows, snapshotDir); len(issues) != 0 {
+		t.Fatalf("snapshot coverage issues = %#v, want none for balance trace coverage [1,1]", issues)
 	}
 }
 
