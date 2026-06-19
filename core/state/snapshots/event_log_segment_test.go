@@ -694,6 +694,56 @@ func TestEventLogRangeCoveredRequiresReadableSegments(t *testing.T) {
 	}
 }
 
+func TestCheckEventLogSegmentRejectsMissingAddressLookupKey(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x4a)
+	topic := common.Hash{0xda}
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x0a}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	ref, err := BuildEventLogSegmentFromChain(db, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	zeroEventLogLookupCount(t, dir, ref, "address")
+	ref = refreshEventLogSegmentMetadata(t, dir, ref)
+	if err := CheckEventLogSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "address lookup keys 0, want 1") {
+		t.Fatalf("CheckEventLogSegment missing address lookup = %v, want missing-key error", err)
+	}
+}
+
+func TestCheckEventLogSegmentRejectsMissingTopicLookupKey(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x4b)
+	topic := common.Hash{0xdb}
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x0b}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	ref, err := BuildEventLogSegmentFromChain(db, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	zeroEventLogLookupCount(t, dir, ref, "topic")
+	ref = refreshEventLogSegmentMetadata(t, dir, ref)
+	if err := CheckEventLogSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "topic lookup keys 0, want 1") {
+		t.Fatalf("CheckEventLogSegment missing topic lookup = %v, want missing-key error", err)
+	}
+}
+
 func TestManagerIterateCoveredEventLogsRejectsPartialCoverage(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -1055,4 +1105,40 @@ func eventLogTestAddress(seed byte) []byte {
 		out[i] = seed + byte(i)
 	}
 	return out
+}
+
+func zeroEventLogLookupCount(t *testing.T, dir string, ref SegmentRef, lookup string) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer file.Close()
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatalf("readEventLogHeader: %v", err)
+	}
+	var offset uint64
+	switch lookup {
+	case "address":
+		offset = header.addressIndexOffset
+	case "topic":
+		offset = header.topicIndexOffset
+	default:
+		t.Fatalf("unknown event-log lookup %q", lookup)
+	}
+	if _, err := file.WriteAt(make([]byte, 8), int64(offset)); err != nil {
+		t.Fatalf("zero %s lookup count: %v", lookup, err)
+	}
+}
+
+func refreshEventLogSegmentMetadata(t *testing.T, dir string, ref SegmentRef) SegmentRef {
+	t.Helper()
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(filepath.Join(dir, ref.Path))
+	if err != nil {
+		t.Fatalf("refresh segment metadata: %v", err)
+	}
+	ref.Size = size
+	ref.Checksum = checksum
+	return ref
 }

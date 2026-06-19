@@ -1313,6 +1313,11 @@ Status:
   including average postings per key and single- versus multi-segment key
   counts, giving larger soaks a concrete selectivity signal before revisiting
   recsplit-style accessors.
+- Event-log segment verification now also proves the segment-local address and
+  positional-topic lookup maps are exact, not merely internally well-formed:
+  every payload/index row must be reachable from the corresponding lookup key,
+  and stale or missing lookup keys fail the registered checker before a cold
+  filtered `eth_getLogs` path can return a false empty result.
 - Section-bloom segment builds now use the shared sorted ETL collector too:
   hot `sb-` rows are collected by `(section, bitIndex)` into scratch space and
   streamed into the immutable segment in lookup order. The derived-index

@@ -1756,6 +1756,8 @@ func validateEventLogIndexHeader(ref SegmentRef, header eventLogIndexHeader, fil
 
 func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) error {
 	var prev eventLogIndexEntry
+	expectedAddress := make(map[string][]uint64)
+	expectedTopic := make(map[string][]uint64)
 	for i := uint64(0); i < header.rowCount; i++ {
 		entry, err := readEventLogIndexEntryAt(file, eventLogIndexEntryOffset(header, i))
 		if err != nil {
@@ -1782,6 +1784,14 @@ func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader,
 		if eventLogAddress(log.GetAddress()) != entry.address {
 			return fmt.Errorf("snapshots: event log segment %q entry %d address index mismatch", ref.Path, i)
 		}
+		addressKey := string(eventLogAddressLookupKey(entry.address))
+		expectedAddress[addressKey] = append(expectedAddress[addressKey], i)
+		for position, rawTopic := range log.GetTopics() {
+			var topic common.Hash
+			copy(topic[:], rawTopic)
+			key := string(eventLogTopicLookupKey(uint64(position), topic))
+			expectedTopic[key] = append(expectedTopic[key], i)
+		}
 		prev = entry
 	}
 	if header.version >= 2 {
@@ -1789,6 +1799,9 @@ func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader,
 			return err
 		}
 		if err := checkEventLogTopicLookupIndex(file, ref, header); err != nil {
+			return err
+		}
+		if err := checkEventLogSegmentLookupCoverage(file, ref, header, expectedAddress, expectedTopic); err != nil {
 			return err
 		}
 	}
@@ -2241,6 +2254,37 @@ func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header even
 		}
 		return nil
 	})
+}
+
+func checkEventLogSegmentLookupCoverage(file io.ReaderAt, ref SegmentRef, header eventLogHeader, expectedAddress, expectedTopic map[string][]uint64) error {
+	actualAddress, err := readEventLogLookupIndexMap(file, header.addressIndexOffset, header.addressIndexLength, eventLogAddressLookupKeySize)
+	if err != nil {
+		return err
+	}
+	if err := compareEventLogSegmentLookupIndexMaps(ref, "address", expectedAddress, actualAddress); err != nil {
+		return err
+	}
+	actualTopic, err := readEventLogLookupIndexMap(file, header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize)
+	if err != nil {
+		return err
+	}
+	return compareEventLogSegmentLookupIndexMaps(ref, "topic", expectedTopic, actualTopic)
+}
+
+func compareEventLogSegmentLookupIndexMaps(ref SegmentRef, name string, expected, actual map[string][]uint64) error {
+	if len(expected) != len(actual) {
+		return fmt.Errorf("snapshots: event log segment %q %s lookup keys %d, want %d", ref.Path, name, len(actual), len(expected))
+	}
+	for key, want := range expected {
+		got, ok := actual[key]
+		if !ok {
+			return fmt.Errorf("snapshots: event log segment %q missing %s lookup key %x", ref.Path, name, []byte(key))
+		}
+		if !equalUint64Slices(got, want) {
+			return fmt.Errorf("snapshots: event log segment %q %s lookup key %x postings %v, want %v", ref.Path, name, []byte(key), got, want)
+		}
+	}
+	return nil
 }
 
 func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, name string, offset, length uint64, keySize int, verify func(rowIndex uint64, key []byte) error) error {
