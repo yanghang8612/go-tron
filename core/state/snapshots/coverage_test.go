@@ -52,6 +52,31 @@ func TestManagerDerivedRangeCoverageRequiresReadableSegments(t *testing.T) {
 	}
 }
 
+func TestBalanceTraceRangeCoveredRejectsSparseBlockTraceSegment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(db, 3, &contractpb.BlockBalanceTrace{Timestamp: 123}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(db, dir, "", 3, 5)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if covered, err := mgr.BalanceTraceRangeCovered(3, 3); err != nil || !covered {
+		t.Fatalf("BalanceTraceRangeCovered exact row = %v/%v, want true/nil", covered, err)
+	}
+	if covered, err := mgr.BalanceTraceRangeCovered(3, 5); err != nil || covered {
+		t.Fatalf("BalanceTraceRangeCovered sparse segment = %v/%v, want false/nil", covered, err)
+	}
+}
+
 func TestManagerChainIndexRangeCoverageRequiresMatchingIndex(t *testing.T) {
 	root := t.TempDir()
 	freezer := openChainFreezerTestStore(t, filepath.Join(root, "ancient"))

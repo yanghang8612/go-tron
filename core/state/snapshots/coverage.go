@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -73,13 +74,84 @@ func (m *Manager) BalanceTraceRangeCovered(fromBlock, toBlock uint64) (bool, err
 	if toBlock < fromBlock {
 		return false, fmt.Errorf("snapshots: balance-trace coverage range [%d,%d] is inverted", fromBlock, toBlock)
 	}
+	if toBlock > math.MaxInt64 {
+		return false, fmt.Errorf("snapshots: balance-trace coverage range [%d,%d] exceeds int64 block number range", fromBlock, toBlock)
+	}
 	manifest, err := m.currentManifest()
 	if err != nil || manifest == nil {
 		return false, err
 	}
-	return segmentRangeCovered(balanceTraceRefs(manifest), fromBlock, toBlock, func(ref SegmentRef) error {
-		return CheckBalanceTraceSegment(m.dir, ref)
-	})
+	return balanceTraceRangeCovered(m.dir, balanceTraceRefs(manifest), fromBlock, toBlock)
+}
+
+func balanceTraceRangeCovered(dir string, refs []SegmentRef, fromBlock, toBlock uint64) (bool, error) {
+	sortSegmentRefsAscending(refs)
+	next := fromBlock
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false, nil
+		}
+		if err := CheckBalanceTraceSegment(dir, ref); err != nil {
+			return false, err
+		}
+		seg, err := OpenBalanceTraceSegment(dir, ref)
+		if err != nil {
+			return false, err
+		}
+		coveredTo := min(ref.ToTxNum, toBlock)
+		covered, lookupErr := balanceTraceSegmentHasEveryBlock(seg, next, coveredTo)
+		closeErr := seg.Close()
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		if !covered {
+			return false, nil
+		}
+		if coveredTo >= toBlock {
+			return true, nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return false, nil
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false, nil
+}
+
+func balanceTraceSegmentHasEveryBlock(seg *BalanceTraceSegment, fromBlock, toBlock uint64) (bool, error) {
+	if seg == nil || seg.file == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return true, nil
+	}
+	expected := fromBlock
+	for i := uint64(0); i < seg.header.blockCount; i++ {
+		entry, err := readBalanceTraceBlockIndexEntryAt(seg.file, seg.header.blockIndexOffset+i*balanceTraceBlockIndexEntrySize)
+		if err != nil {
+			return false, err
+		}
+		if entry.blockNum < expected {
+			continue
+		}
+		if entry.blockNum != expected {
+			return false, nil
+		}
+		if err := validateBalanceTracePayloadBounds(seg.header, entry); err != nil {
+			return false, err
+		}
+		if expected == toBlock {
+			return true, nil
+		}
+		expected++
+	}
+	return false, nil
 }
 
 func segmentRangeCovered(refs []SegmentRef, fromBlock, toBlock uint64, check func(SegmentRef) error) (bool, error) {

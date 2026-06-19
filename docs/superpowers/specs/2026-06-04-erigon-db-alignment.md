@@ -1236,7 +1236,10 @@ Status:
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested
   range must exist and have a block-balance trace whose payload block
-  identifier matches the canonical hash/number.
+  identifier matches the canonical hash/number. Snapshot stage/cold coverage
+  checks also require every block in the claimed balance-trace range to have a
+  cold block-trace row, so a sparse sidecar cannot satisfy
+  `SnapshotBalanceTracePrune` health checks.
 - `core.BackfillBalanceTracesByReplay` and
   `gtron db backfill-balance-traces` now provide a safe historical
   `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the
