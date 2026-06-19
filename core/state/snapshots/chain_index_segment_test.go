@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestChainIndexSegmentBuildVerifyLookup(t *testing.T) {
@@ -133,6 +134,58 @@ func TestVerifyRemoteManifestFilesRejectsChainIndexFreezerMismatch(t *testing.T)
 	}
 }
 
+func TestManagerChainIndexLookupRejectsStaleSidecar(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	sourceBlock0 := canonicalBoundaryTestBlock(t, 0)
+	sourceBlock1, _, sourceInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: sourceBlock0},
+		{block: sourceBlock1, txInfosRaw: sourceInfoRaw},
+	})
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "chain/freezer-0-1.seg", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient src: %v", err)
+	}
+
+	alt := openChainFreezerTestStore(t, filepath.Join(root, "alt"))
+	defer alt.Close()
+	altBlock0 := canonicalBoundaryTestBlock(t, 0)
+	altBlock1, altTxHash, altInfoRaw := chainIndexTestBlockWithTx(t, 1, 99_000)
+	if altBlock1.Hash() == sourceBlock1.Hash() || altTxHash == sourceBlock1.Transactions()[0].Hash() {
+		t.Fatal("alternate block/tx unexpectedly matched source")
+	}
+	appendChainFreezerRawRows(t, alt, []chainFreezerRawTestRow{
+		{block: altBlock0},
+		{block: altBlock1, txInfosRaw: altInfoRaw},
+	})
+	altFreezerRef, err := BuildChainFreezerSegmentFromAncient(alt, snapshotDir, "chain/freezer-alt-0-1.seg", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient alt: %v", err)
+	}
+	staleIndexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, altFreezerRef, "chain/index-stale-0-1.idx")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment alt: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifestForChain(0, 0, []SegmentRef{freezerRef, staleIndexRef}, chainFreezerTestIdentity())); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	if got, ok, err := mgr.BlockNumberByHash(altBlock1.Hash()); err == nil || ok {
+		t.Fatalf("BlockNumberByHash stale sidecar = %d/%v/%v, want false/error", got, ok, err)
+	}
+	if lookup, ok, err := mgr.TransactionIndexByHash(altTxHash); err == nil || ok {
+		t.Fatalf("TransactionIndexByHash stale sidecar = %+v/%v/%v, want false/error", lookup, ok, err)
+	}
+}
+
 func TestBuildChainIndexSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
@@ -224,4 +277,40 @@ func TestCheckChainIndexSegmentRejectsTrailingBytes(t *testing.T) {
 	if err := CheckChainIndexSegment(snapshotDir, indexRef); err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("CheckChainIndexSegment error = %v, want size/trailing-byte rejection", err)
 	}
+}
+
+func chainIndexTestBlockWithTx(t *testing.T, number uint64, timestamp int64) (*coretypes.Block, common.Hash, []byte) {
+	t.Helper()
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  timestamp,
+			Expiration: timestamp + 10_000,
+		},
+	}
+	tx := coretypes.NewTransactionFromPB(txPB)
+	txHash := tx.Hash()
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: timestamp + 20_000,
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	ret := &corepb.TransactionRet{
+		BlockNumber:    int64(number),
+		BlockTimeStamp: timestamp + 20_000,
+		Transactioninfo: []*corepb.TransactionInfo{{
+			Id:             txHash[:],
+			Fee:            999,
+			BlockNumber:    int64(number),
+			BlockTimeStamp: timestamp + 20_000,
+		}},
+	}
+	txInfoRaw, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal tx info: %v", err)
+	}
+	return block, txHash, txInfoRaw
 }

@@ -293,6 +293,9 @@ func (m *Manager) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
 			return 0, false, closeErr
 		}
 		if ok {
+			if err := m.verifyChainIndexBlockLookup(manifest, ref, hash, num); err != nil {
+				return 0, false, err
+			}
 			return num, true, nil
 		}
 	}
@@ -319,6 +322,9 @@ func (m *Manager) TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, 
 			return zero, false, closeErr
 		}
 		if ok {
+			if err := m.verifyChainIndexTxLookup(manifest, ref, hash, lookup); err != nil {
+				return zero, false, err
+			}
 			return lookup, true, nil
 		}
 	}
@@ -331,6 +337,55 @@ func (m *Manager) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, 
 		return 0, ok, err
 	}
 	return lookup.BlockNum, true, nil
+}
+
+func (m *Manager) verifyChainIndexBlockLookup(manifest *Manifest, indexRef SegmentRef, hash common.Hash, blockNum uint64) error {
+	verified, err := m.readVerifiedChainIndexLookupBlock(manifest, indexRef, blockNum, "chain-index block lookup")
+	if err != nil {
+		return err
+	}
+	if got := verified.block.Hash(); got != hash {
+		return fmt.Errorf("snapshots: chain-index segment %q block hash %x points to block %d with hash %x", indexRef.Path, hash, blockNum, got)
+	}
+	return nil
+}
+
+func (m *Manager) verifyChainIndexTxLookup(manifest *Manifest, indexRef SegmentRef, hash common.Hash, lookup ChainIndexTxLookup) error {
+	verified, err := m.readVerifiedChainIndexLookupBlock(manifest, indexRef, lookup.BlockNum, "chain-index transaction lookup")
+	if err != nil {
+		return err
+	}
+	txs := verified.block.Transactions()
+	if uint64(lookup.TxIndex) >= uint64(len(txs)) {
+		return fmt.Errorf("snapshots: chain-index segment %q tx hash %x points to block %d index %d outside %d transactions", indexRef.Path, hash, lookup.BlockNum, lookup.TxIndex, len(txs))
+	}
+	tx := txs[int(lookup.TxIndex)]
+	if tx == nil {
+		return fmt.Errorf("snapshots: chain-index segment %q tx hash %x points to nil tx at block %d index %d", indexRef.Path, hash, lookup.BlockNum, lookup.TxIndex)
+	}
+	if got := tx.Hash(); got != hash {
+		return fmt.Errorf("snapshots: chain-index segment %q tx hash %x points to block %d index %d with hash %x", indexRef.Path, hash, lookup.BlockNum, lookup.TxIndex, got)
+	}
+	return nil
+}
+
+func (m *Manager) readVerifiedChainIndexLookupBlock(manifest *Manifest, indexRef SegmentRef, blockNum uint64, context string) (validatedChainFreezerRow, error) {
+	var zero validatedChainFreezerRow
+	if blockNum < indexRef.FromTxNum || blockNum > indexRef.ToTxNum {
+		return zero, fmt.Errorf("snapshots: chain-index segment %q returned block %d outside range [%d,%d]", indexRef.Path, blockNum, indexRef.FromTxNum, indexRef.ToTxNum)
+	}
+	freezerRef, ok := chainFreezerRefForIndex(manifest, indexRef)
+	if !ok {
+		return zero, fmt.Errorf("snapshots: chain-index segment %q has no matching chain-freezer segment for block range [%d,%d]", indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+	}
+	row, found, err := readChainFreezerSegmentRow(m.dir, freezerRef, blockNum)
+	if err != nil {
+		return zero, err
+	}
+	if !found {
+		return zero, fmt.Errorf("snapshots: chain-index segment %q returned block %d missing from chain-freezer segment %q", indexRef.Path, blockNum, freezerRef.Path)
+	}
+	return validateChainFreezerRowPayload(row, context)
 }
 
 func VerifyChainIndexSegmentAgainstChainFreezer(dir string, indexRef, freezerRef SegmentRef) error {
@@ -807,6 +862,23 @@ func chainIndexRefForFreezer(manifest *Manifest, freezerRef SegmentRef) (Segment
 			ref.Domain != freezerRef.Domain ||
 			ref.FromTxNum != freezerRef.FromTxNum ||
 			ref.ToTxNum != freezerRef.ToTxNum {
+			continue
+		}
+		return ref, true
+	}
+	return SegmentRef{}, false
+}
+
+func chainFreezerRefForIndex(manifest *Manifest, indexRef SegmentRef) (SegmentRef, bool) {
+	if manifest == nil || indexRef.Kind != SegmentChainIndex {
+		return SegmentRef{}, false
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Kind != SegmentChainFreezer ||
+			ref.normalizedDataset() != SegmentDatasetChainFreezer ||
+			ref.Domain != indexRef.Domain ||
+			ref.FromTxNum != indexRef.FromTxNum ||
+			ref.ToTxNum != indexRef.ToTxNum {
 			continue
 		}
 		return ref, true
