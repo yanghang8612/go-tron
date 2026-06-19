@@ -178,20 +178,21 @@ type ChainSource interface {
 	// freezing considers them.
 	DB() ethdb.KeyValueStore
 
-	// ReadBlockRaw returns the marshalled `corepb.Block` bytes under
-	// `b-<num>`, or nil if the row is missing. A nil return is treated
-	// as a hard error by the freezer pass: if a solidified block
-	// disappeared from Pebble, something else is wrong upstream.
-	ReadBlockRaw(number uint64) []byte
+	// ReadBlockRawStrict returns the marshalled `corepb.Block` bytes under
+	// `b-<num>`. A missing row is treated as a hard error by the freezer pass:
+	// if a solidified block disappeared from Pebble, something else is wrong
+	// upstream. Storage read errors must be surfaced so the pass rolls back
+	// instead of recording ambiguous ancient data.
+	ReadBlockRawStrict(number uint64) ([]byte, bool, error)
 
-	// ReadTransactionInfosRaw returns the marshalled
+	// ReadTransactionInfosRawStrict returns the marshalled
 	// `corepb.TransactionRet` bytes under `tib-<num>`, or nil if absent.
 	// Empty blocks (no transactions) still have a row written by
 	// applyBlock — see core.WriteTransactionInfosByBlock — so nil only
 	// occurs in test fakes; the freezer pass treats nil as "no rows" and
 	// appends an empty byte slice to preserve the per-num cardinality of
 	// the ancient table.
-	ReadTransactionInfosRaw(number uint64) []byte
+	ReadTransactionInfosRawStrict(number uint64) ([]byte, bool, error)
 
 	// ReadBlockHashByNumber returns the canonical block hash for the
 	// given number. Used by the freezer to resolve the `bsr-<hash>`
@@ -509,7 +510,11 @@ func (r *Runner) OnePass() (uint64, error) {
 	// expensive DeleteRange+Compact only runs when a crash actually left
 	// rows behind; the clean-restart path pays a single Get.
 	if freezeFromN > 0 && !r.reconciled.Swap(true) {
-		if len(r.chain.ReadBlockRaw(freezeFromN-1)) > 0 {
+		leftoverRaw, leftoverOK, err := r.chain.ReadBlockRawStrict(freezeFromN - 1)
+		if err != nil {
+			return 0, err
+		}
+		if leftoverOK && len(leftoverRaw) > 0 {
 			leftoverHi := freezeFromN - 1
 			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
 				return 0, err
@@ -551,8 +556,11 @@ func (r *Runner) OnePass() (uint64, error) {
 	// rows in one table.
 	if _, err := r.freezer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		for n := freezeFromN; n < capExclusive; n++ {
-			blockRaw := r.chain.ReadBlockRaw(n)
-			if len(blockRaw) == 0 {
+			blockRaw, ok, err := r.chain.ReadBlockRawStrict(n)
+			if err != nil {
+				return fmt.Errorf("freezer: read block %d: %w", n, err)
+			}
+			if !ok || len(blockRaw) == 0 {
 				return errMissingBlock(n)
 			}
 			block, err := decodeFreezerBlockRaw(n, blockRaw)
@@ -562,7 +570,10 @@ func (r *Runner) OnePass() (uint64, error) {
 			if err := op.AppendRaw(rawdbAncientBlocks, n, blockRaw); err != nil {
 				return err
 			}
-			txInfosRaw := r.chain.ReadTransactionInfosRaw(n)
+			txInfosRaw, _, err := r.chain.ReadTransactionInfosRawStrict(n)
+			if err != nil {
+				return fmt.Errorf("freezer: read tx infos for block %d: %w", n, err)
+			}
 			if err := validateFreezerTransactionInfosRaw(n, block, txInfosRaw); err != nil {
 				return err
 			}

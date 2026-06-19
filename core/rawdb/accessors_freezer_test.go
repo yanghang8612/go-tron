@@ -447,6 +447,26 @@ func TestReadTransactionInfosRaw_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosRawStrictSurfacesAncientReadError(t *testing.T) {
+	t.Parallel()
+
+	hot := []byte("hot-tx-infos-6")
+	anc := newFakeAncient()
+	anc.setErr(ancientTxInfos, 6, errors.New("ancient tx infos corrupt"))
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	if err := cdb.Put(txInfoBlockKey(6), hot); err != nil {
+		t.Fatalf("put hot tx infos: %v", err)
+	}
+
+	if got := ReadTransactionInfosRaw(cdb, 6); !bytes.Equal(got, hot) {
+		t.Fatalf("legacy ReadTransactionInfosRaw = %q, want hot fallback %q", got, hot)
+	}
+	got, ok, err := ReadTransactionInfosRawStrict(cdb, 6)
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "ancient tx infos corrupt") {
+		t.Fatalf("ReadTransactionInfosRawStrict ancient error = %q/%v/%v, want nil/false/error", got, ok, err)
+	}
+}
+
 // TestReadTransactionInfosByBlock_KVPath verifies the same accessor
 // reads from Pebble when no ancient row exists.
 func TestReadTransactionInfosByBlock_KVPath(t *testing.T) {

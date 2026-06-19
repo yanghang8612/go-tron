@@ -280,6 +280,11 @@ Status:
   canonical hash path, so `StageFinish` and related gates used by snapshot and
   freezer builders fail with the underlying corrupt-block reason instead of a
   generic "canonical block unavailable" mismatch.
+- The live chain-freezer append path now consumes strict raw source methods:
+  `ReadBlockRawStrict` and `ReadTransactionInfosRawStrict`. A block-body or
+  tx-info storage read error aborts the `ModifyAncients` batch and leaves hot
+  rows intact, instead of being collapsed into a missing block or empty
+  tx-info row before ancient append.
 
 Needed:
 

@@ -100,6 +100,39 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
+// ReadTransactionInfosRawStrict returns the raw per-block TransactionRet row
+// and preserves freezer/hot-KV read errors. A missing row is not an error:
+// old empty-block fixtures and pre-backfill data can legitimately lack tx-info
+// coverage, and freezer validation decides whether that is acceptable for the
+// corresponding block body.
+func ReadTransactionInfosRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos raw")
+	}
+	if cdb, ok := db.(*ChainDB); ok {
+		if cdb == nil {
+			return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos raw")
+		}
+		data, ok, err := readAncientStrict(cdb, ancientTxInfos, number)
+		if err != nil || ok {
+			return data, ok, err
+		}
+	}
+	key := txInfoBlockKey(number)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
 // WriteTransactionInfosRaw stores a pre-marshalled `corepb.TransactionRet`
 // blob under `tib-<num>` without decoding or validating it. Normal block
 // execution and backfill paths must use WriteTransactionInfosByBlock instead;

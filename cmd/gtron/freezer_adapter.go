@@ -31,12 +31,12 @@ func (a *freezerChainSource) DB() ethdb.KeyValueStore {
 	return a.chain.DB()
 }
 
-func (a *freezerChainSource) ReadBlockRaw(number uint64) []byte {
-	return rawdb.ReadBlockRaw(a.chain.DB(), number)
+func (a *freezerChainSource) ReadBlockRawStrict(number uint64) ([]byte, bool, error) {
+	return rawdb.ReadBlockRawStrict(a.chain.DB(), number)
 }
 
-func (a *freezerChainSource) ReadTransactionInfosRaw(number uint64) []byte {
-	return rawdb.ReadTransactionInfosRaw(a.chain.DB(), number)
+func (a *freezerChainSource) ReadTransactionInfosRawStrict(number uint64) ([]byte, bool, error) {
+	return rawdb.ReadTransactionInfosRawStrict(a.chain.DB(), number)
 }
 
 func (a *freezerChainSource) ReadBlockHashByNumber(number uint64) tcommon.Hash {

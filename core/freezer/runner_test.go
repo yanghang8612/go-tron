@@ -31,7 +31,9 @@ type fakeChain struct {
 	// runner asserts that what it appended to ancient matches what
 	// plantBlock seeded.
 	blockRaw      map[uint64][]byte
+	blockErr      map[uint64]error
 	txInfosRaw    map[uint64][]byte
+	txInfosErr    map[uint64]error
 	stateRootRaw  map[uint64][]byte
 	stateRootErr  map[uint64]error
 	blockHashByNo map[uint64]tcommon.Hash
@@ -41,7 +43,9 @@ func newFakeChain() *fakeChain {
 	return &fakeChain{
 		db:            memorydb.New(),
 		blockRaw:      make(map[uint64][]byte),
+		blockErr:      make(map[uint64]error),
 		txInfosRaw:    make(map[uint64][]byte),
+		txInfosErr:    make(map[uint64]error),
 		stateRootRaw:  make(map[uint64][]byte),
 		stateRootErr:  make(map[uint64]error),
 		blockHashByNo: make(map[uint64]tcommon.Hash),
@@ -62,22 +66,28 @@ func (f *fakeChain) setSolidified(n int64) {
 
 func (f *fakeChain) DB() ethdb.KeyValueStore { return f.db }
 
-func (f *fakeChain) ReadBlockRaw(n uint64) []byte {
+func (f *fakeChain) ReadBlockRawStrict(n uint64) ([]byte, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if b, ok := f.blockRaw[n]; ok {
-		return append([]byte(nil), b...) // defensive copy
+	if err := f.blockErr[n]; err != nil {
+		return nil, false, err
 	}
-	return nil
+	if b, ok := f.blockRaw[n]; ok {
+		return append([]byte(nil), b...), true, nil // defensive copy
+	}
+	return nil, false, nil
 }
 
-func (f *fakeChain) ReadTransactionInfosRaw(n uint64) []byte {
+func (f *fakeChain) ReadTransactionInfosRawStrict(n uint64) ([]byte, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if b, ok := f.txInfosRaw[n]; ok {
-		return append([]byte(nil), b...)
+	if err := f.txInfosErr[n]; err != nil {
+		return nil, false, err
 	}
-	return nil
+	if b, ok := f.txInfosRaw[n]; ok {
+		return append([]byte(nil), b...), true, nil
+	}
+	return nil, false, nil
 }
 
 func (f *fakeChain) ReadBlockHashByNumber(n uint64) tcommon.Hash {
@@ -395,6 +405,40 @@ func TestOnePassRejectsMalformedBlockRawBeforeAppending(t *testing.T) {
 	}
 }
 
+func TestOnePassRejectsBlockRawReadErrorBeforeAppending(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 3; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.mu.Lock()
+	fc.blockErr[0] = errors.New("block raw read failed")
+	fc.mu.Unlock()
+	fc.setSolidified(2)
+
+	f := newFreezer(t)
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "read block 0") || !strings.Contains(err.Error(), "block raw read failed") {
+		t.Fatalf("OnePass block raw read error = frozen %d err %v, want read error", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen after block raw read error = %d, want 0", frozen)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if count, err := f.AncientCount(kind); err != nil || count != 0 {
+			t.Fatalf("ancient %s count after block raw read error = %d/%v, want 0/nil", kind, count, err)
+		}
+	}
+	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
+		t.Fatalf("hot block row after block raw read error = len %d err %v, want retained", len(v), err)
+	}
+}
+
 func TestOnePassRejectsMalformedTxInfosBeforeAppending(t *testing.T) {
 	t.Parallel()
 	fc := newFakeChain()
@@ -424,6 +468,40 @@ func TestOnePassRejectsMalformedTxInfosBeforeAppending(t *testing.T) {
 	}
 	if v, err := fc.db.Get(txInfoBlockKVKey(0)); err != nil || len(v) == 0 {
 		t.Fatalf("hot tx-info row after malformed tx infos = len %d err %v, want retained", len(v), err)
+	}
+}
+
+func TestOnePassRejectsTxInfosReadErrorBeforeAppending(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 3; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.mu.Lock()
+	fc.txInfosErr[0] = errors.New("tx infos raw read failed")
+	fc.mu.Unlock()
+	fc.setSolidified(2)
+
+	f := newFreezer(t)
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "read tx infos for block 0") || !strings.Contains(err.Error(), "tx infos raw read failed") {
+		t.Fatalf("OnePass tx-info raw read error = frozen %d err %v, want read error", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen after tx-info raw read error = %d, want 0", frozen)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if count, err := f.AncientCount(kind); err != nil || count != 0 {
+			t.Fatalf("ancient %s count after tx-info raw read error = %d/%v, want 0/nil", kind, count, err)
+		}
+	}
+	if v, err := fc.db.Get(txInfoBlockKVKey(0)); err != nil || len(v) == 0 {
+		t.Fatalf("hot tx-info row after tx-info raw read error = len %d err %v, want retained", len(v), err)
 	}
 }
 
