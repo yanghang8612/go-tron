@@ -199,9 +199,12 @@ guarded by the cold chain-freezer plus chain-index coverage check.
 `gtron db stage-status --db.stage.verify` also reopens the local snapshot
 manifest and verifies indexed cold coverage for event-log build and freezer-tail
 prune stages by comparing `event-log-index` postings with the active event-log
-segments, plus chain lookup, section-bloom, and balance-trace coverage, so
-operators can detect stale stage rows after sidecar files are moved or
-corrupted. The same gate compares manifest-backed snapshot stage rows
+segments, and verifies the freezer-tail prune stage against the same
+chain-freezer, chain-index, and indexed event-log coverage required before
+minimal mode can hide or reclaim local freezer rows. It also verifies chain
+lookup, section-bloom, and balance-trace coverage, so operators can detect
+stale stage rows after sidecar files are moved or corrupted. The same gate
+compares manifest-backed snapshot stage rows
 (`SnapshotLatest`, `SnapshotHistory`, `SnapshotAccessor`,
 `SnapshotCommitmentFlush`, and `SnapshotHotPrune`) with the active manifest
 `progress` section, so DB stage watermarks cannot move ahead of the snapshot

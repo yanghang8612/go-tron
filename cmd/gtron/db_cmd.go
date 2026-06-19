@@ -907,6 +907,7 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 	}
 	if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
 		check(row.stage, row.progress.BlockNum, "chain-freezer", 0, mgr.ChainFreezerRangeCovered)
+		check(row.stage, row.progress.BlockNum, "chain-index", 0, mgr.ChainIndexRangeCovered)
 		if row.progress.BlockNum > 0 {
 			check(row.stage, row.progress.BlockNum, "indexed event-log", 1, mgr.EventLogIndexedRangeCovered)
 		}

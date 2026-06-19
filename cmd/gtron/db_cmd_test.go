@@ -1283,6 +1283,7 @@ func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
 		fmt.Sprintf("SnapshotSectionBloomPrune=%d missing cold section-bloom coverage [0,%d]", rawdb.SectionBloomBlockPerSection-1, rawdb.SectionBloomBlockPerSection-1),
 		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [0,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold chain-freezer coverage [0,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold chain-index coverage [0,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold indexed event-log coverage [1,12]",
 	} {
 		found := false
