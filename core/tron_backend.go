@@ -307,25 +307,24 @@ func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transacti
 }
 
 func (b *TronBackend) GetTransactionBlockNumByID(txHash tcommon.Hash) (uint64, bool, error) {
-	_, blockNum, ok, err := b.indexedTransactionByID(txHash)
-	return blockNum, ok, err
+	return rawdb.ReadTransactionIndexStrict(b.chain.chaindb, txHash[:])
 }
 
 func (b *TronBackend) indexedTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, uint64, bool, error) {
-	blockNum := rawdb.ReadTransactionIndex(b.chain.chaindb, txHash[:])
-	if blockNum == nil {
-		return nil, 0, false, nil
+	blockNum, ok, err := rawdb.ReadTransactionIndexStrict(b.chain.chaindb, txHash[:])
+	if err != nil || !ok {
+		return nil, 0, ok, err
 	}
-	block := b.chain.GetBlockByNumber(*blockNum)
+	block := b.chain.GetBlockByNumber(blockNum)
 	if block == nil {
-		return nil, 0, false, fmt.Errorf("block %d not found", *blockNum)
+		return nil, 0, false, fmt.Errorf("block %d not found", blockNum)
 	}
 	for _, tx := range block.Transactions() {
 		if tx.Hash() == txHash {
-			return tx.Proto(), *blockNum, true, nil
+			return tx.Proto(), blockNum, true, nil
 		}
 	}
-	return nil, 0, false, fmt.Errorf("transaction not found in block %d", *blockNum)
+	return nil, 0, false, fmt.Errorf("transaction not found in block %d", blockNum)
 }
 
 func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.TransactionInfo, error) {

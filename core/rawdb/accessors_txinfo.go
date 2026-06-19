@@ -58,38 +58,38 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		}
 		return info, true, nil
 	}
-	blockNum := ReadTransactionIndex(db, txID)
-	if blockNum == nil {
-		return nil, false, nil
+	blockNum, hasIndex, err := ReadTransactionIndexStrict(db, txID)
+	if err != nil || !hasIndex {
+		return nil, hasIndex, err
 	}
-	infos, hasInfos, err := ReadTransactionInfosByBlockStrict(db, *blockNum)
+	infos, hasInfos, err := ReadTransactionInfosByBlockStrict(db, blockNum)
 	if err != nil || !hasInfos {
 		return nil, hasInfos, err
 	}
-	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == *blockNum {
+	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == blockNum {
 		if !coldTransactionPositionMatchesReadableBlock(db, txID, lookup) {
 			return nil, true, fmt.Errorf("rawdb: cold transaction index position block %d tx %d does not match transaction %x", lookup.BlockNum, lookup.TxIndex, txID)
 		}
 		if int(lookup.TxIndex) < len(infos) {
 			info := infos[lookup.TxIndex]
-			if len(info.GetId()) == 0 && transactionInfoBlockNumberMatches(info.BlockNumber, *blockNum) {
+			if len(info.GetId()) == 0 && transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
 				return info, true, nil
 			}
 			if err := validateTransactionInfoIDForKey(txID, info, "read transaction info by cold position"); err != nil {
 				return info, true, err
 			}
-			if transactionInfoBlockNumberMatches(info.BlockNumber, *blockNum) {
+			if transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
 				return info, true, nil
 			}
-			return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during read transaction info by cold position", info.BlockNumber, *blockNum)
+			return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during read transaction info by cold position", info.BlockNumber, blockNum)
 		}
-		return nil, true, fmt.Errorf("rawdb: cold transaction index position %d outside transaction info coverage %d for block %d", lookup.TxIndex, len(infos), *blockNum)
+		return nil, true, fmt.Errorf("rawdb: cold transaction index position %d outside transaction info coverage %d for block %d", lookup.TxIndex, len(infos), blockNum)
 	}
-	if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, *blockNum, infos, "read transaction info"); err != nil || ok {
+	if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
 		return info, ok, err
 	}
 	for _, info := range infos {
-		if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) && len(info.Id) != 0 {
+		if transactionInfoMatchesIndexedLookup(info, txID, blockNum) && len(info.Id) != 0 {
 			return info, true, nil
 		}
 	}
@@ -295,23 +295,49 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 // can resolve historical tx hashes without keeping every old reverse index in
 // Pebble.
 func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
-	if !validTransactionHashKey(txHash) {
+	num, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if err != nil || !ok {
 		return nil
 	}
-	data, err := db.Get(txKey(txHash))
-	if err == nil && len(data) == 8 {
-		num := binary.BigEndian.Uint64(data)
-		return &num
+	return &num
+}
+
+// ReadTransactionIndexStrict retrieves the block number for a tx hash and
+// surfaces malformed hot rows or cold sidecar lookup errors. Boundary checks
+// use this to decide solid/PBFT visibility from the lookup index before reading
+// full transaction or receipt payloads.
+func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error) {
+	if err := validateTransactionHashKey(txHash, "read transaction index"); err != nil {
+		return 0, false, err
+	}
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read transaction index")
+	}
+	key := txKey(txHash)
+	exists, err := db.Has(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return 0, false, err
+		}
+		if len(data) != 8 {
+			return 0, true, fmt.Errorf("rawdb: transaction index %x has length %d, want 8", txHash, len(data))
+		}
+		return binary.BigEndian.Uint64(data), true, nil
 	}
 	if db != nil && db.chainIndex != nil && len(txHash) == common.HashLength {
 		var hash common.Hash
 		copy(hash[:], txHash)
 		num, ok, err := db.chainIndex.TransactionBlockNumberByHash(hash)
-		if err == nil && ok {
-			return &num
+		if err != nil || !ok {
+			return 0, ok, err
 		}
+		return num, true, nil
 	}
-	return nil
+	return 0, false, nil
 }
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.

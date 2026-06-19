@@ -1380,9 +1380,11 @@ Status:
   the solid/PBFT boundary before calling the range reader.
 - HTTP `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` transaction
   by id / transaction-info by id reads now resolve the transaction's block
-  through the cold-index-aware backend before exposing payloads. Transactions
+  through the hot/cold tx lookup index before exposing payloads. Transactions
   above the solid/PBFT boundary return the API's normal empty/not-found response
-  without reading the full transaction or receipt.
+  without reading the full transaction, block body, or receipt; the strict
+  payload readers still verify block-body/index consistency after the bound
+  admits the lookup.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
   the lookup key, cold tx-info fallbacks must either carry no embedded block

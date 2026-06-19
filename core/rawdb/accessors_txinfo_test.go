@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -517,6 +518,57 @@ func TestWriteReadTransactionIndex(t *testing.T) {
 	if *got != 42 {
 		t.Fatalf("block number: got %d, want 42", *got)
 	}
+	strict, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if err != nil || !ok || strict != 42 {
+		t.Fatalf("ReadTransactionIndexStrict = %d/%v/%v, want 42/true/nil", strict, ok, err)
+	}
+}
+
+func TestReadTransactionIndexStrictReportsMalformedHotRow(t *testing.T) {
+	db := NewMemoryChainDB()
+
+	txHash := bytes.Repeat([]byte{0xCD}, 32)
+	if err := db.Put(txKey(txHash), []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("put malformed tx index: %v", err)
+	}
+
+	if got := ReadTransactionIndex(db, txHash); got != nil {
+		t.Fatalf("ReadTransactionIndex malformed hot row = %d, want nil compatibility miss", *got)
+	}
+	num, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if err == nil || !ok || num != 0 || !strings.Contains(err.Error(), "has length 2, want 8") {
+		t.Fatalf("ReadTransactionIndexStrict malformed hot row = %d/%v/%v, want length error", num, ok, err)
+	}
+}
+
+func TestReadTransactionIndexStrictSurfacesColdError(t *testing.T) {
+	db := NewMemoryChainDB()
+	wantErr := errors.New("cold chain index corrupt")
+	db.SetChainIndexReader(failingTxChainIndex{err: wantErr})
+
+	txHash := bytes.Repeat([]byte{0xCE}, 32)
+	if got := ReadTransactionIndex(db, txHash); got != nil {
+		t.Fatalf("ReadTransactionIndex cold error = %d, want nil compatibility miss", *got)
+	}
+	num, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if !errors.Is(err, wantErr) || ok || num != 0 {
+		t.Fatalf("ReadTransactionIndexStrict cold error = %d/%v/%v, want cold error", num, ok, err)
+	}
+}
+
+func TestReadTransactionInfoStrictSurfacesColdTransactionIndexError(t *testing.T) {
+	db := NewMemoryChainDB()
+	wantErr := errors.New("cold tx lookup corrupt")
+	db.SetChainIndexReader(failingTxChainIndex{err: wantErr})
+
+	txHash := bytes.Repeat([]byte{0xCF}, 32)
+	if got := ReadTransactionInfo(db, txHash); got != nil {
+		t.Fatalf("ReadTransactionInfo cold tx lookup error = %+v, want nil compatibility miss", got)
+	}
+	info, ok, err := ReadTransactionInfoStrict(db, txHash)
+	if !errors.Is(err, wantErr) || ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict cold tx lookup error = %+v/%v/%v, want cold error", info, ok, err)
+	}
 }
 
 func TestTransactionIndexRejectsMalformedHash(t *testing.T) {
@@ -530,6 +582,9 @@ func TestTransactionIndexRejectsMalformedHash(t *testing.T) {
 	}
 	if got := ReadTransactionIndex(db, txHash); got != nil {
 		t.Fatalf("ReadTransactionIndex malformed hash = %d, want nil", *got)
+	}
+	if _, ok, err := ReadTransactionIndexStrict(db, txHash); err == nil || ok || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("ReadTransactionIndexStrict malformed hash ok=%v err=%v, want hash length error", ok, err)
 	}
 	if err := DeleteTransactionIndex(db, txHash); err == nil || !strings.Contains(err.Error(), "transaction hash length 1") {
 		t.Fatalf("DeleteTransactionIndex malformed hash err = %v, want hash length error", err)
@@ -545,4 +600,19 @@ func TestReadTransactionIndex_NotFound(t *testing.T) {
 	if got != nil {
 		t.Fatal("expected nil for missing tx index")
 	}
+	if num, ok, err := ReadTransactionIndexStrict(db, bytes.Repeat([]byte{0x00}, 32)); err != nil || ok || num != 0 {
+		t.Fatalf("ReadTransactionIndexStrict missing = %d/%v/%v, want 0/false/nil", num, ok, err)
+	}
+}
+
+type failingTxChainIndex struct {
+	err error
+}
+
+func (f failingTxChainIndex) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+func (f failingTxChainIndex) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	return 0, false, f.err
 }
