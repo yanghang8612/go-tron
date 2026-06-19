@@ -379,14 +379,14 @@ func WriteSyncImportProgressBatch(db interface {
 		result.ProgressRows = len(progress)
 		return result
 	}
+	if err := WriteStageProgressRows(db, progress); err != nil {
+		result.ProgressError = err
+		return result
+	}
+	result.ProgressRows = len(progress)
 	deleteResult := DeleteSyncStagedBlockBatch(db, deletes)
 	result.Deleted = deleteResult.Deleted
 	result.DeleteErrors = deleteResult.Errors
-	if err := WriteStageProgressRows(db, progress); err != nil {
-		result.ProgressError = err
-	} else {
-		result.ProgressRows = len(progress)
-	}
 	return result
 }
 

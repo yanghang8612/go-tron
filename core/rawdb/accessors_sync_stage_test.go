@@ -346,6 +346,63 @@ func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T
 	})
 }
 
+func TestWriteSyncImportProgressBatchFallbackKeepsBodiesWhenProgressWriteFails(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(2, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	db := &failingSyncImportProgressWriter{store: base, failStage: StageSyncImport}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block.Number(), Hash: block.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	})
+	if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "write stage progress SyncImport") {
+		t.Fatalf("result = %+v, want SyncImport progress write error", result)
+	}
+	if result.Deleted != 0 || len(result.DeleteErrors) != 0 || result.ProgressRows != 0 {
+		t.Fatalf("result = %+v, want no body delete after progress failure", result)
+	}
+	if db.deletes != 0 {
+		t.Fatalf("delete attempts = %d, want none before progress succeeds", db.deletes)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after progress failure ok=%v err=%v, want present", ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+		t.Fatalf("sync import progress after failed write = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}
+
+func TestWriteSyncImportProgressBatchFallbackPublishesProgressBeforeDeleteFailure(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(2, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	db := &failingSyncImportDeleteWriter{store: base, failNumber: block.Number()}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block.Number(), Hash: block.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	})
+	if len(result.DeleteErrors) != 1 || result.DeleteErrors[0].Number != block.Number() {
+		t.Fatalf("result = %+v, want staged body delete error", result)
+	}
+	if result.ProgressError != nil || result.ProgressRows != 1 || result.Deleted != 0 {
+		t.Fatalf("result = %+v, want published progress and failed delete", result)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != block.Hash() || !row.HasBlockHash {
+		t.Fatalf("sync import progress after delete failure = %+v ok=%v err=%v, want block2 hash", row, ok, err)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after delete failure ok=%v err=%v, want still present", ok, err)
+	}
+}
+
 func TestWriteSyncImportProgressBatchRejectsProgressDeleteBoundaryMismatch(t *testing.T) {
 	base := NewMemoryDatabase()
 	block2 := testSyncStagedBlock(2, common.Hash{0x01})
@@ -814,4 +871,54 @@ func (db *directSyncStageWriter) Put(key []byte, value []byte) error {
 func (db *directSyncStageWriter) Delete(key []byte) error {
 	db.deletes++
 	return db.writer.Delete(key)
+}
+
+type failingSyncImportProgressWriter struct {
+	store     ethdb.KeyValueStore
+	failStage StageID
+	deletes   int
+}
+
+func (db *failingSyncImportProgressWriter) Has(key []byte) (bool, error) {
+	return db.store.Has(key)
+}
+
+func (db *failingSyncImportProgressWriter) Get(key []byte) ([]byte, error) {
+	return db.store.Get(key)
+}
+
+func (db *failingSyncImportProgressWriter) Put(key []byte, value []byte) error {
+	if bytes.Equal(key, stageProgressKey(db.failStage)) {
+		return errors.New("boom")
+	}
+	return db.store.Put(key, value)
+}
+
+func (db *failingSyncImportProgressWriter) Delete(key []byte) error {
+	db.deletes++
+	return db.store.Delete(key)
+}
+
+type failingSyncImportDeleteWriter struct {
+	store      ethdb.KeyValueStore
+	failNumber uint64
+}
+
+func (db *failingSyncImportDeleteWriter) Has(key []byte) (bool, error) {
+	return db.store.Has(key)
+}
+
+func (db *failingSyncImportDeleteWriter) Get(key []byte) ([]byte, error) {
+	return db.store.Get(key)
+}
+
+func (db *failingSyncImportDeleteWriter) Put(key []byte, value []byte) error {
+	return db.store.Put(key, value)
+}
+
+func (db *failingSyncImportDeleteWriter) Delete(key []byte) error {
+	if bytes.Equal(key, syncStagedBlockKey(db.failNumber)) {
+		return errors.New("boom")
+	}
+	return db.store.Delete(key)
 }

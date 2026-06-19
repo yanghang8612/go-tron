@@ -456,6 +456,11 @@ Status:
   sync import pipeline stages (`SyncImport`, `SyncExecution`, `SyncCommitment`,
   `SyncFinish`). This keeps non-batch stores from half-committing body deletes
   before rejecting an invalid stage row.
+- For stores without batch support, the same writer now publishes validated
+  sync import progress before deleting imported staged-body rows. If the
+  progress write fails, the recoverable staged-body prefix remains intact; if
+  the later cleanup delete fails, restart recovery can still see the durable
+  sync-stage boundary and retry cleanup.
 - The same import-progress writer now validates imported staged-body deletes
   against the staged table before committing any side effect: each delete
   descriptor's block hash must match the stored raw body row. Missing,
