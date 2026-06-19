@@ -552,9 +552,10 @@ Status:
   prune, and chain-freezer progress. Hash-bound rows are checked through the
   freezer-aware chain reader, so old canonical blocks that have left hot Pebble
   do not produce false mismatch diagnostics. `--db.stage.verify` turns the
-  same view into an automation gate for canonical and sync-import stages; it
-  fails on mismatched/missing canonical hashes or legacy unbound canonical
-  stage rows, while downloader body stages report `verified=staged` only when
+  same view into an automation gate for canonical, sync-import, and
+  cold-coverage boundary stages; it fails on mismatched/missing canonical
+  hashes or legacy unbound canonical/freezer/chain-lookup/tail-prune stage
+  rows, while downloader body stages report `verified=staged` only when
   their hash-bound progress rows still match the staged-body table; failed
   staged-body checks include decoded `stagedBlock`/`stagedHash` evidence when
   available. It also

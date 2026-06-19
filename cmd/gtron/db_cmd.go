@@ -57,7 +57,7 @@ var (
 	}
 	dbStageVerifyFlag = &cli.BoolFlag{
 		Name:  "db.stage.verify",
-		Usage: "Fail stage-status when present stage rows are unverifiable or canonical stages are not hash-bound",
+		Usage: "Fail stage-status when present stage rows are unverifiable or canonical/cold-coverage stages are not hash-bound",
 	}
 )
 
@@ -955,7 +955,10 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageSyncImport,
 		rawdb.StageSyncExecution,
 		rawdb.StageSyncCommitment,
-		rawdb.StageSyncFinish:
+		rawdb.StageSyncFinish,
+		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotChainFreezerTailPrune:
 		return true
 	default:
 		return false

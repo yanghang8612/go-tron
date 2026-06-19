@@ -606,7 +606,7 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 	if err := rawdb.WriteBlock(db, block4); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
 	}
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
@@ -656,7 +656,7 @@ func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 	if err := rawdb.WriteBlock(db, block4); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
 	}
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
@@ -729,7 +729,7 @@ func TestDBStorageAlertsCmdRejectsStageVerificationIssue(t *testing.T) {
 	if err := rawdb.WriteBlock(db, block4); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
 	}
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
@@ -1394,6 +1394,100 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
 		t.Fatalf("genesis-only tail prune pipeline issues = %#v, want none without event-log stage", issues)
 	}
+}
+
+func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *testing.T) {
+	boundaryHash := common.Hash{0x12}
+	rows := []dbStageStatusRow{
+		{
+			stage:    rawdb.StageFinish,
+			group:    "canonical",
+			present:  true,
+			verified: "canonical",
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageFinish,
+				BlockNum:     12,
+				BlockHash:    boundaryHash,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+	}
+	issues := dbStageStatusVerificationIssues(rows)
+	for _, want := range []string{
+		"ChainFreezer verified=unbound",
+		"SnapshotChainLookupPrune verified=unbound",
+		"SnapshotChainFreezerTailPrune verified=unbound",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("verification issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows[1].progress.BlockHash = boundaryHash
+	rows[1].progress.HasBlockHash = true
+	rows[1].verified = "canonical"
+	rows[2].progress.BlockHash = boundaryHash
+	rows[2].progress.HasBlockHash = true
+	rows[2].verified = "canonical"
+	rows[4].progress.BlockHash = common.Hash{0xee}
+	rows[4].progress.HasBlockHash = true
+	rows[4].verified = "mismatch"
+	issues = dbStageStatusVerificationIssues(rows)
+	if want := "SnapshotChainFreezerTailPrune verified=mismatch"; !stageStatusIssueContains(issues, want) {
+		t.Fatalf("verification issues missing %q in %#v", want, issues)
+	}
+}
+
+func stageStatusIssueContains(issues []string, want string) bool {
+	for _, issue := range issues {
+		if issue == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
