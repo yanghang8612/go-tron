@@ -43,6 +43,9 @@ type stubBackend struct {
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	rangeCalls              int
+	lastRangeStart          uint64
+	lastRangeEnd            uint64
 	// For inspecting what contract was passed to BuildContractTransaction
 	lastContractType corepb.Transaction_Contract_ContractType
 	lastContract     proto.Message
@@ -89,6 +92,9 @@ func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.Transact
 }
 func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) { return nil, nil }
 func (s *stubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	s.rangeCalls++
+	s.lastRangeStart = start
+	s.lastRangeEnd = end
 	return nil, nil
 }
 func (s *stubBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
@@ -425,6 +431,37 @@ func postJSON(t *testing.T, url, body string) map[string]interface{} {
 		t.Fatalf("decode JSON from %s: %v", url, err)
 	}
 	return result
+}
+
+func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "negative start", body: `{"startNum":-1,"endNum":3}`},
+		{name: "negative end", body: `{"startNum":1,"endNum":-3}`},
+		{name: "empty", body: `{"startNum":3,"endNum":3}`},
+		{name: "reversed", body: `{"startNum":4,"endNum":3}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubBackend{}
+			srv := newTestServer(t, stub)
+			defer srv.Close()
+
+			resp, err := http.Post(srv.URL+"/wallet/getblockbylimitnext", "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("POST getblockbylimitnext: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+			}
+			if stub.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", stub.rangeCalls)
+			}
+		})
+	}
 }
 
 func TestGetAccountBalanceTrace(t *testing.T) {

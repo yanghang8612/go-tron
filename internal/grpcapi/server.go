@@ -244,7 +244,11 @@ func (s *Server) GetBlockByLimitNext(_ context.Context, in *apipb.BlockLimit) (*
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	blocks, err := s.backend.GetBlocksByRange(uint64(in.StartNum), uint64(in.EndNum))
+	start, end, err := validateGRPCBlockLimit(in)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -260,7 +264,11 @@ func (s *Server) GetBlockByLimitNext2(_ context.Context, in *apipb.BlockLimit) (
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	blocks, err := s.backend.GetBlocksByRange(uint64(in.StartNum), uint64(in.EndNum))
+	start, end, err := validateGRPCBlockLimit(in)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -269,6 +277,13 @@ func (s *Server) GetBlockByLimitNext2(_ context.Context, in *apipb.BlockLimit) (
 		result[i] = blockToExtention(b)
 	}
 	return &apipb.BlockListExtention{Block: result}, nil
+}
+
+func validateGRPCBlockLimit(in *apipb.BlockLimit) (uint64, uint64, error) {
+	if in.StartNum < 0 || in.EndNum < 0 || in.EndNum <= in.StartNum {
+		return 0, 0, status.Error(codes.InvalidArgument, "invalid block range")
+	}
+	return uint64(in.StartNum), uint64(in.EndNum), nil
 }
 
 // GetBlockByLatestNum returns the latest N blocks.

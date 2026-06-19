@@ -30,6 +30,9 @@ type testBackend struct {
 	lastNumQueried          uint64
 	hashCalls               int
 	lastHashQueried         common.Hash
+	rangeCalls              int
+	lastRangeStart          uint64
+	lastRangeEnd            uint64
 	account                 *types.Account
 	tx                      *corepb.Transaction
 	params                  []tronapi.ChainParameter
@@ -94,6 +97,9 @@ func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
 	return nil, nil
 }
 func (b *testBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	b.rangeCalls++
+	b.lastRangeStart = start
+	b.lastRangeEnd = end
 	if len(b.blocks) > 0 {
 		var result []*types.Block
 		for _, blk := range b.blocks {
@@ -657,6 +663,43 @@ func TestGetBlockByLimitNext2(t *testing.T) {
 	}
 	if len(resp.GetBlock()) != 2 {
 		t.Fatalf("want 2 blocks, got %d", len(resp.GetBlock()))
+	}
+}
+
+func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
+	cases := []struct {
+		name  string
+		start int64
+		end   int64
+	}{
+		{name: "negative start", start: -1, end: 3},
+		{name: "negative end", start: 1, end: -3},
+		{name: "empty", start: 3, end: 3},
+		{name: "reversed", start: 4, end: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/block", func(t *testing.T) {
+			backend := &testBackend{}
+			client := newTestClient(t, backend)
+			_, err := client.GetBlockByLimitNext(context.Background(), &apipb.BlockLimit{StartNum: tc.start, EndNum: tc.end})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("want InvalidArgument, got %v", err)
+			}
+			if backend.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", backend.rangeCalls)
+			}
+		})
+		t.Run(tc.name+"/extension", func(t *testing.T) {
+			backend := &testBackend{}
+			client := newTestClient(t, backend)
+			_, err := client.GetBlockByLimitNext2(context.Background(), &apipb.BlockLimit{StartNum: tc.start, EndNum: tc.end})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("want InvalidArgument, got %v", err)
+			}
+			if backend.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", backend.rangeCalls)
+			}
+		})
 	}
 }
 

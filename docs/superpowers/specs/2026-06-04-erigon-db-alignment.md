@@ -1387,6 +1387,10 @@ Status:
   bound-aware too. `getblockbyid` extracts the java-tron BlockId height before
   any backend hash lookup, and `getblockbylimitnext` rejects ranges that cross
   the solid/PBFT boundary before calling the range reader.
+- HTTP `/wallet/getblockbylimitnext` and gRPC
+  `Wallet.GetBlockByLimitNext{,2}` now reject negative, empty, and reversed
+  ranges before calling `GetBlocksByRange`, preventing invalid signed inputs
+  from widening into large unsigned hot/cold block scans.
 - HTTP `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` transaction
   by id / transaction-info by id reads now resolve the transaction's block
   through the hot/cold tx lookup index before exposing payloads. Transactions

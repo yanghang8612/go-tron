@@ -492,6 +492,10 @@ func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.
 		http.Error(w, "invalid block range", http.StatusBadRequest)
 		return
 	}
+	if body.EndNum <= body.StartNum {
+		http.Error(w, "invalid block range", http.StatusBadRequest)
+		return
+	}
 	if uint64(body.EndNum) > boundFn()+1 {
 		http.Error(w, notReadyMessage, http.StatusNotFound)
 		return

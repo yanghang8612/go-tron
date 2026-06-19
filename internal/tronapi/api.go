@@ -871,6 +871,10 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if body.StartNum < 0 || body.EndNum < 0 || body.EndNum <= body.StartNum {
+		http.Error(w, "invalid block range", http.StatusBadRequest)
+		return
+	}
 	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
 }
 

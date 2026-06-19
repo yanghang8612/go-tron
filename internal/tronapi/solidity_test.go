@@ -251,6 +251,47 @@ func TestPbftGetBlockByLimitNextRejectsAbovePbftBeforeBackend(t *testing.T) {
 	}
 }
 
+func TestBoundGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
+	endpoints := []struct {
+		name string
+		path string
+	}{
+		{name: "solidity", path: "/walletsolidity/getblockbylimitnext"},
+		{name: "pbft", path: "/walletpbft/getblockbylimitnext"},
+	}
+	ranges := []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: `{"startNum":5,"endNum":5}`},
+		{name: "reversed", body: `{"startNum":6,"endNum":5}`},
+	}
+	for _, endpoint := range endpoints {
+		for _, r := range ranges {
+			t.Run(endpoint.name+"/"+r.name, func(t *testing.T) {
+				stub := &boundBlockStubBackend{
+					solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 20},
+					block:            testBlockWithNumber(5),
+				}
+				srv := newSolidTestServer(t, stub)
+				defer srv.Close()
+
+				resp, err := http.Post(srv.URL+endpoint.path, "application/json", strings.NewReader(r.body))
+				if err != nil {
+					t.Fatalf("request failed: %v", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+				}
+				if stub.rangeCalls != 0 {
+					t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", stub.rangeCalls)
+				}
+			})
+		}
+	}
+}
+
 func TestSolidityGetTransactionByIDRejectsAboveSolidBeforeBackend(t *testing.T) {
 	hash := testTransactionHash(0x01)
 	stub := &boundBlockStubBackend{
