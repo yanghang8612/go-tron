@@ -251,8 +251,8 @@ func TestSelfDestructRevertsOnUnexpiredFrozen(t *testing.T) {
 func selfFreezeV2(t *testing.T, tvm *TVM, caller tcommon.Address, resource corepb.ResourceCode, amount int64) {
 	t.Helper()
 	stack := newStack()
-	stack.push(uint256.NewInt(uint64(resource)))
 	stack.push(uint256.NewInt(uint64(amount)))
+	stack.push(uint256.NewInt(uint64(resource))) // resource on top: java pops resourceType first
 	contract := NewContract(caller, caller, 0, 100_000)
 	if _, err := opFreezeBalanceV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("FREEZEBALANCEV2 (resource %d) error: %v", resource, err)

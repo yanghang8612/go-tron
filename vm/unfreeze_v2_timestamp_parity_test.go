@@ -66,8 +66,8 @@ func TestUnfreezeBalanceV2OpcodeUsesHeaderTimestamp(t *testing.T) {
 
 	stack := newStack()
 	contract := NewContract(owner, owner, 0, 1_000_000)
-	stack.push(uint256.NewInt(uint64(corepb.ResourceCode_ENERGY))) // resourceType (bottom)
-	stack.push(uint256.NewInt(uint64(200 * tvmTRXPrecision)))      // amount (top)
+	stack.push(uint256.NewInt(uint64(200 * tvmTRXPrecision)))      // amount (bottom)
+	stack.push(uint256.NewInt(uint64(corepb.ResourceCode_ENERGY))) // resourceType (top): java pops resourceType first
 	if _, err := opUnfreezeBalanceV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("opUnfreezeBalanceV2 error: %v", err)
 	}

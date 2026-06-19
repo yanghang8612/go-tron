@@ -47,15 +47,15 @@ func addressWord(addr tcommon.Address) uint256.Int {
 }
 
 // callDelegateResource invokes opDelegateResource with the java stack layout:
-// pop order is amount, resourceType, receiver, so push receiver, resource,
-// amount (amount on top).
+// pop order is resourceType, amount, receiver, so push receiver, amount,
+// resource (resource on top).
 func callDelegateResource(t *testing.T, tvm *TVM, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) uint64 {
 	t.Helper()
 	stack := newStack()
 	recv := addressWord(receiver)
 	stack.push(&recv)
-	stack.push(uint256.NewInt(uint64(resource)))
 	stack.push(uint256.NewInt(uint64(amount)))
+	stack.push(uint256.NewInt(uint64(resource)))
 	contract := NewContract(owner, owner, 0, 1_000_000)
 	if _, err := opDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("opDelegateResource error: %v", err)
@@ -69,8 +69,8 @@ func callUnDelegateResource(t *testing.T, tvm *TVM, owner, receiver tcommon.Addr
 	stack := newStack()
 	recv := addressWord(receiver)
 	stack.push(&recv)
-	stack.push(uint256.NewInt(uint64(resource)))
 	stack.push(uint256.NewInt(uint64(amount)))
+	stack.push(uint256.NewInt(uint64(resource)))
 	contract := NewContract(owner, owner, 0, 1_000_000)
 	if _, err := opUnDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("opUnDelegateResource error: %v", err)

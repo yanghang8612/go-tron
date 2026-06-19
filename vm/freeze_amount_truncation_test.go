@@ -126,8 +126,8 @@ func newFreezeV2AmountTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicPro
 func callFreezeV2(t *testing.T, tvm *TVM, owner tcommon.Address, amount *uint256.Int, resource corepb.ResourceCode) uint64 {
 	t.Helper()
 	stack := newStack()
-	stack.push(uint256.NewInt(uint64(resource)))
 	stack.push(amount)
+	stack.push(uint256.NewInt(uint64(resource))) // resource on top: java pops resourceType first
 	contract := NewContract(owner, owner, 0, 5_000_000)
 	if _, err := opFreezeBalanceV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("opFreezeBalanceV2 error: %v", err)
@@ -139,8 +139,8 @@ func callFreezeV2(t *testing.T, tvm *TVM, owner tcommon.Address, amount *uint256
 func callUnfreezeV2(t *testing.T, tvm *TVM, owner tcommon.Address, amount *uint256.Int, resource corepb.ResourceCode) uint64 {
 	t.Helper()
 	stack := newStack()
-	stack.push(uint256.NewInt(uint64(resource)))
 	stack.push(amount)
+	stack.push(uint256.NewInt(uint64(resource))) // resource on top: java pops resourceType first
 	contract := NewContract(owner, owner, 0, 5_000_000)
 	if _, err := opUnfreezeBalanceV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
 		t.Fatalf("opUnfreezeBalanceV2 error: %v", err)
