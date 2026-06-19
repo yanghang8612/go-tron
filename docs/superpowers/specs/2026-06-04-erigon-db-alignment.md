@@ -1272,6 +1272,8 @@ Status:
   checked through strict rawdb trace readers, so malformed, block-mismatched,
   hot rows that fail to read, or unreadable cold trace payloads fail the
   backfill instead of being treated as missing rows and republished into Pebble.
+  Account-trace cold lookups that return a row above the requested block are
+  also surfaced as sidecar data errors on strict/at-or-before reads.
 - `gtron db backfill-balance-traces` can also seed an empty/genesis-only replay
   database from a verified signed snapshot before replay starts. Passing
   `--snapshot.dir` plus the trusted catalog key flags restores latest

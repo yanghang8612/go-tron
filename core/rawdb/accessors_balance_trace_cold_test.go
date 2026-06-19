@@ -184,11 +184,11 @@ func TestAccountTraceRejectsColdFutureLookup(t *testing.T) {
 	if got, ok := ReadAccountTrace(db, owner, 10); ok || got != 0 {
 		t.Fatalf("ReadAccountTrace cold future = %d/%v, want 0/false", got, ok)
 	}
-	block, balance, ok, err := ReadAccountTraceAtOrBefore(db, owner, 10)
-	if err != nil {
-		t.Fatalf("ReadAccountTraceAtOrBefore cold future: %v", err)
+	if got, ok, err := ReadAccountTraceStrict(db, owner, 10); err == nil || ok || got != 0 {
+		t.Fatalf("ReadAccountTraceStrict cold future = %d/%v/%v, want future-block error", got, ok, err)
 	}
-	if ok || block != 0 || balance != 0 {
-		t.Fatalf("ReadAccountTraceAtOrBefore cold future = block %d balance %d ok %v, want zero/false", block, balance, ok)
+	block, balance, ok, err := ReadAccountTraceAtOrBefore(db, owner, 10)
+	if err == nil || ok || block != 0 || balance != 0 {
+		t.Fatalf("ReadAccountTraceAtOrBefore cold future = block %d balance %d ok %v err %v, want future-block error", block, balance, ok, err)
 	}
 }

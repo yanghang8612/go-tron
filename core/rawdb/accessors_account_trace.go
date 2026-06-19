@@ -198,7 +198,7 @@ func readColdAccountTraceAtOrBefore(db interface{}, owner []byte, blockNum int64
 		return 0, 0, false, err
 	}
 	if traceBlock > blockNum {
-		return 0, 0, false, nil
+		return 0, 0, false, fmt.Errorf("account trace: cold lookup returned future block %d for target %d", traceBlock, blockNum)
 	}
 	return traceBlock, balance, true, nil
 }
