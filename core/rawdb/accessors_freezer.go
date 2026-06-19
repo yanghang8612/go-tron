@@ -47,6 +47,37 @@ func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
+// ReadBlockRawStrict returns the raw block row at number and preserves freezer
+// or hot-KV read errors. It does not decode the block; callers that need to
+// validate the proto and key number should use ReadBlockStrict.
+func ReadBlockRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block raw")
+	}
+	if cdb, ok := db.(*ChainDB); ok {
+		if cdb == nil {
+			return nil, false, fmt.Errorf("rawdb: nil database during read block raw")
+		}
+		data, ok, err := readAncientStrict(cdb, ancientBlocks, number)
+		if err != nil || ok {
+			return data, ok, err
+		}
+	}
+	key := blockKey(number)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
 // ReadTransactionInfosRaw returns the marshalled `corepb.TransactionRet`
 // bytes stored under `tib-<num>` in Pebble, or nil if the row is absent.
 // Same fast-path rationale as ReadBlockRaw: avoid round-tripping the proto

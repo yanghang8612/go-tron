@@ -266,6 +266,13 @@ Status:
   `chain-index` lookup errors. The live freezer runner uses the strict raw
   accessor and aborts the pass on those errors, so corruption cannot be copied
   into ancient storage as an empty state-root row.
+- Block-body reads now also have strict variants:
+  `ReadBlockRawStrict` surfaces freezer/hot read errors and
+  `ReadBlockStrict` surfaces malformed or key-number-mismatched block protos.
+  Snapshot canonical-boundary installation, event-log segment builds, and
+  rawdb derived-index rebuilds now use the strict block accessor, so archive
+  sidecar generation fails on corrupt canonical block rows instead of treating
+  them as ordinary missing blocks.
 
 Needed:
 

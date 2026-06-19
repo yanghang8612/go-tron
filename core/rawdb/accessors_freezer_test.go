@@ -20,6 +20,7 @@ import (
 // read side and a way to seed canned bytes per kind/number.
 type fakeAncient struct {
 	rows map[string]map[uint64][]byte
+	errs map[string]map[uint64]error
 }
 
 type fakeChainIndex struct {
@@ -30,7 +31,10 @@ type fakeChainIndex struct {
 }
 
 func newFakeAncient() *fakeAncient {
-	return &fakeAncient{rows: make(map[string]map[uint64][]byte)}
+	return &fakeAncient{
+		rows: make(map[string]map[uint64][]byte),
+		errs: make(map[string]map[uint64]error),
+	}
 }
 
 func (f *fakeAncient) put(kind string, num uint64, data []byte) {
@@ -42,7 +46,21 @@ func (f *fakeAncient) put(kind string, num uint64, data []byte) {
 	tbl[num] = data
 }
 
+func (f *fakeAncient) setErr(kind string, num uint64, err error) {
+	tbl, ok := f.errs[kind]
+	if !ok {
+		tbl = make(map[uint64]error)
+		f.errs[kind] = tbl
+	}
+	tbl[num] = err
+}
+
 func (f *fakeAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if tbl, ok := f.errs[kind]; ok {
+		if err := tbl[number]; err != nil {
+			return nil, err
+		}
+	}
 	tbl, ok := f.rows[kind]
 	if !ok {
 		return nil, ErrNotInAncient
@@ -95,6 +113,11 @@ func (f *fakeAncient) AncientCount(kind string) (uint64, error) {
 }
 
 func (f *fakeAncient) HasAncient(kind string, number uint64) (bool, error) {
+	if tbl, ok := f.errs[kind]; ok {
+		if err := tbl[number]; err != nil {
+			return false, err
+		}
+	}
 	tbl, ok := f.rows[kind]
 	if !ok {
 		return false, nil
@@ -765,5 +788,72 @@ func TestReadBlock_AncientCorrupt(t *testing.T) {
 	cdb := NewChainDB(NewMemoryDatabase(), anc)
 	if got := ReadBlock(cdb, 0); got != nil {
 		t.Fatalf("expected nil for corrupt ancient blob, got %#v", got)
+	}
+}
+
+func TestReadBlockStrictSurfacesMalformedAncientBlock(t *testing.T) {
+	t.Parallel()
+
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 0, []byte("not-a-valid-proto"))
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	block, ok, err := ReadBlockStrict(cdb, 0)
+	if err == nil || !ok || block != nil || !strings.Contains(err.Error(), "block 0 decode") {
+		t.Fatalf("ReadBlockStrict malformed ancient = %#v/%v/%v, want nil/true/decode error", block, ok, err)
+	}
+	raw, ok, err := ReadBlockRawStrict(cdb, 0)
+	if err != nil || !ok || !bytes.Equal(raw, []byte("not-a-valid-proto")) {
+		t.Fatalf("ReadBlockRawStrict malformed ancient raw = %q/%v/%v", raw, ok, err)
+	}
+}
+
+func TestReadBlockStrictSurfacesAncientReadError(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(2, 222))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.setErr(ancientBlocks, 2, errors.New("ancient block file corrupt"))
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	if err := cdb.Put(blockKey(2), data); err != nil {
+		t.Fatalf("put hot block: %v", err)
+	}
+
+	if got := ReadBlock(cdb, 2); got == nil || got.Hash() != block.Hash() {
+		t.Fatalf("legacy ReadBlock should fall back to hot row, got %#v", got)
+	}
+	got, ok, err := ReadBlockStrict(cdb, 2)
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "ancient block file corrupt") {
+		t.Fatalf("ReadBlockStrict ancient read error = %#v/%v/%v, want nil/false/error", got, ok, err)
+	}
+	raw, ok, err := ReadBlockRawStrict(cdb, 2)
+	if err == nil || ok || raw != nil || !strings.Contains(err.Error(), "ancient block file corrupt") {
+		t.Fatalf("ReadBlockRawStrict ancient read error = %x/%v/%v, want nil/false/error", raw, ok, err)
+	}
+}
+
+func TestReadBlockStrictRejectsMismatchedHotBlockNumber(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(4, 444))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	cdb := NewMemoryChainDB()
+	if err := cdb.Put(blockKey(3), data); err != nil {
+		t.Fatalf("put mismatched hot block: %v", err)
+	}
+
+	if got := ReadBlock(cdb, 3); got == nil || got.Number() != 4 {
+		t.Fatalf("legacy ReadBlock = %#v, want mismatched block for compatibility", got)
+	}
+	got, ok, err := ReadBlockStrict(cdb, 3)
+	if err == nil || !ok || got == nil || got.Number() != 4 || !strings.Contains(err.Error(), "block row 3 contains block number 4") {
+		t.Fatalf("ReadBlockStrict mismatched hot row = %#v/%v/%v, want block/true/mismatch error", got, ok, err)
 	}
 }

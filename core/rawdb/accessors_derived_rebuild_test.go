@@ -130,6 +130,12 @@ func TestRebuildTransactionDerivedIndexesRejectsBadInputs(t *testing.T) {
 	if _, err := RebuildTransactionDerivedIndexesFromBlocks(db, db, 9, 9, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "missing block 9") {
 		t.Fatalf("missing block err = %v, want missing block 9", err)
 	}
+	if err := db.Put(blockKey(10), []byte("not-a-valid-block")); err != nil {
+		t.Fatalf("put malformed block: %v", err)
+	}
+	if _, err := RebuildTransactionDerivedIndexesFromBlocks(db, db, 10, 10, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "block 10 decode") {
+		t.Fatalf("malformed block err = %v, want block decode error", err)
+	}
 }
 
 func TestRebuildTransactionDerivedIndexesRejectsMismatchedTransactionInfo(t *testing.T) {

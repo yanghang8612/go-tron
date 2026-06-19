@@ -1073,8 +1073,11 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 func collectEventLogRowsToETL(chain *rawdb.ChainDB, fromBlock, toBlock uint64, collector *etl.Collector) (uint64, error) {
 	var rowCount uint64
 	for blockNum := fromBlock; ; blockNum++ {
-		block := rawdb.ReadBlock(chain, blockNum)
-		if block == nil {
+		block, ok, err := rawdb.ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
 			return 0, fmt.Errorf("snapshots: missing block %d during event log segment build", blockNum)
 		}
 		blockHash := block.Hash()

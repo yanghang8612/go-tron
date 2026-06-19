@@ -101,8 +101,11 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 		ToBlock:   toBlock,
 	}
 	for blockNum := fromBlock; ; blockNum++ {
-		block := ReadBlock(chain, blockNum)
-		if block == nil {
+		block, ok, err := ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("rawdb: missing block %d during transaction derived index rebuild", blockNum)
 		}
 		result.BlocksScanned++
@@ -202,8 +205,11 @@ func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader acco
 	}
 
 	for blockNum := fromBlock; ; blockNum++ {
-		block := ReadBlock(chain, blockNum)
-		if block == nil {
+		block, ok, err := ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("rawdb: missing block %d during account trace rebuild", blockNum)
 		}
 		result.BlocksScanned++
@@ -306,8 +312,11 @@ func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueRe
 		})
 	}
 	for blockNum := fromBlock; ; blockNum++ {
-		block := ReadBlock(chain, blockNum)
-		if block == nil {
+		block, ok, err := ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("rawdb: missing block %d during balance trace coverage audit", blockNum)
 		}
 		result.BlocksScanned++
@@ -410,8 +419,11 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 	}
 
 	for blockNum := fromBlock; ; blockNum++ {
-		block := ReadBlock(chain, blockNum)
-		if block == nil {
+		block, ok, err := ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("rawdb: missing block %d during section bloom rebuild", blockNum)
 		}
 		result.BlocksScanned++

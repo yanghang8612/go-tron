@@ -65,6 +65,25 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 	return block
 }
 
+// ReadBlockStrict returns the block at the given number and reports malformed
+// hot/freezer rows instead of folding them into "missing". Legacy ReadBlock
+// keeps its nil-on-error contract for chain code that treats corrupt rows the
+// same way old hot-only accessors did.
+func ReadBlockStrict(db *ChainDB, number uint64) (*types.Block, bool, error) {
+	data, ok, err := ReadBlockRawStrict(db, number)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	block, err := types.UnmarshalBlock(data)
+	if err != nil {
+		return nil, true, fmt.Errorf("rawdb: block %d decode: %w", number, err)
+	}
+	if block.Number() != number {
+		return block, true, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
+	}
+	return block, true, nil
+}
+
 // ReadBlockNumber returns the block number persisted for the given block hash,
 // or nil if unknown. The hot `bh-<hash>` row is preferred; on a miss, a ChainDB
 // with an attached cold chain-index sidecar can resolve historical hashes
@@ -129,6 +148,20 @@ func readAncient(db *ChainDB, kind string, number uint64) ([]byte, bool) {
 		return nil, false
 	}
 	return data, true
+}
+
+func readAncientStrict(db *ChainDB, kind string, number uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(kind, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 // ReadBlockKV is the KV-only variant of ReadBlock, for tests and narrow

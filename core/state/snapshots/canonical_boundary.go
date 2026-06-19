@@ -58,8 +58,11 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 	if row.BlockHash == (common.Hash{}) {
 		return nil, fmt.Errorf("snapshots: state tx range for block %d has zero block hash", row.BlockNum)
 	}
-	block := rawdb.ReadBlock(chainDB, row.BlockNum)
-	if block == nil {
+	block, ok, err := rawdb.ReadBlockStrict(chainDB, row.BlockNum)
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: canonical boundary block %d unreadable: %w", row.BlockNum, err)
+	}
+	if !ok {
 		return nil, fmt.Errorf("snapshots: canonical boundary block %d not found in chain data", row.BlockNum)
 	}
 	if block.Hash() != row.BlockHash {
