@@ -11,7 +11,6 @@ const (
 	chainFreezerTailPruneReasonReady                = "ready"
 	chainFreezerTailPruneReasonMissingFreezerStage  = "missing chain freezer stage"
 	chainFreezerTailPruneReasonMissingLookupStage   = "missing chain lookup prune stage"
-	chainFreezerTailPruneReasonMissingEventLogStage = "missing event-log build stage"
 	chainFreezerTailPruneReasonZeroRetainBlocks     = "zero retain blocks"
 	chainFreezerTailPruneReasonEmptyAncientStore    = "empty ancient store"
 	chainFreezerTailPruneReasonTailAboveAncientHead = "current tail above ancient head"
@@ -148,12 +147,16 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 	targetTail = minUint64(targetTail, input.AncientHead)
 	if targetTail > 1 {
 		if !input.HasEventLogBuildBlock {
-			return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogStage)
+			coverageBlock = 0
+			coverageTail = 1
+			targetTail = minUint64(coverageTail, retentionTail)
+			targetTail = minUint64(targetTail, input.AncientHead)
+		} else {
+			coverageBlock = minUint64(coverageBlock, input.EventLogBuildBlock)
+			coverageTail = tailAfterInclusiveBlock(coverageBlock)
+			targetTail = minUint64(coverageTail, retentionTail)
+			targetTail = minUint64(targetTail, input.AncientHead)
 		}
-		coverageBlock = minUint64(coverageBlock, input.EventLogBuildBlock)
-		coverageTail = tailAfterInclusiveBlock(coverageBlock)
-		targetTail = minUint64(coverageTail, retentionTail)
-		targetTail = minUint64(targetTail, input.AncientHead)
 	}
 
 	plan.CoverageBlock = coverageBlock
