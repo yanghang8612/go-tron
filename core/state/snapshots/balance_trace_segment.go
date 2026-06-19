@@ -131,10 +131,11 @@ func CheckBalanceTraceSegment(dir string, ref SegmentRef) error {
 	if err := validateBalanceTraceHeader(ref, header, uint64(stat.Size())); err != nil {
 		return err
 	}
-	if err := checkBalanceTraceBlockIndex(file, ref, header); err != nil {
+	requiredAccounts, err := checkBalanceTraceBlockIndex(file, ref, header)
+	if err != nil {
 		return err
 	}
-	return checkBalanceTraceAccountIndex(file, ref, header)
+	return checkBalanceTraceAccountIndex(file, ref, header, requiredAccounts)
 }
 
 func OpenBalanceTraceSegment(dir string, ref SegmentRef) (*BalanceTraceSegment, error) {
@@ -543,41 +544,66 @@ func validateBalanceTraceHeader(ref SegmentRef, header balanceTraceHeader, fileS
 	return nil
 }
 
-func checkBalanceTraceBlockIndex(file io.ReaderAt, ref SegmentRef, header balanceTraceHeader) error {
+type balanceTraceAccountRequirement struct {
+	owner    common.Address
+	blockNum uint64
+}
+
+func checkBalanceTraceBlockIndex(file io.ReaderAt, ref SegmentRef, header balanceTraceHeader) (map[balanceTraceAccountRequirement]struct{}, error) {
+	requiredAccounts := make(map[balanceTraceAccountRequirement]struct{})
 	var prev uint64
 	for i := uint64(0); i < header.blockCount; i++ {
 		entry, err := readBalanceTraceBlockIndexEntryAt(file, header.blockIndexOffset+i*balanceTraceBlockIndexEntrySize)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if entry.blockNum < ref.FromTxNum || entry.blockNum > ref.ToTxNum {
-			return fmt.Errorf("snapshots: balance trace segment %q block index entry %d points to block %d outside [%d,%d]",
+			return nil, fmt.Errorf("snapshots: balance trace segment %q block index entry %d points to block %d outside [%d,%d]",
 				ref.Path, i, entry.blockNum, ref.FromTxNum, ref.ToTxNum)
 		}
 		if i > 0 && entry.blockNum <= prev {
-			return fmt.Errorf("snapshots: balance trace segment %q block index is not sorted", ref.Path)
+			return nil, fmt.Errorf("snapshots: balance trace segment %q block index is not sorted", ref.Path)
 		}
 		if err := validateBalanceTracePayloadBounds(header, entry); err != nil {
-			return fmt.Errorf("snapshots: balance trace segment %q block %d: %w", ref.Path, entry.blockNum, err)
+			return nil, fmt.Errorf("snapshots: balance trace segment %q block %d: %w", ref.Path, entry.blockNum, err)
 		}
 		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var trace contractpb.BlockBalanceTrace
 		if err := proto.Unmarshal(raw, &trace); err != nil {
-			return fmt.Errorf("snapshots: decode balance trace block %d: %w", entry.blockNum, err)
+			return nil, fmt.Errorf("snapshots: decode balance trace block %d: %w", entry.blockNum, err)
 		}
 		if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != int64(entry.blockNum) {
-			return fmt.Errorf("snapshots: balance trace segment %q block payload number %d does not match index %d",
+			return nil, fmt.Errorf("snapshots: balance trace segment %q block payload number %d does not match index %d",
 				ref.Path, id.GetNumber(), entry.blockNum)
+		}
+		for _, txTrace := range trace.GetTransactionBalanceTrace() {
+			if txTrace == nil {
+				continue
+			}
+			for _, op := range txTrace.GetOperation() {
+				if op == nil {
+					continue
+				}
+				addr := op.GetAddress()
+				if len(addr) != common.AddressLength {
+					return nil, fmt.Errorf("snapshots: balance trace segment %q block %d operation address length %d, want %d",
+						ref.Path, entry.blockNum, len(addr), common.AddressLength)
+				}
+				requiredAccounts[balanceTraceAccountRequirement{
+					owner:    common.BytesToAddress(addr),
+					blockNum: entry.blockNum,
+				}] = struct{}{}
+			}
 		}
 		prev = entry.blockNum
 	}
-	return nil
+	return requiredAccounts, nil
 }
 
-func checkBalanceTraceAccountIndex(file io.ReaderAt, ref SegmentRef, header balanceTraceHeader) error {
+func checkBalanceTraceAccountIndex(file io.ReaderAt, ref SegmentRef, header balanceTraceHeader, required map[balanceTraceAccountRequirement]struct{}) error {
 	var prev *balanceTraceAccountIndexEntry
 	for i := uint64(0); i < header.accountCount; i++ {
 		entry, err := readBalanceTraceAccountIndexEntryAt(file, balanceTraceAccountEntryOffset(header, i))
@@ -593,6 +619,11 @@ func checkBalanceTraceAccountIndex(file io.ReaderAt, ref SegmentRef, header bala
 		}
 		cp := entry
 		prev = &cp
+		delete(required, balanceTraceAccountRequirement{owner: entry.owner, blockNum: entry.blockNum})
+	}
+	for missing := range required {
+		return fmt.Errorf("snapshots: balance trace segment %q missing account index owner=%x block=%d for block trace operation",
+			ref.Path, missing.owner[:], missing.blockNum)
 	}
 	return nil
 }

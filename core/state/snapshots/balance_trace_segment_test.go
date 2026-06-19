@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -160,6 +161,59 @@ func TestBuildBalanceTraceSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	block, balance, ok, err = seg.AccountTraceAtOrBefore(ownerB.Bytes(), 6)
 	if err != nil || !ok || block != 3 || balance != 300 {
 		t.Fatalf("AccountTraceAtOrBefore ownerB 6 = %d/%d/%v/%v, want 3/300/true/nil", block, balance, ok, err)
+	}
+}
+
+func TestCheckBalanceTraceSegmentRejectsMissingAccountIndexForOperation(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	owner := balanceTraceTestAddress(0xd4)
+	trace := balanceTraceTestBlockTrace(12, 1200)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: owner.Bytes(),
+			Amount:  25,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(source, 12, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 12, 12)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := CheckBalanceTraceSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "missing account index") {
+		t.Fatalf("CheckBalanceTraceSegment missing account index = %v, want missing-account-index error", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if _, err := VerifyManifestFiles(snapshotDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err == nil || !strings.Contains(err.Error(), "missing account index") {
+		t.Fatalf("VerifyManifestFiles missing account index = %v, want missing-account-index error", err)
+	}
+}
+
+func TestCheckBalanceTraceSegmentRejectsMalformedOperationAddress(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	trace := balanceTraceTestBlockTrace(13, 1300)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: []byte{0x41},
+			Amount:  25,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(source, 13, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 13, 13)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := CheckBalanceTraceSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "operation address length") {
+		t.Fatalf("CheckBalanceTraceSegment malformed operation address = %v, want address-length error", err)
 	}
 }
 

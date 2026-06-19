@@ -1334,6 +1334,10 @@ Status:
   by block number, so large payloads are not duplicated in scratch files while
   the archive account-balance lookup index no longer depends on raw iterator
   ordering.
+- Balance-trace segment verification now proves every account touched by a
+  `BlockBalanceTrace` operation has an exact-height account-index row in the
+  same immutable segment, and rejects malformed operation addresses before
+  signed manifest verification or archive balance APIs can trust the sidecar.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or
