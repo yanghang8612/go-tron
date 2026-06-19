@@ -306,14 +306,31 @@ func RestoreSyncInventoryTarget(db ethdb.KeyValueReader, head uint64) SyncInvent
 }
 
 func ReadVerifiedStageProgressBlock(db ethdb.KeyValueReader, stage StageID) (uint64, bool, error) {
-	return ReadVerifiedStageProgressBlockWithHashReader(db, stage, func(number uint64) common.Hash {
-		return ReadBlockHashByNumber(db, number)
+	return ReadVerifiedStageProgressBlockWithHashLookup(db, stage, func(number uint64) (common.Hash, bool, error) {
+		return ReadBlockHashByNumberStrict(db, number)
 	})
 }
 
 // ReadVerifiedStageProgressBlockWithHashReader reads a hash-bound stage row and
 // verifies it against the caller's canonical hash source.
 func ReadVerifiedStageProgressBlockWithHashReader(db ethdb.KeyValueReader, stage StageID, readCanonicalHash func(uint64) common.Hash) (uint64, bool, error) {
+	if readCanonicalHash == nil {
+		return ReadVerifiedStageProgressBlockWithHashLookup(db, stage, nil)
+	}
+	return ReadVerifiedStageProgressBlockWithHashLookup(db, stage, func(number uint64) (common.Hash, bool, error) {
+		hash := readCanonicalHash(number)
+		if hash == (common.Hash{}) {
+			return common.Hash{}, false, nil
+		}
+		return hash, true, nil
+	})
+}
+
+// ReadVerifiedStageProgressBlockWithHashLookup is the error-aware form of
+// ReadVerifiedStageProgressBlockWithHashReader. It lets stage verifiers surface
+// corrupt canonical block/hash sources instead of collapsing them into an
+// unavailable zero hash.
+func ReadVerifiedStageProgressBlockWithHashLookup(db ethdb.KeyValueReader, stage StageID, readCanonicalHash func(uint64) (common.Hash, bool, error)) (uint64, bool, error) {
 	row, ok, err := ReadStageProgressRow(db, stage)
 	if err != nil || !ok {
 		return 0, ok, err
@@ -325,8 +342,11 @@ func ReadVerifiedStageProgressBlockWithHashReader(db ethdb.KeyValueReader, stage
 	if readCanonicalHash == nil {
 		return 0, true, fmt.Errorf("rawdb: %s stage %d cannot be verified without a canonical hash reader", stageName, row.BlockNum)
 	}
-	canonical := readCanonicalHash(row.BlockNum)
-	if canonical == (common.Hash{}) {
+	canonical, hashOK, err := readCanonicalHash(row.BlockNum)
+	if err != nil {
+		return 0, true, fmt.Errorf("rawdb: %s stage %d canonical hash lookup: %w", stageName, row.BlockNum, err)
+	}
+	if !hashOK || canonical == (common.Hash{}) {
 		return 0, true, fmt.Errorf("rawdb: %s stage %d has hash %x but canonical block is unavailable", stageName, row.BlockNum, row.BlockHash)
 	}
 	if canonical != row.BlockHash {

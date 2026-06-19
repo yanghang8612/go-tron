@@ -141,6 +141,24 @@ func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 	return block.Hash()
 }
 
+// ReadBlockHashByNumberStrict returns the canonical block hash for number and
+// preserves block-row read/decode errors. It is intended for verifier paths
+// that must distinguish "canonical body missing" from "canonical body corrupt".
+func ReadBlockHashByNumberStrict(db ethdb.KeyValueReader, number uint64) (common.Hash, bool, error) {
+	data, ok, err := ReadBlockRawStrict(db, number)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	block, err := types.UnmarshalBlock(data)
+	if err != nil {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode during read block hash: %w", number, err)
+	}
+	if block.Number() != number {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block hash lookup row %d contains block number %d", number, block.Number())
+	}
+	return block.Hash(), true, nil
+}
+
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under
 // `bsr-<hash>`, or nil if absent. Used by the freezer pass to copy the
 // row into the `state_roots` ancient table verbatim.

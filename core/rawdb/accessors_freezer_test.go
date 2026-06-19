@@ -257,6 +257,48 @@ func TestReadBlockHashByNumber_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadBlockHashByNumberStrictSurfacesBlockErrors(t *testing.T) {
+	t.Parallel()
+
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 13, []byte("not-a-valid-proto"))
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	hash, ok, err := ReadBlockHashByNumberStrict(cdb, 13)
+	if err == nil || !ok || hash != (common.Hash{}) || !strings.Contains(err.Error(), "block 13 decode") {
+		t.Fatalf("strict hash malformed ancient = %x/%v/%v, want zero/true/decode error", hash, ok, err)
+	}
+
+	block := types.NewBlockFromPB(newBlockProto(15, 1515))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+	anc = newFakeAncient()
+	anc.setErr(ancientBlocks, 15, errors.New("ancient hash source corrupt"))
+	cdb = NewChainDB(NewMemoryDatabase(), anc)
+	if err := cdb.Put(blockKey(15), data); err != nil {
+		t.Fatalf("put hot block: %v", err)
+	}
+	hash, ok, err = ReadBlockHashByNumberStrict(cdb, 15)
+	if err == nil || ok || hash != (common.Hash{}) || !strings.Contains(err.Error(), "ancient hash source corrupt") {
+		t.Fatalf("strict hash ancient error = %x/%v/%v, want zero/false/error", hash, ok, err)
+	}
+
+	wrong := types.NewBlockFromPB(newBlockProto(17, 1717))
+	wrongRaw, err := wrong.Marshal()
+	if err != nil {
+		t.Fatalf("marshal wrong block: %v", err)
+	}
+	hot := NewMemoryChainDB()
+	if err := hot.Put(blockKey(16), wrongRaw); err != nil {
+		t.Fatalf("put wrong hot block: %v", err)
+	}
+	hash, ok, err = ReadBlockHashByNumberStrict(hot, 16)
+	if err == nil || !ok || hash != (common.Hash{}) || !strings.Contains(err.Error(), "block hash lookup row 16 contains block number 17") {
+		t.Fatalf("strict hash mismatched hot row = %x/%v/%v, want zero/true/mismatch", hash, ok, err)
+	}
+}
+
 // TestReadBlockNumber_KVPath confirms ReadBlockNumber still prefers the hot
 // bh-<hash> row. An ancient block body alone must not satisfy hash lookup.
 func TestReadBlockNumber_KVPath(t *testing.T) {

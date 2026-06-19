@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -125,6 +126,16 @@ func TestReadVerifiedStageProgressBlock(t *testing.T) {
 		t.Fatalf("missing-block verified commitment stage ok=%v err=%v, want unavailable block", ok, err)
 	}
 
+	if err := db.Put(blockKey(10), []byte("not-a-valid-block")); err != nil {
+		t.Fatalf("put malformed block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageBodies, 10, common.Hash{0x10}); err != nil {
+		t.Fatalf("write malformed-block bodies stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageBodies); err == nil || !ok || !strings.Contains(err.Error(), "canonical hash lookup") || !strings.Contains(err.Error(), "block 10 decode") {
+		t.Fatalf("malformed-block verified bodies stage ok=%v err=%v, want canonical hash decode error", ok, err)
+	}
+
 	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageExecution); err != nil || ok {
 		t.Fatalf("missing verified execution stage ok=%v err=%v, want absent", ok, err)
 	}
@@ -144,6 +155,23 @@ func TestReadVerifiedStageProgressBlockWithHashReader(t *testing.T) {
 	})
 	if err != nil || !ok || got != 99 {
 		t.Fatalf("custom-hash verified finish stage = %d ok=%v err=%v, want block 99", got, ok, err)
+	}
+}
+
+func TestReadVerifiedStageProgressBlockWithHashLookupSurfacesReaderError(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.Hash{0x42}
+	if err := WriteStageProgressWithHash(db, StageFinish, 99, hash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlockWithHashLookup(db, StageFinish, func(number uint64) (common.Hash, bool, error) {
+		if number != 99 {
+			t.Fatalf("canonical lookup number = %d, want 99", number)
+		}
+		return common.Hash{}, false, errors.New("canonical hash reader failed")
+	})
+	if err == nil || !ok || got != 0 || !strings.Contains(err.Error(), "canonical hash reader failed") {
+		t.Fatalf("error-aware verified finish stage = %d/%v/%v, want ok reader error", got, ok, err)
 	}
 }
 

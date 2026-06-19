@@ -273,6 +273,13 @@ Status:
   rawdb derived-index rebuilds now use the strict block accessor, so archive
   sidecar generation fails on corrupt canonical block rows instead of treating
   them as ordinary missing blocks.
+- Canonical block-hash and stage verification now have strict forms too:
+  `ReadBlockHashByNumberStrict` and
+  `ReadVerifiedStageProgressBlockWithHashLookup` preserve canonical block read
+  and decode errors. The default hash-bound stage verifier now uses the strict
+  canonical hash path, so `StageFinish` and related gates used by snapshot and
+  freezer builders fail with the underlying corrupt-block reason instead of a
+  generic "canonical block unavailable" mismatch.
 
 Needed:
 
