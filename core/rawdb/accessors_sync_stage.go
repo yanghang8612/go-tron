@@ -324,6 +324,10 @@ func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedB
 	if db == nil || (len(deletes) == 0 && len(progress) == 0) {
 		return result
 	}
+	if err := validateSyncImportProgressRows(progress); err != nil {
+		result.ProgressError = err
+		return result
+	}
 	if batcher, ok := db.(ethdb.Batcher); ok {
 		batch := batcher.NewBatchWithSize((len(deletes) + len(progress)) * 8)
 		defer batch.Reset()
@@ -339,11 +343,7 @@ func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedB
 			}
 			enqueuedDeletes = append(enqueuedDeletes, block)
 		}
-		for i, row := range progress {
-			if row.Stage == "" {
-				result.ProgressError = fmt.Errorf("rawdb: empty stage id at row %d", i)
-				return result
-			}
+		for _, row := range progress {
 			if err := batch.Put(stageProgressKey(row.Stage), encodeStageProgress(row.BlockNum, row.BlockHash, row.HasBlockHash)); err != nil {
 				result.ProgressError = fmt.Errorf("rawdb: write stage progress %s at %d: %w", row.Stage, row.BlockNum, err)
 				return result
@@ -378,6 +378,30 @@ func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedB
 		result.ProgressRows = len(progress)
 	}
 	return result
+}
+
+func validateSyncImportProgressRows(rows []StageProgress) error {
+	for i, row := range rows {
+		if row.Stage == "" {
+			return fmt.Errorf("rawdb: empty stage id at row %d", i)
+		}
+		if !isSyncImportProgressStage(row.Stage) {
+			return fmt.Errorf("rawdb: unexpected sync import progress stage %s at row %d", row.Stage, i)
+		}
+		if !row.HasBlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d is not hash-bound", row.Stage, i, row.BlockNum)
+		}
+	}
+	return nil
+}
+
+func isSyncImportProgressStage(stage StageID) bool {
+	switch stage {
+	case StageSyncImport, StageSyncExecution, StageSyncCommitment, StageSyncFinish:
+		return true
+	default:
+		return false
+	}
 }
 
 func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int, error) {

@@ -451,6 +451,11 @@ Status:
   write fails after canonical insertion, the downloader record plan stops
   before stats/report emission so operators do not see an imported-segment
   summary for a boundary that was not durably recorded.
+- The rawdb import-progress batch writer now validates its progress rows before
+  deleting imported staged bodies: rows must be hash-bound and limited to the
+  sync import pipeline stages (`SyncImport`, `SyncExecution`, `SyncCommitment`,
+  `SyncFinish`). This keeps non-batch stores from half-committing body deletes
+  before rejecting an invalid stage row.
 - The local import run settlement now also stops the drain loop when that
   persisted progress write/delete fails, even if canonical insertion succeeded.
   This prevents the sync loop from advancing into another staged-body chunk

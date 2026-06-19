@@ -147,6 +147,62 @@ func TestWriteSyncImportProgressBatch(t *testing.T) {
 	}
 }
 
+func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *testing.T) {
+	tests := []struct {
+		name string
+		row  StageProgress
+		want string
+	}{
+		{
+			name: "unbound sync import",
+			row:  StageProgress{Stage: StageSyncImport, BlockNum: 2},
+			want: "sync import progress SyncImport at row 0 block 2 is not hash-bound",
+		},
+		{
+			name: "canonical stage",
+			row:  StageProgress{Stage: StageBodies, BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+			want: "unexpected sync import progress stage Bodies at row 0",
+		},
+		{
+			name: "empty stage",
+			row:  StageProgress{BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+			want: "empty stage id at row 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := NewMemoryDatabase()
+			block := testSyncStagedBlock(2, common.Hash{0x01})
+			if err := WriteSyncStagedBlock(base, block); err != nil {
+				t.Fatalf("write staged block: %v", err)
+			}
+			db := &directSyncStageWriter{db: base}
+
+			result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+				{Number: block.Number(), Hash: block.Hash()},
+			}, []StageProgress{tt.row})
+			if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), tt.want) {
+				t.Fatalf("result = %+v, want progress error containing %q", result, tt.want)
+			}
+			if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+				t.Fatalf("result = %+v, want no delete/progress side effects", result)
+			}
+			if db.deletes != 0 || db.puts != 0 {
+				t.Fatalf("writer side effects deletes=%d puts=%d, want none", db.deletes, db.puts)
+			}
+			if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+				t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
+			}
+			if tt.row.Stage != "" {
+				if row, ok, err := ReadStageProgressRow(base, tt.row.Stage); err != nil || ok {
+					t.Fatalf("stage row after rejected write = %+v ok=%v err=%v, want absent", row, ok, err)
+				}
+			}
+		})
+	}
+}
+
 func TestSyncStagedBlockRawIterate(t *testing.T) {
 	db := NewMemoryDatabase()
 	for _, n := range []uint64{4, 2, 3} {
@@ -559,4 +615,20 @@ func (db *countingBatchStore) NewBatch() ethdb.Batch {
 func (db *countingBatchStore) NewBatchWithSize(size int) ethdb.Batch {
 	db.batches++
 	return db.KeyValueStore.NewBatchWithSize(size)
+}
+
+type directSyncStageWriter struct {
+	db      ethdb.KeyValueWriter
+	puts    int
+	deletes int
+}
+
+func (db *directSyncStageWriter) Put(key []byte, value []byte) error {
+	db.puts++
+	return db.db.Put(key, value)
+}
+
+func (db *directSyncStageWriter) Delete(key []byte) error {
+	db.deletes++
+	return db.db.Delete(key)
 }
