@@ -1,6 +1,9 @@
 package sync
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +29,12 @@ type Snapshot struct {
 	// every block applied in the window lets the summary line tell us *which*
 	// phase is the bottleneck.
 	ApplyStats core.ApplyStats
+
+	// TxKinds counts transactions applied in the window by TRON contract type.
+	// The Imported chain segment log renders this as txTop so long-running
+	// sync soaks can distinguish contract-heavy windows from transfer-heavy
+	// windows when throughput drops.
+	TxKinds map[string]int
 }
 
 // Stats wraps the rolling-window accumulator behind its own mutex. SyncService
@@ -94,6 +103,59 @@ func (s *Stats) AddBlocks(blocks, txs int, exec time.Duration) {
 	s.cur.ExecElapsed += exec
 }
 
+// AddTxKinds folds one batch's transaction contract-type breakdown into the
+// current rolling window. Nil/empty input is a no-op.
+func (s *Stats) AddTxKinds(kinds map[string]int) {
+	if len(kinds) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur.TxKinds == nil {
+		s.cur.TxKinds = make(map[string]int, len(kinds))
+	}
+	for kind, count := range kinds {
+		if count > 0 {
+			s.cur.TxKinds[kind] += count
+		}
+	}
+}
+
+// TopTxKindsString renders the top transaction contract types by count. Ties
+// are sorted by name so the Imported chain segment log is stable.
+func TopTxKindsString(kinds map[string]int, limit int) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	type entry struct {
+		name  string
+		count int
+	}
+	entries := make([]entry, 0, len(kinds))
+	for name, count := range kinds {
+		if count > 0 {
+			entries = append(entries, entry{name: name, count: count})
+		}
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+		return entries[i].name < entries[j].name
+	})
+	if limit <= 0 || limit > len(entries) {
+		limit = len(entries)
+	}
+	parts := make([]string, 0, limit)
+	for _, entry := range entries[:limit] {
+		parts = append(parts, fmt.Sprintf("%s=%d", entry.name, entry.count))
+	}
+	return strings.Join(parts, ",")
+}
+
 // AddBufferWait accumulates time spent waiting for the next contiguous
 // buffered block during drainBufferedBlocks. Sums into the window's
 // BufferWaitElapsed counter.
@@ -137,6 +199,7 @@ func (s *Stats) snapshotAndResetLocked(now time.Time) Snapshot {
 	s.cur.ExecElapsed = 0
 	s.cur.BufferWaitElapsed = 0
 	s.cur.ApplyStats = core.ApplyStats{}
+	s.cur.TxKinds = nil
 	return snap
 }
 

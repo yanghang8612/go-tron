@@ -56,6 +56,52 @@ func TestStats_AddBlockAccumulates(t *testing.T) {
 	}
 }
 
+func TestStats_AddTxKindsAccumulatesAndResets(t *testing.T) {
+	s := NewStats()
+	s.InitSession(time.Unix(0, 0))
+
+	s.AddTxKinds(map[string]int{"TransferContract": 3, "TriggerSmartContract": 5})
+	s.AddTxKinds(map[string]int{"TransferContract": 2, "VoteWitnessContract": 1})
+	s.AddTxKinds(nil)
+
+	snap := s.CurrentSnapshot()
+	if snap.TxKinds["TransferContract"] != 5 ||
+		snap.TxKinds["TriggerSmartContract"] != 5 ||
+		snap.TxKinds["VoteWitnessContract"] != 1 {
+		t.Fatalf("TxKinds = %v, want merged contract type counts", snap.TxKinds)
+	}
+
+	out := s.SnapshotAndReset(time.Unix(1, 0))
+	if out.TxKinds["TransferContract"] != 5 {
+		t.Fatalf("snapshot lost TxKinds: %v", out.TxKinds)
+	}
+	if got := s.CurrentSnapshot().TxKinds; len(got) != 0 {
+		t.Fatalf("TxKinds not cleared after reset: %v", got)
+	}
+	s.AddTxKinds(map[string]int{"TransferContract": 1})
+	if out.TxKinds["TransferContract"] != 5 {
+		t.Fatalf("snapshot aliased live TxKinds: %v", out.TxKinds)
+	}
+}
+
+func TestTopTxKindsString(t *testing.T) {
+	kinds := map[string]int{
+		"TriggerSmartContract":  900,
+		"TransferContract":      400,
+		"TransferAssetContract": 100,
+		"VoteWitnessContract":   10,
+	}
+	if got := TopTxKindsString(kinds, 2); got != "TriggerSmartContract=900,TransferContract=400" {
+		t.Fatalf("TopTxKindsString(2) = %q", got)
+	}
+	if got := TopTxKindsString(map[string]int{"B": 5, "A": 5, "C": 1}, 0); got != "A=5,B=5,C=1" {
+		t.Fatalf("tie-break/all = %q, want A=5,B=5,C=1", got)
+	}
+	if got := TopTxKindsString(nil, 3); got != "" {
+		t.Fatalf("empty kinds = %q, want empty string", got)
+	}
+}
+
 func TestStats_AddBufferWaitAccumulates(t *testing.T) {
 	s := NewStats()
 	s.AddBufferWait(100 * time.Millisecond)

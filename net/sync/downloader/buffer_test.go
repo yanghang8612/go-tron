@@ -161,7 +161,9 @@ func TestDecodeBufferedBatchAction(t *testing.T) {
 func TestSummarizeAppliedBatch(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
-	block2.Proto().Transactions = append(block2.Proto().Transactions, &corepb.Transaction{Signature: [][]byte{{0x02, 0x02}}})
+	block1.Proto().Transactions[0] = testBufferedTx(corepb.Transaction_Contract_TransferContract, 0x01)
+	block2.Proto().Transactions[0] = testBufferedTx(corepb.Transaction_Contract_TriggerSmartContract, 0x02)
+	block2.Proto().Transactions = append(block2.Proto().Transactions, testBufferedTx(corepb.Transaction_Contract_TransferContract, 0x03))
 	batch := BufferedBatch{
 		Blocks: []*types.Block{block1, block2},
 		Buffered: []BufferedBlock{
@@ -173,6 +175,9 @@ func TestSummarizeAppliedBatch(t *testing.T) {
 	got := SummarizeAppliedBatch(batch, 2)
 	if !got.OK || got.Applied != 2 || got.TxCount != 3 || !got.HasStage {
 		t.Fatalf("summary = %+v, want applied 2 txs 3 with stage", got)
+	}
+	if got.TxKinds["TransferContract"] != 2 || got.TxKinds["TriggerSmartContract"] != 1 {
+		t.Fatalf("TxKinds = %v, want TransferContract=2 TriggerSmartContract=1", got.TxKinds)
 	}
 	if got.Last.Num != block2.Number() || got.Last.Hash != block2.Hash() {
 		t.Fatalf("last = #%d %x, want block2 #%d %x", got.Last.Num, got.Last.Hash, block2.Number(), block2.Hash())
@@ -1848,9 +1853,18 @@ func testBufferedBlock(num int64) *types.Block {
 			WitnessSignature: make([]byte, 65),
 		},
 		Transactions: []*corepb.Transaction{
-			{Signature: [][]byte{{byte(num)}}},
+			testBufferedTx(corepb.Transaction_Contract_TransferContract, byte(num)),
 		},
 	})
+}
+
+func testBufferedTx(contractType corepb.Transaction_Contract_ContractType, sig byte) *corepb.Transaction {
+	return &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{Type: contractType}},
+		},
+		Signature: [][]byte{{sig}},
+	}
 }
 
 func testImportRunBatch(t *testing.T, blocks ...*types.Block) BufferedBatch {

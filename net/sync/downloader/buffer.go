@@ -94,6 +94,7 @@ type AppliedBatchSummary struct {
 	OK       bool
 	Applied  int
 	TxCount  int
+	TxKinds  map[string]int
 	Last     BufferedBlock
 	HasStage bool
 }
@@ -112,7 +113,17 @@ func SummarizeAppliedBatch(batch BufferedBatch, applied int) AppliedBatchSummary
 	}
 	for i := 0; i < applied && i < len(batch.Blocks); i++ {
 		if block := batch.Blocks[i]; block != nil {
-			summary.TxCount += len(block.Transactions())
+			txs := block.Transactions()
+			summary.TxCount += len(txs)
+			for _, tx := range txs {
+				if tx == nil {
+					continue
+				}
+				if summary.TxKinds == nil {
+					summary.TxKinds = make(map[string]int)
+				}
+				summary.TxKinds[tx.ContractType().String()]++
+			}
 		}
 	}
 	summary.HasStage = summary.Last.Num > 0

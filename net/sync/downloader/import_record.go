@@ -58,7 +58,7 @@ type ImportedBatchRecordPlan struct {
 // imported-batch record plan.
 type ImportedBatchRecordPlanApplier interface {
 	ApplyImportedBatchProgress(ImportedBatchProgressPlan) ImportedBatchProgressApplyResult
-	RecordImportedBatchStats(blocks int, txs int, elapsed time.Duration) ImportedBatchStatsRecordResult
+	RecordImportedBatchStats(blocks int, txs int, txKinds map[string]int, elapsed time.Duration) ImportedBatchStatsRecordResult
 	PrepareImportedBatchReport(ImportedBatchProgressPlan, bool) ImportedBatchReportPreparation
 	ReportImportedBatchSegment(ImportedBatchRecordReport)
 }
@@ -113,7 +113,7 @@ func ApplyImportedBatchRecordPlan(plan ImportedBatchRecordPlan, applier Imported
 				return result
 			}
 		case ImportedBatchRecordStats:
-			result.Stats = applier.RecordImportedBatchStats(plan.Progress.StatsBlocks, plan.Progress.StatsTransactions, plan.Elapsed)
+			result.Stats = applier.RecordImportedBatchStats(plan.Progress.StatsBlocks, plan.Progress.StatsTransactions, plan.Progress.StatsTxKinds, plan.Elapsed)
 			result.HasStats = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case ImportedBatchRecordPrepareReport:

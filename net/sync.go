@@ -1955,7 +1955,8 @@ func (a syncImportedBatchRecordApplier) ApplyImportedBatchProgress(plan syncdl.I
 	return syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: a.service})
 }
 
-func (a syncImportedBatchRecordApplier) RecordImportedBatchStats(blocks int, txs int, elapsed time.Duration) syncdl.ImportedBatchStatsRecordResult {
+func (a syncImportedBatchRecordApplier) RecordImportedBatchStats(blocks int, txs int, txKinds map[string]int, elapsed time.Duration) syncdl.ImportedBatchStatsRecordResult {
+	a.service.stats.AddTxKinds(txKinds)
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -2294,6 +2295,11 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		topKVDomains = "none"
 	}
 	ctx = append(ctx, "stateMutKVTop", topKVDomains)
+	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
+	if txTop == "" {
+		txTop = "none"
+	}
+	ctx = append(ctx, "txTop", txTop)
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
 		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))

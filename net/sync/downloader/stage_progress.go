@@ -855,6 +855,7 @@ type ImportedBatchProgressPlan struct {
 	Steps                []ImportedBatchProgressStep
 	StatsBlocks          int
 	StatsTransactions    int
+	StatsTxKinds         map[string]int
 	ReportHead           uint64
 	ReportPeer           *p2p.Peer
 }
@@ -1033,6 +1034,7 @@ func planImportedBatchProgress(batch BufferedBatch, applied int, schedule Import
 		RefreshReady:      true,
 		StatsBlocks:       summary.Applied,
 		StatsTransactions: summary.TxCount,
+		StatsTxKinds:      cloneTxKindCounts(summary.TxKinds),
 		ReportHead:        summary.Last.Num,
 		ReportPeer:        summary.Last.Peer,
 	}
@@ -1062,6 +1064,17 @@ func (p ImportedBatchProgressPlan) withSteps() ImportedBatchProgressPlan {
 		p.Steps = append(p.Steps, ImportedBatchProgressStep{Action: ImportedBatchRefreshBodiesReady})
 	}
 	return p
+}
+
+func cloneTxKindCounts(source map[string]int) map[string]int {
+	if len(source) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(source))
+	for kind, count := range source {
+		out[kind] = count
+	}
+	return out
 }
 
 // ApplyImportedBatchProgressPlan executes the downloader-owned side-effect

@@ -35,6 +35,7 @@ func TestApplyImportedBatchRecordPlanEmitsReport(t *testing.T) {
 		OK:                true,
 		StatsBlocks:       2,
 		StatsTransactions: 3,
+		StatsTxKinds:      map[string]int{"TransferContract": 2, "TriggerSmartContract": 1},
 		ReportHead:        9,
 	}
 	elapsed := 27 * time.Millisecond
@@ -67,6 +68,9 @@ func TestApplyImportedBatchRecordPlanEmitsReport(t *testing.T) {
 	if !reflect.DeepEqual(applier.progress, progress) || applier.statsBlocks != 2 || applier.statsTxs != 3 || applier.statsElapsed != elapsed {
 		t.Fatalf("applier progress/stats = progress:%+v blocks:%d txs:%d elapsed:%s, want plan stats",
 			applier.progress, applier.statsBlocks, applier.statsTxs, applier.statsElapsed)
+	}
+	if !reflect.DeepEqual(applier.statsTxKinds, progress.StatsTxKinds) {
+		t.Fatalf("applier statsTxKinds = %v, want %v", applier.statsTxKinds, progress.StatsTxKinds)
 	}
 	if !got.HasProgress || !reflect.DeepEqual(got.ProgressApply, applier.progressApply) ||
 		!got.HasStats || !reflect.DeepEqual(got.Stats, applier.stats) ||
@@ -181,6 +185,7 @@ type recordingImportedBatchRecordApplier struct {
 	progressApply   ImportedBatchProgressApplyResult
 	statsBlocks     int
 	statsTxs        int
+	statsTxKinds    map[string]int
 	statsElapsed    time.Duration
 	stats           ImportedBatchStatsRecordResult
 	prepareProgress ImportedBatchProgressPlan
@@ -196,10 +201,11 @@ func (a *recordingImportedBatchRecordApplier) ApplyImportedBatchProgress(plan Im
 	return a.progressApply
 }
 
-func (a *recordingImportedBatchRecordApplier) RecordImportedBatchStats(blocks int, txs int, elapsed time.Duration) ImportedBatchStatsRecordResult {
+func (a *recordingImportedBatchRecordApplier) RecordImportedBatchStats(blocks int, txs int, txKinds map[string]int, elapsed time.Duration) ImportedBatchStatsRecordResult {
 	a.calls = append(a.calls, ImportedBatchRecordStats)
 	a.statsBlocks = blocks
 	a.statsTxs = txs
+	a.statsTxKinds = txKinds
 	a.statsElapsed = elapsed
 	return a.stats
 }

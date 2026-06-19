@@ -615,6 +615,11 @@ Status:
   freezer/stage/snapshot alert fields used by the storage benchmark harness,
   including detail arrays for stage verification and snapshot/freezer alerts so
   `SyncBodiesReady` staged-body mismatches are visible in the JSONL row itself.
+- Imported sync segment stats now include the top transaction contract types
+  for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
+  Nile sampler). This keeps staged-sync throughput soaks from conflating
+  contract-heavy windows with transfer-heavy windows when diagnosing execution
+  and state-commit bottlenecks.
 
 Needed:
 
