@@ -577,6 +577,9 @@ Status:
   checked against the active manifest `progress` section as well, so automation
   cannot trust DB stage rows that are ahead of or missing from the snapshot
   artifact set that would be used for restore/prune/archive decisions.
+  The same verification gate now rejects legacy unbound `SyncImport`,
+  `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows, matching the
+  hash-bound import-progress writer and startup repair rules.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor. When a caller does not

@@ -868,6 +868,31 @@ func TestDBStageStatusVerifyChecksSyncBodiesStagedRow(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerifyRejectsUnboundSyncImportStage(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncImport, 1); err != nil {
+		t.Fatalf("WriteStageProgress SyncImport: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncImport verified=unbound") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want unbound SyncImport failure", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=none verified=unbound", rawdb.StageSyncImport)) {
+		t.Fatalf("verify output missing unbound SyncImport line:\n%s", output)
+	}
+}
+
 func TestDBStageStatusVerifyShowsSyncBodiesStagedMismatchDetails(t *testing.T) {
 	dataDir := t.TempDir()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)

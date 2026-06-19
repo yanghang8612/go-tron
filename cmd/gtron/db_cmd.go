@@ -639,9 +639,7 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 			}
 			continue
 		}
-		if row.group == "canonical" {
-			issues = append(issues, fmt.Sprintf("%s verified=unbound", row.stage))
-		}
+		issues = append(issues, fmt.Sprintf("%s verified=unbound", row.stage))
 	}
 	issues = append(issues, dbStageStatusPipelineOrderIssues(rows)...)
 	return issues
