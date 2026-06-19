@@ -1111,8 +1111,8 @@ func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {
 // Stack: amount, resourceType → success
 
 func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	resourceWord := stack.pop() // java pops resourceType before the amount (OperationActions.*V2Action / *ResourceAction)
 	amountWord := stack.pop()
-	resourceWord := stack.pop()
 	// A (truncation): java Program.freezeBalanceV2 parses the amount via
 	// frozenBalance.sValue().longValueExact() (Program.java:2029) -> an
 	// out-of-int64 word throws ArithmeticException and the freeze is rejected
@@ -1149,8 +1149,8 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 // Stack: amount, resourceType → success
 
 func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	resourceWord := stack.pop() // java pops resourceType before the amount (OperationActions.*V2Action / *ResourceAction)
 	amountWord := stack.pop()
-	resourceWord := stack.pop()
 	// A (truncation): java Program.unfreezeBalanceV2 parses the amount via
 	// unfreezeBalance.sValue().longValueExact() (Program.java:2059) -> an
 	// out-of-int64 word throws ArithmeticException and the unfreeze is rejected
@@ -1267,8 +1267,8 @@ func opWithdrawExpireUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ 
 // Stack: amount, resourceType, receiverAddr → success
 
 func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	resourceWord := stack.pop() // java pops resourceType before the amount (OperationActions.*V2Action / *ResourceAction)
 	amountWord := stack.pop()
-	resourceWord := stack.pop()
 	receiverWord := stack.pop()
 	// SV-3: java delegateResource() increaseNonce() once up front
 	// (Program.java:2162), unconditionally (before validate/execute), so the nonce
@@ -1342,8 +1342,8 @@ func tvmWriteDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address,
 // Stack: amount, resourceType, receiverAddr → success
 
 func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	resourceWord := stack.pop() // java pops resourceType before the amount (OperationActions.*V2Action / *ResourceAction)
 	amountWord := stack.pop()
-	resourceWord := stack.pop()
 	receiverWord := stack.pop()
 	// SV-3: java unDelegateResource() increaseNonce() once up front
 	// (Program.java:2196), unconditionally (before validate/execute).
