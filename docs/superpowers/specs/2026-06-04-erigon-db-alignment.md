@@ -260,6 +260,12 @@ Status:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the
   copied rows are still present in hot KV.
+- State-root freezer reads now also have strict variants:
+  `ReadBlockStateRootRawStrict` and `ReadBlockStateRootStrict` surface
+  malformed hot `bsr-` rows, malformed ancient `state_roots` rows, and cold
+  `chain-index` lookup errors. The live freezer runner uses the strict raw
+  accessor and aborts the pass on those errors, so corruption cannot be copied
+  into ancient storage as an empty state-root row.
 
 Needed:
 

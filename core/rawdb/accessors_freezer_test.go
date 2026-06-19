@@ -614,6 +614,36 @@ func TestReadBlockStateRootRaw_ColdIndexFallback(t *testing.T) {
 	if !bytes.Equal(got, want.Bytes()) {
 		t.Fatalf("ReadBlockStateRootRaw = %x, want %x", got, want.Bytes())
 	}
+	strict, ok, err := ReadBlockStateRootRawStrict(cdb, block.Hash())
+	if err != nil || !ok || !bytes.Equal(strict, want.Bytes()) {
+		t.Fatalf("ReadBlockStateRootRawStrict = %x/%v/%v, want %x/true/nil", strict, ok, err, want.Bytes())
+	}
+	strictRoot, ok, err := ReadBlockStateRootStrict(cdb, block.Hash())
+	if err != nil || !ok || strictRoot != want {
+		t.Fatalf("ReadBlockStateRootStrict = %x/%v/%v, want %x/true/nil", strictRoot, ok, err, want)
+	}
+}
+
+func TestReadBlockStateRootRawStrictSurfacesColdIndexError(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(31, 0))
+	cdb := NewMemoryChainDB()
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blockErr: errors.New("cold block index corrupt"),
+	})
+
+	got, ok, err := ReadBlockStateRootRawStrict(cdb, block.Hash())
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "cold block index corrupt") {
+		t.Fatalf("ReadBlockStateRootRawStrict cold error = %x/%v/%v, want nil/false/cold error", got, ok, err)
+	}
+	root, ok, err := ReadBlockStateRootStrict(cdb, block.Hash())
+	if err == nil || ok || root != (common.Hash{}) || !strings.Contains(err.Error(), "cold block index corrupt") {
+		t.Fatalf("ReadBlockStateRootStrict cold error = %x/%v/%v, want zero/false/cold error", root, ok, err)
+	}
+	if got := ReadBlockStateRootRaw(cdb, block.Hash()); got != nil {
+		t.Fatalf("legacy ReadBlockStateRootRaw cold error = %x, want nil", got)
+	}
 }
 
 func TestReadBlockStateRootIgnoresMalformedHotRowAndFallsBackToAncient(t *testing.T) {
@@ -640,6 +670,12 @@ func TestReadBlockStateRootIgnoresMalformedHotRowAndFallsBackToAncient(t *testin
 	if got := ReadBlockStateRootRaw(cdb, block.Hash()); !bytes.Equal(got, want.Bytes()) {
 		t.Fatalf("ReadBlockStateRootRaw malformed hot fallback = %x, want %x", got, want.Bytes())
 	}
+	if got, ok, err := ReadBlockStateRootRawStrict(cdb, block.Hash()); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "has length 1") {
+		t.Fatalf("ReadBlockStateRootRawStrict malformed hot = %x/%v/%v, want nil/true/length error", got, ok, err)
+	}
+	if root, ok, err := ReadBlockStateRootStrict(cdb, block.Hash()); err == nil || !ok || root != (common.Hash{}) || !strings.Contains(err.Error(), "has length 1") {
+		t.Fatalf("ReadBlockStateRootStrict malformed hot = %x/%v/%v, want zero/true/length error", root, ok, err)
+	}
 }
 
 func TestReadBlockStateRootRejectsMalformedAncientRow(t *testing.T) {
@@ -661,6 +697,12 @@ func TestReadBlockStateRootRejectsMalformedAncientRow(t *testing.T) {
 	}
 	if got := ReadBlockStateRootRaw(cdb, block.Hash()); got != nil {
 		t.Fatalf("ReadBlockStateRootRaw malformed ancient = %x, want nil", got)
+	}
+	if got, ok, err := ReadBlockStateRootRawStrict(cdb, block.Hash()); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "ancient block state root") {
+		t.Fatalf("ReadBlockStateRootRawStrict malformed ancient = %x/%v/%v, want nil/true/length error", got, ok, err)
+	}
+	if root, ok, err := ReadBlockStateRootStrict(cdb, block.Hash()); err == nil || !ok || root != (common.Hash{}) || !strings.Contains(err.Error(), "ancient block state root") {
+		t.Fatalf("ReadBlockStateRootStrict malformed ancient = %x/%v/%v, want zero/true/length error", root, ok, err)
 	}
 }
 
@@ -705,6 +747,10 @@ func TestReadBlockStateRoot_Missing(t *testing.T) {
 	got := ReadBlockStateRoot(cdb, common.HexToHash("dead"))
 	if got != (common.Hash{}) {
 		t.Fatalf("expected zero hash, got %x", got)
+	}
+	root, ok, err := ReadBlockStateRootStrict(cdb, common.HexToHash("dead"))
+	if err != nil || ok || root != (common.Hash{}) {
+		t.Fatalf("ReadBlockStateRootStrict missing = %x/%v/%v, want zero/false/nil", root, ok, err)
 	}
 }
 

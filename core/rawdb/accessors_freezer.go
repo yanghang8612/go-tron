@@ -15,6 +15,9 @@
 package rawdb
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -125,6 +128,74 @@ func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 		}
 	}
 	return nil
+}
+
+// ReadBlockStateRootRawStrict returns the raw 32-byte state root for hash and
+// reports whether a state-root row was found. Unlike ReadBlockStateRootRaw, it
+// surfaces malformed hot rows, malformed ancient rows, and cold chain-index
+// lookup errors instead of folding them into "missing".
+func ReadBlockStateRootRawStrict(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block state root")
+	}
+	if cdb, ok := db.(*ChainDB); ok && cdb == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block state root")
+	}
+	key := blockStateRootKey(hash.Bytes())
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(data) != common.HashLength {
+			return nil, true, fmt.Errorf("rawdb: block state root %x has length %d, want %d", hash.Bytes(), len(data), common.HashLength)
+		}
+		return data, true, nil
+	}
+
+	cdb, ok := db.(*ChainDB)
+	if !ok {
+		return nil, false, nil
+	}
+	num, ok, err := ReadBlockNumberStrict(cdb, hash)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	return readAncientBlockStateRootRawStrict(cdb, hash, num)
+}
+
+func readAncientBlockStateRootRawStrict(db *ChainDB, hash common.Hash, number uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	exists, err := db.HasAncient(ancientStateRoots, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(ancientStateRoots, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if len(data) != common.HashLength {
+		return nil, true, fmt.Errorf("rawdb: ancient block state root %x at block %d has length %d, want %d", hash.Bytes(), number, len(data), common.HashLength)
+	}
+	return data, true, nil
 }
 
 // DeleteFrozenBlockRange removes the hot Pebble rows that the slice-3

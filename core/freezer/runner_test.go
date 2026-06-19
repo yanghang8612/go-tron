@@ -33,6 +33,7 @@ type fakeChain struct {
 	blockRaw      map[uint64][]byte
 	txInfosRaw    map[uint64][]byte
 	stateRootRaw  map[uint64][]byte
+	stateRootErr  map[uint64]error
 	blockHashByNo map[uint64]tcommon.Hash
 }
 
@@ -42,6 +43,7 @@ func newFakeChain() *fakeChain {
 		blockRaw:      make(map[uint64][]byte),
 		txInfosRaw:    make(map[uint64][]byte),
 		stateRootRaw:  make(map[uint64][]byte),
+		stateRootErr:  make(map[uint64]error),
 		blockHashByNo: make(map[uint64]tcommon.Hash),
 	}
 }
@@ -84,20 +86,23 @@ func (f *fakeChain) ReadBlockHashByNumber(n uint64) tcommon.Hash {
 	return f.blockHashByNo[n]
 }
 
-func (f *fakeChain) ReadBlockStateRootRaw(h tcommon.Hash) []byte {
+func (f *fakeChain) ReadBlockStateRootRaw(h tcommon.Hash) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Map hash → num via reverse lookup; tests always plant deterministic
 	// hashes so this is cheap.
 	for n, ph := range f.blockHashByNo {
 		if ph == h {
-			if b, ok := f.stateRootRaw[n]; ok {
-				return append([]byte(nil), b...)
+			if err := f.stateRootErr[n]; err != nil {
+				return nil, err
 			}
-			return nil
+			if b, ok := f.stateRootRaw[n]; ok {
+				return append([]byte(nil), b...), nil
+			}
+			return nil, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // plantBlock seeds synthetic raw bytes for block num. The bytes are
@@ -419,6 +424,40 @@ func TestOnePassRejectsMalformedTxInfosBeforeAppending(t *testing.T) {
 	}
 	if v, err := fc.db.Get(txInfoBlockKVKey(0)); err != nil || len(v) == 0 {
 		t.Fatalf("hot tx-info row after malformed tx infos = len %d err %v, want retained", len(v), err)
+	}
+}
+
+func TestOnePassRejectsStateRootLookupErrorBeforeAppending(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 3; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.mu.Lock()
+	fc.stateRootErr[0] = errors.New("state root lookup corrupt")
+	fc.mu.Unlock()
+	fc.setSolidified(2)
+
+	f := newFreezer(t)
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "read state root for block 0") || !strings.Contains(err.Error(), "state root lookup corrupt") {
+		t.Fatalf("OnePass state-root lookup error = frozen %d err %v, want lookup error", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen after state-root lookup error = %d, want 0", frozen)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if count, err := f.AncientCount(kind); err != nil || count != 0 {
+			t.Fatalf("ancient %s count after state-root lookup error = %d/%v, want 0/nil", kind, count, err)
+		}
+	}
+	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
+		t.Fatalf("hot block row after state-root lookup error = len %d err %v, want retained", len(v), err)
 	}
 }
 

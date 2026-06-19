@@ -43,8 +43,12 @@ func (a *freezerChainSource) ReadBlockHashByNumber(number uint64) tcommon.Hash {
 	return rawdb.ReadBlockHashByNumber(a.chain.ChainDB(), number)
 }
 
-func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) []byte {
-	return rawdb.ReadBlockStateRootRaw(a.chain.DB(), hash)
+func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, error) {
+	data, _, err := rawdb.ReadBlockStateRootRawStrict(a.chain.ChainDB(), hash)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 type freezerStore struct {

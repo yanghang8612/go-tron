@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -206,6 +207,23 @@ func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
 		}
 	}
 	return common.Hash{}
+}
+
+// ReadBlockStateRootStrict returns the post-apply state root for the given
+// block hash and reports malformed hot/freezer rows or cold lookup errors.
+// The legacy ReadBlockStateRoot accessor deliberately keeps its zero-on-error
+// contract for existing chain code; strict callers use this when corruption
+// must abort the operation instead of looking like a missing root.
+func ReadBlockStateRootStrict(db *ChainDB, blockHash common.Hash) (common.Hash, bool, error) {
+	data, ok, err := ReadBlockStateRootRawStrict(db, blockHash)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	root, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block state root %x has length %d, want %d", blockHash.Bytes(), len(data), common.HashLength)
+	}
+	return root, true, nil
 }
 
 func decodeHashRow(data []byte) (common.Hash, bool) {

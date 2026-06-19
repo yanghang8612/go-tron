@@ -202,7 +202,9 @@ type ChainSource interface {
 	// `bsr-<hash>`, or nil if absent. Pre-AccountStateRoot fork blocks
 	// don't have this row; the freezer pass writes an empty entry in
 	// that case so per-num cardinality matches across all three tables.
-	ReadBlockStateRootRaw(hash tcommon.Hash) []byte
+	// Corruption and cold-index lookup failures must return an error so
+	// the pass rolls back instead of appending an empty state-root row.
+	ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, error)
 }
 
 // FreezerStore is the writer surface the runner needs from the freezer.
@@ -575,7 +577,10 @@ func (r *Runner) OnePass() (uint64, error) {
 			// zero hash via the slice-2 read path, which matches the
 			// pre-freezer Pebble miss → zero-hash behavior.
 			hash := block.Hash()
-			stateRoot := r.chain.ReadBlockStateRootRaw(hash)
+			stateRoot, err := r.chain.ReadBlockStateRootRaw(hash)
+			if err != nil {
+				return fmt.Errorf("freezer: read state root for block %d hash %x: %w", n, hash.Bytes(), err)
+			}
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
 			}
