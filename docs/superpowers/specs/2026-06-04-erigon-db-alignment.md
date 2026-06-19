@@ -507,7 +507,9 @@ Status:
   `SnapshotBalanceTracePrune`, and `SnapshotChainFreezerTailPrune`, catching
   missing/gapped/corrupt sidecars even when the stage rows themselves look
   ordered. Tail-prune verification checks the same chain-freezer, chain-index,
-  and indexed event-log coverage triple required by the apply path.
+  and non-genesis indexed event-log coverage required by the apply path, while
+  genesis-only tail-prune progress is allowed with chain-freezer plus
+  chain-index coverage.
   Balance-trace stage coverage starts at block 1 because genesis has no
   replayed `BlockBalanceTrace` row.
   Manifest-backed progress rows (`SnapshotLatest`, `SnapshotHistory`,

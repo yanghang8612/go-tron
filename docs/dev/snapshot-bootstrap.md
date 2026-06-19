@@ -202,8 +202,10 @@ cold chain-freezer plus chain-index coverage check.
 manifest and verifies indexed cold coverage for event-log build and freezer-tail
 prune stages by comparing `event-log-index` postings with the active event-log
 segments, and verifies the freezer-tail prune stage against the same
-chain-freezer, chain-index, and indexed event-log coverage required before
-minimal mode can hide or reclaim local freezer rows. It also verifies chain
+chain-freezer, chain-index, and non-genesis indexed event-log coverage required
+before minimal mode can hide or reclaim local freezer rows. Genesis-only
+tail-prune progress is checked against chain-freezer plus chain-index coverage.
+It also verifies chain
 lookup, section-bloom, and balance-trace coverage, so operators can detect
 stale stage rows after sidecar files are moved or corrupted. Balance-trace
 stage verification starts at block 1 because genesis has no replayed

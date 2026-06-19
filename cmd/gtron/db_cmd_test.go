@@ -1226,6 +1226,84 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
 		}
 	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageHeaders,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageHeaders,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageBodies,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageExecution,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageCommitment,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageCommitment,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageFinish,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageFinish,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 0,
+			},
+		},
+	}
+	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
+		t.Fatalf("genesis-only tail prune pipeline issues = %#v, want none without event-log stage", issues)
+	}
 }
 
 func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {

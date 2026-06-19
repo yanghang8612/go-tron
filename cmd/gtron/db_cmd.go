@@ -791,7 +791,7 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 			continue
 		}
 		if !upOK {
-			if dbStageStatusRequiresUpstreamPresence(pair.downstream, pair.upstream) {
+			if dbStageStatusRequiresUpstreamPresence(pair.downstream, pair.upstream, down.progress.BlockNum) {
 				issues = append(issues, fmt.Sprintf("%s requires %s", pair.downstream, pair.upstream))
 			}
 			continue
@@ -918,7 +918,7 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 	return issues
 }
 
-func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) bool {
+func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID, downstreamBlock uint64) bool {
 	switch downstream {
 	case rawdb.StageSnapshotBuild,
 		rawdb.StageSnapshotLatestBuild,
@@ -931,7 +931,10 @@ func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) b
 	case rawdb.StageSnapshotChainLookupPrune:
 		return upstream == rawdb.StageChainFreezer
 	case rawdb.StageSnapshotChainFreezerTailPrune:
-		return upstream == rawdb.StageSnapshotChainLookupPrune || upstream == rawdb.StageSnapshotEventLogBuild
+		if upstream == rawdb.StageSnapshotChainLookupPrune {
+			return true
+		}
+		return upstream == rawdb.StageSnapshotEventLogBuild && downstreamBlock > 0
 	default:
 		return false
 	}
