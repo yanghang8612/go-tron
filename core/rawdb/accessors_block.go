@@ -3,6 +3,7 @@ package rawdb
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -69,18 +70,42 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 // with an attached cold chain-index sidecar can resolve historical hashes
 // without requiring every old lookup row to stay in Pebble.
 func ReadBlockNumber(db *ChainDB, hash common.Hash) *uint64 {
-	data, err := db.Get(blockHashKey(hash.Bytes()))
-	if err == nil && len(data) == 8 {
-		num := binary.BigEndian.Uint64(data)
-		return &num
+	num, ok, err := ReadBlockNumberStrict(db, hash)
+	if err != nil || !ok {
+		return nil
 	}
-	if db != nil && db.chainIndex != nil {
-		num, ok, err := db.chainIndex.BlockNumberByHash(hash)
-		if err == nil && ok {
-			return &num
+	return &num
+}
+
+// ReadBlockNumberStrict retrieves the block number for a block hash and
+// surfaces malformed hot rows or cold sidecar lookup errors.
+func ReadBlockNumberStrict(db *ChainDB, hash common.Hash) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read block number")
+	}
+	key := blockHashKey(hash.Bytes())
+	exists, err := db.Has(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return 0, false, err
 		}
+		if len(data) != 8 {
+			return 0, true, fmt.Errorf("rawdb: block number lookup %x has length %d, want 8", hash.Bytes(), len(data))
+		}
+		return binary.BigEndian.Uint64(data), true, nil
 	}
-	return nil
+	if db.chainIndex != nil {
+		num, ok, err := db.chainIndex.BlockNumberByHash(hash)
+		if err != nil || !ok {
+			return 0, ok, err
+		}
+		return num, true, nil
+	}
+	return 0, false, nil
 }
 
 // readAncient is the per-accessor freezer probe. Returns (data, true) when

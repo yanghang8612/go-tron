@@ -1187,13 +1187,9 @@ Status:
   segments. Indexed coverage now also replays the active event-log segments
   and compares the rebuilt address/topic postings with the registered
   `event-log-index` sidecar, so format-valid but stale or incomplete sidecars
-  cannot satisfy archive log coverage gates. Filtered cold-log coverage now
-  also refuses to trust an index that reports no candidate segments unless that
-  index can be semantically verified against the active event-log segments,
-  and verifies that every non-candidate segment in the queried range is readable
-  and really has no filter match. This prevents stale empty, partial, or
-  manifest-only sidecars from making archive log queries return false empty or
-  incomplete results.
+  cannot satisfy archive log coverage gates. Runtime filtered archive reads
+  trust the published index after that gate and open only indexed candidate
+  event-log segments, so non-candidate cold files do not sit on the query path.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
@@ -1391,6 +1387,12 @@ Status:
   `Wallet.GetBlockByLimitNext{,2}` now reject negative, empty, and reversed
   ranges before calling `GetBlocksByRange`, preventing invalid signed inputs
   from widening into large unsigned hot/cold block scans.
+- Block-hash lookup now has a strict rawdb accessor too:
+  `ReadBlockNumberStrict` surfaces malformed hot `bh-<hash>` rows and cold
+  chain-index lookup errors. `TronBackend.GetBlockByHash` and JSON-RPC log
+  filtering by `blockHash` use that strict path, so archive index corruption is
+  reported as a data error instead of being disguised as an empty/not-found
+  result.
 - HTTP `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` transaction
   by id / transaction-info by id reads now resolve the transaction's block
   through the hot/cold tx lookup index before exposing payloads. Transactions

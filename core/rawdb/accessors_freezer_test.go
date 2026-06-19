@@ -3,6 +3,8 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -24,6 +26,7 @@ type fakeChainIndex struct {
 	blocks    map[common.Hash]uint64
 	txs       map[common.Hash]uint64
 	positions map[common.Hash]ChainIndexTxLookup
+	blockErr  error
 }
 
 func newFakeAncient() *fakeAncient {
@@ -103,6 +106,9 @@ func (f *fakeAncient) HasAncient(kind string, number uint64) (bool, error) {
 func (f *fakeChainIndex) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
 	if f == nil {
 		return 0, false, nil
+	}
+	if f.blockErr != nil {
+		return 0, false, f.blockErr
 	}
 	num, ok := f.blocks[hash]
 	return num, ok, nil
@@ -269,6 +275,40 @@ func TestReadBlockNumber_ColdIndexFallback(t *testing.T) {
 	got := ReadBlockNumber(cdb, block.Hash())
 	if got == nil || *got != 33 {
 		t.Fatalf("cold chain-index fallback: got %v, want *33", got)
+	}
+}
+
+func TestReadBlockNumberStrictSurfacesMalformedHotRow(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(34, 2027))
+	cdb := NewMemoryChainDB()
+	if err := cdb.Put(blockHashKey(block.Hash().Bytes()), []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("put malformed block hash row: %v", err)
+	}
+
+	num, ok, err := ReadBlockNumberStrict(cdb, block.Hash())
+	if err == nil || !ok || num != 0 || !strings.Contains(err.Error(), "has length 2, want 8") {
+		t.Fatalf("ReadBlockNumberStrict malformed = %d/%v/%v, want ok/error", num, ok, err)
+	}
+	if got := ReadBlockNumber(cdb, block.Hash()); got != nil {
+		t.Fatalf("ReadBlockNumber compatibility = %v, want nil on malformed row", got)
+	}
+}
+
+func TestReadBlockNumberStrictSurfacesColdIndexError(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(35, 2028))
+	cdb := NewMemoryChainDB()
+	cdb.SetChainIndexReader(&fakeChainIndex{blockErr: errors.New("cold block index corrupt")})
+
+	num, ok, err := ReadBlockNumberStrict(cdb, block.Hash())
+	if err == nil || ok || num != 0 || !strings.Contains(err.Error(), "cold block index corrupt") {
+		t.Fatalf("ReadBlockNumberStrict cold err = %d/%v/%v, want cold error", num, ok, err)
+	}
+	if got := ReadBlockNumber(cdb, block.Hash()); got != nil {
+		t.Fatalf("ReadBlockNumber compatibility = %v, want nil on cold error", got)
 	}
 }
 

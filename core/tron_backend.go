@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/tronprotocol/go-tron/actuator"
@@ -363,15 +364,23 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 
 func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
 	// Try direct hash lookup first
-	block := b.chain.GetBlockByHash(hash)
-	if block != nil {
-		return block, nil
+	num, ok, err := rawdb.ReadBlockNumberStrict(b.chain.chaindb, hash)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		if head := b.chain.CurrentBlock(); head != nil && num > head.Number() {
+			return nil, fmt.Errorf("block not found")
+		}
+		if block := rawdb.ReadBlock(b.chain.chaindb, num); block != nil {
+			return block, nil
+		}
 	}
 	// The input may be a blockID (first 8 bytes = block number, rest = hash[8:]).
 	// Extract the block number and look up by number, then verify the ID matches.
-	num := binary.BigEndian.Uint64(hash[:8])
-	if num > 0 {
-		block = b.chain.GetBlockByNumber(num)
+	blockIDNum := binary.BigEndian.Uint64(hash[:8])
+	if blockIDNum > 0 {
+		block := b.chain.GetBlockByNumber(blockIDNum)
 		if block != nil && block.ID().Hash == hash {
 			return block, nil
 		}
@@ -2447,7 +2456,13 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 
 	if filter.BlockHash != nil {
 		// Single-block mode
-		block := b.chain.GetBlockByHash(*filter.BlockHash)
+		block, err := b.GetBlockByHash(*filter.BlockHash)
+		if err != nil {
+			if strings.Contains(err.Error(), "block not found") {
+				return []*jsonrpc.RPCLog{}, nil
+			}
+			return nil, err
+		}
 		if block == nil {
 			return []*jsonrpc.RPCLog{}, nil
 		}

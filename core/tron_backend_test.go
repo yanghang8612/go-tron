@@ -50,6 +50,18 @@ func newTestBlockchain(t *testing.T, witnesses ...params.GenesisWitness) (*Block
 	return bc, func() {} // in-memory DB requires no cleanup
 }
 
+type failingBlockChainIndex struct {
+	err error
+}
+
+func (f failingBlockChainIndex) BlockNumberByHash(hash tcommon.Hash) (uint64, bool, error) {
+	return 0, false, f.err
+}
+
+func (f failingBlockChainIndex) TransactionBlockNumberByHash(hash tcommon.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
+
 // TestTronBackend_ChainID verifies ChainID returns the configured chain ID.
 func TestTronBackend_ChainID(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
@@ -70,6 +82,22 @@ func TestTronBackend_BlockNumber(t *testing.T) {
 	b := &TronBackend{chain: bc}
 	num := b.BlockNumber()
 	_ = num // genesis block number is 0 or 1; just verify no panic
+}
+
+func TestTronBackend_BlockHashReadsSurfaceColdIndexError(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	bc.ChainDB().SetChainIndexReader(failingBlockChainIndex{err: fmt.Errorf("cold block index corrupt")})
+	backend := &TronBackend{chain: bc}
+	var hash tcommon.Hash
+	hash[8] = 0x01
+
+	if _, err := backend.GetBlockByHash(hash); err == nil || !strings.Contains(err.Error(), "cold block index corrupt") {
+		t.Fatalf("GetBlockByHash error = %v, want cold block index error", err)
+	}
+	if _, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &hash}); err == nil || !strings.Contains(err.Error(), "cold block index corrupt") {
+		t.Fatalf("GetLogs blockHash error = %v, want cold block index error", err)
+	}
 }
 
 // TestTronBackend_GetBalance verifies GetBalance opens state and returns int64.
