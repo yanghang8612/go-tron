@@ -17,6 +17,9 @@ func TestPruneHotBalanceTracesKeepsColdReads(t *testing.T) {
 	if err := rawdb.WriteBlockBalanceTrace(db, 10, balanceTraceTestBlockTrace(10, 1000)); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace 10: %v", err)
 	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 11, balanceTraceTestBlockTrace(11, 1100)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace 11: %v", err)
+	}
 	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace 12: %v", err)
 	}
@@ -27,7 +30,7 @@ func TestPruneHotBalanceTracesKeepsColdReads(t *testing.T) {
 		t.Fatalf("WriteAccountTrace ownerB: %v", err)
 	}
 
-	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 10, 20)
+	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 10, 12)
 	if err != nil {
 		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
 	}
@@ -40,8 +43,8 @@ func TestPruneHotBalanceTracesKeepsColdReads(t *testing.T) {
 		t.Fatalf("PruneHotBalanceTraces: %v", err)
 	}
 	if !result.HasRange || result.FromBlock != 10 || result.ToBlock != 12 ||
-		result.ColdTraceSegments != 1 || result.BlockTracesDeleted != 2 || result.AccountTracesDeleted != 2 {
-		t.Fatalf("prune result = %+v, want range 10..12 and two block/account rows", result)
+		result.ColdTraceSegments != 1 || result.BlockTracesDeleted != 3 || result.AccountTracesDeleted != 2 {
+		t.Fatalf("prune result = %+v, want range 10..12 with three block rows and two account rows", result)
 	}
 	if got := rawdb.ReadBlockBalanceTrace(db, 12); got != nil {
 		t.Fatalf("hot ReadBlockBalanceTrace after prune = %+v, want nil", got)
@@ -75,7 +78,7 @@ func TestPruneHotBalanceTracesRejectsColdMismatchBeforeDeleting(t *testing.T) {
 	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 120); err != nil {
 		t.Fatalf("WriteAccountTrace original: %v", err)
 	}
-	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 10, 20)
+	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 12, 12)
 	if err != nil {
 		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
 	}
@@ -108,8 +111,10 @@ func TestPruneHotBalanceTracesWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if err := rawdb.WriteBlockBalanceTrace(db, 10, balanceTraceTestBlockTrace(10, 1000)); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace 10: %v", err)
 	}
-	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
-		t.Fatalf("WriteBlockBalanceTrace 12: %v", err)
+	for blockNum := int64(11); blockNum <= 20; blockNum++ {
+		if err := rawdb.WriteBlockBalanceTrace(db, blockNum, balanceTraceTestBlockTrace(blockNum, blockNum*100)); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", blockNum, err)
+		}
 	}
 	if err := rawdb.WriteAccountTrace(db, ownerA.Bytes(), 10, 100); err != nil {
 		t.Fatalf("WriteAccountTrace ownerA: %v", err)
@@ -134,9 +139,9 @@ func TestPruneHotBalanceTracesWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first PruneHotBalanceTracesWithProgress: %v", err)
 	}
-	if !first.HasRange || first.FromBlock != 10 || first.ToBlock != 12 ||
-		first.ColdTraceSegments != 2 || first.BlockTracesDeleted != 2 || first.AccountTracesDeleted != 2 {
-		t.Fatalf("first prune result = %+v, want range 10..12 with two block/account rows", first)
+	if !first.HasRange || first.FromBlock != 10 || first.ToBlock != 20 ||
+		first.ColdTraceSegments != 2 || first.BlockTracesDeleted != 11 || first.AccountTracesDeleted != 2 {
+		t.Fatalf("first prune result = %+v, want range 10..20 with eleven block rows and two account rows", first)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || got != 20 {
 		t.Fatalf("balance trace prune stage = %d ok=%v err=%v, want 20", got, ok, err)
@@ -148,6 +153,40 @@ func TestPruneHotBalanceTracesWithProgressSkipsProcessedBlocks(t *testing.T) {
 	}
 	if second.HasRange || second.ColdTraceSegments != 0 || second.BlockTracesDeleted != 0 || second.AccountTracesDeleted != 0 {
 		t.Fatalf("second prune result = %+v, want no repeated work", second)
+	}
+}
+
+func TestPruneHotBalanceTracesRejectsSparseColdCoverageBeforeStageAdvance(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	owner := balanceTraceTestAddress(0xf4)
+	if err := rawdb.WriteBlockBalanceTrace(db, 3, balanceTraceTestBlockTrace(3, 300)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 3, 30); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 3, 5)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	_, err = PruneHotBalanceTracesWithProgress(db, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "missing block trace coverage") {
+		t.Fatalf("PruneHotBalanceTracesWithProgress sparse coverage error = %v, want missing block trace coverage", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 3); got == nil || got.GetTimestamp() != 300 {
+		t.Fatalf("hot block trace after failed prune = %+v, want timestamp 300", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(db, owner.Bytes(), 3); !ok || balance != 30 {
+		t.Fatalf("hot account trace after failed prune = %d/%v, want 30/true", balance, ok)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || ok {
+		t.Fatalf("balance trace prune stage after failed prune = %d ok=%v err=%v, want absent", got, ok, err)
 	}
 }
 

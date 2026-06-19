@@ -1239,7 +1239,8 @@ Status:
   identifier matches the canonical hash/number. Snapshot stage/cold coverage
   checks also require every block in the claimed balance-trace range to have a
   cold block-trace row, so a sparse sidecar cannot satisfy
-  `SnapshotBalanceTracePrune` health checks.
+  `SnapshotBalanceTracePrune` health checks or advance the balance-trace prune
+  stage.
 - `core.BackfillBalanceTracesByReplay` and
   `gtron db backfill-balance-traces` now provide a safe historical
   `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the

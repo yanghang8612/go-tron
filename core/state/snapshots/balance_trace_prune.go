@@ -29,15 +29,16 @@ type balanceTracePruneBounds struct {
 }
 
 // PruneHotBalanceTraces deletes hot account/balance trace rows only after a
-// registered cold balance-trace segment has been verified and every hot row in
-// the segment range has an exact cold match.
+// registered cold balance-trace segment has been verified, every block in the
+// processed segment range has a cold block trace, and every hot row in the
+// segment range has an exact cold match.
 func PruneHotBalanceTraces(db ethdb.KeyValueStore, dir string, manifest *Manifest) (*PruneHotBalanceTraceResult, error) {
 	return pruneHotBalanceTraces(db, dir, manifest, balanceTracePruneBounds{})
 }
 
 // PruneHotBalanceTracesWithProgress prunes covered hot account/balance trace
 // rows after the persisted StageSnapshotBalanceTracePrune boundary and advances
-// that boundary when a verified cold segment is processed.
+// that boundary when a densely covered cold segment is processed.
 func PruneHotBalanceTracesWithProgress(db ethdb.KeyValueStore, dir string, manifest *Manifest) (*PruneHotBalanceTraceResult, error) {
 	if db == nil {
 		return nil, errors.New("snapshots: nil balance trace prune database")
@@ -86,7 +87,15 @@ func pruneHotBalanceTraces(db ethdb.KeyValueStore, dir string, manifest *Manifes
 		if err != nil {
 			return nil, err
 		}
-		verified, err := verifyHotBalanceTraceRowsCovered(db, seg, ref, bounds)
+		pruneFromBlock := balanceTracePruneStartBlock(ref, bounds)
+		denselyCovered, err := balanceTraceSegmentHasEveryBlock(seg, pruneFromBlock, ref.ToTxNum)
+		if err == nil && !denselyCovered {
+			err = fmt.Errorf("snapshots: cold balance trace segment %q missing block trace coverage [%d,%d]", ref.Path, pruneFromBlock, ref.ToTxNum)
+		}
+		var verified balanceTraceCoverageCheck
+		if err == nil {
+			verified, err = verifyHotBalanceTraceRowsCovered(db, seg, ref, bounds)
+		}
 		if closeErr := seg.Close(); err == nil {
 			err = closeErr
 		}
@@ -113,6 +122,13 @@ func pruneHotBalanceTraces(db ethdb.KeyValueStore, dir string, manifest *Manifes
 		markBalanceTraceProcessedToBlock(result, ref.ToTxNum)
 	}
 	return result, nil
+}
+
+func balanceTracePruneStartBlock(ref SegmentRef, bounds balanceTracePruneBounds) uint64 {
+	if bounds.hasLastPrunedBlock && bounds.lastPrunedBlock >= ref.FromTxNum {
+		return bounds.lastPrunedBlock + 1
+	}
+	return ref.FromTxNum
 }
 
 type balanceTraceCoverageCheck struct {
