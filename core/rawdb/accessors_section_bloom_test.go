@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
 
 func TestSectionBloom_RoundTrip(t *testing.T) {
@@ -86,6 +87,22 @@ func TestSectionBloomStrictSurfacesColdReaderError(t *testing.T) {
 	}
 	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, 42); err == nil || ok || bitset != nil || !strings.Contains(err.Error(), "cold section bloom corrupt") {
 		t.Fatalf("ReadSectionBloomBitSetStrict cold error = %x/%v/%v, want cold error", bitset, ok, err)
+	}
+}
+
+func TestSectionBloomStrictSurfacesHotReadError(t *testing.T) {
+	wantErr := errors.New("hot section bloom read corrupt")
+	db := failingGetStore{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		key:           sectionBloomKey(3, 42),
+		err:           wantErr,
+	}
+
+	if got := ReadSectionBloom(db, 3, 42); got != nil {
+		t.Fatalf("ReadSectionBloom hot read error = %x, want nil compatibility miss", got)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, 42); !errors.Is(err, wantErr) || ok || bitset != nil {
+		t.Fatalf("ReadSectionBloomBitSetStrict hot read error = %x/%v/%v, want hot read error", bitset, ok, err)
 	}
 }
 
@@ -202,4 +219,24 @@ func (r fakeSectionBloomReader) SectionBloom(section, bitIndex uint64) ([]byte, 
 		return nil, false, nil
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+type failingGetStore struct {
+	ethdb.KeyValueStore
+	key []byte
+	err error
+}
+
+func (db failingGetStore) Has(key []byte) (bool, error) {
+	if bytes.Equal(key, db.key) {
+		return true, nil
+	}
+	return db.KeyValueStore.Has(key)
+}
+
+func (db failingGetStore) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, db.key) {
+		return nil, db.err
+	}
+	return db.KeyValueStore.Get(key)
 }

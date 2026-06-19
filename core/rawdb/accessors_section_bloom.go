@@ -42,11 +42,24 @@ func ReadSectionBloom(db ethdb.KeyValueReader, section, bitIndex uint64) []byte 
 // optional log-query prefilters; rebuild and verification paths should use this
 // strict variant so they do not republish incomplete bitsets.
 func ReadSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
-	data, err := db.Get(sectionBloomKey(section, bitIndex))
-	if err == nil && len(data) != 0 {
-		out := make([]byte, len(data))
-		copy(out, data)
-		return out, true, nil
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
+	}
+	key := sectionBloomKey(section, bitIndex)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(data) != 0 {
+			out := make([]byte, len(data))
+			copy(out, data)
+			return out, true, nil
+		}
 	}
 	if cdb, ok := db.(*ChainDB); ok && cdb.sectionBloom != nil {
 		cold, ok, err := cdb.sectionBloom.SectionBloom(section, bitIndex)

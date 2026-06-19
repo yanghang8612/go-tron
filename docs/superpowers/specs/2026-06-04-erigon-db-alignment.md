@@ -1079,8 +1079,9 @@ Status:
   payloads through `DerivedIndexCollector`. Partial-range rebuilds preserve
   existing block bits in the same section by reading and ORing existing rows.
   Existing hot/cold section-bloom rows are now read through a strict accessor
-  in this rebuild path, so cold sidecar errors abort the rebuild instead of
-  being treated as missing rows that could clear unrelated block bits.
+  in this rebuild path, so hot KV read errors and cold sidecar errors abort the
+  rebuild instead of being treated as missing rows that could clear unrelated
+  block bits.
   Cold section-bloom snapshot sidecars are accepted only when their block range
   covers complete java-tron bloom sections (`from % 2048 == 0` and
   `(to + 1) % 2048 == 0`), so manifests cannot advertise a partial section as
@@ -1269,8 +1270,8 @@ Status:
   operator explicitly passes `--db.balance-trace.overwrite`. Replay output and
   target hot/cold `BlockBalanceTrace` and exact `AccountTrace` rows are now
   checked through strict rawdb trace readers, so malformed, block-mismatched,
-  or unreadable cold trace payloads fail the backfill instead of being treated
-  as missing rows and republished into Pebble.
+  hot rows that fail to read, or unreadable cold trace payloads fail the
+  backfill instead of being treated as missing rows and republished into Pebble.
 - `gtron db backfill-balance-traces` can also seed an empty/genesis-only replay
   database from a verified signed snapshot before replay starts. Passing
   `--snapshot.dir` plus the trusted catalog key flags restores latest

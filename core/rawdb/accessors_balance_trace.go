@@ -92,16 +92,29 @@ func IterateBlockBalanceTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, f
 }
 
 func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
-	data, err := db.Get(balanceTraceKey(blockNum))
-	if err == nil && len(data) != 0 {
-		var trace contractpb.BlockBalanceTrace
-		if err := proto.Unmarshal(data, &trace); err != nil {
-			return nil, true, err
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block balance trace")
+	}
+	key := balanceTraceKey(blockNum)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return nil, false, err
 		}
-		if err := validateBlockBalanceTraceForKey(blockNum, &trace, "read block balance trace"); err != nil {
-			return &trace, true, err
+		if len(data) != 0 {
+			var trace contractpb.BlockBalanceTrace
+			if err := proto.Unmarshal(data, &trace); err != nil {
+				return nil, true, err
+			}
+			if err := validateBlockBalanceTraceForKey(blockNum, &trace, "read block balance trace"); err != nil {
+				return &trace, true, err
+			}
+			return &trace, true, nil
 		}
-		return &trace, true, nil
 	}
 
 	chain, ok := db.(*ChainDB)

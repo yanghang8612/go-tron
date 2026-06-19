@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -94,6 +95,23 @@ func TestBlockBalanceTrace_RejectsMismatchedHotRow(t *testing.T) {
 	}
 	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 1); err == nil || !ok || trace == nil {
 		t.Fatalf("ReadBlockBalanceTraceStrict mismatched hot row = trace %+v ok %v err %v, want trace/ok/error", trace, ok, err)
+	}
+}
+
+func TestBlockBalanceTraceStrictSurfacesHotReadError(t *testing.T) {
+	wantErr := errors.New("hot balance trace read corrupt")
+	db := failingGetStore{
+		KeyValueStore: memorydb.New(),
+		key:           balanceTraceKey(1),
+		err:           wantErr,
+	}
+
+	if got := ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace hot read error = %+v, want nil compatibility miss", got)
+	}
+	trace, ok, err := ReadBlockBalanceTraceStrict(db, 1)
+	if !errors.Is(err, wantErr) || ok || trace != nil {
+		t.Fatalf("ReadBlockBalanceTraceStrict hot read error = trace %+v ok %v err %v, want hot read error", trace, ok, err)
 	}
 }
 
