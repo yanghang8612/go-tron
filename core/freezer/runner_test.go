@@ -356,6 +356,9 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 32 {
 		t.Fatalf("StageChainFreezer after freeze = %d ok=%v err=%v, want 32", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(32) {
+		t.Fatalf("StageChainFreezer row after freeze = %+v ok=%v err=%v, want hash-bound block32", row, ok, err)
+	}
 	// KV rows for frozen blocks should be gone.
 	for n := uint64(0); n <= 32; n++ {
 		if v, err := fc.db.Get(blockKVKey(n)); err == nil && len(v) > 0 {
@@ -874,6 +877,16 @@ func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed ancient rows: %v", err)
 	}
+	fc.mu.Lock()
+	for n := uint64(0); n < 10; n++ {
+		block, err := coretypes.UnmarshalBlock(blockBytes(n))
+		if err != nil {
+			fc.mu.Unlock()
+			t.Fatalf("decode seeded ancient block %d: %v", n, err)
+		}
+		fc.blockHashByNo[n] = block.Hash()
+	}
+	fc.mu.Unlock()
 
 	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
 		Enabled:      true,
@@ -889,6 +902,9 @@ func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 9 {
 		t.Fatalf("StageChainFreezer backfill = %d ok=%v err=%v, want 9", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(9) {
+		t.Fatalf("StageChainFreezer backfill row = %+v ok=%v err=%v, want hash-bound block9", row, ok, err)
 	}
 }
 

@@ -692,14 +692,24 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 
 func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
 	db := r.chain.DB()
-	current, ok, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	blockHash := r.chain.ReadBlockHashByNumber(blockNum)
+	if blockHash == (tcommon.Hash{}) {
+		return fmt.Errorf("freezer: cannot resolve block hash for ChainFreezer stage %d", blockNum)
+	}
+	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)
 	if err != nil {
 		return err
 	}
-	if ok && current >= blockNum {
+	if ok && current.BlockNum > blockNum {
 		return nil
 	}
-	return rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, blockNum)
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return fmt.Errorf("freezer: ChainFreezer stage %d hash %x does not match canonical hash %x", blockNum, current.BlockHash, blockHash)
+		}
+		return nil
+	}
+	return rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, blockNum, blockHash)
 }
 
 // loop is the goroutine. Fires once on Start so a fresh-install backlog

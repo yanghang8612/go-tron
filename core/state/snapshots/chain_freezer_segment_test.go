@@ -140,6 +140,9 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(indexDB, rawdb.StageChainFreezer); err != nil || !ok || got != 1 {
 		t.Fatalf("StageChainFreezer after restore = %d ok=%v err=%v, want 1", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(indexDB, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("StageChainFreezer row after restore = %+v ok=%v err=%v, want block1 hash", row, ok, err)
+	}
 	chainDB := rawdb.NewChainDB(indexDB, rawdb.NewFreezerReader(dst))
 	if num := rawdb.ReadBlockNumber(chainDB, block1.Hash()); num == nil || *num != 1 {
 		t.Fatalf("ReadBlockNumber = %v, want 1", num)
@@ -361,6 +364,9 @@ func TestRestoreChainFreezerManifestPrefersColdLookupIndexes(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(indexDB, rawdb.StageChainFreezer); err != nil || !ok || got != 1 {
 		t.Fatalf("StageChainFreezer after cold-index restore = %d ok=%v err=%v, want 1", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(indexDB, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("StageChainFreezer row after cold-index restore = %+v ok=%v err=%v, want block1 hash", row, ok, err)
 	}
 
 	chainDB := rawdb.NewChainDB(indexDB, rawdb.NewFreezerReader(dst))

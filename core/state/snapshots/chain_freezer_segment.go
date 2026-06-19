@@ -595,7 +595,7 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 			rawdb.AncientStateRootsTable, heads[2])
 	}
 	if opts.ProgressWriter != nil {
-		if err := writeChainFreezerStageProgress(opts.ProgressWriter, ref.ToTxNum); err != nil {
+		if err := writeChainFreezerStageProgress(opts.ProgressWriter, dir, ref); err != nil {
 			return result, err
 		}
 	}
@@ -611,17 +611,43 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 	return result, nil
 }
 
-func writeChainFreezerStageProgress(db ethdb.KeyValueWriter, blockNum uint64) error {
+func writeChainFreezerStageProgress(db ethdb.KeyValueWriter, dir string, ref SegmentRef) error {
+	blockNum := ref.ToTxNum
+	blockHash, err := chainFreezerSegmentBlockHash(dir, ref, blockNum)
+	if err != nil {
+		return err
+	}
 	if reader, ok := db.(ethdb.KeyValueReader); ok {
-		current, ok, err := rawdb.ReadStageProgress(reader, rawdb.StageChainFreezer)
+		current, ok, err := rawdb.ReadStageProgressRow(reader, rawdb.StageChainFreezer)
 		if err != nil {
 			return err
 		}
-		if ok && current >= blockNum {
+		if ok && current.BlockNum > blockNum {
+			return nil
+		}
+		if ok && current.BlockNum == blockNum && current.HasBlockHash {
+			if current.BlockHash != blockHash {
+				return fmt.Errorf("snapshots: ChainFreezer stage %d hash %x does not match segment hash %x", blockNum, current.BlockHash, blockHash)
+			}
 			return nil
 		}
 	}
-	return rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, blockNum)
+	return rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, blockNum, blockHash)
+}
+
+func chainFreezerSegmentBlockHash(dir string, ref SegmentRef, blockNum uint64) (common.Hash, error) {
+	row, ok, err := readChainFreezerSegmentRow(dir, ref, blockNum)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if !ok {
+		return common.Hash{}, fmt.Errorf("snapshots: chain-freezer segment %q missing block %d", ref.Path, blockNum)
+	}
+	verified, err := validateChainFreezerRowPayload(row, "chain-freezer stage progress")
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return verified.block.Hash(), nil
 }
 
 func RestoreChainFreezerIndexes(db ethdb.KeyValueWriter, dir string, ref SegmentRef) (RestoreChainFreezerSegmentResult, error) {

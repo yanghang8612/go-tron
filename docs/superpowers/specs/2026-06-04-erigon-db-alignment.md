@@ -679,7 +679,11 @@ Status:
 - Verified chain-freezer snapshot restore writes the same `ChainFreezer` stage
   to the restored datadir after the segment is installed or verified as already
   present, so remote bootstrap and live freezer passes expose one cold-chain
-  coverage watermark.
+  coverage watermark. Live freezer passes and chain-freezer snapshot restore
+  now write that watermark as a hash-bound stage row, using the freezer chain
+  reader or the verified segment's boundary block payload. Existing unbound
+  rows at the same height are upgraded, while same-height hash mismatches are
+  treated as storage integrity errors instead of being overwritten.
 - `PruneHotChainLookups` can now remove historical hot `bh-`, `tx-`, `ti-`,
   and `bsr-` lookup rows for a freezer range after verifying the matching
   `chain-index` sidecar against the chain-freezer segment. Tests prove cold
