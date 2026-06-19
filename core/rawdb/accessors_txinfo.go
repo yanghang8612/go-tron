@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -227,7 +228,13 @@ func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.Transac
 // rebuild/snapshot publishers can fail loudly instead of treating corrupt
 // coverage as an ordinary miss.
 func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
-	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos by block")
+	}
+	if data, ok, err := readAncientTransactionInfosStrict(db, blockNum); err != nil || ok {
+		if err != nil {
+			return nil, ok, err
+		}
 		infos, err := decodeTransactionRetForBlock(data, blockNum)
 		return infos, true, err
 	}
@@ -237,6 +244,20 @@ func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.
 	}
 	infos, err := decodeTransactionRetForBlock(data, blockNum)
 	return infos, true, err
+}
+
+func readAncientTransactionInfosStrict(db *ChainDB, blockNum uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(ancientTxInfos, blockNum)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {

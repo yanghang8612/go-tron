@@ -456,6 +456,24 @@ func TestReadTransactionInfosByBlockStrictReportsMissingSource(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosByBlockStrictSurfacesAncientError(t *testing.T) {
+	wantErr := errors.New("ancient tx infos corrupt")
+	db := NewChainDB(NewMemoryDatabase(), failingAncientReader{kind: ancientTxInfos, err: wantErr})
+	if err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{
+		{Id: bytes.Repeat([]byte{0x07}, common.HashLength), Fee: 700, BlockNumber: 5},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("ReadTransactionInfosByBlock ancient error = %+v, want nil compatibility miss", got)
+	}
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
+	if !errors.Is(err, wantErr) || ok || infos != nil {
+		t.Fatalf("ReadTransactionInfosByBlockStrict ancient error = %+v/%v/%v, want ancient error", infos, ok, err)
+	}
+}
+
 func TestWriteTransactionInfosByBlockRejectsNilEntry(t *testing.T) {
 	db := NewMemoryChainDB()
 	err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{nil})
@@ -665,4 +683,37 @@ func (f failingTxPositionChainIndex) TransactionIndexByHash(hash common.Hash) (C
 		return ChainIndexTxLookup{}, false, f.posErr
 	}
 	return ChainIndexTxLookup{}, false, nil
+}
+
+type failingAncientReader struct {
+	kind string
+	err  error
+}
+
+func (f failingAncientReader) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == f.kind {
+		return nil, f.err
+	}
+	return nil, ErrNotInAncient
+}
+
+func (f failingAncientReader) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if kind == f.kind {
+		return nil, f.err
+	}
+	return nil, ErrNotInAncient
+}
+
+func (f failingAncientReader) AncientCount(kind string) (uint64, error) {
+	if kind == f.kind {
+		return 0, f.err
+	}
+	return 0, nil
+}
+
+func (f failingAncientReader) HasAncient(kind string, number uint64) (bool, error) {
+	if kind == f.kind {
+		return false, f.err
+	}
+	return false, nil
 }
