@@ -476,24 +476,27 @@ func eventLogIndexedCoverageBlockFromRefs(indexRefs []SegmentRef, fromBlock, max
 	if maxBlock < fromBlock {
 		return 0, false
 	}
-	var block uint64
-	var ok bool
+	sortSegmentRefsAscending(indexRefs)
+	next := fromBlock
 	for _, ref := range indexRefs {
-		if ref.FromTxNum > fromBlock || ref.ToTxNum < fromBlock {
+		if ref.ToTxNum < next {
 			continue
 		}
-		if ref.ToTxNum > block {
-			block = ref.ToTxNum
-			ok = true
+		if ref.FromTxNum > next {
+			break
 		}
+		if ref.ToTxNum >= maxBlock {
+			return maxBlock, true
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return 0, false
+		}
+		next = ref.ToTxNum + 1
 	}
-	if !ok {
+	if next == fromBlock {
 		return 0, false
 	}
-	if block > maxBlock {
-		block = maxBlock
-	}
-	return block, true
+	return next - 1, true
 }
 
 func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {

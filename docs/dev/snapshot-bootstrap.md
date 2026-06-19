@@ -190,7 +190,8 @@ only one sidecar needs to be refreshed. Event-log builds advance the
 `SnapshotEventLogBuild` stage to the highest source block covered by continuous
 `event-log` segments and a matching `event-log-index` sidecar. Snapshot
 restore/bootstrap derives the same stage from verified manifest indexed
-event-log coverage, and minimal-mode freezer tail pruning rechecks continuous
+event-log coverage, combining adjacent index sidecars into one continuous
+boundary, and minimal-mode freezer tail pruning rechecks continuous
 cold chain-freezer, chain-index, and indexed event-log coverage before hiding
 or reclaiming local freezer rows. When a `chain-freezer-accessor` sidecar is
 present, cold chain-freezer coverage also verifies its offsets against the

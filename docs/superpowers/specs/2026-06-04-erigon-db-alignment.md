@@ -1200,9 +1200,10 @@ Status:
   event-log builders now advance a block-valued `SnapshotEventLogBuild` stage
   only when indexed cold log coverage exists, so operators can audit it against
   the verified `Finish` boundary. Snapshot restore/bootstrap also derives that
-  stage from verified manifest `event-log` plus `event-log-index` coverage, so
-  restored nodes can continue minimal-mode tail pruning without locally
-  rebuilding log sidecars. Runtime startup registers the manager on
+  stage from verified manifest `event-log` plus `event-log-index` coverage,
+  combining adjacent indexed sidecars into one continuous boundary, so restored
+  nodes can continue minimal-mode tail pruning without locally rebuilding log
+  sidecars. Runtime startup registers the manager on
   `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments
