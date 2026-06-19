@@ -833,10 +833,11 @@ Status:
   `rawdb.NewChainDB(..., rawdb.NoopAncient{})` constructors outside audited
   isolated replay/diagnostic boundaries, preventing new call sites from
   creating hot-only chain readers that skip ancient freezer and cold index
-  sidecars by construction. Strict balance-trace and account-trace archive
-  readers are included in the same cold-boundary audit, so new production code
-  cannot call the integrity-preserving variants on a hot-only KV store and
-  accidentally bypass registered cold sidecars.
+  sidecars by construction. The same cold-boundary audit now covers the
+  integrity-preserving strict readers for block numbers, transaction indexes,
+  transaction infos, state roots, section blooms, balance traces, and account
+  traces, so new production code cannot call those variants on a hot-only KV
+  store and accidentally bypass registered cold sidecars.
 
 Needed:
 

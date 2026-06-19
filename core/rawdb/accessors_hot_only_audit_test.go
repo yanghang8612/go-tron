@@ -45,14 +45,16 @@ func query(db any) {
 func TestNoUnexpectedProductionRawFreezerReadReferences(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
-		"ReadBlockRaw":            {},
-		"ReadTransactionInfosRaw": {},
-		"ReadBlockStateRootRaw":   {},
+		"ReadBlockRaw":                {},
+		"ReadTransactionInfosRaw":     {},
+		"ReadBlockStateRootRaw":       {},
+		"ReadBlockStateRootRawStrict": {},
 	}, map[string]map[string]struct{}{
 		"cmd/gtron/freezer_adapter.go": {
-			"ReadBlockRaw":            {},
-			"ReadTransactionInfosRaw": {},
-			"ReadBlockStateRootRaw":   {},
+			"ReadBlockRaw":                {},
+			"ReadTransactionInfosRaw":     {},
+			"ReadBlockStateRootRaw":       {},
+			"ReadBlockStateRootRawStrict": {},
 		},
 	})
 	if len(offenders) > 0 {
@@ -221,11 +223,18 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"ReadBlockBalanceTraceStrict":       {},
 		"ReadBlockHashByNumber":             {},
 		"ReadBlockNumber":                   {},
+		"ReadBlockNumberStrict":             {},
 		"ReadBlockStateRoot":                {},
+		"ReadBlockStateRootRawStrict":       {},
+		"ReadBlockStateRootStrict":          {},
 		"ReadSectionBloom":                  {},
 		"ReadSectionBloomBitSet":            {},
+		"ReadSectionBloomBitSetStrict":      {},
+		"ReadSectionBloomStrict":            {},
 		"ReadTransactionIndex":              {},
+		"ReadTransactionIndexStrict":        {},
 		"ReadTransactionInfo":               {},
+		"ReadTransactionInfoStrict":         {},
 		"ReadTransactionInfosByBlock":       {},
 		"ReadTransactionInfosByBlockStrict": {},
 	}, map[string]map[string]struct{}{
@@ -444,6 +453,59 @@ func query(db any) {
 	}, nil)
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfosByBlockStrict") {
 		t.Fatalf("offenders = %+v, want hot-store strict transaction info read rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditRejectsStrictStateRootReadsOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import (
+	"github.com/tronprotocol/go-tron/common"
+	rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+)
+
+func query(db any, hash common.Hash) {
+	_, _, _ = rawdb.ReadBlockStateRootRawStrict(db, hash)
+	_, _, _ = rawdb.ReadBlockStateRootStrict(db, hash)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadBlockStateRootRawStrict": {},
+		"ReadBlockStateRootStrict":    {},
+	}, nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want strict state-root reads on hot store rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.ReadBlockStateRootRawStrict", "rawdb.ReadBlockStateRootStrict"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
+	}
+}
+
+func TestColdArchiveAuditAllowsStrictStateRootReadsOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import (
+	"github.com/tronprotocol/go-tron/common"
+	rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+)
+
+func query(db *rawdb.ChainDB, hash common.Hash) {
+	chainDB := db
+	_, _, _ = rawdb.ReadBlockStateRootRawStrict(chainDB, hash)
+	_, _, _ = rawdb.ReadBlockStateRootStrict(chainDB, hash)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadBlockStateRootRawStrict": {},
+		"ReadBlockStateRootStrict":    {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want ChainDB strict state-root boundary accepted", offenders)
 	}
 }
 
