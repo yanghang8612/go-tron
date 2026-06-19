@@ -2,8 +2,10 @@ package snapshots
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -16,6 +18,8 @@ type PruneHotChainLookupResult struct {
 	TxIndexesDeleted    uint64
 	TxInfosDeleted      uint64
 	ColdIndexSegments   uint64
+	ToBlockHash         common.Hash
+	HasToBlockHash      bool
 }
 
 type chainLookupPruneBounds struct {
@@ -63,7 +67,7 @@ func PruneHotChainLookupsWithProgress(db ethdb.KeyValueStore, dir string, manife
 		return nil, err
 	}
 	if result.HasRange {
-		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, result.ToBlock); err != nil {
+		if err := writeSnapshotChainLookupPruneStage(db, result.ToBlock, result.ToBlockHash, result.HasToBlockHash); err != nil {
 			return nil, err
 		}
 	}
@@ -127,8 +131,10 @@ func pruneHotChainLookupsForFreezerSegment(db ethdb.KeyValueWriter, dir string, 
 			result.HasRange = true
 			result.FromBlock = row.blockNum
 		}
-		if row.blockNum > result.ToBlock {
+		if !result.HasToBlockHash || row.blockNum >= result.ToBlock {
 			result.ToBlock = row.blockNum
+			result.ToBlockHash = block.Hash()
+			result.HasToBlockHash = true
 		}
 		blockHash := block.Hash()
 		if err := rawdb.DeleteBlockNumber(db, blockHash); err != nil {
@@ -152,4 +158,24 @@ func pruneHotChainLookupsForFreezerSegment(db ethdb.KeyValueWriter, dir string, 
 		return nil
 	})
 	return pruned, err
+}
+
+func writeSnapshotChainLookupPruneStage(db ethdb.KeyValueStore, blockNum uint64, blockHash common.Hash, hasBlockHash bool) error {
+	if !hasBlockHash {
+		return fmt.Errorf("snapshots: missing hash for %s stage block %d", rawdb.StageSnapshotChainLookupPrune, blockNum)
+	}
+	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainLookupPrune)
+	if err != nil {
+		return err
+	}
+	if ok && current.BlockNum > blockNum {
+		return nil
+	}
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return fmt.Errorf("snapshots: %s stage %d hash %x does not match pruned block hash %x", rawdb.StageSnapshotChainLookupPrune, blockNum, current.BlockHash, blockHash)
+		}
+		return nil
+	}
+	return rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainLookupPrune, blockNum, blockHash)
 }

@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -136,6 +137,9 @@ func TestPruneHotChainLookupsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || got != 1 {
 		t.Fatalf("chain lookup prune stage = %d ok=%v err=%v, want 1", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("chain lookup prune stage row = %+v ok=%v err=%v, want block1 hash", row, ok, err)
+	}
 
 	second, err := PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
 	if err != nil {
@@ -146,6 +150,29 @@ func TestPruneHotChainLookupsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	}
 	if info := rawdb.ReadTransactionInfo(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); info != nil {
 		t.Fatalf("hot tx info after stage-aware prune = %+v, want nil", info)
+	}
+}
+
+func TestWriteSnapshotChainLookupPruneStageHashRules(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	wantHash := common.Hash{0x11}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 7); err != nil {
+		t.Fatalf("WriteStageProgress unbound: %v", err)
+	}
+	if err := writeSnapshotChainLookupPruneStage(db, 7, wantHash, true); err != nil {
+		t.Fatalf("writeSnapshotChainLookupPruneStage upgrade: %v", err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wantHash {
+		t.Fatalf("upgraded prune stage row = %+v ok=%v err=%v, want hash-bound", row, ok, err)
+	}
+
+	otherHash := common.Hash{0x22}
+	err := writeSnapshotChainLookupPruneStage(db, 7, otherHash, true)
+	if err == nil || !strings.Contains(err.Error(), "does not match pruned block hash") {
+		t.Fatalf("writeSnapshotChainLookupPruneStage mismatch err = %v, want hash mismatch", err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || row.BlockHash != wantHash {
+		t.Fatalf("prune stage after rejected mismatch = %+v ok=%v err=%v, want original hash", row, ok, err)
 	}
 }
 
@@ -201,6 +228,9 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 	if got, ok, err := rawdb.ReadStageProgress(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || got != 0 {
 		t.Fatalf("chain lookup prune stage after partial = %d ok=%v err=%v, want 0", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block0.Hash() {
+		t.Fatalf("partial chain lookup prune stage row = %+v ok=%v err=%v, want block0 hash", row, ok, err)
+	}
 
 	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 1); err != nil {
 		t.Fatalf("WriteStageProgress ChainFreezer 1: %v", err)
@@ -211,6 +241,9 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 	}
 	if !second.HasRange || second.FromBlock != 1 || second.ToBlock != 1 || second.TxIndexesDeleted != 1 || second.TxInfosDeleted != 1 {
 		t.Fatalf("final prune result = %+v, want block1 tx lookups", second)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("final chain lookup prune stage row = %+v ok=%v err=%v, want block1 hash", row, ok, err)
 	}
 	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx != nil {
 		t.Fatalf("hot tx lookup after final prune = %v, want nil", idx)
@@ -269,6 +302,9 @@ func TestChainLookupPruneLifecycleOnePassPrunesCoveredLookups(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || got != 1 {
 		t.Fatalf("chain lookup prune stage = %d ok=%v err=%v, want 1", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("lifecycle chain lookup prune stage row = %+v ok=%v err=%v, want block1 hash", row, ok, err)
 	}
 	if num := rawdb.ReadBlockNumber(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), block1.Hash()); num != nil {
 		t.Fatalf("hot block lookup after lifecycle prune = %v, want nil", num)
