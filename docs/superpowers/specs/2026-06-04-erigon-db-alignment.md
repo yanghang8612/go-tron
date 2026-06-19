@@ -462,6 +462,12 @@ Status:
   unreadable, corrupt, or hash-mismatched staged rows stop the whole
   delete/progress batch, so sync-stage progress cannot advance after deleting
   the wrong downloader body.
+- Imported sync progress rows are now validated as a single stage prefix before
+  publication too: `SyncImport`, `SyncExecution`, `SyncCommitment`, and
+  `SyncFinish` must appear in order, downstream stages cannot be ahead of
+  upstream stages, and every published stage boundary must match a block/hash in
+  the staged-body delete prefix. This prevents rawdb callers from publishing a
+  sync-stage boundary that does not belong to the body prefix they just removed.
 - The local import run settlement now also stops the drain loop when that
   persisted progress write/delete fails, even if canonical insertion succeeded.
   This prevents the sync loop from advancing into another staged-body chunk

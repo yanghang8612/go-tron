@@ -334,6 +334,10 @@ func WriteSyncImportProgressBatch(db interface {
 	if result.DeleteErrors = validateSyncImportDeleteRows(db, deletes); len(result.DeleteErrors) > 0 {
 		return result
 	}
+	if err := validateSyncImportProgressAgainstDeletes(deletes, progress); err != nil {
+		result.ProgressError = err
+		return result
+	}
 	if batcher, ok := db.(ethdb.Batcher); ok {
 		batch := batcher.NewBatchWithSize((len(deletes) + len(progress)) * 8)
 		defer batch.Reset()
@@ -391,7 +395,15 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 		return nil
 	}
 	errs := make([]SyncStagedBlockDeleteError, 0)
-	for _, block := range deletes {
+	for i, block := range deletes {
+		if i > 0 && block.Number != deletes[i-1].Number+1 {
+			errs = append(errs, SyncStagedBlockDeleteError{
+				Number: block.Number,
+				Hash:   block.Hash,
+				Err:    fmt.Errorf("rawdb: sync staged delete row %d block %d does not continue from block %d", i, block.Number, deletes[i-1].Number),
+			})
+			continue
+		}
 		row, ok, err := ReadSyncStagedBlockRaw(db, block.Number)
 		if err != nil {
 			errs = append(errs, SyncStagedBlockDeleteError{
@@ -420,6 +432,27 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 	return errs
 }
 
+func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, rows []StageProgress) error {
+	if len(deletes) == 0 || len(rows) == 0 {
+		return nil
+	}
+	first := deletes[0]
+	last := deletes[len(deletes)-1]
+	for i, row := range rows {
+		if row.BlockNum < first.Number || row.BlockNum > last.Number {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d is outside staged delete prefix [%d,%d]", row.Stage, i, row.BlockNum, first.Number, last.Number)
+		}
+		deleteRow := deletes[row.BlockNum-first.Number]
+		if deleteRow.Number != row.BlockNum {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d is not covered by staged delete prefix", row.Stage, i, row.BlockNum)
+		}
+		if deleteRow.Hash != row.BlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d hash %x, want staged delete hash %x", row.Stage, i, row.BlockNum, row.BlockHash, deleteRow.Hash)
+		}
+	}
+	return nil
+}
+
 func validateSyncImportProgressRows(rows []StageProgress) error {
 	for i, row := range rows {
 		if row.Stage == "" {
@@ -428,11 +461,33 @@ func validateSyncImportProgressRows(rows []StageProgress) error {
 		if !isSyncImportProgressStage(row.Stage) {
 			return fmt.Errorf("rawdb: unexpected sync import progress stage %s at row %d", row.Stage, i)
 		}
+		if i >= len(syncImportProgressStageOrder) {
+			return fmt.Errorf("rawdb: sync import progress row %d stage %s exceeds pipeline length", i, row.Stage)
+		}
+		if want := syncImportProgressStageOrder[i]; row.Stage != want {
+			return fmt.Errorf("rawdb: sync import progress row %d stage %s, want %s", i, row.Stage, want)
+		}
 		if !row.HasBlockHash {
 			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d is not hash-bound", row.Stage, i, row.BlockNum)
 		}
+		if i > 0 {
+			prev := rows[i-1]
+			if row.BlockNum > prev.BlockNum {
+				return fmt.Errorf("rawdb: sync import progress %s at row %d block %d is ahead of upstream %s block %d", row.Stage, i, row.BlockNum, prev.Stage, prev.BlockNum)
+			}
+			if row.BlockNum == prev.BlockNum && row.BlockHash != prev.BlockHash {
+				return fmt.Errorf("rawdb: sync import progress %s at row %d block %d hash %x, want upstream hash %x", row.Stage, i, row.BlockNum, row.BlockHash, prev.BlockHash)
+			}
+		}
 	}
 	return nil
+}
+
+var syncImportProgressStageOrder = []StageID{
+	StageSyncImport,
+	StageSyncExecution,
+	StageSyncCommitment,
+	StageSyncFinish,
 }
 
 func isSyncImportProgressStage(stage StageID) bool {

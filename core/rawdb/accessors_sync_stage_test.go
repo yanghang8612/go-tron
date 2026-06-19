@@ -150,23 +150,36 @@ func TestWriteSyncImportProgressBatch(t *testing.T) {
 func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *testing.T) {
 	tests := []struct {
 		name string
-		row  StageProgress
+		rows []StageProgress
 		want string
 	}{
 		{
 			name: "unbound sync import",
-			row:  StageProgress{Stage: StageSyncImport, BlockNum: 2},
+			rows: []StageProgress{{Stage: StageSyncImport, BlockNum: 2}},
 			want: "sync import progress SyncImport at row 0 block 2 is not hash-bound",
 		},
 		{
 			name: "canonical stage",
-			row:  StageProgress{Stage: StageBodies, BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+			rows: []StageProgress{{Stage: StageBodies, BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true}},
 			want: "unexpected sync import progress stage Bodies at row 0",
 		},
 		{
 			name: "empty stage",
-			row:  StageProgress{BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+			rows: []StageProgress{{BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true}},
 			want: "empty stage id at row 0",
+		},
+		{
+			name: "missing upstream import",
+			rows: []StageProgress{{Stage: StageSyncExecution, BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true}},
+			want: "sync import progress row 0 stage SyncExecution, want SyncImport",
+		},
+		{
+			name: "mixed boundaries",
+			rows: []StageProgress{
+				{Stage: StageSyncImport, BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+				{Stage: StageSyncExecution, BlockNum: 3, BlockHash: common.Hash{0x03}, HasBlockHash: true},
+			},
+			want: "sync import progress SyncExecution at row 1 block 3 is ahead of upstream SyncImport block 2",
 		},
 	}
 
@@ -181,7 +194,7 @@ func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *test
 
 			result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
 				{Number: block.Number(), Hash: block.Hash()},
-			}, []StageProgress{tt.row})
+			}, tt.rows)
 			if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), tt.want) {
 				t.Fatalf("result = %+v, want progress error containing %q", result, tt.want)
 			}
@@ -194,12 +207,49 @@ func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *test
 			if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
 				t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
 			}
-			if tt.row.Stage != "" {
-				if row, ok, err := ReadStageProgressRow(base, tt.row.Stage); err != nil || ok {
-					t.Fatalf("stage row after rejected write = %+v ok=%v err=%v, want absent", row, ok, err)
+			for _, progress := range tt.rows {
+				if progress.Stage == "" {
+					continue
+				}
+				if row, ok, err := ReadStageProgressRow(base, progress.Stage); err != nil || ok {
+					t.Fatalf("stage %s row after rejected write = %+v ok=%v err=%v, want absent", progress.Stage, row, ok, err)
 				}
 			}
 		})
+	}
+}
+
+func TestWriteSyncImportProgressBatchAllowsDownstreamStageLag(t *testing.T) {
+	base := NewMemoryDatabase()
+	block1 := testSyncStagedBlock(1, common.Hash{})
+	block2 := testSyncStagedBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block1.Number(), Hash: block1.Hash()},
+		{Number: block2.Number(), Hash: block2.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+		{Stage: StageSyncExecution, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+	})
+	if result.Deleted != 2 || len(result.DeleteErrors) != 0 || result.ProgressRows != 2 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want deleted 2 and lagging execution progress", result)
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after import ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync import progress = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncExecution); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync execution progress = %+v ok=%v err=%v, want block1", row, ok, err)
 	}
 }
 
@@ -258,6 +308,73 @@ func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T
 			t.Fatalf("sync import progress after rejected delete = %+v ok=%v err=%v, want absent", row, ok, err)
 		}
 	})
+
+	t.Run("gapped delete prefix", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block2 := testSyncStagedBlock(2, common.Hash{0x01})
+		block4 := testSyncStagedBlock(4, block2.Hash())
+		for _, block := range []*types.Block{block2, block4} {
+			if err := WriteSyncStagedBlock(base, block); err != nil {
+				t.Fatalf("write staged block %d: %v", block.Number(), err)
+			}
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block2.Number(), Hash: block2.Hash()},
+			{Number: block4.Number(), Hash: block4.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block4.Number(), BlockHash: block4.Hash(), HasBlockHash: true},
+		})
+		if len(result.DeleteErrors) != 1 || result.DeleteErrors[0].Number != block4.Number() || !strings.Contains(result.DeleteErrors[0].Err.Error(), "does not continue") {
+			t.Fatalf("result = %+v, want one gapped delete prefix error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || result.ProgressError != nil {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+			t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+		}
+		for _, block := range []*types.Block{block2, block4} {
+			if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+				t.Fatalf("staged block %d after rejected delete ok=%v err=%v, want present", block.Number(), ok, err)
+			}
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+			t.Fatalf("sync import progress after rejected delete = %+v ok=%v err=%v, want absent", row, ok, err)
+		}
+	})
+}
+
+func TestWriteSyncImportProgressBatchRejectsProgressDeleteBoundaryMismatch(t *testing.T) {
+	base := NewMemoryDatabase()
+	block2 := testSyncStagedBlock(2, common.Hash{0x01})
+	block3 := testSyncStagedBlock(3, block2.Hash())
+	if err := WriteSyncStagedBlock(base, block2); err != nil {
+		t.Fatalf("write staged block2: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block2.Number(), Hash: block2.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block3.Number(), BlockHash: block3.Hash(), HasBlockHash: true},
+	})
+	if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "outside staged delete prefix") {
+		t.Fatalf("result = %+v, want progress outside staged delete prefix", result)
+	}
+	if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+		t.Fatalf("result = %+v, want no delete/progress writes", result)
+	}
+	if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+		t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block2.Number()); err != nil || !ok {
+		t.Fatalf("staged block2 after rejected write ok=%v err=%v, want present", ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+		t.Fatalf("sync import progress after rejected write = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
 }
 
 func TestSyncStagedBlockRawIterate(t *testing.T) {
