@@ -220,6 +220,30 @@ func TestWriteSyncStagedBlockRawAndProgressWritesBodyAndProgress(t *testing.T) {
 	}
 }
 
+func TestWriteSyncStagedBlockRawAndProgressRejectsMismatchedRaw(t *testing.T) {
+	db := NewMemoryDatabase()
+	block2 := testSyncStagedBlock(2, common.Hash{0x01})
+	block3 := testSyncStagedBlock(3, block2.Hash())
+	raw3, err := block3.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block3: %v", err)
+	}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, block2, raw3)
+	if result.StageError == nil || !strings.Contains(result.StageError.Error(), "sync staged raw key 2 contains block 3") {
+		t.Fatalf("write mismatched raw result = %+v, want staged raw mismatch error", result)
+	}
+	if result.Staged || result.ProgressWritten || result.ProgressSkipped {
+		t.Fatalf("write mismatched raw result = %+v, want no staged/progress side effects", result)
+	}
+	if _, ok, err := ReadSyncStagedBlockRaw(db, block2.Number()); err != nil || ok {
+		t.Fatalf("mismatched raw left staged row ok=%v err=%v, want absent", ok, err)
+	}
+	if _, ok, err := ReadStageProgressRow(db, StageSyncBodies); err != nil || ok {
+		t.Fatalf("mismatched raw wrote progress ok=%v err=%v, want absent", ok, err)
+	}
+}
+
 func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressProgress(t *testing.T) {
 	base := NewMemoryDatabase()
 	block3 := testSyncStagedBlock(3, common.Hash{0x02})

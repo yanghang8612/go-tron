@@ -293,6 +293,11 @@ Status:
   `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
   storage errors, so downloader restart and ready-frontier validation stop on
   unreadable body staging data instead of assuming the table has a gap.
+- The production sync body writer now validates supplied raw wire bytes before
+  publishing `SyncBodies`: `WriteSyncStagedBlockRawAndProgress` rejects raw
+  payloads that decode to a different block number or hash than the block being
+  staged. Lower-level raw writes remain available for corruption fixtures and
+  repair tests.
 
 Needed:
 

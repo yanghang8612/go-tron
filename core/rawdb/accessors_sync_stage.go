@@ -122,6 +122,10 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.StageError = err
 		return result
 	}
+	if err := validateSyncStagedBlockRawForProgress(block, raw); err != nil {
+		result.StageError = err
+		return result
+	}
 	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil {
 		if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
@@ -163,6 +167,25 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 	result.Staged = true
 	result.ProgressWritten = true
 	return result
+}
+
+func validateSyncStagedBlockRawForProgress(block *types.Block, raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	wireBlock, err := types.UnmarshalBlock(raw)
+	if err != nil {
+		return fmt.Errorf("rawdb: sync staged raw for block %d decode: %w", block.Number(), err)
+	}
+	if wireBlock.Number() != block.Number() {
+		return fmt.Errorf("rawdb: sync staged raw key %d contains block %d", block.Number(), wireBlock.Number())
+	}
+	wireHash := wireBlock.Hash()
+	blockHash := block.Hash()
+	if wireHash != blockHash {
+		return fmt.Errorf("rawdb: sync staged raw block %d hash %x, want %x", block.Number(), wireHash, blockHash)
+	}
+	return nil
 }
 
 func ReadSyncStagedBlock(db ethdb.KeyValueReader, number uint64) (*types.Block, bool, error) {

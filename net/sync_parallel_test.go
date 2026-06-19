@@ -338,8 +338,11 @@ func TestSyncServiceStartupPrunesMalformedStagedBodyTail(t *testing.T) {
 	if result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block1, nil); result.StageError != nil || result.ProgressWriteError != nil {
 		t.Fatalf("write staged block1: stage=%v progress=%v", result.StageError, result.ProgressWriteError)
 	}
-	if result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block2, rawOf(t, block3)); result.StageError != nil || result.ProgressWriteError != nil {
-		t.Fatalf("write malformed staged block2: stage=%v progress=%v", result.StageError, result.ProgressWriteError)
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), block2, rawOf(t, block3)); err != nil {
+		t.Fatalf("write malformed staged block2: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodies, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write malformed staged block2 progress: %v", err)
 	}
 
 	restarted := NewSyncService(bc, nil)
