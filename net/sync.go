@@ -1264,11 +1264,22 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 		return
 	}
 	var txs int
+	// txKinds tallies the applied range's transactions by contract type for the
+	// "txTop" composition field of the segment summary. ContractType() is a
+	// cheap field read, so this shares the existing tx-count pass at no real
+	// cost. Folded into the window before RecordBlocks so the snapshot it may
+	// emit includes this range's breakdown.
+	txKinds := make(map[string]int)
 	for i := 0; i < applied && i < len(batch.blocks); i++ {
 		if block := batch.blocks[i]; block != nil {
-			txs += len(block.Transactions())
+			txList := block.Transactions()
+			txs += len(txList)
+			for _, tx := range txList {
+				txKinds[tx.ContractType().String()]++
+			}
 		}
 	}
+	ss.stats.AddTxKinds(txKinds)
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -1452,6 +1463,11 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		topKVDomains = "none"
 	}
 	ctx = append(ctx, "stateMutKVTop", topKVDomains)
+	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
+	if txTop == "" {
+		txTop = "none"
+	}
+	ctx = append(ctx, "txTop", txTop)
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
 		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
