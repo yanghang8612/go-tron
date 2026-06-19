@@ -1318,6 +1318,10 @@ Status:
   every payload/index row must be reachable from the corresponding lookup key,
   and stale or missing lookup keys fail the registered checker before a cold
   filtered `eth_getLogs` path can return a false empty result.
+- Manifest verification now also cross-checks active global `event-log-index`
+  sidecars against the active `event-log` segments, so signed fetch, bootstrap,
+  restore, and local verify gates reject stale address/topic postings before
+  runtime archive log queries depend on them.
 - Section-bloom segment builds now use the shared sorted ETL collector too:
   hot `sb-` rows are collected by `(section, bitIndex)` into scratch space and
   streamed into the immutable segment in lookup order. The derived-index

@@ -822,6 +822,9 @@ func TestEventLogIndexedRangeCoveredRejectsStaleIndexPostings(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{eventRef, badIndexRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err == nil || !strings.Contains(err.Error(), "event-log-index") {
+		t.Fatalf("VerifyManifestFiles stale event-log-index = %v, want semantic index error", err)
+	}
 	mgr, err := OpenManager(dir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)

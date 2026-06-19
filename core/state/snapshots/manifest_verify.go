@@ -304,6 +304,9 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 	if err := verifyManifestChainFreezerSidecars(dir, manifest); err != nil {
 		return nil, err
 	}
+	if err := verifyManifestEventLogSidecars(dir, manifest); err != nil {
+		return nil, err
+	}
 	if opts.CheckRetired {
 		for _, ref := range manifest.Retired {
 			if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
@@ -343,6 +346,19 @@ func verifyManifestChainFreezerSidecars(dir string, manifest *Manifest) error {
 			if err := VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir, ref, freezerRef); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func verifyManifestEventLogSidecars(dir string, manifest *Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	refs := eventLogRefs(manifest)
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, refs); err != nil {
+			return err
 		}
 	}
 	return nil
