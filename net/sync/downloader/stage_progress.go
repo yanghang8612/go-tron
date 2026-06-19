@@ -86,9 +86,12 @@ type SyncPipelineProgressOrderPair struct {
 type SyncPipelineProgressOrderIssue struct {
 	Downstream      rawdb.StageID
 	DownstreamBlock uint64
+	DownstreamHash  tcommon.Hash
 	Upstream        rawdb.StageID
 	UpstreamBlock   uint64
+	UpstreamHash    tcommon.Hash
 	MissingUpstream bool
+	HashMismatch    bool
 }
 
 // SyncPipelineProgressOrderReadError records a stage row that could not be
@@ -175,6 +178,9 @@ type SyncPipelineProgressOrderRepairResult struct {
 func (i SyncPipelineProgressOrderIssue) String() string {
 	if i.MissingUpstream {
 		return fmt.Sprintf("%s requires %s", i.Downstream, i.Upstream)
+	}
+	if i.HashMismatch {
+		return fmt.Sprintf("%s=%d/%x hash does not match %s=%d/%x", i.Downstream, i.DownstreamBlock, i.DownstreamHash, i.Upstream, i.UpstreamBlock, i.UpstreamHash)
 	}
 	return fmt.Sprintf("%s=%d ahead of %s=%d", i.Downstream, i.DownstreamBlock, i.Upstream, i.UpstreamBlock)
 }
@@ -1472,6 +1478,19 @@ func CheckSyncPipelineProgressOrder(rows map[rawdb.StageID]rawdb.StageProgress, 
 			continue
 		}
 		if downstream.BlockNum <= upstream.BlockNum {
+			if downstream.BlockNum == upstream.BlockNum &&
+				downstream.HasBlockHash && upstream.HasBlockHash &&
+				downstream.BlockHash != upstream.BlockHash {
+				issues = append(issues, SyncPipelineProgressOrderIssue{
+					Downstream:      pair.Downstream,
+					DownstreamBlock: downstream.BlockNum,
+					DownstreamHash:  downstream.BlockHash,
+					Upstream:        pair.Upstream,
+					UpstreamBlock:   upstream.BlockNum,
+					UpstreamHash:    upstream.BlockHash,
+					HashMismatch:    true,
+				})
+			}
 			continue
 		}
 		issues = append(issues, SyncPipelineProgressOrderIssue{

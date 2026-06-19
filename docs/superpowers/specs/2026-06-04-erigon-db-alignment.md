@@ -468,6 +468,11 @@ Status:
   upstream stages, and every published stage boundary must match a block/hash in
   the staged-body delete prefix. This prevents rawdb callers from publishing a
   sync-stage boundary that does not belong to the body prefix they just removed.
+- Sync pipeline order checks now treat same-height hash mismatches as ordering
+  violations too. Startup repair and `db stage-status --db.stage.verify` no
+  longer accept, for example, `SyncImport=N/hashA` with
+  `SyncExecution=N/hashB`; the downstream tail is deleted/reported the same way
+  as a downstream stage that is numerically ahead.
 - The local import run settlement now also stops the drain loop when that
   persisted progress write/delete fails, even if canonical insertion succeeded.
   This prevents the sync loop from advancing into another staged-body chunk

@@ -1357,6 +1357,17 @@ func TestCheckSyncPipelineProgressOrder(t *testing.T) {
 	if len(issues) != 1 || !issues[0].MissingUpstream || issues[0].String() != "SyncExecution requires SyncImport" {
 		t.Fatalf("strict missing upstream issues = %+v, want SyncExecution requires SyncImport", issues)
 	}
+
+	hashA := tcommon.Hash{0x0a}
+	hashB := tcommon.Hash{0x0b}
+	issues = CheckSyncPipelineProgressOrder(map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageSyncImport:    {Stage: rawdb.StageSyncImport, BlockNum: 10, BlockHash: hashA, HasBlockHash: true},
+		rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 10, BlockHash: hashB, HasBlockHash: true},
+	}, SyncPipelineProgressOrderOptions{})
+	if len(issues) != 1 || !issues[0].HashMismatch || issues[0].Downstream != rawdb.StageSyncExecution ||
+		issues[0].Upstream != rawdb.StageSyncImport || issues[0].DownstreamHash != hashB || issues[0].UpstreamHash != hashA {
+		t.Fatalf("hash mismatch issues = %+v, want SyncExecution/SyncImport hash mismatch", issues)
+	}
 }
 
 func TestCheckSyncPipelineProgressOrderFromDB(t *testing.T) {
@@ -1662,6 +1673,45 @@ func TestRepairSyncPipelineProgressOrderFromDBDeletesCommitmentTailAfterExecutio
 		}
 	}
 	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressOrderFromDBDeletesHashMismatchedImportTail(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	importHash := tcommon.Hash{0x10}
+	executionHash := tcommon.Hash{0x20}
+	writes := []struct {
+		stage rawdb.StageID
+		hash  tcommon.Hash
+	}{
+		{stage: rawdb.StageSyncImport, hash: importHash},
+		{stage: rawdb.StageSyncExecution, hash: executionHash},
+		{stage: rawdb.StageSyncCommitment, hash: executionHash},
+		{stage: rawdb.StageSyncFinish, hash: executionHash},
+	}
+	for _, write := range writes {
+		if err := rawdb.WriteStageProgressWithHash(db, write.stage, 10, write.hash); err != nil {
+			t.Fatalf("write %s progress: %v", write.stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Deleted != 3 || len(got.Repairs) != 3 {
+		t.Fatalf("repair result = %+v, want execution/commitment/finish tail deleted", got)
+	}
+	if len(got.Before.Issues) != 1 || !got.Before.Issues[0].HashMismatch || got.Before.Issues[0].Downstream != rawdb.StageSyncExecution {
+		t.Fatalf("before issues = %+v, want execution/import hash mismatch", got.Before.Issues)
+	}
+	if len(got.After.Issues) != 0 || len(got.After.ReadErrors) != 0 {
+		t.Fatalf("after check = %+v, want clean order after deleting hash-mismatched import tail", got.After)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != 10 || row.BlockHash != importHash {
+		t.Fatalf("SyncImport after repair = %+v ok=%v err=%v, want kept import hash", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
 		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
 			t.Fatalf("%s after repair = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
 		}
