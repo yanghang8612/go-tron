@@ -215,8 +215,10 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
 		"ReadAccountTrace":                  {},
 		"ReadAccountTraceAtOrBefore":        {},
+		"ReadAccountTraceStrict":            {},
 		"ReadBlock":                         {},
 		"ReadBlockBalanceTrace":             {},
+		"ReadBlockBalanceTraceStrict":       {},
 		"ReadBlockHashByNumber":             {},
 		"ReadBlockNumber":                   {},
 		"ReadBlockStateRoot":                {},
@@ -234,8 +236,10 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 			"ReadBlockHashByNumber": {},
 		},
 		"core/balance_trace_backfill.go": {
-			"ReadAccountTrace":      {},
-			"ReadBlockBalanceTrace": {},
+			"ReadAccountTrace":            {},
+			"ReadAccountTraceStrict":      {},
+			"ReadBlockBalanceTrace":       {},
+			"ReadBlockBalanceTraceStrict": {},
 		},
 		"core/blockbuffer/buffer.go": {
 			"ReadBlockHashByNumber": {},
@@ -440,6 +444,53 @@ func query(db any) {
 	}, nil)
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfosByBlockStrict") {
 		t.Fatalf("offenders = %+v, want hot-store strict transaction info read rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditRejectsStrictTraceReadsOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db any, owner []byte) {
+	_, _, _ = rawdb.ReadBlockBalanceTraceStrict(db, 7)
+	_, _, _ = rawdb.ReadAccountTraceStrict(db, owner, 7)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadAccountTraceStrict":      {},
+		"ReadBlockBalanceTraceStrict": {},
+	}, nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want strict trace reads on hot store rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.ReadAccountTraceStrict", "rawdb.ReadBlockBalanceTraceStrict"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
+	}
+}
+
+func TestColdArchiveAuditAllowsStrictTraceReadsOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db *rawdb.ChainDB, owner []byte) {
+	chainDB := db
+	_, _, _ = rawdb.ReadBlockBalanceTraceStrict(chainDB, 7)
+	_, _, _ = rawdb.ReadAccountTraceStrict(chainDB, owner, 7)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadAccountTraceStrict":      {},
+		"ReadBlockBalanceTraceStrict": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want ChainDB strict trace boundary accepted", offenders)
 	}
 }
 
