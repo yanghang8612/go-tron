@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
@@ -180,6 +181,49 @@ func (s *Server) GetBlockByNum2(_ context.Context, in *apipb.NumberMessage) (*ap
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtention(block), nil
+}
+
+// GetBlock returns a block extension by latest/head, earliest/genesis, number, or BlockID.
+func (s *Server) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockExtention, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	idOrNum := strings.TrimSpace(in.GetIdOrNum())
+	if idOrNum == "" || strings.EqualFold(idOrNum, "latest") {
+		block := s.backend.CurrentBlock()
+		if block == nil {
+			return nil, status.Error(codes.NotFound, "no current block")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+	if strings.EqualFold(idOrNum, "earliest") {
+		block, err := s.backend.GetBlockByNumber(0)
+		if err != nil || block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	if hash, _, ok, err := parseGRPCBlockID(idOrNum); ok || err != nil {
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		block, err := s.backend.GetBlockByHash(hash)
+		if err != nil || block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	num, err := parseGRPCBlockNumber(idOrNum)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid block number")
+	}
+	block, err := s.backend.GetBlockByNumber(num)
+	if err != nil || block == nil {
+		return nil, status.Error(codes.NotFound, "block not found")
+	}
+	return blockToExtentionWithDetail(block, in.GetDetail()), nil
 }
 
 // GetBlockById returns the block matching the given block ID (hash bytes).

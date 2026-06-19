@@ -26,6 +26,10 @@ const bufSize = 1 << 20
 type testBackend struct {
 	block                   *types.Block
 	blocks                  []*types.Block // for range queries
+	blockNumCalls           int
+	lastNumQueried          uint64
+	hashCalls               int
+	lastHashQueried         common.Hash
 	account                 *types.Account
 	tx                      *corepb.Transaction
 	params                  []tronapi.ChainParameter
@@ -39,8 +43,12 @@ type testBackend struct {
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
 }
 
-func (b *testBackend) CurrentBlock() *types.Block                             { return b.block }
-func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return b.block, nil }
+func (b *testBackend) CurrentBlock() *types.Block { return b.block }
+func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
+	b.blockNumCalls++
+	b.lastNumQueried = n
+	return b.block, nil
+}
 func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { return b.account, nil }
 func (b *testBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	return b.account, nil
@@ -73,6 +81,8 @@ func (b *testBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.Transact
 	return nil, nil
 }
 func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
+	b.hashCalls++
+	b.lastHashQueried = h
 	if b.block != nil && b.block.Hash() == h {
 		return b.block, nil
 	}
@@ -543,6 +553,76 @@ func TestGetBlockByNum2_Found(t *testing.T) {
 	}
 	if resp.GetBlockHeader().GetRawData().GetNumber() != 5 {
 		t.Fatalf("want block 5, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+}
+
+func TestGetBlockLatestUsesCurrentBlock(t *testing.T) {
+	blk := makeBlock(8)
+	client := newTestClient(t, &testBackend{block: blk})
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "latest", Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock latest: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 8 {
+		t.Fatalf("want block 8, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+}
+
+func TestGetBlockNumberUsesNumberLookup(t *testing.T) {
+	blk := makeBlock(9)
+	backend := &testBackend{block: blk}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "9", Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock number: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 9 {
+		t.Fatalf("want block 9, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.blockNumCalls != 1 || backend.lastNumQueried != 9 {
+		t.Fatalf("number lookup calls/num = %d/%d, want 1/9", backend.blockNumCalls, backend.lastNumQueried)
+	}
+}
+
+func TestGetBlockIDUsesHashLookup(t *testing.T) {
+	blk := makeBlock(10)
+	backend := &testBackend{block: blk}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: blk.Hash().Hex(), Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock id: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 10 {
+		t.Fatalf("want block 10, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.hashCalls != 1 || backend.lastHashQueried != blk.Hash() {
+		t.Fatalf("hash lookup calls/hash = %d/%s, want 1/%s", backend.hashCalls, backend.lastHashQueried.Hex(), blk.Hash().Hex())
+	}
+}
+
+func TestGetBlockDetailFalseOmitsTransactionBody(t *testing.T) {
+	blk := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 11},
+		},
+		Transactions: []*corepb.Transaction{{
+			RawData: &corepb.TransactionRaw{Timestamp: 99},
+		}},
+	})
+	client := newTestClient(t, &testBackend{block: blk})
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "11"})
+	if err != nil {
+		t.Fatalf("GetBlock detail=false: %v", err)
+	}
+	txs := resp.GetTransactions()
+	if len(txs) != 1 {
+		t.Fatalf("transaction count = %d, want 1", len(txs))
+	}
+	if txs[0].GetTransaction() != nil {
+		t.Fatal("detail=false returned full transaction body")
+	}
+	if len(txs[0].GetTxid()) != common.HashLength {
+		t.Fatalf("txid length = %d, want %d", len(txs[0].GetTxid()), common.HashLength)
 	}
 }
 

@@ -1379,6 +1379,10 @@ Status:
   expose their encoded height before any backend hash lookup, so requests above
   the solidified block cannot read hot/cold block payloads accidentally; the
   `detail=false` form returns transaction IDs without full transaction bodies.
+- gRPC `Wallet.GetBlock(BlockReq)` now implements the same `BlockReq` parser for
+  head, genesis, number, and java-tron BlockID reads, so regular Wallet callers
+  also reach the ChainDB hot/cold block lookup path instead of the generated
+  unimplemented stub; `detail=false` mirrors the Solidity response shape.
 - HTTP `/walletsolidity` and `/walletpbft` block-by-id/range reads are now
   bound-aware too. `getblockbyid` extracts the java-tron BlockId height before
   any backend hash lookup, and `getblockbylimitnext` rejects ranges that cross
