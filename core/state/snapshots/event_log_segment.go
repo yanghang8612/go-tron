@@ -346,7 +346,7 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	return compareEventLogLookupIndexMaps(indexRef, "topic", expectedTopic, actualTopic)
 }
 
-func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eventRefs []SegmentRef, fromBlock, toBlock uint64, candidateStarts []uint64) error {
+func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eventRefs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, candidateStarts []uint64) error {
 	if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
 		return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
 			indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
@@ -355,7 +355,9 @@ func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eve
 	for _, ref := range eventRefs {
 		refsByStart[ref.FromTxNum] = ref
 	}
+	candidateSet := make(map[uint64]struct{}, len(candidateStarts))
 	for _, start := range candidateStarts {
+		candidateSet[start] = struct{}{}
 		ref, ok := refsByStart[start]
 		if ok {
 			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
@@ -370,7 +372,46 @@ func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eve
 			return fmt.Errorf("snapshots: event-log-index %q points to missing event-log segment starting at block %d", indexRef.Path, start)
 		}
 	}
+	for _, ref := range eventRefs {
+		if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+			continue
+		}
+		if ref.FromTxNum < indexRef.FromTxNum || ref.ToTxNum > indexRef.ToTxNum {
+			return fmt.Errorf("snapshots: event-log segment %q range [%d,%d] crosses event-log-index %q range [%d,%d]",
+				ref.Path, ref.FromTxNum, ref.ToTxNum, indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+		if _, ok := candidateSet[ref.FromTxNum]; ok {
+			continue
+		}
+		seg, err := OpenEventLogSegment(dir, ref)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		hasMatch, matchErr := eventLogSegmentHasFilterMatch(seg, fromBlock, toBlock, filter)
+		closeErr := seg.Close()
+		if matchErr != nil {
+			return matchErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if hasMatch {
+			return fmt.Errorf("snapshots: event-log-index %q missing candidate event-log segment %q for filter", indexRef.Path, ref.Path)
+		}
+	}
 	return nil
+}
+
+func eventLogSegmentHasFilterMatch(seg *EventLogSegment, fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	matched := false
+	err := seg.IterateLogs(fromBlock, toBlock, filter, func(EventLog) (bool, error) {
+		matched = true
+		return false, nil
+	})
+	return matched, err
 }
 
 func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
@@ -925,7 +966,7 @@ func (m *Manager) eventLogIndexQueryPlans(manifest *Manifest, refs []SegmentRef,
 		if !used {
 			return nil, false, nil
 		}
-		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, queryFrom, queryTo, starts); err != nil {
+		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, queryFrom, queryTo, filter, starts); err != nil {
 			return nil, false, err
 		}
 		plans = append(plans, eventLogIndexQueryPlan{

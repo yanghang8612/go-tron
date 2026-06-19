@@ -1274,8 +1274,9 @@ Status:
   and compares the rebuilt address/topic postings with the registered
   `event-log-index` sidecar, so format-valid but stale or incomplete sidecars
   cannot satisfy archive log coverage gates. Runtime filtered archive reads
-  trust the published index after that gate and open only indexed candidate
-  event-log segments, so non-candidate cold files do not sit on the query path.
+  also cross-check global index candidates against readable segment-local
+  lookup postings, rejecting stale sidecars that would otherwise omit a
+  matching event-log segment while still skipping missing non-candidate files.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
