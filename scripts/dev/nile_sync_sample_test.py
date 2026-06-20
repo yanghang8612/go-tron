@@ -1540,6 +1540,16 @@ class NileSyncSampleTest(unittest.TestCase):
                 "\n".join(
                     [
                         "#!/usr/bin/env bash",
+                        'if printf "%s\\n" "$@" | grep -qx -- "--prometheus"; then',
+                        "cat <<'EOF'",
+                        "# HELP gtron_storage_alert_status Overall storage alert status: 0=ok, 1=warning, 2=critical.",
+                        "# TYPE gtron_storage_alert_status gauge",
+                        'gtron_storage_alert_status{datadir="/tmp/nile"} 2',
+                        'gtron_storage_alert_component_status{component="stage",datadir="/tmp/nile"} 2',
+                        'gtron_storage_alert_component_issues{component="stage",datadir="/tmp/nile"} 1',
+                        "EOF",
+                        "exit 1",
+                        "fi",
                         "cat <<'EOF'",
                         '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
                         "EOF",
@@ -1556,6 +1566,7 @@ class NileSyncSampleTest(unittest.TestCase):
             thread.start()
             self.addCleanup(server.shutdown)
             self.addCleanup(server.server_close)
+            output = tmpdir / "samples.jsonl"
 
             proc = subprocess.run(
                 [
@@ -1566,6 +1577,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     f"http://127.0.0.1:{server.server_address[1]}",
                     "--gtron",
                     str(fake_gtron),
+                    "--output",
+                    str(output),
                     "--offline-db-check",
                 ],
                 cwd=REPO_ROOT,
@@ -1577,6 +1590,15 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertTrue(row["offlineDbCheck"])
             self.assertEqual(row["offlineDbCheckStatus"], "error")
+            self.assertEqual(row["offlineDbCheckPrometheusStatus"], "ok")
+            metrics_path = Path(row["offlineDbCheckPrometheus"])
+            self.assertEqual(metrics_path, Path(str(output) + ".storage-alerts.prom"))
+            metrics = metrics_path.read_text(encoding="utf-8")
+            self.assertIn('gtron_storage_alert_status{datadir="/tmp/nile"} 2', metrics)
+            self.assertIn(
+                'gtron_storage_alert_component_issues{component="stage",datadir="/tmp/nile"} 1',
+                metrics,
+            )
             self.assertEqual(row["stageVerifyStatus"], "critical")
             self.assertEqual(row["stageVerifyIssues"], 1)
             self.assertEqual(

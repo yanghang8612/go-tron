@@ -950,6 +950,10 @@ Status:
   records its path as `storageAlertPrometheus` in the JSONL result row. Critical
   storage states still emit the Prometheus metrics before the harness exits
   non-zero.
+- `scripts/dev/nile_sync_sample.sh --offline-db-check` now writes the same
+  storage-alert Prometheus metric payload next to the JSONL output by default,
+  records `offlineDbCheckPrometheus*` fields, and supports an explicit
+  `--storage-alert-prometheus-file` path for long-running Nile scrape jobs.
 
 Needed:
 
@@ -968,10 +972,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Wire the storage benchmark's Prometheus artifacts into the external
-  monitor/alert routing used for long Nile/mainnet soaks. Catalog/freezer
-  sidecar mismatch is now caught by signed/local manifest verification as well
-  as tail-prune/stage-status coverage gates.
+- Wire the storage benchmark and Nile sampler Prometheus artifacts into the
+  external monitor/alert routing used for long Nile/mainnet soaks.
+  Catalog/freezer sidecar mismatch is now caught by signed/local manifest
+  verification as well as tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

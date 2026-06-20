@@ -21,6 +21,7 @@ STAGE_STATUS_FILE=""
 SYNC_LOG_FILE=""
 PID_FILE=""
 DEBUG_METRICS_URL=""
+STORAGE_ALERT_PROMETHEUS_FILE=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 
@@ -42,6 +43,8 @@ Options:
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --debug-metrics-url URL    Fetch optional /debug/metrics JSON into the sample row
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
+  --storage-alert-prometheus-file FILE
+                              Write storage-alerts Prometheus metrics when offline DB check runs
   --strict-offline-db-check  Fail when offline db check reports critical issues
   -h, --help                 Show this help
 
@@ -75,6 +78,7 @@ while [ "$#" -gt 0 ]; do
     --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
+    --storage-alert-prometheus-file) STORAGE_ALERT_PROMETHEUS_FILE="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -161,16 +165,39 @@ fi
 
 offline_status="skipped"
 offline_exit=0
+offline_prometheus_status="skipped"
+storage_alerts_prometheus_path=""
 if [ "$OFFLINE_DB_CHECK" -eq 1 ]; then
   if [ ! -x "$GTRON" ]; then
     offline_status="missing-gtron"
     offline_exit=127
+    offline_prometheus_status="missing-gtron"
     echo "gtron binary not executable: $GTRON" >"$storage_alerts_out"
-  elif "$GTRON" db storage-alerts --json --datadir "$DATADIR" >"$storage_alerts_out" 2>&1; then
-    offline_status="ok"
   else
-    offline_exit=$?
-    offline_status="error"
+    if "$GTRON" db storage-alerts --json --datadir "$DATADIR" >"$storage_alerts_out" 2>&1; then
+      offline_status="ok"
+    else
+      offline_exit=$?
+      offline_status="error"
+    fi
+    if [ -n "$STORAGE_ALERT_PROMETHEUS_FILE" ]; then
+      storage_alerts_prometheus_path="$STORAGE_ALERT_PROMETHEUS_FILE"
+    elif [ -n "$OUTPUT" ]; then
+      storage_alerts_prometheus_path="$OUTPUT.storage-alerts.prom"
+    fi
+    if [ -n "$storage_alerts_prometheus_path" ]; then
+      mkdir -p "$(dirname "$storage_alerts_prometheus_path")"
+      if "$GTRON" db storage-alerts --prometheus --datadir "$DATADIR" >"$storage_alerts_prometheus_path" 2>&1; then
+        offline_prometheus_status="ok"
+      elif grep -q '^gtron_storage_alert_status{' "$storage_alerts_prometheus_path"; then
+        # Critical storage states intentionally return non-zero after writing metrics.
+        offline_prometheus_status="ok"
+      else
+        offline_prometheus_status="error"
+      fi
+    else
+      offline_prometheus_status="skipped-no-output"
+    fi
   fi
 else
   : >"$storage_alerts_out"
@@ -201,6 +228,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
+  "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -235,6 +263,8 @@ from pathlib import Path
     offline_exit,
     offline_enabled,
     strict_offline,
+    offline_prometheus_status,
+    storage_alerts_prometheus_path,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -1470,6 +1500,7 @@ def build_soak_health(
     alerts,
     offline_status,
     offline_enabled,
+    offline_prometheus_status,
     stage_sync_bottleneck,
     stage_sync_bottleneck_lag,
     sync_log,
@@ -1518,6 +1549,8 @@ def build_soak_health(
             add(warning, issue)
     if bool(int(offline_enabled)) and offline_status != "ok":
         add(critical, f"offline-db-check:{offline_status}")
+    if bool(int(offline_enabled)) and offline_prometheus_status == "error":
+        add(warning, "offline-db-check-prometheus:error")
 
     if critical:
         status = "critical"
@@ -2007,6 +2040,7 @@ soak_health = build_soak_health(
     alerts,
     offline_status,
     offline_enabled,
+    offline_prometheus_status,
     stage_sync_bottleneck,
     stage_sync_bottleneck_lag,
     sync_log,
@@ -2293,6 +2327,8 @@ row = {
     "offlineDbCheck": bool(int(offline_enabled)),
     "offlineDbCheckStatus": offline_status,
     "offlineDbCheckExit": int(offline_exit),
+    "offlineDbCheckPrometheusStatus": offline_prometheus_status,
+    "offlineDbCheckPrometheus": storage_alerts_prometheus_path,
     "gitCommit": git_commit,
     "gitDirty": git_dirty == "true",
     "datadir": datadir,
