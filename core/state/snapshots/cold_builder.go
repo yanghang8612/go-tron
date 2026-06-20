@@ -387,6 +387,14 @@ func (r *Runner) onePass() (PassResult, error) {
 		return result, nil
 	}
 
+	var snapshotBuildHash common.Hash
+	if _, ok := db.(ethdb.KeyValueWriter); ok {
+		snapshotBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotBuild, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+	}
+
 	refs, err := historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
 	if err != nil {
 		return PassResult{}, err
@@ -459,7 +467,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	result.Manifest = manifest
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
 		stageProgress := newRawDBStageProgressStore(writer)
-		if err := stageProgress.Write(rawdb.StageSnapshotBuild, cutoffBlock); err != nil {
+		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotBuild, cutoffBlock, snapshotBuildHash); err != nil {
 			return PassResult{}, err
 		}
 		if eventLogBuilt {
@@ -472,6 +480,34 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func writeSnapshotBuildStage(writer ethdb.KeyValueWriter, stage rawdb.StageID, block uint64, hash common.Hash) error {
+	if writer == nil {
+		return errNilStageProgressStore
+	}
+	if hash == (common.Hash{}) {
+		return fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
+	}
+	return rawdb.WriteStageProgressWithHash(writer, stage, block, hash)
+}
+
+func (r *Runner) snapshotBuildStageBoundaryHash(db AggregatorDB, stage rawdb.StageID, block uint64) (common.Hash, error) {
+	if db == nil {
+		return common.Hash{}, fmt.Errorf("snapshots: %s stage block %d requires readable database", stage, block)
+	}
+	hash := r.canonicalHashReader(db)(block)
+	if hash != (common.Hash{}) {
+		return hash, nil
+	}
+	strictHash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, block)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, block, err)
+	}
+	if ok && strictHash != (common.Hash{}) {
+		return strictHash, nil
+	}
+	return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
 }
 
 func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
@@ -658,13 +694,20 @@ func (r *Runner) latestPass() (bool, error) {
 	if prevBlock != 0 && block < prevBlock+r.cfg.LatestBuildBlocks {
 		return false, nil // not enough blocks elapsed
 	}
+	var latestBuildHash common.Hash
+	if _, ok := db.(ethdb.KeyValueWriter); ok {
+		latestBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotLatestBuild, block)
+		if err != nil {
+			return false, err
+		}
+	}
 	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
 	if err != nil {
 		return false, err
 	}
 	r.lastLatestBuildBlock.Store(block)
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		if err := newRawDBStageProgressStore(writer).Write(rawdb.StageSnapshotLatestBuild, block); err != nil {
+		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotLatestBuild, block, latestBuildHash); err != nil {
 			return false, err
 		}
 	}

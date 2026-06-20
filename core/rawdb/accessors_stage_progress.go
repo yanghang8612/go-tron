@@ -13,11 +13,14 @@ import (
 type StageID string
 
 const (
-	StageHeaders       StageID = "Headers"
-	StageBodies        StageID = "Bodies"
-	StageExecution     StageID = "Execution"
-	StageCommitment    StageID = "Commitment"
-	StageFinish        StageID = "Finish"
+	StageHeaders    StageID = "Headers"
+	StageBodies     StageID = "Bodies"
+	StageExecution  StageID = "Execution"
+	StageCommitment StageID = "Commitment"
+	StageFinish     StageID = "Finish"
+	// StageSnapshotBuild records the highest canonical source block whose
+	// state-domain history files have been published. It is hash-bound so
+	// snapshot build progress cannot silently cross a same-height fork.
 	StageSnapshotBuild StageID = "SnapshotBuild"
 	StageSnapshotPrune StageID = "SnapshotPrune"
 
@@ -58,10 +61,11 @@ const (
 	// StageSnapshotLatestBuild records the solidified block at which the last
 	// production latest-snapshot build ran, so the LatestBuildBlocks cadence gate
 	// resumes across restarts instead of re-seeding to the current head (which
-	// would delay the next build by one interval). Block-valued, forward-only
-	// (never rewound), mirroring StageSnapshotBuild. NOTE: if an operator raises
-	// LatestBuildBlocks a lot, the next build may be far out even when state is
-	// stale — that is expected (gate = block >= prev + interval), not a stuck stage.
+	// would delay the next build by one interval). Block-valued, hash-bound,
+	// forward-only (never rewound), mirroring StageSnapshotBuild. NOTE: if an
+	// operator raises LatestBuildBlocks a lot, the next build may be far out even
+	// when state is stale — that is expected (gate = block >= prev + interval),
+	// not a stuck stage.
 	StageSnapshotLatestBuild StageID = "SnapshotLatestBuild"
 	// StageSnapshotEventLogBuild records the highest source block whose
 	// transaction logs have been published into registered cold event-log

@@ -1398,6 +1398,8 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageSyncCommitment,
 		rawdb.StageSyncFinish,
 		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotBuild,
+		rawdb.StageSnapshotLatestBuild,
 		rawdb.StageSnapshotEventLogBuild,
 		rawdb.StageSnapshotChainLookupPrune,
 		rawdb.StageSnapshotSectionBloomPrune,

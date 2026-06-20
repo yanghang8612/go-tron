@@ -1192,6 +1192,42 @@ func TestDBStageStatusVerifyRejectsUnboundSyncImportStage(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerifyRejectsUnboundSnapshotBuildStages(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild} {
+		if err := rawdb.WriteStageProgress(db, stage, block1.Number()); err != nil {
+			t.Fatalf("WriteStageProgress %s: %v", stage, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SnapshotBuild verified=unbound") || !strings.Contains(err.Error(), "SnapshotLatestBuild verified=unbound") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want unbound snapshot build failures", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild} {
+		if !strings.Contains(output, fmt.Sprintf("group=snapshot name=%s value=1 hash=none verified=unbound", stage)) {
+			t.Fatalf("verify output missing unbound %s line:\n%s", stage, output)
+		}
+	}
+}
+
 func TestDBStageStatusVerifyShowsSyncBodiesStagedMismatchDetails(t *testing.T) {
 	dataDir := t.TempDir()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -1850,6 +1886,8 @@ func TestDBStageStatusVerificationLimitsStateTxRangeHashFallback(t *testing.T) {
 	for _, stage := range []rawdb.StageID{
 		rawdb.StageFinish,
 		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotBuild,
+		rawdb.StageSnapshotLatestBuild,
 		rawdb.StageSnapshotChainLookupPrune,
 		rawdb.StageSnapshotChainFreezerTailPrune,
 	} {

@@ -644,6 +644,12 @@ Status:
   checker next to the downloader-owned sync-stage checker. This makes the
   post-import storage maintenance stages part of the same machine-verifiable
   staged pipeline model instead of CLI-local validation logic.
+- The cold snapshot builder now writes `SnapshotBuild` and
+  `SnapshotLatestBuild` as hash-bound canonical block stages. It resolves the
+  boundary hash before publishing the new stage row, and
+  `gtron db stage-status --db.stage.verify` rejects legacy unbound or
+  same-height mismatched build-stage rows, so snapshot publication cadence and
+  history-build progress cannot silently cross a fork boundary.
 - Derived-index hot-row pruning for balance traces and section blooms now
   writes hash-bound `SnapshotBalanceTracePrune` and
   `SnapshotSectionBloomPrune` stage rows after verified cold segment coverage,

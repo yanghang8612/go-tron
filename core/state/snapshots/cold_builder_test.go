@@ -52,6 +52,7 @@ func seedLatestRows(t *testing.T, db ethdb.KeyValueWriter, owner common.Address,
 	if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, txNum, txNum); err != nil {
 		t.Fatalf("seed tx range block %d: %v", blockNum, err)
 	}
+	writeColdBuilderCanonicalBlock(t, db, blockNum)
 }
 
 func TestColdBuilderConfigDefaultsHistoryDataset(t *testing.T) {
@@ -84,8 +85,11 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	owner := coldBuilderOwner(0x71)
 
 	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+	writeColdBuilderCanonicalBlock(t, db, 1)
 	writeColdBuilderChange(t, db, owner, 2, 2, "b")
+	writeColdBuilderCanonicalBlock(t, db, 2)
 	writeColdBuilderChange(t, db, owner, 3, 3, "c")
+	block3Hash := writeColdBuilderCanonicalBlock(t, db, 3)
 
 	mgr, err := OpenManager(dir)
 	if err != nil {
@@ -125,6 +129,9 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || !ok || got != 3 {
 		t.Fatalf("snapshot build stage progress = %d ok=%v err=%v, want 3", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block3Hash {
+		t.Fatalf("SnapshotBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block3Hash)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHistory); err != nil || !ok || got != 3 {
 		t.Fatalf("snapshot history stage progress = %d ok=%v err=%v, want 3", got, ok, err)
@@ -175,6 +182,9 @@ func TestColdBuilderOnePassCapsCutoffAtVerifiedFinishStage(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || !ok || got != 3 {
 		t.Fatalf("StageSnapshotBuild = %d ok=%v err=%v, want 3", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != finishHash {
+		t.Fatalf("StageSnapshotBuild row = %+v ok=%v err=%v, want finish hash %x", row, ok, err, finishHash)
+	}
 	manifest, err := LoadManifest(dir)
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
@@ -221,6 +231,9 @@ func TestColdBuilderOnePassVerifiesFinishStageThroughChainSourceHash(t *testing.
 	if !result.Built || result.CutoffBlock != 3 || result.ToTxNum != 3 {
 		t.Fatalf("result = %+v, want build through chain-source finish stage", result)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != finishHash {
+		t.Fatalf("StageSnapshotBuild row = %+v ok=%v err=%v, want chain-source hash %x", row, ok, err, finishHash)
+	}
 }
 
 func TestColdBuilderOnePassRejectsFinishStageHashMismatch(t *testing.T) {
@@ -251,13 +264,37 @@ func TestColdBuilderOnePassRejectsFinishStageHashMismatch(t *testing.T) {
 	}
 }
 
+func TestColdBuilderOnePassRejectsMissingSnapshotBuildBoundaryHashBeforePublish(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x78)
+
+	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+	})
+	result, err := runner.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "missing canonical hash for SnapshotBuild stage block 1") {
+		t.Fatalf("one pass result=%+v err=%v, want missing SnapshotBuild boundary hash", result, err)
+	}
+	if _, err := LoadManifest(dir); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("manifest after rejected pass err=%v, want not exist", err)
+	}
+}
+
 func TestColdBuilderSecondPassNoOpWhenManifestCoversCutoff(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := coldBuilderOwner(0x72)
 
 	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+	writeColdBuilderCanonicalBlock(t, db, 1)
 	writeColdBuilderChange(t, db, owner, 2, 2, "b")
+	writeColdBuilderCanonicalBlock(t, db, 2)
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 3}, Config{
 		Dir:           dir,
@@ -296,6 +333,7 @@ func TestColdBuilderSecondPassContinuesFromManifestVisibleEnd(t *testing.T) {
 
 	for block := uint64(1); block <= 5; block++ {
 		writeColdBuilderChange(t, db, owner, block, block, string(rune('a'+block-1)))
+		writeColdBuilderCanonicalBlock(t, db, block)
 	}
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 6}, Config{
@@ -334,7 +372,9 @@ func TestColdBuilderCompactsSmallHistorySegments(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := coldBuilderOwner(0x76)
 	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+	writeColdBuilderCanonicalBlock(t, db, 1)
 	writeColdBuilderChange(t, db, owner, 2, 2, "b")
+	writeColdBuilderCanonicalBlock(t, db, 2)
 	chain := &coldBuilderChain{db: db, solidified: 2}
 	runner := NewRunner(chain, Config{
 		Dir:                dir,
@@ -407,7 +447,9 @@ func TestColdBuilderCursorIgnoresNonHistoryManifestVisibility(t *testing.T) {
 	owner := coldBuilderOwner(0x75)
 
 	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+	writeColdBuilderCanonicalBlock(t, db, 1)
 	writeColdBuilderChange(t, db, owner, 2, 2, "b")
+	writeColdBuilderCanonicalBlock(t, db, 2)
 	if err := PublishManifest(dir, NewManifest(1, 2, nil)); err != nil {
 		t.Fatalf("publish non-history manifest: %v", err)
 	}
@@ -506,6 +548,9 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	if got := runner.lastLatestBuildBlock.Load(); got != 50 {
 		t.Fatalf("lastLatestBuildBlock after call 1 = %d, want 50", got)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash {
+		t.Fatalf("StageSnapshotLatestBuild row after call 1 = %+v ok=%v err=%v, want hash-bound row", row, ok, err)
+	}
 	// Manifest must have latest refs.
 	manifest, err := LoadManifest(dir)
 	if err != nil {
@@ -536,6 +581,7 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, 65, common.Hash{65}, 65, 65); err != nil {
 		t.Fatalf("seed tx range block 65: %v", err)
 	}
+	writeColdBuilderCanonicalBlock(t, db, 65)
 	built3, err := runner.latestPass()
 	if err != nil {
 		t.Fatalf("latestPass call 3: %v", err)
@@ -545,6 +591,9 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	}
 	if got := runner.lastLatestBuildBlock.Load(); got != 65 {
 		t.Fatalf("lastLatestBuildBlock after call 3 = %d, want 65", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash {
+		t.Fatalf("StageSnapshotLatestBuild row after call 3 = %+v ok=%v err=%v, want hash-bound row", row, ok, err)
 	}
 }
 
@@ -581,6 +630,9 @@ func TestRunnerLatestPassCapsWatermarkAtVerifiedFinishStage(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || got != 40 {
 		t.Fatalf("StageSnapshotLatestBuild = %d ok=%v err=%v, want 40", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != finishHash {
+		t.Fatalf("StageSnapshotLatestBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, finishHash)
 	}
 	manifest, err := LoadManifest(dir)
 	if err != nil {
@@ -650,6 +702,9 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	if stageErr1 != nil || !stageOK1 || stageBlock1 != 50 {
 		t.Fatalf("StageSnapshotLatestBuild after runner1 = %d ok=%v err=%v, want 50", stageBlock1, stageOK1, stageErr1)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash {
+		t.Fatalf("StageSnapshotLatestBuild row after runner1 = %+v ok=%v err=%v, want hash-bound row", row, ok, err)
+	}
 
 	// ── Simulate restart: advance chain to 55 BEFORE constructing Runner2 ───
 	// This is the discriminator: old Start() would seed to 55 (current head);
@@ -708,6 +763,7 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, 65, common.Hash{65}, 65, 65); err != nil {
 		t.Fatalf("seed tx range block 65: %v", err)
 	}
+	writeColdBuilderCanonicalBlock(t, db, 65)
 
 	result2b, err := runner2.OnePass()
 	if err != nil {
@@ -724,6 +780,9 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	stageBlock2, stageOK2, stageErr2 := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild)
 	if stageErr2 != nil || !stageOK2 || stageBlock2 != 65 {
 		t.Fatalf("StageSnapshotLatestBuild after runner2 build = %d ok=%v err=%v, want 65", stageBlock2, stageOK2, stageErr2)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash {
+		t.Fatalf("StageSnapshotLatestBuild row after runner2 build = %+v ok=%v err=%v, want hash-bound row", row, ok, err)
 	}
 }
 
@@ -1028,6 +1087,7 @@ func TestColdBuilderBuildsSectionBloomsOnlyForCompleteSections(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, sectionEnd, common.Hash{0xee}, sectionEnd, sectionEnd); err != nil {
 		t.Fatalf("WriteStateTxRange section end: %v", err)
 	}
+	writeColdBuilderCanonicalBlock(t, db, sectionEnd)
 	row := sectionBloomTestEncodedBit(t, 5)
 	if err := rawdb.WriteSectionBloom(db, 0, 42, row); err != nil {
 		t.Fatalf("WriteSectionBloom: %v", err)
@@ -1092,6 +1152,7 @@ func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, cutoff, common.Hash{0xdd}, cutoff, cutoff); err != nil {
 		t.Fatalf("WriteStateTxRange cutoff: %v", err)
 	}
+	writeColdBuilderCanonicalBlock(t, db, cutoff)
 	if err := rawdb.WriteSectionBloom(db, 0, 42, sectionBloomTestEncodedBit(t, 5)); err != nil {
 		t.Fatalf("WriteSectionBloom: %v", err)
 	}
