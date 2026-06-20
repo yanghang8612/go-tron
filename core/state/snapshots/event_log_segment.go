@@ -854,6 +854,9 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 	refs := eventLogRefs(manifest)
 	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {
+		if eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
+			return refs, nil
+		}
 		return nil, err
 	}
 	if !indexed {

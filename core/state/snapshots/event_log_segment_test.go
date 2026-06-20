@@ -1024,8 +1024,11 @@ func TestEventLogIndexedRangeCoveredRejectsPartialIndex(t *testing.T) {
 	if err := mgr.IterateEventLogs(1, 2, filter, func(EventLog) (bool, error) {
 		seen++
 		return true, nil
-	}); err == nil || !strings.Contains(err.Error(), "missing candidate event-log segment") {
-		t.Fatalf("IterateEventLogs partial index err = %v rows=%d, want missing-candidate error", err, seen)
+	}); err != nil {
+		t.Fatalf("IterateEventLogs partial index fallback: %v", err)
+	}
+	if seen != 2 {
+		t.Fatalf("IterateEventLogs rows = %d, want 2 fallback rows", seen)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 2)
 	if err == nil || covered {

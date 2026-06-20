@@ -1428,10 +1428,14 @@ Status:
   segments. Indexed coverage now also replays the active event-log segments
   and compares the rebuilt address/topic postings with the registered
   `event-log-index` sidecar, so format-valid but stale or incomplete sidecars
-  cannot satisfy archive log coverage gates. Runtime filtered archive reads
+  cannot satisfy archive log coverage gates. Covered filtered archive reads
   also cross-check global index candidates against readable segment-local
   lookup postings, rejecting stale sidecars that would otherwise omit a
   matching event-log segment while still skipping missing non-candidate files.
+  Non-covered manager iteration can still fall back to a full cold event-log
+  segment scan when the immutable event-log segments continuously cover the
+  request range, so stale global index sidecars degrade performance without
+  producing a false empty result.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
