@@ -62,6 +62,20 @@ func (f failingBlockChainIndex) TransactionBlockNumberByHash(hash tcommon.Hash) 
 	return 0, false, nil
 }
 
+type staticAncientRow struct {
+	rawdb.NoopAncient
+	kind   string
+	number uint64
+	data   []byte
+}
+
+func (a staticAncientRow) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == a.kind && number == a.number {
+		return append([]byte(nil), a.data...), nil
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
 // TestTronBackend_ChainID verifies ChainID returns the configured chain ID.
 func TestTronBackend_ChainID(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
@@ -97,6 +111,43 @@ func TestTronBackend_BlockHashReadsSurfaceColdIndexError(t *testing.T) {
 	}
 	if _, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &hash}); err == nil || !strings.Contains(err.Error(), "cold block index corrupt") {
 		t.Fatalf("GetLogs blockHash error = %v, want cold block index error", err)
+	}
+}
+
+func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 1000000},
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, staticAncientRow{
+		kind:   rawdb.AncientBlocksTable,
+		number: 1,
+		data:   []byte("not-a-valid-block"),
+	})
+	if err != nil {
+		t.Fatalf("NewBlockChainWithAncient: %v", err)
+	}
+	defer bc.Close()
+
+	block, _ := testBackendLogBlock(1, nil)
+	if err := rawdb.WriteBlockNumber(diskdb, block.Hash(), block.Number()); err != nil {
+		t.Fatalf("WriteBlockNumber: %v", err)
+	}
+	bc.currentBlock.Store(block)
+
+	backend := &TronBackend{chain: bc}
+	if got, err := backend.GetBlockByHash(block.Hash()); err == nil || got != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetBlockByHash corrupt body = %v/%v, want decode error", got, err)
+	}
+	blockHash := block.Hash()
+	if logs, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &blockHash}); err == nil || logs != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetLogs corrupt block body = %+v/%v, want decode error", logs, err)
 	}
 }
 

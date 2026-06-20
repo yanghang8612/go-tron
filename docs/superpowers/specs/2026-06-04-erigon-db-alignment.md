@@ -1620,7 +1620,10 @@ Status:
   chain-index lookup errors. `TronBackend.GetBlockByHash` and JSON-RPC log
   filtering by `blockHash` use that strict path, so archive index corruption is
   reported as a data error instead of being disguised as an empty/not-found
-  result.
+  result. Once the hash lookup resolves a block number, the backend now reads
+  the body through `ReadBlockStrict`; corrupt or missing freezer/hot block
+  bodies behind a valid index surface as archive data errors before
+  `eth_getLogs(blockHash=...)` can return a false empty result.
 - HTTP `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` transaction
   by id / transaction-info by id reads now resolve the transaction's block
   through the hot/cold tx lookup index before exposing payloads. Transactions

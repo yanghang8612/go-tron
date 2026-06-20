@@ -372,9 +372,14 @@ func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
 		if head := b.chain.CurrentBlock(); head != nil && num > head.Number() {
 			return nil, fmt.Errorf("block not found")
 		}
-		if block := rawdb.ReadBlock(b.chain.chaindb, num); block != nil {
-			return block, nil
+		block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, num)
+		if err != nil {
+			return nil, err
 		}
+		if !hasBlock {
+			return nil, fmt.Errorf("block body missing for indexed block %d hash %x", num, hash)
+		}
+		return block, nil
 	}
 	// The input may be a blockID (first 8 bytes = block number, rest = hash[8:]).
 	// Extract the block number and look up by number, then verify the ID matches.
