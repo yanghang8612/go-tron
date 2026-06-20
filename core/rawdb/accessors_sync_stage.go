@@ -331,6 +331,10 @@ func WriteSyncImportProgressBatch(db interface {
 		result.ProgressError = err
 		return result
 	}
+	if err := validateSyncImportProgressMonotonic(db, progress); err != nil {
+		result.ProgressError = err
+		return result
+	}
 	if result.DeleteErrors = validateSyncImportDeleteRows(db, deletes); len(result.DeleteErrors) > 0 {
 		return result
 	}
@@ -448,6 +452,31 @@ func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, r
 		}
 		if deleteRow.Hash != row.BlockHash {
 			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d hash %x, want staged delete hash %x", row.Stage, i, row.BlockNum, row.BlockHash, deleteRow.Hash)
+		}
+	}
+	return nil
+}
+
+func validateSyncImportProgressMonotonic(db ethdb.KeyValueReader, rows []StageProgress) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if db == nil {
+		return errors.New("rawdb: nil sync import progress reader")
+	}
+	for i, row := range rows {
+		existing, ok, err := ReadStageProgressRow(db, row.Stage)
+		if err != nil {
+			return fmt.Errorf("rawdb: read existing sync import progress %s: %w", row.Stage, err)
+		}
+		if !ok {
+			continue
+		}
+		if existing.BlockNum > row.BlockNum {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d would regress existing block %d", row.Stage, i, row.BlockNum, existing.BlockNum)
+		}
+		if existing.BlockNum == row.BlockNum && existing.HasBlockHash && row.HasBlockHash && existing.BlockHash != row.BlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d hash %x would replace existing hash %x", row.Stage, i, row.BlockNum, row.BlockHash, existing.BlockHash)
 		}
 	}
 	return nil

@@ -253,6 +253,82 @@ func TestWriteSyncImportProgressBatchAllowsDownstreamStageLag(t *testing.T) {
 	}
 }
 
+func TestWriteSyncImportProgressBatchRejectsExistingProgressRegression(t *testing.T) {
+	t.Run("lower block", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block1 := testSyncStagedBlock(1, common.Hash{})
+		block2 := testSyncStagedBlock(2, block1.Hash())
+		block3 := testSyncStagedBlock(3, block2.Hash())
+		for _, block := range []*types.Block{block1, block2, block3} {
+			if err := WriteSyncStagedBlock(base, block); err != nil {
+				t.Fatalf("write staged block %d: %v", block.Number(), err)
+			}
+		}
+		if err := WriteStageProgressWithHash(base, StageSyncImport, block3.Number(), block3.Hash()); err != nil {
+			t.Fatalf("write existing sync import progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block1.Number(), Hash: block1.Hash()},
+			{Number: block2.Number(), Hash: block2.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "would regress existing block 3") {
+			t.Fatalf("result = %+v, want existing progress regression error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+			t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || !ok || row.BlockNum != block3.Number() || row.BlockHash != block3.Hash() {
+			t.Fatalf("existing sync import progress = %+v ok=%v err=%v, want block3 kept", row, ok, err)
+		}
+		for _, block := range []*types.Block{block1, block2, block3} {
+			if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+				t.Fatalf("staged block %d after rejected write ok=%v err=%v, want present", block.Number(), ok, err)
+			}
+		}
+	})
+
+	t.Run("same height hash mismatch", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block: %v", err)
+		}
+		existingHash := common.Hash{0xee}
+		if err := WriteStageProgressWithHash(base, StageSyncImport, block.Number(), existingHash); err != nil {
+			t.Fatalf("write existing sync import progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: block.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "would replace existing hash") {
+			t.Fatalf("result = %+v, want same-height hash replacement error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+			t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != existingHash {
+			t.Fatalf("existing sync import progress = %+v ok=%v err=%v, want old hash kept", row, ok, err)
+		}
+		if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+			t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
+		}
+	})
+}
+
 func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T) {
 	t.Run("hash mismatch", func(t *testing.T) {
 		base := NewMemoryDatabase()
