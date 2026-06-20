@@ -492,6 +492,44 @@ def parse_stage_status_json(text, row):
                     detail["stagedHash"] = entry["stagedHash"]
                 row["stageStagedBodyIssueRows"] += 1
                 row["stageStagedBodyIssueDetails"].append(detail)
+        for item in obj.get("issueDetails", []) or []:
+            if not isinstance(item, dict):
+                continue
+            detail = {}
+            for key in ("severity", "kind", "detail", "stage", "verified", "downstream", "upstream"):
+                if key in item:
+                    detail[key] = str(item.get(key, ""))
+            for key in ("value", "downstreamValue", "upstreamValue"):
+                if key in item:
+                    try:
+                        detail[key] = int(item.get(key, -1))
+                    except Exception:
+                        detail[key] = item.get(key)
+            for key in ("missingUpstream", "hashMismatch"):
+                if key in item:
+                    detail[key] = bool(item.get(key))
+            if not detail:
+                continue
+            kind = str(detail.get("kind", ""))
+            row["stageIssueRows"] += 1
+            row["stageIssueDetails"].append(detail)
+            if kind in {"stage-order", "sync-stage-order"}:
+                row["stageOrderIssueRows"] += 1
+                row["stageOrderIssueDetails"].append(detail)
+                if kind == "sync-stage-order":
+                    row["stageSyncOrderIssueRows"] += 1
+                else:
+                    row["stageStorageOrderIssueRows"] += 1
+        if row["stageIssueRows"] == 0:
+            for issue in obj.get("issues", []) or []:
+                if not isinstance(issue, str):
+                    continue
+                row["stageIssueRows"] += 1
+                row["stageIssueDetails"].append({
+                    "severity": "critical",
+                    "kind": "stage-status",
+                    "detail": issue,
+                })
         return True
     return False
 
@@ -507,6 +545,12 @@ def parse_stage_status(path):
         "stageMissingCanonicalRows": 0,
         "stageStagedBodyIssueRows": 0,
         "stageStagedBodyIssueDetails": [],
+        "stageIssueRows": 0,
+        "stageIssueDetails": [],
+        "stageOrderIssueRows": 0,
+        "stageSyncOrderIssueRows": 0,
+        "stageStorageOrderIssueRows": 0,
+        "stageOrderIssueDetails": [],
         "stageSyncInventory": -1,
         "stageSyncBodies": -1,
         "stageSyncBodiesReady": -1,
@@ -1529,6 +1573,10 @@ def build_soak_health(
         add(critical, "stage-missing-canonical")
     if number(stages, "stageStagedBodyIssueRows", 0) > 0:
         add(critical, "stage-staged-body-issue")
+    if number(stages, "stageOrderIssueRows", 0) > 0:
+        add(critical, "stage-order-issue")
+    if number(stages, "stageIssueRows", 0) > 0:
+        add(critical, "stage-status-issue")
     if number(stages, "stageUnboundRows", 0) > 0:
         add(warning, "stage-unbound-rows")
     if restart_recovery_status == "stalled":

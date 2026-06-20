@@ -1097,6 +1097,16 @@ func TestDBStageStatusCmd(t *testing.T) {
 	if !strings.Contains(strings.Join(report.Issues, "; "), "SyncImport verified=mismatch") {
 		t.Fatalf("stage status json issues = %v, want SyncImport mismatch", report.Issues)
 	}
+	var foundSyncImportDetail bool
+	for _, detail := range report.IssueDetails {
+		if detail.Kind == "stage-verification" && detail.Stage == string(rawdb.StageSyncImport) && detail.Verified == "mismatch" {
+			foundSyncImportDetail = true
+			break
+		}
+	}
+	if !foundSyncImportDetail {
+		t.Fatalf("stage status issue details = %+v, want structured SyncImport mismatch", report.IssueDetails)
+	}
 
 	verifyCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
 	verifyOutput, err := captureDBCmdStdout(t, func() error {
@@ -1416,6 +1426,7 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	}
 
 	issues := dbStageStatusPipelineOrderIssues(rows)
+	details := dbStageStatusPipelineOrderIssueDetails(rows)
 	for _, want := range []string{
 		"Execution=6 ahead of Bodies=5",
 		"SnapshotBuild=31 ahead of Finish=30",
@@ -1439,6 +1450,20 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		if !found {
 			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
 		}
+	}
+	var foundExecutionOrderDetail bool
+	for _, detail := range details {
+		if detail.Kind == "stage-order" &&
+			detail.Downstream == string(rawdb.StageExecution) &&
+			detail.Upstream == string(rawdb.StageBodies) &&
+			detail.DownstreamValue == 6 &&
+			detail.UpstreamValue == 5 {
+			foundExecutionOrderDetail = true
+			break
+		}
+	}
+	if !foundExecutionOrderDetail {
+		t.Fatalf("pipeline order issue details = %+v, want structured Execution/Bodies issue", details)
 	}
 
 	rows = []dbStageStatusRow{

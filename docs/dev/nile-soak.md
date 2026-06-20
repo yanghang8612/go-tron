@@ -242,7 +242,12 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSyncInventory`, `stageSyncBodies`, `stageSyncBodiesReady`,
 `stageSyncImport`, `stageSyncExecution`, `stageSyncCommitment`,
 `stageSyncFinish`, `stageCanonicalFinish`, `stageChainFreezer`, and
-`stageSnapshotEventLogBuild`. The sampler also derives
+`stageSnapshotEventLogBuild`. When the captured JSON contains structured
+`issueDetails`, the sampler records `stageIssueRows`, `stageIssueDetails`,
+`stageOrderIssueRows`, `stageSyncOrderIssueRows`,
+`stageStorageOrderIssueRows`, and `stageOrderIssueDetails`, so long soaks can
+filter directly on the stage edge that broke instead of parsing the free-form
+`issues` strings. The sampler also derives
 `stageSyncBodiesReadyGapBlocks`, `stageSyncImportExecutionLagBlocks`,
 `stageSyncExecutionCommitmentLagBlocks`,
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
@@ -352,7 +357,9 @@ enable that flag against a live Pebble datadir unless the DB can be opened by
 the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
 body progress rows fail staged-body verification, including `stagedBlock` and
-`stagedHash` when the referenced staged row can be decoded.
+`stagedHash` when the referenced staged row can be decoded. Structured
+stage-status issue details additionally raise `stage-status-issue`, and
+structured order details raise `stage-order-issue` in `soakHealthIssues`.
 For monitor scrape jobs outside the JSONL sampler, use
 `gtron db storage-alerts --prometheus --datadir <dir>` while the node is stopped
 or the database can otherwise be opened exclusively. The text metrics expose

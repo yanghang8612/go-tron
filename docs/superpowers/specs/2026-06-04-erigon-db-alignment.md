@@ -636,6 +636,12 @@ Status:
   checker next to the downloader-owned sync-stage checker. This makes the
   post-import storage maintenance stages part of the same machine-verifiable
   staged pipeline model instead of CLI-local validation logic.
+- `gtron db stage-status --json` now preserves backward-compatible
+  `issues` strings while also emitting structured `issueDetails` with issue
+  kind, stage/order edge, values, missing-upstream, and hash-mismatch flags.
+  The Nile sampler carries these into `stageIssue*`/`stageOrderIssue*` JSONL
+  fields and marks `stage-status-issue` / `stage-order-issue` in
+  `soakHealthIssues`.
 
 Needed:
 

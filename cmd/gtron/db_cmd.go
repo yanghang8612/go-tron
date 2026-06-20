@@ -892,13 +892,14 @@ type dbStageStatusOptions struct {
 }
 
 type dbStageStatusJSON struct {
-	Datadir string                 `json:"datadir"`
-	Known   int                    `json:"known"`
-	Rows    int                    `json:"rows"`
-	Status  string                 `json:"status"`
-	Verify  bool                   `json:"verify"`
-	Stages  []dbStageStatusRowJSON `json:"stages"`
-	Issues  []string               `json:"issues,omitempty"`
+	Datadir      string                   `json:"datadir"`
+	Known        int                      `json:"known"`
+	Rows         int                      `json:"rows"`
+	Status       string                   `json:"status"`
+	Verify       bool                     `json:"verify"`
+	Stages       []dbStageStatusRowJSON   `json:"stages"`
+	Issues       []string                 `json:"issues,omitempty"`
+	IssueDetails []dbStageStatusIssueJSON `json:"issueDetails,omitempty"`
 }
 
 type dbStageStatusRowJSON struct {
@@ -913,6 +914,21 @@ type dbStageStatusRowJSON struct {
 	Details       []string `json:"details,omitempty"`
 }
 
+type dbStageStatusIssueJSON struct {
+	Severity        string `json:"severity"`
+	Kind            string `json:"kind"`
+	Detail          string `json:"detail"`
+	Stage           string `json:"stage,omitempty"`
+	Verified        string `json:"verified,omitempty"`
+	Value           uint64 `json:"value,omitempty"`
+	Downstream      string `json:"downstream,omitempty"`
+	DownstreamValue uint64 `json:"downstreamValue,omitempty"`
+	Upstream        string `json:"upstream,omitempty"`
+	UpstreamValue   uint64 `json:"upstreamValue,omitempty"`
+	MissingUpstream bool   `json:"missingUpstream,omitempty"`
+	HashMismatch    bool   `json:"hashMismatch,omitempty"`
+}
+
 func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string, opts dbStageStatusOptions) error {
 	rows, err := dbStageStatusRows(db, canonical)
 	if err != nil {
@@ -925,20 +941,21 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		}
 	}
 	var issues []string
+	var issueDetails []dbStageStatusIssueJSON
 	if opts.JSON || opts.Verify {
-		issues = dbStageStatusVerificationIssues(rows)
-		issues = append(issues, dbStageStatusStagedBodyIssues(db, rows)...)
-		issues = append(issues, dbStageStatusSnapshotCoverageIssues(rows, stateSnapshotsDir(dataDir))...)
+		issueDetails = dbStageStatusIssueDetails(rows, db, stateSnapshotsDir(dataDir))
+		issues = dbStageStatusIssueStrings(issueDetails)
 	}
 	if opts.JSON {
 		report := dbStageStatusJSON{
-			Datadir: dataDir,
-			Known:   len(rawdb.KnownStageProgressStages()),
-			Rows:    present,
-			Status:  "ok",
-			Verify:  opts.Verify,
-			Stages:  dbStageStatusRowsJSON(rows),
-			Issues:  issues,
+			Datadir:      dataDir,
+			Known:        len(rawdb.KnownStageProgressStages()),
+			Rows:         present,
+			Status:       "ok",
+			Verify:       opts.Verify,
+			Stages:       dbStageStatusRowsJSON(rows),
+			Issues:       issues,
+			IssueDetails: issueDetails,
 		}
 		if len(issues) > 0 {
 			report.Status = "critical"
@@ -1007,7 +1024,34 @@ func dbStageStatusRowsJSON(rows []dbStageStatusRow) []dbStageStatusRowJSON {
 }
 
 func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
-	var issues []string
+	return dbStageStatusIssueStrings(dbStageStatusVerificationIssueDetails(rows))
+}
+
+func dbStageStatusIssueStrings(details []dbStageStatusIssueJSON) []string {
+	if len(details) == 0 {
+		return nil
+	}
+	issues := make([]string, 0, len(details))
+	for _, detail := range details {
+		issues = append(issues, detail.Detail)
+	}
+	return issues
+}
+
+func dbStageStatusIssueDetails(rows []dbStageStatusRow, db ethdb.KeyValueReader, snapshotDir string) []dbStageStatusIssueJSON {
+	var details []dbStageStatusIssueJSON
+	details = append(details, dbStageStatusVerificationIssueDetails(rows)...)
+	for _, issue := range dbStageStatusStagedBodyIssues(db, rows) {
+		details = append(details, dbStageStatusTextIssueJSON("staged-body", issue))
+	}
+	for _, issue := range dbStageStatusSnapshotCoverageIssues(rows, snapshotDir) {
+		details = append(details, dbStageStatusTextIssueJSON("snapshot-coverage", issue))
+	}
+	return details
+}
+
+func dbStageStatusVerificationIssueDetails(rows []dbStageStatusRow) []dbStageStatusIssueJSON {
+	var details []dbStageStatusIssueJSON
 	for _, row := range rows {
 		if !row.present {
 			continue
@@ -1015,16 +1059,31 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 		if !dbStageStatusRequiresCanonicalVerification(row.stage) {
 			continue
 		}
+		verified := row.verified
 		if row.progress.HasBlockHash {
-			if row.verified != "canonical" {
-				issues = append(issues, fmt.Sprintf("%s verified=%s", row.stage, row.verified))
+			if verified != "canonical" {
+				details = append(details, dbStageStatusIssueJSON{
+					Severity: "critical",
+					Kind:     "stage-verification",
+					Stage:    string(row.stage),
+					Value:    row.progress.BlockNum,
+					Verified: verified,
+					Detail:   fmt.Sprintf("%s verified=%s", row.stage, verified),
+				})
 			}
 			continue
 		}
-		issues = append(issues, fmt.Sprintf("%s verified=unbound", row.stage))
+		details = append(details, dbStageStatusIssueJSON{
+			Severity: "critical",
+			Kind:     "stage-verification",
+			Stage:    string(row.stage),
+			Value:    row.progress.BlockNum,
+			Verified: "unbound",
+			Detail:   fmt.Sprintf("%s verified=unbound", row.stage),
+		})
 	}
-	issues = append(issues, dbStageStatusPipelineOrderIssues(rows)...)
-	return issues
+	details = append(details, dbStageStatusPipelineOrderIssueDetails(rows)...)
+	return details
 }
 
 func dbStageStatusStagedBodyIssues(db ethdb.KeyValueReader, rows []dbStageStatusRow) []string {
@@ -1139,20 +1198,69 @@ func dbStageStatusStagedBodyProgressStatus(status syncdl.StagedBodyProgressStatu
 }
 
 func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
+	return dbStageStatusIssueStrings(dbStageStatusPipelineOrderIssueDetails(rows))
+}
+
+func dbStageStatusPipelineOrderIssueDetails(rows []dbStageStatusRow) []dbStageStatusIssueJSON {
 	byStage := make(map[rawdb.StageID]dbStageStatusRow, len(rows))
 	for _, row := range rows {
 		if row.present {
 			byStage[row.stage] = row
 		}
 	}
-	var issues []string
+	var details []dbStageStatusIssueJSON
 	for _, issue := range rawdb.CheckStageProgressOrder(dbStageStatusProgressRows(byStage)) {
-		issues = append(issues, issue.String())
+		details = append(details, dbStageStatusRawdbOrderIssueJSON(issue))
 	}
 	for _, issue := range syncdl.CheckSyncPipelineProgressOrder(dbStageStatusSyncProgressRows(byStage), syncdl.SyncPipelineProgressOrderOptions{}) {
-		issues = append(issues, issue.String())
+		details = append(details, dbStageStatusSyncOrderIssueJSON(issue))
 	}
-	return issues
+	return details
+}
+
+func dbStageStatusRawdbOrderIssueJSON(issue rawdb.StageProgressOrderIssue) dbStageStatusIssueJSON {
+	return dbStageStatusIssueJSON{
+		Severity:        "critical",
+		Kind:            "stage-order",
+		Detail:          issue.String(),
+		Downstream:      string(issue.Downstream),
+		DownstreamValue: issue.DownstreamBlock,
+		Upstream:        string(issue.Upstream),
+		UpstreamValue:   issue.UpstreamBlock,
+		MissingUpstream: issue.MissingUpstream,
+		HashMismatch:    issue.HashMismatch,
+	}
+}
+
+func dbStageStatusSyncOrderIssueJSON(issue syncdl.SyncPipelineProgressOrderIssue) dbStageStatusIssueJSON {
+	return dbStageStatusIssueJSON{
+		Severity:        "critical",
+		Kind:            "sync-stage-order",
+		Detail:          issue.String(),
+		Downstream:      string(issue.Downstream),
+		DownstreamValue: issue.DownstreamBlock,
+		Upstream:        string(issue.Upstream),
+		UpstreamValue:   issue.UpstreamBlock,
+		MissingUpstream: issue.MissingUpstream,
+		HashMismatch:    issue.HashMismatch,
+	}
+}
+
+func dbStageStatusTextIssueJSON(kind string, issue string) dbStageStatusIssueJSON {
+	return dbStageStatusIssueJSON{
+		Severity: "critical",
+		Kind:     kind,
+		Detail:   issue,
+		Stage:    dbStageStatusIssueStage(issue),
+	}
+}
+
+func dbStageStatusIssueStage(issue string) string {
+	stage, _, ok := strings.Cut(issue, " ")
+	if !ok {
+		stage, _, _ = strings.Cut(issue, "=")
+	}
+	return stage
 }
 
 func dbStageStatusProgressRows(rows map[rawdb.StageID]dbStageStatusRow) map[rawdb.StageID]rawdb.StageProgress {

@@ -586,6 +586,23 @@ class NileSyncSampleTest(unittest.TestCase):
                             {"group": "snapshot", "name": "SnapshotEventLogBuild", "present": False, "status": "missing"},
                         ],
                         "issues": ["SyncBodiesReady staged-body status=hash-mismatch block=96 hash=bb stagedBlock=96 stagedHash=cc"],
+                        "issueDetails": [
+                            {
+                                "severity": "critical",
+                                "kind": "sync-stage-order",
+                                "detail": "SyncExecution=101 ahead of SyncImport=95",
+                                "downstream": "SyncExecution",
+                                "downstreamValue": 101,
+                                "upstream": "SyncImport",
+                                "upstreamValue": 95,
+                            },
+                            {
+                                "severity": "critical",
+                                "kind": "staged-body",
+                                "detail": "SyncBodiesReady staged-body status=hash-mismatch block=96 hash=bb stagedBlock=96 stagedHash=cc",
+                                "stage": "SyncBodiesReady",
+                            },
+                        ],
                     }
                 )
                 + "\n",
@@ -627,6 +644,24 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncBodiesReadyGapBlocks"], 4)
             self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
             self.assertEqual(row["stageStagedBodyIssueRows"], 1)
+            self.assertEqual(row["stageIssueRows"], 2)
+            self.assertEqual(row["stageOrderIssueRows"], 1)
+            self.assertEqual(row["stageSyncOrderIssueRows"], 1)
+            self.assertEqual(row["stageStorageOrderIssueRows"], 0)
+            self.assertEqual(
+                row["stageOrderIssueDetails"],
+                [
+                    {
+                        "severity": "critical",
+                        "kind": "sync-stage-order",
+                        "detail": "SyncExecution=101 ahead of SyncImport=95",
+                        "downstream": "SyncExecution",
+                        "downstreamValue": 101,
+                        "upstream": "SyncImport",
+                        "upstreamValue": 95,
+                    }
+                ],
+            )
             self.assertEqual(
                 row["stageStagedBodyIssueDetails"],
                 [{"stage": "SyncBodiesReady", "value": 96, "verified": "staged-hash-mismatch", "stagedBlock": 96, "stagedHash": "cc"}],
@@ -634,6 +669,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedBlock"], "96")
             self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedHash"], "cc")
             self.assertEqual(row["fullStagedSyncStatus"], "hash-issue")
+            self.assertIn("stage-order-issue", row["soakHealthIssues"])
+            self.assertIn("stage-status-issue", row["soakHealthIssues"])
             self.assertIn("stage-staged-body-issue", row["soakHealthIssues"])
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
