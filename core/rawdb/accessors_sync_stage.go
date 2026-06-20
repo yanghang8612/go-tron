@@ -553,6 +553,20 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 	if db == nil {
 		return 0, nil
 	}
+	keys, err := collectSyncStagedBlockKeysFrom(db, blockNum)
+	if err != nil {
+		return 0, err
+	}
+	if err := deleteKeyBatch(db, keys); err != nil {
+		return 0, err
+	}
+	return len(keys), nil
+}
+
+func collectSyncStagedBlockKeysFrom(db ethdb.Iteratee, blockNum uint64) ([][]byte, error) {
+	if db == nil {
+		return nil, nil
+	}
 	var start [8]byte
 	binary.BigEndian.PutUint64(start[:], blockNum)
 	it := db.NewIterator(syncStagedBlockPrefix, start[:])
@@ -566,13 +580,10 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 	}
 	if err := it.Error(); err != nil {
 		it.Release()
-		return 0, err
+		return nil, err
 	}
 	it.Release()
-	if err := deleteKeyBatch(db, keys); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	return keys, nil
 }
 
 // PruneSyncStagedBlocksFrom removes a stale downloader body tail and keeps the
@@ -582,33 +593,62 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 // refreshes it after this storage-level prune.
 func PruneSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64, lastRestoredNum uint64, lastRestoredHash common.Hash, haveLastRestored bool) (SyncStagedTailPruneResult, error) {
 	var result SyncStagedTailPruneResult
-	deleted, err := DeleteSyncStagedBlocksFrom(db, blockNum)
+	if db == nil {
+		return result, nil
+	}
+	keys, err := collectSyncStagedBlockKeysFrom(db, blockNum)
 	if err != nil {
 		return result, err
 	}
-	result.Deleted = deleted
 	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil {
 		return result, err
 	}
-	if !ok || row.BlockNum < blockNum {
+	var (
+		deleteProgress bool
+		rewindProgress bool
+	)
+	if ok && row.BlockNum >= blockNum {
+		result.HadProgress = true
+		result.PreviousProgress = row
+		if haveLastRestored {
+			rewindProgress = true
+		} else {
+			deleteProgress = true
+		}
+	}
+	if len(keys) == 0 && !deleteProgress && !rewindProgress {
 		return result, nil
 	}
-	result.HadProgress = true
-	result.PreviousProgress = row
-	if !haveLastRestored {
-		if err := DeleteStageProgress(db, StageSyncBodies); err != nil {
+	batch := db.NewBatchWithSize(len(keys)*8 + 8 + common.HashLength)
+	defer batch.Reset()
+	for _, key := range keys {
+		if err := batch.Delete(key); err != nil {
 			return result, err
 		}
-		result.DeletedProgress = true
-		return result, nil
 	}
-	if err := WriteStageProgressWithHash(db, StageSyncBodies, lastRestoredNum, lastRestoredHash); err != nil {
+	if deleteProgress {
+		if err := batch.Delete(stageProgressKey(StageSyncBodies)); err != nil {
+			return result, err
+		}
+	}
+	if rewindProgress {
+		if err := batch.Put(stageProgressKey(StageSyncBodies), encodeStageProgress(lastRestoredNum, lastRestoredHash, true)); err != nil {
+			return result, err
+		}
+	}
+	if err := batch.Write(); err != nil {
 		return result, err
 	}
-	result.RewoundProgress = true
-	result.RewindBlock = lastRestoredNum
-	result.RewindHash = lastRestoredHash
+	result.Deleted = len(keys)
+	if deleteProgress {
+		result.DeletedProgress = true
+	}
+	if rewindProgress {
+		result.RewoundProgress = true
+		result.RewindBlock = lastRestoredNum
+		result.RewindHash = lastRestoredHash
+	}
 	return result, nil
 }
 

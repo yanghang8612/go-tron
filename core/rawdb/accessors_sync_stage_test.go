@@ -729,6 +729,34 @@ func TestPruneSyncStagedBlocksFromDeletesBodiesProgressWithoutRestoredBlock(t *t
 	}
 }
 
+func TestPruneSyncStagedBlocksFromKeepsBodiesOnProgressReadError(t *testing.T) {
+	db := NewMemoryDatabase()
+	block2 := testSyncStagedBlock(2, common.Hash{0x01})
+	block3 := testSyncStagedBlock(3, block2.Hash())
+	block4 := testSyncStagedBlock(4, block3.Hash())
+	for _, block := range []*types.Block{block2, block3, block4} {
+		if err := WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := db.Put(stageProgressKey(StageSyncBodies), []byte{0x01}); err != nil {
+		t.Fatalf("write corrupt SyncBodies progress: %v", err)
+	}
+
+	result, err := PruneSyncStagedBlocksFrom(db, 3, block2.Number(), block2.Hash(), true)
+	if err == nil || !strings.Contains(err.Error(), `stage progress "SyncBodies"`) {
+		t.Fatalf("prune result=%+v err=%v, want SyncBodies progress read error", result, err)
+	}
+	if result.Deleted != 0 || result.DeletedProgress || result.RewoundProgress {
+		t.Fatalf("prune result=%+v, want no side-effect counters after read error", result)
+	}
+	for _, block := range []*types.Block{block2, block3, block4} {
+		if got, ok, readErr := ReadSyncStagedBlock(db, block.Number()); readErr != nil || !ok || got.Hash() != block.Hash() {
+			t.Fatalf("staged block %d after failed prune = %v ok=%v err=%v, want kept", block.Number(), got, ok, readErr)
+		}
+	}
+}
+
 func TestDeleteAllSyncStagedBlocks(t *testing.T) {
 	base := NewMemoryDatabase()
 	for n := uint64(1); n <= 3; n++ {

@@ -505,6 +505,11 @@ Status:
   failures, current-head completion write failures, imported staged-body
   cleanup failures, and order-repair read/write/delete failures before
   restoring or deriving any downstream view.
+- Storage-level staged-body tail pruning now reads and validates the
+  `SyncBodies` watermark before deleting any stale tail rows, then commits the
+  tail delete plus `SyncBodies` rewind/delete in one rawdb batch. A corrupt or
+  unreadable watermark no longer deletes staged body rows first and leaves the
+  persisted downloader boundary pointing at missing data.
 - The higher local-drain session branch now treats that pre-import ready repair
   failure as a stop condition instead of an empty drain, so it will not refill
   fetch slots or probe peers as though the stage table were merely empty.
