@@ -183,7 +183,9 @@ compaction or replacement. The JSONL row includes
 `modeAlertDetails`, `pruneMode`, `pruneModePersisted`,
 `snapshotAlertStatus`, `snapshotAlertIssues`, `snapshotAlertDetails`, and the
 `snapshotRetired*` counters; warning rows capture hidden freezer bytes and
-retired snapshot bytes that still await physical pruning.
+retired snapshot bytes that still await physical pruning. Each row also records
+`storageAlertPrometheus`, the Prometheus text artifact produced from the same
+storage-alert gate for archive/soak monitor ingestion.
 For external monitors that scrape command output instead of JSONL harness rows,
 run `gtron db storage-alerts --prometheus --datadir <dir>`. The Prometheus text
 output exposes overall/component status gauges (`0=ok`, `1=warning`,

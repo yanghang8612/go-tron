@@ -945,6 +945,11 @@ Status:
   alert state as Prometheus text metrics for external monitor scrape jobs:
   overall/component status values, issue counts, hidden freezer bytes, retired
   snapshot counters, and the persisted prune mode.
+- `scripts/dev/storage_benchmark.sh` now writes a
+  `<mode>-<role>-storage-alerts.prom` artifact for every storage-alert gate and
+  records its path as `storageAlertPrometheus` in the JSONL result row. Critical
+  storage states still emit the Prometheus metrics before the harness exits
+  non-zero.
 
 Needed:
 
@@ -963,10 +968,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Wire the Prometheus storage-alert metrics into the external monitor/alert
-  routing used for long Nile/mainnet soaks. Catalog/freezer sidecar mismatch is
-  now caught by signed/local manifest verification as well as
-  tail-prune/stage-status coverage gates.
+- Wire the storage benchmark's Prometheus artifacts into the external
+  monitor/alert routing used for long Nile/mainnet soaks. Catalog/freezer
+  sidecar mismatch is now caught by signed/local manifest verification as well
+  as tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

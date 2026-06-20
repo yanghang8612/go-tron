@@ -86,6 +86,7 @@ RUN_SNAPSHOT_RETIRED_MISSING=-1
 RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
 RUN_SNAPSHOT_RETIRED_BYTES=-1
 RUN_STORAGE_ALERT_FAILED=0
+RUN_STORAGE_ALERT_PROMETHEUS=""
 
 usage() {
   cat <<'EOF'
@@ -264,6 +265,7 @@ reset_run_metrics() {
   RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
   RUN_SNAPSHOT_RETIRED_BYTES=-1
   RUN_STORAGE_ALERT_FAILED=0
+  RUN_STORAGE_ALERT_PROMETHEUS=""
 }
 
 block_num() {
@@ -622,10 +624,20 @@ run_storage_alert_gate() {
   local datadir="$3"
   local log_path="$4"
   local alert_out="$WORKDIR/$mode-$role-storage-alerts.out"
+  local alert_prometheus="$WORKDIR/$mode-$role-storage-alerts.prom"
   echo "checking persisted storage alert conditions" >>"$log_path"
   local ok=1
   if ! run_logged "$alert_out" "$GTRON" db storage-alerts --json --datadir "$datadir" >>"$log_path"; then
     ok=0
+  fi
+  echo "writing persisted storage alert prometheus metrics: $alert_prometheus" >>"$log_path"
+  if "$GTRON" db storage-alerts --prometheus --datadir "$datadir" >"$alert_prometheus" 2>&1; then
+    RUN_STORAGE_ALERT_PROMETHEUS="$alert_prometheus"
+  elif grep -q '^gtron_storage_alert_status{' "$alert_prometheus"; then
+    # Critical storage states intentionally return non-zero after writing metrics.
+    RUN_STORAGE_ALERT_PROMETHEUS="$alert_prometheus"
+  else
+    echo "warning: storage-alerts prometheus metrics failed; see $alert_prometheus" >>"$log_path"
   fi
   local freezer_status freezer_issues hidden stage_status stage_issues mode_status mode_issues prune_mode prune_mode_persisted snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
   freezer_status="$(storage_alert_field "$alert_out" freezerStatus 'freezerStatus=([^ ]+)')"
@@ -833,7 +845,7 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_SEGMENTS" "$RUN_SNAPSHOT_RETIRED_FILES" \
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
-    "$datadir" "$log_path" <<'PY'
+    "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
 keys = [
@@ -861,7 +873,7 @@ keys = [
     "modeAlertDetails", "pruneMode", "pruneModePersisted",
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
-    "snapshotRetiredBytes",
+    "snapshotRetiredBytes", "storageAlertPrometheus",
     "datadir", "log",
 ]
 values = sys.argv[2:]
