@@ -803,10 +803,11 @@ Status:
   long soaks. It combines the persisted freezer checks from
   `gtron db freezer-alerts` with `stage-status --db.stage.verify`, failing on
   recorded freezer repair, missing/impossible `ChainFreezer` stage progress,
-  freezer/table bound mismatches, virtual-tail invariants, hash-mismatched or
-  out-of-order stage rows, and claimed cold coverage that the local manifest
-  cannot prove. It also reports hidden freezer bytes and retired snapshot bytes
-  that still await physical pruning.
+  freezer/table bound mismatches, virtual-tail invariants, missing or
+  contradictory `SnapshotChainFreezerTailPrune` proof for the hidden tail,
+  hash-mismatched or out-of-order stage rows, and claimed cold coverage that
+  the local manifest cannot prove. It also reports hidden freezer bytes and
+  retired snapshot bytes that still await physical pruning.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,

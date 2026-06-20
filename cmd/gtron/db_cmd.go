@@ -333,8 +333,12 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read chain freezer stage: %w", err)
 	}
+	tailPruneStage, hasTailPruneStage, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune)
+	if err != nil {
+		return fmt.Errorf("read chain freezer tail prune stage: %w", err)
+	}
 
-	issues := dbFreezerAlertIssues(stats, stage, hasStage)
+	issues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
 	status := "ok"
 	if dbFreezerAlertHasCritical(issues) {
 		status = "critical"
@@ -382,7 +386,11 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read chain freezer stage: %w", err)
 	}
-	freezerIssues := dbFreezerAlertIssues(stats, stage, hasStage)
+	tailPruneStage, hasTailPruneStage, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune)
+	if err != nil {
+		return fmt.Errorf("read chain freezer tail prune stage: %w", err)
+	}
+	freezerIssues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
 	freezerStatus := dbFreezerAlertStatus(freezerIssues)
 
 	stageRows, err := dbStageStatusRows(db, chainDB)
@@ -721,7 +729,7 @@ func dbSnapshotAlertStatus(issues []dbSnapshotAlertIssue) string {
 	return "ok"
 }
 
-func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, hasChainFreezerStage bool) []dbFreezerAlertIssue {
+func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, hasChainFreezerStage bool, tailPruneStage uint64, hasTailPruneStage bool) []dbFreezerAlertIssue {
 	var issues []dbFreezerAlertIssue
 	add := func(severity, kind, format string, args ...interface{}) {
 		issues = append(issues, dbFreezerAlertIssue{
@@ -749,6 +757,21 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, ha
 			add("critical", "chain-freezer-stage-ahead", "%s=%d exceeds freezer max block %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Head-1)
 		case chainFreezerStage < stats.Tail:
 			add("critical", "chain-freezer-stage-behind-tail", "%s=%d is below freezer visible tail %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Tail)
+		}
+	}
+	if stats.Tail == 0 {
+		if hasTailPruneStage {
+			add("critical", "tail-prune-stage-without-hidden-tail", "%s=%d but freezer tail is 0", rawdb.StageSnapshotChainFreezerTailPrune, tailPruneStage)
+		}
+	} else if !hasTailPruneStage {
+		add("critical", "tail-prune-stage-missing", "freezer tail=%d but %s stage is missing", stats.Tail, rawdb.StageSnapshotChainFreezerTailPrune)
+	} else {
+		prunedThrough := stats.Tail - 1
+		switch {
+		case tailPruneStage < prunedThrough:
+			add("critical", "tail-prune-stage-behind-tail", "%s=%d is below freezer pruned-through block %d", rawdb.StageSnapshotChainFreezerTailPrune, tailPruneStage, prunedThrough)
+		case tailPruneStage > prunedThrough:
+			add("critical", "tail-prune-stage-ahead-of-tail", "%s=%d exceeds freezer pruned-through block %d", rawdb.StageSnapshotChainFreezerTailPrune, tailPruneStage, prunedThrough)
 		}
 	}
 	for _, table := range stats.Tables {
