@@ -721,11 +721,9 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 		HistoryWindow:     1,
 		LatestBuildBlocks: 10,
 	})
-	// Replicate the Start() seed path inline (avoids spawning the loop goroutine).
-	if row, ok, err := newRawDBStageProgressReader(runner2.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
-		runner2.lastLatestBuildBlock.Store(row.BlockNum)
-	} else if block, _, ok, werr := runner2.latestBuildWatermark(); werr == nil && ok {
-		runner2.lastLatestBuildBlock.Store(block)
+	// Drive the Start() seed path inline (avoids spawning the loop goroutine).
+	if err := runner2.seedLatestBuildBlock(); err != nil {
+		t.Fatalf("runner2 seedLatestBuildBlock: %v", err)
 	}
 
 	// Assert seeded from persistence (50), NOT from current head (55).
@@ -783,6 +781,79 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || !row.HasBlockHash {
 		t.Fatalf("StageSnapshotLatestBuild row after runner2 build = %+v ok=%v err=%v, want hash-bound row", row, ok, err)
+	}
+}
+
+func TestRunnerLatestBuildWatermarkIgnoresUnboundRestartStage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x8a)
+	seedLatestRows(t, db, owner, 55, 55)
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotLatestBuild, 50); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotLatestBuild: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 55}, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		LatestBuildBlocks: 10,
+	})
+	if err := runner.seedLatestBuildBlock(); err != nil {
+		t.Fatalf("seedLatestBuildBlock: %v", err)
+	}
+	if got := runner.lastLatestBuildBlock.Load(); got != 0 {
+		t.Fatalf("lastLatestBuildBlock after unbound seed = %d, want 0 for immediate repair build", got)
+	}
+	built, err := runner.latestPass()
+	if err != nil {
+		t.Fatalf("latestPass: %v", err)
+	}
+	if !built {
+		t.Fatal("latestPass = false, want repair build after unbound restart stage")
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || row.BlockNum != 55 || !row.HasBlockHash {
+		t.Fatalf("SnapshotLatestBuild row after repair = %+v ok=%v err=%v, want block 55 hash-bound", row, ok, err)
+	}
+}
+
+func TestRunnerLatestBuildWatermarkIgnoresHashMismatchRestartStage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x8b)
+	seedLatestRows(t, db, owner, 50, 50)
+	seedLatestRows(t, db, owner, 55, 55)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotLatestBuild, 50, common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotLatestBuild: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 55}, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		LatestBuildBlocks: 10,
+	})
+	if err := runner.seedLatestBuildBlock(); err != nil {
+		t.Fatalf("seedLatestBuildBlock: %v", err)
+	}
+	if got := runner.lastLatestBuildBlock.Load(); got != 0 {
+		t.Fatalf("lastLatestBuildBlock after mismatched seed = %d, want 0 for immediate repair build", got)
+	}
+	built, err := runner.latestPass()
+	if err != nil {
+		t.Fatalf("latestPass: %v", err)
+	}
+	if !built {
+		t.Fatal("latestPass = false, want repair build after mismatched restart stage")
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild)
+	if err != nil || !ok || row.BlockNum != 55 || !row.HasBlockHash {
+		t.Fatalf("SnapshotLatestBuild row after mismatch repair = %+v ok=%v err=%v, want block 55 hash-bound", row, ok, err)
+	}
+	if canonical := rawdb.ReadBlockHashByNumber(db, 55); canonical == (common.Hash{}) || row.BlockHash != canonical {
+		t.Fatalf("SnapshotLatestBuild hash = %x, want canonical block 55 hash %x", row.BlockHash, canonical)
 	}
 }
 

@@ -650,6 +650,10 @@ Status:
   `gtron db stage-status --db.stage.verify` rejects legacy unbound or
   same-height mismatched build-stage rows, so snapshot publication cadence and
   history-build progress cannot silently cross a fork boundary.
+  Restart seeding for the latest-snapshot cadence also ignores unbound,
+  missing-canonical, or hash-mismatched `SnapshotLatestBuild` rows instead of
+  using them as a durable cadence boundary; the next latest build can then
+  rewrite the row with a verified block hash.
 - Derived-index hot-row pruning for balance traces and section blooms now
   writes hash-bound `SnapshotBalanceTracePrune` and
   `SnapshotSectionBloomPrune` stage rows after verified cold segment coverage,

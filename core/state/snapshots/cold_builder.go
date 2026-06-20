@@ -209,12 +209,10 @@ func (r *Runner) Start() error {
 		// Seed lastLatestBuildBlock from the persisted stage first (survives
 		// restarts); fall back to the current solidified block for fresh nodes
 		// that have never run a latest build (self-heals after the first build).
-		if r.cfg.LatestBuildBlocks > 0 {
-			if row, ok, err := newRawDBStageProgressReader(r.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
-				r.lastLatestBuildBlock.Store(row.BlockNum)
-			} else if block, _, ok, werr := r.latestBuildWatermark(); werr == nil && ok {
-				r.lastLatestBuildBlock.Store(block)
-			}
+		if err := r.seedLatestBuildBlock(); err != nil {
+			close(r.done)
+			r.startErr = err
+			return
 		}
 		go r.loop()
 		coldSnapshotLog.Info("History cold snapshot builder started",
@@ -493,21 +491,32 @@ func writeSnapshotBuildStage(writer ethdb.KeyValueWriter, stage rawdb.StageID, b
 }
 
 func (r *Runner) snapshotBuildStageBoundaryHash(db AggregatorDB, stage rawdb.StageID, block uint64) (common.Hash, error) {
+	hash, ok, err := r.snapshotBuildStageCanonicalHash(db, stage, block)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if !ok {
+		return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
+	}
+	return hash, nil
+}
+
+func (r *Runner) snapshotBuildStageCanonicalHash(db AggregatorDB, stage rawdb.StageID, block uint64) (common.Hash, bool, error) {
 	if db == nil {
-		return common.Hash{}, fmt.Errorf("snapshots: %s stage block %d requires readable database", stage, block)
+		return common.Hash{}, false, fmt.Errorf("snapshots: %s stage block %d requires readable database", stage, block)
 	}
 	hash := r.canonicalHashReader(db)(block)
 	if hash != (common.Hash{}) {
-		return hash, nil
+		return hash, true, nil
 	}
 	strictHash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, block)
 	if err != nil {
-		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, block, err)
+		return common.Hash{}, false, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, block, err)
 	}
 	if ok && strictHash != (common.Hash{}) {
-		return strictHash, nil
+		return strictHash, true, nil
 	}
-	return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
+	return common.Hash{}, false, nil
 }
 
 func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
@@ -655,6 +664,53 @@ func (r *Runner) compactHistory() (HistoryCompactionResult, error) {
 		MaxTxSpan:      r.cfg.CompactMaxTxSpan,
 		DeleteObsolete: !r.cfg.RetainObsoleteSegments,
 	})
+}
+
+func (r *Runner) seedLatestBuildBlock() error {
+	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
+		return nil
+	}
+	block, ok, hadStage, err := r.latestBuildStageSeed()
+	if err != nil {
+		return err
+	}
+	if ok {
+		r.lastLatestBuildBlock.Store(block)
+		return nil
+	}
+	if hadStage {
+		return nil
+	}
+	block, _, ok, err = r.latestBuildWatermark()
+	if err != nil {
+		return err
+	}
+	if ok {
+		r.lastLatestBuildBlock.Store(block)
+	}
+	return nil
+}
+
+func (r *Runner) latestBuildStageSeed() (block uint64, ok bool, hadStage bool, err error) {
+	if r == nil || r.chain == nil || r.chain.DB() == nil {
+		return 0, false, false, errors.New("snapshots: nil cold builder chain or database")
+	}
+	db := r.chain.DB()
+	row, exists, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild)
+	if err != nil || !exists {
+		return 0, false, exists, err
+	}
+	if !row.HasBlockHash {
+		return 0, false, true, nil
+	}
+	hash, hasHash, err := r.snapshotBuildStageCanonicalHash(db, rawdb.StageSnapshotLatestBuild, row.BlockNum)
+	if err != nil {
+		return 0, false, true, err
+	}
+	if !hasHash || hash != row.BlockHash {
+		return 0, false, true, nil
+	}
+	return row.BlockNum, true, true, nil
 }
 
 func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, err error) {
