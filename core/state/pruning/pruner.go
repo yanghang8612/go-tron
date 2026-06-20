@@ -32,6 +32,10 @@ type canonicalHashSource interface {
 	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 }
 
+type canonicalHashLookupSource interface {
+	CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error)
+}
+
 type chainDBSource interface {
 	ChainDB() *rawdb.ChainDB
 }
@@ -213,13 +217,19 @@ func (p *Pruner) PrunePass() (Stats, error) {
 func (p *Pruner) pruneHeadWithVerifiedBoundary(pruneHead uint64) (uint64, common.Hash, bool, error) {
 	row, ok, err := newRawDBStageProgressReader(p.chain.DB()).Read(rawdb.StageFinish)
 	if err != nil || !ok {
-		hash, hashOK := p.canonicalBlockHash(pruneHead)
+		hash, hashOK, hashErr := p.canonicalBlockHash(pruneHead)
+		if hashErr != nil {
+			return 0, common.Hash{}, false, fmt.Errorf("pruning: prune head %d canonical hash lookup: %w", pruneHead, hashErr)
+		}
 		return pruneHead, hash, hashOK, err
 	}
 	if !row.HasBlockHash {
 		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d is not hash-bound", row.BlockNum)
 	}
-	hash, ok := p.canonicalBlockHash(row.BlockNum)
+	hash, ok, err := p.canonicalBlockHash(row.BlockNum)
+	if err != nil {
+		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d canonical hash lookup: %w", row.BlockNum, err)
+	}
 	if !ok {
 		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
 	}
@@ -232,37 +242,46 @@ func (p *Pruner) pruneHeadWithVerifiedBoundary(pruneHead uint64) (uint64, common
 	if row.BlockNum == pruneHead {
 		return pruneHead, row.BlockHash, true, nil
 	}
-	hash, ok = p.canonicalBlockHash(pruneHead)
+	hash, ok, err = p.canonicalBlockHash(pruneHead)
+	if err != nil {
+		return 0, common.Hash{}, false, fmt.Errorf("pruning: prune head %d canonical hash lookup: %w", pruneHead, err)
+	}
 	if ok {
 		return pruneHead, hash, true, nil
 	}
 	return pruneHead, common.Hash{}, false, nil
 }
 
-func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	return canonicalBlockHashFromChainSource(p.chain, blockNum)
+func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool, error) {
+	return canonicalBlockHashLookupFromChainSource(p.chain, blockNum)
 }
 
 func canonicalBlockHashFromChainSource(chain ChainSource, blockNum uint64) (common.Hash, bool) {
+	hash, ok, _ := canonicalBlockHashLookupFromChainSource(chain, blockNum)
+	return hash, ok
+}
+
+func canonicalBlockHashLookupFromChainSource(chain ChainSource, blockNum uint64) (common.Hash, bool, error) {
 	if chain == nil {
-		return common.Hash{}, false
+		return common.Hash{}, false, nil
+	}
+	if source, ok := chain.(canonicalHashLookupSource); ok {
+		return source.CanonicalBlockHashStrict(blockNum)
 	}
 	if source, ok := chain.(canonicalHashSource); ok {
-		return source.CanonicalBlockHash(blockNum)
+		hash, ok := source.CanonicalBlockHash(blockNum)
+		return hash, ok, nil
 	}
 	if source, ok := chain.(chainDBSource); ok {
 		if db := source.ChainDB(); db != nil {
-			hash := rawdb.ReadBlockHashByNumber(db, blockNum)
-			if hash != (common.Hash{}) {
-				return hash, true
-			}
+			return rawdb.ReadBlockHashByNumberStrict(db, blockNum)
 		}
 	}
-	hash := rawdb.ReadBlockHashByNumber(chain.DB(), blockNum)
-	if hash == (common.Hash{}) {
-		return common.Hash{}, false
+	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(chain.DB(), blockNum)
+	if err != nil || !ok || hash == (common.Hash{}) {
+		return hash, ok, err
 	}
-	return hash, true
+	return hash, true, nil
 }
 
 func (p *Pruner) shouldSkipForCatchup() bool {

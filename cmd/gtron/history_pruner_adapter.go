@@ -59,11 +59,18 @@ func (a *prunerChainSource) LatestSolidifiedBlockNum() int64 {
 }
 
 func (a *prunerChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	block := a.chain.GetBlockByNumber(blockNum)
-	if block == nil {
+	hash, ok, err := a.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
 		return common.Hash{}, false
 	}
-	return block.Hash(), true
+	return hash, ok
+}
+
+func (a *prunerChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	if a == nil || a.chain == nil {
+		return common.Hash{}, false, nil
+	}
+	return rawdb.ReadBlockHashByNumberStrict(a.chain.ChainDB(), blockNum)
 }
 
 func (a *stateSnapshotChainSource) DB() statesnapshots.AggregatorDB {

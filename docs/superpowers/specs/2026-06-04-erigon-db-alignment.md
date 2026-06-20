@@ -622,15 +622,18 @@ Status:
   output and `--db.stage.verify` failure semantics.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
-  uses the freezer-aware rawdb block-hash accessor. When a caller does not
-  provide an explicit canonical hash source but does expose `ChainDB()`, the
-  pruner and snapshot lifecycle now resolve the `StageFinish` block hash
-  through that hot+ancient chain reader before falling back to hot KV, so frozen
-  block bodies do not falsely block safe history pruning. Live pruning also
-  writes `SnapshotPrune` as a hash-bound stage row whenever the prune head can
-  be tied to the verified finish/canonical boundary, so stage-status checks can
-  prove hot-history pruning did not advance onto another fork at the same
-  height.
+  uses the freezer-aware rawdb block-hash accessor. The live pruner adapter now
+  exposes an error-aware canonical hash source, so corrupt hot/freezer block
+  rows or cold hash lookup errors abort Finish-stage and prune-head boundary
+  checks instead of being collapsed into "canonical block unavailable". When a
+  caller does not provide an explicit canonical hash source but does expose
+  `ChainDB()`, the pruner and snapshot lifecycle now resolve the `StageFinish`
+  block hash through that hot+ancient chain reader before falling back to hot
+  KV, so frozen block bodies do not falsely block safe history pruning. Live
+  pruning also writes `SnapshotPrune` as a hash-bound stage row whenever the
+  prune head can be tied to the verified finish/canonical boundary, so
+  stage-status checks can prove hot-history pruning did not advance onto
+  another fork at the same height.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped

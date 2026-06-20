@@ -995,12 +995,66 @@ func TestPrunerRejectsFinishStageHashMismatch(t *testing.T) {
 	}
 }
 
+func TestPrunerPropagatesFinishStageHashLookupError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishHash := common.Hash{0x05}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 5, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	pruner := NewPruner(&fakePruneChain{
+		db:              db,
+		solidified:      10,
+		canonicalHashes: map[uint64]common.Hash{5: finishHash},
+		canonicalErrs:   map[uint64]error{5: errors.New("canonical hash corrupt")},
+	}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	if _, err := pruner.PrunePass(); err == nil || !strings.Contains(err.Error(), "finish stage 5 canonical hash lookup") || !strings.Contains(err.Error(), "canonical hash corrupt") {
+		t.Fatalf("prune pass error = %v, want finish-stage hash lookup error", err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("block 1 range pruned despite finish hash lookup error ok=%v err=%v", ok, err)
+	}
+}
+
+func TestPrunerPropagatesPruneHeadHashLookupError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruner := NewPruner(&fakePruneChain{
+		db:            db,
+		solidified:    10,
+		canonicalErrs: map[uint64]error{10: errors.New("canonical head corrupt")},
+	}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	if _, err := pruner.PrunePass(); err == nil || !strings.Contains(err.Error(), "prune head 10 canonical hash lookup") || !strings.Contains(err.Error(), "canonical head corrupt") {
+		t.Fatalf("prune pass error = %v, want prune-head hash lookup error", err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("block 1 range pruned despite prune-head hash lookup error ok=%v err=%v", ok, err)
+	}
+}
+
 type fakePruneChain struct {
 	db              ethdb.KeyValueStore
 	solidified      int64
 	syncRemaining   uint64
 	syncRemainingOK bool
 	canonicalHashes map[uint64]common.Hash
+	canonicalErrs   map[uint64]error
 }
 
 func (f *fakePruneChain) DB() ethdb.KeyValueStore { return f.db }
@@ -1008,8 +1062,28 @@ func (f *fakePruneChain) DB() ethdb.KeyValueStore { return f.db }
 func (f *fakePruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }
 
 func (f *fakePruneChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	hash, ok := f.canonicalHashes[blockNum]
+	hash, ok, err := f.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
+		return common.Hash{}, false
+	}
 	return hash, ok
+}
+
+func (f *fakePruneChain) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	if err := f.canonicalErrs[blockNum]; err != nil {
+		return common.Hash{}, false, err
+	}
+	if hash, ok := f.canonicalHashes[blockNum]; ok {
+		return hash, true, nil
+	}
+	if f.db != nil {
+		row, ok, err := rawdb.ReadStateTxRange(f.db, blockNum)
+		if err != nil || !ok || row.BlockHash == (common.Hash{}) {
+			return common.Hash{}, ok, err
+		}
+		return row.BlockHash, true, nil
+	}
+	return common.Hash{}, false, nil
 }
 
 func (f *fakePruneChain) SyncRemainingBlocks() (uint64, bool) {
