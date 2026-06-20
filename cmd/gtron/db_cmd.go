@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -63,6 +64,10 @@ var (
 	dbAlertJSONFlag = &cli.BoolFlag{
 		Name:  "json",
 		Usage: "Emit machine-readable JSON alert output",
+	}
+	dbAlertPrometheusFlag = &cli.BoolFlag{
+		Name:  "prometheus",
+		Usage: "Emit Prometheus text-format storage alert metrics",
 	}
 )
 
@@ -203,6 +208,7 @@ func dbCommand() *cli.Command {
 					dbL0CompactionFlag,
 					dbL0StopFlag,
 					dbAlertJSONFlag,
+					dbAlertPrometheusFlag,
 				},
 				Action: dbStorageAlertsCmd,
 			},
@@ -352,6 +358,9 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 
 func dbStorageAlertsCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	if ctx.Bool(dbAlertJSONFlag.Name) && ctx.Bool(dbAlertPrometheusFlag.Name) {
+		return fmt.Errorf("--%s and --%s are mutually exclusive", dbAlertJSONFlag.Name, dbAlertPrometheusFlag.Name)
+	}
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -399,36 +408,44 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	} else if freezerStatus == "warning" || modeStatus == "warning" || snapshotStatus == "warning" {
 		status = "warning"
 	}
+	report := dbStorageAlertsJSON{
+		Datadir:                      cfg.DataDir,
+		Status:                       status,
+		FreezerStatus:                freezerStatus,
+		FreezerIssues:                len(freezerIssues),
+		FreezerAlertDetails:          dbFreezerAlertIssuesJSON(freezerIssues),
+		FreezerAlertHiddenBytes:      dbFreezerHiddenSize(stats),
+		StageStatus:                  stageStatus,
+		StageIssues:                  len(stageIssues),
+		StageVerifyDetails:           dbStageAlertIssuesJSON(stageIssues),
+		ModeStatus:                   modeStatus,
+		ModeIssues:                   len(modeIssues),
+		ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
+		PruneMode:                    pruneMode,
+		PruneModePersisted:           pruneModePersisted,
+		SnapshotStatus:               snapshotStatus,
+		SnapshotIssues:               len(snapshotIssues),
+		SnapshotAlertDetails:         dbSnapshotAlertIssuesJSON(snapshotIssues),
+		SnapshotRetiredSegments:      snapshotInspection.RetiredSegments,
+		SnapshotRetiredFiles:         snapshotInspection.FilesPresent,
+		SnapshotRetiredMissing:       snapshotInspection.FilesMissing,
+		SnapshotRetiredSkippedActive: snapshotInspection.FilesSkippedActive,
+		SnapshotRetiredBytes:         snapshotInspection.BytesPresent,
+	}
 	if ctx.Bool(dbAlertJSONFlag.Name) {
-		report := dbStorageAlertsJSON{
-			Datadir:                      cfg.DataDir,
-			Status:                       status,
-			FreezerStatus:                freezerStatus,
-			FreezerIssues:                len(freezerIssues),
-			FreezerAlertDetails:          dbFreezerAlertIssuesJSON(freezerIssues),
-			FreezerAlertHiddenBytes:      dbFreezerHiddenSize(stats),
-			StageStatus:                  stageStatus,
-			StageIssues:                  len(stageIssues),
-			StageVerifyDetails:           dbStageAlertIssuesJSON(stageIssues),
-			ModeStatus:                   modeStatus,
-			ModeIssues:                   len(modeIssues),
-			ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
-			PruneMode:                    pruneMode,
-			PruneModePersisted:           pruneModePersisted,
-			SnapshotStatus:               snapshotStatus,
-			SnapshotIssues:               len(snapshotIssues),
-			SnapshotAlertDetails:         dbSnapshotAlertIssuesJSON(snapshotIssues),
-			SnapshotRetiredSegments:      snapshotInspection.RetiredSegments,
-			SnapshotRetiredFiles:         snapshotInspection.FilesPresent,
-			SnapshotRetiredMissing:       snapshotInspection.FilesMissing,
-			SnapshotRetiredSkippedActive: snapshotInspection.FilesSkippedActive,
-			SnapshotRetiredBytes:         snapshotInspection.BytesPresent,
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetEscapeHTML(false)
 		if err := enc.Encode(report); err != nil {
 			return fmt.Errorf("encode storage alerts json: %w", err)
 		}
+		if status == "critical" {
+			return fmt.Errorf("storage alerts failed: freezer=%s stage=%s mode=%s snapshot=%s",
+				dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbModeAlertSummary(modeIssues), dbSnapshotAlertSummary(snapshotIssues))
+		}
+		return nil
+	}
+	if ctx.Bool(dbAlertPrometheusFlag.Name) {
+		dbWriteStorageAlertsPrometheus(os.Stdout, report)
 		if status == "critical" {
 			return fmt.Errorf("storage alerts failed: freezer=%s stage=%s mode=%s snapshot=%s",
 				dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbModeAlertSummary(modeIssues), dbSnapshotAlertSummary(snapshotIssues))
@@ -458,6 +475,97 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 			dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbModeAlertSummary(modeIssues), dbSnapshotAlertSummary(snapshotIssues))
 	}
 	return nil
+}
+
+func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
+	labels := dbPrometheusLabels(map[string]string{"datadir": report.Datadir})
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_status Overall storage alert status: 0=ok, 1=warning, 2=critical.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_status gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_status{%s} %d\n", labels, dbStorageAlertStatusMetricValue(report.Status))
+
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_component_status Component storage alert status: 0=ok, 1=warning, 2=critical.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_component_status gauge")
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_component_issues Component storage alert issue count.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_component_issues gauge")
+	for _, component := range []struct {
+		name   string
+		status string
+		issues int
+	}{
+		{name: "freezer", status: report.FreezerStatus, issues: report.FreezerIssues},
+		{name: "stage", status: report.StageStatus, issues: report.StageIssues},
+		{name: "mode", status: report.ModeStatus, issues: report.ModeIssues},
+		{name: "snapshot", status: report.SnapshotStatus, issues: report.SnapshotIssues},
+	} {
+		componentLabels := dbPrometheusLabels(map[string]string{
+			"component": component.name,
+			"datadir":   report.Datadir,
+		})
+		fmt.Fprintf(w, "gtron_storage_alert_component_status{%s} %d\n", componentLabels, dbStorageAlertStatusMetricValue(component.status))
+		fmt.Fprintf(w, "gtron_storage_alert_component_issues{%s} %d\n", componentLabels, component.issues)
+	}
+
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_freezer_hidden_bytes Bytes hidden by freezer virtual-tail pruning.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_freezer_hidden_bytes gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_freezer_hidden_bytes{%s} %d\n", labels, report.FreezerAlertHiddenBytes)
+
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_snapshot_retired_segments Retired snapshot segments recorded in the manifest.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_snapshot_retired_segments gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_snapshot_retired_segments{%s} %d\n", labels, report.SnapshotRetiredSegments)
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_snapshot_retired_files Retired snapshot files still present on disk.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_snapshot_retired_files gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_snapshot_retired_files{%s} %d\n", labels, report.SnapshotRetiredFiles)
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_snapshot_retired_missing Retired snapshot files missing from disk.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_snapshot_retired_missing gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_snapshot_retired_missing{%s} %d\n", labels, report.SnapshotRetiredMissing)
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_snapshot_retired_skipped_active Retired snapshot files skipped because they are still active manifest files.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_snapshot_retired_skipped_active gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_snapshot_retired_skipped_active{%s} %d\n", labels, report.SnapshotRetiredSkippedActive)
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_snapshot_retired_bytes Retired snapshot bytes still present on disk.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_snapshot_retired_bytes gauge")
+	fmt.Fprintf(w, "gtron_storage_alert_snapshot_retired_bytes{%s} %d\n", labels, report.SnapshotRetiredBytes)
+
+	modeLabels := dbPrometheusLabels(map[string]string{
+		"datadir":   report.Datadir,
+		"mode":      report.PruneMode,
+		"persisted": fmt.Sprintf("%t", report.PruneModePersisted),
+	})
+	fmt.Fprintln(w, "# HELP gtron_storage_prune_mode_info Persisted Erigon-style prune mode selected for this datadir.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_prune_mode_info gauge")
+	fmt.Fprintf(w, "gtron_storage_prune_mode_info{%s} 1\n", modeLabels)
+}
+
+func dbStorageAlertStatusMetricValue(status string) int {
+	switch status {
+	case "ok":
+		return 0
+	case "warning":
+		return 1
+	case "critical":
+		return 2
+	default:
+		return -1
+	}
+}
+
+func dbPrometheusLabels(labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=\"%s\"", key, dbPrometheusLabelValue(labels[key])))
+	}
+	return strings.Join(parts, ",")
+}
+
+func dbPrometheusLabelValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return value
 }
 
 func dbFreezerAlertIssuesJSON(issues []dbFreezerAlertIssue) []dbStorageAlertIssueJSON {

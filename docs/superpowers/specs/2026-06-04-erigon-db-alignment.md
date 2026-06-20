@@ -941,6 +941,10 @@ Status:
   lookup-prune, or tail-prune progress, or non-`minimal` datadirs with
   freezer-tail prune progress. The Nile sampler and storage benchmark harness
   request the JSON form while retaining a legacy text parser fallback.
+- `gtron db storage-alerts --prometheus` now exposes the same aggregate storage
+  alert state as Prometheus text metrics for external monitor scrape jobs:
+  overall/component status values, issue counts, hidden freezer bytes, retired
+  snapshot counters, and the persisted prune mode.
 
 Needed:
 
@@ -959,10 +963,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Extend higher-level production alert packaging beyond the local JSON report
-  into the external monitor/alert routing used for long Nile/mainnet soaks.
-  Catalog/freezer sidecar mismatch is now caught by signed/local manifest
-  verification as well as tail-prune/stage-status coverage gates.
+- Wire the Prometheus storage-alert metrics into the external monitor/alert
+  routing used for long Nile/mainnet soaks. Catalog/freezer sidecar mismatch is
+  now caught by signed/local manifest verification as well as
+  tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

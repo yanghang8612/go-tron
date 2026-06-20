@@ -647,6 +647,96 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 	}
 }
 
+func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
+	dataDir := t.TempDir()
+	seedDBStorageAlertsOKDatadir(t, dataDir)
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStorageAlertsCmd --prometheus: %v", err)
+	}
+	for _, want := range []string{
+		"# HELP gtron_storage_alert_status",
+		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_status{component="freezer",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_freezer_hidden_bytes{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsCmdPrometheusCriticalReturnsError(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Finish verified=mismatch") {
+		t.Fatalf("dbStorageAlertsCmd --prometheus err = %v, want Finish mismatch", err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_status{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsCmdRejectsAmbiguousMachineFormats(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "--json and --prometheus are mutually exclusive") {
+		t.Fatalf("dbStorageAlertsCmd err = %v output=%q, want machine-format conflict", err, output)
+	}
+	if output != "" {
+		t.Fatalf("dbStorageAlertsCmd conflict output = %q, want empty", output)
+	}
+}
+
+func TestDBPrometheusLabelValueEscapesSpecialCharacters(t *testing.T) {
+	got := dbPrometheusLabelValue("a\\b\nc\"d")
+	if got != `a\\b\nc\"d` {
+		t.Fatalf("dbPrometheusLabelValue = %q, want escaped prometheus label", got)
+	}
+}
+
 func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 	dataDir := t.TempDir()
 	f := openDBCmdFreezer(t, dataDir)
@@ -717,6 +807,32 @@ func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func seedDBStorageAlertsOKDatadir(t *testing.T, dataDir string) {
+	t.Helper()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
 	}
 }
 
@@ -2105,6 +2221,7 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbBalanceTraceOverwriteFlag,
 		dbStageVerifyFlag,
 		dbAlertJSONFlag,
+		dbAlertPrometheusFlag,
 		snapshotDirFlag,
 		snapshotTrustedCatalogKeyFlag,
 		snapshotTrustedCatalogKeyFileFlag,

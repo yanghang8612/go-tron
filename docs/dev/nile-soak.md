@@ -353,6 +353,12 @@ the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
 body progress rows fail staged-body verification, including `stagedBlock` and
 `stagedHash` when the referenced staged row can be decoded.
+For monitor scrape jobs outside the JSONL sampler, use
+`gtron db storage-alerts --prometheus --datadir <dir>` while the node is stopped
+or the database can otherwise be opened exclusively. The text metrics expose
+overall/component status values (`0=ok`, `1=warning`, `2=critical`), issue
+counts, hidden freezer bytes, retired snapshot counters, and the persisted
+prune mode.
 
 ## Shielded TRC20 Replay Recovery
 
