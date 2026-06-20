@@ -59,7 +59,12 @@ type Diagnostics struct {
 	ImportPhaseCursorCurrentCanonical      string
 	ImportPhaseCursorCurrentSync           string
 	ImportPhaseCursorCurrentTaskIndex      int
+	ImportPhaseCursorCurrentTaskCount      int
+	ImportPhaseCursorCurrentTaskRemaining  int
 	ImportPhaseCursorNextBlock             uint64
+	ImportPhaseCursorNextPhase             string
+	ImportPhaseCursorNextCanonical         string
+	ImportPhaseCursorNextSync              string
 	ImportPhaseCursorBlockedStatus         string
 	ImportPhaseProgressScheduled           int
 	ImportPhaseProgressCompleted           int
@@ -180,11 +185,16 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 				"syncPhaseCursorCurrentCanonical", d.ImportPhaseCursorCurrentCanonical,
 				"syncPhaseCursorCurrentSync", d.ImportPhaseCursorCurrentSync,
 				"syncPhaseCursorCurrentTaskIndex", d.ImportPhaseCursorCurrentTaskIndex,
+				"syncPhaseCursorCurrentTaskCount", d.ImportPhaseCursorCurrentTaskCount,
+				"syncPhaseCursorCurrentTaskRemaining", d.ImportPhaseCursorCurrentTaskRemaining,
 			)
 		}
-		if d.ImportPhaseCursorNextBlock != 0 || d.ImportPhaseCursorBlockedStatus != "" {
+		if d.ImportPhaseCursorNextBlock != 0 || d.ImportPhaseCursorNextPhase != "" || d.ImportPhaseCursorBlockedStatus != "" {
 			fields = append(fields,
 				"syncPhaseCursorNextBlock", d.ImportPhaseCursorNextBlock,
+				"syncPhaseCursorNextPhase", d.ImportPhaseCursorNextPhase,
+				"syncPhaseCursorNextCanonical", d.ImportPhaseCursorNextCanonical,
+				"syncPhaseCursorNextSync", d.ImportPhaseCursorNextSync,
 				"syncPhaseCursorBlockedStatus", d.ImportPhaseCursorBlockedStatus,
 			)
 		}
@@ -322,9 +332,17 @@ func (d Diagnostics) WithImportStagePhaseCursor(cursor ImportStagePhaseCursor) D
 		d.ImportPhaseCursorCurrentCanonical = string(cursor.CurrentCanonicalStage)
 		d.ImportPhaseCursorCurrentSync = string(cursor.CurrentSyncStage)
 		d.ImportPhaseCursorCurrentTaskIndex = cursor.CurrentTaskIndex
+		d.ImportPhaseCursorCurrentTaskCount = len(cursor.CurrentTasks)
+		d.ImportPhaseCursorCurrentTaskRemaining = d.ImportPhaseCursorCurrentTaskCount - cursor.CurrentTaskIndex
+		if d.ImportPhaseCursorCurrentTaskRemaining < 0 {
+			d.ImportPhaseCursorCurrentTaskRemaining = 0
+		}
 	}
 	if cursor.HasNextTask {
 		d.ImportPhaseCursorNextBlock = cursor.NextTask.BlockNum
+		d.ImportPhaseCursorNextPhase = string(cursor.NextTask.Phase)
+		d.ImportPhaseCursorNextCanonical = string(cursor.NextTask.CanonicalStage)
+		d.ImportPhaseCursorNextSync = string(cursor.NextTask.SyncStage)
 	}
 	if cursor.HasBlocked {
 		d.ImportPhaseCursorBlockedStatus = cursor.BlockedStatus.String()

@@ -198,6 +198,7 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 			CurrentPhase:          ImportStagePhaseExecution,
 			CurrentCanonicalStage: rawdb.StageExecution,
 			CurrentSyncStage:      rawdb.StageSyncExecution,
+			CurrentTasks:          stagePlan.Execution,
 			CurrentTaskIndex:      1,
 			HasNextTask:           true,
 			NextTask:              ImportExecutionStageTask(2, hash2),
@@ -240,7 +241,12 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 		diag.ImportPhaseCursorCurrentCanonical != string(rawdb.StageExecution) ||
 		diag.ImportPhaseCursorCurrentSync != string(rawdb.StageSyncExecution) ||
 		diag.ImportPhaseCursorCurrentTaskIndex != 1 ||
+		diag.ImportPhaseCursorCurrentTaskCount != 2 ||
+		diag.ImportPhaseCursorCurrentTaskRemaining != 1 ||
 		diag.ImportPhaseCursorNextBlock != 2 ||
+		diag.ImportPhaseCursorNextPhase != string(ImportStagePhaseExecution) ||
+		diag.ImportPhaseCursorNextCanonical != string(rawdb.StageExecution) ||
+		diag.ImportPhaseCursorNextSync != string(rawdb.StageSyncExecution) ||
 		diag.ImportPhaseCursorBlockedStatus != ImportStageProgressMismatch.String() {
 		t.Fatalf("phase cursor diagnostics = %+v, want execution cursor at block2 mismatch", diag)
 	}
@@ -302,7 +308,12 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		ImportPhaseCursorCurrentCanonical:     string(rawdb.StageExecution),
 		ImportPhaseCursorCurrentSync:          string(rawdb.StageSyncExecution),
 		ImportPhaseCursorCurrentTaskIndex:     1,
+		ImportPhaseCursorCurrentTaskCount:     2,
+		ImportPhaseCursorCurrentTaskRemaining: 1,
 		ImportPhaseCursorNextBlock:            2,
+		ImportPhaseCursorNextPhase:            string(ImportStagePhaseExecution),
+		ImportPhaseCursorNextCanonical:        string(rawdb.StageExecution),
+		ImportPhaseCursorNextSync:             string(rawdb.StageSyncExecution),
 		ImportPhaseCursorBlockedStatus:        ImportStageProgressMismatch.String(),
 		ImportPhaseProgressScheduled:          4,
 		ImportPhaseProgressCompleted:          1,
@@ -334,7 +345,12 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncPhaseCursorCurrentCanonical", string(rawdb.StageExecution),
 		"syncPhaseCursorCurrentSync", string(rawdb.StageSyncExecution),
 		"syncPhaseCursorCurrentTaskIndex", 1,
+		"syncPhaseCursorCurrentTaskCount", 2,
+		"syncPhaseCursorCurrentTaskRemaining", 1,
 		"syncPhaseCursorNextBlock", uint64(2),
+		"syncPhaseCursorNextPhase", string(ImportStagePhaseExecution),
+		"syncPhaseCursorNextCanonical", string(rawdb.StageExecution),
+		"syncPhaseCursorNextSync", string(rawdb.StageSyncExecution),
 		"syncPhaseCursorBlockedStatus", ImportStageProgressMismatch.String(),
 		"syncPhaseProgressCompletedPhases", 1,
 		"syncPhaseProgressScheduledPhases", 4,

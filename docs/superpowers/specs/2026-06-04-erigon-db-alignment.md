@@ -626,6 +626,10 @@ Status:
   Nile sampler). This keeps staged-sync throughput soaks from conflating
   contract-heavy windows with transfer-heavy windows when diagnosing execution
   and state-commit bottlenecks.
+- Phase cursor diagnostics now expose the current phase task count, remaining
+  tasks, and the next task phase/canonical/sync stage in both runtime logs and
+  the Nile sampler. Long soaks can identify the exact staged-sync task that is
+  missing or mismatched without reopening the live database.
 
 Needed:
 
