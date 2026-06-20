@@ -18,6 +18,11 @@ ZERO_ISSUE_FIELDS = (
     "stageSyncPipelineViolationCount",
 )
 
+PROMETHEUS_REQUIRED_SNIPPETS = (
+    ("gtron_storage_alert_status{", "gtron_storage_alert_status"),
+    ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
+)
+
 
 def load_rows(path):
     rows = []
@@ -126,6 +131,29 @@ def check_thresholds(row, raws, op_name, predicate):
     return issues
 
 
+def resolve_artifact(result_path, raw_path):
+    path = Path(str(raw_path))
+    if path.is_absolute():
+        return path
+    return result_path.parent / path
+
+
+def check_prometheus_artifact(result_path, row):
+    raw_path = row.get("offlineDbCheckPrometheus")
+    if not raw_path:
+        return ["offlineDbCheckPrometheus is missing while status is ok"]
+    path = resolve_artifact(result_path, raw_path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"offlineDbCheckPrometheus artifact {path}: {exc}"]
+    issues = []
+    for needle, name in PROMETHEUS_REQUIRED_SNIPPETS:
+        if needle not in text:
+            issues.append(f"offlineDbCheckPrometheus artifact {path} missing {name}")
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -172,6 +200,8 @@ def check_row(row, args):
                 "offlineDbCheckPrometheusStatus="
                 f"{row.get('offlineDbCheckPrometheusStatus')!r}, want ok/skipped"
             )
+        if row.get("offlineDbCheckPrometheusStatus") == "ok":
+            issues.extend(check_prometheus_artifact(args.result, row))
 
     if args.min_height is not None:
         height = as_number(row, "height")

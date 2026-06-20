@@ -677,7 +677,8 @@ Status:
   full staged-sync evidence. It checks latest-row sample health, captured
   stage-status availability, staged-sync readiness or caught-up status, stage
   monotonicity, hash/staged-body/order/regression counters, optional stopped
-  offline DB checks, and project-specific numeric thresholds.
+  offline DB checks, storage-alert Prometheus artifact shape, and
+  project-specific numeric thresholds.
 
 Needed:
 
@@ -1020,6 +1021,11 @@ Status:
   storage-alert Prometheus metric payload next to the JSONL output by default,
   records `offlineDbCheckPrometheus*` fields, and supports an explicit
   `--storage-alert-prometheus-file` path for long-running Nile scrape jobs.
+- The storage benchmark and Nile acceptance checkers now require readable
+  Prometheus artifacts to expose both `gtron_storage_alert_status` and the
+  normalized `gtron_storage_alert_issue` metric family, so production soak
+  gates catch older binaries or scrape payloads that cannot route freezer,
+  stage, mode, and snapshot issue kinds.
 
 Needed:
 

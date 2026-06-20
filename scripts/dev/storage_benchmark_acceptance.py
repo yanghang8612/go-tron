@@ -14,6 +14,11 @@ ALERT_STATUS_FIELDS = (
     "snapshotAlertStatus",
 )
 
+PROMETHEUS_REQUIRED_SNIPPETS = (
+    ("gtron_storage_alert_status{", "gtron_storage_alert_status"),
+    ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
+)
+
 
 def row_sort_key(row):
     unix = row.get("unix")
@@ -178,6 +183,14 @@ def resolve_artifact(result_path, raw_path):
     return result_path.parent / path
 
 
+def check_prometheus_text(label, path, text):
+    issues = []
+    for needle, name in PROMETHEUS_REQUIRED_SNIPPETS:
+        if needle not in text:
+            issues.append(f"{label} prometheus artifact {path} missing {name}")
+    return issues
+
+
 def check_prometheus_artifacts(result_path, rows):
     issues = []
     for row in latest_rows(rows).values():
@@ -191,10 +204,7 @@ def check_prometheus_artifacts(result_path, rows):
         except OSError as exc:
             issues.append(f"{line_label(row)} prometheus artifact {path}: {exc}")
             continue
-        if "gtron_storage_alert_status{" not in text:
-            issues.append(
-                f"{line_label(row)} prometheus artifact {path} missing gtron_storage_alert_status"
-            )
+        issues.extend(check_prometheus_text(line_label(row), path, text))
     return issues
 
 

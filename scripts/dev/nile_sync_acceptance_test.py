@@ -20,7 +20,15 @@ def write_result(path, rows):
 class NileSyncAcceptanceTest(unittest.TestCase):
     def test_accepts_clean_latest_staged_sync_row(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = Path(tmp) / "samples.jsonl"
+            tmpdir = Path(tmp)
+            prom = tmpdir / "storage-alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "samples.jsonl"
             write_result(
                 result,
                 [
@@ -47,6 +55,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "offlineDbCheck": True,
                         "offlineDbCheckStatus": "ok",
                         "offlineDbCheckPrometheusStatus": "ok",
+                        "offlineDbCheckPrometheus": str(prom),
                         "height": 1000,
                         "fullStagedSyncHeadLagBlocks": 12,
                         "intervalStageSyncFinishBlocksPerMinute": 30.5,
@@ -142,6 +151,52 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "fullStagedSyncHeadLagBlocks=500.0",
             ):
                 self.assertIn(want, proc.stderr)
+
+    def test_rejects_offline_prometheus_artifact_without_issue_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "storage-alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "offlineDbCheck": True,
+                        "offlineDbCheckStatus": "ok",
+                        "offlineDbCheckPrometheusStatus": "ok",
+                        "offlineDbCheckPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_alert_issue", proc.stderr)
 
 
 if __name__ == "__main__":

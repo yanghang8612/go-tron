@@ -24,6 +24,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             for name in ("full.prom", "blocks.prom", "minimal.prom"):
                 (tmpdir / name).write_text(
                     '# TYPE gtron_storage_alert_status gauge\n'
+                    '# TYPE gtron_storage_alert_issue gauge\n'
                     'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
                     encoding="utf-8",
                 )
@@ -149,6 +150,49 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("prometheus artifact", proc.stderr)
             self.assertIn("signedColdPrune must be true", proc.stderr)
             self.assertIn("tailPrunedThroughBlock must be >= 0", proc.stderr)
+
+    def test_rejects_prometheus_artifact_without_issue_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_alert_issue", proc.stderr)
 
 
 if __name__ == "__main__":

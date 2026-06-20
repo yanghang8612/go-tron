@@ -383,9 +383,10 @@ For monitor scrape jobs outside the JSONL sampler, use
 `gtron db storage-alerts --prometheus --datadir <dir>` while the node is stopped
 or the database can otherwise be opened exclusively. The text metrics expose
 overall/component status values (`0=ok`, `1=warning`, `2=critical`), issue
-counts, hidden freezer bytes, retired snapshot counters, and the persisted
-prune mode. When `--offline-db-check` is used with `--output`, the sampler also
-writes `${output}.storage-alerts.prom` by default and records
+counts, normalized issue-kind counts by component/severity/kind, hidden freezer
+bytes, retired snapshot counters, and the persisted prune mode. When
+`--offline-db-check` is used with `--output`, the sampler also writes
+`${output}.storage-alerts.prom` by default and records
 `offlineDbCheckPrometheus` plus `offlineDbCheckPrometheusStatus` in the JSONL
 row. Use `--storage-alert-prometheus-file <file>` to place that artifact at a
 stable path for external scrape jobs.

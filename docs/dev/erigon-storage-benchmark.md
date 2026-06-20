@@ -189,9 +189,10 @@ storage-alert gate for archive/soak monitor ingestion.
 For external monitors that scrape command output instead of JSONL harness rows,
 run `gtron db storage-alerts --prometheus --datadir <dir>`. The Prometheus text
 output exposes overall/component status gauges (`0=ok`, `1=warning`,
-`2=critical`), component issue counts, hidden freezer bytes, retired snapshot
-counters, and the persisted prune mode without putting high-cardinality issue
-details into metric labels.
+`2=critical`), component issue counts, normalized issue-kind counts by
+component/severity/kind, hidden freezer bytes, retired snapshot counters, and
+the persisted prune mode without putting high-cardinality issue details into
+metric labels.
 
 ## Sync Profile
 
@@ -266,9 +267,10 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
 
 The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
-`gtron_storage_alert_status` Prometheus artifact, confirms minimal-mode signed
-cold lookup pruning plus tail-prune evidence, and applies any project-specific
-numeric `--min`/`--max` thresholds.
+Prometheus artifact with `gtron_storage_alert_status` and
+`gtron_storage_alert_issue`, confirms minimal-mode signed cold lookup pruning
+plus tail-prune evidence, and applies any project-specific numeric
+`--min`/`--max` thresholds.
 
 Recorded samples:
 
