@@ -931,8 +931,12 @@ Status:
   health into one machine-readable report for soak/production monitors. The
   JSON form preserves the same critical exit semantics as the text command and
   includes freezer/stage/snapshot detail arrays plus hidden-freezer and retired
-  snapshot counters; the Nile sampler and storage benchmark harness request the
-  JSON form while retaining a legacy text parser fallback.
+  snapshot counters. It also reads the persisted `history-prune-mode-v1` row,
+  reports `modeAlert*` plus `pruneMode*` fields, and fails when stage progress
+  contradicts mode semantics, such as `archive` datadirs with hot-prune,
+  lookup-prune, or tail-prune progress, or non-`minimal` datadirs with
+  freezer-tail prune progress. The Nile sampler and storage benchmark harness
+  request the JSON form while retaining a legacy text parser fallback.
 
 Needed:
 
@@ -1033,9 +1037,11 @@ Status:
   `gtron db storage-alerts` before the JSONL row is emitted and records
   `freezerAlertStatus`, `freezerAlertIssues`,
   `freezerAlertHiddenBytes`, `freezerAlertDetails`, `stageVerifyStatus`,
-  `stageVerifyIssues`, `stageVerifyDetails`, `snapshotAlertStatus`,
-  `snapshotAlertIssues`, `snapshotAlertDetails`, and the `snapshotRetired*`
-  counters, so critical freezer, stage, prune, and cold-coverage regressions
+  `stageVerifyIssues`, `stageVerifyDetails`, `modeAlertStatus`,
+  `modeAlertIssues`, `modeAlertDetails`, `pruneMode`, `pruneModePersisted`,
+  `snapshotAlertStatus`, `snapshotAlertIssues`, `snapshotAlertDetails`, and the
+  `snapshotRetired*` counters, so critical freezer, stage, mode, prune, and
+  cold-coverage regressions
   are emitted as `status=storage-alerts-critical` rows before the harness exits
   non-zero. Warning rows keep the exact alert detail in JSONL without failing
   the run.

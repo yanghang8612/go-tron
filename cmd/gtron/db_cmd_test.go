@@ -21,6 +21,7 @@ import (
 	corestate "github.com/tronprotocol/go-tron/core/state"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/urfave/cli/v2"
@@ -631,6 +632,10 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"freezerIssues=0",
 		"stageStatus=ok",
 		"stageIssues=0",
+		"modeStatus=ok",
+		"modeIssues=0",
+		"pruneMode=unknown",
+		"pruneModePersisted=false",
 		"snapshotStatus=ok",
 		"snapshotIssues=0",
 		"retiredSegments=0",
@@ -804,6 +809,9 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	if report.SnapshotStatus != "ok" || report.SnapshotIssues != 0 {
 		t.Fatalf("unexpected snapshot alert fields: %+v", report)
 	}
+	if report.ModeStatus != "ok" || report.ModeIssues != 0 || report.PruneMode != "unknown" || report.PruneModePersisted {
+		t.Fatalf("unexpected mode alert fields: %+v", report)
+	}
 	if len(report.StageVerifyDetails) != report.StageIssues {
 		t.Fatalf("unexpected stage verify details: %+v", report.StageVerifyDetails)
 	}
@@ -821,6 +829,60 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	}
 	if len(report.FreezerAlertDetails) != 0 || len(report.SnapshotAlertDetails) != 0 {
 		t.Fatalf("unexpected non-stage details: freezer=%+v snapshot=%+v", report.FreezerAlertDetails, report.SnapshotAlertDetails)
+	}
+}
+
+func TestDBStorageAlertsCmdJSONReportsArchiveModePruneConflict(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("WriteHistoryPruneMode: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, block4.Number()); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotHotPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "archive-prune-stage") {
+		t.Fatalf("dbStorageAlertsCmd err = %v, want archive prune conflict", err)
+	}
+	var report dbStorageAlertsJSON
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("storage alerts json unmarshal failed: %v\n%s", err, output)
+	}
+	if report.Status != "critical" || report.ModeStatus != "critical" || report.PruneMode != params.HistoryModeArchive || !report.PruneModePersisted {
+		t.Fatalf("unexpected archive mode alert summary: %+v", report)
+	}
+	if report.ModeIssues != 1 || len(report.ModeAlertDetails) != 1 {
+		t.Fatalf("mode alert details = %+v issues=%d", report.ModeAlertDetails, report.ModeIssues)
+	}
+	detail := report.ModeAlertDetails[0]
+	if detail.Severity != "critical" || detail.Kind != "archive-prune-stage" || !strings.Contains(detail.Detail, string(rawdb.StageSnapshotHotPrune)) {
+		t.Fatalf("unexpected mode alert detail: %+v", detail)
 	}
 }
 

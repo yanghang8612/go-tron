@@ -264,6 +264,11 @@ def parse_alerts(text):
         "stageVerifyStatus": "unknown",
         "stageVerifyIssues": -1,
         "stageVerifyDetails": [],
+        "modeAlertStatus": "unknown",
+        "modeAlertIssues": -1,
+        "modeAlertDetails": [],
+        "pruneMode": "unknown",
+        "pruneModePersisted": False,
         "snapshotAlertStatus": "unknown",
         "snapshotAlertIssues": -1,
         "snapshotAlertDetails": [],
@@ -286,6 +291,10 @@ def parse_alerts(text):
             "freezerAlertHiddenBytes": "freezerAlertHiddenBytes",
             "stageVerifyStatus": "stageStatus",
             "stageVerifyIssues": "stageIssues",
+            "modeAlertStatus": "modeStatus",
+            "modeAlertIssues": "modeIssues",
+            "pruneMode": "pruneMode",
+            "pruneModePersisted": "pruneModePersisted",
             "snapshotAlertStatus": "snapshotStatus",
             "snapshotAlertIssues": "snapshotIssues",
             "snapshotRetiredBytes": "snapshotRetiredBytes",
@@ -296,6 +305,7 @@ def parse_alerts(text):
         detail_fields = {
             "freezerAlertDetails": "freezerAlertDetails",
             "stageVerifyDetails": "stageVerifyDetails",
+            "modeAlertDetails": "modeAlertDetails",
             "snapshotAlertDetails": "snapshotAlertDetails",
         }
         for row_key, json_key in detail_fields.items():
@@ -308,6 +318,10 @@ def parse_alerts(text):
         "freezerAlertHiddenBytes": r"hiddenSize=([0-9]+)",
         "stageVerifyStatus": r"stageStatus=([^ ]+)",
         "stageVerifyIssues": r"stageIssues=([0-9]+)",
+        "modeAlertStatus": r"modeStatus=([^ ]+)",
+        "modeAlertIssues": r"modeIssues=([0-9]+)",
+        "pruneMode": r"pruneMode=([^ ]+)",
+        "pruneModePersisted": r"pruneModePersisted=([^ ]+)",
         "snapshotAlertStatus": r"snapshotStatus=([^ ]+)",
         "snapshotAlertIssues": r"snapshotIssues=([0-9]+)",
         "snapshotRetiredBytes": r"retiredBytes=([0-9]+)",
@@ -319,6 +333,8 @@ def parse_alerts(text):
         value = found[-1]
         if key.endswith("Issues") or key.endswith("Bytes"):
             row[key] = int(value)
+        elif key == "pruneModePersisted":
+            row[key] = str(value).lower() in {"1", "true", "yes"}
         else:
             row[key] = value
     for line in text.splitlines():
@@ -335,6 +351,14 @@ def parse_alerts(text):
             row["stageVerifyDetails"].append({
                 "severity": m.group(1),
                 "detail": m.group(2),
+            })
+            continue
+        m = re.match(r"Storage mode alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+        if m:
+            row["modeAlertDetails"].append({
+                "severity": m.group(1),
+                "kind": m.group(2),
+                "detail": m.group(3),
             })
             continue
         m = re.match(r"Storage snapshot alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
@@ -1474,6 +1498,7 @@ def build_soak_health(
     for field, issue in (
         ("freezerAlertStatus", "freezer-alert"),
         ("stageVerifyStatus", "stage-verify-alert"),
+        ("modeAlertStatus", "mode-alert"),
         ("snapshotAlertStatus", "snapshot-alert"),
     ):
         status = alerts.get(field, "unknown")

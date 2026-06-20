@@ -48,7 +48,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     #!/usr/bin/env bash
                     if [ "${1:-}" = "db" ] && [ "${2:-}" = "storage-alerts" ]; then
                       cat <<'EOF'
-                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
+                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
                     EOF
                       exit 1
                     fi
@@ -102,6 +102,20 @@ class StorageBenchmarkTest(unittest.TestCase):
                     {
                         "severity": "critical",
                         "detail": "SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa",
+                    }
+                ],
+            )
+            self.assertEqual(row["modeAlertStatus"], "critical")
+            self.assertEqual(row["modeAlertIssues"], 1)
+            self.assertEqual(row["pruneMode"], "archive")
+            self.assertTrue(row["pruneModePersisted"])
+            self.assertEqual(
+                row["modeAlertDetails"],
+                [
+                    {
+                        "severity": "critical",
+                        "kind": "archive-prune-stage",
+                        "detail": "archive mode must not have SnapshotHotPrune progress at block 7",
                     }
                 ],
             )

@@ -72,6 +72,11 @@ RUN_FREEZER_ALERT_DETAILS="[]"
 RUN_STAGE_VERIFY_STATUS="not-run"
 RUN_STAGE_VERIFY_ISSUES=-1
 RUN_STAGE_VERIFY_DETAILS="[]"
+RUN_MODE_ALERT_STATUS="not-run"
+RUN_MODE_ALERT_ISSUES=-1
+RUN_MODE_ALERT_DETAILS="[]"
+RUN_PRUNE_MODE="unknown"
+RUN_PRUNE_MODE_PERSISTED="false"
 RUN_SNAPSHOT_ALERT_STATUS="not-run"
 RUN_SNAPSHOT_ALERT_ISSUES=-1
 RUN_SNAPSHOT_ALERT_DETAILS="[]"
@@ -245,6 +250,11 @@ reset_run_metrics() {
   RUN_STAGE_VERIFY_STATUS="not-run"
   RUN_STAGE_VERIFY_ISSUES=-1
   RUN_STAGE_VERIFY_DETAILS="[]"
+  RUN_MODE_ALERT_STATUS="not-run"
+  RUN_MODE_ALERT_ISSUES=-1
+  RUN_MODE_ALERT_DETAILS="[]"
+  RUN_PRUNE_MODE="unknown"
+  RUN_PRUNE_MODE_PERSISTED="false"
   RUN_SNAPSHOT_ALERT_STATUS="not-run"
   RUN_SNAPSHOT_ALERT_ISSUES=-1
   RUN_SNAPSHOT_ALERT_DETAILS="[]"
@@ -532,6 +542,7 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 freezer = []
 stage = []
+mode = []
 snapshot = []
 for line in text.splitlines():
     stripped = line.strip()
@@ -545,9 +556,11 @@ for line in text.splitlines():
         continue
     freezer = obj.get("freezerAlertDetails", [])
     stage = obj.get("stageVerifyDetails", [])
+    mode = obj.get("modeAlertDetails", [])
     snapshot = obj.get("snapshotAlertDetails", [])
     print(json.dumps(freezer if isinstance(freezer, list) else [], separators=(",", ":")))
     print(json.dumps(stage if isinstance(stage, list) else [], separators=(",", ":")))
+    print(json.dumps(mode if isinstance(mode, list) else [], separators=(",", ":")))
     print(json.dumps(snapshot if isinstance(snapshot, list) else [], separators=(",", ":")))
     raise SystemExit(0)
 for line in text.splitlines():
@@ -559,11 +572,16 @@ for line in text.splitlines():
     if m:
         stage.append({"severity": m.group(1), "detail": m.group(2)})
         continue
+    m = re.match(r"Storage mode alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+    if m:
+        mode.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
+        continue
     m = re.match(r"Storage snapshot alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
     if m:
         snapshot.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
 print(json.dumps(freezer, separators=(",", ":")))
 print(json.dumps(stage, separators=(",", ":")))
+print(json.dumps(mode, separators=(",", ":")))
 print(json.dumps(snapshot, separators=(",", ":")))
 PY
 }
@@ -609,12 +627,16 @@ run_storage_alert_gate() {
   if ! run_logged "$alert_out" "$GTRON" db storage-alerts --json --datadir "$datadir" >>"$log_path"; then
     ok=0
   fi
-  local freezer_status freezer_issues hidden stage_status stage_issues snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
+  local freezer_status freezer_issues hidden stage_status stage_issues mode_status mode_issues prune_mode prune_mode_persisted snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
   freezer_status="$(storage_alert_field "$alert_out" freezerStatus 'freezerStatus=([^ ]+)')"
   freezer_issues="$(storage_alert_field "$alert_out" freezerIssues 'freezerIssues=([0-9]+)')"
   hidden="$(storage_alert_field "$alert_out" freezerAlertHiddenBytes 'hiddenSize=([0-9]+)')"
   stage_status="$(storage_alert_field "$alert_out" stageStatus 'stageStatus=([^ ]+)')"
   stage_issues="$(storage_alert_field "$alert_out" stageIssues 'stageIssues=([0-9]+)')"
+  mode_status="$(storage_alert_field "$alert_out" modeStatus 'modeStatus=([^ ]+)')"
+  mode_issues="$(storage_alert_field "$alert_out" modeIssues 'modeIssues=([0-9]+)')"
+  prune_mode="$(storage_alert_field "$alert_out" pruneMode 'pruneMode=([^ ]+)')"
+  prune_mode_persisted="$(storage_alert_field "$alert_out" pruneModePersisted 'pruneModePersisted=([^ ]+)')"
   snapshot_status="$(storage_alert_field "$alert_out" snapshotStatus 'snapshotStatus=([^ ]+)')"
   snapshot_issues="$(storage_alert_field "$alert_out" snapshotIssues 'snapshotIssues=([0-9]+)')"
   retired_segments="$(storage_alert_field "$alert_out" snapshotRetiredSegments 'retiredSegments=([0-9]+)')"
@@ -627,6 +649,11 @@ run_storage_alert_gate() {
   RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"
   RUN_STAGE_VERIFY_STATUS="${stage_status:-unknown}"
   RUN_STAGE_VERIFY_ISSUES="${stage_issues:--1}"
+  RUN_MODE_ALERT_STATUS="${mode_status:-unknown}"
+  RUN_MODE_ALERT_ISSUES="${mode_issues:--1}"
+  RUN_PRUNE_MODE="${prune_mode:-unknown}"
+  RUN_PRUNE_MODE_PERSISTED="${prune_mode_persisted:-false}"
+  RUN_PRUNE_MODE_PERSISTED="$(printf '%s' "$RUN_PRUNE_MODE_PERSISTED" | tr '[:upper:]' '[:lower:]')"
   RUN_SNAPSHOT_ALERT_STATUS="${snapshot_status:-unknown}"
   RUN_SNAPSHOT_ALERT_ISSUES="${snapshot_issues:--1}"
   RUN_SNAPSHOT_RETIRED_SEGMENTS="${retired_segments:--1}"
@@ -638,7 +665,8 @@ run_storage_alert_gate() {
   detail_json="$(storage_alert_detail_json "$alert_out")"
   RUN_FREEZER_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '1p')"
   RUN_STAGE_VERIFY_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '2p')"
-  RUN_SNAPSHOT_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '3p')"
+  RUN_MODE_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '3p')"
+  RUN_SNAPSHOT_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '4p')"
   if [ "$ok" -ne 1 ]; then
     RUN_STORAGE_ALERT_FAILED=1
   fi
@@ -799,6 +827,8 @@ emit_result() {
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$RUN_FREEZER_ALERT_DETAILS" \
     "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" "$RUN_STAGE_VERIFY_DETAILS" \
+    "$RUN_MODE_ALERT_STATUS" "$RUN_MODE_ALERT_ISSUES" "$RUN_MODE_ALERT_DETAILS" \
+    "$RUN_PRUNE_MODE" "$RUN_PRUNE_MODE_PERSISTED" \
     "$RUN_SNAPSHOT_ALERT_STATUS" "$RUN_SNAPSHOT_ALERT_ISSUES" "$RUN_SNAPSHOT_ALERT_DETAILS" \
     "$RUN_SNAPSHOT_RETIRED_SEGMENTS" "$RUN_SNAPSHOT_RETIRED_FILES" \
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
@@ -827,8 +857,9 @@ keys = [
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "freezerAlertDetails", "stageVerifyStatus", "stageVerifyIssues",
-    "stageVerifyDetails", "snapshotAlertStatus", "snapshotAlertIssues",
-    "snapshotAlertDetails", "snapshotRetiredSegments",
+    "stageVerifyDetails", "modeAlertStatus", "modeAlertIssues",
+    "modeAlertDetails", "pruneMode", "pruneModePersisted",
+    "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes",
     "datadir", "log",
@@ -854,14 +885,20 @@ ints = {
     "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
-    "stageVerifyIssues",
+    "stageVerifyIssues", "modeAlertIssues",
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
 }
+bools = {"pruneModePersisted"}
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
-    row[key] = int(value) if key in ints else value
-for key in ("freezerAlertDetails", "stageVerifyDetails", "snapshotAlertDetails"):
+    if key in ints:
+        row[key] = int(value)
+    elif key in bools:
+        row[key] = str(value).lower() in {"1", "true", "yes"}
+    else:
+        row[key] = value
+for key in ("freezerAlertDetails", "stageVerifyDetails", "modeAlertDetails", "snapshotAlertDetails"):
     try:
         parsed = json.loads(row.get(key, "[]"))
     except Exception:

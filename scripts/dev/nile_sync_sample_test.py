@@ -1536,7 +1536,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     [
                         "#!/usr/bin/env bash",
                         "cat <<'EOF'",
-                        '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
+                        '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
                         "EOF",
                         "exit 1",
                     ]
@@ -1583,6 +1583,20 @@ class NileSyncSampleTest(unittest.TestCase):
                     }
                 ],
             )
+            self.assertEqual(row["modeAlertStatus"], "critical")
+            self.assertEqual(row["modeAlertIssues"], 1)
+            self.assertEqual(row["pruneMode"], "archive")
+            self.assertTrue(row["pruneModePersisted"])
+            self.assertEqual(
+                row["modeAlertDetails"],
+                [
+                    {
+                        "severity": "critical",
+                        "kind": "archive-prune-stage",
+                        "detail": "archive mode must not have SnapshotHotPrune progress at block 7",
+                    }
+                ],
+            )
             self.assertEqual(row["snapshotAlertStatus"], "warning")
             self.assertEqual(row["snapshotAlertIssues"], 1)
             self.assertEqual(
@@ -1597,6 +1611,7 @@ class NileSyncSampleTest(unittest.TestCase):
             )
             self.assertEqual(row["freezerAlertDetails"], [])
             self.assertIn("stage-verify-alert", row["soakHealthIssues"])
+            self.assertIn("mode-alert", row["soakHealthIssues"])
             self.assertIn("offline-db-check:error", row["soakHealthIssues"])
             self.assertIn("SyncBodiesReady staged-body status=hash-mismatch", row["offlineDbCheckTail"])
 

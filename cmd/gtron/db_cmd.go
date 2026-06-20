@@ -268,6 +268,12 @@ type dbSnapshotAlertIssue struct {
 	detail   string
 }
 
+type dbModeAlertIssue struct {
+	severity string
+	kind     string
+	detail   string
+}
+
 type dbStorageAlertIssueJSON struct {
 	Severity string `json:"severity"`
 	Kind     string `json:"kind,omitempty"`
@@ -284,6 +290,11 @@ type dbStorageAlertsJSON struct {
 	StageStatus                  string                    `json:"stageStatus"`
 	StageIssues                  int                       `json:"stageIssues"`
 	StageVerifyDetails           []dbStorageAlertIssueJSON `json:"stageVerifyDetails"`
+	ModeStatus                   string                    `json:"modeStatus"`
+	ModeIssues                   int                       `json:"modeIssues"`
+	ModeAlertDetails             []dbStorageAlertIssueJSON `json:"modeAlertDetails"`
+	PruneMode                    string                    `json:"pruneMode"`
+	PruneModePersisted           bool                      `json:"pruneModePersisted"`
 	SnapshotStatus               string                    `json:"snapshotStatus"`
 	SnapshotIssues               int                       `json:"snapshotIssues"`
 	SnapshotAlertDetails         []dbStorageAlertIssueJSON `json:"snapshotAlertDetails"`
@@ -376,14 +387,16 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if len(stageIssues) > 0 {
 		stageStatus = "critical"
 	}
+	pruneMode, pruneModePersisted, modeIssues := dbModeAlertIssues(db, stageRows)
+	modeStatus := dbModeAlertStatus(modeIssues)
 
 	snapshotInspection, snapshotIssues := dbSnapshotRetiredAlertIssues(stateSnapshotsDir(cfg.DataDir))
 	snapshotStatus := dbSnapshotAlertStatus(snapshotIssues)
 
 	status := "ok"
-	if freezerStatus == "critical" || stageStatus == "critical" || snapshotStatus == "critical" {
+	if freezerStatus == "critical" || stageStatus == "critical" || modeStatus == "critical" || snapshotStatus == "critical" {
 		status = "critical"
-	} else if freezerStatus == "warning" || snapshotStatus == "warning" {
+	} else if freezerStatus == "warning" || modeStatus == "warning" || snapshotStatus == "warning" {
 		status = "warning"
 	}
 	if ctx.Bool(dbAlertJSONFlag.Name) {
@@ -397,6 +410,11 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 			StageStatus:                  stageStatus,
 			StageIssues:                  len(stageIssues),
 			StageVerifyDetails:           dbStageAlertIssuesJSON(stageIssues),
+			ModeStatus:                   modeStatus,
+			ModeIssues:                   len(modeIssues),
+			ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
+			PruneMode:                    pruneMode,
+			PruneModePersisted:           pruneModePersisted,
 			SnapshotStatus:               snapshotStatus,
 			SnapshotIssues:               len(snapshotIssues),
 			SnapshotAlertDetails:         dbSnapshotAlertIssuesJSON(snapshotIssues),
@@ -412,13 +430,14 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 			return fmt.Errorf("encode storage alerts json: %w", err)
 		}
 		if status == "critical" {
-			return fmt.Errorf("storage alerts failed: freezer=%s stage=%s snapshot=%s",
-				dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbSnapshotAlertSummary(snapshotIssues))
+			return fmt.Errorf("storage alerts failed: freezer=%s stage=%s mode=%s snapshot=%s",
+				dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbModeAlertSummary(modeIssues), dbSnapshotAlertSummary(snapshotIssues))
 		}
 		return nil
 	}
-	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues),
+		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
 		snapshotInspection.FilesMissing, snapshotInspection.FilesSkippedActive, snapshotInspection.BytesPresent,
 		dbFreezerHiddenSize(stats))
@@ -428,12 +447,15 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	for _, issue := range stageIssues {
 		fmt.Printf("Storage stage alert: severity=critical detail=%s\n", issue)
 	}
+	for _, issue := range modeIssues {
+		fmt.Printf("Storage mode alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
+	}
 	for _, issue := range snapshotIssues {
 		fmt.Printf("Storage snapshot alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
 	}
 	if status == "critical" {
-		return fmt.Errorf("storage alerts failed: freezer=%s stage=%s snapshot=%s",
-			dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbSnapshotAlertSummary(snapshotIssues))
+		return fmt.Errorf("storage alerts failed: freezer=%s stage=%s mode=%s snapshot=%s",
+			dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbModeAlertSummary(modeIssues), dbSnapshotAlertSummary(snapshotIssues))
 	}
 	return nil
 }
@@ -473,6 +495,18 @@ func dbSnapshotAlertIssuesJSON(issues []dbSnapshotAlertIssue) []dbStorageAlertIs
 	return out
 }
 
+func dbModeAlertIssuesJSON(issues []dbModeAlertIssue) []dbStorageAlertIssueJSON {
+	out := make([]dbStorageAlertIssueJSON, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, dbStorageAlertIssueJSON{
+			Severity: issue.severity,
+			Kind:     issue.kind,
+			Detail:   issue.detail,
+		})
+	}
+	return out
+}
+
 func dbFreezerAlertStatus(issues []dbFreezerAlertIssue) string {
 	if dbFreezerAlertHasCritical(issues) {
 		return "critical"
@@ -481,6 +515,75 @@ func dbFreezerAlertStatus(issues []dbFreezerAlertIssue) string {
 		return "warning"
 	}
 	return "ok"
+}
+
+func dbModeAlertStatus(issues []dbModeAlertIssue) string {
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			return "critical"
+		}
+	}
+	if len(issues) > 0 {
+		return "warning"
+	}
+	return "ok"
+}
+
+func dbModeAlertIssues(db ethdb.KeyValueReader, rows []dbStageStatusRow) (string, bool, []dbModeAlertIssue) {
+	mode, ok, err := rawdb.ReadHistoryPruneMode(db)
+	if err != nil {
+		return "invalid", ok, []dbModeAlertIssue{{
+			severity: "critical",
+			kind:     "prune-mode-invalid",
+			detail:   err.Error(),
+		}}
+	}
+	if !ok {
+		return "unknown", false, nil
+	}
+	normalised, err := normaliseHistoryMode(mode)
+	if err != nil {
+		return mode, true, []dbModeAlertIssue{{
+			severity: "critical",
+			kind:     "prune-mode-invalid",
+			detail:   err.Error(),
+		}}
+	}
+	var issues []dbModeAlertIssue
+	byStage := make(map[rawdb.StageID]dbStageStatusRow, len(rows))
+	for _, row := range rows {
+		if row.present {
+			byStage[row.stage] = row
+		}
+	}
+	if normalised == params.HistoryModeArchive {
+		for _, stage := range []rawdb.StageID{
+			rawdb.StageSnapshotHotPrune,
+			rawdb.StageSnapshotPrune,
+			rawdb.StageSnapshotChainLookupPrune,
+			rawdb.StageSnapshotSectionBloomPrune,
+			rawdb.StageSnapshotBalanceTracePrune,
+			rawdb.StageSnapshotChainFreezerTailPrune,
+		} {
+			if row, ok := byStage[stage]; ok {
+				issues = append(issues, dbModeAlertIssue{
+					severity: "critical",
+					kind:     "archive-prune-stage",
+					detail:   fmt.Sprintf("archive mode must not have %s progress at block %d", stage, row.progress.BlockNum),
+				})
+			}
+		}
+	}
+	if normalised != params.HistoryModeMinimal && normalised != params.HistoryModeArchive {
+		if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
+			issues = append(issues, dbModeAlertIssue{
+				severity: "critical",
+				kind:     "tail-prune-mode-mismatch",
+				detail:   fmt.Sprintf("mode %s must not have minimal-only %s progress at block %d", normalised, rawdb.StageSnapshotChainFreezerTailPrune, row.progress.BlockNum),
+			})
+		}
+	}
+	return normalised, true, issues
 }
 
 func dbSnapshotRetiredAlertIssues(snapshotDir string) (*statesnapshots.RetiredSegmentFileInspection, []dbSnapshotAlertIssue) {
@@ -609,6 +712,19 @@ func dbStageAlertSummary(issues []string) string {
 }
 
 func dbSnapshotAlertSummary(issues []dbSnapshotAlertIssue) string {
+	var critical []string
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			critical = append(critical, issue.kind)
+		}
+	}
+	if len(critical) == 0 {
+		return "no critical issues"
+	}
+	return strings.Join(critical, ",")
+}
+
+func dbModeAlertSummary(issues []dbModeAlertIssue) string {
 	var critical []string
 	for _, issue := range issues {
 		if issue.severity == "critical" {

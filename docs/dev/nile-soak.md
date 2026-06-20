@@ -340,9 +340,11 @@ state.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --json --datadir <dir>` and include
-freezer/stage/snapshot alert fields in the row. The row keeps both aggregate
-counts and detail arrays:
-`freezerAlertDetails`, `stageVerifyDetails`, and `snapshotAlertDetails`. Do not
+freezer/stage/mode/snapshot alert fields in the row. The row keeps both
+aggregate counts and detail arrays:
+`freezerAlertDetails`, `stageVerifyDetails`, `modeAlertDetails`, and
+`snapshotAlertDetails`. `modeAlertDetails` flags persisted prune-mode conflicts
+such as `archive` datadirs with hot-prune or tail-prune progress. Do not
 enable that flag against a live Pebble datadir unless the DB can be opened by
 the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
