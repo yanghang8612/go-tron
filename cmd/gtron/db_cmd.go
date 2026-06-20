@@ -406,9 +406,8 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	stageIssues := dbStageStatusVerificationIssues(stageRows)
-	stageIssues = append(stageIssues, dbStageStatusStagedBodyIssues(db, stageRows)...)
-	stageIssues = append(stageIssues, dbStageStatusSnapshotCoverageIssues(stageRows, stateSnapshotsDir(cfg.DataDir))...)
+	stageIssueDetails := dbStageStatusIssueDetails(stageRows, db, stateSnapshotsDir(cfg.DataDir))
+	stageIssues := dbStageStatusIssueStrings(stageIssueDetails)
 	stageStatus := "ok"
 	if len(stageIssues) > 0 {
 		stageStatus = "critical"
@@ -434,7 +433,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		FreezerAlertHiddenBytes:      dbFreezerHiddenSize(stats),
 		StageStatus:                  stageStatus,
 		StageIssues:                  len(stageIssues),
-		StageVerifyDetails:           dbStageAlertIssuesJSON(stageIssues),
+		StageVerifyDetails:           dbStageAlertIssueDetailsJSON(stageIssueDetails),
 		ModeStatus:                   modeStatus,
 		ModeIssues:                   len(modeIssues),
 		ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
@@ -653,12 +652,13 @@ func dbFreezerAlertIssuesJSON(issues []dbFreezerAlertIssue) []dbStorageAlertIssu
 	return out
 }
 
-func dbStageAlertIssuesJSON(issues []string) []dbStorageAlertIssueJSON {
-	out := make([]dbStorageAlertIssueJSON, 0, len(issues))
-	for _, issue := range issues {
+func dbStageAlertIssueDetailsJSON(details []dbStageStatusIssueJSON) []dbStorageAlertIssueJSON {
+	out := make([]dbStorageAlertIssueJSON, 0, len(details))
+	for _, detail := range details {
 		out = append(out, dbStorageAlertIssueJSON{
-			Severity: "critical",
-			Detail:   issue,
+			Severity: detail.Severity,
+			Kind:     detail.Kind,
+			Detail:   detail.Detail,
 		})
 	}
 	return out
@@ -1212,7 +1212,7 @@ func dbStageStatusVerificationIssueDetails(rows []dbStageStatusRow) []dbStageSta
 					Stage:    string(row.stage),
 					Value:    row.progress.BlockNum,
 					Verified: verified,
-					Detail:   fmt.Sprintf("%s verified=%s", row.stage, verified),
+					Detail:   dbStageStatusVerificationIssueDetail(row, verified),
 				})
 			}
 			continue
@@ -1223,11 +1223,19 @@ func dbStageStatusVerificationIssueDetails(rows []dbStageStatusRow) []dbStageSta
 			Stage:    string(row.stage),
 			Value:    row.progress.BlockNum,
 			Verified: "unbound",
-			Detail:   fmt.Sprintf("%s verified=unbound", row.stage),
+			Detail:   dbStageStatusVerificationIssueDetail(row, "unbound"),
 		})
 	}
 	details = append(details, dbStageStatusPipelineOrderIssueDetails(rows)...)
 	return details
+}
+
+func dbStageStatusVerificationIssueDetail(row dbStageStatusRow, verified string) string {
+	detail := fmt.Sprintf("%s verified=%s", row.stage, verified)
+	if len(row.details) > 0 {
+		detail += " " + strings.Join(row.details, " ")
+	}
+	return detail
 }
 
 func dbStageStatusStagedBodyIssues(db ethdb.KeyValueReader, rows []dbStageStatusRow) []string {

@@ -837,7 +837,9 @@ Status:
   `SnapshotChainFreezerTailPrune` proof for the hidden tail,
   hash-mismatched or out-of-order stage rows, and claimed cold coverage that
   the local manifest cannot prove. It also reports hidden freezer bytes and
-  retired snapshot bytes that still await physical pruning.
+  retired snapshot bytes that still await physical pruning. Stage alert details
+  preserve the structured issue kind and any root-cause detail emitted by
+  `stage-status`, including strict canonical block read/decode errors.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,

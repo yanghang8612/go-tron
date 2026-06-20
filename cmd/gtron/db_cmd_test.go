@@ -1076,6 +1076,39 @@ func TestDBStorageAlertsPrometheusReportsIssueKinds(t *testing.T) {
 	}
 }
 
+func TestDBStorageAlertStageDetailsPreserveIssueKindsAndRootCauses(t *testing.T) {
+	stageDetails := []dbStageStatusIssueJSON{{
+		Severity: "critical",
+		Kind:     "stage-verification",
+		Detail:   `Finish verified=missing-canonical canonicalError="canonical read failed"`,
+	}}
+	storageDetails := dbStageAlertIssueDetailsJSON(stageDetails)
+	if len(storageDetails) != 1 {
+		t.Fatalf("storage details = %+v, want one detail", storageDetails)
+	}
+	if storageDetails[0].Severity != "critical" || storageDetails[0].Kind != "stage-verification" || !strings.Contains(storageDetails[0].Detail, "canonicalError=") {
+		t.Fatalf("storage stage detail = %+v, want structured canonical error detail", storageDetails[0])
+	}
+
+	report := dbStorageAlertsJSON{
+		Datadir:            "/tmp/gtron",
+		Status:             "critical",
+		StageStatus:        "critical",
+		StageIssues:        len(storageDetails),
+		StageVerifyDetails: storageDetails,
+		FreezerStatus:      "ok",
+		ModeStatus:         "ok",
+		SnapshotStatus:     "ok",
+		PruneMode:          "unknown",
+	}
+	var output strings.Builder
+	dbWriteStorageAlertsPrometheus(&output, report)
+	want := `gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1`
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("storage alert prometheus output missing %q:\n%s", want, output.String())
+	}
+}
+
 func TestDBStorageAlertsCmdRejectsAmbiguousMachineFormats(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--prometheus"})
@@ -1297,6 +1330,9 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 			t.Fatalf("unexpected stage verify severity: %+v", report.StageVerifyDetails)
 		}
 		if strings.Contains(detail.Detail, "Finish verified=mismatch") {
+			if detail.Kind != "stage-verification" {
+				t.Fatalf("finish mismatch detail = %+v, want stage-verification kind", detail)
+			}
 			foundFinishMismatch = true
 		}
 	}
@@ -2284,6 +2320,22 @@ func TestDBStageStatusVerificationSurfacesCanonicalHashReadError(t *testing.T) {
 	}
 	if len(details) != 1 || !strings.Contains(details[0], "canonicalError=") || !strings.Contains(details[0], wantErr.Error()) {
 		t.Fatalf("details = %v, want canonical read error", details)
+	}
+
+	issueDetails := dbStageStatusVerificationIssueDetails([]dbStageStatusRow{{
+		stage:    rawdb.StageFinish,
+		group:    "canonical",
+		present:  true,
+		progress: progress,
+		verified: verified,
+		details:  details,
+	}})
+	if len(issueDetails) != 1 || issueDetails[0].Kind != "stage-verification" || !strings.Contains(issueDetails[0].Detail, "canonicalError=") || !strings.Contains(issueDetails[0].Detail, wantErr.Error()) {
+		t.Fatalf("issue details = %+v, want canonical read error detail", issueDetails)
+	}
+	issues := dbStageStatusIssueStrings(issueDetails)
+	if len(issues) != 1 || !strings.Contains(issues[0], "canonicalError=") {
+		t.Fatalf("issues = %v, want canonical read error detail", issues)
 	}
 }
 
