@@ -471,8 +471,10 @@ Status:
   publication too: `SyncImport`, `SyncExecution`, `SyncCommitment`, and
   `SyncFinish` must appear in order, downstream stages cannot be ahead of
   upstream stages, and every published stage boundary must match a block/hash in
-  the staged-body delete prefix. This prevents rawdb callers from publishing a
-  sync-stage boundary that does not belong to the body prefix they just removed.
+  the staged-body delete prefix. Progress-only import-stage writes without a
+  staged-body delete proof are rejected as well. This prevents rawdb callers
+  from publishing a sync-stage boundary that does not belong to the body prefix
+  they just removed.
   The same writer also rejects normal import writes that would move an existing
   sync import stage to a lower block, or replace a hash-bound same-height row
   with a different hash; explicit startup repair/unwind remains the path for

@@ -441,8 +441,11 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 }
 
 func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, rows []StageProgress) error {
-	if len(deletes) == 0 || len(rows) == 0 {
+	if len(rows) == 0 {
 		return nil
+	}
+	if len(deletes) == 0 {
+		return fmt.Errorf("rawdb: sync import progress has no staged delete prefix")
 	}
 	first := deletes[0]
 	last := deletes[len(deletes)-1]
