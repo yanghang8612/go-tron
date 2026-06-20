@@ -298,8 +298,10 @@ Status:
   payloads that decode to a different block number or hash than the block being
   staged, rejects same-number hash conflicts with an existing staged body row,
   and rejects same-height hash conflicts with an existing hash-bound
-  `SyncBodies` row before replacing the numbered staged body. Lower-level raw
-  writes remain available for corruption fixtures and repair tests.
+  `SyncBodies` row before replacing the numbered staged body. It also preserves
+  a higher legacy unbound `SyncBodies` watermark instead of regressing it while
+  still upgrading same-height legacy rows to hash-bound progress. Lower-level
+  raw writes remain available for corruption fixtures and repair tests.
 
 Needed:
 

@@ -893,10 +893,10 @@ func TestWriteSyncStagedBlockRawAndProgressRejectsSameNumberStagedHashMismatch(t
 	}
 }
 
-func TestWriteSyncStagedBlockRawAndProgressReplacesUnboundProgress(t *testing.T) {
+func TestWriteSyncStagedBlockRawAndProgressUpgradesSameHeightUnboundProgress(t *testing.T) {
 	base := NewMemoryDatabase()
 	block3 := testSyncStagedBlock(3, common.Hash{0x02})
-	if err := WriteStageProgress(base, StageSyncBodies, 5); err != nil {
+	if err := WriteStageProgress(base, StageSyncBodies, block3.Number()); err != nil {
 		t.Fatalf("write legacy unbound progress: %v", err)
 	}
 	db := &countingBatchStore{KeyValueStore: base}
@@ -914,6 +914,30 @@ func TestWriteSyncStagedBlockRawAndProgressReplacesUnboundProgress(t *testing.T)
 	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil || !ok || progress.BlockNum != block3.Number() || progress.BlockHash != block3.Hash() || !progress.HasBlockHash {
 		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want hash-bound block3", progress, ok, err)
+	}
+}
+
+func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressUnboundProgress(t *testing.T) {
+	base := NewMemoryDatabase()
+	block3 := testSyncStagedBlock(3, common.Hash{0x02})
+	if err := WriteStageProgress(base, StageSyncBodies, 5); err != nil {
+		t.Fatalf("write legacy unbound progress: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, block3, nil)
+	if result.StageError != nil || result.ProgressReadError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("write result has error: %+v", result)
+	}
+	if !result.Staged || !result.HadPreviousProgress || !result.ProgressSkipped || result.ProgressWritten {
+		t.Fatalf("write result = %+v, want staged and skipped legacy higher progress", result)
+	}
+	if db.batches != 0 || db.directPuts != 1 {
+		t.Fatalf("writes used batches=%d directPuts=%d, want one direct body put", db.batches, db.directPuts)
+	}
+	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil || !ok || progress.BlockNum != 5 || progress.HasBlockHash {
+		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want legacy unbound block5", progress, ok, err)
 	}
 }
 
