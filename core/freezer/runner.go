@@ -194,10 +194,11 @@ type ChainSource interface {
 	// the ancient table.
 	ReadTransactionInfosRawStrict(number uint64) ([]byte, bool, error)
 
-	// ReadBlockHashByNumber returns the canonical block hash for the
-	// given number. Used by the freezer to resolve the `bsr-<hash>`
-	// state-root key. Returns the zero hash when the block is unknown.
-	ReadBlockHashByNumber(number uint64) tcommon.Hash
+	// ReadBlockHashByNumberStrict returns the canonical block hash for the
+	// given number. Used by the freezer to verify hash-bound stages and write
+	// its own ChainFreezer stage. Storage corruption must return an error so
+	// the pass rolls back instead of treating the hash as unavailable.
+	ReadBlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error)
 
 	// ReadBlockStateRootRaw returns the raw state-root bytes under
 	// `bsr-<hash>`, or nil if absent. Pre-AccountStateRoot fork blocks
@@ -679,10 +680,10 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 	if r == nil || r.chain == nil || r.chain.DB() == nil {
 		return 0, false, nil
 	}
-	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashReader(
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(
 		r.chain.DB(),
 		rawdb.StageFinish,
-		r.chain.ReadBlockHashByNumber,
+		r.chain.ReadBlockHashByNumberStrict,
 	)
 	if err != nil {
 		return 0, ok, fmt.Errorf("freezer: %w", err)
@@ -692,8 +693,11 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 
 func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
 	db := r.chain.DB()
-	blockHash := r.chain.ReadBlockHashByNumber(blockNum)
-	if blockHash == (tcommon.Hash{}) {
+	blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(blockNum)
+	if err != nil {
+		return fmt.Errorf("freezer: read canonical hash for ChainFreezer stage %d: %w", blockNum, err)
+	}
+	if !ok || blockHash == (tcommon.Hash{}) {
 		return fmt.Errorf("freezer: cannot resolve block hash for ChainFreezer stage %d", blockNum)
 	}
 	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)

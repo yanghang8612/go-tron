@@ -279,7 +279,10 @@ Status:
   and decode errors. The default hash-bound stage verifier now uses the strict
   canonical hash path, so `StageFinish` and related gates used by snapshot and
   freezer builders fail with the underlying corrupt-block reason instead of a
-  generic "canonical block unavailable" mismatch.
+  generic "canonical block unavailable" mismatch. The live chain-freezer runner
+  now gets its Finish-stage verifier and ChainFreezer-stage writer canonical
+  hashes through the strict source too, so corrupt block/hash lookup data aborts
+  the freezer pass instead of being collapsed to a zero-hash missing result.
 - The live chain-freezer append path now consumes strict raw source methods:
   `ReadBlockRawStrict` and `ReadTransactionInfosRawStrict`. A block-body or
   tx-info storage read error aborts the `ModifyAncients` batch and leaves hot

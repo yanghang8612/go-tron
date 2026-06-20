@@ -37,6 +37,7 @@ type fakeChain struct {
 	stateRootRaw  map[uint64][]byte
 	stateRootErr  map[uint64]error
 	blockHashByNo map[uint64]tcommon.Hash
+	blockHashErr  map[uint64]error
 }
 
 func newFakeChain() *fakeChain {
@@ -49,6 +50,7 @@ func newFakeChain() *fakeChain {
 		stateRootRaw:  make(map[uint64][]byte),
 		stateRootErr:  make(map[uint64]error),
 		blockHashByNo: make(map[uint64]tcommon.Hash),
+		blockHashErr:  make(map[uint64]error),
 	}
 }
 
@@ -94,6 +96,19 @@ func (f *fakeChain) ReadBlockHashByNumber(n uint64) tcommon.Hash {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.blockHashByNo[n]
+}
+
+func (f *fakeChain) ReadBlockHashByNumberStrict(n uint64) (tcommon.Hash, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.blockHashErr[n]; err != nil {
+		return tcommon.Hash{}, false, err
+	}
+	hash := f.blockHashByNo[n]
+	if hash == (tcommon.Hash{}) {
+		return tcommon.Hash{}, false, nil
+	}
+	return hash, true, nil
 }
 
 func (f *fakeChain) ReadBlockStateRootRaw(h tcommon.Hash) ([]byte, error) {
@@ -636,6 +651,37 @@ func TestOnePassRejectsFinishStageHashMismatch(t *testing.T) {
 	}
 }
 
+func TestOnePassPropagatesFinishStageHashLookupError(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 20; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(15)
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 10, fc.ReadBlockHashByNumber(10)); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	fc.mu.Lock()
+	fc.blockHashErr[10] = errors.New("canonical hash corrupt")
+	fc.mu.Unlock()
+
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "finish stage 10 canonical hash lookup") || !strings.Contains(err.Error(), "canonical hash corrupt") {
+		t.Fatalf("OnePass error = %v, want finish stage hash lookup error", err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen=%d, want 0 after finish hash lookup error", frozen)
+	}
+	if got, err := r.freezer.AncientCount(rawdbAncientBlocks); err != nil || got != 0 {
+		t.Fatalf("ancient blocks after rejected pass = %d err=%v, want 0", got, err)
+	}
+}
+
 // TestOnePass_BatchBound: solidified far ahead, batch=BatchBlocks should
 // cap the pass at the configured limit.
 func TestOnePass_BatchBound(t *testing.T) {
@@ -950,6 +996,54 @@ func TestOnePassRejectsChainFreezerStageAheadOfAncientHead(t *testing.T) {
 	}
 	if frozen != 0 {
 		t.Fatalf("frozen=%d, want 0 after ahead-stage rejection", frozen)
+	}
+}
+
+func TestOnePassPropagatesChainFreezerStageHashLookupError(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 20; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(15)
+	f := newFreezer(t)
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < 10; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed ancient rows: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(fc.db, 0, 9); err != nil {
+		t.Fatalf("delete hot frozen rows: %v", err)
+	}
+	fc.mu.Lock()
+	fc.blockHashErr[9] = errors.New("canonical hash corrupt")
+	fc.mu.Unlock()
+
+	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "ChainFreezer stage 9") || !strings.Contains(err.Error(), "canonical hash corrupt") {
+		t.Fatalf("OnePass frozen=%d err=%v, want ChainFreezer hash lookup error", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen=%d, want 0 after ChainFreezer hash lookup error", frozen)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezer); err != nil || ok || row.BlockNum != 0 {
+		t.Fatalf("ChainFreezer stage after hash lookup error = %+v ok=%v err=%v, want absent", row, ok, err)
 	}
 }
 
