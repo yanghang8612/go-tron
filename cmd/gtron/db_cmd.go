@@ -1490,11 +1490,25 @@ func dbStageStatusCanonicalHash(canonical ethdb.KeyValueReader, progress rawdb.S
 	if canonicalHash != (common.Hash{}) {
 		return canonicalHash
 	}
+	if !dbStageStatusAllowsStateTxRangeHashFallback(progress.Stage) {
+		return common.Hash{}
+	}
 	row, ok, err := rawdb.ReadStateTxRange(canonical, progress.BlockNum)
 	if err != nil || !ok {
 		return common.Hash{}
 	}
 	return row.BlockHash
+}
+
+func dbStageStatusAllowsStateTxRangeHashFallback(stage rawdb.StageID) bool {
+	switch stage {
+	case rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune:
+		return true
+	default:
+		return false
+	}
 }
 
 func dbStageStatusStagedBodyProgressVerification(progress syncdl.StagedBodyProgressCheck) string {

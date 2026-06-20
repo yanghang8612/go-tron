@@ -1840,6 +1840,32 @@ func TestDBStageStatusVerificationUsesStateTxRangeHashFallback(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerificationLimitsStateTxRangeHashFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	boundaryHash := common.Hash{0x34}
+	if err := rawdb.WriteStateTxRange(db, 34, boundaryHash, 340, 341); err != nil {
+		t.Fatalf("WriteStateTxRange: %v", err)
+	}
+
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageFinish,
+		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotChainFreezerTailPrune,
+	} {
+		progress := rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     34,
+			BlockHash:    boundaryHash,
+			HasBlockHash: true,
+		}
+		verified, canonicalHash, details := dbStageStatusVerification(stage, progress, db, db)
+		if verified != "missing-canonical" || canonicalHash != (common.Hash{}) || len(details) != 0 {
+			t.Fatalf("%s verification = %s hash=%x details=%v, want missing canonical without StateTxRange fallback", stage, verified, canonicalHash, details)
+		}
+	}
+}
+
 func stageStatusIssueContains(issues []string, want string) bool {
 	for _, issue := range issues {
 		if issue == want {

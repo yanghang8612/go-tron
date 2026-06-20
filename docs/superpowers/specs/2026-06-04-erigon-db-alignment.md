@@ -559,7 +559,10 @@ Status:
   downloader body stages report `verified=staged` only when
   their hash-bound progress rows still match the staged-body table; failed
   staged-body checks include decoded `stagedBlock`/`stagedHash` evidence when
-  available. It also
+  available. StateTxRange hash fallback is limited to derived cold
+  event-log/section-bloom/balance-trace stages; canonical, freezer, lookup,
+  and tail-prune stages still require a readable canonical block hash from the
+  chain reader. It also
   rejects canonical and sync-stage order violations, e.g. `Execution` ahead of
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
   of `SyncBodies`, cold build/prune/freezer coverage ahead of verified
