@@ -596,7 +596,14 @@ func opBaseFee(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	// (getEnergyFee(), sun per energy) unconditionally — not 0. Pushing 0
 	// diverged any London-era contract that reads block.basefee. (Sibling
 	// GASPRICE reads the same energy fee, but only for version-1 contracts.)
-	fee := interpreter.tvm.StateDB.DynamicProperties().EnergyFee()
+	// Read the energy fee from the wired dp (tvm.DynProps), not the empty
+	// production StateDB dp — same dp-source class as the dynamic-energy /
+	// getChainParameter fixes (StateDB.DynamicProperties() is genesis-default in
+	// production, so EnergyFee() would be 0).
+	var fee int64
+	if dp := stakingDynamicProperties(interpreter.tvm); dp != nil {
+		fee = dp.EnergyFee()
+	}
 	stack.push(uint256.NewInt(uint64(fee)))
 	return nil, nil
 }

@@ -1398,7 +1398,9 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	}
 	// Before balances shift, transfer the receiver's proportional usage
 	// back to the owner. Mirrors java-tron UnDelegateResourceActuator.execute.
-	dp := in.tvm.StateDB.DynamicProperties()
+	// Use the wired dp (tvm.DynProps); the production StateDB dp is the empty
+	// genesis default (same class as the dynamic-energy / getChainParameter fix).
+	dp := stakingDynamicProperties(in.tvm)
 	resourceTime := in.tvm.ResourceTime()
 	transfer, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)

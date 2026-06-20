@@ -1086,7 +1086,18 @@ func (c *getChainParameter) Run(tvm *TVM, _ tcommon.Address, input []byte, energ
 		return make([]byte, 32), cost, nil
 	}
 	code := parseInt64FromWord(input, 0)
-	dp := tvm.StateDB.DynamicProperties()
+	// Use the wired dp (tvm.DynProps), NOT tvm.StateDB.DynamicProperties():
+	// production never calls StateDB.SetDynamicProperties, so the StateDB dp is
+	// the empty genesis-default from state.New (e.g. unfreeze_delay_days=0,
+	// total_energy_current_limit=50e9) — getChainParameter would return stale
+	// defaults instead of the live chain values. Same class as the dynamic-energy
+	// fix. Nile 34,563,685: STRXG1 read getChainParameter(5)=UNFREEZE_DELAY_DAYS
+	// and got 0 (vs java 14), diverging its rental/round math (expected SUCCESS,
+	// got REVERT).
+	dp := stakingDynamicProperties(tvm)
+	if dp == nil {
+		return int64ToBytes32(0), cost, nil
+	}
 	var val int64
 	switch code {
 	case 1: // TOTAL_NET_LIMIT
