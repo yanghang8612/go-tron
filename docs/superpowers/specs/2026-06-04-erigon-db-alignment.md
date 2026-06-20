@@ -1631,8 +1631,8 @@ Status:
   without reading the full transaction, block body, or receipt; the strict
   payload readers still verify block-body/index consistency after the bound
   admits the lookup. The strict transaction-info reader now also surfaces cold
-  chain-index block-local-position lookup errors instead of silently falling
-  back to a per-block receipt scan.
+  chain-index block-local-position lookup errors and corrupt readable block
+  bodies instead of silently falling back to a per-block receipt scan.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
   the lookup key, cold tx-info fallbacks must either carry no embedded block
@@ -1640,7 +1640,10 @@ Status:
   validate any retained `TransactionRet` list against the canonical block
   transaction count, block number, and tx hash order. The hot `TransactionInfo`
   writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
-  check before new `ti-` rows can be written.
+  check before new `ti-` rows can be written. Backend transaction-by-id/hash
+  reads also use strict block-body access after the tx lookup admits a block, so
+  a corrupt freezer/hot block behind a valid transaction index returns a data
+  error instead of a false not-found result.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
   `TransactionRet` reader too. For non-genesis blocks, missing per-block
   tx-info rows on tx-bearing blocks now fail the query instead of producing a

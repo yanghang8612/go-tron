@@ -72,7 +72,11 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		return nil, false, err
 	}
 	if ok && lookup.BlockNum == blockNum {
-		if !coldTransactionPositionMatchesReadableBlock(db, txID, lookup) {
+		matchesBlock, err := coldTransactionPositionMatchesReadableBlock(db, txID, lookup)
+		if err != nil {
+			return nil, true, err
+		}
+		if !matchesBlock {
 			return nil, true, fmt.Errorf("rawdb: cold transaction index position block %d tx %d does not match transaction %x", lookup.BlockNum, lookup.TxIndex, txID)
 		}
 		if int(lookup.TxIndex) < len(infos) {
@@ -152,27 +156,33 @@ func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLoo
 	return lookup, true, nil
 }
 
-func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, lookup ChainIndexTxLookup) bool {
-	block := ReadBlock(db, lookup.BlockNum)
-	if block == nil {
-		return true
+func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, lookup ChainIndexTxLookup) (bool, error) {
+	block, ok, err := ReadBlockStrict(db, lookup.BlockNum)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return true, nil
 	}
 	txs := block.Transactions()
 	txIndex := int(lookup.TxIndex)
 	if txIndex < 0 || txIndex >= len(txs) {
-		return false
+		return false, nil
 	}
 	tx := txs[txIndex]
 	if tx == nil {
-		return false
+		return false, nil
 	}
 	txHash := tx.Hash()
-	return bytes.Equal(txHash[:], txID)
+	return bytes.Equal(txHash[:], txID), nil
 }
 
 func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
-	block := ReadBlock(db, blockNum)
-	if block == nil {
+	block, ok, err := ReadBlockStrict(db, blockNum)
+	if err != nil {
+		return nil, true, err
+	}
+	if !ok {
 		return nil, false, nil
 	}
 	txs := block.Transactions()

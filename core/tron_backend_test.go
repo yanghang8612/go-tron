@@ -139,6 +139,16 @@ func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
 	if err := rawdb.WriteBlockNumber(diskdb, block.Hash(), block.Number()); err != nil {
 		t.Fatalf("WriteBlockNumber: %v", err)
 	}
+	txHash := block.Transactions()[0].Hash()
+	if err := rawdb.WriteTransactionIndex(diskdb, txHash[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfo(diskdb, txHash[:], &corepb.TransactionInfo{
+		Id:          append([]byte(nil), txHash[:]...),
+		BlockNumber: int64(block.Number()),
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfo: %v", err)
+	}
 	bc.currentBlock.Store(block)
 
 	backend := &TronBackend{chain: bc}
@@ -148,6 +158,12 @@ func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
 	blockHash := block.Hash()
 	if logs, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &blockHash}); err == nil || logs != nil || !strings.Contains(err.Error(), "block 1 decode") {
 		t.Fatalf("GetLogs corrupt block body = %+v/%v, want decode error", logs, err)
+	}
+	if got, err := backend.GetTransactionByID(txHash); err == nil || got != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetTransactionByID corrupt block body = %+v/%v, want decode error", got, err)
+	}
+	if tx, gotBlock, idx, err := backend.GetTransactionByHash(txHash); err == nil || tx != nil || gotBlock != nil || idx != 0 || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetTransactionByHash corrupt block body = tx:%+v block:%+v idx:%d err:%v, want decode error", tx, gotBlock, idx, err)
 	}
 }
 

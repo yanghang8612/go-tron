@@ -168,6 +168,33 @@ func TestReadTransactionInfoColdPositionChecksReadableBlockBody(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoColdPositionRejectsCorruptReadableBlockBody(t *testing.T) {
+	ancient := newFakeAncient()
+	ancient.put(ancientBlocks, 7, []byte("not-a-valid-block"))
+	db := NewChainDB(NewMemoryDatabase(), ancient)
+	txID := bytes.Repeat([]byte{0x3b}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{hash: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			hash: {BlockNum: 7, TxIndex: 0},
+		},
+	})
+
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo corrupt readable block body = %+v, want nil", got)
+	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || info != nil || !strings.Contains(err.Error(), "block 7 decode") {
+		t.Fatalf("ReadTransactionInfoStrict corrupt readable block body = info %+v ok %v err %v, want decode error", info, ok, err)
+	}
+}
+
 func TestReadTransactionInfoUsesReadableBlockPositionWhenInfoIDMissing(t *testing.T) {
 	db := NewMemoryChainDB()
 	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7051, Expiration: 8051, Data: []byte{0x51}}}
@@ -195,6 +222,28 @@ func TestReadTransactionInfoUsesReadableBlockPositionWhenInfoIDMissing(t *testin
 	}
 	if got := ReadTransactionInfo(db, txHash2[:]); got == nil || got.Fee != 200 {
 		t.Fatalf("ReadTransactionInfo via readable block = %+v, want fee 200", got)
+	}
+}
+
+func TestReadTransactionInfoReadableBlockPositionRejectsCorruptBlockBody(t *testing.T) {
+	ancient := newFakeAncient()
+	ancient.put(ancientBlocks, 7, []byte("not-a-valid-block"))
+	db := NewChainDB(NewMemoryDatabase(), ancient)
+	txID := bytes.Repeat([]byte{0x53}, common.HashLength)
+	if err := WriteTransactionIndex(db, txID, 7); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Id: txID, Fee: 200, BlockNumber: 7, BlockTimeStamp: 7050},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo corrupt readable block fallback = %+v, want nil", got)
+	}
+	if got, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "block 7 decode") {
+		t.Fatalf("ReadTransactionInfoStrict corrupt readable block fallback = %+v ok %v err %v, want decode error", got, ok, err)
 	}
 }
 

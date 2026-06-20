@@ -316,9 +316,12 @@ func (b *TronBackend) indexedTransactionByID(txHash tcommon.Hash) (*corepb.Trans
 	if err != nil || !ok {
 		return nil, 0, ok, err
 	}
-	block := b.chain.GetBlockByNumber(blockNum)
-	if block == nil {
-		return nil, 0, false, fmt.Errorf("block %d not found", blockNum)
+	block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, blockNum)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if !hasBlock {
+		return nil, 0, false, fmt.Errorf("block body missing for indexed transaction %x at block %d", txHash, blockNum)
 	}
 	for _, tx := range block.Transactions() {
 		if tx.Hash() == txHash {
@@ -2398,9 +2401,13 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 	if !ok {
 		return nil, nil, 0, nil // not found
 	}
-	block := b.chain.GetBlockByNumber(uint64(info.BlockNumber))
-	if block == nil {
-		return nil, nil, 0, nil
+	blockNum := uint64(info.BlockNumber)
+	block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, blockNum)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if !hasBlock {
+		return nil, nil, 0, fmt.Errorf("block body missing for indexed transaction %x at block %d", hash, blockNum)
 	}
 	for i, tx := range block.Transactions() {
 		if tx.Hash() == hash {
