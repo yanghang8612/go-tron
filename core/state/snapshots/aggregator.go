@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -335,7 +334,7 @@ func writeEventLogBuildStage(db any, manifest *Manifest) error {
 	if !ok {
 		return fmt.Errorf("snapshots: %s stage block %d requires readable database", rawdb.StageSnapshotEventLogBuild, block)
 	}
-	hash, err := eventLogBuildStageHash(reader, block)
+	hash, err := requireSnapshotStageBoundaryHash(reader, rawdb.StageSnapshotEventLogBuild, block)
 	if err != nil {
 		return err
 	}
@@ -449,24 +448,6 @@ func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (
 		return nil, err
 	}
 	return progress, nil
-}
-
-func eventLogBuildStageHash(db ethdb.KeyValueReader, blockNum uint64) (common.Hash, error) {
-	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, blockNum)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", rawdb.StageSnapshotEventLogBuild, blockNum, err)
-	}
-	if ok && hash != (common.Hash{}) {
-		return hash, nil
-	}
-	row, ok, err := rawdb.ReadStateTxRange(db, blockNum)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d tx range hash: %w", rawdb.StageSnapshotEventLogBuild, blockNum, err)
-	}
-	if ok && row.BlockHash != (common.Hash{}) {
-		return row.BlockHash, nil
-	}
-	return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", rawdb.StageSnapshotEventLogBuild, blockNum)
 }
 
 func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {

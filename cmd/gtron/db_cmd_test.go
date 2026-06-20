@@ -1766,6 +1766,7 @@ func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *te
 	for _, want := range []string{
 		"ChainFreezer verified=unbound",
 		"SnapshotChainLookupPrune verified=unbound",
+		"SnapshotEventLogBuild verified=unbound",
 		"SnapshotChainFreezerTailPrune verified=unbound",
 	} {
 		found := false
@@ -1792,6 +1793,25 @@ func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *te
 	issues = dbStageStatusVerificationIssues(rows)
 	if want := "SnapshotChainFreezerTailPrune verified=mismatch"; !stageStatusIssueContains(issues, want) {
 		t.Fatalf("verification issues missing %q in %#v", want, issues)
+	}
+}
+
+func TestDBStageStatusVerificationUsesStateTxRangeHashFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	boundaryHash := common.Hash{0x12}
+	if err := rawdb.WriteStateTxRange(db, 12, boundaryHash, 120, 121); err != nil {
+		t.Fatalf("WriteStateTxRange: %v", err)
+	}
+	progress := rawdb.StageProgress{
+		Stage:        rawdb.StageSnapshotEventLogBuild,
+		BlockNum:     12,
+		BlockHash:    boundaryHash,
+		HasBlockHash: true,
+	}
+
+	verified, canonicalHash, details := dbStageStatusVerification(rawdb.StageSnapshotEventLogBuild, progress, db, db)
+	if verified != "canonical" || canonicalHash != boundaryHash || len(details) != 0 {
+		t.Fatalf("event-log stage verification = %s hash=%x details=%v, want canonical via StateTxRange %x", verified, canonicalHash, details, boundaryHash)
 	}
 }
 

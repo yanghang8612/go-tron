@@ -187,12 +187,12 @@ event-log sidecars together and integrates them into a single manifest
 generation. It uses the same balance-trace coverage audit as
 `snapshot build-balance-traces`; run the specific single-dataset commands when
 only one sidecar needs to be refreshed. Event-log builds advance the
-`SnapshotEventLogBuild` stage to the highest source block covered by a
-continuous block-1 prefix of `event-log` segments and matching
+`SnapshotEventLogBuild` stage as a hash-bound row at the highest source block
+covered by a continuous block-1 prefix of `event-log` segments and matching
 `event-log-index` sidecars. Snapshot restore/bootstrap derives the same stage
 from verified manifest indexed event-log coverage, combining adjacent index
-sidecars into one continuous block-1 boundary, and minimal-mode freezer tail
-pruning rechecks continuous cold chain-freezer, chain-index, and indexed
+sidecars into one continuous block-1 boundary. Minimal-mode freezer tail pruning
+verifies that stage and continuous cold chain-freezer, chain-index, and indexed
 event-log coverage before hiding or reclaiming non-genesis local freezer rows.
 When a `chain-freezer-accessor` sidecar is present, cold chain-freezer coverage
 also verifies its offsets against the freezer segment contents. Event-log

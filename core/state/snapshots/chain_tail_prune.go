@@ -180,21 +180,22 @@ func noChainFreezerTailPrune(plan ChainFreezerTailPrunePlan, reason string) Chai
 	return plan
 }
 
-// PlanChainFreezerTailPruneFromDB reads the chain freezer, lookup-prune, and
-// event-log build stages from db, then delegates to PlanChainFreezerTailPrune.
+// PlanChainFreezerTailPruneFromDB reads the hash-bound chain freezer,
+// lookup-prune, and event-log build stages from db, then delegates to
+// PlanChainFreezerTailPrune.
 func PlanChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, currentTail, ancientHead, headBlock, retainBlocks uint64) (ChainFreezerTailPrunePlan, error) {
 	if db == nil {
 		return ChainFreezerTailPrunePlan{}, errors.New("snapshots: nil chain freezer tail prune database")
 	}
-	freezerBlock, hasFreezerBlock, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	freezerBlock, hasFreezerBlock, err := readVerifiedTailPruneDependencyStageBlock(db, rawdb.StageChainFreezer)
 	if err != nil {
 		return ChainFreezerTailPrunePlan{}, err
 	}
-	lookupBlock, hasLookupBlock, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainLookupPrune)
+	lookupBlock, hasLookupBlock, err := readVerifiedTailPruneDependencyStageBlock(db, rawdb.StageSnapshotChainLookupPrune)
 	if err != nil {
 		return ChainFreezerTailPrunePlan{}, err
 	}
-	eventLogBlock, hasEventLogBlock, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild)
+	eventLogBlock, hasEventLogBlock, err := readVerifiedTailPruneDependencyStageBlock(db, rawdb.StageSnapshotEventLogBuild)
 	if err != nil {
 		return ChainFreezerTailPrunePlan{}, err
 	}
@@ -210,6 +211,16 @@ func PlanChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, currentTail, ancie
 		EventLogBuildBlock:       eventLogBlock,
 		HasEventLogBuildBlock:    hasEventLogBlock,
 	}), nil
+}
+
+func readVerifiedTailPruneDependencyStageBlock(db ethdb.KeyValueReader, stage rawdb.StageID) (uint64, bool, error) {
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(db, stage, func(number uint64) (common.Hash, bool, error) {
+		return snapshotStageBoundaryHash(db, stage, number)
+	})
+	if err != nil {
+		return 0, ok, fmt.Errorf("snapshots: verify %s before chain freezer tail prune: %w", stage, err)
+	}
+	return block, ok, nil
 }
 
 func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFreezerTailPruner, cold rawdb.AncientReader, headBlock, retainBlocks uint64) (*ChainFreezerTailPruneApplyResult, error) {

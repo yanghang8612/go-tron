@@ -7,10 +7,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 )
+
+func writeChainTailPruneDependencyStage(t *testing.T, db ethdb.KeyValueWriter, stage rawdb.StageID, blockNum uint64) common.Hash {
+	t.Helper()
+	hash := common.Hash{0x7a, byte(blockNum >> 56), byte(blockNum >> 48), byte(blockNum >> 40), byte(blockNum >> 32), byte(blockNum >> 24), byte(blockNum >> 16), byte(blockNum >> 8), byte(blockNum)}
+	if err := rawdb.WriteStateTxRange(db, blockNum, hash, blockNum, blockNum); err != nil {
+		t.Fatalf("WriteStateTxRange %d: %v", blockNum, err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, stage, blockNum, hash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash %s: %v", stage, err)
+	}
+	return hash
+}
 
 func TestPlanChainFreezerTailPruneRequiresStages(t *testing.T) {
 	input := ChainFreezerTailPrunePlanInput{
@@ -191,15 +204,9 @@ func TestPlanChainFreezerTailPruneKeepsShortChains(t *testing.T) {
 
 func TestPlanChainFreezerTailPruneFromDB(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 95); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 95); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 95); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 95)
 	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
 	if err != nil {
 		t.Fatalf("PlanChainFreezerTailPruneFromDB: %v", err)
@@ -209,14 +216,41 @@ func TestPlanChainFreezerTailPruneFromDB(t *testing.T) {
 	}
 }
 
+func TestPlanChainFreezerTailPruneFromDBRejectsUnboundDependencyStage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 95); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
+	}
+
+	_, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
+	if err == nil || !strings.Contains(err.Error(), "SnapshotEventLogBuild") || !strings.Contains(err.Error(), "not hash-bound") {
+		t.Fatalf("PlanChainFreezerTailPruneFromDB err = %v, want unbound event-log stage rejection", err)
+	}
+}
+
+func TestPlanChainFreezerTailPruneFromDBRejectsDependencyStageHashMismatch(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
+	canonical := writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 95)
+	other := canonical
+	other[0] ^= 0xff
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotEventLogBuild, 95, other); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotEventLogBuild mismatch: %v", err)
+	}
+
+	_, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
+	if err == nil || !strings.Contains(err.Error(), "SnapshotEventLogBuild") || !strings.Contains(err.Error(), "does not match canonical hash") {
+		t.Fatalf("PlanChainFreezerTailPruneFromDB err = %v, want hash mismatch rejection", err)
+	}
+}
+
 func TestPlanChainFreezerTailPruneFromDBCapsMissingEventLogStageAtGenesis(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 95); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 95); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
 	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
 	if err != nil {
 		t.Fatalf("PlanChainFreezerTailPruneFromDB: %v", err)
@@ -250,12 +284,8 @@ func TestApplyChainFreezerTailPruneFromDBAllowsGenesisOnlyWithoutEventLogStage(t
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 1); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 1); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 1)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 1)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -310,15 +340,9 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -368,12 +392,8 @@ func TestApplyChainFreezerTailPruneFromDBRejectsStageHashConflictBeforeTruncate(
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 1); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 1); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 1)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 1)
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainFreezerTailPrune, 0, common.Hash{0xee}); err != nil {
 		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
 	}
@@ -411,15 +431,9 @@ func TestApplyChainFreezerTailPruneRequiresEventLogColdCoverage(t *testing.T) {
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -457,15 +471,9 @@ func TestApplyChainFreezerTailPruneRequiresEventLogIndexCoverage(t *testing.T) {
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -500,15 +508,9 @@ func TestApplyChainFreezerTailPruneRequiresChainIndexColdCoverage(t *testing.T) 
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -531,15 +533,9 @@ func TestApplyChainFreezerTailPruneFromDBRequiresColdCoverage(t *testing.T) {
 	appendChainFreezerTestRows(t, f, 0, 9)
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, rawdb.NoopAncient{}, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -585,15 +581,9 @@ func TestApplyChainFreezerTailPruneRejectsColdCoverageGap(t *testing.T) {
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -640,15 +630,9 @@ func TestApplyChainFreezerTailPruneRejectsUnreadableColdCoverageSegment(t *testi
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
@@ -706,15 +690,9 @@ func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 10); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 10); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
-	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 10); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
-	}
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 10)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 10)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 10)
 	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 11, 4)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)

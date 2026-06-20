@@ -1398,6 +1398,7 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageSyncCommitment,
 		rawdb.StageSyncFinish,
 		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotEventLogBuild,
 		rawdb.StageSnapshotChainLookupPrune,
 		rawdb.StageSnapshotChainFreezerTailPrune:
 		return true
@@ -1472,7 +1473,7 @@ func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress
 	if canonical == nil {
 		return "unchecked", common.Hash{}, nil
 	}
-	canonicalHash := rawdb.ReadBlockHashByNumber(canonical, progress.BlockNum)
+	canonicalHash := dbStageStatusCanonicalHash(canonical, progress)
 	if canonicalHash == (common.Hash{}) {
 		return "missing-canonical", canonicalHash, nil
 	}
@@ -1480,6 +1481,18 @@ func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress
 		return "mismatch", canonicalHash, nil
 	}
 	return "canonical", canonicalHash, nil
+}
+
+func dbStageStatusCanonicalHash(canonical ethdb.KeyValueReader, progress rawdb.StageProgress) common.Hash {
+	canonicalHash := rawdb.ReadBlockHashByNumber(canonical, progress.BlockNum)
+	if canonicalHash != (common.Hash{}) {
+		return canonicalHash
+	}
+	row, ok, err := rawdb.ReadStateTxRange(canonical, progress.BlockNum)
+	if err != nil || !ok {
+		return common.Hash{}
+	}
+	return row.BlockHash
 }
 
 func dbStageStatusStagedBodyProgressVerification(progress syncdl.StagedBodyProgressCheck) string {

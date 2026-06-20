@@ -780,7 +780,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
 		retainBlocks := chainConfig.EffectiveHistoryPruneWindow()
-		stack.RegisterLifecycle(statesnapshots.NewChainFreezerTailPruneLifecycle(db, ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
+		stack.RegisterLifecycle(statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
 			RetainBlocks: retainBlocks,
 			HeadBlock: func() uint64 {
 				if head := bc.CurrentBlock(); head != nil {

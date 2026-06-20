@@ -554,8 +554,8 @@ Status:
   do not produce false mismatch diagnostics. `--db.stage.verify` turns the
   same view into an automation gate for canonical, sync-import, and
   cold-coverage boundary stages; it fails on mismatched/missing canonical
-  hashes or legacy unbound canonical/freezer/chain-lookup/tail-prune stage
-  rows, while downloader body stages report `verified=staged` only when
+  hashes or legacy unbound canonical/freezer/event-log-build/chain-lookup/
+  tail-prune stage rows, while downloader body stages report `verified=staged` only when
   their hash-bound progress rows still match the staged-body table; failed
   staged-body checks include decoded `stagedBlock`/`stagedHash` evidence when
   available. It also
@@ -786,11 +786,14 @@ Status:
   minimal-mode block retention. It combines `ChainFreezer`,
   `SnapshotChainLookupPrune`, and `SnapshotEventLogBuild` stage progress,
   converts inclusive coverage block `N` into freezer tail `N+1`, and caps the
-  target by the ancient append head plus the recent-block retention window. The
-  event-log build boundary keeps minimal-mode physical tail pruning behind
-  cold lookup/log index coverage, so archive block/transaction/log queries do
-  not lose their immutable sidecar path when local freezer files are hidden or
-  reclaimed. The apply path verifies cold chain-freezer, chain-index, and
+  target by the ancient append head plus the recent-block retention window.
+  DB-backed planning now reads those dependency stages through hash-bound
+  verification, using the freezer/snapshot-aware chain reader when local hot
+  block bodies have already moved cold. The event-log build boundary keeps
+  minimal-mode physical tail pruning behind cold lookup/log index coverage, so
+  archive block/transaction/log queries do not lose their immutable sidecar
+  path when local freezer files are hidden or reclaimed. The apply path verifies
+  cold chain-freezer, chain-index, and
   indexed event-log coverage before calling runtime `TruncateTail`; indexed
   event-log coverage starts at block 1 because genesis has no transaction logs,
   so genesis-only tail movement is allowed with cold freezer plus chain-index
