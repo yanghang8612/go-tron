@@ -253,6 +253,23 @@ For production acceptance, collect at least:
 2. Long-running private-chain soak samples with the same JSON schema.
 3. Mainnet/Nile replay or fixture samples for archive reads after hot prune.
 
+After collecting a candidate run, gate the JSONL with the acceptance checker:
+
+```bash
+scripts/dev/storage_benchmark_acceptance.py results.jsonl \
+  --role producer \
+  --require-modes full,blocks,minimal,archive \
+  --require-prometheus-artifacts \
+  --require-minimal-tail-prune \
+  --min minimal.producer.tailPrunedThroughBlock=100000
+```
+
+The checker verifies required mode coverage, rejects non-clean storage-alert
+statuses by default, checks that each latest selected sample has a readable
+`gtron_storage_alert_status` Prometheus artifact, confirms minimal-mode signed
+cold lookup pruning plus tail-prune evidence, and applies any project-specific
+numeric `--min`/`--max` thresholds.
+
 Recorded samples:
 
 - [2026-06-10 smoke sample](erigon-storage-benchmark-results-2026-06-10.md)

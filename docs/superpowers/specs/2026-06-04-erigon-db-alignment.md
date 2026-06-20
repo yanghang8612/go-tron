@@ -1065,6 +1065,11 @@ Status:
   are emitted as `status=storage-alerts-critical` rows before the harness exits
   non-zero. Warning rows keep the exact alert detail in JSONL without failing
   the run.
+- `scripts/dev/storage_benchmark_acceptance.py` now gates collected JSONL runs
+  before production sign-off: it enforces required prune-mode coverage, clean
+  storage-alert statuses, readable storage-alert Prometheus artifacts,
+  minimal-mode signed cold lookup prune plus tail-prune evidence, and
+  project-specific numeric `--min`/`--max` thresholds.
 
 Remaining:
 
@@ -1076,9 +1081,9 @@ Remaining:
   tail pruning now also requires continuous cold snapshot coverage across the
   entire pruned range, and the benchmark drill can compare `blocks` lookup
   pruning without freezer-tail truncation against `minimal` tail pruning. The
-  remaining gap is collected long-running soak/space samples and acceptance
-  thresholds before old block file reclamation is considered production-complete
-  under `minimal`.
+  remaining gap is collected long-running soak/space samples and concrete
+  project threshold values before old block file reclamation is considered
+  production-complete under `minimal`.
 
 ### P2: Derived Domains And RPC Indexes
 
