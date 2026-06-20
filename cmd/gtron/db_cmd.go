@@ -324,6 +324,10 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open freezer: %w", err)
 	}
 	defer f.Close()
+	chainDB, err := dbFreezerAlertChainDB(db, f, cfg.DataDir)
+	if err != nil {
+		return err
+	}
 
 	stats, err := f.Stats()
 	if err != nil {
@@ -339,6 +343,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	}
 
 	issues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
+	issues = append(issues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage)...)
 	status := "ok"
 	if dbFreezerAlertHasCritical(issues) {
 		status = "critical"
@@ -391,6 +396,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("read chain freezer tail prune stage: %w", err)
 	}
 	freezerIssues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
+	freezerIssues = append(freezerIssues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage)...)
 	freezerStatus := dbFreezerAlertStatus(freezerIssues)
 
 	stageRows, err := dbStageStatusRows(db, chainDB)
@@ -729,6 +735,19 @@ func dbSnapshotAlertStatus(issues []dbSnapshotAlertIssue) string {
 	return "ok"
 }
 
+func dbFreezerAlertChainDB(db ethdb.KeyValueStore, freezer *rawdbfreezer.Freezer, dataDir string) (*rawdb.ChainDB, error) {
+	if db == nil {
+		return nil, errors.New("nil freezer alert database")
+	}
+	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(dataDir))
+	if err != nil {
+		return nil, fmt.Errorf("open state snapshots: %w", err)
+	}
+	chainDB := rawdb.NewChainDB(db, rawdb.NewFallbackAncientReader(rawdb.NewFreezerReader(freezer), snapshotManager))
+	chainDB.SetChainIndexReader(snapshotManager)
+	return chainDB, nil
+}
+
 func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool, tailPruneStage rawdb.StageProgress, hasTailPruneStage bool) []dbFreezerAlertIssue {
 	var issues []dbFreezerAlertIssue
 	add := func(severity, kind, format string, args ...interface{}) {
@@ -800,6 +819,38 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.Stag
 		add("warning", "physical-prune-pending", "freezer has %d hidden bytes waiting for physical tail-file pruning", hidden)
 	}
 	return issues
+}
+
+func dbFreezerAlertStageProofIssues(chainDB ethdb.KeyValueReader, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool) []dbFreezerAlertIssue {
+	if chainDB == nil || !hasChainFreezerStage || !chainFreezerStage.HasBlockHash {
+		return nil
+	}
+	canonical, ok, err := rawdb.ReadBlockHashByNumberStrict(chainDB, chainFreezerStage.BlockNum)
+	if err != nil {
+		return []dbFreezerAlertIssue{{
+			severity: "critical",
+			kind:     "chain-freezer-stage-canonical-error",
+			detail: fmt.Sprintf("%s=%d hash %x canonical hash lookup failed: %v",
+				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash, err),
+		}}
+	}
+	if !ok || canonical == (common.Hash{}) {
+		return []dbFreezerAlertIssue{{
+			severity: "critical",
+			kind:     "chain-freezer-stage-missing-canonical",
+			detail: fmt.Sprintf("%s=%d hash %x cannot be verified because canonical block is unavailable",
+				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash),
+		}}
+	}
+	if canonical != chainFreezerStage.BlockHash {
+		return []dbFreezerAlertIssue{{
+			severity: "critical",
+			kind:     "chain-freezer-stage-hash-mismatch",
+			detail: fmt.Sprintf("%s=%d hash %x does not match canonical hash %x",
+				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash, canonical),
+		}}
+	}
+	return nil
 }
 
 func dbFreezerAlertHasCritical(issues []dbFreezerAlertIssue) bool {

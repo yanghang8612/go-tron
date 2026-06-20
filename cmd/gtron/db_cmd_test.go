@@ -486,7 +486,7 @@ func TestDBFreezerStatusCmd(t *testing.T) {
 func TestDBFreezerAlertsCmdOK(t *testing.T) {
 	dataDir := t.TempDir()
 	f := openDBCmdFreezer(t, dataDir)
-	appendDBCmdFreezerRows(t, f, 5)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
 	if err := f.Close(); err != nil {
 		t.Fatalf("close freezer: %v", err)
 	}
@@ -494,7 +494,8 @@ func TestDBFreezerAlertsCmdOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
 		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -587,6 +588,43 @@ func TestDBFreezerAlertsCmdRejectsUnboundChainFreezerStage(t *testing.T) {
 	for _, want := range []string{
 		"status=critical",
 		"severity=critical kind=chain-freezer-stage-unbound",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsMismatchedChainFreezerStageHash(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-hash-mismatch") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want chain-freezer-stage-hash-mismatch alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-hash-mismatch",
 		"chainFreezerStage=4",
 	} {
 		if !strings.Contains(output, want) {
