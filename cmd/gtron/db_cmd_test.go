@@ -598,6 +598,48 @@ func TestDBFreezerAlertsCmdRejectsHiddenTailWithoutTailPruneStage(t *testing.T) 
 	}
 }
 
+func TestDBFreezerAlertsCmdRejectsUnboundTailPruneStage(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune, 2); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainFreezerTailPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "tail-prune-stage-unbound") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want tail-prune-stage-unbound alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"tail=3",
+		"severity=critical kind=tail-prune-stage-unbound",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
 	stats := rawdbfreezer.Stats{
 		Head: 5,
@@ -616,7 +658,7 @@ func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
 			{Name: "legacy", Head: 5, PhysicalTail: 0, HiddenTail: 1, Prunable: false},
 		},
 	}
-	issues := dbFreezerAlertIssues(stats, 0, true, 0, false)
+	issues := dbFreezerAlertIssues(stats, 0, true, rawdb.StageProgress{}, false)
 	for _, want := range []string{
 		"repair-applied",
 		"chain-freezer-stage-behind-tail",
@@ -639,16 +681,22 @@ func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
 		name     string
 		stage    uint64
 		hasStage bool
+		bound    bool
 		want     string
 	}{
 		{name: "missing", want: "tail-prune-stage-missing"},
-		{name: "behind", stage: 2, hasStage: true, want: "tail-prune-stage-behind-tail"},
-		{name: "ahead", stage: 4, hasStage: true, want: "tail-prune-stage-ahead-of-tail"},
-		{name: "exact", stage: 3, hasStage: true},
+		{name: "unbound", stage: 3, hasStage: true, want: "tail-prune-stage-unbound"},
+		{name: "behind", stage: 2, hasStage: true, bound: true, want: "tail-prune-stage-behind-tail"},
+		{name: "ahead", stage: 4, hasStage: true, bound: true, want: "tail-prune-stage-ahead-of-tail"},
+		{name: "exact", stage: 3, hasStage: true, bound: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			issues := dbFreezerAlertIssues(stats, 9, true, tt.stage, tt.hasStage)
+			progress := rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune, BlockNum: tt.stage, HasBlockHash: tt.bound}
+			if tt.bound {
+				progress.BlockHash = common.Hash{0x33}
+			}
+			issues := dbFreezerAlertIssues(stats, 9, true, progress, tt.hasStage)
 			if tt.want == "" {
 				for _, issue := range issues {
 					if strings.HasPrefix(issue.kind, "tail-prune-stage-") {
@@ -663,7 +711,7 @@ func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
 		})
 	}
 
-	issues := dbFreezerAlertIssues(rawdbfreezer.Stats{Head: 10, Tail: 0}, 9, true, 0, true)
+	issues := dbFreezerAlertIssues(rawdbfreezer.Stats{Head: 10, Tail: 0}, 9, true, rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune}, true)
 	if !dbFreezerAlertIssueKindsContain(issues, "tail-prune-stage-without-hidden-tail") {
 		t.Fatalf("tail=0 issues missing tail-prune-stage-without-hidden-tail: %+v", issues)
 	}
