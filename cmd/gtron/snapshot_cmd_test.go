@@ -1338,8 +1338,8 @@ func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, block1.Number()); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 
 	result, err := pruneVerifiedHotChainLookups(hot, snapshotDir, identity, []ed25519.PublicKey{pub})

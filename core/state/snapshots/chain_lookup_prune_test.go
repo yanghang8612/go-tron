@@ -124,8 +124,8 @@ func TestPruneHotChainLookupsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if err := rawdb.WriteBlockStateRoot(hot, block1.Hash(), stateRoot); err != nil {
 		t.Fatalf("WriteBlockStateRoot: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 1); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	first, err := PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
 	if err != nil {
@@ -176,6 +176,134 @@ func TestWriteSnapshotChainLookupPruneStageHashRules(t *testing.T) {
 	}
 }
 
+func TestPruneHotChainLookupsWithProgressRejectsUnboundChainFreezerStage(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef, indexRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 1); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+
+	_, err = PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "ChainFreezer stage 1 is not hash-bound") {
+		t.Fatalf("PruneHotChainLookupsWithProgress err = %v, want unbound ChainFreezer rejection", err)
+	}
+	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx == nil || *idx != 1 {
+		t.Fatalf("hot tx lookup after rejected unbound stage = %v, want still present", idx)
+	}
+}
+
+func TestPruneHotChainLookupsWithProgressRejectsChainFreezerHashMismatchBeforeDelete(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef, indexRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	wrongHash := block1.Hash()
+	wrongHash[0] ^= 0xff
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, wrongHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+
+	_, err = PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "ChainFreezer stage 1 hash") || !strings.Contains(err.Error(), "does not match chain-freezer segment hash") {
+		t.Fatalf("PruneHotChainLookupsWithProgress err = %v, want ChainFreezer hash mismatch", err)
+	}
+	if num := rawdb.ReadBlockNumber(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), block0.Hash()); num == nil || *num != 0 {
+		t.Fatalf("hot block0 lookup after rejected mismatch = %v, want still present", num)
+	}
+	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx == nil || *idx != 1 {
+		t.Fatalf("hot tx lookup after rejected mismatch = %v, want still present", idx)
+	}
+}
+
+func TestPruneHotChainLookupsWithProgressUpgradesUnboundResumeStage(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef, indexRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(hot, rawdb.StageSnapshotChainLookupPrune, 1); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+
+	result, err := PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotChainLookupsWithProgress: %v", err)
+	}
+	if !result.HasRange || result.FromBlock != 0 || result.ToBlock != 1 || result.TxIndexesDeleted != 1 {
+		t.Fatalf("prune result = %+v, want reprocessed range 0..1", result)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("upgraded chain lookup prune row = %+v ok=%v err=%v, want block1 hash", row, ok, err)
+	}
+	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx != nil {
+		t.Fatalf("hot tx lookup after upgraded prune = %v, want nil", idx)
+	}
+}
+
 func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, root+"/src")
@@ -212,8 +340,8 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 		t.Fatalf("hot block1 lookup without ChainFreezer stage = %v, want 1", num)
 	}
 
-	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 0); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer 0: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 0, block0.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer 0: %v", err)
 	}
 	first, err := PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
 	if err != nil {
@@ -232,8 +360,8 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 		t.Fatalf("partial chain lookup prune stage row = %+v ok=%v err=%v, want block0 hash", row, ok, err)
 	}
 
-	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 1); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer 1: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer 1: %v", err)
 	}
 	second, err := PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
 	if err != nil {
@@ -289,8 +417,8 @@ func TestChainLookupPruneLifecycleOnePassPrunesCoveredLookups(t *testing.T) {
 	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
 		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(hot, rawdb.StageChainFreezer, 1); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	lifecycle := NewChainLookupPruneLifecycle(hot, ChainLookupPruneLifecycleConfig{Dir: snapshotDir})
 	result, err := lifecycle.OnePass()

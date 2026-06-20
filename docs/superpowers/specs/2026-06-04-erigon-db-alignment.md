@@ -737,8 +737,11 @@ Status:
   reads continue to work through freezer plus sidecar after these hot lookup
   rows are deleted. The progress-aware path now writes
   `SnapshotChainLookupPrune` as a hash-bound stage row using the verified
-  chain-freezer segment boundary block hash, upgrading legacy unbound rows at
-  the same height and rejecting same-height hash conflicts.
+  chain-freezer segment boundary block hash, requires a hash-bound
+  `ChainFreezer` upstream boundary before deleting hot lookup rows, repairs
+  legacy unbound `SnapshotChainLookupPrune` rows by reprocessing the covered
+  cold range, and rejects same-height hash conflicts before any hot lookup
+  row is deleted.
 - `gtron snapshot prune-chain-lookups` now exposes that verified prune path to
   operators. It derives the local chain identity, verifies the signed snapshot
   catalog with trusted Ed25519 keys, cross-checks freezer/index sidecars, and

@@ -29,6 +29,13 @@ type chainLookupPruneBounds struct {
 	hasMaxBlock        bool
 }
 
+type chainLookupPruneStageBoundary struct {
+	block    uint64
+	hash     common.Hash
+	hasBlock bool
+	hasHash  bool
+}
+
 // PruneHotChainLookups deletes hash-keyed historical lookup rows that are
 // covered by verified chain-freezer + chain-index segment pairs in manifest.
 // It does not delete b-<num>/tib-<num>; the freezer runner already owns those
@@ -46,21 +53,29 @@ func PruneHotChainLookupsWithProgress(db ethdb.KeyValueStore, dir string, manife
 	if db == nil {
 		return nil, errors.New("snapshots: nil chain lookup prune database")
 	}
-	localFreezerBlock, hasLocalFreezerBlock, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	localFreezer, err := readChainLookupPruneUpstreamStage(db, rawdb.StageChainFreezer)
 	if err != nil {
 		return nil, err
 	}
-	if !hasLocalFreezerBlock {
+	if !localFreezer.hasBlock {
 		return new(PruneHotChainLookupResult), nil
 	}
-	lastPrunedBlock, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotChainLookupPrune)
+	if err := verifyChainLookupPruneStageBoundary(dir, manifest, rawdb.StageChainFreezer, localFreezer); err != nil {
+		return nil, err
+	}
+	lastPruned, err := readChainLookupPruneResumeStage(db)
 	if err != nil {
 		return nil, err
 	}
+	if lastPruned.hasHash {
+		if err := verifyChainLookupPruneStageBoundary(dir, manifest, rawdb.StageSnapshotChainLookupPrune, lastPruned); err != nil {
+			return nil, err
+		}
+	}
 	result, err := pruneHotChainLookups(db, dir, manifest, chainLookupPruneBounds{
-		lastPrunedBlock:    lastPrunedBlock,
-		hasLastPrunedBlock: ok,
-		maxBlock:           localFreezerBlock,
+		lastPrunedBlock:    lastPruned.block,
+		hasLastPrunedBlock: lastPruned.hasHash,
+		maxBlock:           localFreezer.block,
 		hasMaxBlock:        true,
 	})
 	if err != nil {
@@ -72,6 +87,68 @@ func PruneHotChainLookupsWithProgress(db ethdb.KeyValueStore, dir string, manife
 		}
 	}
 	return result, nil
+}
+
+func readChainLookupPruneUpstreamStage(db ethdb.KeyValueReader, stage rawdb.StageID) (chainLookupPruneStageBoundary, error) {
+	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+	if err != nil || !ok {
+		return chainLookupPruneStageBoundary{}, err
+	}
+	if !row.HasBlockHash {
+		return chainLookupPruneStageBoundary{}, fmt.Errorf("snapshots: %s stage %d is not hash-bound", stage, row.BlockNum)
+	}
+	return chainLookupPruneStageBoundary{
+		block:    row.BlockNum,
+		hash:     row.BlockHash,
+		hasBlock: true,
+		hasHash:  true,
+	}, nil
+}
+
+func readChainLookupPruneResumeStage(db ethdb.KeyValueReader) (chainLookupPruneStageBoundary, error) {
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainLookupPrune)
+	if err != nil || !ok {
+		return chainLookupPruneStageBoundary{}, err
+	}
+	if !row.HasBlockHash {
+		return chainLookupPruneStageBoundary{}, nil
+	}
+	return chainLookupPruneStageBoundary{
+		block:    row.BlockNum,
+		hash:     row.BlockHash,
+		hasBlock: true,
+		hasHash:  true,
+	}, nil
+}
+
+func verifyChainLookupPruneStageBoundary(dir string, manifest *Manifest, stage rawdb.StageID, boundary chainLookupPruneStageBoundary) error {
+	if manifest == nil || !boundary.hasHash {
+		return nil
+	}
+	ref, ok := chainFreezerRefCoveringBlock(manifest, boundary.block)
+	if !ok {
+		return nil
+	}
+	hash, err := chainFreezerSegmentBlockHash(dir, ref, boundary.block)
+	if err != nil {
+		return fmt.Errorf("snapshots: verify %s stage block %d against chain-freezer segment: %w", stage, boundary.block, err)
+	}
+	if hash != boundary.hash {
+		return fmt.Errorf("snapshots: %s stage %d hash %x does not match chain-freezer segment hash %x", stage, boundary.block, boundary.hash, hash)
+	}
+	return nil
+}
+
+func chainFreezerRefCoveringBlock(manifest *Manifest, blockNum uint64) (SegmentRef, bool) {
+	if manifest == nil {
+		return SegmentRef{}, false
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentChainFreezer && ref.FromTxNum <= blockNum && blockNum <= ref.ToTxNum {
+			return ref, true
+		}
+	}
+	return SegmentRef{}, false
 }
 
 func pruneHotChainLookups(db ethdb.KeyValueWriter, dir string, manifest *Manifest, bounds chainLookupPruneBounds) (*PruneHotChainLookupResult, error) {
