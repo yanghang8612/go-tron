@@ -2063,7 +2063,11 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	if !ok || boundaryRoot == (common.Hash{}) {
 		return nil, errors.New("balance trace replay snapshot seed: restored snapshot has no latest commitment root")
 	}
-	if sourceRoot := rawdb.ReadBlockStateRoot(source, boundary.BlockHash); sourceRoot != (common.Hash{}) && sourceRoot != boundaryRoot {
+	sourceRoot, sourceRootOK, err := rawdb.ReadBlockStateRootStrict(source, boundary.BlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed read source boundary state root: %w", err)
+	}
+	if sourceRootOK && sourceRoot != boundaryRoot {
 		return nil, fmt.Errorf("balance trace replay snapshot seed: restored root %x does not match source block %d root %x", boundaryRoot, boundary.BlockNum, sourceRoot)
 	}
 	if err := rawdb.WriteBlockStateRoot(replayDB, boundary.BlockHash, boundaryRoot); err != nil {
@@ -2105,9 +2109,16 @@ func dbCopyReplayRecentChainWindow(source *rawdb.ChainDB, target ethdb.KeyValueW
 	}
 	var copied uint64
 	for blockNum := from; blockNum <= boundary; blockNum++ {
-		block := rawdb.ReadBlock(source, blockNum)
-		if block == nil {
+		block, ok, err := rawdb.ReadBlockStrict(source, blockNum)
+		if err != nil {
+			return copied, fmt.Errorf("balance trace replay snapshot seed: source block %d for recent execution window is corrupt: %w", blockNum, err)
+		}
+		if !ok {
 			return copied, fmt.Errorf("balance trace replay snapshot seed: missing source block %d for recent execution window", blockNum)
+		}
+		root, hasRoot, err := rawdb.ReadBlockStateRootStrict(source, block.Hash())
+		if err != nil {
+			return copied, fmt.Errorf("balance trace replay snapshot seed read block %d state root: %w", blockNum, err)
 		}
 		if err := rawdb.WriteBlock(target, block); err != nil {
 			return copied, fmt.Errorf("balance trace replay snapshot seed write block %d: %w", blockNum, err)
@@ -2115,7 +2126,7 @@ func dbCopyReplayRecentChainWindow(source *rawdb.ChainDB, target ethdb.KeyValueW
 		if err := rawdb.WriteTaposRef(target, blockNum, block.Hash()); err != nil {
 			return copied, fmt.Errorf("balance trace replay snapshot seed write tapos block %d: %w", blockNum, err)
 		}
-		if root := rawdb.ReadBlockStateRoot(source, block.Hash()); root != (common.Hash{}) {
+		if hasRoot {
 			if err := rawdb.WriteBlockStateRoot(target, block.Hash(), root); err != nil {
 				return copied, fmt.Errorf("balance trace replay snapshot seed write block %d state root: %w", blockNum, err)
 			}

@@ -447,6 +447,38 @@ func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestDBCopyReplayRecentChainWindowRejectsCorruptSourceStateRoot(t *testing.T) {
+	sourceKV := rawdb.NewMemoryDatabase()
+	block0, _ := dbRebuildTxIndexBlock(t, 0, 0)
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(sourceKV, block0); err != nil {
+		t.Fatalf("WriteBlock block0: %v", err)
+	}
+	if err := rawdb.WriteBlock(sourceKV, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	source := rawdb.NewChainDB(sourceKV, &dbCmdStaticAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: 1,
+		data:   []byte{0x01},
+	})
+	target := rawdb.NewMemoryDatabase()
+
+	copied, err := dbCopyReplayRecentChainWindow(source, target, 1)
+	if err == nil || !strings.Contains(err.Error(), "read block 1 state root") {
+		t.Fatalf("dbCopyReplayRecentChainWindow error = %v, copied=%d, want strict state-root error", err, copied)
+	}
+	if copied != 1 {
+		t.Fatalf("copied = %d, want block 0 copied before corrupt block 1 root", copied)
+	}
+	if got := rawdb.ReadBlock(rawdb.NewChainDB(target, rawdb.NoopAncient{}), 1); got != nil {
+		t.Fatalf("target block 1 = %+v, want absent after corrupt source root", got)
+	}
+	if got := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(target, rawdb.NoopAncient{}), block1.Hash()); got != (common.Hash{}) {
+		t.Fatalf("target block 1 state root = %x, want absent after corrupt source root", got)
+	}
+}
+
 func TestDBFreezerStatusCmd(t *testing.T) {
 	dataDir := t.TempDir()
 	f := openDBCmdFreezer(t, dataDir)
@@ -2780,6 +2812,24 @@ func dbStageStatusJSONRow(report dbStageStatusJSON, stage rawdb.StageID) (dbStag
 		}
 	}
 	return dbStageStatusRowJSON{}, false
+}
+
+type dbCmdStaticAncient struct {
+	rawdb.NoopAncient
+	kind   string
+	number uint64
+	data   []byte
+}
+
+func (a *dbCmdStaticAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if a != nil && kind == a.kind && number == a.number {
+		return append([]byte(nil), a.data...), nil
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a *dbCmdStaticAncient) HasAncient(kind string, number uint64) (bool, error) {
+	return a != nil && kind == a.kind && number == a.number, nil
 }
 
 func captureDBCmdStdout(t *testing.T, fn func() error) (string, error) {

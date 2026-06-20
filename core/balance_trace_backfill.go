@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	"google.golang.org/protobuf/proto"
 )
@@ -90,9 +91,9 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 	if err != nil {
 		return nil, fmt.Errorf("setup replay genesis: %w", err)
 	}
-	sourceGenesis := rawdb.ReadBlock(source, 0)
-	if sourceGenesis == nil {
-		return nil, errors.New("core: source genesis block missing")
+	sourceGenesis, err := readBalanceTraceBackfillSourceBlock(source, 0, "genesis check")
+	if err != nil {
+		return nil, err
 	}
 	if sourceGenesis.Hash() != replayGenesisHash {
 		return nil, fmt.Errorf("core: replay genesis hash %x does not match source genesis %x", replayGenesisHash, sourceGenesis.Hash())
@@ -109,9 +110,9 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 		return nil, errors.New("core: replay blockchain has no head")
 	}
 	if replayHead.Number() > 0 {
-		sourceHead := rawdb.ReadBlock(source, replayHead.Number())
-		if sourceHead == nil {
-			return nil, fmt.Errorf("core: source missing replay head block %d", replayHead.Number())
+		sourceHead, err := readBalanceTraceBackfillSourceBlock(source, replayHead.Number(), "replay head check")
+		if err != nil {
+			return nil, err
 		}
 		if sourceHead.Hash() != replayHead.Hash() {
 			return nil, fmt.Errorf("core: replay head %d hash %x does not match source canonical hash %x", replayHead.Number(), replayHead.Hash(), sourceHead.Hash())
@@ -124,9 +125,9 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 
 	copyEnd := min(opts.ToBlock, replayHead.Number())
 	for blockNum := opts.FromBlock; blockNum <= copyEnd; blockNum++ {
-		block := rawdb.ReadBlock(source, blockNum)
-		if block == nil {
-			return nil, fmt.Errorf("core: missing canonical block %d during balance trace replay backfill copy", blockNum)
+		block, err := readBalanceTraceBackfillSourceBlock(source, blockNum, "balance trace replay backfill copy")
+		if err != nil {
+			return nil, err
 		}
 		if opts.Progress != nil {
 			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "copy", Block: blockNum, Target: opts.ToBlock})
@@ -137,9 +138,9 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 		result.BlocksBackfilled++
 	}
 	for blockNum := replayHead.Number() + 1; blockNum <= opts.ToBlock; blockNum++ {
-		block := rawdb.ReadBlock(source, blockNum)
-		if block == nil {
-			return nil, fmt.Errorf("core: missing canonical block %d during balance trace replay backfill", blockNum)
+		block, err := readBalanceTraceBackfillSourceBlock(source, blockNum, "balance trace replay backfill")
+		if err != nil {
+			return nil, err
 		}
 		if opts.Progress != nil {
 			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "replay", Block: blockNum, Target: opts.ToBlock})
@@ -163,6 +164,17 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 	}
 	result.ETL = stats
 	return result, nil
+}
+
+func readBalanceTraceBackfillSourceBlock(source *rawdb.ChainDB, blockNum uint64, context string) (*types.Block, error) {
+	block, ok, err := rawdb.ReadBlockStrict(source, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("core: source canonical block %d during %s is corrupt: %w", blockNum, context, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("core: missing canonical block %d during %s", blockNum, context)
+	}
+	return block, nil
 }
 
 func cloneBalanceTraceBackfillGenesis(genesis *params.Genesis) *params.Genesis {

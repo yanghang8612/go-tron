@@ -213,6 +213,29 @@ func TestBackfillBalanceTracesByReplayRejectsCorruptColdTargetAccountTrace(t *te
 	}
 }
 
+func TestBackfillBalanceTracesByReplayRejectsCorruptSourceBlock(t *testing.T) {
+	sourceDB, _, genesis, _ := newBalanceTraceBackfillSource(t)
+	ancient := &balanceTraceBackfillCorruptAncient{
+		kind:   rawdb.AncientBlocksTable,
+		number: 1,
+		data:   []byte("not-a-valid-block"),
+	}
+
+	_, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, ancient),
+		sourceDB,
+		ethrawdb.NewMemoryDatabase(),
+		genesis,
+		BalanceTraceReplayBackfillOptions{FromBlock: 1, ToBlock: 1},
+	)
+	if err == nil || !strings.Contains(err.Error(), "source canonical block 1") || !strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("BackfillBalanceTracesByReplay corrupt source block error = %v, want strict source corruption", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 1); got != nil {
+		t.Fatalf("BlockBalanceTrace written despite corrupt source block: %+v", got)
+	}
+}
+
 func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
 	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
 	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)
@@ -329,6 +352,20 @@ type balanceTraceBackfillCountingAncient struct {
 func (a *balanceTraceBackfillCountingAncient) Ancient(kind string, number uint64) ([]byte, error) {
 	if kind == rawdb.AncientBlocksTable {
 		a.reads[number]++
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+type balanceTraceBackfillCorruptAncient struct {
+	rawdb.NoopAncient
+	kind   string
+	number uint64
+	data   []byte
+}
+
+func (a *balanceTraceBackfillCorruptAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if a != nil && kind == a.kind && number == a.number {
+		return append([]byte(nil), a.data...), nil
 	}
 	return nil, rawdb.ErrNotInAncient
 }
