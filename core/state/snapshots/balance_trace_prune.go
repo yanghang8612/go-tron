@@ -46,7 +46,7 @@ func PruneHotBalanceTracesWithProgress(db ethdb.KeyValueStore, dir string, manif
 	if db == nil {
 		return nil, errors.New("snapshots: nil balance trace prune database")
 	}
-	lastPrunedBlock, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBalanceTracePrune)
+	lastPrunedBlock, ok, err := readHashBoundPruneResumeBlock(db, rawdb.StageSnapshotBalanceTracePrune)
 	if err != nil {
 		return nil, err
 	}

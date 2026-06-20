@@ -198,6 +198,45 @@ func TestPruneHotBalanceTracesRejectsSparseColdCoverageBeforeStageAdvance(t *tes
 	}
 }
 
+func TestPruneHotBalanceTracesWithProgressUpgradesUnboundResumeStage(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	owner := balanceTraceTestAddress(0xf5)
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 120); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 12, 12)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotBalanceTracePrune, 12); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotBalanceTracePrune: %v", err)
+	}
+
+	result, err := PruneHotBalanceTracesWithProgress(db, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotBalanceTracesWithProgress: %v", err)
+	}
+	if !result.HasRange || result.BlockTracesDeleted != 1 || result.AccountTracesDeleted != 1 {
+		t.Fatalf("prune result = %+v, want reprocessed balance trace rows", result)
+	}
+	wantHash := common.Hash{}
+	for i := range wantHash {
+		wantHash[i] = 12
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wantHash {
+		t.Fatalf("upgraded balance trace prune row = %+v ok=%v err=%v, want block hash %x", row, ok, err, wantHash)
+	}
+}
+
 func TestBalanceTracePruneLifecycleOnePass(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"

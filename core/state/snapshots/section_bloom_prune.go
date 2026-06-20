@@ -43,7 +43,7 @@ func PruneHotSectionBloomsWithProgress(db ethdb.KeyValueStore, dir string, manif
 	if db == nil {
 		return nil, errors.New("snapshots: nil section bloom prune database")
 	}
-	lastPrunedBlock, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotSectionBloomPrune)
+	lastPrunedBlock, ok, err := readHashBoundPruneResumeBlock(db, rawdb.StageSnapshotSectionBloomPrune)
 	if err != nil {
 		return nil, err
 	}

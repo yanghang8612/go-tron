@@ -648,8 +648,10 @@ Status:
   writes hash-bound `SnapshotBalanceTracePrune` and
   `SnapshotSectionBloomPrune` stage rows after verified cold segment coverage,
   and `gtron db stage-status --db.stage.verify` treats those rows as canonical
-  hash-bound cold-coverage stages, so cold-index reclamation has the same
-  fork-bound proof as chain lookup and freezer-tail pruning.
+  hash-bound cold-coverage stages. Progress-aware pruning ignores legacy
+  unbound resume rows and reprocesses the covered cold range to upgrade them,
+  so cold-index reclamation has the same fork-bound proof as chain lookup and
+  freezer-tail pruning.
 - `gtron db stage-status --json` now preserves backward-compatible
   `issues` strings while also emitting structured `issueDetails` with issue
   kind, stage/order edge, values, missing-upstream, and hash-mismatch flags.

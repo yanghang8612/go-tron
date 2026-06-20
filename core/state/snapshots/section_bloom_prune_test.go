@@ -139,6 +139,42 @@ func TestPruneHotSectionBloomsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	}
 }
 
+func TestPruneHotSectionBloomsWithProgressUpgradesUnboundResumeStage(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	row := sectionBloomTestEncodedBit(t, 5)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	block := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection-1)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock section end: %v", err)
+	}
+	ref, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotSectionBloomPrune, rawdb.SectionBloomBlockPerSection-1); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotSectionBloomPrune: %v", err)
+	}
+
+	result, err := PruneHotSectionBloomsWithProgress(db, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotSectionBloomsWithProgress: %v", err)
+	}
+	if !result.HasRange || result.RowsDeleted != 1 {
+		t.Fatalf("prune result = %+v, want reprocessed section bloom row", result)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
+		t.Fatalf("upgraded section bloom prune row = %+v ok=%v err=%v, want block hash %x", row, ok, err, block.Hash())
+	}
+}
+
 func TestSectionBloomPruneLifecycleOnePass(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"
