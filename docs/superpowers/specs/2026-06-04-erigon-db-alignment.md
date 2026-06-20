@@ -840,7 +840,9 @@ Status:
   the local manifest cannot prove. It also reports hidden freezer bytes and
   retired snapshot bytes that still await physical pruning. Stage alert details
   preserve the structured issue kind and any root-cause detail emitted by
-  `stage-status`, including strict canonical block read/decode errors.
+  `stage-status`, including strict canonical block read/decode errors. Text
+  output and the Nile/storage-benchmark legacy parsers preserve the same
+  stage-alert kind while remaining compatible with older detail-only lines.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,

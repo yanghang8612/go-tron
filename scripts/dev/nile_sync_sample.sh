@@ -376,6 +376,14 @@ def parse_alerts(text):
                 "detail": m.group(3),
             })
             continue
+        m = re.match(r"Storage stage alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+        if m:
+            row["stageVerifyDetails"].append({
+                "severity": m.group(1),
+                "kind": m.group(2),
+                "detail": m.group(3),
+            })
+            continue
         m = re.match(r"Storage stage alert: severity=([^ ]+) detail=(.*)$", line)
         if m:
             row["stageVerifyDetails"].append({

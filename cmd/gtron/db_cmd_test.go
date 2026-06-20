@@ -1265,7 +1265,7 @@ func TestDBStorageAlertsCmdRejectsStageVerificationIssue(t *testing.T) {
 		"status=critical",
 		"freezerStatus=ok",
 		"stageStatus=critical",
-		"Storage stage alert: severity=critical detail=Finish verified=mismatch",
+		"Storage stage alert: severity=critical kind=stage-verification detail=Finish verified=mismatch",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)

@@ -477,8 +477,16 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	for _, issue := range freezerIssues {
 		fmt.Printf("Storage freezer alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
 	}
-	for _, issue := range stageIssues {
-		fmt.Printf("Storage stage alert: severity=critical detail=%s\n", issue)
+	for _, issue := range report.StageVerifyDetails {
+		severity := issue.Severity
+		if severity == "" {
+			severity = "critical"
+		}
+		kind := issue.Kind
+		if kind == "" {
+			kind = "unclassified"
+		}
+		fmt.Printf("Storage stage alert: severity=%s kind=%s detail=%s\n", severity, kind, issue.Detail)
 	}
 	for _, issue := range modeIssues {
 		fmt.Printf("Storage mode alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)

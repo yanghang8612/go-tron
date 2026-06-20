@@ -570,6 +570,10 @@ for line in text.splitlines():
     if m:
         freezer.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
         continue
+    m = re.match(r"Storage stage alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+    if m:
+        stage.append({"severity": m.group(1), "kind": m.group(2), "detail": m.group(3)})
+        continue
     m = re.match(r"Storage stage alert: severity=([^ ]+) detail=(.*)$", line)
     if m:
         stage.append({"severity": m.group(1), "detail": m.group(2)})
