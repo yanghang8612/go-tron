@@ -179,6 +179,9 @@ func ensureHistoryPruneModeLocked(db ethdb.KeyValueStore, requested string) erro
 		return fmt.Errorf("read persisted prune mode: %w", err)
 	}
 	if !ok {
+		if err := ensureHistoryPruneModeStagesCompatible(db, mode); err != nil {
+			return err
+		}
 		if err := rawdb.WriteHistoryPruneMode(db, mode); err != nil {
 			return fmt.Errorf("persist prune mode: %w", err)
 		}
@@ -196,7 +199,91 @@ func ensureHistoryPruneModeLocked(db ethdb.KeyValueStore, requested string) erro
 			return fmt.Errorf("canonicalise persisted prune mode: %w", err)
 		}
 	}
+	if err := ensureHistoryPruneModeStagesCompatible(db, storedMode); err != nil {
+		return err
+	}
 	return nil
+}
+
+type historyPruneModeStageConflict struct {
+	kind   string
+	detail string
+}
+
+func ensureHistoryPruneModeStagesCompatible(db ethdb.KeyValueReader, mode string) error {
+	conflicts, err := historyPruneModeStageConflicts(db, mode)
+	if err != nil {
+		return err
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("datadir prune mode %q conflicts with stage progress: %s", mode, historyPruneModeStageConflictSummary(conflicts))
+}
+
+func historyPruneModeStageConflicts(db ethdb.KeyValueReader, mode string) ([]historyPruneModeStageConflict, error) {
+	var conflicts []historyPruneModeStageConflict
+	for _, stage := range historyPruneModeConflictStages(mode) {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil {
+			return nil, fmt.Errorf("read %s stage progress for prune mode %s: %w", stage, mode, err)
+		}
+		if !ok {
+			continue
+		}
+		kind, detail, ok := historyPruneModeStageConflictFor(mode, stage, row.BlockNum)
+		if ok {
+			conflicts = append(conflicts, historyPruneModeStageConflict{kind: kind, detail: detail})
+		}
+	}
+	return conflicts, nil
+}
+
+func historyPruneModeConflictStages(mode string) []rawdb.StageID {
+	switch mode {
+	case params.HistoryModeArchive:
+		return historyPruneModeArchiveForbiddenStages()
+	case params.HistoryModeMinimal:
+		return nil
+	default:
+		return []rawdb.StageID{rawdb.StageSnapshotChainFreezerTailPrune}
+	}
+}
+
+func historyPruneModeArchiveForbiddenStages() []rawdb.StageID {
+	return []rawdb.StageID{
+		rawdb.StageSnapshotHotPrune,
+		rawdb.StageSnapshotPrune,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
+		rawdb.StageSnapshotChainFreezerTailPrune,
+	}
+}
+
+func historyPruneModeStageConflictFor(mode string, stage rawdb.StageID, block uint64) (string, string, bool) {
+	if mode == params.HistoryModeArchive {
+		for _, forbidden := range historyPruneModeArchiveForbiddenStages() {
+			if stage == forbidden {
+				return "archive-prune-stage", fmt.Sprintf("archive mode must not have %s progress at block %d", stage, block), true
+			}
+		}
+	}
+	if mode != params.HistoryModeMinimal && mode != params.HistoryModeArchive && stage == rawdb.StageSnapshotChainFreezerTailPrune {
+		return "tail-prune-mode-mismatch", fmt.Sprintf("mode %s must not have minimal-only %s progress at block %d", mode, rawdb.StageSnapshotChainFreezerTailPrune, block), true
+	}
+	return "", "", false
+}
+
+func historyPruneModeStageConflictSummary(conflicts []historyPruneModeStageConflict) string {
+	if len(conflicts) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(conflicts))
+	for _, conflict := range conflicts {
+		parts = append(parts, conflict.kind+": "+conflict.detail)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // normaliseHistoryMode validates a user-supplied --prune.mode / --gcmode value.

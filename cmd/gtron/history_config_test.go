@@ -500,3 +500,68 @@ func TestEnsureHistoryPruneModeLockedRejectsModeChange(t *testing.T) {
 		t.Fatalf("unexpected mismatch error: %v", err)
 	}
 }
+
+func TestEnsureHistoryPruneModeLockedRejectsArchivePruneStage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, 12); err != nil {
+		t.Fatalf("write hot prune stage: %v", err)
+	}
+
+	err := ensureHistoryPruneModeLocked(db, params.HistoryModeArchive)
+	if err == nil {
+		t.Fatal("expected archive prune stage conflict")
+	}
+	if !strings.Contains(err.Error(), "archive-prune-stage") || !strings.Contains(err.Error(), string(rawdb.StageSnapshotHotPrune)) {
+		t.Fatalf("unexpected archive prune conflict error: %v", err)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedRejectsLegacyArchivePruneStageBeforePersist(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 7); err != nil {
+		t.Fatalf("write chain lookup prune stage: %v", err)
+	}
+
+	err := ensureHistoryPruneModeLocked(db, params.HistoryModeArchive)
+	if err == nil {
+		t.Fatal("expected archive prune stage conflict")
+	}
+	if _, ok, readErr := rawdb.ReadHistoryPruneMode(db); readErr != nil || ok {
+		t.Fatalf("prune mode persisted despite startup conflict: ok=%v err=%v", ok, readErr)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedRejectsTailPruneOutsideMinimal(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeBlocks); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune, 5); err != nil {
+		t.Fatalf("write tail prune stage: %v", err)
+	}
+
+	err := ensureHistoryPruneModeLocked(db, params.HistoryModeBlocks)
+	if err == nil {
+		t.Fatal("expected tail prune mode conflict")
+	}
+	if !strings.Contains(err.Error(), "tail-prune-mode-mismatch") || !strings.Contains(err.Error(), string(rawdb.StageSnapshotChainFreezerTailPrune)) {
+		t.Fatalf("unexpected tail prune conflict error: %v", err)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedAllowsTailPruneInMinimal(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeMinimal); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune, 5); err != nil {
+		t.Fatalf("write tail prune stage: %v", err)
+	}
+
+	if err := ensureHistoryPruneModeLocked(db, params.HistoryModeMinimal); err != nil {
+		t.Fatalf("minimal tail prune should be allowed: %v", err)
+	}
+}

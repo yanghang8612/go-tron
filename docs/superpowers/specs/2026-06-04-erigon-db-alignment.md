@@ -1011,7 +1011,10 @@ Status:
   deleting the hot `StateDomainChange` rows.
 - `archive` keeps every temporal state row and auto-enables history capture.
 - The selected mode is persisted in rawdb as `history-prune-mode-v1`; startup
-  rejects incompatible mode changes for an existing datadir.
+  rejects incompatible mode changes for an existing datadir and also rejects
+  mode/stage contradictions before services start, e.g. `archive` datadirs
+  with hot-prune/lookup-prune/tail-prune progress or non-`minimal` datadirs
+  with freezer-tail prune progress.
 - Chain lookup pruning is already wired for `full`, `blocks`, `minimal`, and
   `snap` once verified chain-freezer/index snapshot coverage exists; `archive`
   keeps hot lookup rows.

@@ -556,31 +556,16 @@ func dbModeAlertIssues(db ethdb.KeyValueReader, rows []dbStageStatusRow) (string
 			byStage[row.stage] = row
 		}
 	}
-	if normalised == params.HistoryModeArchive {
-		for _, stage := range []rawdb.StageID{
-			rawdb.StageSnapshotHotPrune,
-			rawdb.StageSnapshotPrune,
-			rawdb.StageSnapshotChainLookupPrune,
-			rawdb.StageSnapshotSectionBloomPrune,
-			rawdb.StageSnapshotBalanceTracePrune,
-			rawdb.StageSnapshotChainFreezerTailPrune,
-		} {
-			if row, ok := byStage[stage]; ok {
+	for _, stage := range historyPruneModeConflictStages(normalised) {
+		if row, ok := byStage[stage]; ok {
+			kind, detail, ok := historyPruneModeStageConflictFor(normalised, stage, row.progress.BlockNum)
+			if ok {
 				issues = append(issues, dbModeAlertIssue{
 					severity: "critical",
-					kind:     "archive-prune-stage",
-					detail:   fmt.Sprintf("archive mode must not have %s progress at block %d", stage, row.progress.BlockNum),
+					kind:     kind,
+					detail:   detail,
 				})
 			}
-		}
-	}
-	if normalised != params.HistoryModeMinimal && normalised != params.HistoryModeArchive {
-		if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
-			issues = append(issues, dbModeAlertIssue{
-				severity: "critical",
-				kind:     "tail-prune-mode-mismatch",
-				detail:   fmt.Sprintf("mode %s must not have minimal-only %s progress at block %d", normalised, rawdb.StageSnapshotChainFreezerTailPrune, row.progress.BlockNum),
-			})
 		}
 	}
 	return normalised, true, issues
