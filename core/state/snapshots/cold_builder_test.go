@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -258,6 +259,43 @@ func TestColdBuilderOnePassRejectsFinishStageHashMismatch(t *testing.T) {
 	result, err := runner.OnePass()
 	if err == nil || !strings.Contains(err.Error(), "finish stage 3 hash") {
 		t.Fatalf("one pass result=%+v err=%v, want finish stage hash mismatch", result, err)
+	}
+	if _, err := LoadManifest(dir); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("manifest after rejected pass err=%v, want not exist", err)
+	}
+}
+
+func TestColdBuilderOnePassPropagatesFinishStageHashLookupError(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x79)
+
+	var finishHash common.Hash
+	for n := uint64(1); n <= 3; n++ {
+		writeColdBuilderChange(t, db, owner, n, n, string([]byte{'a' + byte(n)}))
+		hash := writeColdBuilderCanonicalBlock(t, db, n)
+		if n == 3 {
+			finishHash = hash
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 3, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{
+		db:              db,
+		solidified:      4,
+		canonicalHashes: map[uint64]common.Hash{3: finishHash},
+		canonicalErrs:   map[uint64]error{3: errors.New("canonical hash corrupt")},
+	}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+	})
+	result, err := runner.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "finish stage 3 canonical hash lookup") || !strings.Contains(err.Error(), "canonical hash corrupt") {
+		t.Fatalf("one pass result=%+v err=%v, want finish stage hash lookup error", result, err)
 	}
 	if _, err := LoadManifest(dir); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("manifest after rejected pass err=%v, want not exist", err)
@@ -1255,6 +1293,7 @@ type coldBuilderChain struct {
 	db              AggregatorDB
 	solidified      int64
 	canonicalHashes map[uint64]common.Hash
+	canonicalErrs   map[uint64]error
 }
 
 func (c *coldBuilderChain) DB() AggregatorDB { return c.db }
@@ -1262,15 +1301,22 @@ func (c *coldBuilderChain) DB() AggregatorDB { return c.db }
 func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidified }
 
 func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	if c.canonicalHashes != nil {
-		hash, ok := c.canonicalHashes[blockNum]
-		return hash, ok
-	}
-	hash := rawdb.ReadBlockHashByNumber(c.db, blockNum)
-	if hash == (common.Hash{}) {
+	hash, ok, err := c.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
 		return common.Hash{}, false
 	}
-	return hash, true
+	return hash, ok
+}
+
+func (c *coldBuilderChain) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	if err := c.canonicalErrs[blockNum]; err != nil {
+		return common.Hash{}, false, err
+	}
+	if c.canonicalHashes != nil {
+		hash, ok := c.canonicalHashes[blockNum]
+		return hash, ok, nil
+	}
+	return rawdb.ReadBlockHashByNumberStrict(c.db, blockNum)
 }
 
 func coldBuilderEventLogBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {

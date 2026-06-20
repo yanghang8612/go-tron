@@ -82,14 +82,18 @@ func (a *stateSnapshotChainSource) LatestSolidifiedBlockNum() int64 {
 }
 
 func (a *stateSnapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	hash, ok, err := a.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
+		return common.Hash{}, false
+	}
+	return hash, ok
+}
+
+func (a *stateSnapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
 	if a == nil || a.chain == nil {
-		return common.Hash{}, false
+		return common.Hash{}, false, nil
 	}
-	block := a.chain.GetBlockByNumber(blockNum)
-	if block == nil {
-		return common.Hash{}, false
-	}
-	return block.Hash(), true
+	return rawdb.ReadBlockHashByNumberStrict(a.chain.ChainDB(), blockNum)
 }
 
 func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {

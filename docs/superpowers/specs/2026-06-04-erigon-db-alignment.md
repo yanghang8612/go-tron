@@ -569,7 +569,11 @@ Status:
   check, keeping StageFinish integrity rules centralized at the DB-accessor
   layer. The freezer runner and cold snapshot builder supply their
   `ChainSource` hash readers to the same verifier, so StageFinish checks still
-  pass when old block bodies have already moved out of hot Pebble.
+  pass when old block bodies have already moved out of hot Pebble. Cold snapshot
+  builder sources can now expose an error-aware canonical hash lookup too; the
+  production snapshot chain source uses the strict ChainDB block-hash accessor,
+  so corrupt hot/freezer block rows or cold hash lookup errors abort snapshot
+  build-stage publication instead of being collapsed into a zero hash.
 - `gtron db stage-status` now gives operators one Erigon-style stage view over
   canonical execution, sync downloader/import diagnostics, snapshot build,
   prune, and chain-freezer progress. Hash-bound rows are checked through the

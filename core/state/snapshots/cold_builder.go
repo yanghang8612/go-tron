@@ -36,6 +36,10 @@ type canonicalHashSource interface {
 	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 }
 
+type canonicalHashLookupSource interface {
+	CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error)
+}
+
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
 	Dir                    string
@@ -505,40 +509,36 @@ func (r *Runner) snapshotBuildStageCanonicalHash(db AggregatorDB, stage rawdb.St
 	if db == nil {
 		return common.Hash{}, false, fmt.Errorf("snapshots: %s stage block %d requires readable database", stage, block)
 	}
-	hash := r.canonicalHashReader(db)(block)
-	if hash != (common.Hash{}) {
-		return hash, true, nil
-	}
-	strictHash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, block)
+	hash, ok, err := r.canonicalHashLookup(db)(block)
 	if err != nil {
 		return common.Hash{}, false, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, block, err)
 	}
-	if ok && strictHash != (common.Hash{}) {
-		return strictHash, true, nil
+	if ok && hash != (common.Hash{}) {
+		return hash, true, nil
 	}
 	return common.Hash{}, false, nil
 }
 
 func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
-	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashReader(db, rawdb.StageFinish, r.canonicalHashReader(db))
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(db, rawdb.StageFinish, r.canonicalHashLookup(db))
 	if err != nil {
 		return 0, ok, fmt.Errorf("snapshots: %w", err)
 	}
 	return block, ok, nil
 }
 
-func (r *Runner) canonicalHashReader(db AggregatorDB) func(uint64) common.Hash {
-	return func(blockNum uint64) common.Hash {
+func (r *Runner) canonicalHashLookup(db AggregatorDB) func(uint64) (common.Hash, bool, error) {
+	return func(blockNum uint64) (common.Hash, bool, error) {
 		if r != nil && r.chain != nil {
+			if source, ok := r.chain.(canonicalHashLookupSource); ok {
+				return source.CanonicalBlockHashStrict(blockNum)
+			}
 			if source, ok := r.chain.(canonicalHashSource); ok {
 				hash, ok := source.CanonicalBlockHash(blockNum)
-				if ok {
-					return hash
-				}
-				return common.Hash{}
+				return hash, ok, nil
 			}
 		}
-		return rawdb.ReadBlockHashByNumber(db, blockNum)
+		return rawdb.ReadBlockHashByNumberStrict(db, blockNum)
 	}
 }
 
