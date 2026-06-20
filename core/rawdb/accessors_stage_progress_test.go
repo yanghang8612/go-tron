@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -267,5 +268,141 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 		if row, ok, err := ReadStageProgressRow(db, stage); err != nil || !ok || row.BlockNum != 7 || !row.HasBlockHash || row.BlockHash != hash7 {
 			t.Fatalf("%s progress after rewind = %+v ok=%v err=%v, want 7 hash", stage, row, ok, err)
 		}
+	}
+}
+
+func TestCheckStageProgressOrder(t *testing.T) {
+	hashA := common.Hash{0xaa}
+	hashB := common.Hash{0xbb}
+	rows := map[StageID]StageProgress{
+		StageBodies: {
+			Stage:    StageBodies,
+			BlockNum: 5,
+		},
+		StageExecution: {
+			Stage:    StageExecution,
+			BlockNum: 6,
+		},
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     20,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageSnapshotBuild: {
+			Stage:    StageSnapshotBuild,
+			BlockNum: 21,
+		},
+		StageSnapshotLatestBuild: {
+			Stage:    StageSnapshotLatestBuild,
+			BlockNum: 22,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     20,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 23,
+		},
+		StageSnapshotEventLogBuild: {
+			Stage:    StageSnapshotEventLogBuild,
+			BlockNum: 24,
+		},
+		StageSnapshotChainFreezerTailPrune: {
+			Stage:    StageSnapshotChainFreezerTailPrune,
+			BlockNum: 25,
+		},
+	}
+
+	issues := CheckStageProgressOrder(rows)
+	for _, want := range []string{
+		"Execution=6 ahead of Bodies=5",
+		"SnapshotBuild=21 ahead of Finish=20",
+		"SnapshotLatestBuild=22 ahead of Finish=20",
+		"SnapshotChainLookupPrune=23 ahead of ChainFreezer=20",
+		"SnapshotEventLogBuild=24 ahead of Finish=20",
+		"SnapshotChainFreezerTailPrune=25 ahead of SnapshotChainLookupPrune=23",
+		"SnapshotChainFreezerTailPrune=25 ahead of SnapshotEventLogBuild=24",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue.String() == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("stage progress order issues missing %q in %+v", want, issues)
+		}
+	}
+
+	hashIssues := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     20,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     20,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+	})
+	wantHashIssue := fmt.Sprintf("ChainFreezer=20/%x hash does not match Finish=20/%x", hashB, hashA)
+	if len(hashIssues) != 1 || hashIssues[0].String() != wantHashIssue {
+		t.Fatalf("hash issues = %+v, want %q", hashIssues, wantHashIssue)
+	}
+
+	missing := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageSnapshotBuild: {
+			Stage:    StageSnapshotBuild,
+			BlockNum: 12,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 8,
+		},
+	})
+	for _, want := range []string{
+		"SnapshotBuild requires Finish",
+		"SnapshotChainLookupPrune requires ChainFreezer",
+	} {
+		found := false
+		for _, issue := range missing {
+			if issue.String() == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing-upstream issues missing %q in %+v", want, missing)
+		}
+	}
+
+	genesisTail := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:    StageFinish,
+			BlockNum: 0,
+		},
+		StageChainFreezer: {
+			Stage:    StageChainFreezer,
+			BlockNum: 0,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 0,
+		},
+		StageSnapshotChainFreezerTailPrune: {
+			Stage:    StageSnapshotChainFreezerTailPrune,
+			BlockNum: 0,
+		},
+	})
+	if len(genesisTail) != 0 {
+		t.Fatalf("genesis-only tail prune issues = %+v, want none without event-log stage", genesisTail)
 	}
 }

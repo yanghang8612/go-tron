@@ -1146,53 +1146,26 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		}
 	}
 	var issues []string
-	for _, pair := range []struct {
-		downstream rawdb.StageID
-		upstream   rawdb.StageID
-	}{
-		{rawdb.StageBodies, rawdb.StageHeaders},
-		{rawdb.StageExecution, rawdb.StageBodies},
-		{rawdb.StageCommitment, rawdb.StageExecution},
-		{rawdb.StageFinish, rawdb.StageCommitment},
-		{rawdb.StageSnapshotBuild, rawdb.StageFinish},
-		{rawdb.StageSnapshotLatestBuild, rawdb.StageFinish},
-		{rawdb.StageSnapshotEventLogBuild, rawdb.StageFinish},
-		{rawdb.StageSnapshotPrune, rawdb.StageFinish},
-		{rawdb.StageChainFreezer, rawdb.StageFinish},
-		{rawdb.StageSnapshotSectionBloomPrune, rawdb.StageFinish},
-		{rawdb.StageSnapshotBalanceTracePrune, rawdb.StageFinish},
-		{rawdb.StageSnapshotChainLookupPrune, rawdb.StageChainFreezer},
-		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotChainLookupPrune},
-		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotEventLogBuild},
-	} {
-		down, downOK := byStage[pair.downstream]
-		up, upOK := byStage[pair.upstream]
-		if !downOK {
-			continue
-		}
-		if !upOK {
-			if dbStageStatusRequiresUpstreamPresence(pair.downstream, pair.upstream, down.progress.BlockNum) {
-				issues = append(issues, fmt.Sprintf("%s requires %s", pair.downstream, pair.upstream))
-			}
-			continue
-		}
-		if down.progress.BlockNum <= up.progress.BlockNum {
-			if down.progress.BlockNum == up.progress.BlockNum &&
-				down.progress.HasBlockHash && up.progress.HasBlockHash &&
-				down.progress.BlockHash != up.progress.BlockHash {
-				issues = append(issues, fmt.Sprintf("%s=%d/%x hash does not match %s=%d/%x",
-					pair.downstream, down.progress.BlockNum, down.progress.BlockHash,
-					pair.upstream, up.progress.BlockNum, up.progress.BlockHash))
-			}
-			continue
-		}
-		issues = append(issues, fmt.Sprintf("%s=%d ahead of %s=%d",
-			pair.downstream, down.progress.BlockNum, pair.upstream, up.progress.BlockNum))
+	for _, issue := range rawdb.CheckStageProgressOrder(dbStageStatusProgressRows(byStage)) {
+		issues = append(issues, issue.String())
 	}
 	for _, issue := range syncdl.CheckSyncPipelineProgressOrder(dbStageStatusSyncProgressRows(byStage), syncdl.SyncPipelineProgressOrderOptions{}) {
 		issues = append(issues, issue.String())
 	}
 	return issues
+}
+
+func dbStageStatusProgressRows(rows map[rawdb.StageID]dbStageStatusRow) map[rawdb.StageID]rawdb.StageProgress {
+	progress := make(map[rawdb.StageID]rawdb.StageProgress)
+	for _, pair := range rawdb.StageProgressOrderPairs() {
+		if row, ok := rows[pair.Downstream]; ok {
+			progress[pair.Downstream] = row.progress
+		}
+		if row, ok := rows[pair.Upstream]; ok {
+			progress[pair.Upstream] = row.progress
+		}
+	}
+	return progress
 }
 
 func dbStageStatusSyncProgressRows(rows map[rawdb.StageID]dbStageStatusRow) map[rawdb.StageID]rawdb.StageProgress {
@@ -1303,28 +1276,6 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		}
 	}
 	return issues
-}
-
-func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID, downstreamBlock uint64) bool {
-	switch downstream {
-	case rawdb.StageSnapshotBuild,
-		rawdb.StageSnapshotLatestBuild,
-		rawdb.StageSnapshotEventLogBuild,
-		rawdb.StageSnapshotPrune,
-		rawdb.StageChainFreezer,
-		rawdb.StageSnapshotSectionBloomPrune,
-		rawdb.StageSnapshotBalanceTracePrune:
-		return upstream == rawdb.StageFinish
-	case rawdb.StageSnapshotChainLookupPrune:
-		return upstream == rawdb.StageChainFreezer
-	case rawdb.StageSnapshotChainFreezerTailPrune:
-		if upstream == rawdb.StageSnapshotChainLookupPrune {
-			return true
-		}
-		return upstream == rawdb.StageSnapshotEventLogBuild && downstreamBlock > 0
-	default:
-		return false
-	}
 }
 
 func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {

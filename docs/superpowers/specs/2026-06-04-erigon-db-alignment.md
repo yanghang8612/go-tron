@@ -630,6 +630,12 @@ Status:
   tasks, and the next task phase/canonical/sync stage in both runtime logs and
   the Nile sampler. Long soaks can identify the exact staged-sync task that is
   missing or mismatched without reopening the live database.
+- Canonical, snapshot-build/prune, chain-freezer, chain-lookup-prune, and
+  freezer-tail-prune stage dependencies are now rawdb-owned
+  `StageProgressOrderPairs`, and `gtron db stage-status` consumes that shared
+  checker next to the downloader-owned sync-stage checker. This makes the
+  post-import storage maintenance stages part of the same machine-verifiable
+  staged pipeline model instead of CLI-local validation logic.
 
 Needed:
 

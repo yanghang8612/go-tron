@@ -115,6 +115,39 @@ type SyncInventoryTargetRestore struct {
 	ReadError error
 }
 
+// StageProgressOrderPair is one non-sync staged-pipeline invariant. A present
+// downstream stage must not be ahead of its upstream stage; selected storage
+// stages also require the upstream row to be present.
+type StageProgressOrderPair struct {
+	Downstream                  StageID
+	Upstream                    StageID
+	RequireUpstream             bool
+	RequireUpstreamAfterGenesis bool
+}
+
+// StageProgressOrderIssue describes one canonical/storage stage ordering
+// violation.
+type StageProgressOrderIssue struct {
+	Downstream      StageID
+	DownstreamBlock uint64
+	DownstreamHash  common.Hash
+	Upstream        StageID
+	UpstreamBlock   uint64
+	UpstreamHash    common.Hash
+	MissingUpstream bool
+	HashMismatch    bool
+}
+
+func (i StageProgressOrderIssue) String() string {
+	if i.MissingUpstream {
+		return fmt.Sprintf("%s requires %s", i.Downstream, i.Upstream)
+	}
+	if i.HashMismatch {
+		return fmt.Sprintf("%s=%d/%x hash does not match %s=%d/%x", i.Downstream, i.DownstreamBlock, i.DownstreamHash, i.Upstream, i.UpstreamBlock, i.UpstreamHash)
+	}
+	return fmt.Sprintf("%s=%d ahead of %s=%d", i.Downstream, i.DownstreamBlock, i.Upstream, i.UpstreamBlock)
+}
+
 func CanonicalExecutionStages() []StageID {
 	return []StageID{
 		StageHeaders,
@@ -123,6 +156,88 @@ func CanonicalExecutionStages() []StageID {
 		StageCommitment,
 		StageFinish,
 	}
+}
+
+// StageProgressOrderPairs returns canonical execution plus storage-maintenance
+// stage dependencies. Downloader-only sync progress is checked by
+// net/sync/downloader because that package owns sync-stage semantics.
+func StageProgressOrderPairs() []StageProgressOrderPair {
+	return []StageProgressOrderPair{
+		{Downstream: StageBodies, Upstream: StageHeaders},
+		{Downstream: StageExecution, Upstream: StageBodies},
+		{Downstream: StageCommitment, Upstream: StageExecution},
+		{Downstream: StageFinish, Upstream: StageCommitment},
+		{Downstream: StageSnapshotBuild, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotLatestBuild, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotEventLogBuild, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotPrune, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageChainFreezer, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotSectionBloomPrune, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotBalanceTracePrune, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageSnapshotChainLookupPrune, Upstream: StageChainFreezer, RequireUpstream: true},
+		{Downstream: StageSnapshotChainFreezerTailPrune, Upstream: StageSnapshotChainLookupPrune, RequireUpstream: true},
+		{Downstream: StageSnapshotChainFreezerTailPrune, Upstream: StageSnapshotEventLogBuild, RequireUpstreamAfterGenesis: true},
+	}
+}
+
+// CheckStageProgressOrder validates the rawdb-owned non-sync staged pipeline.
+// Missing upstream rows are tolerated for canonical execution rows but rejected
+// for storage stages whose persisted progress is only meaningful after the
+// upstream coverage stage exists.
+func CheckStageProgressOrder(rows map[StageID]StageProgress) []StageProgressOrderIssue {
+	if len(rows) == 0 {
+		return nil
+	}
+	var issues []StageProgressOrderIssue
+	for _, pair := range StageProgressOrderPairs() {
+		downstream, downstreamOK := rows[pair.Downstream]
+		if !downstreamOK {
+			continue
+		}
+		upstream, upstreamOK := rows[pair.Upstream]
+		if !upstreamOK {
+			if pair.RequiresUpstreamPresence(downstream.BlockNum) {
+				issues = append(issues, StageProgressOrderIssue{
+					Downstream:      pair.Downstream,
+					DownstreamBlock: downstream.BlockNum,
+					Upstream:        pair.Upstream,
+					MissingUpstream: true,
+				})
+			}
+			continue
+		}
+		if downstream.BlockNum <= upstream.BlockNum {
+			if downstream.BlockNum == upstream.BlockNum &&
+				downstream.HasBlockHash && upstream.HasBlockHash &&
+				downstream.BlockHash != upstream.BlockHash {
+				issues = append(issues, StageProgressOrderIssue{
+					Downstream:      pair.Downstream,
+					DownstreamBlock: downstream.BlockNum,
+					DownstreamHash:  downstream.BlockHash,
+					Upstream:        pair.Upstream,
+					UpstreamBlock:   upstream.BlockNum,
+					UpstreamHash:    upstream.BlockHash,
+					HashMismatch:    true,
+				})
+			}
+			continue
+		}
+		issues = append(issues, StageProgressOrderIssue{
+			Downstream:      pair.Downstream,
+			DownstreamBlock: downstream.BlockNum,
+			DownstreamHash:  downstream.BlockHash,
+			Upstream:        pair.Upstream,
+			UpstreamBlock:   upstream.BlockNum,
+			UpstreamHash:    upstream.BlockHash,
+		})
+	}
+	return issues
+}
+
+// RequiresUpstreamPresence reports whether a downstream row is invalid without
+// its upstream row.
+func (p StageProgressOrderPair) RequiresUpstreamPresence(downstreamBlock uint64) bool {
+	return p.RequireUpstream || (p.RequireUpstreamAfterGenesis && downstreamBlock > 0)
 }
 
 // KnownStageProgressStages returns every stage id with a built-in meaning in
