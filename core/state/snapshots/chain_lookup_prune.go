@@ -97,12 +97,41 @@ func readChainLookupPruneUpstreamStage(db ethdb.KeyValueReader, stage rawdb.Stag
 	if !row.HasBlockHash {
 		return chainLookupPruneStageBoundary{}, fmt.Errorf("snapshots: %s stage %d is not hash-bound", stage, row.BlockNum)
 	}
+	if stage == rawdb.StageChainFreezer {
+		if err := verifyChainLookupPruneLocalFreezerHead(db, row.BlockNum); err != nil {
+			return chainLookupPruneStageBoundary{}, err
+		}
+	}
 	return chainLookupPruneStageBoundary{
 		block:    row.BlockNum,
 		hash:     row.BlockHash,
 		hasBlock: true,
 		hasHash:  true,
 	}, nil
+}
+
+func verifyChainLookupPruneLocalFreezerHead(db ethdb.KeyValueReader, blockNum uint64) error {
+	counter, ok := db.(interface {
+		AncientCount(kind string) (uint64, error)
+	})
+	if !ok {
+		return nil
+	}
+	head, err := counter.AncientCount(rawdb.AncientBlocksTable)
+	if err != nil {
+		return fmt.Errorf("snapshots: read local chain-freezer ancient head for %s stage: %w", rawdb.StageChainFreezer, err)
+	}
+	if blockNum >= head {
+		return fmt.Errorf("snapshots: %s stage %d exceeds local chain-freezer max block %s", rawdb.StageChainFreezer, blockNum, freezerMaxBlockLabel(head))
+	}
+	return nil
+}
+
+func freezerMaxBlockLabel(head uint64) string {
+	if head == 0 {
+		return "none"
+	}
+	return fmt.Sprintf("%d", head-1)
 }
 
 func readChainLookupPruneResumeStage(db ethdb.KeyValueReader) (chainLookupPruneStageBoundary, error) {

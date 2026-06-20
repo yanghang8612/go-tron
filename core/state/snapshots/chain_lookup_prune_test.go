@@ -257,6 +257,45 @@ func TestPruneHotChainLookupsWithProgressRejectsChainFreezerHashMismatchBeforeDe
 	}
 }
 
+func TestPruneHotChainLookupsWithProgressRejectsChainFreezerStageAheadOfLocalAncient(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef, indexRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+
+	chainDB := rawdb.NewChainDB(hot, rawdb.NoopAncient{})
+	_, err = PruneHotChainLookupsWithProgress(chainDB, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "ChainFreezer stage 1 exceeds local chain-freezer max block none") {
+		t.Fatalf("PruneHotChainLookupsWithProgress err = %v, want local ancient head rejection", err)
+	}
+	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx == nil || *idx != 1 {
+		t.Fatalf("hot tx lookup after rejected local ancient head = %v, want still present", idx)
+	}
+}
+
 func TestPruneHotChainLookupsWithProgressUpgradesUnboundResumeStage(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, root+"/src")

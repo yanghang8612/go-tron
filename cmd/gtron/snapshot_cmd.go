@@ -1006,7 +1006,7 @@ func snapshotPruneChainLookupsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("setup genesis: %w", err)
 	}
 	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
-	result, err := pruneVerifiedHotChainLookups(db, dir, identity, trustedKeys)
+	result, err := pruneVerifiedHotChainLookups(rawdb.NewChainDB(db, ancientReader), dir, identity, trustedKeys)
 	if err != nil {
 		return err
 	}

@@ -908,6 +908,51 @@ func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
 	}
 }
 
+func TestOnePassRejectsChainFreezerStageAheadOfAncientHead(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 20; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(15)
+	f := newFreezer(t)
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < 10; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed ancient rows: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(fc.db, 0, 9); err != nil {
+		t.Fatalf("delete hot frozen rows: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageChainFreezer, 12, fc.ReadBlockHashByNumber(12)); err != nil {
+		t.Fatalf("write ahead ChainFreezer stage: %v", err)
+	}
+
+	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "ChainFreezer stage 12 is ahead of local ancient head 9") {
+		t.Fatalf("OnePass frozen=%d err=%v, want ChainFreezer ahead rejection", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen=%d, want 0 after ahead-stage rejection", frozen)
+	}
+}
+
 // TestOnePass_CrashBetweenSyncAndDelete is the real crash-interleaving
 // regression: a prior pass died after Phase 2 (ancient Sync) but before
 // Phase 3 (Pebble DeleteRange), leaving blocks durably in ancient with

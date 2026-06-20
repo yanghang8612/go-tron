@@ -695,7 +695,7 @@ func gtron(ctx *cli.Context) error {
 					}
 					return nil, err
 				}
-				return statesnapshots.PruneHotChainLookupsWithProgress(db, stateSnapshotDir, manifest)
+				return statesnapshots.PruneHotChainLookupsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
 			},
 			SectionBloomPrune: func() (*statesnapshots.PruneHotSectionBloomResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)

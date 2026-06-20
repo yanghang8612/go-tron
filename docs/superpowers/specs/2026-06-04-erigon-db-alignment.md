@@ -743,6 +743,11 @@ Status:
   reader or the verified segment's boundary block payload. Existing unbound
   rows at the same height are upgraded, while same-height hash mismatches are
   treated as storage integrity errors instead of being overwritten.
+  Live freezer passes now also reject `ChainFreezer` rows that are ahead of the
+  local ancient `bodies` head instead of silently preserving that downstream
+  stage. Runtime and CLI chain-lookup pruning pass a freezer-aware `ChainDB`
+  into the progress-aware prune path, which rejects `StageChainFreezer` values
+  above the local ancient head before deleting hot hash lookups.
 - `PruneHotChainLookups` can now remove historical hot `bh-`, `tx-`, `ti-`,
   and `bsr-` lookup rows for a freezer range after verifying the matching
   `chain-index` sidecar against the chain-freezer segment. Tests prove cold

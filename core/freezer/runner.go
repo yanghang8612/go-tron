@@ -701,7 +701,7 @@ func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
 		return err
 	}
 	if ok && current.BlockNum > blockNum {
-		return nil
+		return fmt.Errorf("freezer: ChainFreezer stage %d is ahead of local ancient head %d", current.BlockNum, blockNum)
 	}
 	if ok && current.BlockNum == blockNum && current.HasBlockHash {
 		if current.BlockHash != blockHash {
