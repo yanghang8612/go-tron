@@ -185,16 +185,17 @@ func (p *Pruner) PrunePass() (Stats, error) {
 		return Stats{}, nil
 	}
 	pruneHead := uint64(solidified)
-	var err error
-	pruneHead, err = p.capPruneHeadAtVerifiedFinishStage(pruneHead)
+	pruneHead, pruneHeadHash, pruneHeadHasHash, err := p.pruneHeadWithVerifiedBoundary(pruneHead)
 	if err != nil {
 		return Stats{}, err
 	}
 	stats, err := Worker{
-		DB:          p.chain.DB(),
-		Policy:      p.cfg.Policy,
-		MaxBlocks:   p.cfg.BatchSize,
-		SnapshotDir: p.cfg.SnapshotDir,
+		DB:               p.chain.DB(),
+		Policy:           p.cfg.Policy,
+		MaxBlocks:        p.cfg.BatchSize,
+		SnapshotDir:      p.cfg.SnapshotDir,
+		PruneHeadHash:    pruneHeadHash,
+		PruneHeadHasHash: pruneHeadHasHash,
 	}.PruneTo(pruneHead)
 	if err != nil {
 		return Stats{}, err
@@ -209,25 +210,33 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	return stats, nil
 }
 
-func (p *Pruner) capPruneHeadAtVerifiedFinishStage(pruneHead uint64) (uint64, error) {
+func (p *Pruner) pruneHeadWithVerifiedBoundary(pruneHead uint64) (uint64, common.Hash, bool, error) {
 	row, ok, err := newRawDBStageProgressReader(p.chain.DB()).Read(rawdb.StageFinish)
 	if err != nil || !ok {
-		return pruneHead, err
+		hash, hashOK := p.canonicalBlockHash(pruneHead)
+		return pruneHead, hash, hashOK, err
 	}
 	if !row.HasBlockHash {
-		return 0, fmt.Errorf("pruning: finish stage %d is not hash-bound", row.BlockNum)
+		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d is not hash-bound", row.BlockNum)
 	}
 	hash, ok := p.canonicalBlockHash(row.BlockNum)
 	if !ok {
-		return 0, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
+		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
 	}
 	if hash != row.BlockHash {
-		return 0, fmt.Errorf("pruning: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, hash)
+		return 0, common.Hash{}, false, fmt.Errorf("pruning: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, hash)
 	}
 	if row.BlockNum < pruneHead {
-		return row.BlockNum, nil
+		return row.BlockNum, row.BlockHash, true, nil
 	}
-	return pruneHead, nil
+	if row.BlockNum == pruneHead {
+		return pruneHead, row.BlockHash, true, nil
+	}
+	hash, ok = p.canonicalBlockHash(pruneHead)
+	if ok {
+		return pruneHead, hash, true, nil
+	}
+	return pruneHead, common.Hash{}, false, nil
 }
 
 func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool) {

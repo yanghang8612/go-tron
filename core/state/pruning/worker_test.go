@@ -821,6 +821,9 @@ func TestPrunerCapsHeadAtFinishStageProgress(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || !ok || got != 5 {
 		t.Fatalf("snapshot/prune stage = %d ok=%v err=%v, want 5", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != finishHash {
+		t.Fatalf("snapshot/prune row = %+v ok=%v err=%v, want hash-bound finish stage", row, ok, err)
+	}
 }
 
 func TestPrunerCapsHeadAtFinishStageProgressFromRawDBFallback(t *testing.T) {
@@ -895,6 +898,31 @@ func TestPrunerCapsHeadAtFinishStageProgressFromChainDBFallback(t *testing.T) {
 	}
 	if _, ok, err := rawdb.ReadStateTxRange(db, 4); err != nil || !ok {
 		t.Fatalf("block 4 range after chain fallback prune ok=%v err=%v, want retained by finish-stage cap", ok, err)
+	}
+}
+
+func TestPrunerWritesHashBoundSnapshotPruneAtSolidifiedHead(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 8; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	headHash := common.Hash{0x08}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 8, headHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	pruner := NewPruner(&fakePruneChain{db: db, solidified: 8, canonicalHashes: map[uint64]common.Hash{8: headHash}}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	if _, err := pruner.PrunePass(); err != nil {
+		t.Fatalf("prune pass: %v", err)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotPrune)
+	if err != nil || !ok || row.BlockNum != 8 || !row.HasBlockHash || row.BlockHash != headHash {
+		t.Fatalf("snapshot/prune row = %+v ok=%v err=%v, want block 8 hash-bound", row, ok, err)
 	}
 }
 

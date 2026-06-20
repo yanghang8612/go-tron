@@ -599,7 +599,11 @@ Status:
   provide an explicit canonical hash source but does expose `ChainDB()`, the
   pruner and snapshot lifecycle now resolve the `StageFinish` block hash
   through that hot+ancient chain reader before falling back to hot KV, so frozen
-  block bodies do not falsely block safe history pruning.
+  block bodies do not falsely block safe history pruning. Live pruning also
+  writes `SnapshotPrune` as a hash-bound stage row whenever the prune head can
+  be tied to the verified finish/canonical boundary, so stage-status checks can
+  prove hot-history pruning did not advance onto another fork at the same
+  height.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped

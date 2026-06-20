@@ -22,6 +22,11 @@ type Worker struct {
 	Policy      Policy
 	MaxBlocks   int
 	SnapshotDir string
+
+	// PruneHeadHash, when set by the live pruner, binds SnapshotPrune
+	// progress to the canonical block hash that capped this prune pass.
+	PruneHeadHash    common.Hash
+	PruneHeadHasHash bool
 }
 
 type Stats struct {
@@ -113,10 +118,18 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 		}
 		stats.DeletedCommitmentCheckpoints++
 	}
-	if err := newRawDBStageProgressStore(w.DB).Write(rawdb.StageSnapshotPrune, headNum); err != nil {
+	if err := w.writeSnapshotPruneProgress(headNum); err != nil {
 		return Stats{}, fmt.Errorf("pruning: write snapshot/prune stage progress: %w", err)
 	}
 	return stats, nil
+}
+
+func (w Worker) writeSnapshotPruneProgress(headNum uint64) error {
+	store := newRawDBStageProgressStore(w.DB)
+	if w.PruneHeadHasHash {
+		return store.WriteWithHash(rawdb.StageSnapshotPrune, headNum, w.PruneHeadHash)
+	}
+	return store.Write(rawdb.StageSnapshotPrune, headNum)
 }
 
 func (w Worker) hotHistoryDomainConfig() (snapshots.DomainCfg, error) {
