@@ -253,7 +253,9 @@ so a partial sidecar cannot claim coverage for the rest of its section. Runtime
 snapshot/prune lifecycle also runs balance-trace and section-bloom pruning with
 persisted `SnapshotBalanceTracePrune` and `SnapshotSectionBloomPrune` stages, so
 already processed cold segments are skipped after restart. The manual prune
-commands update the same stages.
+commands update the same hash-bound stages, and
+`gtron db stage-status --db.stage.verify` rejects unbound or mismatched rows for
+these cold derived-prune boundaries.
 
 ## One-Step Bootstrap
 

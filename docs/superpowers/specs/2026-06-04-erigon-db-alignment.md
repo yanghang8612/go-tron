@@ -555,7 +555,8 @@ Status:
   same view into an automation gate for canonical, sync-import, and
   cold-coverage boundary stages; it fails on mismatched/missing canonical
   hashes or legacy unbound canonical/freezer/event-log-build/chain-lookup/
-  tail-prune stage rows, while downloader body stages report `verified=staged` only when
+  section-bloom-prune/balance-trace-prune/tail-prune stage rows, while
+  downloader body stages report `verified=staged` only when
   their hash-bound progress rows still match the staged-body table; failed
   staged-body checks include decoded `stagedBlock`/`stagedHash` evidence when
   available. It also
@@ -643,8 +644,9 @@ Status:
 - Derived-index hot-row pruning for balance traces and section blooms now
   writes hash-bound `SnapshotBalanceTracePrune` and
   `SnapshotSectionBloomPrune` stage rows after verified cold segment coverage,
-  so cold-index reclamation has the same fork-bound proof as chain lookup and
-  freezer-tail pruning.
+  and `gtron db stage-status --db.stage.verify` treats those rows as canonical
+  hash-bound cold-coverage stages, so cold-index reclamation has the same
+  fork-bound proof as chain lookup and freezer-tail pruning.
 - `gtron db stage-status --json` now preserves backward-compatible
   `issues` strings while also emitting structured `issueDetails` with issue
   kind, stage/order edge, values, missing-upstream, and hash-mismatch flags.

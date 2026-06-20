@@ -1400,6 +1400,8 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageChainFreezer,
 		rawdb.StageSnapshotEventLogBuild,
 		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
 		rawdb.StageSnapshotChainFreezerTailPrune:
 		return true
 	default:

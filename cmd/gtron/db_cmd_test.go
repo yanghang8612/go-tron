@@ -1753,6 +1753,24 @@ func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *te
 			},
 		},
 		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 12,
+			},
+		},
+		{
 			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
 			group:   "prune",
 			present: true,
@@ -1767,6 +1785,8 @@ func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *te
 		"ChainFreezer verified=unbound",
 		"SnapshotChainLookupPrune verified=unbound",
 		"SnapshotEventLogBuild verified=unbound",
+		"SnapshotSectionBloomPrune verified=unbound",
+		"SnapshotBalanceTracePrune verified=unbound",
 		"SnapshotChainFreezerTailPrune verified=unbound",
 	} {
 		found := false
@@ -1787,9 +1807,9 @@ func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *te
 	rows[2].progress.BlockHash = boundaryHash
 	rows[2].progress.HasBlockHash = true
 	rows[2].verified = "canonical"
-	rows[4].progress.BlockHash = common.Hash{0xee}
-	rows[4].progress.HasBlockHash = true
-	rows[4].verified = "mismatch"
+	rows[6].progress.BlockHash = common.Hash{0xee}
+	rows[6].progress.HasBlockHash = true
+	rows[6].verified = "mismatch"
 	issues = dbStageStatusVerificationIssues(rows)
 	if want := "SnapshotChainFreezerTailPrune verified=mismatch"; !stageStatusIssueContains(issues, want) {
 		t.Fatalf("verification issues missing %q in %#v", want, issues)
@@ -1802,16 +1822,21 @@ func TestDBStageStatusVerificationUsesStateTxRangeHashFallback(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, 12, boundaryHash, 120, 121); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
-	progress := rawdb.StageProgress{
-		Stage:        rawdb.StageSnapshotEventLogBuild,
-		BlockNum:     12,
-		BlockHash:    boundaryHash,
-		HasBlockHash: true,
-	}
-
-	verified, canonicalHash, details := dbStageStatusVerification(rawdb.StageSnapshotEventLogBuild, progress, db, db)
-	if verified != "canonical" || canonicalHash != boundaryHash || len(details) != 0 {
-		t.Fatalf("event-log stage verification = %s hash=%x details=%v, want canonical via StateTxRange %x", verified, canonicalHash, details, boundaryHash)
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
+	} {
+		progress := rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     12,
+			BlockHash:    boundaryHash,
+			HasBlockHash: true,
+		}
+		verified, canonicalHash, details := dbStageStatusVerification(stage, progress, db, db)
+		if verified != "canonical" || canonicalHash != boundaryHash || len(details) != 0 {
+			t.Fatalf("%s verification = %s hash=%x details=%v, want canonical via StateTxRange %x", stage, verified, canonicalHash, details, boundaryHash)
+		}
 	}
 }
 

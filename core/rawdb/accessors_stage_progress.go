@@ -81,11 +81,11 @@ const (
 	StageSnapshotChainLookupPrune StageID = "SnapshotChainLookupPrune"
 	// StageSnapshotSectionBloomPrune records the highest source block whose
 	// hot section-bloom rows have been pruned after verified cold
-	// section-bloom snapshot coverage was published.
+	// section-bloom snapshot coverage was published. It is hash-bound.
 	StageSnapshotSectionBloomPrune StageID = "SnapshotSectionBloomPrune"
 	// StageSnapshotBalanceTracePrune records the highest source block whose
 	// hot account/balance trace rows have been pruned after verified cold
-	// balance-trace snapshot coverage was published.
+	// balance-trace snapshot coverage was published. It is hash-bound.
 	StageSnapshotBalanceTracePrune StageID = "SnapshotBalanceTracePrune"
 	// StageSnapshotChainFreezerTailPrune records the highest local freezer
 	// block hidden by the virtual tail after verified cold chain-freezer
