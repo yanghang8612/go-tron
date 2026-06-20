@@ -335,6 +335,10 @@ func WriteSyncImportProgressBatch(db interface {
 		result.ProgressError = err
 		return result
 	}
+	if err := validateSyncImportMergedProgressOrder(db, progress); err != nil {
+		result.ProgressError = err
+		return result
+	}
 	if result.DeleteErrors = validateSyncImportDeleteRows(db, deletes); len(result.DeleteErrors) > 0 {
 		return result
 	}
@@ -452,6 +456,53 @@ func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, r
 		}
 		if deleteRow.Hash != row.BlockHash {
 			return fmt.Errorf("rawdb: sync import progress %s at row %d block %d hash %x, want staged delete hash %x", row.Stage, i, row.BlockNum, row.BlockHash, deleteRow.Hash)
+		}
+	}
+	return nil
+}
+
+func validateSyncImportMergedProgressOrder(db ethdb.KeyValueReader, rows []StageProgress) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if db == nil {
+		return errors.New("rawdb: nil sync import progress reader")
+	}
+	merged := make(map[StageID]StageProgress, len(syncImportProgressStageOrder))
+	for _, stage := range syncImportProgressStageOrder {
+		row, ok, err := ReadStageProgressRow(db, stage)
+		if err != nil {
+			return fmt.Errorf("rawdb: read existing sync import progress %s: %w", stage, err)
+		}
+		if ok {
+			merged[stage] = row
+		}
+	}
+	for _, row := range rows {
+		merged[row.Stage] = row
+	}
+	for i := 1; i < len(syncImportProgressStageOrder); i++ {
+		upstreamStage := syncImportProgressStageOrder[i-1]
+		downstreamStage := syncImportProgressStageOrder[i]
+		downstream, downstreamOK := merged[downstreamStage]
+		if !downstreamOK {
+			continue
+		}
+		if !downstream.HasBlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s at block %d is not hash-bound", downstreamStage, downstream.BlockNum)
+		}
+		upstream, upstreamOK := merged[upstreamStage]
+		if !upstreamOK {
+			return fmt.Errorf("rawdb: sync import progress %s at block %d requires upstream %s", downstreamStage, downstream.BlockNum, upstreamStage)
+		}
+		if !upstream.HasBlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s at block %d is not hash-bound", upstreamStage, upstream.BlockNum)
+		}
+		if downstream.BlockNum > upstream.BlockNum {
+			return fmt.Errorf("rawdb: sync import progress %s block %d is ahead of upstream %s block %d", downstreamStage, downstream.BlockNum, upstreamStage, upstream.BlockNum)
+		}
+		if downstream.BlockNum == upstream.BlockNum && downstream.HasBlockHash && upstream.HasBlockHash && downstream.BlockHash != upstream.BlockHash {
+			return fmt.Errorf("rawdb: sync import progress %s block %d hash %x does not match upstream %s hash %x", downstreamStage, downstream.BlockNum, downstream.BlockHash, upstreamStage, upstream.BlockHash)
 		}
 	}
 	return nil

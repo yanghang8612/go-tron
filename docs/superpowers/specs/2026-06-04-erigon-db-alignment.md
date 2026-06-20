@@ -477,6 +477,11 @@ Status:
   sync import stage to a lower block, or replace a hash-bound same-height row
   with a different hash; explicit startup repair/unwind remains the path for
   clearing stale or forked progress.
+  It also validates the merged view of existing and newly written import-stage
+  rows before deleting staged bodies: previously persisted downstream
+  `SyncExecution`/`SyncCommitment`/`SyncFinish` rows may lag the new upstream
+  boundary, but cannot be unbound, missing their upstream row, ahead of it, or
+  same-height hash-mismatched.
 - Sync pipeline order checks now treat same-height hash mismatches as ordering
   violations too. Startup repair and `db stage-status --db.stage.verify` no
   longer accept, for example, `SyncImport=N/hashA` with

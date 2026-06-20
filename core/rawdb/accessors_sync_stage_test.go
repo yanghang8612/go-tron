@@ -329,6 +329,170 @@ func TestWriteSyncImportProgressBatchRejectsExistingProgressRegression(t *testin
 	})
 }
 
+func TestWriteSyncImportProgressBatchRejectsMergedProgressOrderViolation(t *testing.T) {
+	t.Run("downstream ahead", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block1 := testSyncStagedBlock(1, common.Hash{})
+		block2 := testSyncStagedBlock(2, block1.Hash())
+		block3 := testSyncStagedBlock(3, block2.Hash())
+		for _, block := range []*types.Block{block1, block2, block3} {
+			if err := WriteSyncStagedBlock(base, block); err != nil {
+				t.Fatalf("write staged block %d: %v", block.Number(), err)
+			}
+		}
+		if err := WriteStageProgressWithHash(base, StageSyncExecution, block3.Number(), block3.Hash()); err != nil {
+			t.Fatalf("write existing sync execution progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block1.Number(), Hash: block1.Hash()},
+			{Number: block2.Number(), Hash: block2.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "SyncExecution block 3 is ahead of upstream SyncImport block 2") {
+			t.Fatalf("result = %+v, want merged order error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+			t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncExecution); err != nil || !ok || row.BlockNum != block3.Number() || row.BlockHash != block3.Hash() {
+			t.Fatalf("existing sync execution progress = %+v ok=%v err=%v, want block3 kept", row, ok, err)
+		}
+		for _, block := range []*types.Block{block1, block2, block3} {
+			if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+				t.Fatalf("staged block %d after rejected write ok=%v err=%v, want present", block.Number(), ok, err)
+			}
+		}
+	})
+
+	t.Run("same height hash mismatch", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block: %v", err)
+		}
+		existingHash := common.Hash{0xee}
+		if err := WriteStageProgressWithHash(base, StageSyncExecution, block.Number(), existingHash); err != nil {
+			t.Fatalf("write existing sync execution progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: block.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "SyncExecution block 2 hash") || !strings.Contains(result.ProgressError.Error(), "does not match upstream SyncImport hash") {
+			t.Fatalf("result = %+v, want merged hash mismatch error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncExecution); err != nil || !ok || row.BlockHash != existingHash {
+			t.Fatalf("existing sync execution progress = %+v ok=%v err=%v, want old hash kept", row, ok, err)
+		}
+		if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+			t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
+		}
+	})
+
+	t.Run("missing upstream", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block: %v", err)
+		}
+		if err := WriteStageProgressWithHash(base, StageSyncCommitment, block.Number(), block.Hash()); err != nil {
+			t.Fatalf("write existing sync commitment progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: block.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "SyncCommitment at block 2 requires upstream SyncExecution") {
+			t.Fatalf("result = %+v, want missing upstream error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncCommitment); err != nil || !ok || row.BlockHash != block.Hash() {
+			t.Fatalf("existing sync commitment progress = %+v ok=%v err=%v, want kept", row, ok, err)
+		}
+		if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+			t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
+		}
+	})
+
+	t.Run("legacy unbound downstream", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		block := testSyncStagedBlock(2, common.Hash{0x01})
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block: %v", err)
+		}
+		if err := WriteStageProgress(base, StageSyncExecution, block.Number()); err != nil {
+			t.Fatalf("write unbound sync execution progress: %v", err)
+		}
+		db := &countingBatchStore{KeyValueStore: base}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block.Number(), Hash: block.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		})
+		if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "SyncExecution at block 2 is not hash-bound") {
+			t.Fatalf("result = %+v, want legacy unbound downstream error", result)
+		}
+		if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+			t.Fatalf("result = %+v, want no delete/progress writes", result)
+		}
+		if row, ok, err := ReadStageProgressRow(base, StageSyncExecution); err != nil || !ok || row.HasBlockHash {
+			t.Fatalf("existing sync execution progress = %+v ok=%v err=%v, want unbound row kept for startup repair", row, ok, err)
+		}
+		if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+			t.Fatalf("staged block after rejected write ok=%v err=%v, want present", ok, err)
+		}
+	})
+}
+
+func TestWriteSyncImportProgressBatchAllowsExistingDownstreamLag(t *testing.T) {
+	base := NewMemoryDatabase()
+	block1 := testSyncStagedBlock(1, common.Hash{})
+	block2 := testSyncStagedBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := WriteStageProgressWithHash(base, StageSyncExecution, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write existing sync execution progress: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block1.Number(), Hash: block1.Hash()},
+		{Number: block2.Number(), Hash: block2.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+	})
+	if result.Deleted != 2 || len(result.DeleteErrors) != 0 || result.ProgressRows != 1 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want import advanced while execution lags", result)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync import progress = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncExecution); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync execution progress = %+v ok=%v err=%v, want existing block1", row, ok, err)
+	}
+}
+
 func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T) {
 	t.Run("hash mismatch", func(t *testing.T) {
 		base := NewMemoryDatabase()
