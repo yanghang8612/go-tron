@@ -217,6 +217,7 @@ func dbCommand() *cli.Command {
 					dbL0CompactionFlag,
 					dbL0StopFlag,
 					dbStageVerifyFlag,
+					dbAlertJSONFlag,
 				},
 				Action: dbStageStatusCmd,
 			},
@@ -662,6 +663,7 @@ func dbStageStatusCmd(ctx *cli.Context) error {
 
 	return dbPrintStageStatus(db, chainDB, cfg.DataDir, dbStageStatusOptions{
 		Verify: ctx.Bool("db.stage.verify"),
+		JSON:   ctx.Bool(dbAlertJSONFlag.Name),
 	})
 }
 
@@ -677,6 +679,29 @@ type dbStageStatusRow struct {
 
 type dbStageStatusOptions struct {
 	Verify bool
+	JSON   bool
+}
+
+type dbStageStatusJSON struct {
+	Datadir string                 `json:"datadir"`
+	Known   int                    `json:"known"`
+	Rows    int                    `json:"rows"`
+	Status  string                 `json:"status"`
+	Verify  bool                   `json:"verify"`
+	Stages  []dbStageStatusRowJSON `json:"stages"`
+	Issues  []string               `json:"issues,omitempty"`
+}
+
+type dbStageStatusRowJSON struct {
+	Group         string   `json:"group"`
+	Name          string   `json:"name"`
+	Present       bool     `json:"present"`
+	Status        string   `json:"status"`
+	Value         uint64   `json:"value,omitempty"`
+	Hash          string   `json:"hash,omitempty"`
+	Verified      string   `json:"verified,omitempty"`
+	CanonicalHash string   `json:"canonicalHash,omitempty"`
+	Details       []string `json:"details,omitempty"`
 }
 
 func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string, opts dbStageStatusOptions) error {
@@ -689,6 +714,35 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		if row.present {
 			present++
 		}
+	}
+	var issues []string
+	if opts.JSON || opts.Verify {
+		issues = dbStageStatusVerificationIssues(rows)
+		issues = append(issues, dbStageStatusStagedBodyIssues(db, rows)...)
+		issues = append(issues, dbStageStatusSnapshotCoverageIssues(rows, stateSnapshotsDir(dataDir))...)
+	}
+	if opts.JSON {
+		report := dbStageStatusJSON{
+			Datadir: dataDir,
+			Known:   len(rawdb.KnownStageProgressStages()),
+			Rows:    present,
+			Status:  "ok",
+			Verify:  opts.Verify,
+			Stages:  dbStageStatusRowsJSON(rows),
+			Issues:  issues,
+		}
+		if len(issues) > 0 {
+			report.Status = "critical"
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(report); err != nil {
+			return fmt.Errorf("encode stage status json: %w", err)
+		}
+		if opts.Verify && len(issues) > 0 {
+			return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
+		}
+		return nil
 	}
 	fmt.Printf("Stage status: datadir=%s known=%d rows=%d\n", dataDir, len(rawdb.KnownStageProgressStages()), present)
 	for _, row := range rows {
@@ -711,15 +765,36 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		}
 		fmt.Println()
 	}
-	if opts.Verify {
-		issues := dbStageStatusVerificationIssues(rows)
-		issues = append(issues, dbStageStatusStagedBodyIssues(db, rows)...)
-		issues = append(issues, dbStageStatusSnapshotCoverageIssues(rows, stateSnapshotsDir(dataDir))...)
-		if len(issues) > 0 {
-			return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
-		}
+	if opts.Verify && len(issues) > 0 {
+		return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
 	}
 	return nil
+}
+
+func dbStageStatusRowsJSON(rows []dbStageStatusRow) []dbStageStatusRowJSON {
+	out := make([]dbStageStatusRowJSON, 0, len(rows))
+	for _, row := range rows {
+		item := dbStageStatusRowJSON{
+			Group:   row.group,
+			Name:    string(row.stage),
+			Present: row.present,
+			Status:  "missing",
+		}
+		if row.present {
+			item.Status = "present"
+			item.Value = row.progress.BlockNum
+			item.Verified = row.verified
+			if row.progress.HasBlockHash {
+				item.Hash = fmt.Sprintf("%x", row.progress.BlockHash)
+			}
+			if row.canonicalHash != (common.Hash{}) && row.verified != "canonical" {
+				item.CanonicalHash = fmt.Sprintf("%x", row.canonicalHash)
+			}
+			item.Details = append([]string(nil), row.details...)
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {

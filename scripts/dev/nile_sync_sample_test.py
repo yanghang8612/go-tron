@@ -556,6 +556,81 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncStartupStagedLastRestored"], 103)
             self.assertEqual(output.read_text(encoding="utf-8").strip(), proc.stdout.strip())
 
+    def test_sample_parses_json_stage_status_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            stage_status = tmpdir / "stage-status.json"
+            stage_status.write_text(
+                json.dumps(
+                    {
+                        "datadir": "/tmp/nile",
+                        "known": 32,
+                        "rows": 8,
+                        "status": "critical",
+                        "verify": True,
+                        "stages": [
+                            {"group": "sync", "name": "SyncBodies", "present": True, "status": "present", "value": 100, "hash": "aa", "verified": "canonical"},
+                            {"group": "sync", "name": "SyncBodiesReady", "present": True, "status": "present", "value": 96, "hash": "bb", "verified": "staged-hash-mismatch", "details": ["stagedBlock=96", "stagedHash=cc"]},
+                            {"group": "sync", "name": "SyncImport", "present": True, "status": "present", "value": 95, "hash": "cc", "verified": "canonical"},
+                            {"group": "sync", "name": "SyncExecution", "present": True, "status": "present", "value": 90, "hash": "dd", "verified": "canonical"},
+                            {"group": "sync", "name": "SyncCommitment", "present": True, "status": "present", "value": 89, "hash": "ee", "verified": "canonical"},
+                            {"group": "sync", "name": "SyncFinish", "present": True, "status": "present", "value": 80, "hash": "ff", "verified": "canonical"},
+                            {"group": "canonical", "name": "Finish", "present": True, "status": "present", "value": 82, "hash": "11", "verified": "canonical"},
+                            {"group": "snapshot", "name": "SnapshotEventLogBuild", "present": False, "status": "missing"},
+                        ],
+                        "issues": ["SyncBodiesReady staged-body status=hash-mismatch block=96 hash=bb stagedBlock=96 stagedHash=cc"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["stageStatusFileStatus"], "ok")
+            self.assertEqual(row["stageKnown"], 32)
+            self.assertEqual(row["stageRows"], 8)
+            self.assertEqual(row["stageSyncBodies"], 100)
+            self.assertEqual(row["stageSyncBodiesReady"], 96)
+            self.assertEqual(row["stageSyncImport"], 95)
+            self.assertEqual(row["stageSyncExecution"], 90)
+            self.assertEqual(row["stageSyncCommitment"], 89)
+            self.assertEqual(row["stageSyncFinish"], 80)
+            self.assertEqual(row["stageSyncBodiesReadyGapBlocks"], 4)
+            self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
+            self.assertEqual(row["stageStagedBodyIssueRows"], 1)
+            self.assertEqual(
+                row["stageStagedBodyIssueDetails"],
+                [{"stage": "SyncBodiesReady", "value": 96, "verified": "staged-hash-mismatch", "stagedBlock": 96, "stagedHash": "cc"}],
+            )
+            self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedBlock"], "96")
+            self.assertEqual(row["stageProgress"]["SyncBodiesReady"]["stagedHash"], "cc")
+            self.assertEqual(row["fullStagedSyncStatus"], "hash-issue")
+            self.assertIn("stage-staged-body-issue", row["soakHealthIssues"])
+
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

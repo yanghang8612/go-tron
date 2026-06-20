@@ -220,13 +220,18 @@ which persisted progress row failed to decode first, and which sync stage the
 next import pass should advance.
 
 To include staged-sync progress without making the sampler open a live Pebble
-datadir, pass a captured `gtron db stage-status` output file:
+datadir, pass a captured `gtron db stage-status --json` output file. The
+sampler still accepts the legacy text output for older binaries.
 
 ```bash
+gtron db stage-status --json \
+  --datadir /Users/asuka/gtron-soak/datadir \
+  > /Users/asuka/gtron-soak/logs/stage-status.json
+
 scripts/dev/nile_sync_sample.sh \
   --datadir /Users/asuka/gtron-soak/datadir \
   --http http://127.0.0.1:8090 \
-  --stage-status-file /Users/asuka/gtron-soak/logs/stage-status.txt \
+  --stage-status-file /Users/asuka/gtron-soak/logs/stage-status.json \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
 
@@ -310,8 +315,8 @@ For a production Nile run, capture these checks:
 
 1. Start from an empty datadir and sample every few minutes with
    `nile_sync_sample.sh`.
-2. Periodically write `gtron db stage-status --datadir <dir>` output to the
-   `--stage-status-file` path used by the sampler.
+2. Periodically write `gtron db stage-status --json --datadir <dir>` output to
+   the `--stage-status-file` path used by the sampler.
 3. Confirm `stageSyncPipelineMonotonic=true`, or manually check
    `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
    stageSyncExecution >= stageSyncCommitment >= stageSyncFinish`.
@@ -322,11 +327,11 @@ For a production Nile run, capture these checks:
    staged bodies are recovered or pruned to a contiguous prefix: the next sample
    should not show `SyncBodies` or `SyncBodiesReady` ahead of a missing or
    mismatched body row.
-   `gtron db stage-status --db.stage.verify --datadir <dir>` now fails this
-   case by reopening the staged body rows referenced by `SyncBodies` and
+   `gtron db stage-status --json --db.stage.verify --datadir <dir>` now fails
+   this case by reopening the staged body rows referenced by `SyncBodies` and
    `SyncBodiesReady`.
 6. After catch-up, run at least one stopped-node `--offline-db-check` sample and
-   keep the JSONL row together with `gtron.err.log` and `stage-status.txt`.
+   keep the JSONL row together with `gtron.err.log` and `stage-status.json`.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.

@@ -590,6 +590,9 @@ Status:
   The same verification gate now rejects legacy unbound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows, matching the
   hash-bound import-progress writer and startup repair rules.
+  The command also supports `--json`, emitting the same stage rows, verification
+  evidence, and issue list in a machine-readable form while preserving the text
+  output and `--db.stage.verify` failure semantics.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor. When a caller does not
@@ -615,6 +618,9 @@ Status:
   freezer/stage/snapshot alert fields used by the storage benchmark harness,
   including detail arrays for stage verification and snapshot/freezer alerts so
   `SyncBodiesReady` staged-body mismatches are visible in the JSONL row itself.
+  The sampler also parses captured `gtron db stage-status --json` files for the
+  live-stage fields and staged-body issue details, with a legacy text fallback
+  for older diagnostics.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating

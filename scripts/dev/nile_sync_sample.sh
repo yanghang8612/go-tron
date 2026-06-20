@@ -346,6 +346,101 @@ def parse_alerts(text):
             })
     return row
 
+def finalize_stage_status(row):
+    stage_fields = {
+        "SyncInventory": "stageSyncInventory",
+        "SyncBodies": "stageSyncBodies",
+        "SyncBodiesReady": "stageSyncBodiesReady",
+        "SyncImport": "stageSyncImport",
+        "SyncExecution": "stageSyncExecution",
+        "SyncCommitment": "stageSyncCommitment",
+        "SyncFinish": "stageSyncFinish",
+        "Finish": "stageCanonicalFinish",
+        "ChainFreezer": "stageChainFreezer",
+        "SnapshotEventLogBuild": "stageSnapshotEventLogBuild",
+    }
+    for stage, field in stage_fields.items():
+        entry = row["stageProgress"].get(stage)
+        if entry and entry.get("present"):
+            row[field] = int(entry.get("value", -1))
+    row["stageSyncBodiesReadyGapBlocks"] = lag(row["stageSyncBodies"], row["stageSyncBodiesReady"])
+    row["stageSyncImportExecutionLagBlocks"] = lag(row["stageSyncImport"], row["stageSyncExecution"])
+    row["stageSyncExecutionCommitmentLagBlocks"] = lag(row["stageSyncExecution"], row["stageSyncCommitment"])
+    row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
+    return row
+
+def parse_stage_status_json(text, row):
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            obj = json.loads(stripped)
+        except Exception:
+            continue
+        if not isinstance(obj, dict) or not isinstance(obj.get("stages"), list):
+            continue
+        row["stageKnown"] = int(obj.get("known", -1))
+        row["stageRows"] = int(obj.get("rows", -1))
+        for item in obj.get("stages", []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", ""))
+            if not name:
+                continue
+            present = bool(item.get("present", False))
+            value = -1
+            if present:
+                try:
+                    value = int(item.get("value", -1))
+                except Exception:
+                    value = -1
+            verified = str(item.get("verified", ""))
+            entry = {
+                "group": str(item.get("group", "")),
+                "present": present,
+                "value": value,
+                "hash": str(item.get("hash", "")),
+                "verified": verified,
+                "canonicalHash": str(item.get("canonicalHash", "")),
+                "stagedBlock": "",
+                "stagedHash": "",
+            }
+            if not present:
+                entry["status"] = str(item.get("status", "missing"))
+            for detail in item.get("details", []) or []:
+                if not isinstance(detail, str) or "=" not in detail:
+                    continue
+                key, value_text = detail.split("=", 1)
+                if key == "stagedBlock":
+                    entry["stagedBlock"] = value_text
+                elif key == "stagedHash":
+                    entry["stagedHash"] = value_text
+            row["stageProgress"][name] = entry
+            if verified == "mismatch":
+                row["stageMismatchRows"] += 1
+            elif verified == "unbound":
+                row["stageUnboundRows"] += 1
+            elif verified == "missing-canonical":
+                row["stageMissingCanonicalRows"] += 1
+            elif verified.startswith("staged-"):
+                detail = {
+                    "stage": name,
+                    "value": value,
+                    "verified": verified,
+                }
+                if entry.get("stagedBlock"):
+                    try:
+                        detail["stagedBlock"] = int(entry["stagedBlock"])
+                    except Exception:
+                        detail["stagedBlock"] = entry["stagedBlock"]
+                if entry.get("stagedHash"):
+                    detail["stagedHash"] = entry["stagedHash"]
+                row["stageStagedBodyIssueRows"] += 1
+                row["stageStagedBodyIssueDetails"].append(detail)
+        return True
+    return False
+
 def parse_stage_status(path):
     row = {
         "stageStatusFile": path,
@@ -380,6 +475,8 @@ def parse_stage_status(path):
     except Exception:
         return row
     row["stageStatusFileStatus"] = "ok"
+    if parse_stage_status_json(text, row):
+        return finalize_stage_status(row)
     for line in text.splitlines():
         if line.startswith("Stage status:"):
             known = re.findall(r"known=([0-9]+)", line)
@@ -443,27 +540,7 @@ def parse_stage_status(path):
             row["stageStagedBodyIssueRows"] += 1
             row["stageStagedBodyIssueDetails"].append(detail)
 
-    stage_fields = {
-        "SyncInventory": "stageSyncInventory",
-        "SyncBodies": "stageSyncBodies",
-        "SyncBodiesReady": "stageSyncBodiesReady",
-        "SyncImport": "stageSyncImport",
-        "SyncExecution": "stageSyncExecution",
-        "SyncCommitment": "stageSyncCommitment",
-        "SyncFinish": "stageSyncFinish",
-        "Finish": "stageCanonicalFinish",
-        "ChainFreezer": "stageChainFreezer",
-        "SnapshotEventLogBuild": "stageSnapshotEventLogBuild",
-    }
-    for stage, field in stage_fields.items():
-        entry = row["stageProgress"].get(stage)
-        if entry and entry.get("present"):
-            row[field] = int(entry.get("value", -1))
-    row["stageSyncBodiesReadyGapBlocks"] = lag(row["stageSyncBodies"], row["stageSyncBodiesReady"])
-    row["stageSyncImportExecutionLagBlocks"] = lag(row["stageSyncImport"], row["stageSyncExecution"])
-    row["stageSyncExecutionCommitmentLagBlocks"] = lag(row["stageSyncExecution"], row["stageSyncCommitment"])
-    row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
-    return row
+    return finalize_stage_status(row)
 
 def parse_log_value(value):
     text = str(value).strip().strip('"')

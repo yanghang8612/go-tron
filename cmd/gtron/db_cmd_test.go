@@ -890,6 +890,36 @@ func TestDBStageStatusCmd(t *testing.T) {
 		}
 	}
 
+	jsonCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	jsonOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(jsonCtx)
+	})
+	if err != nil {
+		t.Fatalf("dbStageStatusCmd json: %v", err)
+	}
+	var report dbStageStatusJSON
+	if err := json.Unmarshal([]byte(jsonOutput), &report); err != nil {
+		t.Fatalf("stage status json unmarshal failed: %v\n%s", err, jsonOutput)
+	}
+	if report.Datadir != dataDir || report.Known != len(rawdb.KnownStageProgressStages()) || report.Rows == 0 || report.Status != "critical" || report.Verify {
+		t.Fatalf("stage status json summary = %+v", report)
+	}
+	headersRow, ok := dbStageStatusJSONRow(report, rawdb.StageHeaders)
+	if !ok || !headersRow.Present || headersRow.Group != "canonical" || headersRow.Value != block1.Number() || headersRow.Hash != fmt.Sprintf("%x", block1.Hash()) || headersRow.Verified != "canonical" {
+		t.Fatalf("headers json row = %+v ok=%v", headersRow, ok)
+	}
+	syncImportRow, ok := dbStageStatusJSONRow(report, rawdb.StageSyncImport)
+	if !ok || !syncImportRow.Present || syncImportRow.Verified != "mismatch" || syncImportRow.CanonicalHash != fmt.Sprintf("%x", block1.Hash()) {
+		t.Fatalf("sync import json row = %+v ok=%v", syncImportRow, ok)
+	}
+	chainFreezerRow, ok := dbStageStatusJSONRow(report, rawdb.StageChainFreezer)
+	if !ok || chainFreezerRow.Present || chainFreezerRow.Status != "missing" {
+		t.Fatalf("chain freezer json row = %+v ok=%v", chainFreezerRow, ok)
+	}
+	if !strings.Contains(strings.Join(report.Issues, "; "), "SyncImport verified=mismatch") {
+		t.Fatalf("stage status json issues = %v, want SyncImport mismatch", report.Issues)
+	}
+
 	verifyCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
 	verifyOutput, err := captureDBCmdStdout(t, func() error {
 		return dbStageStatusCmd(verifyCtx)
@@ -902,6 +932,21 @@ func TestDBStageStatusCmd(t *testing.T) {
 	}
 	if !strings.Contains(verifyOutput, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
 		t.Fatalf("verify output missing SyncBodies line:\n%s", verifyOutput)
+	}
+
+	verifyJSONCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--db.stage.verify"})
+	verifyJSONOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(verifyJSONCtx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") {
+		t.Fatalf("dbStageStatusCmd json verify err = %v, want verification failure", err)
+	}
+	var verifyReport dbStageStatusJSON
+	if jsonErr := json.Unmarshal([]byte(verifyJSONOutput), &verifyReport); jsonErr != nil {
+		t.Fatalf("stage status verify json unmarshal failed: %v\n%s", jsonErr, verifyJSONOutput)
+	}
+	if !verifyReport.Verify || verifyReport.Status != "critical" || len(verifyReport.Issues) == 0 {
+		t.Fatalf("stage status verify json = %+v, want critical verified report", verifyReport)
 	}
 }
 
@@ -2085,6 +2130,15 @@ func dbFreezerAlertIssueKindsContain(issues []dbFreezerAlertIssue, kind string) 
 		}
 	}
 	return false
+}
+
+func dbStageStatusJSONRow(report dbStageStatusJSON, stage rawdb.StageID) (dbStageStatusRowJSON, bool) {
+	for _, row := range report.Stages {
+		if row.Name == string(stage) {
+			return row, true
+		}
+	}
+	return dbStageStatusRowJSON{}, false
 }
 
 func captureDBCmdStdout(t *testing.T, fn func() error) (string, error) {
