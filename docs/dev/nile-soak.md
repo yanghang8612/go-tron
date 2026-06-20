@@ -341,6 +341,25 @@ For a production Nile run, capture these checks:
 6. After catch-up, run at least one stopped-node `--offline-db-check` sample and
    keep the JSONL row together with `gtron.err.log` and `stage-status.json`.
 
+Gate the collected JSONL with the acceptance checker before treating a run as
+full-staged-sync evidence:
+
+```bash
+scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.jsonl \
+  --network nile \
+  --mode full \
+  --require-offline-db-check \
+  --min-height 100000 \
+  --max-lag-blocks 5000
+```
+
+By default the checker validates the latest selected row, requires a captured
+stage-status file, accepts `catching-up` or `caught-up` staged-sync states, and
+rejects HTTP/sample failures, critical soak health, stage regressions, stage
+hash/staged-body/order issues, and non-monotonic sync-stage progress. Add
+`--require-caught-up` for final catch-up proof or `--all` to validate every
+selected row in a candidate window.
+
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.
 Treat repeated repairs after a clean restart as a bug, not an expected steady
