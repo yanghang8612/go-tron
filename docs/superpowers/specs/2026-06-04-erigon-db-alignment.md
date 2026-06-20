@@ -589,7 +589,10 @@ Status:
   available. StateTxRange hash fallback is limited to derived cold
   event-log/section-bloom/balance-trace stages; canonical, freezer, lookup,
   and tail-prune stages still require a readable canonical block hash from the
-  chain reader. It also
+  chain reader. Canonical boundary checks use the strict block-hash accessor
+  and include `canonicalError=...` details when hot Pebble or cold freezer block
+  rows fail to read or decode, so automation sees the storage-root cause
+  instead of a silent zero-hash collapse. It also
   rejects canonical and sync-stage order violations, e.g. `Execution` ahead of
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
   of `SyncBodies`, cold build/prune/freezer coverage ahead of verified

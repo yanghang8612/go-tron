@@ -2264,6 +2264,41 @@ func TestDBStageStatusVerificationLimitsStateTxRangeHashFallback(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerificationSurfacesCanonicalHashReadError(t *testing.T) {
+	progress := rawdb.StageProgress{
+		Stage:        rawdb.StageFinish,
+		BlockNum:     9,
+		BlockHash:    common.Hash{0x09},
+		HasBlockHash: true,
+	}
+	wantErr := fmt.Errorf("canonical read failed")
+
+	verified, canonicalHash, details := dbStageStatusVerification(
+		rawdb.StageFinish,
+		progress,
+		rawdb.NewMemoryDatabase(),
+		failingStageCanonicalReader{err: wantErr},
+	)
+	if verified != "missing-canonical" || canonicalHash != (common.Hash{}) {
+		t.Fatalf("verification = %s hash=%x, want missing-canonical zero hash", verified, canonicalHash)
+	}
+	if len(details) != 1 || !strings.Contains(details[0], "canonicalError=") || !strings.Contains(details[0], wantErr.Error()) {
+		t.Fatalf("details = %v, want canonical read error", details)
+	}
+}
+
+type failingStageCanonicalReader struct {
+	err error
+}
+
+func (r failingStageCanonicalReader) Has([]byte) (bool, error) {
+	return false, r.err
+}
+
+func (r failingStageCanonicalReader) Get([]byte) ([]byte, error) {
+	return nil, r.err
+}
+
 func stageStatusIssueContains(issues []string, want string) bool {
 	for _, issue := range issues {
 		if issue == want {

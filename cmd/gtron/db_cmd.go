@@ -1621,29 +1621,35 @@ func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress
 	if canonical == nil {
 		return "unchecked", common.Hash{}, nil
 	}
-	canonicalHash := dbStageStatusCanonicalHash(canonical, progress)
+	canonicalHash, details := dbStageStatusCanonicalHash(canonical, progress)
 	if canonicalHash == (common.Hash{}) {
-		return "missing-canonical", canonicalHash, nil
+		return "missing-canonical", canonicalHash, details
 	}
 	if canonicalHash != progress.BlockHash {
-		return "mismatch", canonicalHash, nil
+		return "mismatch", canonicalHash, details
 	}
-	return "canonical", canonicalHash, nil
+	return "canonical", canonicalHash, details
 }
 
-func dbStageStatusCanonicalHash(canonical ethdb.KeyValueReader, progress rawdb.StageProgress) common.Hash {
-	canonicalHash := rawdb.ReadBlockHashByNumber(canonical, progress.BlockNum)
-	if canonicalHash != (common.Hash{}) {
-		return canonicalHash
+func dbStageStatusCanonicalHash(canonical ethdb.KeyValueReader, progress rawdb.StageProgress) (common.Hash, []string) {
+	canonicalHash, ok, err := rawdb.ReadBlockHashByNumberStrict(canonical, progress.BlockNum)
+	if err != nil {
+		return common.Hash{}, []string{fmt.Sprintf("canonicalError=%q", err.Error())}
+	}
+	if ok && canonicalHash != (common.Hash{}) {
+		return canonicalHash, nil
 	}
 	if !dbStageStatusAllowsStateTxRangeHashFallback(progress.Stage) {
-		return common.Hash{}
+		return common.Hash{}, nil
 	}
 	row, ok, err := rawdb.ReadStateTxRange(canonical, progress.BlockNum)
-	if err != nil || !ok {
-		return common.Hash{}
+	if err != nil {
+		return common.Hash{}, []string{fmt.Sprintf("stateTxRangeError=%q", err.Error())}
 	}
-	return row.BlockHash
+	if !ok {
+		return common.Hash{}, nil
+	}
+	return row.BlockHash, nil
 }
 
 func dbStageStatusAllowsStateTxRangeHashFallback(stage rawdb.StageID) bool {
