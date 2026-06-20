@@ -126,6 +126,15 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.StageError = err
 		return result
 	}
+	existing, existingOK, err := ReadSyncStagedBlockRaw(db, result.Number)
+	if err != nil {
+		result.StageError = fmt.Errorf("rawdb: read existing sync staged block %d: %w", result.Number, err)
+		return result
+	}
+	if existingOK && existing.Hash != result.Hash {
+		result.StageError = fmt.Errorf("rawdb: sync staged block %d hash %x conflicts staged block hash %x", result.Number, existing.Hash, result.Hash)
+		return result
+	}
 	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil {
 		if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
