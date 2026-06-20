@@ -1058,7 +1058,10 @@ Status:
   Prometheus artifacts to expose both `gtron_storage_alert_status` and the
   normalized `gtron_storage_alert_issue` metric family, so production soak
   gates catch older binaries or scrape payloads that cannot route freezer,
-  stage, mode, and snapshot issue kinds.
+  stage, mode, and snapshot issue kinds. When JSONL alert details include a
+  structured `kind`/`severity`, the same checkers now require a matching
+  `gtron_storage_alert_issue{component,kind,severity}` series in the captured
+  artifact.
 
 Needed:
 

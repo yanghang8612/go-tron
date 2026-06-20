@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -191,6 +192,64 @@ def check_prometheus_text(label, path, text):
     return issues
 
 
+def parse_prometheus_labels(raw):
+    labels = {}
+    for match in re.finditer(r'([A-Za-z_][A-Za-z0-9_]*)="((?:\\.|[^"\\])*)"', raw):
+        value = match.group(2)
+        value = value.replace(r"\\", "\\").replace(r"\"", '"').replace(r"\n", "\n")
+        labels[match.group(1)] = value
+    return labels
+
+
+def prometheus_issue_keys(text):
+    keys = set()
+    for line in text.splitlines():
+        match = re.match(r"^gtron_storage_alert_issue\{([^}]*)\}\s+", line.strip())
+        if not match:
+            continue
+        labels = parse_prometheus_labels(match.group(1))
+        component = labels.get("component")
+        kind = labels.get("kind")
+        severity = labels.get("severity")
+        if component and kind and severity:
+            keys.add((component, kind, severity))
+    return keys
+
+
+def row_alert_issue_keys(row):
+    keys = set()
+    fields = {
+        "freezer": "freezerAlertDetails",
+        "stage": "stageVerifyDetails",
+        "mode": "modeAlertDetails",
+        "snapshot": "snapshotAlertDetails",
+    }
+    for component, field in fields.items():
+        details = row.get(field)
+        if not isinstance(details, list):
+            continue
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            kind = detail.get("kind")
+            severity = detail.get("severity")
+            if kind and severity:
+                keys.add((component, str(kind), str(severity)))
+    return keys
+
+
+def check_prometheus_issue_kinds(label, path, text, row):
+    issues = []
+    actual = prometheus_issue_keys(text)
+    for component, kind, severity in sorted(row_alert_issue_keys(row)):
+        if (component, kind, severity) not in actual:
+            issues.append(
+                f"{label} prometheus artifact {path} missing "
+                f"gtron_storage_alert_issue component={component!r} kind={kind!r} severity={severity!r}"
+            )
+    return issues
+
+
 def check_prometheus_artifacts(result_path, rows):
     issues = []
     for row in latest_rows(rows).values():
@@ -205,6 +264,7 @@ def check_prometheus_artifacts(result_path, rows):
             issues.append(f"{line_label(row)} prometheus artifact {path}: {exc}")
             continue
         issues.extend(check_prometheus_text(line_label(row), path, text))
+        issues.extend(check_prometheus_issue_kinds(line_label(row), path, text, row))
     return issues
 
 
