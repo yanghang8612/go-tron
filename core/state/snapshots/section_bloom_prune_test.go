@@ -94,6 +94,14 @@ func TestPruneHotSectionBloomsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if err := rawdb.WriteSectionBloom(db, 1, 99, rowB); err != nil {
 		t.Fatalf("WriteSectionBloom 1/99: %v", err)
 	}
+	blockA := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection-1)
+	if err := rawdb.WriteBlock(db, blockA); err != nil {
+		t.Fatalf("WriteBlock section A end: %v", err)
+	}
+	blockB := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection*2-1)
+	if err := rawdb.WriteBlock(db, blockB); err != nil {
+		t.Fatalf("WriteBlock section B end: %v", err)
+	}
 	refA, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
 	if err != nil {
 		t.Fatalf("BuildSectionBloomSegmentFromDB A: %v", err)
@@ -118,6 +126,9 @@ func TestPruneHotSectionBloomsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || got != rawdb.SectionBloomBlockPerSection*2-1 {
 		t.Fatalf("section bloom prune stage = %d ok=%v err=%v, want %d", got, ok, err, rawdb.SectionBloomBlockPerSection*2-1)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != blockB.Hash() {
+		t.Fatalf("section bloom prune stage row = %+v ok=%v err=%v, want block %d hash %x", row, ok, err, blockB.Number(), blockB.Hash())
+	}
 
 	second, err := PruneHotSectionBloomsWithProgress(db, snapshotDir, manifest)
 	if err != nil {
@@ -135,6 +146,10 @@ func TestSectionBloomPruneLifecycleOnePass(t *testing.T) {
 	row := sectionBloomTestEncodedBit(t, 5)
 	if err := rawdb.WriteSectionBloom(db, 0, 42, row); err != nil {
 		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	block := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection-1)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock section end: %v", err)
 	}
 	ref, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
 	if err != nil {
@@ -154,6 +169,9 @@ func TestSectionBloomPruneLifecycleOnePass(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || got != rawdb.SectionBloomBlockPerSection-1 {
 		t.Fatalf("section bloom prune stage = %d ok=%v err=%v, want %d", got, ok, err, rawdb.SectionBloomBlockPerSection-1)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
+		t.Fatalf("section bloom prune stage row = %+v ok=%v err=%v, want block %d hash %x", row, ok, err, block.Number(), block.Hash())
 	}
 }
 

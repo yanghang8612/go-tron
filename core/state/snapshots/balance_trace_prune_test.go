@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -146,6 +147,13 @@ func TestPruneHotBalanceTracesWithProgressSkipsProcessedBlocks(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || got != 20 {
 		t.Fatalf("balance trace prune stage = %d ok=%v err=%v, want 20", got, ok, err)
 	}
+	wantHash := common.Hash{}
+	for i := range wantHash {
+		wantHash[i] = 20
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wantHash {
+		t.Fatalf("balance trace prune stage row = %+v ok=%v err=%v, want block 20 hash %x", row, ok, err, wantHash)
+	}
 
 	second, err := PruneHotBalanceTracesWithProgress(db, snapshotDir, manifest)
 	if err != nil {
@@ -219,6 +227,13 @@ func TestBalanceTracePruneLifecycleOnePass(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || got != 12 {
 		t.Fatalf("balance trace prune stage = %d ok=%v err=%v, want 12", got, ok, err)
+	}
+	wantHash := common.Hash{}
+	for i := range wantHash {
+		wantHash[i] = 12
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wantHash {
+		t.Fatalf("balance trace prune stage row = %+v ok=%v err=%v, want block 12 hash %x", row, ok, err, wantHash)
 	}
 }
 

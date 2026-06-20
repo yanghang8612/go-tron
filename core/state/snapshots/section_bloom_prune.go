@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -16,13 +17,16 @@ type PruneHotSectionBloomResult struct {
 	RowsDeleted       uint64
 	ColdBloomSegments uint64
 
-	hasProcessedToBlock bool
-	processedToBlock    uint64
+	hasProcessedToBlock     bool
+	processedToBlock        uint64
+	hasProcessedToBlockHash bool
+	processedToBlockHash    common.Hash
 }
 
 type sectionBloomPruneBounds struct {
-	lastPrunedBlock    uint64
-	hasLastPrunedBlock bool
+	lastPrunedBlock     uint64
+	hasLastPrunedBlock  bool
+	requireProgressHash bool
 }
 
 // PruneHotSectionBlooms deletes hot section-bloom rows only after a registered
@@ -44,14 +48,15 @@ func PruneHotSectionBloomsWithProgress(db ethdb.KeyValueStore, dir string, manif
 		return nil, err
 	}
 	result, err := pruneHotSectionBlooms(db, dir, manifest, sectionBloomPruneBounds{
-		lastPrunedBlock:    lastPrunedBlock,
-		hasLastPrunedBlock: ok,
+		lastPrunedBlock:     lastPrunedBlock,
+		hasLastPrunedBlock:  ok,
+		requireProgressHash: true,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if result.hasProcessedToBlock {
-		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotSectionBloomPrune, result.processedToBlock); err != nil {
+		if err := writeSnapshotSectionBloomPruneStage(db, result.processedToBlock, result.processedToBlockHash, result.hasProcessedToBlockHash); err != nil {
 			return nil, err
 		}
 	}
@@ -75,6 +80,16 @@ func pruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifes
 		}
 		if err := CheckSectionBloomSegment(dir, ref); err != nil {
 			return nil, err
+		}
+		var processedHash common.Hash
+		var hasProcessedHash bool
+		if bounds.requireProgressHash {
+			var hashErr error
+			processedHash, hashErr = sectionBloomPruneStageHash(db, ref.ToTxNum)
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			hasProcessedHash = true
 		}
 		seg, err := OpenSectionBloomSegment(dir, ref)
 		if err != nil {
@@ -104,7 +119,7 @@ func pruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifes
 				result.ColdBloomSegments++
 			}
 		}
-		markSectionBloomProcessedToBlock(result, ref.ToTxNum)
+		markSectionBloomProcessedToBlock(result, ref.ToTxNum, processedHash, hasProcessedHash)
 	}
 	return result, nil
 }
@@ -181,14 +196,59 @@ func markSectionBloomPrunedRange(result *PruneHotSectionBloomResult, section uin
 	}
 }
 
-func markSectionBloomProcessedToBlock(result *PruneHotSectionBloomResult, blockNum uint64) {
+func markSectionBloomProcessedToBlock(result *PruneHotSectionBloomResult, blockNum uint64, blockHash common.Hash, hasBlockHash bool) {
 	if result == nil {
 		return
 	}
 	if !result.hasProcessedToBlock || blockNum > result.processedToBlock {
 		result.hasProcessedToBlock = true
 		result.processedToBlock = blockNum
+		result.hasProcessedToBlockHash = hasBlockHash
+		result.processedToBlockHash = blockHash
+		return
 	}
+	if blockNum == result.processedToBlock && hasBlockHash && !result.hasProcessedToBlockHash {
+		result.hasProcessedToBlockHash = true
+		result.processedToBlockHash = blockHash
+	}
+}
+
+func writeSnapshotSectionBloomPruneStage(db ethdb.KeyValueStore, blockNum uint64, blockHash common.Hash, hasBlockHash bool) error {
+	if !hasBlockHash {
+		return fmt.Errorf("snapshots: missing hash for %s stage block %d", rawdb.StageSnapshotSectionBloomPrune, blockNum)
+	}
+	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotSectionBloomPrune)
+	if err != nil {
+		return err
+	}
+	if ok && current.BlockNum > blockNum {
+		return nil
+	}
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return fmt.Errorf("snapshots: %s stage %d hash %x does not match pruned block hash %x", rawdb.StageSnapshotSectionBloomPrune, blockNum, current.BlockHash, blockHash)
+		}
+		return nil
+	}
+	return rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotSectionBloomPrune, blockNum, blockHash)
+}
+
+func sectionBloomPruneStageHash(db ethdb.KeyValueReader, blockNum uint64) (common.Hash, error) {
+	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, blockNum)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", rawdb.StageSnapshotSectionBloomPrune, blockNum, err)
+	}
+	if ok && hash != (common.Hash{}) {
+		return hash, nil
+	}
+	row, ok, err := rawdb.ReadStateTxRange(db, blockNum)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d tx range hash: %w", rawdb.StageSnapshotSectionBloomPrune, blockNum, err)
+	}
+	if ok && row.BlockHash != (common.Hash{}) {
+		return row.BlockHash, nil
+	}
+	return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", rawdb.StageSnapshotSectionBloomPrune, blockNum)
 }
 
 func sectionBloomRefsAscending(manifest *Manifest) []SegmentRef {

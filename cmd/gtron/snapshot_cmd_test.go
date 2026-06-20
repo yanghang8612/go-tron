@@ -825,6 +825,11 @@ func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
 	if err := rawdb.WriteSectionBloom(db, 1, 99, rowB); err != nil {
 		t.Fatalf("WriteSectionBloom 1/99: %v", err)
 	}
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection*2 - 1)
+	sectionEndHash := common.Hash{0x42}
+	if err := rawdb.WriteStateTxRange(db, sectionEnd, sectionEndHash, sectionEnd, sectionEnd); err != nil {
+		t.Fatalf("WriteStateTxRange section end: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
@@ -887,6 +892,9 @@ func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || got != rawdb.SectionBloomBlockPerSection*2-1 {
 		t.Fatalf("StageSnapshotSectionBloomPrune = %d ok=%v err=%v, want %d", got, ok, err, rawdb.SectionBloomBlockPerSection*2-1)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(reopened, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != sectionEndHash {
+		t.Fatalf("StageSnapshotSectionBloomPrune row = %+v ok=%v err=%v, want hash %x", row, ok, err, sectionEndHash)
 	}
 	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
 	chainDB.SetSectionBloomReader(mgr)

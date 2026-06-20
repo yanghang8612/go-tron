@@ -640,6 +640,11 @@ Status:
   checker next to the downloader-owned sync-stage checker. This makes the
   post-import storage maintenance stages part of the same machine-verifiable
   staged pipeline model instead of CLI-local validation logic.
+- Derived-index hot-row pruning for balance traces and section blooms now
+  writes hash-bound `SnapshotBalanceTracePrune` and
+  `SnapshotSectionBloomPrune` stage rows after verified cold segment coverage,
+  so cold-index reclamation has the same fork-bound proof as chain lookup and
+  freezer-tail pruning.
 - `gtron db stage-status --json` now preserves backward-compatible
   `issues` strings while also emitting structured `issueDetails` with issue
   kind, stage/order edge, values, missing-upstream, and hash-mismatch flags.

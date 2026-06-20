@@ -19,13 +19,16 @@ type PruneHotBalanceTraceResult struct {
 	AccountTracesDeleted uint64
 	ColdTraceSegments    uint64
 
-	hasProcessedToBlock bool
-	processedToBlock    uint64
+	hasProcessedToBlock     bool
+	processedToBlock        uint64
+	hasProcessedToBlockHash bool
+	processedToBlockHash    common.Hash
 }
 
 type balanceTracePruneBounds struct {
-	lastPrunedBlock    uint64
-	hasLastPrunedBlock bool
+	lastPrunedBlock     uint64
+	hasLastPrunedBlock  bool
+	requireProgressHash bool
 }
 
 // PruneHotBalanceTraces deletes hot account/balance trace rows only after a
@@ -48,14 +51,15 @@ func PruneHotBalanceTracesWithProgress(db ethdb.KeyValueStore, dir string, manif
 		return nil, err
 	}
 	result, err := pruneHotBalanceTraces(db, dir, manifest, balanceTracePruneBounds{
-		lastPrunedBlock:    lastPrunedBlock,
-		hasLastPrunedBlock: ok,
+		lastPrunedBlock:     lastPrunedBlock,
+		hasLastPrunedBlock:  ok,
+		requireProgressHash: true,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if result.hasProcessedToBlock {
-		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotBalanceTracePrune, result.processedToBlock); err != nil {
+		if err := writeSnapshotBalanceTracePruneStage(db, result.processedToBlock, result.processedToBlockHash, result.hasProcessedToBlockHash); err != nil {
 			return nil, err
 		}
 	}
@@ -96,6 +100,12 @@ func pruneHotBalanceTraces(db ethdb.KeyValueStore, dir string, manifest *Manifes
 		if err == nil {
 			verified, err = verifyHotBalanceTraceRowsCovered(db, seg, ref, bounds)
 		}
+		var processedHash common.Hash
+		var hasProcessedHash bool
+		if err == nil && bounds.requireProgressHash {
+			processedHash, err = balanceTraceSegmentBlockHash(seg, ref.ToTxNum)
+			hasProcessedHash = err == nil
+		}
 		if closeErr := seg.Close(); err == nil {
 			err = closeErr
 		}
@@ -119,7 +129,7 @@ func pruneHotBalanceTraces(db ethdb.KeyValueStore, dir string, manifest *Manifes
 				result.ColdTraceSegments++
 			}
 		}
-		markBalanceTraceProcessedToBlock(result, ref.ToTxNum)
+		markBalanceTraceProcessedToBlock(result, ref.ToTxNum, processedHash, hasProcessedHash)
 	}
 	return result, nil
 }
@@ -243,14 +253,68 @@ func markBalanceTracePrunedRange(result *PruneHotBalanceTraceResult, blockNum ui
 	}
 }
 
-func markBalanceTraceProcessedToBlock(result *PruneHotBalanceTraceResult, blockNum uint64) {
+func markBalanceTraceProcessedToBlock(result *PruneHotBalanceTraceResult, blockNum uint64, blockHash common.Hash, hasBlockHash bool) {
 	if result == nil {
 		return
 	}
 	if !result.hasProcessedToBlock || blockNum > result.processedToBlock {
 		result.hasProcessedToBlock = true
 		result.processedToBlock = blockNum
+		result.hasProcessedToBlockHash = hasBlockHash
+		result.processedToBlockHash = blockHash
+		return
 	}
+	if blockNum == result.processedToBlock && hasBlockHash && !result.hasProcessedToBlockHash {
+		result.hasProcessedToBlockHash = true
+		result.processedToBlockHash = blockHash
+	}
+}
+
+func writeSnapshotBalanceTracePruneStage(db ethdb.KeyValueStore, blockNum uint64, blockHash common.Hash, hasBlockHash bool) error {
+	if !hasBlockHash {
+		return fmt.Errorf("snapshots: missing hash for %s stage block %d", rawdb.StageSnapshotBalanceTracePrune, blockNum)
+	}
+	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBalanceTracePrune)
+	if err != nil {
+		return err
+	}
+	if ok && current.BlockNum > blockNum {
+		return nil
+	}
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return fmt.Errorf("snapshots: %s stage %d hash %x does not match pruned block hash %x", rawdb.StageSnapshotBalanceTracePrune, blockNum, current.BlockHash, blockHash)
+		}
+		return nil
+	}
+	return rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotBalanceTracePrune, blockNum, blockHash)
+}
+
+func balanceTraceSegmentBlockHash(seg *BalanceTraceSegment, blockNum uint64) (common.Hash, error) {
+	if seg == nil {
+		return common.Hash{}, errors.New("snapshots: nil balance trace segment")
+	}
+	if blockNum > math.MaxInt64 {
+		return common.Hash{}, fmt.Errorf("snapshots: balance trace stage block %d exceeds int64 block number range", blockNum)
+	}
+	trace, ok, err := seg.BlockBalanceTrace(int64(blockNum))
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if !ok {
+		return common.Hash{}, fmt.Errorf("snapshots: cold balance trace segment %q missing stage block trace %d", seg.ref.Path, blockNum)
+	}
+	id := trace.GetBlockIdentifier()
+	if id == nil {
+		return common.Hash{}, fmt.Errorf("snapshots: cold balance trace segment %q stage block %d missing block identifier", seg.ref.Path, blockNum)
+	}
+	if id.GetNumber() != int64(blockNum) {
+		return common.Hash{}, fmt.Errorf("snapshots: cold balance trace segment %q stage block %d has identifier number %d", seg.ref.Path, blockNum, id.GetNumber())
+	}
+	if len(id.GetHash()) != common.HashLength {
+		return common.Hash{}, fmt.Errorf("snapshots: cold balance trace segment %q stage block %d hash length %d, want %d", seg.ref.Path, blockNum, len(id.GetHash()), common.HashLength)
+	}
+	return common.BytesToHash(id.GetHash()), nil
 }
 
 func balanceTraceRefsAscending(manifest *Manifest) []SegmentRef {
