@@ -658,7 +658,8 @@ Status:
   When the node is stopped, `--offline-db-check` appends the same
   freezer/stage/snapshot alert fields used by the storage benchmark harness,
   including detail arrays for stage verification and snapshot/freezer alerts so
-  `SyncBodiesReady` staged-body mismatches are visible in the JSONL row itself.
+  `SyncBodiesReady` staged-body mismatches and structured stage-alert kinds are
+  visible in the JSONL row itself.
   The sampler also parses captured `gtron db stage-status --json` files for the
   live-stage fields and staged-body issue details, with a legacy text fallback
   for older diagnostics.

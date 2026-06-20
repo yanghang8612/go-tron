@@ -55,12 +55,14 @@ class StorageBenchmarkTest(unittest.TestCase):
                     gtron_storage_alert_status{datadir="/tmp/gtron"} 2
                     gtron_storage_alert_component_status{component="stage",datadir="/tmp/gtron"} 2
                     gtron_storage_alert_component_issues{component="stage",datadir="/tmp/gtron"} 1
+                    # TYPE gtron_storage_alert_issue gauge
+                    gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1
                     EOF
                           exit 1
                         fi
                       done
                       cat <<'EOF'
-                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
+                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
                     EOF
                       exit 1
                     fi
@@ -114,6 +116,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                 [
                     {
                         "severity": "critical",
+                        "kind": "stage-verification",
                         "detail": "SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa",
                     }
                 ],
@@ -149,6 +152,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertIn('gtron_storage_alert_status{datadir="/tmp/gtron"} 2', metrics)
             self.assertIn(
                 'gtron_storage_alert_component_issues{component="stage",datadir="/tmp/gtron"} 1',
+                metrics,
+            )
+            self.assertIn(
+                'gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1',
                 metrics,
             )
 
