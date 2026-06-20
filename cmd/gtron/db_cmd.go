@@ -343,7 +343,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	}
 
 	issues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
-	issues = append(issues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage)...)
+	issues = append(issues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage, tailPruneStage, hasTailPruneStage)...)
 	status := "ok"
 	if dbFreezerAlertHasCritical(issues) {
 		status = "critical"
@@ -381,7 +381,10 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open freezer: %w", err)
 	}
 	defer f.Close()
-	chainDB := rawdb.NewChainDB(db, rawdb.NewFreezerReader(f))
+	chainDB, err := dbFreezerAlertChainDB(db, f, cfg.DataDir)
+	if err != nil {
+		return err
+	}
 
 	stats, err := f.Stats()
 	if err != nil {
@@ -396,7 +399,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("read chain freezer tail prune stage: %w", err)
 	}
 	freezerIssues := dbFreezerAlertIssues(stats, stage, hasStage, tailPruneStage, hasTailPruneStage)
-	freezerIssues = append(freezerIssues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage)...)
+	freezerIssues = append(freezerIssues, dbFreezerAlertStageProofIssues(chainDB, stage, hasStage, tailPruneStage, hasTailPruneStage)...)
 	freezerStatus := dbFreezerAlertStatus(freezerIssues)
 
 	stageRows, err := dbStageStatusRows(db, chainDB)
@@ -821,33 +824,40 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.Stag
 	return issues
 }
 
-func dbFreezerAlertStageProofIssues(chainDB ethdb.KeyValueReader, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool) []dbFreezerAlertIssue {
-	if chainDB == nil || !hasChainFreezerStage || !chainFreezerStage.HasBlockHash {
+func dbFreezerAlertStageProofIssues(chainDB ethdb.KeyValueReader, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool, tailPruneStage rawdb.StageProgress, hasTailPruneStage bool) []dbFreezerAlertIssue {
+	var issues []dbFreezerAlertIssue
+	issues = append(issues, dbFreezerAlertOneStageProofIssues(chainDB, chainFreezerStage, hasChainFreezerStage, "chain-freezer-stage")...)
+	issues = append(issues, dbFreezerAlertOneStageProofIssues(chainDB, tailPruneStage, hasTailPruneStage, "tail-prune-stage")...)
+	return issues
+}
+
+func dbFreezerAlertOneStageProofIssues(chainDB ethdb.KeyValueReader, stage rawdb.StageProgress, hasStage bool, kindPrefix string) []dbFreezerAlertIssue {
+	if chainDB == nil || !hasStage || !stage.HasBlockHash {
 		return nil
 	}
-	canonical, ok, err := rawdb.ReadBlockHashByNumberStrict(chainDB, chainFreezerStage.BlockNum)
+	canonical, ok, err := rawdb.ReadBlockHashByNumberStrict(chainDB, stage.BlockNum)
 	if err != nil {
 		return []dbFreezerAlertIssue{{
 			severity: "critical",
-			kind:     "chain-freezer-stage-canonical-error",
+			kind:     kindPrefix + "-canonical-error",
 			detail: fmt.Sprintf("%s=%d hash %x canonical hash lookup failed: %v",
-				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash, err),
+				stage.Stage, stage.BlockNum, stage.BlockHash, err),
 		}}
 	}
 	if !ok || canonical == (common.Hash{}) {
 		return []dbFreezerAlertIssue{{
 			severity: "critical",
-			kind:     "chain-freezer-stage-missing-canonical",
+			kind:     kindPrefix + "-missing-canonical",
 			detail: fmt.Sprintf("%s=%d hash %x cannot be verified because canonical block is unavailable",
-				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash),
+				stage.Stage, stage.BlockNum, stage.BlockHash),
 		}}
 	}
-	if canonical != chainFreezerStage.BlockHash {
+	if canonical != stage.BlockHash {
 		return []dbFreezerAlertIssue{{
 			severity: "critical",
-			kind:     "chain-freezer-stage-hash-mismatch",
+			kind:     kindPrefix + "-hash-mismatch",
 			detail: fmt.Sprintf("%s=%d hash %x does not match canonical hash %x",
-				rawdb.StageChainFreezer, chainFreezerStage.BlockNum, chainFreezerStage.BlockHash, canonical),
+				stage.Stage, stage.BlockNum, stage.BlockHash, canonical),
 		}}
 	}
 	return nil

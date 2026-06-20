@@ -714,6 +714,50 @@ func TestDBFreezerAlertsCmdRejectsUnboundTailPruneStage(t *testing.T) {
 	}
 }
 
+func TestDBFreezerAlertsCmdRejectsTailPruneStageWithoutColdProof(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block2, _ := dbRebuildTxIndexBlock(t, 2, 0)
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainFreezerTailPrune, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "tail-prune-stage-missing-canonical") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want tail-prune-stage-missing-canonical alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"tail=3",
+		"severity=critical kind=tail-prune-stage-missing-canonical",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
 	stats := rawdbfreezer.Stats{
 		Head: 5,

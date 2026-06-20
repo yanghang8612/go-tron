@@ -804,7 +804,7 @@ Status:
   `gtron db freezer-alerts` with `stage-status --db.stage.verify`, failing on
   recorded freezer repair, missing, unbound, hash-mismatched, or impossible
   `ChainFreezer` stage progress, freezer/table bound mismatches, virtual-tail
-  invariants, missing, unbound, or contradictory
+  invariants, missing, unbound, unreadable, hash-mismatched, or contradictory
   `SnapshotChainFreezerTailPrune` proof for the hidden tail,
   hash-mismatched or out-of-order stage rows, and claimed cold coverage that
   the local manifest cannot prove. It also reports hidden freezer bytes and
