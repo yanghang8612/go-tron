@@ -126,8 +126,14 @@ func (b *TronBackend) LatestPbftBlockNum() int64 {
 }
 
 func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {
-	block := b.chain.GetBlockByNumber(number)
-	if block == nil {
+	if current := b.chain.CurrentBlock(); current != nil && number > current.Number() {
+		return nil, fmt.Errorf("block %d not found", number)
+	}
+	block, ok, err := rawdb.ReadBlockStrict(b.chain.chaindb, number)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, fmt.Errorf("block %d not found", number)
 	}
 	return block, nil
@@ -391,8 +397,14 @@ func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
 	// Extract the block number and look up by number, then verify the ID matches.
 	blockIDNum := binary.BigEndian.Uint64(hash[:8])
 	if blockIDNum > 0 {
-		block := b.chain.GetBlockByNumber(blockIDNum)
-		if block != nil && block.ID().Hash == hash {
+		block, err := b.GetBlockByNumber(blockIDNum)
+		if err != nil {
+			if !strings.Contains(err.Error(), "not found") {
+				return nil, err
+			}
+			return nil, fmt.Errorf("block not found")
+		}
+		if block.ID().Hash == hash {
 			return block, nil
 		}
 	}
@@ -408,8 +420,11 @@ func (b *TronBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error
 	}
 	var blocks []*types.Block
 	for i := start; i < end; i++ {
-		block := b.chain.GetBlockByNumber(i)
-		if block == nil {
+		block, ok, err := rawdb.ReadBlockStrict(b.chain.chaindb, i)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			break
 		}
 		blocks = append(blocks, block)

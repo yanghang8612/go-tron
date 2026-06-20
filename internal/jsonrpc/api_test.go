@@ -3,6 +3,7 @@ package jsonrpc_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +19,7 @@ type stubBackend struct {
 	chainID     int64
 	blockNumber uint64
 	block       *types.Block
+	blockErr    error
 	balance     int64
 	code        []byte
 	storage     common.Hash
@@ -65,8 +67,18 @@ func (s *stubBackend) GetStorageAtBlock(addr common.Address, slot common.Hash, b
 	}
 	return s.storageAt, nil
 }
-func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error)     { return s.block, nil }
-func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) { return s.block, nil }
+func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return s.block, nil
+}
+func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return s.block, nil
+}
 func (s *stubBackend) GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error) {
 	return s.tx, s.txBlock, s.txIndex, nil
 }
@@ -250,6 +262,15 @@ func TestEthGetBlockByNumber_NotFound(t *testing.T) {
 	}
 }
 
+func TestEthGetBlockByNumber_NotFoundError(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{blockErr: errors.New("block 9 not found")})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_getBlockByNumber", []interface{}{"0x9", false})
+	if resp["result"] != nil {
+		t.Fatalf("eth_getBlockByNumber not-found error should return null, got %v", resp["result"])
+	}
+}
+
 func TestEthGetBlockByHash_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{block: nil})
 	defer srv.Close()
@@ -259,6 +280,55 @@ func TestEthGetBlockByHash_NotFound(t *testing.T) {
 	})
 	if resp["result"] != nil {
 		t.Fatalf("eth_getBlockByHash not-found should return null, got %v", resp["result"])
+	}
+}
+
+func TestEthGetBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "by number",
+			method: "eth_getBlockByNumber",
+			params: []interface{}{"0x1", false},
+		},
+		{
+			name:   "by hash",
+			method: "eth_getBlockByHash",
+			params: []interface{}{
+				"0x0000000000000000000000000000000000000000000000000000000000000000",
+				false,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
+}
+
+func TestEthAPI_GetBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	api := jsonrpc.NewEthAPI(&stubBackend{blockErr: backendErr}, nil)
+
+	if got, err := api.GetBlockByNumber("0x1", nil); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockByNumber = %v/%v, want backend error", got, err)
+	}
+	if got, err := api.GetBlockByHash("0x0000000000000000000000000000000000000000000000000000000000000000", nil); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockByHash = %v/%v, want backend error", got, err)
 	}
 }
 

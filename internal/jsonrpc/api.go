@@ -577,7 +577,13 @@ func (api *API) ethGetBlockByNumber(params json.RawMessage) (interface{}, error)
 		num = api.backend.BlockNumber()
 	}
 	block, err := api.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil // unknown block → null (Ethereum spec)
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil // unknown block → null (Ethereum spec)
 	}
 	return blockToRPC(block, fullTx), nil
@@ -598,7 +604,13 @@ func (api *API) ethGetBlockByHash(params json.RawMessage) (interface{}, error) {
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashStr))
 	block, err := api.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil // unknown block → null (Ethereum spec)
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil // unknown block → null (Ethereum spec)
 	}
 	return blockToRPC(block, fullTx), nil

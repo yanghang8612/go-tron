@@ -211,7 +211,13 @@ func (e *EthAPI) GetBlockByNumber(blockTag string, fullTx *bool) (interface{}, e
 		num = e.backend.BlockNumber()
 	}
 	block, err := e.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil
 	}
 	return blockToRPC(block, fullTx != nil && *fullTx), nil
@@ -222,7 +228,13 @@ func (e *EthAPI) GetBlockByHash(hashHex string, fullTx *bool) (interface{}, erro
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashHex))
 	block, err := e.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil
 	}
 	return blockToRPC(block, fullTx != nil && *fullTx), nil
