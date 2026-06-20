@@ -329,7 +329,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read freezer status: %w", err)
 	}
-	stage, hasStage, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	stage, hasStage, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)
 	if err != nil {
 		return fmt.Errorf("read chain freezer stage: %w", err)
 	}
@@ -347,7 +347,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	}
 	stageLabel := "-"
 	if hasStage {
-		stageLabel = fmt.Sprintf("%d", stage)
+		stageLabel = fmt.Sprintf("%d", stage.BlockNum)
 	}
 	fmt.Printf("Freezer alerts: datadir=%s status=%s issues=%d head=%d tail=%d chainFreezerStage=%s repairApplied=%t hiddenSize=%d\n",
 		cfg.DataDir, status, len(issues), stats.Head, stats.Tail, stageLabel, stats.Repair.Applied, dbFreezerHiddenSize(stats))
@@ -382,7 +382,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read freezer status: %w", err)
 	}
-	stage, hasStage, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	stage, hasStage, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)
 	if err != nil {
 		return fmt.Errorf("read chain freezer stage: %w", err)
 	}
@@ -729,7 +729,7 @@ func dbSnapshotAlertStatus(issues []dbSnapshotAlertIssue) string {
 	return "ok"
 }
 
-func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, hasChainFreezerStage bool, tailPruneStage rawdb.StageProgress, hasTailPruneStage bool) []dbFreezerAlertIssue {
+func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool, tailPruneStage rawdb.StageProgress, hasTailPruneStage bool) []dbFreezerAlertIssue {
 	var issues []dbFreezerAlertIssue
 	add := func(severity, kind, format string, args ...interface{}) {
 		issues = append(issues, dbFreezerAlertIssue{
@@ -751,12 +751,14 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, ha
 	}
 	if hasChainFreezerStage {
 		switch {
+		case !chainFreezerStage.HasBlockHash:
+			add("critical", "chain-freezer-stage-unbound", "%s=%d is not hash-bound", rawdb.StageChainFreezer, chainFreezerStage.BlockNum)
 		case stats.Head == 0:
-			add("critical", "chain-freezer-stage-with-empty-freezer", "%s=%d but freezer head is 0", rawdb.StageChainFreezer, chainFreezerStage)
-		case chainFreezerStage >= stats.Head:
-			add("critical", "chain-freezer-stage-ahead", "%s=%d exceeds freezer max block %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Head-1)
-		case chainFreezerStage < stats.Tail:
-			add("critical", "chain-freezer-stage-behind-tail", "%s=%d is below freezer visible tail %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Tail)
+			add("critical", "chain-freezer-stage-with-empty-freezer", "%s=%d but freezer head is 0", rawdb.StageChainFreezer, chainFreezerStage.BlockNum)
+		case chainFreezerStage.BlockNum >= stats.Head:
+			add("critical", "chain-freezer-stage-ahead", "%s=%d exceeds freezer max block %d", rawdb.StageChainFreezer, chainFreezerStage.BlockNum, stats.Head-1)
+		case chainFreezerStage.BlockNum < stats.Tail:
+			add("critical", "chain-freezer-stage-behind-tail", "%s=%d is below freezer visible tail %d", rawdb.StageChainFreezer, chainFreezerStage.BlockNum, stats.Tail)
 		}
 	}
 	if stats.Tail == 0 {

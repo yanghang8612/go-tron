@@ -494,8 +494,8 @@ func TestDBFreezerAlertsCmdOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close pebble: %v", err)
@@ -534,8 +534,8 @@ func TestDBFreezerAlertsCmdRejectsStageAheadOfHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close pebble: %v", err)
@@ -559,6 +559,42 @@ func TestDBFreezerAlertsCmdRejectsStageAheadOfHead(t *testing.T) {
 	}
 }
 
+func TestDBFreezerAlertsCmdRejectsUnboundChainFreezerStage(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-unbound") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want chain-freezer-stage-unbound alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-unbound",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestDBFreezerAlertsCmdRejectsHiddenTailWithoutTailPruneStage(t *testing.T) {
 	dataDir := t.TempDir()
 	f := openDBCmdFreezer(t, dataDir)
@@ -573,8 +609,8 @@ func TestDBFreezerAlertsCmdRejectsHiddenTailWithoutTailPruneStage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close pebble: %v", err)
@@ -612,8 +648,8 @@ func TestDBFreezerAlertsCmdRejectsUnboundTailPruneStage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
-		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
 	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune, 2); err != nil {
 		t.Fatalf("WriteStageProgress SnapshotChainFreezerTailPrune: %v", err)
@@ -658,7 +694,7 @@ func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
 			{Name: "legacy", Head: 5, PhysicalTail: 0, HiddenTail: 1, Prunable: false},
 		},
 	}
-	issues := dbFreezerAlertIssues(stats, 0, true, rawdb.StageProgress{}, false)
+	issues := dbFreezerAlertIssues(stats, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 0, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, rawdb.StageProgress{}, false)
 	for _, want := range []string{
 		"repair-applied",
 		"chain-freezer-stage-behind-tail",
@@ -672,6 +708,57 @@ func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
 	}
 	if !dbFreezerAlertHasCritical(issues) {
 		t.Fatalf("issues have no critical severity: %+v", issues)
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectChainFreezerStageInvariants(t *testing.T) {
+	stats := rawdbfreezer.Stats{Head: 5, Tail: 2}
+	tests := []struct {
+		name     string
+		stage    rawdb.StageProgress
+		hasStage bool
+		want     string
+	}{
+		{name: "missing", want: "chain-freezer-stage-missing"},
+		{
+			name:     "unbound",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 4},
+			hasStage: true,
+			want:     "chain-freezer-stage-unbound",
+		},
+		{
+			name:     "behind-tail",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 1, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+			want:     "chain-freezer-stage-behind-tail",
+		},
+		{
+			name:     "ahead",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 5, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+			want:     "chain-freezer-stage-ahead",
+		},
+		{
+			name:     "exact",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 4, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := dbFreezerAlertIssues(stats, tt.stage, tt.hasStage, rawdb.StageProgress{}, false)
+			if tt.want == "" {
+				for _, issue := range issues {
+					if strings.HasPrefix(issue.kind, "chain-freezer-stage-") {
+						t.Fatalf("unexpected chain-freezer issue in %+v", issues)
+					}
+				}
+				return
+			}
+			if !dbFreezerAlertIssueKindsContain(issues, tt.want) {
+				t.Fatalf("issues missing %q: %+v", tt.want, issues)
+			}
+		})
 	}
 }
 
@@ -696,7 +783,7 @@ func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
 			if tt.bound {
 				progress.BlockHash = common.Hash{0x33}
 			}
-			issues := dbFreezerAlertIssues(stats, 9, true, progress, tt.hasStage)
+			issues := dbFreezerAlertIssues(stats, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 9, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, progress, tt.hasStage)
 			if tt.want == "" {
 				for _, issue := range issues {
 					if strings.HasPrefix(issue.kind, "tail-prune-stage-") {
@@ -711,7 +798,7 @@ func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
 		})
 	}
 
-	issues := dbFreezerAlertIssues(rawdbfreezer.Stats{Head: 10, Tail: 0}, 9, true, rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune}, true)
+	issues := dbFreezerAlertIssues(rawdbfreezer.Stats{Head: 10, Tail: 0}, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 9, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune}, true)
 	if !dbFreezerAlertIssueKindsContain(issues, "tail-prune-stage-without-hidden-tail") {
 		t.Fatalf("tail=0 issues missing tail-prune-stage-without-hidden-tail: %+v", issues)
 	}
