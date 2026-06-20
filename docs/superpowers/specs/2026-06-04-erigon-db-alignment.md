@@ -1008,8 +1008,9 @@ Status:
   request the JSON form while retaining a legacy text parser fallback.
 - `gtron db storage-alerts --prometheus` now exposes the same aggregate storage
   alert state as Prometheus text metrics for external monitor scrape jobs:
-  overall/component status values, issue counts, hidden freezer bytes, retired
-  snapshot counters, and the persisted prune mode.
+  overall/component status values, component issue counts, per-component
+  issue-kind counts, hidden freezer bytes, retired snapshot counters, and the
+  persisted prune mode.
 - `scripts/dev/storage_benchmark.sh` now writes a
   `<mode>-<role>-storage-alerts.prom` artifact for every storage-alert gate and
   records its path as `storageAlertPrometheus` in the JSONL result row. Critical

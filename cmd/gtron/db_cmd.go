@@ -522,6 +522,8 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 		fmt.Fprintf(w, "gtron_storage_alert_component_issues{%s} %d\n", componentLabels, component.issues)
 	}
 
+	dbWriteStorageAlertIssuePrometheus(w, report)
+
 	fmt.Fprintln(w, "# HELP gtron_storage_alert_freezer_hidden_bytes Bytes hidden by freezer virtual-tail pruning.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_alert_freezer_hidden_bytes gauge")
 	fmt.Fprintf(w, "gtron_storage_alert_freezer_hidden_bytes{%s} %d\n", labels, report.FreezerAlertHiddenBytes)
@@ -550,6 +552,60 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 	fmt.Fprintln(w, "# HELP gtron_storage_prune_mode_info Persisted Erigon-style prune mode selected for this datadir.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_prune_mode_info gauge")
 	fmt.Fprintf(w, "gtron_storage_prune_mode_info{%s} 1\n", modeLabels)
+}
+
+func dbWriteStorageAlertIssuePrometheus(w io.Writer, report dbStorageAlertsJSON) {
+	type issueKey struct {
+		component string
+		severity  string
+		kind      string
+	}
+	counts := make(map[issueKey]int)
+	add := func(component string, issues []dbStorageAlertIssueJSON) {
+		for _, issue := range issues {
+			severity := issue.Severity
+			if severity == "" {
+				severity = "unknown"
+			}
+			kind := issue.Kind
+			if kind == "" {
+				kind = "unclassified"
+			}
+			counts[issueKey{component: component, severity: severity, kind: kind}]++
+		}
+	}
+	add("freezer", report.FreezerAlertDetails)
+	add("stage", report.StageVerifyDetails)
+	add("mode", report.ModeAlertDetails)
+	add("snapshot", report.SnapshotAlertDetails)
+
+	fmt.Fprintln(w, "# HELP gtron_storage_alert_issue Storage alert issue count by component, severity, and issue kind.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_alert_issue gauge")
+	if len(counts) == 0 {
+		return
+	}
+	keys := make([]issueKey, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].component != keys[j].component {
+			return keys[i].component < keys[j].component
+		}
+		if keys[i].severity != keys[j].severity {
+			return keys[i].severity < keys[j].severity
+		}
+		return keys[i].kind < keys[j].kind
+	})
+	for _, key := range keys {
+		issueLabels := dbPrometheusLabels(map[string]string{
+			"component": key.component,
+			"datadir":   report.Datadir,
+			"kind":      key.kind,
+			"severity":  key.severity,
+		})
+		fmt.Fprintf(w, "gtron_storage_alert_issue{%s} %d\n", issueLabels, counts[key])
+	}
 }
 
 func dbStorageAlertStatusMetricValue(status string) int {

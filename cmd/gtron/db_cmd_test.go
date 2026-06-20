@@ -1009,6 +1009,41 @@ func TestDBStorageAlertsCmdPrometheusCriticalReturnsError(t *testing.T) {
 	}
 }
 
+func TestDBStorageAlertsPrometheusReportsIssueKinds(t *testing.T) {
+	report := dbStorageAlertsJSON{
+		Datadir:       "/tmp/gtron",
+		Status:        "critical",
+		FreezerStatus: "critical",
+		FreezerIssues: 2,
+		FreezerAlertDetails: []dbStorageAlertIssueJSON{
+			{Severity: "critical", Kind: "tail-prune-stage-missing-canonical", Detail: "first"},
+			{Severity: "critical", Kind: "tail-prune-stage-missing-canonical", Detail: "second"},
+		},
+		StageStatus: "critical",
+		StageIssues: 1,
+		StageVerifyDetails: []dbStorageAlertIssueJSON{
+			{Severity: "critical", Detail: "SyncBodiesReady staged-body status=hash-mismatch"},
+		},
+		ModeStatus:     "ok",
+		SnapshotStatus: "ok",
+		PruneMode:      "unknown",
+	}
+
+	var output strings.Builder
+	dbWriteStorageAlertsPrometheus(&output, report)
+	got := output.String()
+	for _, want := range []string{
+		"# HELP gtron_storage_alert_issue Storage alert issue count by component, severity, and issue kind.",
+		"# TYPE gtron_storage_alert_issue gauge",
+		`gtron_storage_alert_issue{component="freezer",datadir="/tmp/gtron",kind="tail-prune-stage-missing-canonical",severity="critical"} 2`,
+		`gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="unclassified",severity="critical"} 1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("storage alert prometheus output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDBStorageAlertsCmdRejectsAmbiguousMachineFormats(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--prometheus"})
