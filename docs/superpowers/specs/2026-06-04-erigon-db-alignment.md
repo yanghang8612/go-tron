@@ -1673,7 +1673,9 @@ Status:
   a corrupt freezer/hot block behind a valid transaction index returns a data
   error instead of a false not-found result. Block-number TransactionInfo
   queries use the same strict block-body read before validating retained
-  `TransactionRet` rows.
+  `TransactionRet` rows. JSON-RPC `eth_getTransactionReceipt` now preserves
+  those transaction/block lookup errors after the receipt row has been found
+  instead of translating cold archive corruption into a `null` receipt.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
   `TransactionRet` reader too. For non-genesis blocks, missing per-block
   tx-info rows on tx-bearing blocks now fail the query instead of producing a

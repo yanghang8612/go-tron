@@ -24,6 +24,7 @@ type stubBackend struct {
 	code        []byte
 	storage     common.Hash
 	tx          *corepb.Transaction
+	txErr       error
 	txBlock     *types.Block
 	txIndex     int
 	txInfo      *corepb.TransactionInfo
@@ -80,6 +81,9 @@ func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
 	return s.block, nil
 }
 func (s *stubBackend) GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error) {
+	if s.txErr != nil {
+		return nil, nil, 0, s.txErr
+	}
 	return s.tx, s.txBlock, s.txIndex, nil
 }
 func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionInfo, error) {
@@ -351,6 +355,39 @@ func TestEthGetTransactionReceipt_NotFound(t *testing.T) {
 	})
 	if resp["result"] != nil {
 		t.Fatalf("eth_getTransactionReceipt not-found should return null, got %v", resp["result"])
+	}
+}
+
+func TestEthGetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+		txErr:  backendErr,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{
+		"0x0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if errObj["message"] != backendErr.Error() {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want %q", errObj["message"], backendErr.Error())
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+		txErr:  backendErr,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt("0x0000000000000000000000000000000000000000000000000000000000000000")
+	if err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want backend error", got, err)
 	}
 }
 

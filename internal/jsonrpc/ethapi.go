@@ -266,7 +266,10 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 		return nil, nil
 	}
 	tx, block, index, err := e.backend.GetTransactionByHash(hash)
-	if err != nil || tx == nil {
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
 		return nil, nil
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil

@@ -648,7 +648,10 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 		return nil, nil // not found → null
 	}
 	tx, block, index, err := api.backend.GetTransactionByHash(hash)
-	if err != nil || tx == nil {
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
 		return nil, nil // receipt exists but can't find tx — treat as not found
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil
