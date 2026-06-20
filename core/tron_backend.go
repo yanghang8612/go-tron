@@ -349,8 +349,11 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 	if head := b.chain.CurrentBlock(); head != nil && blockNum > head.Number() {
 		return nil, nil
 	}
-	block := b.chain.GetBlockByNumber(blockNum)
-	if block == nil {
+	block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !hasBlock {
 		return nil, nil
 	}
 	infos, hasInfos, err := rawdb.ReadTransactionInfosByBlockStrict(b.chain.chaindb, blockNum)
@@ -2514,8 +2517,11 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		if bloomMatcher != nil && !bloomMatcher.mayContain(num) {
 			continue
 		}
-		block := b.chain.GetBlockByNumber(num)
-		if block == nil {
+		block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, num)
+		if err != nil {
+			return nil, err
+		}
+		if !hasBlock {
 			continue
 		}
 		blockHash := block.Hash()

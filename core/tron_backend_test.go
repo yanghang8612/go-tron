@@ -159,6 +159,13 @@ func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
 	if logs, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &blockHash}); err == nil || logs != nil || !strings.Contains(err.Error(), "block 1 decode") {
 		t.Fatalf("GetLogs corrupt block body = %+v/%v, want decode error", logs, err)
 	}
+	if infos, err := backend.GetTransactionInfoByBlockNum(block.Number()); err == nil || infos != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetTransactionInfoByBlockNum corrupt block body = %+v/%v, want decode error", infos, err)
+	}
+	from, to := block.Number(), block.Number()
+	if logs, err := backend.GetLogs(jsonrpc.LogFilter{FromBlock: &from, ToBlock: &to}); err == nil || logs != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetLogs range corrupt block body = %+v/%v, want decode error", logs, err)
+	}
 	if got, err := backend.GetTransactionByID(txHash); err == nil || got != nil || !strings.Contains(err.Error(), "block 1 decode") {
 		t.Fatalf("GetTransactionByID corrupt block body = %+v/%v, want decode error", got, err)
 	}

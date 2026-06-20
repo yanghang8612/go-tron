@@ -1643,13 +1643,18 @@ Status:
   check before new `ti-` rows can be written. Backend transaction-by-id/hash
   reads also use strict block-body access after the tx lookup admits a block, so
   a corrupt freezer/hot block behind a valid transaction index returns a data
-  error instead of a false not-found result.
+  error instead of a false not-found result. Block-number TransactionInfo
+  queries use the same strict block-body read before validating retained
+  `TransactionRet` rows.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
   `TransactionRet` reader too. For non-genesis blocks, missing per-block
   tx-info rows on tx-bearing blocks now fail the query instead of producing a
   false empty archive log response when cold event-log coverage is incomplete.
   Present rows with mismatched block numbers, counts, nil entries, or tx ids
-  fail the query instead of producing a false empty or wrong log response.
+  fail the query instead of producing a false empty or wrong log response. The
+  fallback range scan also reads block bodies through `ReadBlockStrict`, so a
+  corrupt freezer/hot body in the scanned range surfaces as data corruption
+  instead of being skipped.
 - Per-block `TransactionRet` reads now apply the same block-number guard at the
   rawdb accessor boundary for hot `tib-<block>` rows and ancient `tx_infos`
   rows: an embedded `TransactionRet.block_number` or
