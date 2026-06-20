@@ -827,6 +827,41 @@ func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressProgress(t *testing.T) 
 	}
 }
 
+func TestWriteSyncStagedBlockRawAndProgressRejectsSameHeightProgressHashMismatch(t *testing.T) {
+	base := NewMemoryDatabase()
+	original := testSyncStagedBlock(3, common.Hash{0x02})
+	replacement := testSyncStagedBlock(3, common.Hash{0xff})
+	if original.Hash() == replacement.Hash() {
+		t.Fatal("test blocks unexpectedly share a hash")
+	}
+	if err := WriteSyncStagedBlock(base, original); err != nil {
+		t.Fatalf("write original staged block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(base, StageSyncBodies, original.Number(), original.Hash()); err != nil {
+		t.Fatalf("write existing SyncBodies progress: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, replacement, nil)
+	if result.StageError == nil || !strings.Contains(result.StageError.Error(), "conflicts staged block hash") {
+		t.Fatalf("write conflict result = %+v, want same-height progress hash conflict", result)
+	}
+	if result.Staged || result.ProgressWritten || result.ProgressSkipped || result.ProgressWriteError != nil || result.ProgressReadError != nil {
+		t.Fatalf("write conflict result = %+v, want no body/progress side effects", result)
+	}
+	if db.batches != 0 || db.directPuts != 0 {
+		t.Fatalf("writes used batches=%d directPuts=%d, want no writes", db.batches, db.directPuts)
+	}
+	row, ok, err := ReadSyncStagedBlockRaw(db, original.Number())
+	if err != nil || !ok || row.Hash != original.Hash() {
+		t.Fatalf("staged row after conflict = %+v ok=%v err=%v, want original hash", row, ok, err)
+	}
+	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil || !ok || progress.BlockNum != original.Number() || progress.BlockHash != original.Hash() {
+		t.Fatalf("SyncBodies after conflict = %+v ok=%v err=%v, want original progress", progress, ok, err)
+	}
+}
+
 func TestWriteSyncStagedBlockRawAndProgressReplacesUnboundProgress(t *testing.T) {
 	base := NewMemoryDatabase()
 	block3 := testSyncStagedBlock(3, common.Hash{0x02})

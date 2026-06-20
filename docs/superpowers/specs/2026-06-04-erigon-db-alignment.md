@@ -296,8 +296,9 @@ Status:
 - The production sync body writer now validates supplied raw wire bytes before
   publishing `SyncBodies`: `WriteSyncStagedBlockRawAndProgress` rejects raw
   payloads that decode to a different block number or hash than the block being
-  staged. Lower-level raw writes remain available for corruption fixtures and
-  repair tests.
+  staged, and rejects same-height hash conflicts with an existing hash-bound
+  `SyncBodies` row before replacing the numbered staged body. Lower-level raw
+  writes remain available for corruption fixtures and repair tests.
 
 Needed:
 

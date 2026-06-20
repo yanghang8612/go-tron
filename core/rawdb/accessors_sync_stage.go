@@ -139,6 +139,10 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 	if ok {
 		result.HadPreviousProgress = true
 		result.PreviousProgress = row
+		if row.HasBlockHash && row.BlockNum == result.Number && row.BlockHash != result.Hash {
+			result.StageError = fmt.Errorf("rawdb: sync bodies progress block %d hash %x conflicts staged block hash %x", result.Number, row.BlockHash, result.Hash)
+			return result
+		}
 		if row.HasBlockHash && row.BlockNum > result.Number {
 			if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
 				result.StageError = err
