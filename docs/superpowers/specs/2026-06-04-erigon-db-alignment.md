@@ -839,8 +839,12 @@ Status:
   missing, and rejection of gapped cold coverage. Successful tail pruning now
   records `SnapshotChainFreezerTailPrune` as a hash-bound stage row using the
   local freezer boundary block before truncation; legacy unbound rows at the
-  same height are upgraded, while same-height hash conflicts abort before the
-  freezer tail moves.
+  same height are upgraded, while same-height hash conflicts or rows ahead of
+  the actual prune boundary abort before the freezer tail moves. If a previous
+  pass already advanced the virtual tail but failed before writing the stage
+  row, the next pass repairs `SnapshotChainFreezerTailPrune` from verified cold
+  chain-freezer/chain-index/event-log coverage instead of leaving storage-alerts
+  without a hash-bound proof of the hidden freezer range.
 - The snapshot `Manager` now implements the rawdb `AncientReader` shape for
   chain-freezer segments, and `rawdb.NewFallbackAncientReader` composes local
   freezer rows with verified cold snapshot files. Runtime startup wraps the

@@ -96,6 +96,14 @@ func (l *ChainFreezerTailPruneLifecycle) logPass(label string, result *ChainFree
 		return
 	}
 	if result == nil || !result.Applied {
+		if result != nil && result.StageRepaired {
+			coldSnapshotLog.Info("Chain freezer tail prune stage repaired",
+				"kind", label,
+				"tail", result.NewTail,
+				"prunedThroughBlock", result.NewTail-1,
+				"coverageTail", result.Plan.CoverageTail,
+				"retentionTail", result.Plan.RetentionTail)
+		}
 		return
 	}
 	coldSnapshotLog.Info("Chain freezer tail prune pass completed",

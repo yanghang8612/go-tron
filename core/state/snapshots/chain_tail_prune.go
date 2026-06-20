@@ -94,6 +94,7 @@ type ChainFreezerTailPruner interface {
 type ChainFreezerTailPruneApplyResult struct {
 	Plan            ChainFreezerTailPrunePlan
 	Applied         bool
+	StageRepaired   bool
 	OldTail         uint64
 	NewTail         uint64
 	PrunedTailFiles uint64
@@ -245,6 +246,11 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 		NewTail: currentTail,
 	}
 	if !plan.CanPrune {
+		repaired, err := repairSnapshotChainFreezerTailPruneStageForCurrentTail(db, cold, currentTail, plan)
+		if err != nil {
+			return nil, err
+		}
+		result.StageRepaired = repaired
 		return result, nil
 	}
 	if err := verifyColdChainFreezerTailCoverage(cold, currentTail, plan.TargetTail); err != nil {
@@ -309,7 +315,7 @@ func shouldWriteSnapshotChainFreezerTailPruneStage(reader ethdb.KeyValueReader, 
 		return false, err
 	}
 	if ok && current.BlockNum > blockNum {
-		return false, nil
+		return false, fmt.Errorf("snapshots: %s stage %d is ahead of pruned block %d", rawdb.StageSnapshotChainFreezerTailPrune, current.BlockNum, blockNum)
 	}
 	if ok && current.BlockNum == blockNum && current.HasBlockHash {
 		if current.BlockHash != blockHash {
@@ -320,10 +326,42 @@ func shouldWriteSnapshotChainFreezerTailPruneStage(reader ethdb.KeyValueReader, 
 	return true, nil
 }
 
+func repairSnapshotChainFreezerTailPruneStageForCurrentTail(db ethdb.KeyValueReader, cold rawdb.AncientReader, currentTail uint64, plan ChainFreezerTailPrunePlan) (bool, error) {
+	if plan.Reason != chainFreezerTailPruneReasonCurrentTailCovered || currentTail == 0 || !plan.HasCoverageBlock || currentTail > plan.CoverageTail || currentTail > plan.AncientHead {
+		return false, nil
+	}
+	writer, ok := db.(ethdb.KeyValueWriter)
+	if !ok {
+		return false, nil
+	}
+	stageBlock := currentTail - 1
+	stageHash, err := chainFreezerTailPruneStageHash(cold, stageBlock)
+	if err != nil {
+		return false, err
+	}
+	write, err := shouldWriteSnapshotChainFreezerTailPruneStage(db, stageBlock, stageHash)
+	if err != nil || !write {
+		return false, err
+	}
+	if err := verifyColdChainFreezerTailCoverage(cold, 0, currentTail); err != nil {
+		return false, fmt.Errorf("snapshots: verify cold chain-freezer coverage before repairing %s stage at tail %d: %w", rawdb.StageSnapshotChainFreezerTailPrune, currentTail, err)
+	}
+	if err := verifyColdChainIndexTailCoverage(cold, 0, currentTail); err != nil {
+		return false, fmt.Errorf("snapshots: verify cold chain-index coverage before repairing %s stage at tail %d: %w", rawdb.StageSnapshotChainFreezerTailPrune, currentTail, err)
+	}
+	if err := verifyColdEventLogTailCoverage(cold, 0, currentTail); err != nil {
+		return false, fmt.Errorf("snapshots: verify cold indexed event-log coverage before repairing %s stage at tail %d: %w", rawdb.StageSnapshotChainFreezerTailPrune, currentTail, err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageSnapshotChainFreezerTailPrune, stageBlock, stageHash); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func chainFreezerTailPruneStageHash(reader rawdb.AncientReader, blockNum uint64) (common.Hash, error) {
 	raw, err := reader.Ancient(rawdb.AncientBlocksTable, blockNum)
 	if err != nil {
-		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d from local freezer: %w", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, err)
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d from chain-freezer reader: %w", rawdb.StageSnapshotChainFreezerTailPrune, blockNum, err)
 	}
 	block, err := types.UnmarshalBlock(raw)
 	if err != nil {

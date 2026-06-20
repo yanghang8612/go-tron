@@ -368,6 +368,60 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	}
 }
 
+func TestApplyChainFreezerTailPruneFromDBRepairsMissingStageAfterTailMoved(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTailPruneBlockRows(t, f, 10)
+
+	snapshotDir := root + "/snapshot"
+	ref, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 9)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, ref, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 1, 9)
+	eventIndexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []SegmentRef{eventRef}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, indexRef, eventRef, eventIndexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if oldTail, err := f.TruncateTail(7); err != nil || oldTail != 0 {
+		t.Fatalf("pre-move freezer tail old=%d err=%v, want 0/nil", oldTail, err)
+	}
+	if _, err := f.Ancient(rawdb.AncientBlocksTable, 6); !errors.Is(err, rawdbfreezer.ErrOutOfBounds) {
+		t.Fatalf("local freezer read hidden block 6 = %v, want out of bounds", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	if err != nil {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
+	}
+	if result.Applied || !result.StageRepaired || result.OldTail != 7 || result.NewTail != 7 || result.Plan.TargetTail != 7 {
+		t.Fatalf("apply result = %+v, want stage repair without moving tail", result)
+	}
+	block6, _, _ := chainFreezerBlockWithTx(t, 6)
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotChainFreezerTailPrune); err != nil || !ok || row.BlockNum != 6 || !row.HasBlockHash || row.BlockHash != block6.Hash() {
+		t.Fatalf("StageSnapshotChainFreezerTailPrune row = %+v ok=%v err=%v, want block6 hash %x", row, ok, err, block6.Hash())
+	}
+	if _, err := mgr.Ancient(rawdb.AncientBlocksTable, 6); err != nil {
+		t.Fatalf("cold manager read repaired stage block 6: %v", err)
+	}
+}
+
 func TestApplyChainFreezerTailPruneFromDBRejectsStageHashConflictBeforeTruncate(t *testing.T) {
 	root := t.TempDir()
 	f := openChainFreezerTestStore(t, root+"/ancient")
@@ -401,6 +455,46 @@ func TestApplyChainFreezerTailPruneFromDBRejectsStageHashConflictBeforeTruncate(
 	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
 	if err == nil || !strings.Contains(err.Error(), "does not match pruned block hash") {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB err = %v, want stage hash conflict", err)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 0 {
+		t.Fatalf("freezer tail after rejected prune = %d/%v, want 0/nil", tail, err)
+	}
+}
+
+func TestApplyChainFreezerTailPruneFromDBRejectsStageAheadBeforeTruncate(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTailPruneBlockRows(t, f, 2)
+
+	snapshotDir := root + "/snapshot"
+	ref, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, ref, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 1)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 1)
+	block1, _, _ := chainFreezerBlockWithTx(t, 1)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainFreezerTailPrune, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
+	}
+
+	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	if err == nil || !strings.Contains(err.Error(), "stage 1 is ahead of pruned block 0") {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB err = %v, want stage-ahead rejection", err)
 	}
 	if tail, err := f.Tail(); err != nil || tail != 0 {
 		t.Fatalf("freezer tail after rejected prune = %d/%v, want 0/nil", tail, err)
