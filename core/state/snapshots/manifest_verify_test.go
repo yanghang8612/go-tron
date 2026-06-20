@@ -196,12 +196,19 @@ func TestWriteSnapshotInstallProgressCapsEventLogBuildAtContinuousCoverage(t *te
 	ref4 := writeVerifiableEventLogSegment(t, dir, 4, 4)
 	manifest := NewManifest(0, 0, []SegmentRef{ref1, index1, ref4})
 	db := rawdb.NewMemoryDatabase()
+	block2Hash := common.Hash{0x02}
+	if err := rawdb.WriteStateTxRange(db, 2, block2Hash, 2, 2); err != nil {
+		t.Fatalf("WriteStateTxRange block2: %v", err)
+	}
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 2 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 2", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block2Hash {
+		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block2Hash)
 	}
 }
 
@@ -219,12 +226,19 @@ func TestWriteSnapshotInstallProgressCombinesAdjacentEventLogIndexes(t *testing.
 	}
 	manifest := NewManifest(0, 0, []SegmentRef{ref1, index1, ref2, index2})
 	db := rawdb.NewMemoryDatabase()
+	block4Hash := common.Hash{0x04}
+	if err := rawdb.WriteStateTxRange(db, 4, block4Hash, 4, 4); err != nil {
+		t.Fatalf("WriteStateTxRange block4: %v", err)
+	}
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 4 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 4", got, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block4Hash {
+		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block4Hash)
 	}
 }
 

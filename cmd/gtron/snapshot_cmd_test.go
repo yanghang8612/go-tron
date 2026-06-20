@@ -943,12 +943,16 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	}
 	owner := common.Address{0x41, 0xbb}
 	block12, txHash, _ := snapshotCmdBlockWithTx(t, 12)
+	var sectionEndHash common.Hash
 	for blockNum := uint64(0); blockNum <= sectionEnd; blockNum++ {
 		block := snapshotCmdBlock(blockNum)
 		timestamp := int64(30_000 + blockNum)
 		if blockNum == 12 {
 			block = block12
 			timestamp = 1200
+		}
+		if blockNum == sectionEnd {
+			sectionEndHash = block.Hash()
 		}
 		if err := rawdb.WriteBlock(db, block); err != nil {
 			t.Fatalf("WriteBlock %d: %v", blockNum, err)
@@ -1072,6 +1076,9 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	defer reopened.Close()
 	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != sectionEnd {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want %d", got, ok, err, sectionEnd)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != sectionEndHash {
+		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, sectionEndHash)
 	}
 }
 

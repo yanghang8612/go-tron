@@ -781,6 +781,9 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 1 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 1", got, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
+		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block.Hash())
+	}
 	mgr, err := OpenManager(dir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)

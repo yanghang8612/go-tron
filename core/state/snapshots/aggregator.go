@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -322,14 +323,23 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 }
 
 func writeEventLogBuildStage(db any, manifest *Manifest) error {
-	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		block, ok := eventLogBuildBlockFromManifest(manifest)
-		if !ok {
-			return nil
-		}
-		return rawdb.WriteStageProgress(writer, rawdb.StageSnapshotEventLogBuild, block)
+	writer, ok := db.(ethdb.KeyValueWriter)
+	if !ok {
+		return nil
 	}
-	return nil
+	block, ok := eventLogBuildBlockFromManifest(manifest)
+	if !ok {
+		return nil
+	}
+	reader, ok := db.(ethdb.KeyValueReader)
+	if !ok {
+		return fmt.Errorf("snapshots: %s stage block %d requires readable database", rawdb.StageSnapshotEventLogBuild, block)
+	}
+	hash, err := eventLogBuildStageHash(reader, block)
+	if err != nil {
+		return err
+	}
+	return rawdb.WriteStageProgressWithHash(writer, rawdb.StageSnapshotEventLogBuild, block, hash)
 }
 
 func (a *Aggregator) eventLogRefsAfterIntegrating(newEventRefs []SegmentRef) ([]SegmentRef, error) {
@@ -435,12 +445,28 @@ func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (
 	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotInstall, manifest.VisibleTxEnd); err != nil {
 		return nil, err
 	}
-	if block, ok := eventLogBuildBlockFromManifest(manifest); ok {
-		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, block); err != nil {
-			return nil, err
-		}
+	if err := writeEventLogBuildStage(db, manifest); err != nil {
+		return nil, err
 	}
 	return progress, nil
+}
+
+func eventLogBuildStageHash(db ethdb.KeyValueReader, blockNum uint64) (common.Hash, error) {
+	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, blockNum)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", rawdb.StageSnapshotEventLogBuild, blockNum, err)
+	}
+	if ok && hash != (common.Hash{}) {
+		return hash, nil
+	}
+	row, ok, err := rawdb.ReadStateTxRange(db, blockNum)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("snapshots: read %s stage block %d tx range hash: %w", rawdb.StageSnapshotEventLogBuild, blockNum, err)
+	}
+	if ok && row.BlockHash != (common.Hash{}) {
+		return row.BlockHash, nil
+	}
+	return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", rawdb.StageSnapshotEventLogBuild, blockNum)
 }
 
 func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {

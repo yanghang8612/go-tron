@@ -1357,9 +1357,10 @@ Status:
   history passes can now publish matching
   event-log and event-log-index sidecars in the same manifest generation as the
   state-history segment before hot prune runs, and both production and manual
-  event-log builders now advance a block-valued `SnapshotEventLogBuild` stage
+  event-log builders now advance a hash-bound `SnapshotEventLogBuild` stage
   only when indexed cold log coverage exists as a continuous prefix from block
-  1, so operators can audit it against the verified `Finish` boundary. Snapshot
+  1, so operators can audit it against the verified `Finish` boundary without
+  trusting a height-only cold coverage row across forks. Snapshot
   restore/bootstrap also derives that stage from verified manifest `event-log`
   plus `event-log-index` coverage, combining adjacent indexed sidecars into one
   continuous block-1 prefix, so restored nodes can continue minimal-mode tail
