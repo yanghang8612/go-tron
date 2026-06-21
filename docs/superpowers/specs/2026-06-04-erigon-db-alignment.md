@@ -980,7 +980,10 @@ Status:
   split: explicit account misses still return `{}`, while cold account-net or
   dynamic-property reconstruction failures return HTTP 500. TRON HTTP
   `getproposalbyid` now preserves `{}` only for explicit proposal misses and
-  surfaces cold proposal-history reconstruction failures as HTTP 500. HTTP
+  surfaces cold proposal-history reconstruction failures as HTTP 500. The
+  underlying proposal history reader now also treats corrupt proposal JSON and
+  malformed proposal-index bytes as archive data errors instead of silently
+  returning missing proposal data. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as

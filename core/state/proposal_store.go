@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -85,7 +86,7 @@ func (r *PersistentHistoryReader) ProposalAt(id int64, blockNum uint64) (*rawdb.
 	}
 	p := &rawdb.Proposal{}
 	if err := json.Unmarshal(raw, p); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode proposal %d: %w", id, err)
 	}
 	return p, nil
 }
@@ -116,6 +117,9 @@ func (r *PersistentHistoryReader) ProposalIndexAt(blockNum uint64) ([]int64, err
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreIndexKey, blockNum)
 	if err != nil || !ok {
 		return nil, err
+	}
+	if len(raw)%8 != 0 {
+		return nil, fmt.Errorf("decode proposal index: length %d is not a multiple of 8", len(raw))
 	}
 	return decodeProposalIndex(raw), nil
 }
