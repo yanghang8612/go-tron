@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math/big"
 	"sort"
 
@@ -220,15 +221,18 @@ func (s *StateDB) ReadCycleBrokerage(cycle int64, addr []byte) int {
 }
 
 // CycleBrokerageAt reconstructs a witness brokerage snapshot for cycle at the
-// end of blockNum. Missing or malformed rows default to java-tron's
-// DEFAULT_BROKERAGE.
+// end of blockNum. Missing rows default to java-tron's DEFAULT_BROKERAGE, while
+// malformed retained/cold history rows surface as archive data errors.
 func (r *PersistentHistoryReader) CycleBrokerageAt(cycle int64, addr []byte, blockNum uint64) (int64, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.CycleBrokerageStateKey(cycle, addr), blockNum)
 	if err != nil {
 		return 0, err
 	}
-	if !ok || len(raw) != 4 {
+	if !ok {
 		return int64(rawdb.DefaultBrokerage), nil
+	}
+	if len(raw) != 4 {
+		return 0, fmt.Errorf("decode cycle brokerage at block %d: length %d, want 4", blockNum, len(raw))
 	}
 	return int64(int32(binary.BigEndian.Uint32(raw))), nil
 }

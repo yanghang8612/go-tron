@@ -3,12 +3,14 @@ package state
 import (
 	"bytes"
 	"math/big"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 func TestRewardStoreDefaults(t *testing.T) {
@@ -158,5 +160,43 @@ func TestRewardStoreAddCycleRewardsFinalStacksDirtyValues(t *testing.T) {
 	}
 	if got := reopened.ReadCycleReward(9, addr.Bytes()); got != 12 {
 		t.Fatalf("reward = %d, want 12", got)
+	}
+}
+
+func TestCycleBrokerageAtDefaultsMissingHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x49)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(*StateDB) {})
+
+	got, err := f.reader().CycleBrokerageAt(9, addr.Bytes(), 1)
+	if err != nil {
+		t.Fatalf("CycleBrokerageAt missing history error = %v", err)
+	}
+	if got != int64(rawdb.DefaultBrokerage) {
+		t.Fatalf("CycleBrokerageAt missing history = %d, want %d", got, rawdb.DefaultBrokerage)
+	}
+}
+
+func TestCycleBrokerageAtSurfacesMalformedLength(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x4a)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemReward, rawdb.CycleBrokerageStateKey(9, addr.Bytes()), []byte{0x01, 0x02, 0x03}); err != nil {
+			t.Fatalf("write malformed brokerage history: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().CycleBrokerageAt(9, addr.Bytes(), 1)
+	if err == nil {
+		t.Fatal("CycleBrokerageAt malformed history error = nil")
+	}
+	if got != 0 {
+		t.Fatalf("CycleBrokerageAt malformed history = %d, want 0", got)
+	}
+	if !strings.Contains(err.Error(), "decode cycle brokerage at block 1") || !strings.Contains(err.Error(), "length 3, want 4") {
+		t.Fatalf("CycleBrokerageAt malformed history error = %v, want decode length context", err)
 	}
 }
