@@ -2,7 +2,11 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/ethdb"
 )
 
 func TestCommitmentBranchRoundTrip(t *testing.T) {
@@ -107,4 +111,81 @@ func TestCommitmentBranchMissing(t *testing.T) {
 	if ok {
 		t.Fatal("missing engine state read: expected not found")
 	}
+}
+
+func TestCommitmentBranchSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x01, 0x02}
+	if err := WriteCommitmentBranch(db, prefix, []byte("branch")); err != nil {
+		t.Fatalf("write branch: %v", err)
+	}
+
+	_, ok, err := ReadCommitmentBranch(failingCommitmentReader{
+		reader: db,
+		getErr: errors.New("get boom"),
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("plain get error ok=%v err=%v, want get error", ok, err)
+	}
+
+	_, ok, err = ReadCommitmentBranchNoCopy(failingNoCopyCommitmentReader{
+		failingCommitmentReader: failingCommitmentReader{
+			reader: db,
+			getErr: errors.New("nocopy boom"),
+		},
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "nocopy boom") {
+		t.Fatalf("nocopy get error ok=%v err=%v, want get error", ok, err)
+	}
+
+	_, ok, err = ReadCommitmentBranch(failingCommitmentReader{
+		reader: db,
+		getErr: errors.New("get boom"),
+		hasErr: errors.New("has boom"),
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "presence after get error") {
+		t.Fatalf("presence error ok=%v err=%v, want presence error", ok, err)
+	}
+}
+
+func TestCommitmentEngineStateSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := WriteCommitmentEngineState(db, []byte("engine")); err != nil {
+		t.Fatalf("write engine state: %v", err)
+	}
+
+	if got, ok, err := ReadCommitmentEngineState(failingCommitmentReader{reader: db, hasErr: errors.New("has boom")}); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("has error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+	if got, ok, err := ReadCommitmentEngineState(failingCommitmentReader{reader: db, getErr: errors.New("get boom")}); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("get error = %x ok=%v err=%v, want get error", got, ok, err)
+	}
+}
+
+type failingCommitmentReader struct {
+	reader ethdb.KeyValueReader
+	hasErr error
+	getErr error
+}
+
+func (r failingCommitmentReader) Has(key []byte) (bool, error) {
+	if r.hasErr != nil {
+		return false, r.hasErr
+	}
+	return r.reader.Has(key)
+}
+
+func (r failingCommitmentReader) Get(key []byte) ([]byte, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return r.reader.Get(key)
+}
+
+type failingNoCopyCommitmentReader struct {
+	failingCommitmentReader
+}
+
+func (r failingNoCopyCommitmentReader) GetNoCopy(key []byte) ([]byte, error) {
+	return r.Get(key)
 }

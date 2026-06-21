@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
@@ -13,11 +14,7 @@ func WriteStateCommitmentDomain(db ethdb.KeyValueWriter, logicalKey, value []byt
 
 // ReadStateCommitmentDomain loads one opaque commitment-domain row.
 func ReadStateCommitmentDomain(db ethdb.KeyValueReader, logicalKey []byte) ([]byte, bool, error) {
-	value, err := db.Get(stateCommitmentDomainKey(logicalKey))
-	if err != nil {
-		return nil, false, nil
-	}
-	return append([]byte(nil), value...), true, nil
+	return readPresentValue(db, stateCommitmentDomainKey(logicalKey), fmt.Sprintf("state commitment domain key %x", logicalKey))
 }
 
 // DeleteStateCommitmentDomain deletes one opaque commitment-domain row.

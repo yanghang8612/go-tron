@@ -2,7 +2,9 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -91,6 +93,21 @@ func TestStateCommitmentDomainEmptyValue(t *testing.T) {
 	}
 	if !slices.Equal(rows, []string{"empty="}) {
 		t.Fatalf("empty rows = %v", rows)
+	}
+}
+
+func TestStateCommitmentDomainSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	key := []byte("node/error")
+	if err := WriteStateCommitmentDomain(db, key, []byte("value")); err != nil {
+		t.Fatalf("write commitment domain: %v", err)
+	}
+
+	if got, ok, err := ReadStateCommitmentDomain(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, key); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("has error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+	if got, ok, err := ReadStateCommitmentDomain(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, key); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("get error = %x ok=%v err=%v, want get error", got, ok, err)
 	}
 }
 

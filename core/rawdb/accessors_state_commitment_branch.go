@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
@@ -54,18 +56,9 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 	var buf [branchKeyStackBufLen]byte
 	key := commitmentBranchKeyInto(buf[:0], prefix)
 	if nc, ok := db.(noCopyKeyValueReader); ok {
-		raw, err := nc.GetNoCopy(key)
-		if err != nil {
-			return nil, false, nil
-		}
-		return raw, true, nil
+		return readValueThenVerifyMiss(db, key, fmt.Sprintf("commitment branch %x", prefix), nc.GetNoCopy)
 	}
-	raw, err := db.Get(key)
-	if err != nil {
-		// go-ethereum memorydb / pebble both return an error on missing keys.
-		return nil, false, nil
-	}
-	return raw, true, nil
+	return readValueThenVerifyMiss(db, key, fmt.Sprintf("commitment branch %x", prefix), nil)
 }
 
 // DeleteCommitmentBranch removes the branch row for prefix.
@@ -110,11 +103,7 @@ func WriteCommitmentEngineState(db ethdb.KeyValueWriter, encoded []byte) error {
 // ReadCommitmentEngineState retrieves the staged-engine state blob.
 // Returns (nil, false, nil) when absent.
 func ReadCommitmentEngineState(db ethdb.KeyValueReader) ([]byte, bool, error) {
-	raw, err := db.Get(stateCommitmentEngineStateKey)
-	if err != nil {
-		return nil, false, nil
-	}
-	return append([]byte(nil), raw...), true, nil
+	return readPresentValue(db, stateCommitmentEngineStateKey, "commitment engine state")
 }
 
 // commitmentBranchKey builds the physical DB key for a branch row. The result

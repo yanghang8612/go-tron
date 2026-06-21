@@ -299,6 +299,11 @@ Status:
   reads, snapshot builders, and hot-history pruning therefore stop on
   unreadable latest/history rows instead of rolling back from an incorrectly
   assumed absence.
+- Commitment-domain readers now do the same for `StateCommitmentDomain`,
+  staged commitment branch rows, and commitment engine state. Branch reads keep
+  the fast `Get`/`GetNoCopy` hit path and only probe `Has` after a read error,
+  so bulk commitment folding does not pay an extra KV lookup for normal hits
+  while storage errors still abort instead of being treated as empty branches.
 - Sync staged body reads now follow the same rule: `ReadSyncStagedBlock` and
   `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
   storage errors, so downloader restart and ready-frontier validation stop on

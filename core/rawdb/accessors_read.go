@@ -23,3 +23,24 @@ func readPresentValue(db ethdb.KeyValueReader, key []byte, context string) ([]by
 	}
 	return append([]byte(nil), value...), true, nil
 }
+
+func readValueThenVerifyMiss(db ethdb.KeyValueReader, key []byte, context string, read func([]byte) ([]byte, error)) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database while reading %s", context)
+	}
+	if read == nil {
+		read = db.Get
+	}
+	value, err := read(key)
+	if err == nil {
+		return value, true, nil
+	}
+	exists, hasErr := db.Has(key)
+	if hasErr != nil {
+		return nil, false, fmt.Errorf("rawdb: read %s presence after get error: %w", context, hasErr)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
+}
