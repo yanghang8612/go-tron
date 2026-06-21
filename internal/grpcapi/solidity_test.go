@@ -838,6 +838,24 @@ func TestSolidity_GetAccountUsesSolidBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidity_GetAccountSurfacesBackendError(t *testing.T) {
+	addr := solidityTestAddress(0x15)
+	backendErr := errors.New("state history: cold account segment corrupt")
+	backend := &solidTestBackend{
+		testBackend: testBackend{accountAtErr: backendErr},
+		solidNum:    42,
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetAccount(context.Background(), &corepb.Account{Address: addr})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal for backend account read error, got %v", err)
+	}
+	if backend.lastAccountAt != 42 {
+		t.Fatalf("GetAccountAt block = %d, want solid block 42", backend.lastAccountAt)
+	}
+}
+
 func TestSolidity_GetAccountByIdAddressUsesSolidBoundArchivePath(t *testing.T) {
 	addr := solidityTestAddress(0x22)
 	accountAt := types.NewAccount(common.BytesToAddress(addr), corepb.AccountType_Normal)
@@ -885,6 +903,23 @@ func TestSolidity_GetAccountByIdAccountIDUsesSolidBoundArchivePath(t *testing.T)
 	}
 	if backend.liveAccountIDCalls != 0 {
 		t.Fatalf("live GetAccountById called %d times, want 0", backend.liveAccountIDCalls)
+	}
+}
+
+func TestSolidity_GetAccountByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account-id index corrupt")
+	backend := &solidTestBackend{
+		testBackend: testBackend{accountIDAtErr: backendErr},
+		solidNum:    79,
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal for backend account-id read error, got %v", err)
+	}
+	if backend.lastAccountIDAt != 79 {
+		t.Fatalf("GetAccountByIdAt block = %d, want solid block 79", backend.lastAccountIDAt)
 	}
 }
 

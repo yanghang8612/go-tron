@@ -37,6 +37,10 @@ type testBackend struct {
 	lastRangeStart          uint64
 	lastRangeEnd            uint64
 	account                 *types.Account
+	accountErr              error
+	accountAtErr            error
+	accountIDErr            error
+	accountIDAtErr          error
 	tx                      *corepb.Transaction
 	txErr                   error
 	txInfoErr               error
@@ -60,8 +64,16 @@ func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	}
 	return b.block, nil
 }
-func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { return b.account, nil }
+func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) {
+	if b.accountErr != nil {
+		return nil, b.accountErr
+	}
+	return b.account, nil
+}
 func (b *testBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	if b.accountAtErr != nil {
+		return nil, b.accountAtErr
+	}
 	return b.account, nil
 }
 func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
@@ -328,9 +340,15 @@ func (b *testBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 	return nil, nil
 }
 func (b *testBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	if b.accountIDErr != nil {
+		return nil, b.accountIDErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	if b.accountIDAtErr != nil {
+		return nil, b.accountIDAtErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
@@ -451,6 +469,24 @@ func TestGetAccount_Empty(t *testing.T) {
 	// java-tron returns an empty account (not an error) when address is unknown.
 	if resp == nil {
 		t.Fatal("expected non-nil response for unknown account")
+	}
+}
+
+func TestGetAccount_BackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account segment corrupt")
+	client := newTestClient(t, &testBackend{accountErr: backendErr})
+	_, err := client.GetAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetAccountById_BackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account-id index corrupt")
+	client := newTestClient(t, &testBackend{accountIDErr: backendErr})
+	_, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 

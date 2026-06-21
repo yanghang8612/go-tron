@@ -43,6 +43,10 @@ type stubBackend struct {
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	accountErr              error
+	accountAtErr            error
+	accountIDErr            error
+	accountIDAtErr          error
 	blockErr                error
 	hashErr                 error
 	txErr                   error
@@ -68,8 +72,16 @@ func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	}
 	return nil, nil
 }
-func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { return nil, nil }
+func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) {
+	if s.accountErr != nil {
+		return nil, s.accountErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	if s.accountAtErr != nil {
+		return nil, s.accountAtErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
@@ -344,12 +356,18 @@ func (s *stubBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	if s.accountIDErr != nil {
+		return nil, s.accountIDErr
+	}
 	if s.accountByID != nil {
 		return s.accountByID, nil
 	}
 	return nil, fmt.Errorf("account not found")
 }
 func (s *stubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	if s.accountIDAtErr != nil {
+		return nil, s.accountIDAtErr
+	}
 	if s.accountByID != nil {
 		return s.accountByID, nil
 	}
@@ -511,6 +529,36 @@ func TestGetBlockByIdSurfacesBackendError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("getblockbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account segment corrupt")
+	srv := newTestServer(t, &stubBackend{accountErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccount: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account-id index corrupt")
+	srv := newTestServer(t, &stubBackend{accountIDErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountbyid", "application/json", strings.NewReader(`{"account_id":"user1234"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
 	}
 }
 

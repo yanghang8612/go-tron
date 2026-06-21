@@ -156,6 +156,44 @@ func TestSolidityGetBlockByNumSurfacesBackendError(t *testing.T) {
 	}
 }
 
+func TestSolidityGetAccountSurfacesBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{accountAtErr: errors.New("state history: cold account segment corrupt")},
+		solidNum:    3,
+		pbftNum:     -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for backend account error, got %d", resp.StatusCode)
+	}
+}
+
+func TestSolidityGetAccountByIdSurfacesBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{accountIDAtErr: errors.New("state history: cold account-id index corrupt")},
+		solidNum:    3,
+		pbftNum:     -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getaccountbyid", "application/json", strings.NewReader(`{"account_id":"user1234"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for backend account-id error, got %d", resp.StatusCode)
+	}
+}
+
 // TestPbftGetNowBlock_fallsBackToSolid checks that /walletpbft/getnowblock falls back to
 // the solid block when LatestPbftBlockNum returns -1.
 func TestPbftGetNowBlock_fallsBackToSolid(t *testing.T) {

@@ -235,7 +235,16 @@ func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn
 	} else {
 		acc, err = api.backend.GetAccount(addr)
 	}
-	if err != nil || acc == nil {
+	if err != nil {
+		if accountLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if acc == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -823,6 +832,14 @@ func blockLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
+}
+
+func accountLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "account not found" || (strings.HasPrefix(msg, "account not found at block "))
 }
 
 func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Request) {

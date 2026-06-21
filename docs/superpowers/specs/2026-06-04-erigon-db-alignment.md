@@ -969,7 +969,11 @@ Status:
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend
   coverage now also exercises temporal `SystemAccountIndex` history by resolving
-  the same account ID to different accounts at block 1 and block 2. HTTP
+  the same account ID to different accounts at block 1 and block 2. TRON HTTP
+  and gRPC account/account-id handlers now preserve empty account responses only
+  for explicit account misses; cold state-history or account-id reconstruction
+  errors surface as HTTP 500 / gRPC Internal instead of being disguised as
+  absent accounts. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as

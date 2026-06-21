@@ -96,7 +96,13 @@ func (s *Server) GetAccount(_ context.Context, in *corepb.Account) (*corepb.Acco
 	}
 	addr := common.BytesToAddress(in.Address)
 	acc, err := s.backend.GetAccount(addr)
-	if err != nil || acc == nil {
+	if err != nil {
+		if accountLookupNotFound(err) {
+			return &corepb.Account{}, nil
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if acc == nil {
 		return &corepb.Account{}, nil
 	}
 	return acc.Proto(), nil
@@ -414,14 +420,26 @@ func (s *Server) GetAccountById(_ context.Context, in *corepb.Account) (*corepb.
 	if len(in.Address) > 0 {
 		addr := common.BytesToAddress(in.Address)
 		acc, err := s.backend.GetAccount(addr)
-		if err != nil || acc == nil {
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
 	}
 	if len(in.AccountId) > 0 {
 		acc, err := s.backend.GetAccountById(in.AccountId)
-		if err != nil || acc == nil {
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
@@ -814,6 +832,14 @@ func blockLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
+}
+
+func accountLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "account not found" || strings.HasPrefix(msg, "account not found at block ")
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.

@@ -248,7 +248,13 @@ func (s *SolidityServer) GetAccount(_ context.Context, in *corepb.Account) (*cor
 	}
 	addr := common.BytesToAddress(in.Address)
 	acc, err := s.backend.GetAccountAt(addr, s.solidNum())
-	if err != nil || acc == nil {
+	if err != nil {
+		if accountLookupNotFound(err) {
+			return &corepb.Account{}, nil
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if acc == nil {
 		return &corepb.Account{}, nil
 	}
 	return acc.Proto(), nil
@@ -261,14 +267,26 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 	if len(in.Address) > 0 {
 		addr := common.BytesToAddress(in.Address)
 		acc, err := s.backend.GetAccountAt(addr, s.solidNum())
-		if err != nil || acc == nil {
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
 	}
 	if len(in.AccountId) > 0 {
 		acc, err := s.backend.GetAccountByIdAt(in.AccountId, s.solidNum())
-		if err != nil || acc == nil {
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
