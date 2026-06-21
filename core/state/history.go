@@ -91,6 +91,10 @@ type LiveContractReader interface {
 	GetState(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash
 }
 
+type LiveContractCodeReader interface {
+	GetCodeStrict(addr tcommon.Address) ([]byte, error)
+}
+
 type LiveContractStateReader interface {
 	GetStateStrict(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error)
 }
@@ -148,6 +152,13 @@ func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Ha
 
 // CodeAt returns the live contract bytecode at addr; blockNum is ignored.
 func (r *LiveStateHistoryReader) CodeAt(addr tcommon.Address, _ uint64) ([]byte, error) {
+	if live, ok := r.live.(LiveContractCodeReader); ok {
+		code, err := live.GetCodeStrict(addr)
+		if err != nil || len(code) == 0 {
+			return nil, err
+		}
+		return append([]byte(nil), code...), nil
+	}
 	if live, ok := r.live.(LiveContractReader); ok {
 		code := live.GetCode(addr)
 		if len(code) == 0 {
@@ -618,7 +629,7 @@ func (r *PersistentHistoryReader) readCodeByHashAtBlock(hash tcommon.Hash, block
 	}
 	cold, ok := r.coldHistory.(StateCodeColdHistory)
 	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("state code %x at block %d is missing", hash, blockNum)
 	}
 	txNum, err := r.stateTxNumAtBlockEnd(blockNum)
 	if err != nil {
@@ -626,14 +637,20 @@ func (r *PersistentHistoryReader) readCodeByHashAtBlock(hash tcommon.Hash, block
 	}
 	if contentAddressed, ok := r.coldHistory.(StateCodeColdHistoryAtOrBefore); ok {
 		code, ok, err := contentAddressed.GetCodeAtOrBefore(hash, txNum)
-		if err != nil || !ok || len(code) == 0 {
+		if err != nil {
 			return nil, err
+		}
+		if !ok || len(code) == 0 {
+			return nil, fmt.Errorf("state code %x at block %d is missing", hash, blockNum)
 		}
 		return append([]byte(nil), code...), nil
 	}
 	code, ok, err := cold.GetCode(hash, txNum)
-	if err != nil || !ok || len(code) == 0 {
+	if err != nil {
 		return nil, err
+	}
+	if !ok || len(code) == 0 {
+		return nil, fmt.Errorf("state code %x at block %d is missing", hash, blockNum)
 	}
 	return append([]byte(nil), code...), nil
 }
@@ -1177,7 +1194,13 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
 			return accountCacheEntry{}, nil
 		}
 		var code []byte
-		if live, ok := r.live.(LiveContractReader); ok {
+		if live, ok := r.live.(LiveContractCodeReader); ok {
+			var err error
+			code, err = live.GetCodeStrict(addr)
+			if err != nil {
+				return accountCacheEntry{}, err
+			}
+		} else if live, ok := r.live.(LiveContractReader); ok {
 			code = live.GetCode(addr)
 		}
 		if len(code) == 0 {

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -113,6 +114,46 @@ func TestStateDBCodeUsesTypedStoreBoundary(t *testing.T) {
 	}
 	if len(store.reads) != 1 || store.reads[0] != hash {
 		t.Fatalf("typed code reads = %x, want [%x]", store.reads, hash)
+	}
+}
+
+func TestStateDBGetCodeStrictSurfacesMissingCodeRow(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x01, 0x11}
+	code := []byte{0x60, 0x0b, 0x60, 0x00, 0xf3}
+	hash := tcommon.Keccak256(code)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, code)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteStateCode(diskdb, hash); err != nil {
+		t.Fatalf("delete code row: %v", err)
+	}
+	reloaded, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := reloaded.GetCode(addr); got != nil {
+		t.Fatalf("compat GetCode missing code row = %x, want nil", got)
+	}
+	got, err := reloaded.GetCodeStrict(addr)
+	if err == nil {
+		t.Fatal("GetCodeStrict missing code row error = nil")
+	}
+	if got != nil {
+		t.Fatalf("GetCodeStrict missing code row = %x, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "state code") || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("GetCodeStrict missing code row error = %v, want missing state code context", err)
 	}
 }
 

@@ -2073,6 +2073,42 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	return obj.code
 }
 
+// GetCodeStrict returns contract bytecode and surfaces missing/corrupt
+// content-addressed code rows as data errors. Live execution keeps using
+// GetCode's defensive nil fallback; archive/head readers use this method.
+func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, nil
+	}
+	if obj.code != nil || obj.codeDirty {
+		if len(obj.code) == 0 {
+			return nil, nil
+		}
+		return append([]byte(nil), obj.code...), nil
+	}
+	if obj.codeHash == (tcommon.Hash{}) {
+		return nil, nil
+	}
+	if code, ok, err := s.readStateCodeStrict(obj.codeHash); err != nil {
+		return nil, fmt.Errorf("read state code %x for %s: %w", obj.codeHash, addr.Hex(), err)
+	} else if ok && len(code) > 0 {
+		obj.code = append([]byte(nil), code...)
+		return append([]byte(nil), obj.code...), nil
+	}
+	if s.codeColdHistory != nil {
+		code, ok, err := s.codeColdHistory.GetCodeAtOrBefore(obj.codeHash, s.codeColdTxNum)
+		if err != nil {
+			return nil, fmt.Errorf("read cold state code %x for %s: %w", obj.codeHash, addr.Hex(), err)
+		}
+		if ok && len(code) > 0 {
+			obj.code = append([]byte(nil), code...)
+			return append([]byte(nil), obj.code...), nil
+		}
+	}
+	return nil, fmt.Errorf("state code %x for %s is missing", obj.codeHash, addr.Hex())
+}
+
 // SetCode sets the contract bytecode at addr. Creates the account if needed.
 func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
 	obj := s.GetOrCreateAccount(addr)
