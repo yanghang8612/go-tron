@@ -190,7 +190,8 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 
 // EstimateGas serves eth_estimateGas: the energy used by a simulated execution
 // as 0x-hex. Both from and to are optional (to may be nil for creation-style
-// estimates, unlike eth_call). The block tag, if present, is ignored.
+// estimates, unlike eth_call). A numeric block tag estimates against archive
+// state; latest/pending uses the live head state.
 func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 	var from, to *common.Address
 	if tx.From != "" {
@@ -201,7 +202,16 @@ func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 		a := common.BytesToAddress(common.FromHex(tx.To))
 		to = &a
 	}
-	energy, err := e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	var energy uint64
+	if isLatest {
+		energy, err = e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	} else {
+		energy, err = e.backend.EstimateGasAt(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+	}
 	if err != nil {
 		return "", err
 	}

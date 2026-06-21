@@ -15,13 +15,13 @@ import (
 
 // Slice 7 of the State History Index: JSON-RPC archive-query handler tests.
 //
-// These exercise the block-tag plumbing added to eth_getBalance /
-// eth_getCode / eth_getStorageAt — namely that a non-"latest" block
-// argument routes to the backend's *At (history-reader-backed) methods,
-// "latest"/absent routes to the live read, and a backend gate error
-// (history disabled) surfaces as a JSON-RPC error rather than a wrong
-// value. The reconstruction itself is covered at the reader / TronBackend
-// layers; here we only validate the handler's routing + error mapping.
+// These exercise the block-tag plumbing added to historical account reads and
+// read-only TVM execution — namely that a non-"latest" block argument routes
+// to the backend's *At (history-reader-backed) methods, "latest"/absent routes
+// to the live read, and a backend gate error (history disabled) surfaces as a
+// JSON-RPC error rather than a wrong value. The reconstruction itself is
+// covered at the reader / TronBackend layers; here we only validate the
+// handler's routing + error mapping.
 
 const archiveTestAddr = "0x4101020304050607080900010203040506070809"
 
@@ -135,6 +135,33 @@ func TestEthCall_ArchiveBlock(t *testing.T) {
 	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
 		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
 			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
+	}
+}
+
+func TestEthEstimateGas_ArchiveBlock(t *testing.T) {
+	backend := &stubBackend{
+		estimateGas:   5,
+		estimateGasAt: 7,
+		blockNumber:   100,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	tx := map[string]interface{}{
+		"to":   archiveTestAddr,
+		"data": "0x70a08231",
+	}
+	live := rpcCall(t, srv, "eth_estimateGas", []interface{}{tx, "latest"})
+	if live["result"] != "0x5" {
+		t.Fatalf("latest eth_estimateGas = %v, want live result 0x5", live["result"])
+	}
+	hist := rpcCall(t, srv, "eth_estimateGas", []interface{}{tx, "0x8"})
+	if hist["result"] != "0x7" {
+		t.Fatalf("archive eth_estimateGas = %v, want archive result 0x7", hist["result"])
+	}
+	if backend.liveEstimateCalls != 1 || backend.estimateAtCalls != 1 || backend.estimateAtBlock != 8 {
+		t.Fatalf("eth_estimateGas routing live=%d archive=%d block=%d, want 1/1/8",
+			backend.liveEstimateCalls, backend.estimateAtCalls, backend.estimateAtBlock)
 	}
 }
 

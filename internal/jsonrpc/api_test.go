@@ -16,26 +16,31 @@ import (
 
 // stubBackend is a test double implementing jsonrpc.Backend.
 type stubBackend struct {
-	chainID       int64
-	blockNumber   uint64
-	block         *types.Block
-	blockErr      error
-	balance       int64
-	code          []byte
-	storage       common.Hash
-	tx            *corepb.Transaction
-	txErr         error
-	txBlock       *types.Block
-	txIndex       int
-	txInfo        *corepb.TransactionInfo
-	callResult    []byte
-	callAtResult  []byte
-	callAtBlock   uint64
-	callAtCalls   int
-	liveCallCalls int
-	logs          []*jsonrpc.RPCLog
-	gasPrice      int64
-	peerCount     int
+	chainID           int64
+	blockNumber       uint64
+	block             *types.Block
+	blockErr          error
+	balance           int64
+	code              []byte
+	storage           common.Hash
+	tx                *corepb.Transaction
+	txErr             error
+	txBlock           *types.Block
+	txIndex           int
+	txInfo            *corepb.TransactionInfo
+	callResult        []byte
+	callAtResult      []byte
+	callAtBlock       uint64
+	callAtCalls       int
+	liveCallCalls     int
+	estimateGas       uint64
+	estimateGasAt     uint64
+	estimateAtBlock   uint64
+	estimateAtCalls   int
+	liveEstimateCalls int
+	logs              []*jsonrpc.RPCLog
+	gasPrice          int64
+	peerCount         int
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -108,7 +113,13 @@ func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
 func (s *stubBackend) PeerCount() int  { return s.peerCount }
 func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error) {
-	return 0, nil
+	s.liveEstimateCalls++
+	return s.estimateGas, nil
+}
+func (s *stubBackend) EstimateGasAt(from, to *common.Address, data []byte, value int64, blockNum uint64) (uint64, error) {
+	s.estimateAtCalls++
+	s.estimateAtBlock = blockNum
+	return s.estimateGasAt, nil
 }
 func (s *stubBackend) SubscribeBlocks(_ chan<- *types.Block)   {}
 func (s *stubBackend) UnsubscribeBlocks(_ chan<- *types.Block) {}

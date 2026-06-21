@@ -63,6 +63,7 @@ type Backend interface {
 
 	// EstimateGas simulates execution and returns energy used.
 	EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)
+	EstimateGasAt(from, to *common.Address, data []byte, value int64, blockNum uint64) (uint64, error)
 
 	// Log queries
 	GetLogs(filter LogFilter) ([]*RPCLog, error)

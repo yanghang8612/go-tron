@@ -160,11 +160,13 @@ func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	}
 }
 
-func TestEthAPI_CallHistoricalBlockUsesArchivePath(t *testing.T) {
+func TestEthAPI_HistoricalExecutionUsesArchivePath(t *testing.T) {
 	backend := &stubBackend{
-		blockNumber:  100,
-		callResult:   []byte{0x01},
-		callAtResult: []byte{0x02},
+		blockNumber:   100,
+		callResult:    []byte{0x01},
+		callAtResult:  []byte{0x02},
+		estimateGas:   5,
+		estimateGasAt: 7,
 	}
 	srv := rpc.NewServer()
 	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(backend, jsonrpc.NewFilterManager(backend))); err != nil {
@@ -181,9 +183,19 @@ func TestEthAPI_CallHistoricalBlockUsesArchivePath(t *testing.T) {
 	postParity(t, ts.URL,
 		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"`+to+`"},"0x7"]}`,
 		`"0x02"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[{"data":"0x70a08231","to":"`+to+`"},"latest"]}`,
+		`"0x5"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[{"data":"0x70a08231","to":"`+to+`"},"0x8"]}`,
+		`"0x7"`)
 	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
 		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
 			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
+	}
+	if backend.liveEstimateCalls != 1 || backend.estimateAtCalls != 1 || backend.estimateAtBlock != 8 {
+		t.Fatalf("eth_estimateGas routing live=%d archive=%d block=%d, want 1/1/8",
+			backend.liveEstimateCalls, backend.estimateAtCalls, backend.estimateAtBlock)
 	}
 }
 

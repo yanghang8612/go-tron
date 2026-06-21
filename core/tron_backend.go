@@ -2472,6 +2472,24 @@ func (b *TronBackend) EstimateGas(from, to *tcommon.Address, data []byte, value 
 	return uint64(result.EnergyUsed), nil
 }
 
+func (b *TronBackend) EstimateGasAt(from, to *tcommon.Address, data []byte, value int64, blockNum uint64) (uint64, error) {
+	if to != nil && len(data) == 0 {
+		return 0, nil // plain TRX transfer costs no energy
+	}
+	fromAddr := tcommon.Address{}
+	if from != nil {
+		fromAddr = *from
+	}
+	if to == nil {
+		return 0, fmt.Errorf("eth_estimateGas: 'to' required for contract call")
+	}
+	result, err := b.TriggerConstantContractAt(fromAddr, *to, data, 30_000_000, blockNum)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(result.EnergyUsed), nil
+}
+
 func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) ([]byte, error) {
 	fromAddr := tcommon.Address{}
 	if from != nil {
