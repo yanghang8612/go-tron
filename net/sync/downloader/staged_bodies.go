@@ -286,12 +286,15 @@ func RefreshStagedBodyReadyProgressAfterStage(db ethdb.KeyValueStore, start, tar
 }
 
 // AcceptStagedBody persists a fetched body and then refreshes SyncBodiesReady
-// when that body can start or extend the contiguous staged-body frontier.
+// when that body can start or extend the contiguous staged-body frontier. The
+// ready frontier is only published after the SyncBodies watermark was read and
+// updated/skipped cleanly; otherwise downstream import could trust a ready row
+// whose upstream body stage is unreadable or stale.
 func AcceptStagedBody(db ethdb.KeyValueStore, block *types.Block, raw []byte, start, targetHead uint64) StagedBodyAcceptance {
 	result := StagedBodyAcceptance{
 		Write: rawdb.WriteSyncStagedBlockRawAndProgress(db, block, raw),
 	}
-	if result.Write.StageError != nil {
+	if result.Write.StageError != nil || result.Write.ProgressReadError != nil || result.Write.ProgressWriteError != nil {
 		return result
 	}
 	result.Ready = RefreshStagedBodyReadyProgressAfterStage(db, start, targetHead, result.Write.Number)

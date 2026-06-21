@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -393,6 +394,32 @@ func TestAcceptStagedBodyStopsBeforeReadyRefreshOnStageError(t *testing.T) {
 	}
 	if got.Ready.Refreshed || got.Ready.Skipped || got.Ready.ReadyLimit.Status != StagedBodyReadyLimitMissing {
 		t.Fatalf("ready refresh after stage error = %+v, want untouched zero result", got.Ready)
+	}
+}
+
+func TestAcceptStagedBodyStopsBeforeReadyRefreshOnProgressReadError(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	db := &corruptStageProgressStore{
+		KeyValueStore: base,
+		stage:         rawdb.StageSyncBodies,
+	}
+	block := testBufferedBlock(2)
+
+	got := AcceptStagedBody(db, block, nil, 2, 0)
+	if got.Write.StageError != nil || got.Write.ProgressReadError == nil || got.Write.ProgressWriteError != nil {
+		t.Fatalf("accept = %+v, want only progress read error", got)
+	}
+	if !got.Write.Staged || got.Write.ProgressWritten || got.Write.ProgressSkipped {
+		t.Fatalf("accept write = %+v, want staged body without progress", got.Write)
+	}
+	if got.Ready.Refreshed || got.Ready.Skipped || got.Ready.ReadyLimit.Status != StagedBodyReadyLimitMissing {
+		t.Fatalf("ready refresh after progress read error = %+v, want untouched zero result", got.Ready)
+	}
+	if row, ok, err := rawdb.ReadSyncStagedBlockRaw(base, block.Number()); err != nil || !ok || row.Hash != block.Hash() {
+		t.Fatalf("staged block = %+v ok=%v err=%v, want persisted block2", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(base, rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after progress read error = %+v ok=%v err=%v, want absent", row, ok, err)
 	}
 }
 
@@ -863,6 +890,29 @@ func (corruptStageProgressReader) Has([]byte) (bool, error) {
 
 func (corruptStageProgressReader) Get([]byte) ([]byte, error) {
 	return []byte{0x01}, nil
+}
+
+type corruptStageProgressStore struct {
+	ethdb.KeyValueStore
+	stage rawdb.StageID
+}
+
+func (db *corruptStageProgressStore) Has(key []byte) (bool, error) {
+	if bytes.Equal(key, stageProgressTestKey(db.stage)) {
+		return true, nil
+	}
+	return db.KeyValueStore.Has(key)
+}
+
+func (db *corruptStageProgressStore) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, stageProgressTestKey(db.stage)) {
+		return []byte{0x01}, nil
+	}
+	return db.KeyValueStore.Get(key)
+}
+
+func stageProgressTestKey(stage rawdb.StageID) []byte {
+	return []byte("stage-progress-v1-" + string(stage))
 }
 
 func writeTestStagedBlocks(t *testing.T, db ethdb.KeyValueStore, nums ...uint64) {
