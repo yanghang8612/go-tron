@@ -8,6 +8,7 @@ package rawdb
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -184,13 +185,67 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 		return false, nil
 	}
 	if reader, ok := db.eventLog.(CoveredEventLogReader); ok {
-		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, fn)
+		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, coveredEventLogValidator(fromBlock, toBlock, fn))
 	}
 	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return covered, err
 	}
 	return true, db.IterateEventLogs(fromBlock, toBlock, filter, fn)
+}
+
+func coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
+	var (
+		last    EventLog
+		hasLast bool
+	)
+	return func(row EventLog) (bool, error) {
+		if err := validateCoveredEventLogRow(fromBlock, toBlock, row); err != nil {
+			return false, err
+		}
+		if hasLast && compareEventLogPosition(row, last) <= 0 {
+			return false, fmt.Errorf(
+				"rawdb: cold event log row block=%d tx=%d log=%d is not after previous block=%d tx=%d log=%d",
+				row.BlockNum, row.TxIndex, row.LogIndex,
+				last.BlockNum, last.TxIndex, last.LogIndex,
+			)
+		}
+		hasLast = true
+		last = row
+		return fn(row)
+	}
+}
+
+func validateCoveredEventLogRow(fromBlock, toBlock uint64, row EventLog) error {
+	if row.BlockNum < fromBlock || row.BlockNum > toBlock {
+		return fmt.Errorf("rawdb: cold event log row block %d outside covered range [%d,%d]", row.BlockNum, fromBlock, toBlock)
+	}
+	if row.Log == nil {
+		return fmt.Errorf("rawdb: cold event log row block=%d tx=%d log=%d is nil", row.BlockNum, row.TxIndex, row.LogIndex)
+	}
+	return nil
+}
+
+func compareEventLogPosition(a, b EventLog) int {
+	if a.BlockNum != b.BlockNum {
+		if a.BlockNum < b.BlockNum {
+			return -1
+		}
+		return 1
+	}
+	if a.TxIndex != b.TxIndex {
+		if a.TxIndex < b.TxIndex {
+			return -1
+		}
+		return 1
+	}
+	if a.LogIndex != b.LogIndex {
+		if a.LogIndex < b.LogIndex {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's

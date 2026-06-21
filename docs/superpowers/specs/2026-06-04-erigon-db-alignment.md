@@ -1525,7 +1525,9 @@ Status:
   and event-log iteration can now run through one `ChainDB` boundary backed by
   a single snapshot-manager manifest view, so an archive log query cannot mix a
   passing coverage check from one immutable view with rows from a later
-  uncovered view. Backend and JSON-RPC
+  uncovered view. That covered boundary also rejects nil, out-of-range, or
+  non-monotonic cold event-log rows before API code can silently drop or
+  reorder them after hot receipt rows have been pruned. Backend and JSON-RPC
   `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
   segment files to prove filtered archive reads are served through the cold
   index path. The API falls back to the hot scan on coverage gaps and surfaces

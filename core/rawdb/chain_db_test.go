@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -282,6 +283,80 @@ func TestChainDBIterateCoveredEventLogsSkipsIterationWhenUncovered(t *testing.T)
 	}
 	if reader.coveredCalls != 1 || reader.iterCalls != 0 {
 		t.Fatalf("uncovered calls covered=%d iter=%d, want coverage only", reader.coveredCalls, reader.iterCalls)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsRejectsOutOfRangeAtomicRow(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 13,
+			Log:      &corepb.TransactionInfo_Log{Address: []byte{0x13}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(10, 12, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for out-of-range cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "outside covered range [10,12]") {
+		t.Fatalf("IterateCoveredEventLogs out-of-range = covered %v err %v, want covered error", covered, err)
+	}
+	if reader.coveredIterCalls != 1 || reader.coveredCalls != 0 || reader.iterCalls != 0 {
+		t.Fatalf("reader calls coveredIter=%d covered=%d iter=%d, want atomic only", reader.coveredIterCalls, reader.coveredCalls, reader.iterCalls)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsRejectsNilAtomicRowPayload(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 11,
+			TxIndex:  2,
+			LogIndex: 3,
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(10, 12, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for nil cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "cold event log row block=11 tx=2 log=3 is nil") {
+		t.Fatalf("IterateCoveredEventLogs nil row = covered %v err %v, want nil-row error", covered, err)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsRejectsUnsortedAtomicRows(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{
+			{BlockNum: 10, TxIndex: 1, LogIndex: 1, Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
+			{BlockNum: 10, TxIndex: 1, LogIndex: 0, Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
+		},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var rows int
+	covered, err := cdb.IterateCoveredEventLogs(10, 10, EventLogFilter{}, func(EventLog) (bool, error) {
+		rows++
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "is not after previous") {
+		t.Fatalf("IterateCoveredEventLogs unsorted = covered %v err %v, want ordering error", covered, err)
+	}
+	if rows != 1 {
+		t.Fatalf("callback rows = %d, want only first sorted row before error", rows)
 	}
 }
 
