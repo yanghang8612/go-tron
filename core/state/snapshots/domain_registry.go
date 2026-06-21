@@ -376,7 +376,10 @@ func readHotStateCode(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, 
 	if hash == (common.Hash{}) {
 		return nil, false, nil
 	}
-	code := rawdb.ReadStateCode(db, hash)
+	code, ok, err := rawdb.ReadStateCodeStrict(db, hash)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
 	if len(code) == 0 {
 		return nil, false, nil
 	}

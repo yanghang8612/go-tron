@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -26,14 +27,24 @@ func WriteStateCode(db ethdb.KeyValueWriter, hash common.Hash, code []byte) erro
 
 // ReadStateCode loads immutable contract bytecode by content hash.
 func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	code, ok, err := ReadStateCodeStrict(db, hash)
+	if err != nil || !ok {
+		return nil
+	}
+	return code
+}
+
+// ReadStateCodeStrict loads immutable contract bytecode by content hash and
+// distinguishes missing code from storage read failures.
+func ReadStateCodeStrict(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error) {
 	if hash == (common.Hash{}) {
-		return nil
+		return nil, false, nil
 	}
-	data, err := db.Get(stateCodeKey(hash))
-	if err != nil {
-		return nil
+	data, ok, err := readValueThenVerifyMiss(db, stateCodeKey(hash), fmt.Sprintf("state code %x", hash), nil)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
-	return append([]byte(nil), data...)
+	return append([]byte(nil), data...), true, nil
 }
 
 func DeleteStateCode(db ethdb.KeyValueWriter, hash common.Hash) error {

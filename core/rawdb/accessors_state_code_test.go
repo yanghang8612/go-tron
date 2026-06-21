@@ -2,9 +2,12 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
 
@@ -26,6 +29,14 @@ func TestStateCodeReadWrite(t *testing.T) {
 	got[0] = 0xff
 	if reread := ReadStateCode(db, hash); bytes.Equal(reread, got) {
 		t.Fatal("ReadStateCode returned aliased bytes")
+	}
+	strict, ok, err := ReadStateCodeStrict(db, hash)
+	if err != nil || !ok || !bytes.Equal(strict, code) {
+		t.Fatalf("strict code = %x ok=%v err=%v, want %x", strict, ok, err, code)
+	}
+	strict[0] = 0xff
+	if reread, ok, err := ReadStateCodeStrict(db, hash); err != nil || !ok || bytes.Equal(reread, strict) {
+		t.Fatalf("ReadStateCodeStrict returned aliased bytes or failed reread=%x ok=%v err=%v", reread, ok, err)
 	}
 }
 
@@ -49,4 +60,71 @@ func TestStateCodeDelete(t *testing.T) {
 	if got := ReadStateCode(db, hash); got != nil {
 		t.Fatalf("deleted code = %x", got)
 	}
+}
+
+func TestStateCodeStrictReadDistinguishesMissAndErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	code := []byte{0x60, 0x42}
+	hash := common.Keccak256(code)
+
+	if got, ok, err := ReadStateCodeStrict(db, common.Hash{}); err != nil || ok || got != nil {
+		t.Fatalf("zero hash read = %x ok=%v err=%v, want miss", got, ok, err)
+	}
+	if got, ok, err := ReadStateCodeStrict(db, hash); err != nil || ok || got != nil {
+		t.Fatalf("missing code = %x ok=%v err=%v, want miss", got, ok, err)
+	}
+	if got, ok, err := ReadStateCodeStrict(failingStateCodeReader{
+		KeyValueStore: db,
+		getKey:        stateCodeKey(hash),
+		getErr:        errors.New("get boom"),
+	}, hash); err != nil || ok || got != nil {
+		t.Fatalf("missing code with get error = %x ok=%v err=%v, want verified miss", got, ok, err)
+	}
+
+	if err := WriteStateCode(db, hash, code); err != nil {
+		t.Fatalf("write state code: %v", err)
+	}
+	if got, ok, err := ReadStateCodeStrict(failingStateCodeReader{
+		KeyValueStore: db,
+		getKey:        stateCodeKey(hash),
+		getErr:        errors.New("get boom"),
+	}, hash); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("present code get error = %x ok=%v err=%v, want get error", got, ok, err)
+	}
+	if got, ok, err := ReadStateCodeStrict(failingStateCodeReader{
+		KeyValueStore: db,
+		getKey:        stateCodeKey(hash),
+		getErr:        errors.New("get boom"),
+		hasErr:        errors.New("has boom"),
+	}, hash); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence after get error") {
+		t.Fatalf("present code has error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+	if got := ReadStateCode(failingStateCodeReader{
+		KeyValueStore: db,
+		getKey:        stateCodeKey(hash),
+		getErr:        errors.New("get boom"),
+	}, hash); got != nil {
+		t.Fatalf("compat reader get error = %x, want nil", got)
+	}
+}
+
+type failingStateCodeReader struct {
+	ethdb.KeyValueStore
+	getKey []byte
+	getErr error
+	hasErr error
+}
+
+func (r failingStateCodeReader) Has(key []byte) (bool, error) {
+	if bytes.Equal(key, r.getKey) && r.hasErr != nil {
+		return false, r.hasErr
+	}
+	return r.KeyValueStore.Has(key)
+}
+
+func (r failingStateCodeReader) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, r.getKey) && r.getErr != nil {
+		return nil, r.getErr
+	}
+	return r.KeyValueStore.Get(key)
 }

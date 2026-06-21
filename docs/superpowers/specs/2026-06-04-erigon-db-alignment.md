@@ -306,6 +306,12 @@ Status:
   the fast `Get`/`GetNoCopy` hit path and only probe `Has` after a read error,
   so bulk commitment folding does not pay an extra KV lookup for normal hits
   while storage errors still abort instead of being treated as empty branches.
+- CodeDomain hot reads now expose the same strict path through
+  `ReadStateCodeStrict` and the registered `ReadHotCode` hook. Archive
+  reconstruction and pruning coverage checks therefore surface unreadable hot
+  content-addressed contract bytecode rows when no CodeDomain snapshot already
+  proves coverage, instead of treating them as missing code, while still
+  keeping the legacy `ReadStateCode` compatibility wrapper.
 - The current-cycle reward pending accumulator also probes presence before
   decoding, so startup and reorg reloads stop on unreadable accumulator storage
   instead of silently resetting in-memory pending rewards to empty.

@@ -382,6 +382,30 @@ func TestCheckerRequiresReferencedCodeHashCoverage(t *testing.T) {
 	}
 }
 
+func TestCheckerSurfacesUnreadableHotCodeWithoutSnapshotCoverage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x4d}, common.AccountIDLength)...))
+	code := []byte{0x60, 0x11}
+	hash := common.Keccak256(code)
+	writeAccountLatestEnvelope(t, db, owner, hash)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &checkerCodeHidingStore{
+		Store: db,
+		hidden: map[common.Hash]struct{}{
+			hash: {},
+		},
+	}
+	_, err := Check(wrapped, ArchivePolicy(), 1, "")
+	if err == nil || !strings.Contains(err.Error(), "hidden state code") {
+		t.Fatalf("check error = %v, want hidden state code", err)
+	}
+}
+
 func TestCheckerRequiresHistoricalCodeHashCoverage(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x49}, common.AccountIDLength)...))
