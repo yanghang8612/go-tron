@@ -454,7 +454,13 @@ func (s *Server) GetContract(_ context.Context, in *apipb.BytesMessage) (*contra
 	}
 	addr := common.BytesToAddress(in.Value)
 	sc, err := s.backend.GetContract(addr)
-	if err != nil || sc == nil {
+	if err != nil {
+		if contractLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "contract not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if sc == nil {
 		return nil, status.Error(codes.NotFound, "contract not found")
 	}
 	return sc, nil
@@ -467,7 +473,13 @@ func (s *Server) GetContractInfo(_ context.Context, in *apipb.BytesMessage) (*co
 	}
 	addr := common.BytesToAddress(in.Value)
 	sc, err := s.backend.GetContract(addr)
-	if err != nil || sc == nil {
+	if err != nil {
+		if contractLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "contract not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if sc == nil {
 		return nil, status.Error(codes.NotFound, "contract not found")
 	}
 	return &contractpb.SmartContractDataWrapper{
@@ -840,6 +852,14 @@ func accountLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "account not found" || strings.HasPrefix(msg, "account not found at block ")
+}
+
+func contractLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "contract not found"
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.

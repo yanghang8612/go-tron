@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,8 @@ type stubBackend struct {
 	accountAtErr            error
 	accountIDErr            error
 	accountIDAtErr          error
+	contractErr             error
+	contractAtErr           error
 	blockErr                error
 	hashErr                 error
 	txErr                   error
@@ -88,9 +91,15 @@ func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return
 func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
 func (s *stubBackend) PendingTransactionCount() int                     { return 0 }
 func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	if s.contractErr != nil {
+		return nil, s.contractErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
+	if s.contractAtErr != nil {
+		return nil, s.contractAtErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
@@ -559,6 +568,42 @@ func TestGetAccountByIdSurfacesBackendError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetContractSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state latest: contract metadata corrupt")
+	srv := newTestServer(t, &stubBackend{contractErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getcontract", "application/json", strings.NewReader(`{"value":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getcontract: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getcontract status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetContractPreservesNotFoundErrorAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{contractErr: errors.New("contract not found")})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getcontract", "application/json", strings.NewReader(`{"value":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getcontract: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getcontract status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("getcontract body = %q, want {}", string(body))
 	}
 }
 

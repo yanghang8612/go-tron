@@ -46,6 +46,7 @@ type testBackend struct {
 	txInfoErr               error
 	params                  []tronapi.ChainParameter
 	contract                *contractpb.SmartContract
+	contractErr             error
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
 	delegatedResources      []*tronapi.DelegatedResourceInfo
@@ -80,6 +81,9 @@ func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error { return
 func (b *testBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
 func (b *testBackend) PendingTransactionCount() int                     { return 0 }
 func (b *testBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	if b.contractErr != nil {
+		return nil, b.contractErr
+	}
 	return b.contract, nil
 }
 func (b *testBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
@@ -815,6 +819,23 @@ func TestGetContract_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetContract_BackendError(t *testing.T) {
+	backendErr := errors.New("state latest: contract metadata corrupt")
+	client := newTestClient(t, &testBackend{contractErr: backendErr})
+	_, err := client.GetContract(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetContract_PreservesNotFoundError(t *testing.T) {
+	client := newTestClient(t, &testBackend{contractErr: errors.New("contract not found")})
+	_, err := client.GetContract(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
 func TestGetContract_Found(t *testing.T) {
 	sc := &contractpb.SmartContract{Name: "TestContract", Bytecode: []byte{0x60, 0x80}}
 	client := newTestClient(t, &testBackend{contract: sc})
@@ -824,6 +845,15 @@ func TestGetContract_Found(t *testing.T) {
 	}
 	if resp.GetName() != "TestContract" {
 		t.Fatalf("want TestContract, got %s", resp.GetName())
+	}
+}
+
+func TestGetContractInfo_BackendError(t *testing.T) {
+	backendErr := errors.New("state latest: contract bytecode corrupt")
+	client := newTestClient(t, &testBackend{contractErr: backendErr})
+	_, err := client.GetContractInfo(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 

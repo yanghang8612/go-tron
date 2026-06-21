@@ -194,6 +194,27 @@ func TestSolidityGetAccountByIdSurfacesBackendError(t *testing.T) {
 	}
 }
 
+func TestSolidityGetContractSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 3, pbftNum: -1},
+		contractAtErr:    errors.New("state history: cold contract metadata corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getcontract", "application/json", strings.NewReader(`{"value":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for backend contract error, got %d", resp.StatusCode)
+	}
+	if stub.contractAtBlock != 3 {
+		t.Fatalf("GetContractAt block = %d, want solid block 3", stub.contractAtBlock)
+	}
+}
+
 // TestPbftGetNowBlock_fallsBackToSolid checks that /walletpbft/getnowblock falls back to
 // the solid block when LatestPbftBlockNum returns -1.
 func TestPbftGetNowBlock_fallsBackToSolid(t *testing.T) {
@@ -480,6 +501,7 @@ type isolationStubBackend struct {
 	gotAt                    uint64 // last blockNum passed to GetAccountAt
 	liveContractCalls        int
 	contractAtBlock          uint64
+	contractAtErr            error
 	liveConstantCalls        int
 	constantAtBlock          uint64
 	liveEstimateCalls        int
@@ -544,6 +566,9 @@ func (s *isolationStubBackend) GetContract(addr common.Address) (*contractpb.Sma
 
 func (s *isolationStubBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
 	s.contractAtBlock = blockNum
+	if s.contractAtErr != nil {
+		return nil, s.contractAtErr
+	}
 	return &contractpb.SmartContract{
 		ContractAddress: s.solidAddr.Bytes(),
 		Name:            "bound-contract",

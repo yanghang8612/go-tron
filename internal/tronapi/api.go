@@ -406,11 +406,16 @@ func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundF
 	} else {
 		sc, err = api.backend.GetContractAt(addr, boundFn())
 	}
-	if err != nil || sc == nil {
-		if boundFn != nil && err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err != nil {
+		if contractLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
 			return
 		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sc == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -840,6 +845,14 @@ func accountLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "account not found" || (strings.HasPrefix(msg, "account not found at block "))
+}
+
+func contractLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "contract not found"
 }
 
 func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Request) {

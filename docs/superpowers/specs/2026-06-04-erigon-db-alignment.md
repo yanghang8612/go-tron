@@ -973,7 +973,10 @@ Status:
   and gRPC account/account-id handlers now preserve empty account responses only
   for explicit account misses; cold state-history or account-id reconstruction
   errors surface as HTTP 500 / gRPC Internal instead of being disguised as
-  absent accounts. HTTP
+  absent accounts. TRON HTTP and gRPC contract handlers follow the same
+  error-preserving rule, keeping explicit contract misses as empty/NotFound
+  responses while surfacing latest/cold contract metadata read failures as
+  HTTP 500 / gRPC Internal. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as
