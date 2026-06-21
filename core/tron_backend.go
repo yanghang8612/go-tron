@@ -1109,6 +1109,9 @@ func readDelegationIndexAt(reader *state.PersistentHistoryReader, addr tcommon.A
 	if err != nil || !ok || len(data) == 0 {
 		return nil, err
 	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil, fmt.Errorf("delegation index at block %d has malformed length %d, want multiple of %d", blockNum, len(data), tcommon.AddressLength)
+	}
 	count := len(data) / tcommon.AddressLength
 	addrs := make([]tcommon.Address, count)
 	for i := range addrs {

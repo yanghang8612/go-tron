@@ -14,6 +14,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
@@ -1077,6 +1078,21 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 		block2Index.ToAddresses[0] != hex.EncodeToString(to1[:]) ||
 		block2Index.ToAddresses[1] != hex.EncodeToString(to2[:]) {
 		t.Fatalf("block2 delegation index = %+v, want %x,%x", block2Index, to1[:], to2[:])
+	}
+}
+
+func TestArchiveQuery_DelegationIndexRejectsMalformedHistory(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	from := testInsertAddr(71)
+	key := rawdb.DelegationIndexStateKey(from)
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, key, []byte("short")); err != nil {
+		t.Fatalf("WriteStateKVLatest malformed delegation index: %v", err)
+	}
+	reader := state.NewPersistentHistoryReader(db, nil, 1)
+
+	_, err := readDelegationIndexAt(reader, from, 1)
+	if err == nil || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("readDelegationIndexAt malformed error = %v, want malformed length", err)
 	}
 }
 
