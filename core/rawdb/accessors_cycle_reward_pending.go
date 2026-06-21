@@ -12,9 +12,9 @@ import (
 
 // ReadCycleRewardPending reads the flat current-cycle reward accumulator.
 func ReadCycleRewardPending(db ethdb.KeyValueReader) (int64, map[common.Address]int64, bool, error) {
-	data, err := db.Get(cycleRewardPendingKey)
-	if err != nil || len(data) == 0 {
-		return 0, nil, false, nil
+	data, ok, err := readPresentValue(db, cycleRewardPendingKey, "cycle reward pending accumulator")
+	if err != nil || !ok {
+		return 0, nil, ok, err
 	}
 	if len(data) < 12 {
 		return 0, nil, false, errors.New("cycle reward pending: short value")

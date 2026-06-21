@@ -304,6 +304,9 @@ Status:
   the fast `Get`/`GetNoCopy` hit path and only probe `Has` after a read error,
   so bulk commitment folding does not pay an extra KV lookup for normal hits
   while storage errors still abort instead of being treated as empty branches.
+- The current-cycle reward pending accumulator also probes presence before
+  decoding, so startup and reorg reloads stop on unreadable accumulator storage
+  instead of silently resetting in-memory pending rewards to empty.
 - Sync staged body reads now follow the same rule: `ReadSyncStagedBlock` and
   `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
   storage errors, so downloader restart and ready-frontier validation stop on
