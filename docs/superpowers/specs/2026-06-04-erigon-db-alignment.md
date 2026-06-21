@@ -976,7 +976,9 @@ Status:
   absent accounts. TRON HTTP and gRPC contract handlers follow the same
   error-preserving rule, keeping explicit contract misses as empty/NotFound
   responses while surfacing latest/cold contract metadata read failures as
-  HTTP 500 / gRPC Internal. HTTP
+  HTTP 500 / gRPC Internal. TRON HTTP `getaccountnet` now applies the same
+  split: explicit account misses still return `{}`, while cold account-net or
+  dynamic-property reconstruction failures return HTTP 500. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as

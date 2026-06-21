@@ -39,6 +39,8 @@ type stubBackend struct {
 	// M5.1 PR-1
 	accountByID             *types.Account
 	accountNet              *apipb.AccountNetMessage
+	accountNetErr           error
+	accountNetAtErr         error
 	accountResource         *tronapi.AccountResource
 	accountBalanceResp      *contractpb.AccountBalanceResponse
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
@@ -383,12 +385,18 @@ func (s *stubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*type
 	return nil, fmt.Errorf("account not found")
 }
 func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	if s.accountNetErr != nil {
+		return nil, s.accountNetErr
+	}
 	if s.accountNet != nil {
 		return s.accountNet, nil
 	}
 	return nil, nil
 }
 func (s *stubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	if s.accountNetAtErr != nil {
+		return nil, s.accountNetAtErr
+	}
 	if s.accountNet != nil {
 		return s.accountNet, nil
 	}
@@ -978,6 +986,42 @@ func TestGetAccountNet(t *testing.T) {
 	// protojson encodes int64 as string
 	if result["freeNetUsed"] != "100" {
 		t.Fatalf("unexpected freeNetUsed: %v", result)
+	}
+}
+
+func TestGetAccountNetSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account net dynamic properties corrupt")
+	srv := newTestServer(t, &stubBackend{accountNetErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountnet", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountnet: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountnet status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountNetPreservesAccountNotFoundAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{accountNetErr: errors.New("account not found")})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountnet", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountnet: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getaccountnet status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("getaccountnet body = %q, want {}", string(body))
 	}
 }
 

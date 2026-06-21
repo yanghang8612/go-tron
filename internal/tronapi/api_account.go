@@ -285,7 +285,16 @@ func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boun
 	} else {
 		msg, err = api.backend.GetAccountNet(addr)
 	}
-	if err != nil || msg == nil {
+	if err != nil {
+		if accountLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if msg == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return

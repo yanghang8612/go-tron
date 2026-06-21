@@ -1046,6 +1046,25 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidityAccountNetSurfacesBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{accountNetAtErr: errors.New("state history: cold account net dynamic properties corrupt")},
+		solidNum:    42,
+		pbftNum:     -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getaccountnet", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for backend account net error, got %d", resp.StatusCode)
+	}
+}
+
 func TestSolidityGetContractUsesSolidBoundArchivePath(t *testing.T) {
 	stub := &isolationStubBackend{
 		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
