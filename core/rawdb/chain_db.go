@@ -185,22 +185,27 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 		return false, nil
 	}
 	if reader, ok := db.eventLog.(CoveredEventLogReader); ok {
-		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, coveredEventLogValidator(fromBlock, toBlock, fn))
+		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, fn))
 	}
 	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return covered, err
 	}
-	return true, db.IterateEventLogs(fromBlock, toBlock, filter, coveredEventLogValidator(fromBlock, toBlock, fn))
+	return true, db.IterateEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, fn))
 }
 
-func coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
+func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
 	var (
-		last    EventLog
-		hasLast bool
+		last          EventLog
+		hasLast       bool
+		canonicalHash = make(map[uint64]common.Hash)
+		canonicalOK   = make(map[uint64]bool)
 	)
 	return func(row EventLog) (bool, error) {
 		if err := validateCoveredEventLogRow(fromBlock, toBlock, row); err != nil {
+			return false, err
+		}
+		if err := db.validateCoveredEventLogCanonicalHash(row, canonicalHash, canonicalOK); err != nil {
 			return false, err
 		}
 		if hasLast && compareEventLogPosition(row, last) <= 0 {
@@ -214,6 +219,30 @@ func coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool
 		last = row
 		return fn(row)
 	}
+}
+
+func (db *ChainDB) validateCoveredEventLogCanonicalHash(row EventLog, cache map[uint64]common.Hash, okCache map[uint64]bool) error {
+	if db == nil {
+		return nil
+	}
+	canonical, cached := cache[row.BlockNum]
+	ok := okCache[row.BlockNum]
+	if !cached {
+		var err error
+		canonical, ok, err = ReadBlockHashByNumberStrict(db, row.BlockNum)
+		if err != nil {
+			return fmt.Errorf("rawdb: cold event log row block=%d canonical hash read: %w", row.BlockNum, err)
+		}
+		cache[row.BlockNum] = canonical
+		okCache[row.BlockNum] = ok
+	}
+	if !ok {
+		return nil
+	}
+	if row.BlockHash != canonical {
+		return fmt.Errorf("rawdb: cold event log row block=%d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonical)
+	}
+	return nil
 }
 
 func validateCoveredEventLogRow(fromBlock, toBlock uint64, row EventLog) error {

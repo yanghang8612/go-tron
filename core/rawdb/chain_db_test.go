@@ -385,6 +385,35 @@ func TestChainDBIterateCoveredEventLogsRejectsNilAtomicRowPayload(t *testing.T) 
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsRejectsCanonicalHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	block := testSyncStagedBlock(12, common.Hash{0x0b})
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum:  block.Number(),
+			TxIndex:   1,
+			LogIndex:  2,
+			BlockHash: common.Hash{0xff},
+			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x12}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(block.Number(), block.Number(), EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for hash-mismatched cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "does not match canonical hash") {
+		t.Fatalf("IterateCoveredEventLogs hash mismatch = covered %v err %v, want canonical hash error", covered, err)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsRejectsUnsortedAtomicRows(t *testing.T) {
 	t.Parallel()
 
