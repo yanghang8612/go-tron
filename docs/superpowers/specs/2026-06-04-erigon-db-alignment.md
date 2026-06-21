@@ -1063,11 +1063,12 @@ Status:
   JSON form preserves the same critical exit semantics as the text command and
   includes freezer/stage/snapshot detail arrays plus hidden-freezer and retired
   snapshot counters. It also reads the persisted `history-prune-mode-v1` row,
-  reports `modeAlert*` plus `pruneMode*` fields, and fails when stage progress
-  contradicts mode semantics, such as `archive` datadirs with hot-prune,
-  lookup-prune, or tail-prune progress, or non-`minimal` datadirs with
-  freezer-tail prune progress. The Nile sampler and storage benchmark harness
-  request the JSON form while retaining a legacy text parser fallback.
+  reports `modeAlert*` plus `pruneMode*` fields, treats persisted-mode storage
+  read errors as critical instead of an unknown mode, and fails when stage
+  progress contradicts mode semantics, such as `archive` datadirs with
+  hot-prune, lookup-prune, or tail-prune progress, or non-`minimal` datadirs
+  with freezer-tail prune progress. The Nile sampler and storage benchmark
+  harness request the JSON form while retaining a legacy text parser fallback.
 - `gtron db storage-alerts --prometheus` now exposes the same aggregate storage
   alert state as Prometheus text metrics for external monitor scrape jobs:
   overall/component status values, component issue counts, per-component

@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
@@ -26,9 +27,16 @@ func ReadHistoryPruneMode(db ethdb.KeyValueReader) (mode string, ok bool, err er
 	if db == nil {
 		return "", false, nil
 	}
+	exists, err := db.Has(historyPruneModeKey)
+	if err != nil {
+		return "", false, fmt.Errorf("rawdb: read history prune mode presence: %w", err)
+	}
+	if !exists {
+		return "", false, nil
+	}
 	raw, err := db.Get(historyPruneModeKey)
 	if err != nil {
-		return "", false, nil
+		return "", false, fmt.Errorf("rawdb: read history prune mode: %w", err)
 	}
 	if len(raw) == 0 {
 		return "", true, errors.New("rawdb: empty persisted history prune mode")
