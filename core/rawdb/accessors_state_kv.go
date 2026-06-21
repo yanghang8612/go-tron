@@ -55,9 +55,9 @@ func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, ge
 }
 
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
-	raw, err := db.Get(stateKVLatestKey(owner, generation, domain, logicalKey))
-	if err != nil {
-		return nil, false, nil
+	raw, ok, err := readPresentValue(db, stateKVLatestKey(owner, generation, domain, logicalKey), fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain)))
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	value, err := DecodeStateKVLatestValue(raw)
 	if err != nil {
@@ -185,9 +185,9 @@ func EncodeStateKVGenerationValue(generation uint64) []byte {
 }
 
 func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint64, bool, error) {
-	data, err := db.Get(stateKVGenerationKey(owner))
-	if err != nil {
-		return 0, false, nil
+	data, ok, err := readPresentValue(db, stateKVGenerationKey(owner), fmt.Sprintf("state kv generation for %s", owner.Hex()))
+	if err != nil || !ok {
+		return 0, ok, err
 	}
 	generation, err := DecodeStateKVGenerationValue(data)
 	if err != nil {

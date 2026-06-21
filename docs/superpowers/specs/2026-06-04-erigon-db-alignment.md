@@ -292,6 +292,13 @@ Status:
   `ReadStageProgressRow` probes with `Has` before `Get` and propagates either
   error. This keeps sync/freezer/snapshot/prune gates from silently treating an
   unreadable stage boundary as if no boundary existed.
+- Flat state-domain readers now follow the same missing-vs-error rule for
+  archive-critical rows: `ReadStateAccountLatest`, `ReadStateKVLatest`,
+  `ReadStateKVGeneration`, `ReadStateTxRange`, and `ReadStateDomainChange`
+  probe with `Has` before `Get` and propagate storage errors. Archive as-of
+  reads, snapshot builders, and hot-history pruning therefore stop on
+  unreadable latest/history rows instead of rolling back from an incorrectly
+  assumed absence.
 - Sync staged body reads now follow the same rule: `ReadSyncStagedBlock` and
   `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
   storage errors, so downloader restart and ready-frontier validation stop on

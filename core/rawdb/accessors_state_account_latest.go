@@ -18,11 +18,7 @@ func WriteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address, valu
 }
 
 func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
-	value, err := db.Get(stateAccountLatestKey(owner))
-	if err != nil {
-		return nil, false, nil
-	}
-	return append([]byte(nil), value...), true, nil
+	return readPresentValue(db, stateAccountLatestKey(owner), fmt.Sprintf("state account latest for %s", owner.Hex()))
 }
 
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {

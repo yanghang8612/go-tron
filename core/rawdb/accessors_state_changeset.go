@@ -111,9 +111,9 @@ func WriteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64, blockHash commo
 }
 
 func ReadStateTxRange(db ethdb.KeyValueReader, blockNum uint64) (*StateTxRange, bool, error) {
-	data, err := db.Get(stateTxRangeKey(blockNum))
-	if err != nil {
-		return nil, false, nil
+	data, ok, err := readPresentValue(db, stateTxRangeKey(blockNum), fmt.Sprintf("state tx range for block %d", blockNum))
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	var row StateTxRange
 	if err := rlp.DecodeBytes(data, &row); err != nil {
@@ -216,9 +216,9 @@ func validateStateDomainChange(change *StateDomainChange) error {
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
-	data, err := db.Get(stateChangeSetKey(blockNum, seq))
-	if err != nil {
-		return nil, false, nil
+	data, ok, err := readPresentValue(db, stateChangeSetKey(blockNum, seq), fmt.Sprintf("state domain change for block %d seq %d", blockNum, seq))
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	var row StateDomainChange
 	if err := rlp.DecodeBytes(data, &row); err != nil {
