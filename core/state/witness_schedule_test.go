@@ -31,6 +31,12 @@ func TestAddressListCodec(t *testing.T) {
 	if got := decodeAddressList(encodeAddressList(in)); !sameAddrs(got, in) {
 		t.Fatalf("round-trip mismatch: got %v want %v", got, in)
 	}
+	if got, err := decodeAddressListStrict("test list", encodeAddressList(in)); err != nil || !sameAddrs(got, in) {
+		t.Fatalf("strict round-trip = %v err=%v, want %v nil", got, err, in)
+	}
+	if got, err := decodeAddressListStrict("test list", encodeAddressList(nil)); err != nil || got != nil {
+		t.Fatalf("strict empty list = %v err=%v, want nil nil", got, err)
+	}
 	if got := decodeAddressList(encodeAddressList(nil)); got != nil {
 		t.Fatalf("empty list should decode to nil, got %v", got)
 	}
@@ -41,6 +47,9 @@ func TestAddressListCodec(t *testing.T) {
 	bad := []byte{0, 0, 0, 2, 0x41}
 	if got := decodeAddressList(bad); got != nil {
 		t.Fatalf("truncated data should decode to nil, got %v", got)
+	}
+	if got, err := decodeAddressListStrict("test list", bad); err == nil || got != nil {
+		t.Fatalf("strict truncated data = %v err=%v, want nil error", got, err)
 	}
 }
 

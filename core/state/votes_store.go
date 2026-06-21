@@ -110,7 +110,10 @@ func (s *StateDB) AppendVotesIndex(addr tcommon.Address) error {
 	}
 	var existing []tcommon.Address
 	if ok {
-		existing = decodeAddressList(raw)
+		existing, err = decodeAddressListStrict("votes index", raw)
+		if err != nil {
+			return err
+		}
 	}
 	for _, a := range existing {
 		if a == addr {

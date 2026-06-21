@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -55,6 +56,25 @@ func decodeAddressList(data []byte) []tcommon.Address {
 	return out
 }
 
+func decodeAddressListStrict(label string, data []byte) ([]tcommon.Address, error) {
+	if len(data) < 4 {
+		return nil, fmt.Errorf("%s: length %d shorter than 4-byte count", label, len(data))
+	}
+	count := uint64(binary.BigEndian.Uint32(data[:4]))
+	expected := uint64(4) + count*uint64(tcommon.AddressLength)
+	if uint64(len(data)) != expected {
+		return nil, fmt.Errorf("%s: length %d, want %d for %d addresses", label, len(data), expected, count)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	out := make([]tcommon.Address, int(count))
+	for i := range out {
+		out[i] = tcommon.BytesToAddress(data[4+i*tcommon.AddressLength : 4+(i+1)*tcommon.AddressLength])
+	}
+	return out, nil
+}
+
 // readAddressList resolves a witness-schedule key, propagating the KV error so
 // callers that do read-modify-write (AppendWitnessIndex) never truncate on a
 // transient trie error.
@@ -63,7 +83,7 @@ func (s *StateDB) readAddressList(key []byte) ([]tcommon.Address, error) {
 	if err != nil || !ok {
 		return nil, err
 	}
-	return decodeAddressList(raw), nil
+	return decodeAddressListStrict("witness schedule address list", raw)
 }
 
 // ReadActiveWitnesses returns the rooted active witness list (nil if unset). A

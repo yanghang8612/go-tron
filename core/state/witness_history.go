@@ -18,7 +18,7 @@ func (r *PersistentHistoryReader) WitnessIndexAt(blockNum uint64) ([]tcommon.Add
 	if err != nil || !ok {
 		return nil, err
 	}
-	return decodeAddressList(raw), nil
+	return decodeAddressListStrict(fmt.Sprintf("decode witness index at block %d", blockNum), raw)
 }
 
 // ActiveWitnessesAt reconstructs the active witness set at the end of blockNum.
@@ -27,7 +27,7 @@ func (r *PersistentHistoryReader) ActiveWitnessesAt(blockNum uint64) ([]tcommon.
 	if err != nil || !ok {
 		return nil, err
 	}
-	return decodeAddressList(raw), nil
+	return decodeAddressListStrict(fmt.Sprintf("decode active witness list at block %d", blockNum), raw)
 }
 
 // WitnessAt reconstructs a witness capsule at the end of blockNum.
@@ -50,7 +50,7 @@ func (r *PersistentHistoryReader) VotesIndexAt(blockNum uint64) ([]tcommon.Addre
 	if err != nil || !ok {
 		return nil, err
 	}
-	return decodeAddressList(raw), nil
+	return decodeAddressListStrict(fmt.Sprintf("decode votes index at block %d", blockNum), raw)
 }
 
 // VotesAt reconstructs a voter's pending vote-state record at the end of

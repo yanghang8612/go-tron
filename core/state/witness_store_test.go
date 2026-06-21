@@ -95,3 +95,34 @@ func TestWitnessHistoryAtSurfacesCorruptPayloads(t *testing.T) {
 		t.Fatalf("VotesAt corrupt payload error = %v, want decode votes context", err)
 	}
 }
+
+func TestWitnessHistoryAtSurfacesCorruptIndexes(t *testing.T) {
+	f := newHistoryFixture(t)
+	truncated := []byte{0, 0, 0, 2, 0x41}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleIndexKey, truncated); err != nil {
+			t.Fatalf("write corrupt witness index: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleActiveKey, truncated); err != nil {
+			t.Fatalf("write corrupt active witnesses: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, truncated); err != nil {
+			t.Fatalf("write corrupt votes index: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	if got, err := f.reader().WitnessIndexAt(1); err == nil || got != nil || !strings.Contains(err.Error(), "decode witness index at block 1") {
+		t.Fatalf("WitnessIndexAt corrupt index = %v err=%v, want nil decode error", got, err)
+	}
+	if got, err := f.reader().ActiveWitnessesAt(1); err == nil || got != nil || !strings.Contains(err.Error(), "decode active witness list at block 1") {
+		t.Fatalf("ActiveWitnessesAt corrupt index = %v err=%v, want nil decode error", got, err)
+	}
+	if got, err := f.reader().VotesIndexAt(1); err == nil || got != nil || !strings.Contains(err.Error(), "decode votes index at block 1") {
+		t.Fatalf("VotesIndexAt corrupt index = %v err=%v, want nil decode error", got, err)
+	}
+	if got, ok, err := f.reader().PendingVoteDeltasAt(1); err == nil || ok || got != nil || !strings.Contains(err.Error(), "decode votes index at block 1") {
+		t.Fatalf("PendingVoteDeltasAt corrupt index = %v ok=%v err=%v, want nil false decode error", got, ok, err)
+	}
+}
