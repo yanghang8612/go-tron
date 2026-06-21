@@ -2106,6 +2106,12 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 		t.Fatalf("delete hot code3: %v", err)
 	}
 	bc.buffer.CommitBlock()
+	for n := uint64(2); n <= 3; n++ {
+		rawdb.DeleteBlockStateRoot(bc.db, blocks[n].Hash())
+		if root := bc.StateRootAtBlock(n); root != (tcommon.Hash{}) {
+			t.Fatalf("state root for block %d still present after delete: %x", n, root)
+		}
+	}
 
 	assertArchiveCodeStorage("cold", 2, code2, storage2)
 	assertArchiveCodeStorage("cold", 3, code3, storage3)

@@ -240,16 +240,29 @@ func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Addr
 	if err != nil || block == nil {
 		return nil, fmt.Errorf("block %d not found", blockNum)
 	}
-	root := b.chain.StateRootAtBlock(blockNum)
-	if root == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("state root for block %d not available", blockNum)
-	}
 	session, err := b.archiveStateAt(blockNum)
 	if err != nil {
 		return nil, err
 	}
 	defer session.Close()
+	root, err := b.archiveExecutionRoot(blockNum, session)
+	if err != nil {
+		return nil, err
+	}
 	return b.triggerConstantContractAtRoot(owner, contractAddr, data, energyLimit, root, block, session.reader, blockNum)
+}
+
+func (b *TronBackend) archiveExecutionRoot(blockNum uint64, session *archiveStateSession) (tcommon.Hash, error) {
+	if root := b.chain.StateRootAtBlock(blockNum); root != (tcommon.Hash{}) {
+		return root, nil
+	}
+	if session != nil && blockNum < session.headNum {
+		if root := b.chain.StateRootAtBlock(session.headNum); root != (tcommon.Hash{}) {
+			return root, nil
+		}
+		return tcommon.Hash{}, fmt.Errorf("state root for head block %d not available", session.headNum)
+	}
+	return tcommon.Hash{}, fmt.Errorf("state root for block %d not available", blockNum)
 }
 
 func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.Address, data []byte, energyLimit int64, root tcommon.Hash, block *types.Block, history *state.PersistentHistoryReader, historyBlock uint64) (*tronapi.TriggerResult, error) {
