@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -497,6 +498,25 @@ func TestReadTransactionInfosByBlockStrictReportsMalformedID(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosByBlockStrictSurfacesHotReadError(t *testing.T) {
+	base := NewMemoryDatabase()
+	db := NewChainDB(base, NoopAncient{})
+	txID := bytes.Repeat([]byte{0xd2}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{{Id: txID, Fee: 700, BlockNumber: 5}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	wantErr := errors.New("hot tx infos unreadable")
+	failing := NewChainDB(failingTxInfoHotStore{KeyValueStore: base, getKey: txInfoBlockKey(5), getErr: wantErr}, NoopAncient{})
+
+	if got := ReadTransactionInfosByBlock(failing, 5); got != nil {
+		t.Fatalf("ReadTransactionInfosByBlock hot read error = %+v, want nil compatibility miss", got)
+	}
+	infos, ok, err := ReadTransactionInfosByBlockStrict(failing, 5)
+	if !errors.Is(err, wantErr) || ok || infos != nil {
+		t.Fatalf("ReadTransactionInfosByBlockStrict hot read error = %+v/%v/%v, want hot error", infos, ok, err)
+	}
+}
+
 func TestReadTransactionInfosByBlockStrictReportsMissingSource(t *testing.T) {
 	db := NewMemoryChainDB()
 	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
@@ -638,6 +658,25 @@ func TestReadTransactionInfoStrictSurfacesColdTransactionIndexError(t *testing.T
 	}
 }
 
+func TestReadTransactionInfoStrictSurfacesHotReadError(t *testing.T) {
+	base := NewMemoryDatabase()
+	db := NewChainDB(base, NoopAncient{})
+	txID := bytes.Repeat([]byte{0xd1}, common.HashLength)
+	if err := WriteTransactionInfo(db, txID, &corepb.TransactionInfo{Id: txID, Fee: 700, BlockNumber: 7}); err != nil {
+		t.Fatalf("WriteTransactionInfo: %v", err)
+	}
+	wantErr := errors.New("hot tx info unreadable")
+	failing := NewChainDB(failingTxInfoHotStore{KeyValueStore: base, getKey: txInfoKey(txID), getErr: wantErr}, NoopAncient{})
+
+	if got := ReadTransactionInfo(failing, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo hot read error = %+v, want nil compatibility miss", got)
+	}
+	info, ok, err := ReadTransactionInfoStrict(failing, txID)
+	if !errors.Is(err, wantErr) || ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict hot read error = %+v/%v/%v, want hot error", info, ok, err)
+	}
+}
+
 func TestReadTransactionInfoStrictSurfacesColdTransactionPositionError(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0xd0}, common.HashLength)
@@ -732,6 +771,27 @@ func (f failingTxPositionChainIndex) TransactionIndexByHash(hash common.Hash) (C
 		return ChainIndexTxLookup{}, false, f.posErr
 	}
 	return ChainIndexTxLookup{}, false, nil
+}
+
+type failingTxInfoHotStore struct {
+	ethdb.KeyValueStore
+	getKey []byte
+	getErr error
+	hasErr error
+}
+
+func (s failingTxInfoHotStore) Has(key []byte) (bool, error) {
+	if bytes.Equal(key, s.getKey) && s.hasErr != nil {
+		return false, s.hasErr
+	}
+	return s.KeyValueStore.Has(key)
+}
+
+func (s failingTxInfoHotStore) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, s.getKey) && s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.KeyValueStore.Get(key)
 }
 
 type failingAncientReader struct {

@@ -48,8 +48,11 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 	if err := validateTransactionHashKey(txID, "read transaction info"); err != nil {
 		return nil, false, err
 	}
-	data, err := db.Get(txInfoKey(txID))
-	if err == nil {
+	data, ok, err := readValueThenVerifyMiss(db, txInfoKey(txID), fmt.Sprintf("transaction info %x", txID), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if ok {
 		info := &corepb.TransactionInfo{}
 		if err := proto.Unmarshal(data, info); err != nil {
 			return nil, true, err
@@ -248,9 +251,9 @@ func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.
 		infos, err := decodeTransactionRetForBlock(data, blockNum)
 		return infos, true, err
 	}
-	data, err := db.Get(txInfoBlockKey(blockNum))
-	if err != nil {
-		return nil, false, nil
+	data, ok, err := readValueThenVerifyMiss(db, txInfoBlockKey(blockNum), fmt.Sprintf("transaction infos for block %d", blockNum), nil)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	infos, err := decodeTransactionRetForBlock(data, blockNum)
 	return infos, true, err

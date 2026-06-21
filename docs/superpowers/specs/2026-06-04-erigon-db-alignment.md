@@ -255,7 +255,9 @@ Status:
   surface malformed hot rows, corrupt per-block `TransactionRet` payloads, and
   block-body/index mismatches as archive data errors, while still using readable
   block bodies to locate legacy receipt rows whose `TransactionInfo.Id` is
-  absent.
+  absent. Hot `ti-<txid>` and `tib-<block>` read failures are also surfaced in
+  strict mode instead of being collapsed into misses before consulting cold
+  lookup fallbacks.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the
