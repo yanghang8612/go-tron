@@ -1532,10 +1532,11 @@ Status:
   index entry, so a corrupted cold payload cannot be returned under a stale
   address posting after hot receipt rows are gone. When the canonical block is
   readable, covered cold log rows must also carry the canonical block hash for
-  their block number. Segment-local address/topic lookup candidates must still
-  match the requested filter at query time too: stale postings now fail as
-  cold-index corruption instead of degrading into a false empty archive-log
-  result. Backend and JSON-RPC
+  their block number and a transaction hash/index that matches the canonical
+  block body. Segment-local address/topic lookup candidates must still match
+  the requested filter at query time too: stale postings now fail as cold-index
+  corruption instead of degrading into a false empty archive-log result.
+  Backend and JSON-RPC
   `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
   segment files to prove filtered archive reads are served through the cold
   index path. The API falls back to the hot scan on coverage gaps and surfaces

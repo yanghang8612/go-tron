@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -196,16 +197,16 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 
 func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
 	var (
-		last          EventLog
-		hasLast       bool
-		canonicalHash = make(map[uint64]common.Hash)
-		canonicalOK   = make(map[uint64]bool)
+		last        EventLog
+		hasLast     bool
+		blocks      = make(map[uint64]*types.Block)
+		blockExists = make(map[uint64]bool)
 	)
 	return func(row EventLog) (bool, error) {
 		if err := validateCoveredEventLogRow(fromBlock, toBlock, row); err != nil {
 			return false, err
 		}
-		if err := db.validateCoveredEventLogCanonicalHash(row, canonicalHash, canonicalOK); err != nil {
+		if err := db.validateCoveredEventLogCanonicalRow(row, blocks, blockExists); err != nil {
 			return false, err
 		}
 		if hasLast && compareEventLogPosition(row, last) <= 0 {
@@ -221,26 +222,39 @@ func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(E
 	}
 }
 
-func (db *ChainDB) validateCoveredEventLogCanonicalHash(row EventLog, cache map[uint64]common.Hash, okCache map[uint64]bool) error {
+func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, cache map[uint64]*types.Block, okCache map[uint64]bool) error {
 	if db == nil {
 		return nil
 	}
-	canonical, cached := cache[row.BlockNum]
+	block, cached := cache[row.BlockNum]
 	ok := okCache[row.BlockNum]
 	if !cached {
 		var err error
-		canonical, ok, err = ReadBlockHashByNumberStrict(db, row.BlockNum)
+		block, ok, err = ReadBlockStrict(db, row.BlockNum)
 		if err != nil {
-			return fmt.Errorf("rawdb: cold event log row block=%d canonical hash read: %w", row.BlockNum, err)
+			return fmt.Errorf("rawdb: cold event log row block=%d canonical block read: %w", row.BlockNum, err)
 		}
-		cache[row.BlockNum] = canonical
+		cache[row.BlockNum] = block
 		okCache[row.BlockNum] = ok
 	}
 	if !ok {
 		return nil
 	}
-	if row.BlockHash != canonical {
-		return fmt.Errorf("rawdb: cold event log row block=%d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonical)
+	canonicalHash := block.Hash()
+	if row.BlockHash != canonicalHash {
+		return fmt.Errorf("rawdb: cold event log row block=%d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonicalHash)
+	}
+	txs := block.Transactions()
+	if row.TxIndex >= uint64(len(txs)) {
+		return fmt.Errorf("rawdb: cold event log row block=%d tx index %d outside canonical transaction count %d", row.BlockNum, row.TxIndex, len(txs))
+	}
+	tx := txs[int(row.TxIndex)]
+	if tx == nil {
+		return fmt.Errorf("rawdb: cold event log row block=%d tx index %d is nil in canonical block", row.BlockNum, row.TxIndex)
+	}
+	canonicalTxHash := tx.Hash()
+	if row.TxHash != canonicalTxHash {
+		return fmt.Errorf("rawdb: cold event log row block=%d tx index %d hash %x does not match canonical transaction hash %x", row.BlockNum, row.TxIndex, row.TxHash, canonicalTxHash)
 	}
 	return nil
 }
