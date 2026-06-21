@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -73,6 +74,53 @@ func (f *historyFixture) pruneHotStateDomainHistory() {
 		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
 			f.t.Fatalf("DeleteStateTxRange block=%d: %v", blockNum, err)
 		}
+	}
+}
+
+func TestPersistentHistoryReaderLiveAccountSurfacesCorruptEnvelope(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	addr := testAddr(0x91)
+	if err := rawdb.WriteStateAccountLatest(db, addr, []byte{0x80}); err != nil {
+		t.Fatalf("write corrupt account envelope: %v", err)
+	}
+
+	got, err := NewPersistentHistoryReader(db, nil, 1).AccountAt(addr, 1)
+	if err == nil {
+		t.Fatal("AccountAt corrupt live envelope error = nil")
+	}
+	if got != nil {
+		t.Fatalf("AccountAt corrupt live envelope account = %+v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "read live account latest") {
+		t.Fatalf("AccountAt corrupt live envelope error = %v, want live account latest context", err)
+	}
+}
+
+func TestPersistentHistoryReaderLiveAccountSurfacesCorruptAccountProto(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	addr := testAddr(0x92)
+	envelope := &StateAccountV2{
+		Version:       StateAccountVersion,
+		AccountProto:  []byte{0x80},
+		AccountKVRoot: EmptyKVRoot,
+	}
+	encoded, err := envelope.Encode()
+	if err != nil {
+		t.Fatalf("encode account envelope: %v", err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, addr, encoded); err != nil {
+		t.Fatalf("write corrupt account proto envelope: %v", err)
+	}
+
+	got, err := NewPersistentHistoryReader(db, nil, 1).AccountAt(addr, 1)
+	if err == nil {
+		t.Fatal("AccountAt corrupt live account proto error = nil")
+	}
+	if got != nil {
+		t.Fatalf("AccountAt corrupt live account proto account = %+v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "decode live account proto") {
+		t.Fatalf("AccountAt corrupt live account proto error = %v, want decode account proto context", err)
 	}
 }
 

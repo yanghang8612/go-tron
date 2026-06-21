@@ -432,7 +432,10 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 
 	// At or past head: live read.
 	if blockNum >= r.headNum {
-		entry := r.readAccountAndCodeLive(addr)
+		entry, err := r.readAccountAndCodeLive(addr)
+		if err != nil {
+			return accountCacheEntry{}, err
+		}
 		r.cache[cacheKey] = entry
 		return entry, nil
 	}
@@ -1155,14 +1158,14 @@ func (r *PersistentHistoryReader) stateTxRangeForBlock(blockNum uint64) (*rawdb.
 // readAccountAndCodeLive reads the current account + code for addr from
 // the chain's live view. Code resolution goes through the account envelope's
 // CodeHash; there is no canonical address-keyed flat code fallback.
-func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) accountCacheEntry {
+func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (accountCacheEntry, error) {
 	if r.live != nil {
 		acc := r.live.GetAccount(addr)
 		if acc == nil {
 			// No live account means "no code either" — contract code is
 			// selected by the account envelope and cleared together with
 			// SELFDESTRUCT+DeleteAccount in StateDB.Commit().
-			return accountCacheEntry{}
+			return accountCacheEntry{}, nil
 		}
 		var code []byte
 		if live, ok := r.live.(LiveContractReader); ok {
@@ -1171,28 +1174,35 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) a
 		if len(code) == 0 {
 			code = nil
 		}
-		return accountCacheEntry{account: acc, code: code}
+		return accountCacheEntry{account: acc, code: code}, nil
 	}
 
 	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(r.hotLatest(), addr)
-	if err != nil || !ok {
-		return accountCacheEntry{}
+	if err != nil {
+		return accountCacheEntry{}, fmt.Errorf("read live account latest %s: %w", addr.Hex(), err)
+	}
+	if !ok {
+		return accountCacheEntry{}, nil
 	}
 	var pb corepb.Account
 	if err := proto.Unmarshal(envelope.AccountProto, &pb); err != nil {
-		return accountCacheEntry{}
+		return accountCacheEntry{}, fmt.Errorf("decode live account proto %s: %w", addr.Hex(), err)
 	}
 	acc := types.NewAccountFromPB(&pb)
 	var code []byte
 	if envelope.CodeHash != (tcommon.Hash{}) {
-		if hotCode, ok, err := r.hotLatest().Code(envelope.CodeHash); err == nil && ok {
+		hotCode, ok, err := r.hotLatest().Code(envelope.CodeHash)
+		if err != nil {
+			return accountCacheEntry{}, fmt.Errorf("read live code %x for %s: %w", envelope.CodeHash, addr.Hex(), err)
+		}
+		if ok {
 			code = hotCode
 		}
 	}
 	if len(code) == 0 {
 		code = nil
 	}
-	return accountCacheEntry{account: acc, code: code}
+	return accountCacheEntry{account: acc, code: code}, nil
 }
 
 // readStorageLive reads the current on-disk slot value for (addr, slot).

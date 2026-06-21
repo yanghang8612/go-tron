@@ -973,7 +973,10 @@ Status:
   and gRPC account/account-id handlers now preserve empty account responses only
   for explicit account misses; cold state-history or account-id reconstruction
   errors surface as HTTP 500 / gRPC Internal instead of being disguised as
-  absent accounts. TRON HTTP and gRPC contract handlers follow the same
+  absent accounts. The `PersistentHistoryReader` live/head flat-latest path now
+  applies the same rule to corrupt account envelopes and account protobufs,
+  returning archive data errors instead of silently returning a missing account.
+  TRON HTTP and gRPC contract handlers follow the same
   error-preserving rule, keeping explicit contract misses as empty/NotFound
   responses while surfacing latest/cold contract metadata read failures as
   HTTP 500 / gRPC Internal; the underlying contract history reader now also
