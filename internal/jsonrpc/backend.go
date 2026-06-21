@@ -59,6 +59,7 @@ type Backend interface {
 
 	// TVM execution (read-only simulation)
 	Call(from, to *common.Address, data []byte, value int64) ([]byte, error)
+	CallAt(from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error)
 
 	// EstimateGas simulates execution and returns energy used.
 	EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)

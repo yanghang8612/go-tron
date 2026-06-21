@@ -111,6 +111,33 @@ func TestEthGetStorageAt_ArchiveBlock(t *testing.T) {
 	}
 }
 
+func TestEthCall_ArchiveBlock(t *testing.T) {
+	backend := &stubBackend{
+		callResult:   []byte{0x01},
+		callAtResult: []byte{0x02},
+		blockNumber:  100,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	tx := map[string]interface{}{
+		"to":   archiveTestAddr,
+		"data": "0x70a08231",
+	}
+	live := rpcCall(t, srv, "eth_call", []interface{}{tx, "latest"})
+	if live["result"] != "0x01" {
+		t.Fatalf("latest eth_call = %v, want live result 0x01", live["result"])
+	}
+	hist := rpcCall(t, srv, "eth_call", []interface{}{tx, "0x7"})
+	if hist["result"] != "0x02" {
+		t.Fatalf("archive eth_call = %v, want archive result 0x02", hist["result"])
+	}
+	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
+		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
+			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
+	}
+}
+
 // TestEthArchive_GateError asserts that when the backend's archive query
 // returns an error (e.g. history disabled), the handler surfaces it as a
 // JSON-RPC error for a historical block — but a "latest" query still

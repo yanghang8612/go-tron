@@ -159,9 +159,9 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 	return hexBytes(val[:]), nil
 }
 
-// Call serves eth_call: read-only TVM execution against head state, returning
-// the result bytes as 0x-hex. 'to' is required. The block tag is accepted and
-// ignored (the legacy handler always reads head), preserving that behavior.
+// Call serves eth_call: read-only TVM execution returning the result bytes as
+// 0x-hex. 'to' is required. A numeric block tag executes against archive state;
+// latest/pending uses the live head state.
 func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 	if tx.To == "" {
 		return "", fmt.Errorf("eth_call: 'to' required")
@@ -172,7 +172,16 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 		from = &a
 	}
 	to := common.BytesToAddress(common.FromHex(tx.To))
-	result, err := e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	var result []byte
+	if isLatest {
+		result, err = e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	} else {
+		result, err = e.backend.CallAt(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+	}
 	if err != nil {
 		return "", err
 	}

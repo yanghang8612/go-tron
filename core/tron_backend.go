@@ -2487,6 +2487,21 @@ func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) 
 	return result.Result, nil
 }
 
+func (b *TronBackend) CallAt(from, to *tcommon.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
+	fromAddr := tcommon.Address{}
+	if from != nil {
+		fromAddr = *from
+	}
+	if to == nil {
+		return nil, fmt.Errorf("eth_call: 'to' address is required")
+	}
+	result, err := b.TriggerConstantContractAt(fromAddr, *to, data, 30_000_000, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	return result.Result, nil
+}
+
 func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	const maxBlockRange = 2000
 

@@ -139,8 +139,7 @@ func TestEthAPI_AccountFrameworkParity(t *testing.T) {
 
 // TestEthAPI_CallFrameworkParity proves eth_call and eth_estimateGas dispatch
 // through the framework — including the {from,to,data,value} object param and
-// the optional/ignored block tag — with output byte-identical to the frozen
-// corpus.
+// the latest block tag — with output byte-identical to the frozen corpus.
 func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	ts := ethParityServer(t)
 	const to = "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0"
@@ -158,6 +157,33 @@ func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { postParity(t, ts.URL, tc.body, tc.wantResult) })
+	}
+}
+
+func TestEthAPI_CallHistoricalBlockUsesArchivePath(t *testing.T) {
+	backend := &stubBackend{
+		blockNumber:  100,
+		callResult:   []byte{0x01},
+		callAtResult: []byte{0x02},
+	}
+	srv := rpc.NewServer()
+	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(backend, jsonrpc.NewFilterManager(backend))); err != nil {
+		t.Fatalf("RegisterName: %v", err)
+	}
+	t.Cleanup(srv.Stop)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	const to = "0x4101020304050607080900010203040506070809"
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"`+to+`"},"latest"]}`,
+		`"0x01"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"`+to+`"},"0x7"]}`,
+		`"0x02"`)
+	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
+		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
+			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
 	}
 }
 

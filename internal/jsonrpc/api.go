@@ -550,7 +550,32 @@ func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
 		value = v
 	}
 
-	result, err := api.backend.Call(from, &to, data, value)
+	blockNum := api.backend.BlockNumber()
+	isLatest := true
+	if len(p) > 1 && len(p[1]) > 0 && string(p[1]) != "null" {
+		var tag string
+		if err := json.Unmarshal(p[1], &tag); err != nil {
+			return nil, fmt.Errorf("invalid block param: %w", err)
+		}
+		num, err := parseBlockParam(tag)
+		if err != nil {
+			return nil, err
+		}
+		if num == ^uint64(0) {
+			blockNum = api.backend.BlockNumber()
+		} else {
+			blockNum = num
+			isLatest = false
+		}
+	}
+
+	var result []byte
+	var err error
+	if isLatest {
+		result, err = api.backend.Call(from, &to, data, value)
+	} else {
+		result, err = api.backend.CallAt(from, &to, data, value, blockNum)
+	}
 	if err != nil {
 		return nil, err
 	}

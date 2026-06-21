@@ -16,22 +16,26 @@ import (
 
 // stubBackend is a test double implementing jsonrpc.Backend.
 type stubBackend struct {
-	chainID     int64
-	blockNumber uint64
-	block       *types.Block
-	blockErr    error
-	balance     int64
-	code        []byte
-	storage     common.Hash
-	tx          *corepb.Transaction
-	txErr       error
-	txBlock     *types.Block
-	txIndex     int
-	txInfo      *corepb.TransactionInfo
-	callResult  []byte
-	logs        []*jsonrpc.RPCLog
-	gasPrice    int64
-	peerCount   int
+	chainID       int64
+	blockNumber   uint64
+	block         *types.Block
+	blockErr      error
+	balance       int64
+	code          []byte
+	storage       common.Hash
+	tx            *corepb.Transaction
+	txErr         error
+	txBlock       *types.Block
+	txIndex       int
+	txInfo        *corepb.TransactionInfo
+	callResult    []byte
+	callAtResult  []byte
+	callAtBlock   uint64
+	callAtCalls   int
+	liveCallCalls int
+	logs          []*jsonrpc.RPCLog
+	gasPrice      int64
+	peerCount     int
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -90,7 +94,13 @@ func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionI
 	return s.txInfo, nil
 }
 func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) ([]byte, error) {
+	s.liveCallCalls++
 	return s.callResult, nil
+}
+func (s *stubBackend) CallAt(from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
+	s.callAtCalls++
+	s.callAtBlock = blockNum
+	return s.callAtResult, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	return s.logs, nil
