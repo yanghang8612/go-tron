@@ -132,6 +132,33 @@ func TestMarketStorePairPriceCount(t *testing.T) {
 	}
 }
 
+func TestMarketStorePairPriceCountStrictSurfacesMalformedLength(t *testing.T) {
+	sdb := newTestStateDB(t)
+	sell, buy := []byte("_"), []byte("1000003")
+	malformed := []byte{0x01, 0x02, 0x03}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketPairToPriceKVKey(sell, buy), malformed); err != nil {
+		t.Fatalf("write malformed price count: %v", err)
+	}
+	if got := sdb.ReadMarketPairPriceCount(sell, buy); got != 0 {
+		t.Fatalf("compat price count = %d, want 0 for malformed row", got)
+	}
+	got, ok, err := sdb.ReadMarketPairPriceCountStrict(sell, buy)
+	if err == nil || !ok || got != 0 || !strings.Contains(err.Error(), "length 3, want 8") {
+		t.Fatalf("strict price count = %d ok=%v err=%v, want malformed length error", got, ok, err)
+	}
+	if err := sdb.IncrMarketPairPriceCount(sell, buy, 1); err == nil || !strings.Contains(err.Error(), "length 3, want 8") {
+		t.Fatalf("IncrMarketPairPriceCount malformed err = %v, want length error", err)
+	}
+	if err := sdb.DecrementMarketPairPriceCount(sell, buy); err == nil || !strings.Contains(err.Error(), "length 3, want 8") {
+		t.Fatalf("DecrementMarketPairPriceCount malformed err = %v, want length error", err)
+	}
+	raw, exists, err := sdb.SystemKVGet(kvdomains.SystemMarket, marketPairToPriceKVKey(sell, buy))
+	if err != nil || !exists || !bytes.Equal(raw, malformed) {
+		t.Fatalf("malformed price count after failed updates = %x exists=%v err=%v, want preserved %x", raw, exists, err, malformed)
+	}
+}
+
 // TestMarketStoreAnchorAndRewind is the state-layer gate for market rooting:
 // committing market writes moves the state root (anchor), and reopening an old
 // root recovers the old order book across all five sub-stores (rewind). Mirrors
@@ -249,6 +276,7 @@ func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
 	owner := []byte{0x41, 0x6d}
 	sellTokenID := []byte("sell")
 	buyTokenID := []byte("buy")
+	pk := rawdb.PriceKey(2, 3)
 	corruptProto := []byte{0x80}
 
 	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
@@ -260,6 +288,12 @@ func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
 		}
 		if err := s.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), corruptProto); err != nil {
 			t.Fatalf("write corrupt market price list: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk), corruptProto); err != nil {
+			t.Fatalf("write corrupt market order book: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID), []byte{0x01, 0x02, 0x03}); err != nil {
+			t.Fatalf("write corrupt market pair price count: %v", err)
 		}
 	})
 	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
@@ -295,5 +329,28 @@ func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decode market price list at block 1") {
 		t.Fatalf("MarketPriceListAt corrupt protobuf error = %v, want decode market price list context", err)
+	}
+
+	orderBook, err := f.reader().MarketOrderBookAt(sellTokenID, buyTokenID, pk, 1)
+	if err == nil {
+		t.Fatal("MarketOrderBookAt corrupt protobuf error = nil")
+	}
+	if orderBook != nil {
+		t.Fatalf("MarketOrderBookAt corrupt protobuf order book = %+v, want nil", orderBook)
+	}
+	if !strings.Contains(err.Error(), "decode market order book at block 1") {
+		t.Fatalf("MarketOrderBookAt corrupt protobuf error = %v, want decode market order book context", err)
+	}
+
+	count, ok, err := f.reader().MarketPairPriceCountAt(sellTokenID, buyTokenID, 1)
+	if err == nil {
+		t.Fatal("MarketPairPriceCountAt corrupt length error = nil")
+	}
+	if count != 0 || !ok {
+		t.Fatalf("MarketPairPriceCountAt corrupt length = %d ok=%v, want zero true", count, ok)
+	}
+	if !strings.Contains(err.Error(), "decode market pair price count at block 1") ||
+		!strings.Contains(err.Error(), "length 3, want 8") {
+		t.Fatalf("MarketPairPriceCountAt corrupt length error = %v, want decode length context", err)
 	}
 }

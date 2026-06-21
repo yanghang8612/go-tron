@@ -536,11 +536,7 @@ func removeMarketAccountOrder(ctx *Context, owner []byte, orderID []byte) error 
 }
 
 func decrementMarketPairPriceCount(ctx *Context, sellTokenID, buyTokenID []byte) error {
-	count := ctx.State.ReadMarketPairPriceCount(sellTokenID, buyTokenID)
-	if count <= 1 {
-		return ctx.State.DeleteMarketPairPriceCount(sellTokenID, buyTokenID)
-	}
-	return ctx.State.WriteMarketPairPriceCount(sellTokenID, buyTokenID, count-1)
+	return ctx.State.DecrementMarketPairPriceCount(sellTokenID, buyTokenID)
 }
 
 // addOrderToBook adds an order to the price list and linked list in the order book.

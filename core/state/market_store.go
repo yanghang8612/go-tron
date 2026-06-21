@@ -193,6 +193,20 @@ func (s *StateDB) ReadMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byt
 	return list
 }
 
+// MarketOrderBookAt reconstructs a rooted price-level order id list at the end
+// of blockNum, surfacing malformed archive payloads as data errors.
+func (r *PersistentHistoryReader) MarketOrderBookAt(sellTokenID, buyTokenID []byte, pk [16]byte, blockNum uint64) (*corepb.MarketOrderIdList, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	list := &corepb.MarketOrderIdList{}
+	if err := proto.Unmarshal(raw, list); err != nil {
+		return nil, fmt.Errorf("decode market order book at block %d: %w", blockNum, err)
+	}
+	return list, nil
+}
+
 // WriteMarketOrderBook stages a MarketOrderIdList for a price level.
 func (s *StateDB) WriteMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byte, list *corepb.MarketOrderIdList) error {
 	data, err := proto.Marshal(list)
@@ -210,11 +224,37 @@ func (s *StateDB) DeleteMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]b
 // ReadMarketPairPriceCount returns the distinct-price count for a pair (zero if
 // absent or malformed), mirroring java-tron MarketPairToPriceStore.getPriceNum.
 func (s *StateDB) ReadMarketPairPriceCount(sellTokenID, buyTokenID []byte) int64 {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID))
-	if err != nil || !ok || len(raw) != 8 {
+	count, ok, err := s.ReadMarketPairPriceCountStrict(sellTokenID, buyTokenID)
+	if err != nil || !ok {
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	return count
+}
+
+// ReadMarketPairPriceCountStrict returns the distinct-price count for a pair
+// and distinguishes a missing row from unreadable or malformed rooted data.
+func (s *StateDB) ReadMarketPairPriceCountStrict(sellTokenID, buyTokenID []byte) (int64, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID))
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	if len(raw) != 8 {
+		return 0, true, fmt.Errorf("decode market pair price count: length %d, want 8", len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw)), true, nil
+}
+
+// MarketPairPriceCountAt reconstructs the distinct-price count for a pair at
+// the end of blockNum, surfacing malformed archive payloads as data errors.
+func (r *PersistentHistoryReader) MarketPairPriceCountAt(sellTokenID, buyTokenID []byte, blockNum uint64) (int64, bool, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID), blockNum)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	if len(raw) != 8 {
+		return 0, true, fmt.Errorf("decode market pair price count at block %d: length %d, want 8", blockNum, len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw)), true, nil
 }
 
 // WriteMarketPairPriceCount stores the distinct-price count for a pair, mirroring
@@ -235,8 +275,24 @@ func (s *StateDB) DeleteMarketPairPriceCount(sellTokenID, buyTokenID []byte) err
 // java-tron MarketPairToPriceStore.addNewPriceKey (and the symmetric decrement on
 // cancellation).
 func (s *StateDB) IncrMarketPairPriceCount(sellTokenID, buyTokenID []byte, delta int64) error {
-	cur := s.ReadMarketPairPriceCount(sellTokenID, buyTokenID)
+	cur, _, err := s.ReadMarketPairPriceCountStrict(sellTokenID, buyTokenID)
+	if err != nil {
+		return err
+	}
 	return s.WriteMarketPairPriceCount(sellTokenID, buyTokenID, cur+delta)
+}
+
+// DecrementMarketPairPriceCount decrements the distinct-price count and deletes
+// the row when the last price level disappears.
+func (s *StateDB) DecrementMarketPairPriceCount(sellTokenID, buyTokenID []byte) error {
+	count, _, err := s.ReadMarketPairPriceCountStrict(sellTokenID, buyTokenID)
+	if err != nil {
+		return err
+	}
+	if count <= 1 {
+		return s.DeleteMarketPairPriceCount(sellTokenID, buyTokenID)
+	}
+	return s.WriteMarketPairPriceCount(sellTokenID, buyTokenID, count-1)
 }
 
 // ReadMarketPriceList returns the rooted MarketPriceList for a pair. As with the
