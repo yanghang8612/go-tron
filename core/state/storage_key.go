@@ -1,6 +1,8 @@
 package state
 
 import (
+	"fmt"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -42,6 +44,15 @@ func storageRowKeyFromFlatLatest(latest accountKVLatestGenerationReader, addr tc
 		}
 	}
 	return javaStorageRowKey(addr, key, meta), nil
+}
+
+func decodeStorageValueHash(context string, raw []byte) (tcommon.Hash, error) {
+	if len(raw) > tcommon.HashLength {
+		return tcommon.Hash{}, fmt.Errorf("%s: storage value length %d, want <= %d", context, len(raw), tcommon.HashLength)
+	}
+	var h tcommon.Hash
+	copy(h[tcommon.HashLength-len(raw):], raw)
+	return h, nil
 }
 
 func isZeroBytes(b []byte) bool {

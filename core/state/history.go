@@ -517,8 +517,10 @@ func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, s
 	if !ok || len(raw) == 0 {
 		return tcommon.Hash{}, true, nil
 	}
-	var h tcommon.Hash
-	copy(h[len(h)-len(raw):], raw)
+	h, err := decodeStorageValueHash(fmt.Sprintf("storage value at block %d", blockNum), raw)
+	if err != nil {
+		return tcommon.Hash{}, false, err
+	}
 	return h, true, nil
 }
 
@@ -1231,9 +1233,7 @@ func readFlatStorageLatestWithReader(latest hotStateLatestReader, addr tcommon.A
 	if err != nil || !ok || len(raw) == 0 {
 		return tcommon.Hash{}, err
 	}
-	var h tcommon.Hash
-	copy(h[len(h)-len(raw):], raw)
-	return h, nil
+	return decodeStorageValueHash("live storage value", raw)
 }
 
 func readFlatAccountLatestEnvelope(db ethdb.KeyValueReader, addr tcommon.Address) (*StateAccountV2, bool, error) {

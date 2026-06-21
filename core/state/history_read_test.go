@@ -1169,6 +1169,33 @@ func TestPersistentHistoryReader_StorageSlotZeroPreValue(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderStorageAtSurfacesOversizedValue(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x81)
+	slot := tcommon.Hash{0xCE}
+	rowKey := javaStorageRowKey(contract, slot, nil)
+	oversized := bytes.Repeat([]byte{0xaa}, tcommon.HashLength+1)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.GetOrCreateAccount(contract)
+		if err := s.SetAccountKV(contract, kvdomains.ContractStorage, rowKey.Bytes(), oversized); err != nil {
+			t.Fatalf("write oversized storage value: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().StorageAt(contract, slot, 1)
+	if err == nil {
+		t.Fatal("StorageAt oversized value error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("StorageAt oversized value = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "storage value at block 1") || !strings.Contains(err.Error(), "length 33, want <= 32") {
+		t.Fatalf("StorageAt oversized value error = %v, want storage length context", err)
+	}
+}
+
 // TestPersistentHistoryReader_SparseInverseIndexSeek pins down the
 // advisor's concern: if every block touches every slot, the inverse
 // index has dense entries and the reader's walk is trivial. The

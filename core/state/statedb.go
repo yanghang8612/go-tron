@@ -2139,8 +2139,10 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if err != nil || !ok || len(raw) == 0 {
 		return tcommon.Hash{}, false
 	}
-	var h tcommon.Hash
-	copy(h[len(h)-len(raw):], raw)
+	h, err := decodeStorageValueHash("account storage", raw)
+	if err != nil {
+		return tcommon.Hash{}, false
+	}
 	if h == (tcommon.Hash{}) {
 		return tcommon.Hash{}, false
 	}
