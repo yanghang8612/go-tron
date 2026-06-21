@@ -16,6 +16,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // ChainDB is the gtron chain database: a hot Pebble store plus an
@@ -201,12 +202,14 @@ func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(E
 		hasLast     bool
 		blocks      = make(map[uint64]*types.Block)
 		blockExists = make(map[uint64]bool)
+		infos       = make(map[uint64][]*corepb.TransactionInfo)
+		infoExists  = make(map[uint64]bool)
 	)
 	return func(row EventLog) (bool, error) {
 		if err := validateCoveredEventLogRow(fromBlock, toBlock, row); err != nil {
 			return false, err
 		}
-		if err := db.validateCoveredEventLogCanonicalRow(row, blocks, blockExists); err != nil {
+		if err := db.validateCoveredEventLogCanonicalRow(row, blocks, blockExists, infos, infoExists); err != nil {
 			return false, err
 		}
 		if hasLast && compareEventLogPosition(row, last) <= 0 {
@@ -222,20 +225,20 @@ func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(E
 	}
 }
 
-func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, cache map[uint64]*types.Block, okCache map[uint64]bool) error {
+func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, blockCache map[uint64]*types.Block, blockOK map[uint64]bool, infoCache map[uint64][]*corepb.TransactionInfo, infoOK map[uint64]bool) error {
 	if db == nil {
 		return nil
 	}
-	block, cached := cache[row.BlockNum]
-	ok := okCache[row.BlockNum]
+	block, cached := blockCache[row.BlockNum]
+	ok := blockOK[row.BlockNum]
 	if !cached {
 		var err error
 		block, ok, err = ReadBlockStrict(db, row.BlockNum)
 		if err != nil {
 			return fmt.Errorf("rawdb: cold event log row block=%d canonical block read: %w", row.BlockNum, err)
 		}
-		cache[row.BlockNum] = block
-		okCache[row.BlockNum] = ok
+		blockCache[row.BlockNum] = block
+		blockOK[row.BlockNum] = ok
 	}
 	if !ok {
 		return nil
@@ -256,7 +259,50 @@ func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, cache map[u
 	if row.TxHash != canonicalTxHash {
 		return fmt.Errorf("rawdb: cold event log row block=%d tx index %d hash %x does not match canonical transaction hash %x", row.BlockNum, row.TxIndex, row.TxHash, canonicalTxHash)
 	}
+	infos, cached := infoCache[row.BlockNum]
+	hasInfos := infoOK[row.BlockNum]
+	if !cached {
+		var err error
+		infos, hasInfos, err = ReadTransactionInfosByBlockStrict(db, row.BlockNum)
+		if err != nil {
+			return fmt.Errorf("rawdb: cold event log row block=%d canonical transaction infos read: %w", row.BlockNum, err)
+		}
+		infoCache[row.BlockNum] = infos
+		infoOK[row.BlockNum] = hasInfos
+	}
+	if !hasInfos {
+		return nil
+	}
+	if err := ValidateTransactionInfosForBlock(row.BlockNum, txs, infos, "covered cold event log row"); err != nil {
+		return fmt.Errorf("rawdb: cold event log row block=%d canonical transaction infos: %w", row.BlockNum, err)
+	}
+	if err := validateCoveredEventLogCanonicalLog(row, infos); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateCoveredEventLogCanonicalLog(row EventLog, infos []*corepb.TransactionInfo) error {
+	var canonicalLogIndex uint64
+	for txIndex, info := range infos {
+		for _, log := range info.GetLog() {
+			if log == nil {
+				continue
+			}
+			if canonicalLogIndex != row.LogIndex {
+				canonicalLogIndex++
+				continue
+			}
+			if uint64(txIndex) != row.TxIndex {
+				return fmt.Errorf("rawdb: cold event log row block=%d log index %d belongs to canonical tx index %d, not row tx index %d", row.BlockNum, row.LogIndex, txIndex, row.TxIndex)
+			}
+			if !proto.Equal(row.Log, log) {
+				return fmt.Errorf("rawdb: cold event log row block=%d tx=%d log=%d payload does not match canonical transaction info log", row.BlockNum, row.TxIndex, row.LogIndex)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("rawdb: cold event log row block=%d log index %d outside canonical log count %d", row.BlockNum, row.LogIndex, canonicalLogIndex)
 }
 
 func validateCoveredEventLogRow(fromBlock, toBlock uint64, row EventLog) error {

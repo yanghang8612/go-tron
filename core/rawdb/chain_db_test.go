@@ -475,6 +475,117 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalTxIndexOutOfRange(t *test
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogPayloadMismatch(t *testing.T) {
+	t.Parallel()
+
+	block, txHash := testChainDBEventLogBlock(15)
+	canonicalLog := &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{{0x01}}, Data: []byte{0xaa}}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum:  block.Number(),
+			TxIndex:   0,
+			LogIndex:  0,
+			BlockHash: block.Hash(),
+			TxHash:    txHash,
+			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{{0x01}}, Data: []byte{0xbb}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(cdb, block.Number(), []*corepb.TransactionInfo{{
+		BlockNumber: int64(block.Number()),
+		Log:         []*corepb.TransactionInfo_Log{canonicalLog},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(block.Number(), block.Number(), EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for payload-mismatched cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "payload does not match canonical transaction info log") {
+		t.Fatalf("IterateCoveredEventLogs payload mismatch = covered %v err %v, want canonical log payload error", covered, err)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogIndexOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	block, txHash := testChainDBEventLogBlock(16)
+	canonicalLog := &corepb.TransactionInfo_Log{Address: []byte{0x16}, Data: []byte{0x01}}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum:  block.Number(),
+			TxIndex:   0,
+			LogIndex:  1,
+			BlockHash: block.Hash(),
+			TxHash:    txHash,
+			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x16}, Data: []byte{0x01}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(cdb, block.Number(), []*corepb.TransactionInfo{{
+		BlockNumber: int64(block.Number()),
+		Log:         []*corepb.TransactionInfo_Log{canonicalLog},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(block.Number(), block.Number(), EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for out-of-range log-index cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "outside canonical log count 1") {
+		t.Fatalf("IterateCoveredEventLogs log index range = covered %v err %v, want canonical log index error", covered, err)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogTxIndexMismatch(t *testing.T) {
+	t.Parallel()
+
+	block, txHashes := testChainDBEventLogBlockWithTransactions(17, 2)
+	canonicalLog := &corepb.TransactionInfo_Log{Address: []byte{0x17}, Data: []byte{0x02}}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum:  block.Number(),
+			TxIndex:   0,
+			LogIndex:  0,
+			BlockHash: block.Hash(),
+			TxHash:    txHashes[0],
+			Log:       canonicalLog,
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(cdb, block.Number(), []*corepb.TransactionInfo{
+		{BlockNumber: int64(block.Number())},
+		{BlockNumber: int64(block.Number()), Log: []*corepb.TransactionInfo_Log{canonicalLog}},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(block.Number(), block.Number(), EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for tx-index-mismatched canonical log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "belongs to canonical tx index 1") {
+		t.Fatalf("IterateCoveredEventLogs log tx mismatch = covered %v err %v, want canonical log tx-index error", covered, err)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsRejectsUnsortedAtomicRows(t *testing.T) {
 	t.Parallel()
 
@@ -570,14 +681,25 @@ func (r *recordingCoveredEventLogReader) IterateCoveredEventLogs(fromBlock, toBl
 }
 
 func testChainDBEventLogBlock(number uint64) (*coretypes.Block, common.Hash) {
-	txPB := &corepb.Transaction{
-		RawData: &corepb.TransactionRaw{
-			Timestamp:  int64(10_000 + number),
-			Expiration: int64(20_000 + number),
-			Data:       []byte{byte(number)},
-		},
+	block, txHashes := testChainDBEventLogBlockWithTransactions(number, 1)
+	return block, txHashes[0]
+}
+
+func testChainDBEventLogBlockWithTransactions(number uint64, txCount int) (*coretypes.Block, []common.Hash) {
+	txs := make([]*corepb.Transaction, txCount)
+	txHashes := make([]common.Hash, txCount)
+	for i := 0; i < txCount; i++ {
+		txPB := &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				Timestamp:  int64(10_000 + number + uint64(i)),
+				Expiration: int64(20_000 + number + uint64(i)),
+				Data:       []byte{byte(number), byte(i)},
+			},
+		}
+		tx := coretypes.NewTransactionFromPB(txPB)
+		txs[i] = txPB
+		txHashes[i] = tx.Hash()
 	}
-	tx := coretypes.NewTransactionFromPB(txPB)
 	block := coretypes.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{
@@ -586,7 +708,7 @@ func testChainDBEventLogBlock(number uint64) (*coretypes.Block, common.Hash) {
 			},
 			WitnessSignature: make([]byte, 65),
 		},
-		Transactions: []*corepb.Transaction{txPB},
+		Transactions: txs,
 	})
-	return block, tx.Hash()
+	return block, txHashes
 }
