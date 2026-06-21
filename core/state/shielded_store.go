@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -89,6 +90,11 @@ func (s *StateDB) ReadIncrMerkleTree(root []byte) *shieldpb.IncrementalMerkleTre
 	return decodeShieldedMerkleTree(s.readSystemShielded(rawdb.IncrMerkleTreeStateKey(root)))
 }
 
+func (s *StateDB) ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	data, ok := s.readSystemShielded(rawdb.IncrMerkleTreeStateKey(root))
+	return decodeShieldedMerkleTreeStrict(fmt.Sprintf("decode incremental merkle tree %x", root), data, ok)
+}
+
 func (s *StateDB) HasIncrMerkleTree(root []byte) bool {
 	_, ok := s.readSystemShielded(rawdb.IncrMerkleTreeStateKey(root))
 	return ok
@@ -135,12 +141,29 @@ func (s *StateDB) WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error 
 }
 
 func decodeShieldedMerkleTree(data []byte, ok bool) *shieldpb.IncrementalMerkleTree {
-	if !ok || len(data) == 0 {
+	tree, exists, err := decodeShieldedMerkleTreeStrict("", data, ok)
+	if err != nil || !exists {
 		return nil
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return tree
+}
+
+func decodeShieldedMerkleTreeStrict(context string, data []byte, ok bool) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	if !ok || len(data) == 0 {
+		if !ok {
+			return nil, false, nil
+		}
+		return &shieldpb.IncrementalMerkleTree{}, true, nil
 	}
 	var tree shieldpb.IncrementalMerkleTree
 	if err := proto.Unmarshal(data, &tree); err != nil {
-		return nil
+		if context == "" {
+			context = "decode shielded merkle tree"
+		}
+		return nil, true, fmt.Errorf("%s: %w", context, err)
 	}
-	return &tree
+	return &tree, true, nil
 }

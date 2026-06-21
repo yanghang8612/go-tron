@@ -2,8 +2,11 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -116,5 +119,25 @@ func TestShieldedMerkleStoreRoundTripAtRoot(t *testing.T) {
 	}
 	if got := reopened.ReadMerkleTreeRootByBlock(123); !bytes.Equal(got, root) {
 		t.Fatalf("block root = %x, want %x", got, root)
+	}
+}
+
+func TestShieldedStoreReadIncrMerkleTreeStrictSurfacesCorruptPayload(t *testing.T) {
+	sdb := newTestStateDB(t)
+	root := make([]byte, 32)
+	root[0] = 0x5a
+
+	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.IncrMerkleTreeStateKey(root), []byte{0x80}); err != nil {
+		t.Fatalf("write corrupt shielded tree: %v", err)
+	}
+	if !sdb.HasIncrMerkleTree(root) {
+		t.Fatal("root should be present")
+	}
+	if got := sdb.ReadIncrMerkleTree(root); got != nil {
+		t.Fatalf("compat ReadIncrMerkleTree corrupt payload = %v, want nil", got)
+	}
+	got, ok, err := sdb.ReadIncrMerkleTreeStrict(root)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode incremental merkle tree") {
+		t.Fatalf("strict corrupt tree = %v ok=%v err=%v, want decode error", got, ok, err)
 	}
 }

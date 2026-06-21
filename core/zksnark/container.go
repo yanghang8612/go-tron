@@ -27,6 +27,10 @@ type Store interface {
 	WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error
 }
 
+type strictIncrMerkleTreeReader interface {
+	ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMerkleTree, bool, error)
+}
+
 type rawDBStore struct {
 	db DB
 }
@@ -49,6 +53,10 @@ func (s rawDBStore) WriteCurrentMerkleTree(tree *shieldpb.IncrementalMerkleTree)
 
 func (s rawDBStore) ReadIncrMerkleTree(root []byte) *shieldpb.IncrementalMerkleTree {
 	return rawdb.ReadIncrMerkleTree(s.db, root)
+}
+
+func (s rawDBStore) ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	return rawdb.ReadIncrMerkleTreeStrict(s.db, root)
 }
 
 func (s rawDBStore) WriteIncrMerkleTree(root []byte, tree *shieldpb.IncrementalMerkleTree) error {
@@ -152,15 +160,22 @@ func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 		if last != nil && proto.Equal(cur.Proto(), last) {
 			return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
 		}
-		if last == nil && cur.Size() == 0 &&
-			c.store.HasIncrMerkleTree(root) &&
-			c.store.ReadIncrMerkleTree(root) == nil {
-			// Empty IncrementalMerkleTree marshals to zero bytes, so rawdb
-			// intentionally reads LAST_TREE back as nil. The previous block's
-			// root-keyed store entry still proves the best tree is the same
-			// empty tree; reuse it instead of recomputing the 32-level
-			// Sapling empty root on every post-activation transparent block.
-			return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+		if last == nil && cur.Size() == 0 {
+			if strict, ok := c.store.(strictIncrMerkleTreeReader); ok {
+				tree, exists, err := strict.ReadIncrMerkleTreeStrict(root)
+				if err != nil {
+					return err
+				}
+				if exists && proto.Equal(tree, NewTree().Proto()) {
+					// Empty IncrementalMerkleTree marshals to zero bytes. The
+					// previous block's root-keyed store entry proves the best tree
+					// is still empty; reuse it instead of recomputing the 32-level
+					// Sapling empty root on every post-activation transparent block.
+					return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+				}
+			} else if c.store.HasIncrMerkleTree(root) && c.store.ReadIncrMerkleTree(root) == nil {
+				return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+			}
 		}
 	}
 	root, err := cur.MerkleTreeKey()

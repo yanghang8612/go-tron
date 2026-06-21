@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -109,6 +110,26 @@ func TestIncrMerkleTree_Absent(t *testing.T) {
 	root := make([]byte, 32)
 	if got := ReadIncrMerkleTree(db, root); got != nil {
 		t.Fatalf("expected nil for absent root, got %v", got)
+	}
+	if got, ok, err := ReadIncrMerkleTreeStrict(db, root); got != nil || ok || err != nil {
+		t.Fatalf("strict absent = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+}
+
+func TestIncrMerkleTree_StrictSurfacesCorruptPayload(t *testing.T) {
+	db := memorydb.New()
+	root := make([]byte, 32)
+	root[0] = 0xC0
+
+	if err := db.Put(IncrMerkleTreeStateKey(root), []byte{0x80}); err != nil {
+		t.Fatalf("write corrupt tree: %v", err)
+	}
+	if got := ReadIncrMerkleTree(db, root); got != nil {
+		t.Fatalf("compat ReadIncrMerkleTree corrupt payload = %v, want nil", got)
+	}
+	got, ok, err := ReadIncrMerkleTreeStrict(db, root)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode incremental merkle tree") {
+		t.Fatalf("strict corrupt tree = %v ok=%v err=%v, want decode error", got, ok, err)
 	}
 }
 

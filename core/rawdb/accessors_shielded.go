@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	shieldpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -118,6 +119,22 @@ func ReadIncrMerkleTree(db ethdb.KeyValueReader, root []byte) *shieldpb.Incremen
 		return nil
 	}
 	return &tree
+}
+
+// ReadIncrMerkleTreeStrict returns the root-keyed IncrementalMerkleTree and
+// distinguishes absence from unreadable or malformed payloads. A zero-byte
+// payload is a valid empty IncrementalMerkleTree proto and returns a non-nil
+// zero-value tree with ok=true.
+func ReadIncrMerkleTreeStrict(db ethdb.KeyValueReader, root []byte) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	data, ok, err := readValueThenVerifyMiss(db, incrMerkleTreeKey(root), fmt.Sprintf("incremental merkle tree %x", root), nil)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var tree shieldpb.IncrementalMerkleTree
+	if err := proto.Unmarshal(data, &tree); err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode incremental merkle tree %x: %w", root, err)
+	}
+	return &tree, true, nil
 }
 
 // HasIncrMerkleTree reports whether a tree state is stored for root.
