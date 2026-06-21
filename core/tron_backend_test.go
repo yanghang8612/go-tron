@@ -2107,11 +2107,11 @@ func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
 	if matcher == nil {
 		t.Fatal("newSectionBloomLogMatcher returned nil")
 	}
-	if !matcher.mayContain(5) {
-		t.Fatal("mayContain(5) = false, want true for indexed block offset")
+	if mayContain, err := matcher.mayContain(5); err != nil || !mayContain {
+		t.Fatalf("mayContain(5) = %v/%v, want true/nil for indexed block offset", mayContain, err)
 	}
-	if matcher.mayContain(6) {
-		t.Fatal("mayContain(6) = true, want false when all required bloom rows exclude it")
+	if mayContain, err := matcher.mayContain(6); err != nil || mayContain {
+		t.Fatalf("mayContain(6) = %v/%v, want false/nil when all required bloom rows exclude it", mayContain, err)
 	}
 
 	missingTopic := tcommon.Hash{0xee}
@@ -2119,8 +2119,8 @@ func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
 		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
 		Topics:    [][]tcommon.Hash{{missingTopic}},
 	})
-	if !matcher.mayContain(5) {
-		t.Fatal("mayContain with missing topic rows must fall back to true")
+	if mayContain, err := matcher.mayContain(5); err != nil || !mayContain {
+		t.Fatalf("mayContain with missing topic rows = %v/%v, want true/nil fallback", mayContain, err)
 	}
 }
 
@@ -2144,24 +2144,45 @@ func TestSectionBloomLogMatcherUsesColdRows(t *testing.T) {
 	if matcher == nil {
 		t.Fatal("newSectionBloomLogMatcher returned nil")
 	}
-	if !matcher.mayContain(5) {
-		t.Fatal("mayContain(5) = false, want true for cold indexed block offset")
+	if mayContain, err := matcher.mayContain(5); err != nil || !mayContain {
+		t.Fatalf("mayContain(5) = %v/%v, want true/nil for cold indexed block offset", mayContain, err)
 	}
-	if matcher.mayContain(6) {
-		t.Fatal("mayContain(6) = true, want false from cold section bloom rows")
+	if mayContain, err := matcher.mayContain(6); err != nil || mayContain {
+		t.Fatalf("mayContain(6) = %v/%v, want false/nil from cold section bloom rows", mayContain, err)
 	}
 }
 
 type testSectionBloomColdReader struct {
 	rows map[[2]uint64][]byte
+	err  error
 }
 
 func (r testSectionBloomColdReader) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	if r.err != nil {
+		return nil, false, r.err
+	}
 	value, ok := r.rows[[2]uint64{section, bitIndex}]
 	if !ok {
 		return nil, false, nil
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+func TestSectionBloomLogMatcherSurfacesColdErrors(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	db.SetSectionBloomReader(testSectionBloomColdReader{err: fmt.Errorf("cold section bloom unavailable")})
+	addr := bytes20(0x24)
+
+	matcher := newSectionBloomLogMatcher(db, jsonrpc.LogFilter{
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+	})
+	if matcher == nil {
+		t.Fatal("newSectionBloomLogMatcher returned nil")
+	}
+	mayContain, err := matcher.mayContain(5)
+	if err == nil || !strings.Contains(err.Error(), "cold section bloom unavailable") || mayContain {
+		t.Fatalf("mayContain cold error = %v/%v, want false/cold error", mayContain, err)
+	}
 }
 
 type fakeColdEventLogReader struct {

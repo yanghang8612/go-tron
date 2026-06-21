@@ -2613,8 +2613,14 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 	bloomMatcher := newSectionBloomLogMatcher(b.chain.chaindb, filter)
 
 	for num := fromBlock; num <= toBlock; num++ {
-		if bloomMatcher != nil && !bloomMatcher.mayContain(num) {
-			continue
+		if bloomMatcher != nil {
+			mayContain, err := bloomMatcher.mayContain(num)
+			if err != nil {
+				return nil, err
+			}
+			if !mayContain {
+				continue
+			}
 		}
 		block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, num)
 		if err != nil {
@@ -2871,14 +2877,17 @@ func newSectionBloomLogMatcher(db *rawdb.ChainDB, filter jsonrpc.LogFilter) *sec
 	}
 }
 
-func (m *sectionBloomLogMatcher) mayContain(blockNum uint64) bool {
+func (m *sectionBloomLogMatcher) mayContain(blockNum uint64) (bool, error) {
 	section := blockNum / rawdb.SectionBloomBlockPerSection
 	blockOffset := blockNum % rawdb.SectionBloomBlockPerSection
 	for _, group := range m.groups {
 		groupMayMatch := false
 		groupUnknown := false
 		for _, itemBits := range group {
-			match, known := m.itemMayContain(section, blockOffset, itemBits)
+			match, known, err := m.itemMayContain(section, blockOffset, itemBits)
+			if err != nil {
+				return false, err
+			}
 			if !known {
 				groupUnknown = true
 				continue
@@ -2891,22 +2900,25 @@ func (m *sectionBloomLogMatcher) mayContain(blockNum uint64) bool {
 		if groupMayMatch || groupUnknown {
 			continue
 		}
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
-func (m *sectionBloomLogMatcher) itemMayContain(section, blockOffset uint64, bitIndexes [3]uint64) (match bool, known bool) {
+func (m *sectionBloomLogMatcher) itemMayContain(section, blockOffset uint64, bitIndexes [3]uint64) (match bool, known bool, err error) {
 	for _, bitIndex := range bitIndexes {
 		row := m.read(section, bitIndex)
-		if row.err != nil || !row.ok {
-			return true, false
+		if row.err != nil {
+			return false, false, row.err
+		}
+		if !row.ok {
+			return true, false, nil
 		}
 		if !rawdb.SectionBloomBitSetHas(row.bitset, blockOffset) {
-			return false, true
+			return false, true, nil
 		}
 	}
-	return true, true
+	return true, true, nil
 }
 
 func (m *sectionBloomLogMatcher) read(section, bitIndex uint64) sectionBloomCacheRow {
@@ -2914,7 +2926,7 @@ func (m *sectionBloomLogMatcher) read(section, bitIndex uint64) sectionBloomCach
 	if row, ok := m.cache[key]; ok {
 		return row
 	}
-	bitset, ok, err := rawdb.ReadSectionBloomBitSet(m.db, section, bitIndex)
+	bitset, ok, err := rawdb.ReadSectionBloomBitSetStrict(m.db, section, bitIndex)
 	row := sectionBloomCacheRow{bitset: bitset, ok: ok, err: err}
 	m.cache[key] = row
 	return row

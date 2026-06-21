@@ -2272,7 +2272,7 @@ func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames
 	if len(path) == 0 {
 		return false
 	}
-	if rel == "core/tron_backend.go" && function == "ReadSectionBloomBitSet" && strings.Join(path, ".") == "m.db" {
+	if rel == "core/tron_backend.go" && function == "ReadSectionBloomBitSetStrict" && strings.Join(path, ".") == "m.db" {
 		return true
 	}
 	return false
