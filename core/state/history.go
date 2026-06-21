@@ -1223,13 +1223,11 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
 	acc := types.NewAccountFromPB(&pb)
 	var code []byte
 	if envelope.CodeHash != (tcommon.Hash{}) {
-		hotCode, ok, err := r.hotLatest().Code(envelope.CodeHash)
+		hotCode, err := r.readCodeByHashAtBlock(envelope.CodeHash, r.headNum)
 		if err != nil {
 			return accountCacheEntry{}, fmt.Errorf("read live code %x for %s: %w", envelope.CodeHash, addr.Hex(), err)
 		}
-		if ok {
-			code = hotCode
-		}
+		code = hotCode
 	}
 	if len(code) == 0 {
 		code = nil

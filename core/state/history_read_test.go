@@ -505,6 +505,67 @@ func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderCodeAtSurfacesMissingHistoricalCodeRow(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x83)
+	other := testAddr(0x84)
+	code := []byte{0x60, 0x0c, 0x60, 0x00, 0xf3}
+	codeHash := tcommon.Keccak256(code)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, code)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+	if err := rawdb.DeleteStateCode(f.disk, codeHash); err != nil {
+		t.Fatalf("delete state code: %v", err)
+	}
+
+	got, err := f.reader().CodeAt(contract, 1)
+	if err == nil {
+		t.Fatal("CodeAt missing historical code row error = nil")
+	}
+	if got != nil {
+		t.Fatalf("CodeAt missing historical code row = %x, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "state code") ||
+		!strings.Contains(err.Error(), "block 1") ||
+		!strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("CodeAt missing historical code row error = %v, want block-scoped missing state code context", err)
+	}
+}
+
+func TestPersistentHistoryReaderHeadCodeSurfacesMissingCodeRowWithoutLiveState(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x85)
+	code := []byte{0x60, 0x0d, 0x60, 0x00, 0xf3}
+	codeHash := tcommon.Keccak256(code)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, code)
+	})
+	if err := rawdb.DeleteStateCode(f.disk, codeHash); err != nil {
+		t.Fatalf("delete state code: %v", err)
+	}
+
+	r := NewPersistentHistoryReader(f.disk, nil, f.head)
+	got, err := r.CodeAt(contract, f.head)
+	if err == nil {
+		t.Fatal("CodeAt missing head code row error = nil")
+	}
+	if got != nil {
+		t.Fatalf("CodeAt missing head code row = %x, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "read live code") ||
+		!strings.Contains(err.Error(), "state code") ||
+		!strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("CodeAt missing head code row error = %v, want live missing state code context", err)
+	}
+}
+
 // TestPersistentHistoryReader_TenBlockSweep is the spec's headline test:
 // drive a known account's balance and a contract's slot through ten
 // blocks of mutations, plus a code change at block 5, and assert
