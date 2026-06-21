@@ -39,9 +39,10 @@ func storageRowKeyFromFlatLatest(latest accountKVLatestGenerationReader, addr tc
 		return tcommon.Hash{}, err
 	} else if ok && len(data) > 0 {
 		var sc contractpb.SmartContract
-		if err := proto.Unmarshal(data, &sc); err == nil {
-			meta = &sc
+		if err := proto.Unmarshal(data, &sc); err != nil {
+			return tcommon.Hash{}, fmt.Errorf("decode contract metadata for storage key %s generation %d: %w", addr.Hex(), generation, err)
 		}
+		meta = &sc
 	}
 	return javaStorageRowKey(addr, key, meta), nil
 }
