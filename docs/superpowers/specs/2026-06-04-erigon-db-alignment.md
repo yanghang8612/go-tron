@@ -301,6 +301,12 @@ Status:
   reads, snapshot builders, and hot-history pruning therefore stop on
   unreadable latest/history rows instead of rolling back from an incorrectly
   assumed absence.
+- Account-KV latest snapshot builders now apply the implicit generation-0 rule
+  strictly: missing `KVGenerationDomain` rows allow only generation-0 KV rows,
+  not every physical generation, and builders fail once KV rows are present if
+  their hot source cannot point-read the current generation. This keeps stale
+  incarnation data out of cold latest files and reduces snapshot bloat after
+  account reset/recreate cycles.
 - Commitment-domain readers now do the same for `StateCommitmentDomain`,
   staged commitment branch rows, and commitment engine state. Branch reads keep
   the fast `Get`/`GetNoCopy` hit path and only probe `Has` after a read error,

@@ -191,6 +191,9 @@ func TestLatestBinaryAccessorCheckStreamsAndValidates(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := latestBinaryAddress(0x36)
+	if err := rawdb.WriteStateKVGeneration(db, owner, 7); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateKVLatest(db, owner, 7, kvdomains.SystemDynamicProperty, []byte("a"), []byte("value-a")); err != nil {
 		t.Fatal(err)
 	}

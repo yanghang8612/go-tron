@@ -214,7 +214,7 @@ func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, g
 			cached = true
 		}
 		if !cachedExists {
-			return true, nil
+			return generation == 0, nil
 		}
 		return generation == cachedGeneration, nil
 	}

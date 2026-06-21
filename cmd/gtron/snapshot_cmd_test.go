@@ -1434,6 +1434,9 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, recreatedAddr, recreatedAccount2); err != nil {
 		t.Fatalf("WriteStateAccountLatest recreated: %v", err)
 	}
+	if err := rawdb.WriteStateKVGeneration(stateSnapshotDB, recreatedAddr, 1); err != nil {
+		t.Fatalf("WriteStateKVGeneration recreated: %v", err)
+	}
 	if err := rawdb.WriteStateCode(stateSnapshotDB, archiveCodeHash1, archiveCode1); err != nil {
 		t.Fatalf("WriteStateCode code1: %v", err)
 	}
@@ -1536,6 +1539,67 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		Next:       recreatedAccount2,
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange recreated account: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        5,
+		FlatDomain: rawdb.StateFlatDomainKVGeneration,
+		Owner:      recreatedAddr,
+		PrevExists: false,
+		NextExists: true,
+		Next:       rawdb.EncodeStateKVGenerationValue(1),
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated generation: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        6,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      recreatedAddr,
+		Generation: 0,
+		Domain:     kvdomains.ContractStorage,
+		Key:        recreatedStorageKeyA.Bytes(),
+		PrevExists: true,
+		Prev:       recreatedOldA.Bytes(),
+		NextExists: false,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated old slotA: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        7,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      recreatedAddr,
+		Generation: 0,
+		Domain:     kvdomains.ContractStorage,
+		Key:        recreatedStorageKeyB.Bytes(),
+		PrevExists: true,
+		Prev:       recreatedOldB.Bytes(),
+		NextExists: false,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated old slotB: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        8,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      recreatedAddr,
+		Generation: 1,
+		Domain:     kvdomains.ContractStorage,
+		Key:        recreatedStorageKeyA.Bytes(),
+		PrevExists: false,
+		NextExists: true,
+		Next:       recreatedNewA.Bytes(),
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated new slotA: %v", err)
 	}
 	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/accounts-1-2.seg")
 	if err != nil {

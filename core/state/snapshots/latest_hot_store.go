@@ -82,7 +82,7 @@ func (s rawDBLatestHotStore) WriteKVLatest(owner common.Address, generation uint
 
 func (s rawDBLatestHotStore) ReadKVGeneration(owner common.Address) (uint64, bool, error) {
 	if s.reader == nil {
-		return 0, false, nil
+		return 0, false, fmt.Errorf("snapshots latest hot store: nil reader while reading KV generation for %s", owner.Hex())
 	}
 	return rawdb.ReadStateKVGeneration(s.reader, owner)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -435,7 +436,13 @@ func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	if err := rawdb.WriteStateKVLatest(db, owner2, 3, kvdomains.SystemReward, []byte("cycle/2"), []byte("ignored")); err != nil {
 		t.Fatal(err)
 	}
+	if err := rawdb.WriteStateKVGeneration(db, owner1, 7); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateKVLatest(db, owner1, 7, kvdomains.SystemDynamicProperty, []byte("latest_block"), []byte("12")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVGeneration(db, owner2, 9); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateKVLatest(db, owner2, 9, kvdomains.SystemDynamicProperty, []byte("next_maintenance"), []byte("42")); err != nil {
@@ -553,12 +560,65 @@ func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
 	}
 }
 
+func TestLatestBinaryBuildTreatsMissingKVGenerationAsZero(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x60}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, []byte("live-zero"), []byte("zero")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 1, kvdomains.ContractStorage, []byte("stale-one"), []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	ref, accessorRef, btreeRef, err := BuildLatestDomainSegmentFilesFromDB(db, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if err != nil {
+		t.Fatalf("build latest binary segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 0, []byte("live-zero"), 5)
+	if err != nil || !ok || string(got) != "zero" {
+		t.Fatalf("implicit generation-zero value = %q ok:%v err:%v", got, ok, err)
+	}
+	if got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale-one"), 5); err != nil || ok || got != nil {
+		t.Fatalf("nonzero generation without generation row = %q ok:%v err:%v, want miss", got, ok, err)
+	}
+}
+
+func TestLatestBinaryBuildRequiresKVGenerationReader(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x61}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, []byte("slot"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := BuildLatestDomainSegmentFilesFromDB(iteratorOnlyLatestDB{Iteratee: db}, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if err == nil || !strings.Contains(err.Error(), "nil reader while reading KV generation") {
+		t.Fatalf("build error = %v, want missing reader error", err)
+	}
+}
+
+type iteratorOnlyLatestDB struct {
+	ethdb.Iteratee
+}
+
 func TestLatestBinaryManagerReadsWithoutMaterializingSegment(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner1 := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x51}, common.AccountIDLength)...))
 	owner2 := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x52}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner1, 7); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateKVLatest(db, owner1, 7, kvdomains.SystemDynamicProperty, []byte("a"), []byte("value-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVGeneration(db, owner2, 7); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateKVLatest(db, owner2, 7, kvdomains.SystemDynamicProperty, []byte("b"), []byte("value-b")); err != nil {
@@ -620,6 +680,9 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x53}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner, 7); err != nil {
+		t.Fatal(err)
+	}
 	entryCount := int(latestBinaryBTreeBlockSize) + 17
 	for i := 0; i < entryCount; i++ {
 		key := []byte(fmt.Sprintf("slot/%03d", i))

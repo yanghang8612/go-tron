@@ -210,7 +210,11 @@ Status update:
   `KVGenerationDomain` value when one exists, so stale rows from older
   generations are not published into latest snapshots after account
   delete/recreate or KV reset. Missing generation rows still preserve the
-  implicit generation-0 compatibility case.
+  implicit generation-0 compatibility case, but only for generation-0 rows;
+  nonzero-generation KV rows without a matching generation row are treated as
+  stale and are not published. Builders also require a point reader for
+  generation checks once KV rows are present, so snapshot generation fails
+  loudly instead of publishing unfiltered account-KV data.
 
 Next step:
 
