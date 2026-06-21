@@ -2367,11 +2367,20 @@ func TestArchiveQuery_GatedOnHistoryEnabled(t *testing.T) {
 		if _, err := b.GetStorageAtBlock(recipient, slot, n); !errors.Is(err, ErrArchiveHistoryDisabled) {
 			t.Errorf("GetStorageAtBlock(recipient, _, %d) err = %v, want ErrArchiveHistoryDisabled", n, err)
 		}
+		if _, err := b.CallAt(&witness, &recipient, nil, 0, n); !errors.Is(err, ErrArchiveHistoryDisabled) {
+			t.Errorf("CallAt(recipient, %d) err = %v, want ErrArchiveHistoryDisabled", n, err)
+		}
+		if _, err := b.EstimateGasAt(&witness, &recipient, nil, 0, n); !errors.Is(err, ErrArchiveHistoryDisabled) {
+			t.Errorf("EstimateGasAt(recipient, empty data, %d) err = %v, want ErrArchiveHistoryDisabled", n, err)
+		}
 	}
 
 	// Query AT head succeeds even with history disabled (served from live).
 	if _, err := b.GetBalanceAt(recipient, head); err != nil {
 		t.Errorf("GetBalanceAt(recipient, head) with history disabled: %v", err)
+	}
+	if gas, err := b.EstimateGasAt(&witness, &recipient, nil, 0, head); err != nil || gas != 0 {
+		t.Errorf("EstimateGasAt(recipient, empty data, head) = %d, err %v, want 0/nil", gas, err)
 	}
 	// A block past head must fail before the history-enabled gate; returning
 	// live state here would make an explicit future block indistinguishable
@@ -2413,5 +2422,8 @@ func TestArchiveQuery_FutureBlockRejected(t *testing.T) {
 	}
 	if _, err := b.EstimateGasAt(&witness, &recipient, []byte{0x01}, 0, future); err == nil {
 		t.Fatal("EstimateGasAt future block returned nil error")
+	}
+	if _, err := b.EstimateGasAt(&witness, &recipient, nil, 0, future); err == nil {
+		t.Fatal("EstimateGasAt empty-data future block returned nil error")
 	}
 }
