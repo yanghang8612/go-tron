@@ -2,12 +2,14 @@ package state
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 func TestDelegationStoreRoundTripAcrossRoot(t *testing.T) {
@@ -91,6 +93,13 @@ func TestDelegationStoreIndexes(t *testing.T) {
 	if got := statedb.ReadDelegationIndex(from); !reflect.DeepEqual(got, []tcommon.Address{to1, to2}) {
 		t.Fatalf("delegation index = %v, want [%s %s]", got, to1.Hex(), to2.Hex())
 	}
+	strict, err := statedb.ReadDelegationIndexStrict(from)
+	if err != nil {
+		t.Fatalf("ReadDelegationIndexStrict: %v", err)
+	}
+	if !reflect.DeepEqual(strict, []tcommon.Address{to1, to2}) {
+		t.Fatalf("strict delegation index = %v, want [%s %s]", strict, to1.Hex(), to2.Hex())
+	}
 
 	if err := statedb.WriteDrAccountIndexLegacyDelegate(from.Bytes(), to1.Bytes()); err != nil {
 		t.Fatal(err)
@@ -108,5 +117,21 @@ func TestDelegationStoreIndexes(t *testing.T) {
 	entry := statedb.ReadDrAccountIndexEntry(rawdb.DrAccIdxV1From, from.Bytes(), to1.Bytes())
 	if entry == nil || string(entry.Account) != string(to1.Bytes()) || entry.Timestamp != 1 {
 		t.Fatalf("directional index mismatch: %+v", entry)
+	}
+}
+
+func TestDelegationIndexStrictRejectsMalformedBytes(t *testing.T) {
+	statedb := newTestStateDB(t)
+	from := testAddr(0x41)
+	if err := statedb.SystemKVPut(kvdomains.SystemDelegation, rawdb.DelegationIndexStateKey(from), []byte("short")); err != nil {
+		t.Fatalf("write malformed delegation index: %v", err)
+	}
+
+	if got := statedb.ReadDelegationIndex(from); got != nil {
+		t.Fatalf("legacy delegation index = %v, want nil for malformed bytes", got)
+	}
+	_, err := statedb.ReadDelegationIndexStrict(from)
+	if err == nil || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("strict delegation index error = %v, want malformed length", err)
 	}
 }

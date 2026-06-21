@@ -1071,7 +1071,10 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	receivers := statedb.ReadDelegationIndex(addr)
+	receivers, err := statedb.ReadDelegationIndexStrict(addr)
+	if err != nil {
+		return nil, fmt.Errorf("read delegation index: %w", err)
+	}
 	toAddresses := make([]string, len(receivers))
 	for i, r := range receivers {
 		toAddresses[i] = hex.EncodeToString(r[:])
@@ -1131,7 +1134,11 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 
 	// Compute already-delegated amount from the delegation index.
 	var delegated int64
-	for _, receiver := range statedb.ReadDelegationIndex(addr) {
+	receivers, err := statedb.ReadDelegationIndexStrict(addr)
+	if err != nil {
+		return nil, fmt.Errorf("read delegation index: %w", err)
+	}
+	for _, receiver := range receivers {
 		dr := statedb.ReadDelegatedResource(addr, receiver)
 		if dr == nil {
 			continue

@@ -140,6 +140,9 @@ func ReadDelegationIndex(db ethdb.KeyValueReader, from common.Address) []common.
 	if err != nil || len(data) == 0 {
 		return nil
 	}
+	if len(data)%common.AddressLength != 0 {
+		return nil
+	}
 	count := len(data) / common.AddressLength
 	addrs := make([]common.Address, count)
 	for i := range addrs {

@@ -13,11 +13,15 @@ import (
 )
 
 func (s *StateDB) readSystemDelegation(key []byte) ([]byte, bool) {
-	raw, ok, err := s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
+	raw, ok, err := s.readSystemDelegationWithError(key)
 	if err != nil || !ok {
 		return nil, false
 	}
 	return raw, true
+}
+
+func (s *StateDB) readSystemDelegationWithError(key []byte) ([]byte, bool, error) {
+	return s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
 }
 
 func (s *StateDB) writeSystemDelegation(key, value []byte) error {
@@ -142,12 +146,31 @@ func (s *StateDB) ReadDelegationIndex(from tcommon.Address) []tcommon.Address {
 	if !ok || len(data) == 0 {
 		return nil
 	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil
+	}
 	count := len(data) / tcommon.AddressLength
 	addrs := make([]tcommon.Address, count)
 	for i := range addrs {
 		copy(addrs[i][:], data[i*tcommon.AddressLength:])
 	}
 	return addrs
+}
+
+func (s *StateDB) ReadDelegationIndexStrict(from tcommon.Address) ([]tcommon.Address, error) {
+	data, ok, err := s.readSystemDelegationWithError(rawdb.DelegationIndexStateKey(from))
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil, fmt.Errorf("delegation index for %x has malformed length %d, want multiple of %d", from, len(data), tcommon.AddressLength)
+	}
+	count := len(data) / tcommon.AddressLength
+	addrs := make([]tcommon.Address, count)
+	for i := range addrs {
+		copy(addrs[i][:], data[i*tcommon.AddressLength:])
+	}
+	return addrs, nil
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedResourceAccountIndex {

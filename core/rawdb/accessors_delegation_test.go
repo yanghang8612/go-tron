@@ -113,6 +113,17 @@ func TestDelegationIndex(t *testing.T) {
 	}
 }
 
+func TestDelegationIndexRejectsMalformedBytes(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	from := common.Address{0x41, 0x01}
+	if err := db.Put(delegationIndexKey(from[:]), []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadDelegationIndex(db, from); got != nil {
+		t.Fatalf("delegation index = %v, want nil for malformed bytes", got)
+	}
+}
+
 func TestDelegationNotFound(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	from := common.Address{0x41, 0x01}
