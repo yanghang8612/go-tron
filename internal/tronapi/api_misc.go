@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // getProposalById handles GET/POST /wallet/getproposalbyid
@@ -32,7 +33,16 @@ func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, bo
 	} else {
 		p, err = api.backend.GetProposalByIDAt(id, boundFn())
 	}
-	if err != nil || p == nil {
+	if err != nil {
+		if proposalLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -40,6 +50,15 @@ func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, bo
 	data, _ := json.Marshal(p)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func proposalLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return strings.HasPrefix(msg, "proposal ") &&
+		(strings.HasSuffix(msg, " not found") || strings.Contains(msg, " not found at block "))
 }
 
 // getPaginatedProposalList handles POST /wallet/getpaginatedproposallist

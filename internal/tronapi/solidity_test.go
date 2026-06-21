@@ -522,6 +522,7 @@ type isolationStubBackend struct {
 	proposalsAtBlock         uint64
 	liveProposalIDCalls      int
 	proposalIDAtBlock        uint64
+	proposalIDAtErr          error
 	liveProposalPageCalls    int
 	proposalPageAtBlock      uint64
 	liveAssetIDCalls         int
@@ -682,6 +683,9 @@ func (s *isolationStubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo,
 
 func (s *isolationStubBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
 	s.proposalIDAtBlock = blockNum
+	if s.proposalIDAtErr != nil {
+		return nil, s.proposalIDAtErr
+	}
 	return &tronapi.ProposalInfo{ProposalID: id, State: "BOUND"}, nil
 }
 
@@ -1380,6 +1384,30 @@ func assertProposalRoutesUseBound(t *testing.T, prefix string, stub *isolationSt
 	}
 	if stub.liveProposalPageCalls != 0 {
 		t.Fatalf("live ListProposalsPaginated called %d times, want 0", stub.liveProposalPageCalls)
+	}
+}
+
+func TestSolidityGetProposalByIdSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		proposalIDAtErr:  errors.New("state history: cold proposal segment corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/walletsolidity/getproposalbyid?id=42")
+	if err != nil {
+		t.Fatalf("getproposalbyid request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getproposalbyid status = %d, want 500", resp.StatusCode)
+	}
+	if stub.proposalIDAtBlock != 42 {
+		t.Fatalf("GetProposalByIDAt block = %d, want solid block 42", stub.proposalIDAtBlock)
+	}
+	if stub.liveProposalIDCalls != 0 {
+		t.Fatalf("live GetProposalByID called %d times, want 0", stub.liveProposalIDCalls)
 	}
 }
 

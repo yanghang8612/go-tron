@@ -66,7 +66,9 @@ type stubBackend struct {
 	validateErr error
 	// Proposal output divergence test (D-4): canned proposals returned
 	// from ListProposals / ListProposalsPaginated / GetProposalByID.
-	proposals []*tronapi.ProposalInfo
+	proposals     []*tronapi.ProposalInfo
+	proposalErr   error
+	proposalAtErr error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -436,6 +438,9 @@ func (s *stubBackend) BuildContractTransaction(contractType corepb.Transaction_C
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
 	for _, p := range s.proposals {
 		if p.ProposalID == id {
 			return p, nil
@@ -444,9 +449,12 @@ func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	if id == 1 {
 		return &tronapi.ProposalInfo{ProposalID: 1}, nil
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, fmt.Errorf("proposal %d not found", id)
 }
 func (s *stubBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	if s.proposalAtErr != nil {
+		return nil, s.proposalAtErr
+	}
 	return s.GetProposalByID(id)
 }
 func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
@@ -1300,6 +1308,22 @@ func TestGetProposalByIdNotFound(t *testing.T) {
 		t.Fatalf("expected empty object, got %v", result)
 	}
 }
+
+func TestGetProposalByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold proposal segment corrupt")
+	srv := newTestServer(t, &stubBackend{proposalErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getproposalbyid", "application/json", strings.NewReader(`{"id":42}`))
+	if err != nil {
+		t.Fatalf("POST getproposalbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getproposalbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
 func TestGetPaginatedProposalList(t *testing.T) {
 	stub := &stubBackend{}
 	srv := newTestServer(t, stub)

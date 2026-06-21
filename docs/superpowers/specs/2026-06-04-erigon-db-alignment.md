@@ -978,7 +978,9 @@ Status:
   responses while surfacing latest/cold contract metadata read failures as
   HTTP 500 / gRPC Internal. TRON HTTP `getaccountnet` now applies the same
   split: explicit account misses still return `{}`, while cold account-net or
-  dynamic-property reconstruction failures return HTTP 500. HTTP
+  dynamic-property reconstruction failures return HTTP 500. TRON HTTP
+  `getproposalbyid` now preserves `{}` only for explicit proposal misses and
+  surfaces cold proposal-history reconstruction failures as HTTP 500. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as
