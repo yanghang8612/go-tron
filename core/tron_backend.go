@@ -271,6 +271,13 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 	}
 	if history != nil {
 		statedbCopy.SetHistoricalLatestView(history, historyBlock)
+		if codeColdHistory, ok := b.stateColdHistory.(state.StateCodeColdHistoryAtOrBefore); ok {
+			txNum, err := b.archiveStateTxNumAtBlockEnd(historyBlock)
+			if err != nil {
+				return nil, fmt.Errorf("resolve archive code txnum for block %d: %w", historyBlock, err)
+			}
+			statedbCopy.SetCodeColdHistory(codeColdHistory, txNum)
+		}
 	}
 
 	if energyLimit <= 0 {
@@ -2372,6 +2379,24 @@ func (b *TronBackend) archiveStateTxRangeAvailable(blockNum uint64) (bool, error
 		return ok, err
 	}
 	return false, nil
+}
+
+func (b *TronBackend) archiveStateTxNumAtBlockEnd(blockNum uint64) (uint64, error) {
+	if row, ok, err := snapshots.StateDomainHistoryTxRangeForBlock(b.chain.buffer, blockNum); err != nil {
+		return 0, err
+	} else if ok {
+		return row.EndTxNum, nil
+	}
+	if cold, ok := b.stateColdHistory.(state.StateDomainChangeColdTxRange); ok {
+		row, ok, err := cold.StateTxRangeForBlock(blockNum)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			return row.EndTxNum, nil
+		}
+	}
+	return blockNum, nil
 }
 
 // GetBalanceAt returns addr's TRX balance (in SUN) as it stood at the end of

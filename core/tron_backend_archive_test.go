@@ -1964,8 +1964,11 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 
 	contract := testInsertAddr(42)
 	slot := tcommon.Hash{0xAA}
-	code2 := []byte{0x60, 0x02, 0x60, 0x0A}
-	code3 := []byte{0x60, 0x03, 0x60, 0x0B}
+	runtimeReturning := func(v byte) []byte {
+		return []byte{0x60, v, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3}
+	}
+	code2 := runtimeReturning(0x02)
+	code3 := runtimeReturning(0x03)
 	codeHash2 := tcommon.Keccak256(code2)
 	codeHash3 := tcommon.Keccak256(code3)
 	storage2 := tcommon.Hash{0x02}
@@ -2002,11 +2005,23 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 		}
 	}
 	applyDomainBlock(2, blocks[2].Hash(), range2, func(s *state.StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
 		s.SetCode(contract, code2)
+		s.SetContract(contract, &contractpb.SmartContract{
+			ContractAddress: contract.Bytes(),
+			Name:            "cold-runtime",
+			Bytecode:        code2,
+		})
 		s.SetState(contract, slot, storage2)
 	})
 	applyDomainBlock(3, blocks[3].Hash(), range3, func(s *state.StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
 		s.SetCode(contract, code3)
+		s.SetContract(contract, &contractpb.SmartContract{
+			ContractAddress: contract.Bytes(),
+			Name:            "cold-runtime",
+			Bytecode:        code3,
+		})
 		s.SetState(contract, slot, storage3)
 	})
 	bc.buffer.CommitBlock()
@@ -2050,6 +2065,31 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 	}
 	b.SetStateColdHistory(mgr)
 
+	assertArchiveExecution := func(label string, blockNum uint64, want byte) {
+		t.Helper()
+		triggered, err := b.TriggerConstantContractAt(witness, contract, nil, 1_000_000, blockNum)
+		if err != nil {
+			t.Fatalf("%s TriggerConstantContractAt(contract, %d): %v", label, blockNum, err)
+		}
+		if len(triggered.Result) != 32 || triggered.Result[31] != want {
+			t.Fatalf("%s TriggerConstantContractAt(contract, %d) = %x, want trailing 0x%02x", label, blockNum, triggered.Result, want)
+		}
+		call, err := b.CallAt(&witness, &contract, nil, 0, blockNum)
+		if err != nil {
+			t.Fatalf("%s CallAt(contract, %d): %v", label, blockNum, err)
+		}
+		if len(call) != 32 || call[31] != want {
+			t.Fatalf("%s CallAt(contract, %d) = %x, want trailing 0x%02x", label, blockNum, call, want)
+		}
+		gas, err := b.EstimateGasAt(&witness, &contract, []byte{0x01}, 0, blockNum)
+		if err != nil {
+			t.Fatalf("%s EstimateGasAt(contract, %d): %v", label, blockNum, err)
+		}
+		if gas == 0 {
+			t.Fatalf("%s EstimateGasAt(contract, %d) = 0, want positive energy", label, blockNum)
+		}
+	}
+
 	bc.buffer.BeginBlock(tcommon.Hash{0xCE}, 0) // sentinel; archive prune layer
 	for n := uint64(2); n <= 3; n++ {
 		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
@@ -2069,6 +2109,8 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 
 	assertArchiveCodeStorage("cold", 2, code2, storage2)
 	assertArchiveCodeStorage("cold", 3, code3, storage3)
+	assertArchiveExecution("cold", 2, 0x02)
+	assertArchiveExecution("cold", 3, 0x03)
 }
 
 func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChangeSnapshots(t *testing.T) {
