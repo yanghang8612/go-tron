@@ -43,6 +43,8 @@ type stubBackend struct {
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	blockErr                error
+	hashErr                 error
 	txErr                   error
 	txInfoErr               error
 	rangeCalls              int
@@ -59,8 +61,13 @@ type stubBackend struct {
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
-func (s *stubBackend) CurrentBlock() *types.Block                             { return nil }
-func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return nil, nil }
+func (s *stubBackend) CurrentBlock() *types.Block { return nil }
+func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { return nil, nil }
 func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	return nil, nil
@@ -98,7 +105,12 @@ func (s *stubBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, e
 func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) { return nil, nil }
+func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
+	if s.hashErr != nil {
+		return nil, s.hashErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
 	s.rangeCalls++
 	s.lastRangeStart = start
@@ -469,6 +481,36 @@ func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
 				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", stub.rangeCalls)
 			}
 		})
+	}
+}
+
+func TestGetBlockByNumSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbynum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST getblockbynum: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getblockbynum status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetBlockByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: cold block index corrupt")
+	srv := newTestServer(t, &stubBackend{hashErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST getblockbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getblockbyid status = %d, want 500", resp.StatusCode)
 	}
 }
 

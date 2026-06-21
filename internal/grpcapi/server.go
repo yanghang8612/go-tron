@@ -77,7 +77,13 @@ func (s *Server) GetBlockByNum(_ context.Context, in *apipb.NumberMessage) (*cor
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -183,7 +189,13 @@ func (s *Server) GetBlockByNum2(_ context.Context, in *apipb.NumberMessage) (*ap
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtention(block), nil
@@ -204,7 +216,13 @@ func (s *Server) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockEx
 	}
 	if strings.EqualFold(idOrNum, "earliest") {
 		block, err := s.backend.GetBlockByNumber(0)
-		if err != nil || block == nil {
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
 			return nil, status.Error(codes.NotFound, "block not found")
 		}
 		return blockToExtentionWithDetail(block, in.GetDetail()), nil
@@ -215,7 +233,13 @@ func (s *Server) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockEx
 			return nil, status.Error(codes.InvalidArgument, "invalid block id")
 		}
 		block, err := s.backend.GetBlockByHash(hash)
-		if err != nil || block == nil {
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
 			return nil, status.Error(codes.NotFound, "block not found")
 		}
 		return blockToExtentionWithDetail(block, in.GetDetail()), nil
@@ -226,7 +250,13 @@ func (s *Server) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockEx
 		return nil, status.Error(codes.InvalidArgument, "invalid block number")
 	}
 	block, err := s.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtentionWithDetail(block, in.GetDetail()), nil
@@ -239,7 +269,13 @@ func (s *Server) GetBlockById(_ context.Context, in *apipb.BytesMessage) (*corep
 	}
 	hash := common.BytesToHash(in.Value)
 	block, err := s.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -356,7 +392,13 @@ func (s *Server) GetTransactionCountByBlockNum(_ context.Context, in *apipb.Numb
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return &apipb.NumberMessage{Num: int64(len(block.Transactions()))}, nil
@@ -764,6 +806,14 @@ func transactionLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "transaction not found" || msg == "transaction info not found"
+}
+
+func blockLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.

@@ -3,6 +3,7 @@ package tronapi_test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,25 @@ func TestSolidityGetBlockByNum_rejectsAboveSolid(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for block above solid, got %d", resp.StatusCode)
+	}
+}
+
+func TestSolidityGetBlockByNumSurfacesBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{blockErr: errors.New("rawdb: block 2 decode: corrupt")},
+		solidNum:    3,
+		pbftNum:     -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/walletsolidity/getblockbynum?num=2")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for backend block error, got %d", resp.StatusCode)
 	}
 }
 

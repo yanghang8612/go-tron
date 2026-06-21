@@ -62,7 +62,13 @@ func (s *SolidityServer) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb
 			return nil, status.Error(codes.NotFound, "block not yet solidified")
 		}
 		block, err := s.backend.GetBlockByHash(hash)
-		if err != nil || block == nil {
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
 			return nil, status.Error(codes.NotFound, "block not found")
 		}
 		if block.Number() > s.solidNum() {
@@ -83,7 +89,13 @@ func (s *SolidityServer) getSolidBlockByNumber(num uint64, detail bool) (*apipb.
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtentionWithDetail(block, detail), nil
@@ -128,7 +140,13 @@ func (s *SolidityServer) GetNowBlock(_ context.Context, _ *apipb.EmptyMessage) (
 	// solidNum()==0 on a fresh chain → looks up genesis block (#0), matching
 	// java-tron's WalletSolidityApi which returns the solidified-DB head.
 	block, err := s.backend.GetBlockByNumber(s.solidNum())
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "solid block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "solid block not found")
 	}
 	return block.Proto(), nil
@@ -136,7 +154,13 @@ func (s *SolidityServer) GetNowBlock(_ context.Context, _ *apipb.EmptyMessage) (
 
 func (s *SolidityServer) GetNowBlock2(_ context.Context, _ *apipb.EmptyMessage) (*apipb.BlockExtention, error) {
 	block, err := s.backend.GetBlockByNumber(s.solidNum())
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "solid block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "solid block not found")
 	}
 	return blockToExtention(block), nil
@@ -150,7 +174,13 @@ func (s *SolidityServer) GetBlockByNum(_ context.Context, in *apipb.NumberMessag
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -164,7 +194,13 @@ func (s *SolidityServer) GetBlockByNum2(_ context.Context, in *apipb.NumberMessa
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtention(block), nil
@@ -192,7 +228,13 @@ func (s *SolidityServer) GetTransactionCountByBlockNum(_ context.Context, in *ap
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return &apipb.NumberMessage{Num: int64(len(block.Transactions()))}, nil

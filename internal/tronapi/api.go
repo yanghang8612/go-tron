@@ -181,7 +181,15 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	block, err := api.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if block == nil {
 		http.Error(w, "block not found", http.StatusNotFound)
 		return
 	}
@@ -809,6 +817,14 @@ func transactionLookupNotFound(err error) bool {
 	return msg == "transaction not found" || msg == "transaction info not found"
 }
 
+func blockLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
+}
+
 func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -881,7 +897,16 @@ func blockNumberFromBlockIDBytes(hashBytes []byte) (uint64, bool) {
 
 func (api *API) writeBlockByHash(w http.ResponseWriter, hash common.Hash) {
 	block, err := api.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if block == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return

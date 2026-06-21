@@ -522,6 +522,20 @@ func TestSolidity_GetBlockByNum_AboveSolid(t *testing.T) {
 	}
 }
 
+func TestSolidity_GetBlockByNumSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 4 decode: corrupt")
+	backend := &solidTestBackend{
+		testBackend: testBackend{blockErr: backendErr},
+		solidNum:    5,
+	}
+	client := newSolidityClient(t, backend)
+
+	_, err := client.GetBlockByNum(context.Background(), &apipb.NumberMessage{Num: 4})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal for backend block read error, got %v", err)
+	}
+}
+
 func TestSolidity_GetBlockLatestUsesSolidBound(t *testing.T) {
 	solidBlock := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{

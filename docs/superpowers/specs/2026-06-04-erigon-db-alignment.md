@@ -1651,7 +1651,10 @@ Status:
   `eth_getLogs(blockHash=...)` can return a false empty result. Backend
   block-by-number and range reads now use the same strict body accessor, and
   JSON-RPC block-by-number/hash handlers only translate real not-found results
-  to `null`; corrupt indexed block bodies now surface as JSON-RPC errors.
+  to `null`; corrupt indexed block bodies now surface as JSON-RPC errors. TRON
+  HTTP and gRPC block-by-number/hash handlers now make the same distinction,
+  preserving empty/not-found responses for explicit misses while surfacing cold
+  index or block-body corruption as internal server errors.
 - HTTP `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` transaction
   by id / transaction-info by id reads now resolve the transaction's block
   through the hot/cold tx lookup index before exposing payloads. Transactions

@@ -31,6 +31,8 @@ type testBackend struct {
 	lastNumQueried          uint64
 	hashCalls               int
 	lastHashQueried         common.Hash
+	blockErr                error
+	hashErr                 error
 	rangeCalls              int
 	lastRangeStart          uint64
 	lastRangeEnd            uint64
@@ -53,6 +55,9 @@ func (b *testBackend) CurrentBlock() *types.Block { return b.block }
 func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	b.blockNumCalls++
 	b.lastNumQueried = n
+	if b.blockErr != nil {
+		return nil, b.blockErr
+	}
 	return b.block, nil
 }
 func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { return b.account, nil }
@@ -95,6 +100,9 @@ func (b *testBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.Transact
 func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
 	b.hashCalls++
 	b.lastHashQueried = h
+	if b.hashErr != nil {
+		return nil, b.hashErr
+	}
 	if b.block != nil && b.block.Hash() == h {
 		return b.block, nil
 	}
@@ -423,6 +431,15 @@ func TestGetBlockByNum_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetBlockByNum_BackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{blockErr: backendErr})
+	_, err := client.GetBlockByNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
 func TestGetAccount_Empty(t *testing.T) {
 	client := newTestClient(t, &testBackend{account: nil})
 	resp, err := client.GetAccount(context.Background(), &corepb.Account{
@@ -655,6 +672,15 @@ func TestGetBlockById_NotFound(t *testing.T) {
 	_, err := client.GetBlockById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetBlockById_BackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: cold block index corrupt")
+	client := newTestClient(t, &testBackend{hashErr: backendErr})
+	_, err := client.GetBlockById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
