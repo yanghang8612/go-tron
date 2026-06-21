@@ -370,7 +370,7 @@ func WriteSyncImportProgressBatch(db interface {
 					Hash:   block.Hash,
 					Err:    err,
 				})
-				continue
+				return result
 			}
 			enqueuedDeletes = append(enqueuedDeletes, block)
 		}

@@ -586,6 +586,36 @@ func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T
 	})
 }
 
+func TestWriteSyncImportProgressBatchStopsOnBatchDeleteEnqueueError(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(2, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	db := &failingBatchDeleteStore{KeyValueStore: base, failNumber: block.Number()}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block.Number(), Hash: block.Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	})
+	if len(result.DeleteErrors) != 1 || result.DeleteErrors[0].Number != block.Number() || !strings.Contains(result.DeleteErrors[0].Err.Error(), "batch delete boom") {
+		t.Fatalf("result = %+v, want one batch delete enqueue error", result)
+	}
+	if result.Deleted != 0 || result.ProgressRows != 0 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want no delete/progress writes", result)
+	}
+	if db.writes != 0 || db.batchDeleteErrors != 1 {
+		t.Fatalf("batch writes=%d deleteErrors=%d, want no write and one delete enqueue error", db.writes, db.batchDeleteErrors)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after failed batch delete enqueue ok=%v err=%v, want present", ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+		t.Fatalf("sync import progress after failed batch delete enqueue = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}
+
 func TestWriteSyncImportProgressBatchFallbackKeepsBodiesWhenProgressWriteFails(t *testing.T) {
 	base := NewMemoryDatabase()
 	block := testSyncStagedBlock(2, common.Hash{0x01})
@@ -1232,6 +1262,43 @@ func (db *countingBatchStore) NewBatch() ethdb.Batch {
 func (db *countingBatchStore) NewBatchWithSize(size int) ethdb.Batch {
 	db.batches++
 	return db.KeyValueStore.NewBatchWithSize(size)
+}
+
+type failingBatchDeleteStore struct {
+	ethdb.KeyValueStore
+
+	failNumber        uint64
+	batches           int
+	writes            int
+	batchDeleteErrors int
+}
+
+func (db *failingBatchDeleteStore) NewBatch() ethdb.Batch {
+	db.batches++
+	return &failingBatchDelete{Batch: db.KeyValueStore.NewBatch(), store: db}
+}
+
+func (db *failingBatchDeleteStore) NewBatchWithSize(size int) ethdb.Batch {
+	db.batches++
+	return &failingBatchDelete{Batch: db.KeyValueStore.NewBatchWithSize(size), store: db}
+}
+
+type failingBatchDelete struct {
+	ethdb.Batch
+	store *failingBatchDeleteStore
+}
+
+func (b *failingBatchDelete) Delete(key []byte) error {
+	if bytes.Equal(key, syncStagedBlockKey(b.store.failNumber)) {
+		b.store.batchDeleteErrors++
+		return errors.New("batch delete boom")
+	}
+	return b.Batch.Delete(key)
+}
+
+func (b *failingBatchDelete) Write() error {
+	b.store.writes++
+	return b.Batch.Write()
 }
 
 type directSyncStageWriter struct {
