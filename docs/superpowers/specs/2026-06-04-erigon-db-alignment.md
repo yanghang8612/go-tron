@@ -318,6 +318,11 @@ Status:
   content-addressed contract bytecode rows when no CodeDomain snapshot already
   proves coverage, instead of treating them as missing code, while still
   keeping the legacy `ReadStateCode` compatibility wrapper.
+- CodeDomain cold coverage checks now also fail loudly: pruning/checker paths
+  propagate `GetCodeAtOrBefore` snapshot read errors instead of treating a
+  corrupt or unreadable cold code segment as "not covered" and falling back to
+  hot code. Snap pruning therefore cannot delete or retain rows based on a
+  silently corrupted CodeDomain segment.
 - The current-cycle reward pending accumulator also probes presence before
   decoding, so startup and reorg reloads stop on unreadable accumulator storage
   instead of silently resetting in-memory pending rewards to empty.

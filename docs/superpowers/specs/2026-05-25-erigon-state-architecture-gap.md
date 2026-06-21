@@ -423,8 +423,9 @@ Next step:
   selecting the right hash plus content-addressed retention of every referenced
   hash), and the snapshot-coverage deletion gate is now locked from the negative
   direction by `TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage`
-  (uncovered hot code is never pruned). No separate temporal code changeset is
-  needed.
+  (uncovered hot code is never pruned). Corrupt cold CodeDomain coverage now
+  also fails the checker/pruner instead of being treated as an ordinary miss or
+  falling back to hot code. No separate temporal code changeset is needed.
 - Add java-tron parity fixtures for historical contract code if future
   compatibility work finds a case where content-addressed retention is
   insufficient.

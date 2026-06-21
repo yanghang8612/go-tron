@@ -345,7 +345,11 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 		return errors.New("pruning: missing CodeDomain hot reader")
 	}
 	for hash, txNums := range hashes {
-		if codeHashCoveredInSnapshots(codeSnapshots, hash, txNums, codeSnapshotTxNum) {
+		covered, err := codeHashCoveredInSnapshots(codeSnapshots, hash, txNums, codeSnapshotTxNum)
+		if err != nil {
+			return err
+		}
+		if covered {
 			continue
 		}
 		if code, ok, err := codeCfg.ReadHotCode(c.DB, hash); err != nil {
@@ -358,24 +362,28 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 	return nil
 }
 
-func codeHashCoveredInSnapshots(mgr *snapshots.Manager, hash common.Hash, txNums map[uint64]struct{}, fallbackTxNum uint64) bool {
+func codeHashCoveredInSnapshots(mgr *snapshots.Manager, hash common.Hash, txNums map[uint64]struct{}, fallbackTxNum uint64) (bool, error) {
 	if mgr == nil {
-		return false
+		return false, nil
 	}
 	if len(txNums) == 0 {
 		return codeHashAvailableInSnapshot(mgr, hash, fallbackTxNum)
 	}
 	for txNum := range txNums {
-		if !codeHashAvailableInSnapshot(mgr, hash, txNum) {
-			return false
+		covered, err := codeHashAvailableInSnapshot(mgr, hash, txNum)
+		if err != nil || !covered {
+			return false, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) bool {
+func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) (bool, error) {
 	code, ok, err := mgr.GetCodeAtOrBefore(hash, txNum)
-	return err == nil && ok && len(code) > 0
+	if err != nil {
+		return false, err
+	}
+	return ok && len(code) > 0, nil
 }
 
 func isMeaningfulCodeHash(hash common.Hash) bool {

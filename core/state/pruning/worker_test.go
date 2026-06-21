@@ -485,6 +485,33 @@ func TestCheckerAcceptsReferencedCodeHashFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestCheckerSurfacesCorruptColdCodeSnapshot(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x4e}, common.AccountIDLength)...))
+	code := []byte{0x60, 0x12}
+	hash := common.Keccak256(code)
+	writeAccountLatestEnvelope(t, db, owner, hash)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+		t.Fatal(err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 1, 1, "latest/code-1-1.seg")
+	if err != nil {
+		t.Fatalf("build code snapshot: %v", err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(1, 1, []snapshots.SegmentRef{codeRef, codeAccessorRef, codeBTreeRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	corruptSnapshotFile(t, dir, codeRef)
+	_, err = Check(db, ArchivePolicy(), 1, dir)
+	if err == nil || !strings.Contains(err.Error(), "latest/code-1-1-") {
+		t.Fatalf("check error = %v, want corrupt cold code snapshot", err)
+	}
+}
+
 func TestCheckerAcceptsHistoricalCodeHashFromColdSnapshots(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -595,6 +622,53 @@ func TestWorkerSnapPrunesHistoricalStateCodeCoveredByCodeDomain(t *testing.T) {
 	}
 	if _, err := Check(db, SnapPolicy(2, 1), 5, dir); err != nil {
 		t.Fatalf("check after hot code prune: %v", err)
+	}
+}
+
+func TestWorkerSnapRejectsCorruptColdCodeSnapshot(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x4f}, common.AccountIDLength)...))
+	code := []byte{0x60, 0x13}
+	hash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   2,
+		BlockHash:  common.Hash{0x02},
+		TxNum:      2,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      owner,
+		PrevExists: true,
+		Prev:       accountLatestEnvelopeBytes(t, hash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 2, 2, "latest/code-2-2.seg")
+	if err != nil {
+		t.Fatalf("build code snapshot: %v", err)
+	}
+	historyRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 2, 2, "history/state-domain-change-2-2.seg")
+	if err != nil {
+		t.Fatalf("build history snapshot: %v", err)
+	}
+	refs := append([]snapshots.SegmentRef{codeRef, codeAccessorRef, codeBTreeRef}, historyRefs...)
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(2, 2, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	corruptSnapshotFile(t, dir, codeRef)
+
+	stats, err := Worker{DB: db, Policy: SnapPolicy(2, 1), SnapshotDir: dir}.PruneTo(5)
+	if err == nil || !strings.Contains(err.Error(), "latest/code-2-2-") {
+		t.Fatalf("snap prune stats=%+v err=%v, want corrupt cold code snapshot", stats, err)
+	}
+	if got := rawdb.ReadStateCode(db, hash); !bytes.Equal(got, code) {
+		t.Fatalf("hot code after failed prune = %x, want %x", got, code)
 	}
 }
 
@@ -750,6 +824,13 @@ func accountLatestEnvelopeBytes(t *testing.T, codeHash common.Hash) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func corruptSnapshotFile(t *testing.T, dir string, ref snapshots.SegmentRef) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ref.Path), []byte("corrupt snapshot segment"), 0o644); err != nil {
+		t.Fatalf("corrupt snapshot file %s: %v", ref.Path, err)
+	}
 }
 
 type checkerCodeHidingStore struct {

@@ -194,13 +194,21 @@ func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
 		}
 		txNums := refs[row.Hash]
 		if len(txNums) == 0 {
-			if codeHashAvailableInSnapshot(mgr, row.Hash, headTxNum) {
+			covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, headTxNum)
+			if err != nil {
+				return false, err
+			}
+			if covered {
 				deleteHashes = append(deleteHashes, row.Hash)
 			}
 			return true, nil
 		}
 		for txNum := range txNums {
-			if !codeHashAvailableInSnapshot(mgr, row.Hash, txNum) {
+			covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, txNum)
+			if err != nil {
+				return false, err
+			}
+			if !covered {
 				return true, nil
 			}
 		}
