@@ -1676,7 +1676,11 @@ Status:
   queries use the same strict block-body read before validating retained
   `TransactionRet` rows. JSON-RPC `eth_getTransactionReceipt` now preserves
   those transaction/block lookup errors after the receipt row has been found
-  instead of translating cold archive corruption into a `null` receipt.
+  instead of translating cold archive corruption into a `null` receipt. TRON
+  HTTP and gRPC transaction-by-id / transaction-info-by-id handlers now keep
+  java-tron-compatible empty/not-found responses only for explicit misses; cold
+  lookup, block-body, or receipt corruption from the backend is surfaced as an
+  internal server error instead of being disguised as a missing transaction.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
   `TransactionRet` reader too. For non-genesis blocks, missing per-block
   tx-info rows on tx-bearing blocks now fail the query instead of producing a

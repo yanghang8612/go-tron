@@ -43,6 +43,8 @@ type stubBackend struct {
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	txErr                   error
+	txInfoErr               error
 	rangeCalls              int
 	lastRangeStart          uint64
 	lastRangeEnd            uint64
@@ -79,9 +81,15 @@ func (s *stubBackend) TriggerConstantContractAt(owner, contract common.Address, 
 	return nil, nil
 }
 func (s *stubBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
+	if s.txErr != nil {
+		return nil, s.txErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, error) {
@@ -1298,6 +1306,36 @@ func TestGetTransactionReceiptById(t *testing.T) {
 		`{"value":"aabbcc"}`)
 	// stub returns nil tx info → empty object
 	_ = result
+}
+
+func TestGetTransactionByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{txErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactionbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST gettransactionbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactionbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: cold tx lookup corrupt")
+	srv := newTestServer(t, &stubBackend{txInfoErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactionreceiptbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST gettransactionreceiptbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactionreceiptbyid status = %d, want 500", resp.StatusCode)
+	}
 }
 
 // --- Tests: M9.7 broadcastTransaction synchronous actuator.Validate ---

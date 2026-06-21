@@ -427,7 +427,13 @@ func (s *SolidityServer) GetTransactionById(_ context.Context, in *apipb.BytesMe
 		return nil, status.Error(codes.NotFound, "transaction not found")
 	}
 	tx, err := s.backend.GetTransactionByID(hash)
-	if err != nil || tx == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if tx == nil {
 		return nil, status.Error(codes.NotFound, "transaction not found")
 	}
 	return tx, nil
@@ -444,7 +450,13 @@ func (s *SolidityServer) GetTransactionInfoById(_ context.Context, in *apipb.Byt
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	info, err := s.backend.GetTransactionInfoByID(hash)
-	if err != nil || info == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction info not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	return info, nil

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -756,7 +757,16 @@ func parseTransactionIDRequest(w http.ResponseWriter, r *http.Request) (common.H
 
 func (api *API) writeTransactionByID(w http.ResponseWriter, hash common.Hash) {
 	tx, err := api.backend.GetTransactionByID(hash)
-	if err != nil || tx == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tx == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -774,12 +784,29 @@ func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) writeTransactionInfoByID(w http.ResponseWriter, hash common.Hash) {
 	info, err := api.backend.GetTransactionInfoByID(hash)
-	if err != nil || info == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
 	}
 	writeTronJSON(w, info)
+}
+
+func transactionLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "transaction not found" || msg == "transaction info not found"
 }
 
 func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Request) {

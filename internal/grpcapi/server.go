@@ -119,7 +119,13 @@ func (s *Server) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (
 	}
 	txHash := common.BytesToHash(in.Value)
 	tx, err := s.backend.GetTransactionByID(txHash)
-	if err != nil || tx == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if tx == nil {
 		return nil, status.Error(codes.NotFound, "transaction not found")
 	}
 	return tx, nil
@@ -740,10 +746,24 @@ func (s *Server) GetTransactionInfoById(_ context.Context, in *apipb.BytesMessag
 	}
 	hash := common.BytesToHash(in.Value)
 	info, err := s.backend.GetTransactionInfoByID(hash)
-	if err != nil || info == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction info not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	return info, nil
+}
+
+func transactionLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "transaction not found" || msg == "transaction info not found"
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.

@@ -2,6 +2,7 @@ package grpcapi_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -35,6 +36,8 @@ type testBackend struct {
 	lastRangeEnd            uint64
 	account                 *types.Account
 	tx                      *corepb.Transaction
+	txErr                   error
+	txInfoErr               error
 	params                  []tronapi.ChainParameter
 	contract                *contractpb.SmartContract
 	witnesses               []*tronapi.WitnessInfo
@@ -72,9 +75,15 @@ func (b *testBackend) TriggerConstantContractAt(owner, contract common.Address, 
 	return nil, nil
 }
 func (b *testBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
+	if b.txErr != nil {
+		return nil, b.txErr
+	}
 	return b.tx, nil
 }
 func (b *testBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
+	if b.txInfoErr != nil {
+		return nil, b.txInfoErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, error) {
@@ -494,6 +503,15 @@ func TestGetTransactionById_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetTransactionById_BackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{txErr: backendErr})
+	_, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
 func TestGetChainParameters(t *testing.T) {
 	params := []tronapi.ChainParameter{
 		{Key: "getMaintenanceTimeInterval", Value: 21600000},
@@ -907,6 +925,15 @@ func TestGetTransactionInfoById_NotFound(t *testing.T) {
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetTransactionInfoById_BackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: cold tx lookup corrupt")
+	client := newTestClient(t, &testBackend{txInfoErr: backendErr})
+	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
