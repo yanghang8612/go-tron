@@ -105,6 +105,9 @@ func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) (
 func (s *stubBackend) CallAt(from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
 	s.callAtCalls++
 	s.callAtBlock = blockNum
+	if s.atErr != nil {
+		return nil, s.atErr
+	}
 	return s.callAtResult, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
@@ -119,6 +122,9 @@ func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value i
 func (s *stubBackend) EstimateGasAt(from, to *common.Address, data []byte, value int64, blockNum uint64) (uint64, error) {
 	s.estimateAtCalls++
 	s.estimateAtBlock = blockNum
+	if s.atErr != nil {
+		return 0, s.atErr
+	}
 	return s.estimateGasAt, nil
 }
 func (s *stubBackend) SubscribeBlocks(_ chan<- *types.Block)   {}
