@@ -758,6 +758,10 @@ func (s *EventLogSegment) readLog(entry eventLogIndexEntry) (*corepb.Transaction
 	if err := proto.Unmarshal(raw, &log); err != nil {
 		return nil, err
 	}
+	payloadAddress := eventLogAddress(log.GetAddress())
+	if payloadAddress != entry.address {
+		return nil, fmt.Errorf("snapshots: event log row block=%d tx=%d log=%d address %x does not match payload address %x", entry.blockNum, entry.txIndex, entry.logIndex, entry.address, payloadAddress)
+	}
 	return &log, nil
 }
 

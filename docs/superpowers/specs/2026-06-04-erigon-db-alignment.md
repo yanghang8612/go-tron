@@ -1527,7 +1527,10 @@ Status:
   passing coverage check from one immutable view with rows from a later
   uncovered view. That covered boundary also rejects nil, out-of-range, or
   non-monotonic cold event-log rows before API code can silently drop or
-  reorder them after hot receipt rows have been pruned. Backend and JSON-RPC
+  reorder them after hot receipt rows have been pruned. Runtime event-log
+  segment iteration now also rechecks each payload address against the segment
+  index entry, so a corrupted cold payload cannot be returned under a stale
+  address posting after hot receipt rows are gone. Backend and JSON-RPC
   `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
   segment files to prove filtered archive reads are served through the cold
   index path. The API falls back to the hot scan on coverage gaps and surfaces
