@@ -672,14 +672,14 @@ func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, 
 			continue
 		}
 		if !eventLogAddressMatches(filter, entry.address) {
-			continue
+			return true, fmt.Errorf("snapshots: event log lookup row %d block=%d tx=%d log=%d address %x does not match address filter", rowIndex, entry.blockNum, entry.txIndex, entry.logIndex, entry.address)
 		}
 		log, err := s.readLog(entry)
 		if err != nil {
 			return true, err
 		}
 		if !eventLogTopicsMatch(filter.Topics, log.GetTopics()) {
-			continue
+			return true, fmt.Errorf("snapshots: event log lookup row %d block=%d tx=%d log=%d topics do not match topic filter", rowIndex, entry.blockNum, entry.txIndex, entry.logIndex)
 		}
 		cont, err := fn(EventLog{
 			BlockNum:  entry.blockNum,

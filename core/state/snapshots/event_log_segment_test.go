@@ -695,6 +695,75 @@ func TestEventLogSegmentIterateRejectsPayloadAddressMismatch(t *testing.T) {
 	}
 }
 
+func TestEventLogSegmentIterateRejectsStaleTopicLookupPosting(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x36)
+	topicA := common.Hash{0xbd}
+	topicB := common.Hash{0xbe}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topicA[:]}, Data: []byte{0x04}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	ref := result.Segments[0]
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment: %v", err)
+	}
+	entry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, 0))
+	if err != nil {
+		_ = seg.Close()
+		t.Fatalf("read index entry: %v", err)
+	}
+	if err := seg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	corruptPayload, err := proto.Marshal(&corepb.TransactionInfo_Log{
+		Address: addr,
+		Topics:  [][]byte{topicB[:]},
+		Data:    []byte{0x04},
+	})
+	if err != nil {
+		t.Fatalf("marshal corrupt payload: %v", err)
+	}
+	if uint64(len(corruptPayload)) != entry.length {
+		t.Fatalf("corrupt payload length = %d, want existing payload length %d", len(corruptPayload), entry.length)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := file.WriteAt(corruptPayload, int64(entry.offset)); err != nil {
+		_ = file.Close()
+		t.Fatalf("write corrupt payload: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close corrupting file: %v", err)
+	}
+
+	seg, err = OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment after corruption: %v", err)
+	}
+	defer seg.Close()
+	err = seg.IterateLogs(1, 1, EventLogFilter{Topics: [][]common.Hash{{topicA}}}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for topic-mismatched event-log payload")
+		return true, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "topics do not match topic filter") {
+		t.Fatalf("IterateLogs stale topic posting error = %v, want topic lookup mismatch", err)
+	}
+}
+
 func TestEventLogRangeCoveredRequiresReadableSegments(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
