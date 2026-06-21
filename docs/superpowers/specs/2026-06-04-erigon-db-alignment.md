@@ -983,7 +983,9 @@ Status:
   surfaces cold proposal-history reconstruction failures as HTTP 500. The
   underlying proposal history reader now also treats corrupt proposal JSON and
   malformed proposal-index bytes as archive data errors instead of silently
-  returning missing proposal data. HTTP
+  returning missing proposal data. TRC10 asset history reads likewise surface
+  corrupt rooted asset metadata as archive data errors instead of silently
+  returning missing asset data. HTTP
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as

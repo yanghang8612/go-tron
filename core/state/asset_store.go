@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -105,7 +106,7 @@ func (r *PersistentHistoryReader) readAssetMetaAt(key []byte, blockNum uint64) (
 	}
 	c := &contractpb.AssetIssueContract{}
 	if err := proto.Unmarshal(raw, c); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode asset metadata at block %d: %w", blockNum, err)
 	}
 	return c, nil
 }
