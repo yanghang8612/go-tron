@@ -1196,6 +1196,32 @@ func TestPersistentHistoryReaderStorageAtSurfacesOversizedValue(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderLiveStorageSurfacesCorruptMetadata(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x82)
+	slot := tcommon.Hash{0xCF}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(contract, 1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		if err := s.SetAccountKV(contract, kvdomains.ContractMetadata, contractMetaKVKey, []byte{0x80}); err != nil {
+			t.Fatalf("write corrupt contract metadata: %v", err)
+		}
+	})
+
+	got, err := f.reader().StorageAt(contract, slot, f.head)
+	if err == nil {
+		t.Fatal("live StorageAt corrupt metadata error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("live StorageAt corrupt metadata = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "decode contract metadata for storage key") {
+		t.Fatalf("live StorageAt corrupt metadata error = %v, want metadata decode context", err)
+	}
+}
+
 // TestPersistentHistoryReader_SparseInverseIndexSeek pins down the
 // advisor's concern: if every block touches every slot, the inverse
 // index has dense entries and the reader's walk is trivial. The

@@ -91,6 +91,10 @@ type LiveContractReader interface {
 	GetState(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash
 }
 
+type LiveContractStateReader interface {
+	GetStateStrict(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error)
+}
+
 // LiveStateHistoryReader is the no-op fallback. It IGNORES blockNum and
 // returns the live state for every query. Used by RPC handlers on nodes
 // that explicitly choose best-effort current-state answers instead of strict
@@ -133,6 +137,9 @@ func (r *LiveStateHistoryReader) AccountAt(addr tcommon.Address, _ uint64) (*typ
 // blockNum is ignored. Slot values are stored as raw bytes with leading
 // zeros trimmed by the contract writer — we right-align into a Hash.
 func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Hash, _ uint64) (tcommon.Hash, error) {
+	if live, ok := r.live.(LiveContractStateReader); ok {
+		return live.GetStateStrict(addr, slot)
+	}
 	if live, ok := r.live.(LiveContractReader); ok {
 		return live.GetState(addr, slot), nil
 	}
@@ -1210,6 +1217,9 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
 // readStorageLive reads the current on-disk slot value for (addr, slot).
 // Returns the zero hash when the slot is empty.
 func (r *PersistentHistoryReader) readStorageLive(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
+	if live, ok := r.live.(LiveContractStateReader); ok {
+		return live.GetStateStrict(addr, slot)
+	}
 	if live, ok := r.live.(LiveContractReader); ok {
 		return live.GetState(addr, slot), nil
 	}

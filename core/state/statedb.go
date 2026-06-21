@@ -2119,36 +2119,62 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 	return v
 }
 
+// GetStateStrict returns a storage value and surfaces malformed persisted
+// contract metadata or storage rows. Archive/head readers use it when they need
+// data-integrity errors instead of live execution's zero-value fallback.
+func (s *StateDB) GetStateStrict(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, error) {
+	v, _, err := s.getStateWithExist(addr, key, true)
+	return v, err
+}
+
 // GetStateWithExist returns a storage value and whether the java-tron
 // StorageRow exists. A present zero row can exist inside the same transaction
 // before commit; SSTORE energy accounting distinguishes that from a missing
 // row even though both read as zero.
 func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
+	v, ok, _ := s.getStateWithExist(addr, key, false)
+	return v, ok
+}
+
+func (s *StateDB) getStateWithExist(addr tcommon.Address, key tcommon.Hash, strict bool) (tcommon.Hash, bool, error) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
-		return tcommon.Hash{}, false
+		return tcommon.Hash{}, false, nil
 	}
 	if v, ok := obj.storage[key]; ok {
-		return v, obj.storageExists[key]
+		return v, obj.storageExists[key], nil
 	}
 	if obj.created {
-		return tcommon.Hash{}, false
+		return tcommon.Hash{}, false, nil
 	}
 	// Load from persistent storage on cache miss.
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
+	var rowKey tcommon.Hash
+	if strict {
+		var err error
+		rowKey, err = s.storageRowKeyStrict(addr, key)
+		if err != nil {
+			return tcommon.Hash{}, false, err
+		}
+	} else {
+		rowKey = s.storageRowKey(addr, key)
+	}
+	raw, ok, err := s.GetAccountKV(addr, kvdomains.ContractStorage, rowKey.Bytes())
 	if err != nil || !ok || len(raw) == 0 {
-		return tcommon.Hash{}, false
+		return tcommon.Hash{}, false, err
 	}
 	h, err := decodeStorageValueHash("account storage", raw)
 	if err != nil {
-		return tcommon.Hash{}, false
+		if strict {
+			return tcommon.Hash{}, false, err
+		}
+		return tcommon.Hash{}, false, nil
 	}
 	if h == (tcommon.Hash{}) {
-		return tcommon.Hash{}, false
+		return tcommon.Hash{}, false, nil
 	}
 	obj.storage[key] = h
 	obj.storageExists[key] = true
-	return h, true
+	return h, true, nil
 }
 
 // SetState sets a storage value on a contract.
@@ -2176,6 +2202,14 @@ func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.
 	return javaStorageRowKey(addr, key, s.GetContract(addr))
 }
 
+func (s *StateDB) storageRowKeyStrict(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, error) {
+	meta, err := s.GetContractStrict(addr)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	return javaStorageRowKey(addr, key, meta), nil
+}
+
 // GetContract returns the contract metadata at addr.
 func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	obj := s.getStateObject(addr)
@@ -2192,6 +2226,28 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 		}
 	}
 	return obj.contractMeta
+}
+
+// GetContractStrict returns contract metadata and surfaces malformed persisted
+// rows instead of treating them as absent.
+func (s *StateDB) GetContractStrict(addr tcommon.Address) (*contractpb.SmartContract, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, nil
+	}
+	if obj.contractMeta != nil || obj.contractMetaDirty {
+		return obj.contractMeta, nil
+	}
+	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey)
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	var sc contractpb.SmartContract
+	if err := proto.Unmarshal(data, &sc); err != nil {
+		return nil, fmt.Errorf("decode contract metadata for storage key %s: %w", addr.Hex(), err)
+	}
+	obj.contractMeta = &sc
+	return obj.contractMeta, nil
 }
 
 // SetContract stores contract metadata at addr.
