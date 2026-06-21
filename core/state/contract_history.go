@@ -1,6 +1,8 @@
 package state
 
 import (
+	"fmt"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -15,7 +17,7 @@ func (r *PersistentHistoryReader) ContractAt(addr tcommon.Address, blockNum uint
 	}
 	sc := &contractpb.SmartContract{}
 	if err := proto.Unmarshal(raw, sc); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode contract metadata at block %d: %w", blockNum, err)
 	}
 	return sc, nil
 }

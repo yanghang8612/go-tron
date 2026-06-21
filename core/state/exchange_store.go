@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -94,7 +95,7 @@ func (r *PersistentHistoryReader) readExchangeAt(discriminator byte, id int64, b
 	}
 	ex := &corepb.Exchange{}
 	if err := proto.Unmarshal(raw, ex); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode exchange %d at block %d: %w", id, blockNum, err)
 	}
 	return ex, nil
 }

@@ -1,6 +1,8 @@
 package state
 
 import (
+	"fmt"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -36,7 +38,7 @@ func (r *PersistentHistoryReader) WitnessAt(addr tcommon.Address, blockNum uint6
 	}
 	w, err := types.UnmarshalWitness(raw)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode witness at block %d: %w", blockNum, err)
 	}
 	return w, nil
 }
@@ -60,7 +62,7 @@ func (r *PersistentHistoryReader) VotesAt(addr tcommon.Address, blockNum uint64)
 	}
 	votes := &corepb.Votes{}
 	if err := proto.Unmarshal(raw, votes); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode votes at block %d: %w", blockNum, err)
 	}
 	return votes, nil
 }

@@ -976,7 +976,9 @@ Status:
   absent accounts. TRON HTTP and gRPC contract handlers follow the same
   error-preserving rule, keeping explicit contract misses as empty/NotFound
   responses while surfacing latest/cold contract metadata read failures as
-  HTTP 500 / gRPC Internal. TRON HTTP `getaccountnet` now applies the same
+  HTTP 500 / gRPC Internal; the underlying contract history reader now also
+  treats corrupt contract metadata protobuf as an archive data error. TRON HTTP
+  `getaccountnet` now applies the same
   split: explicit account misses still return `{}`, while cold account-net or
   dynamic-property reconstruction failures return HTTP 500. TRON HTTP
   `getproposalbyid` now preserves `{}` only for explicit proposal misses and
@@ -1002,7 +1004,9 @@ Status:
   at the bound; the backend reads `latest_exchange_num` and
   `allow_same_token_name` from the same historical dynamic-property snapshot so
   pre-fork reads enumerate V1 exchanges and post-fork reads enumerate V2
-  exchanges, matching java-tron's final-store selection. HTTP solidity/PBFT
+  exchanges, matching java-tron's final-store selection. The state history
+  reader now surfaces corrupt V1/V2 exchange protobuf payloads instead of
+  silently dropping them from point/list archive reads. HTTP solidity/PBFT
   TRC10 asset metadata routes (`getassetissuebyid`, `getassetissuebyname`,
   `getassetissuelist`, `getpaginatedassetissuelist`) and gRPC
   `WalletSolidity` asset methods now dispatch through `SystemAsset` history at
@@ -1015,6 +1019,9 @@ Status:
   (`GetCanDelegatedMaxSize`, `GetAvailableUnfreezeCount`,
   `GetCanWithdrawUnfreezeAmount`) now use solid-bound archive account and
   `SystemDelegation` history instead of live-head state.
+  Witness/vote history reads also surface corrupt witness-capsule and pending
+  vote protobuf payloads as archive data errors instead of treating them as
+  missing witness/vote records.
   gRPC `WalletSolidity.GetBurnTrx`, `GetBandwidthPrices`, and
   `GetEnergyPrices` now likewise read solid-bound `SystemDynamicProperty`
   history, including string-typed price-history rows, instead of live-head

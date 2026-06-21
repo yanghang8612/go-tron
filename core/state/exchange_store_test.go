@@ -1,8 +1,11 @@
 package state
 
 import (
+	"strings"
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -218,5 +221,42 @@ func TestExchangeStoreAnchorAndRewind(t *testing.T) {
 	}
 	if got := atR2.ReadExchange(1); !sameExchange(got, v1r1) {
 		t.Fatalf("R2 V1 exchange 1 should be untouched: got %+v", got)
+	}
+}
+
+func TestExchangeAtSurfacesCorruptProtobuf(t *testing.T) {
+	f := newHistoryFixture(t)
+	corruptProto := []byte{0x80}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV1, 1), corruptProto); err != nil {
+			t.Fatalf("write corrupt V1 exchange: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, 2), corruptProto); err != nil {
+			t.Fatalf("write corrupt V2 exchange: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	v1, err := f.reader().ExchangeAt(1, 1)
+	if err == nil {
+		t.Fatal("ExchangeAt corrupt protobuf error = nil")
+	}
+	if v1 != nil {
+		t.Fatalf("ExchangeAt corrupt protobuf exchange = %+v, want nil", v1)
+	}
+	if !strings.Contains(err.Error(), "decode exchange 1 at block 1") {
+		t.Fatalf("ExchangeAt corrupt protobuf error = %v, want decode exchange context", err)
+	}
+
+	v2, err := f.reader().ExchangeV2At(2, 1)
+	if err == nil {
+		t.Fatal("ExchangeV2At corrupt protobuf error = nil")
+	}
+	if v2 != nil {
+		t.Fatalf("ExchangeV2At corrupt protobuf exchange = %+v, want nil", v2)
+	}
+	if !strings.Contains(err.Error(), "decode exchange 2 at block 1") {
+		t.Fatalf("ExchangeV2At corrupt protobuf error = %v, want decode exchange context", err)
 	}
 }
