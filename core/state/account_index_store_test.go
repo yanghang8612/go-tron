@@ -2,9 +2,11 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 // TestAccountNameIndexRoundTrip exercises write/read/has/delete and confirms the
@@ -64,6 +66,42 @@ func TestAccountIdIndexCaseInsensitive(t *testing.T) {
 	}
 	if sdb.HasAccountIdIndex([]byte("AliceID1")) {
 		t.Fatal("after case-insensitive delete: Has returned true")
+	}
+}
+
+func TestAccountIndexRejectsMalformedAddressValues(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemAccountIndex, accountNameIndexKVKey([]byte("alice")), []byte("short")); err != nil {
+		t.Fatalf("write malformed account name index: %v", err)
+	}
+	if err := sdb.SystemKVPut(kvdomains.SystemAccountIndex, accountIdIndexKVKey([]byte("aliceid1")), []byte("short")); err != nil {
+		t.Fatalf("write malformed account id index: %v", err)
+	}
+
+	if got := sdb.ReadAccountNameIndex([]byte("alice")); got != nil {
+		t.Fatalf("ReadAccountNameIndex malformed = %x, want nil", got)
+	}
+	if got := sdb.ReadAccountIdIndex([]byte("aliceid1")); got != nil {
+		t.Fatalf("ReadAccountIdIndex malformed = %x, want nil", got)
+	}
+	got, ok, err := sdb.ReadAccountIdIndexStrict([]byte("aliceid1"))
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("ReadAccountIdIndexStrict malformed = %x ok=%v err=%v, want nil false malformed length", got, ok, err)
+	}
+}
+
+func TestAccountIdIndexAtSurfacesMalformedAddressValue(t *testing.T) {
+	f := newHistoryFixture(t)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemAccountIndex, accountIdIndexKVKey([]byte("aliceid1")), []byte("short")); err != nil {
+			t.Fatalf("write malformed account id index: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, ok, err := f.reader().AccountIdIndexAt([]byte("ALICEID1"), 1)
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "account id index at block 1") {
+		t.Fatalf("AccountIdIndexAt malformed = %x ok=%v err=%v, want nil false block decode error", got, ok, err)
 	}
 }
 

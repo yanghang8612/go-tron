@@ -1855,8 +1855,11 @@ func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 	if sysKV == nil {
 		return nil, fmt.Errorf("account not found")
 	}
-	addrBytes := sysKV.ReadAccountIdIndex(accountID)
-	if addrBytes == nil {
+	addrBytes, ok, err := sysKV.ReadAccountIdIndexStrict(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("read account id index: %w", err)
+	}
+	if !ok {
 		return nil, fmt.Errorf("account not found")
 	}
 	var addr tcommon.Address
@@ -1877,9 +1880,6 @@ func (b *TronBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*type
 	}
 	if !ok || len(addrBytes) == 0 {
 		return nil, fmt.Errorf("account not found")
-	}
-	if len(addrBytes) != tcommon.AddressLength {
-		return nil, fmt.Errorf("account id index malformed at block %d: len=%d", blockNum, len(addrBytes))
 	}
 	var addr tcommon.Address
 	copy(addr[:], addrBytes)

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -52,11 +53,21 @@ func accountIdIndexKVKey(accountID []byte) []byte {
 	return out
 }
 
+func validateAccountIndexAddress(label string, raw []byte) ([]byte, error) {
+	if len(raw) != tcommon.AddressLength {
+		return nil, fmt.Errorf("%s has malformed length %d, want %d", label, len(raw), tcommon.AddressLength)
+	}
+	return raw, nil
+}
+
 // ReadAccountNameIndex returns the owner address registered for accountName, or
 // nil if none. A KV error is swallowed to nil, matching the prior rawdb reader.
 func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
 	if err != nil || !ok {
+		return nil
+	}
+	if raw, err = validateAccountIndexAddress("account name index", raw); err != nil {
 		return nil
 	}
 	return raw
@@ -89,7 +100,22 @@ func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 	if err != nil || !ok {
 		return nil
 	}
+	if raw, err = validateAccountIndexAddress("account id index", raw); err != nil {
+		return nil
+	}
 	return raw
+}
+
+func (s *StateDB) ReadAccountIdIndexStrict(accountID []byte) ([]byte, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	raw, err = validateAccountIndexAddress("account id index", raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
 }
 
 // AccountIdIndexAt returns the owner address registered for accountID at the
@@ -98,7 +124,15 @@ func (r *PersistentHistoryReader) AccountIdIndexAt(accountID []byte, blockNum ui
 	if r == nil {
 		return nil, false, nil
 	}
-	return r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID), blockNum)
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID), blockNum)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	raw, err = validateAccountIndexAddress(fmt.Sprintf("account id index at block %d", blockNum), raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
 }
 
 // HasAccountIdIndex reports whether accountID is registered (case-insensitive).
