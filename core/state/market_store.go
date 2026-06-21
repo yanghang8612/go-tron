@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -119,7 +120,7 @@ func (r *PersistentHistoryReader) MarketOrderAt(orderID []byte, blockNum uint64)
 	}
 	o := &corepb.MarketOrder{}
 	if err := proto.Unmarshal(raw, o); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("decode market order at block %d: %w", blockNum, err)
 	}
 	return o, nil
 }
@@ -152,7 +153,8 @@ func (s *StateDB) ReadMarketAccountOrder(ownerAddr []byte) *corepb.MarketAccount
 }
 
 // MarketAccountOrderAt reconstructs a rooted MarketAccountOrder at the end of
-// blockNum. It mirrors ReadMarketAccountOrder's non-nil absent/malformed result.
+// blockNum. It mirrors ReadMarketAccountOrder's non-nil absent result, but
+// surfaces malformed archive payloads as data errors.
 func (r *PersistentHistoryReader) MarketAccountOrderAt(ownerAddr []byte, blockNum uint64) (*corepb.MarketAccountOrder, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr), blockNum)
 	if err != nil {
@@ -163,7 +165,7 @@ func (r *PersistentHistoryReader) MarketAccountOrderAt(ownerAddr []byte, blockNu
 	}
 	mao := &corepb.MarketAccountOrder{}
 	if err := proto.Unmarshal(raw, mao); err != nil {
-		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, nil
+		return nil, fmt.Errorf("decode market account order at block %d: %w", blockNum, err)
 	}
 	return mao, nil
 }
@@ -253,7 +255,8 @@ func (s *StateDB) ReadMarketPriceList(sellTokenID, buyTokenID []byte) *corepb.Ma
 }
 
 // MarketPriceListAt reconstructs a rooted MarketPriceList at the end of
-// blockNum. It mirrors ReadMarketPriceList's non-nil absent/malformed result.
+// blockNum. It mirrors ReadMarketPriceList's non-nil absent result, but
+// surfaces malformed archive payloads as data errors.
 func (r *PersistentHistoryReader) MarketPriceListAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), blockNum)
 	if err != nil {
@@ -264,7 +267,7 @@ func (r *PersistentHistoryReader) MarketPriceListAt(sellTokenID, buyTokenID []by
 	}
 	pl := &corepb.MarketPriceList{}
 	if err := proto.Unmarshal(raw, pl); err != nil {
-		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, nil
+		return nil, fmt.Errorf("decode market price list at block %d: %w", blockNum, err)
 	}
 	return pl, nil
 }

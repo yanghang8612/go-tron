@@ -2,9 +2,12 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -237,5 +240,60 @@ func TestMarketStoreAnchorAndRewind(t *testing.T) {
 	}
 	if got := atR2.ReadMarketPriceList(sell, buy); len(got.Prices) != 0 {
 		t.Fatalf("R2 price list should be empty: %+v", got)
+	}
+}
+
+func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
+	f := newHistoryFixture(t)
+	orderID := []byte("order-corrupt")
+	owner := []byte{0x41, 0x6d}
+	sellTokenID := []byte("sell")
+	buyTokenID := []byte("buy")
+	corruptProto := []byte{0x80}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketOrderKVKey(orderID), corruptProto); err != nil {
+			t.Fatalf("write corrupt market order: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketAccountOrderKVKey(owner), corruptProto); err != nil {
+			t.Fatalf("write corrupt market account order: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), corruptProto); err != nil {
+			t.Fatalf("write corrupt market price list: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	order, err := f.reader().MarketOrderAt(orderID, 1)
+	if err == nil {
+		t.Fatal("MarketOrderAt corrupt protobuf error = nil")
+	}
+	if order != nil {
+		t.Fatalf("MarketOrderAt corrupt protobuf order = %+v, want nil", order)
+	}
+	if !strings.Contains(err.Error(), "decode market order at block 1") {
+		t.Fatalf("MarketOrderAt corrupt protobuf error = %v, want decode market order context", err)
+	}
+
+	accountOrder, err := f.reader().MarketAccountOrderAt(owner, 1)
+	if err == nil {
+		t.Fatal("MarketAccountOrderAt corrupt protobuf error = nil")
+	}
+	if accountOrder != nil {
+		t.Fatalf("MarketAccountOrderAt corrupt protobuf account order = %+v, want nil", accountOrder)
+	}
+	if !strings.Contains(err.Error(), "decode market account order at block 1") {
+		t.Fatalf("MarketAccountOrderAt corrupt protobuf error = %v, want decode market account order context", err)
+	}
+
+	priceList, err := f.reader().MarketPriceListAt(sellTokenID, buyTokenID, 1)
+	if err == nil {
+		t.Fatal("MarketPriceListAt corrupt protobuf error = nil")
+	}
+	if priceList != nil {
+		t.Fatalf("MarketPriceListAt corrupt protobuf price list = %+v, want nil", priceList)
+	}
+	if !strings.Contains(err.Error(), "decode market price list at block 1") {
+		t.Fatalf("MarketPriceListAt corrupt protobuf error = %v, want decode market price list context", err)
 	}
 }
