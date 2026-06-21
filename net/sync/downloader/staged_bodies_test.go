@@ -62,6 +62,20 @@ func TestFindStagedBodyReadyFrontierKeepsPrefixOnReadError(t *testing.T) {
 	}
 }
 
+func TestFindStagedBodyReadyFrontierRejectsNumberMismatch(t *testing.T) {
+	rows := map[uint64]rawdb.SyncStagedBlockRow{
+		3: {Number: 3, Hash: tcommon.Hash{0x03}},
+		4: {Number: 9, Hash: tcommon.Hash{0x04}},
+	}
+	got := FindStagedBodyReadyFrontier(3, 0, stagedBodyMapReader(rows))
+	if !got.Have || got.Number != 3 || got.ErrorAt != 4 || got.Error == nil || got.NextMissing != 4 {
+		t.Fatalf("frontier = %+v, want block3 prefix and mismatch at 4", got)
+	}
+	if got.Error.Error() != "downloader: staged body reader returned block 9 for expected block 4" {
+		t.Fatalf("frontier error = %v, want number mismatch", got.Error)
+	}
+}
+
 func TestFindStagedBodyReadyFrontierWithoutReader(t *testing.T) {
 	got := FindStagedBodyReadyFrontier(7, 0, nil)
 	if got.Have || got.NextMissing != 7 || got.Error != nil {

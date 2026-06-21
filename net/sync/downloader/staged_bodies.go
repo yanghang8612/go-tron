@@ -1,6 +1,8 @@
 package downloader
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -219,6 +221,12 @@ func FindStagedBodyReadyFrontier(start, targetHead uint64, read StagedBodyReader
 			return frontier
 		}
 		if !ok {
+			frontier.NextMissing = expected
+			return frontier
+		}
+		if row.Number != expected {
+			frontier.ErrorAt = expected
+			frontier.Error = fmt.Errorf("downloader: staged body reader returned block %d for expected block %d", row.Number, expected)
 			frontier.NextMissing = expected
 			return frontier
 		}
