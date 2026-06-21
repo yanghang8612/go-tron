@@ -78,6 +78,24 @@ func TestProposalIndexAppend(t *testing.T) {
 	}
 }
 
+func TestProposalIndexAppendRejectsCorruptLength(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemProposal, proposalStoreIndexKey, []byte{0x01, 0x02, 0x03}); err != nil {
+		t.Fatalf("write corrupt proposal index: %v", err)
+	}
+
+	if got := sdb.ReadProposalIndex(); got != nil {
+		t.Fatalf("ReadProposalIndex corrupt length = %v, want nil", got)
+	}
+	err := sdb.AppendProposalIndex(7)
+	if err == nil || !strings.Contains(err.Error(), "length 3 is not a multiple of 8") {
+		t.Fatalf("AppendProposalIndex corrupt length error = %v", err)
+	}
+	if got := sdb.ReadProposalIndex(); got != nil {
+		t.Fatalf("proposal index after failed append = %v, want nil/corrupt preserved", got)
+	}
+}
+
 // TestProposalAnchorAndRewind is the Phase 3d state-layer gate: rooting a
 // proposal change moves the state root (anchor), and reopening an old root
 // recovers the old record AND index (rewind). Mirrors applyBlock's per-block

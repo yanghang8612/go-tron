@@ -56,11 +56,21 @@ func decodeProposalIndex(data []byte) []int64 {
 	if len(data) == 0 {
 		return nil
 	}
+	if len(data)%8 != 0 {
+		return nil
+	}
 	ids := make([]int64, len(data)/8)
 	for i := range ids {
 		ids[i] = int64(binary.BigEndian.Uint64(data[i*8:]))
 	}
 	return ids
+}
+
+func decodeProposalIndexStrict(data []byte) ([]int64, error) {
+	if len(data)%8 != 0 {
+		return nil, fmt.Errorf("decode proposal index: length %d is not a multiple of 8", len(data))
+	}
+	return decodeProposalIndex(data), nil
 }
 
 // ReadProposal resolves a proposal record from the rooted system-KV (nil if
@@ -118,10 +128,7 @@ func (r *PersistentHistoryReader) ProposalIndexAt(blockNum uint64) ([]int64, err
 	if err != nil || !ok {
 		return nil, err
 	}
-	if len(raw)%8 != 0 {
-		return nil, fmt.Errorf("decode proposal index: length %d is not a multiple of 8", len(raw))
-	}
-	return decodeProposalIndex(raw), nil
+	return decodeProposalIndexStrict(raw)
 }
 
 // WriteProposalIndex stages the full proposal index into the system-KV.
@@ -140,7 +147,10 @@ func (s *StateDB) AppendProposalIndex(id int64) error {
 	}
 	var existing []int64
 	if ok {
-		existing = decodeProposalIndex(raw)
+		existing, err = decodeProposalIndexStrict(raw)
+		if err != nil {
+			return err
+		}
 	}
 	return s.WriteProposalIndex(append(existing, id))
 }
