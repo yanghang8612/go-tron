@@ -2411,15 +2411,13 @@ func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash,
 }
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
-	// Use TransactionInfo to locate the block, then find the tx within it.
-	info, ok, err := rawdb.ReadTransactionInfoStrict(b.chain.chaindb, hash[:])
+	blockNum, ok, err := rawdb.ReadTransactionIndexStrict(b.chain.chaindb, hash[:])
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	if !ok {
 		return nil, nil, 0, nil // not found
 	}
-	blockNum := uint64(info.BlockNumber)
 	block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, blockNum)
 	if err != nil {
 		return nil, nil, 0, err
@@ -2432,7 +2430,7 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 			return tx.Proto(), block, i, nil
 		}
 	}
-	return nil, nil, 0, nil
+	return nil, nil, 0, fmt.Errorf("transaction not found in block %d", blockNum)
 }
 
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {

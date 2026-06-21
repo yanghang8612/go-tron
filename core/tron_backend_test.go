@@ -401,6 +401,68 @@ func TestTronBackend_GetTransactionByHash_NotFound(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetTransactionByHashUsesTxIndexWithoutReceipt(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  1001,
+			Expiration: 2001,
+			Data:       []byte{0xab},
+		},
+	}
+	txHash := types.NewTransactionFromPB(txPB).Hash()
+	parent := bc.CurrentBlock()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3001,
+				ParentHash: parent.Hash().Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	if err := rawdb.WriteBlock(bc.DB(), block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionIndex(bc.DB(), txHash[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if got := rawdb.ReadTransactionInfo(bc.ChainDB(), txHash[:]); got != nil {
+		t.Fatalf("unexpected transaction info row = %+v", got)
+	}
+	if got := rawdb.ReadTransactionInfosByBlock(bc.ChainDB(), block.Number()); len(got) != 0 {
+		t.Fatalf("unexpected transaction info block rows = %+v", got)
+	}
+	bc.currentBlock.Store(block)
+
+	backend := &TronBackend{chain: bc}
+	gotTx, gotBlock, idx, err := backend.GetTransactionByHash(txHash)
+	if err != nil || gotTx == nil || gotBlock == nil || gotBlock.Hash() != block.Hash() || idx != 0 {
+		t.Fatalf("GetTransactionByHash = tx:%+v block:%+v idx:%d err:%v, want tx/block/0 from tx index", gotTx, gotBlock, idx, err)
+	}
+
+	rpcServer := jsonrpc.NewServer(backend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	txHashHex := "0x" + txHash.Hex()
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getTransactionByHash", []any{txHashHex})
+	txObj, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getTransactionByHash result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if txObj["hash"] != txHashHex ||
+		txObj["blockHash"] != "0x"+block.Hash().Hex() ||
+		txObj["blockNumber"] != "0x1" ||
+		txObj["transactionIndex"] != "0x0" {
+		t.Fatalf("eth_getTransactionByHash = %+v, want tx indexed by block body without receipt", txObj)
+	}
+}
+
 func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())

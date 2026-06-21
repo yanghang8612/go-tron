@@ -1669,9 +1669,10 @@ Status:
   transaction count, block number, and tx hash order. The hot `TransactionInfo`
   writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
   check before new `ti-` rows can be written. Backend transaction-by-id/hash
-  reads also use strict block-body access after the tx lookup admits a block, so
-  a corrupt freezer/hot block behind a valid transaction index returns a data
-  error instead of a false not-found result. Block-number TransactionInfo
+  reads use the strict tx lookup index plus strict block-body access, so
+  `eth_getTransactionByHash` can return transactions after receipt rows are
+  pruned and a corrupt freezer/hot block behind a valid transaction index
+  returns a data error instead of a false not-found result. Block-number TransactionInfo
   queries use the same strict block-body read before validating retained
   `TransactionRet` rows. JSON-RPC `eth_getTransactionReceipt` now preserves
   those transaction/block lookup errors after the receipt row has been found
