@@ -1528,13 +1528,14 @@ Status:
   uncovered view. That covered boundary also rejects nil, out-of-range, or
   non-monotonic cold event-log rows before API code can silently drop or
   reorder them after hot receipt rows have been pruned. Runtime event-log
-  segment iteration now also rechecks each payload address against the segment
-  index entry, so a corrupted cold payload cannot be returned under a stale
-  address posting after hot receipt rows are gone. When the canonical block is
-  readable, covered cold log rows must also carry the canonical block hash for
-  their block number and a transaction hash/index that matches the canonical
-  block body; when the canonical `TransactionRet` row is readable, the row's
-  block-wide log index and payload must match the canonical receipt log too.
+  segment iteration and the `ChainDB` covered cold-log boundary now also
+  recheck each payload address against the row/index metadata, so a corrupted
+  cold payload cannot be returned under a stale address posting after hot
+  receipt rows are gone. When the canonical block is readable, covered cold log
+  rows must also carry the canonical block hash for their block number and a
+  transaction hash/index that matches the canonical block body; when the
+  canonical `TransactionRet` row is readable, the row's block-wide log index
+  and payload must match the canonical receipt log too.
   Segment-local address/topic lookup candidates must still match the requested
   filter at query time too: stale postings now fail as cold-index corruption
   instead of degrading into a false empty archive-log result. Backend and

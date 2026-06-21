@@ -223,7 +223,7 @@ func TestChainDBIterateEventLogsForwardsColdRows(t *testing.T) {
 func TestChainDBIterateCoveredEventLogsUsesAtomicReaderWhenAvailable(t *testing.T) {
 	t.Parallel()
 
-	want := EventLog{BlockNum: 21, Log: &corepb.TransactionInfo_Log{Address: []byte{0x21}}}
+	want := EventLog{BlockNum: 21, Address: testChainDBEventLogAddress(0x21), Log: &corepb.TransactionInfo_Log{Address: []byte{0x21}}}
 	reader := &recordingCoveredEventLogReader{
 		covered: true,
 		rows:    []EventLog{want},
@@ -250,7 +250,7 @@ func TestChainDBIterateCoveredEventLogsUsesAtomicReaderWhenAvailable(t *testing.
 func TestChainDBIterateCoveredEventLogsFallsBackToCoverageAndIteration(t *testing.T) {
 	t.Parallel()
 
-	want := EventLog{BlockNum: 31, Log: &corepb.TransactionInfo_Log{Address: []byte{0x31}}}
+	want := EventLog{BlockNum: 31, Address: testChainDBEventLogAddress(0x31), Log: &corepb.TransactionInfo_Log{Address: []byte{0x31}}}
 	reader := &recordingBasicEventLogReader{covered: true, rows: []EventLog{want}}
 	cdb := NewMemoryChainDB()
 	cdb.SetEventLogReader(reader)
@@ -294,6 +294,7 @@ func TestChainDBIterateCoveredEventLogsValidatesFallbackRows(t *testing.T) {
 		covered: true,
 		rows: []EventLog{{
 			BlockNum: 43,
+			Address:  testChainDBEventLogAddress(0x43),
 			Log:      &corepb.TransactionInfo_Log{Address: []byte{0x43}},
 		}},
 	}
@@ -318,8 +319,8 @@ func TestChainDBIterateCoveredEventLogsValidatesFallbackOrder(t *testing.T) {
 	reader := &recordingBasicEventLogReader{
 		covered: true,
 		rows: []EventLog{
-			{BlockNum: 50, TxIndex: 1, LogIndex: 0, Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
-			{BlockNum: 50, TxIndex: 0, LogIndex: 9, Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
+			{BlockNum: 50, TxIndex: 1, LogIndex: 0, Address: testChainDBEventLogAddress(0x50), Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
+			{BlockNum: 50, TxIndex: 0, LogIndex: 9, Address: testChainDBEventLogAddress(0x50), Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
 		},
 	}
 	cdb := NewMemoryChainDB()
@@ -345,6 +346,7 @@ func TestChainDBIterateCoveredEventLogsRejectsOutOfRangeAtomicRow(t *testing.T) 
 		covered: true,
 		rows: []EventLog{{
 			BlockNum: 13,
+			Address:  testChainDBEventLogAddress(0x13),
 			Log:      &corepb.TransactionInfo_Log{Address: []byte{0x13}},
 		}},
 	}
@@ -386,6 +388,31 @@ func TestChainDBIterateCoveredEventLogsRejectsNilAtomicRowPayload(t *testing.T) 
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsRejectsPayloadAddressMismatch(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 10,
+			TxIndex:  1,
+			LogIndex: 2,
+			Address:  testChainDBEventLogAddress(0xaa),
+			Log:      &corepb.TransactionInfo_Log{Address: []byte{0xbb}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(10, 10, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for address-mismatched cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "does not match payload address") {
+		t.Fatalf("IterateCoveredEventLogs address mismatch = covered %v err %v, want payload address error", covered, err)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsRejectsCanonicalHashMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -397,6 +424,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalHashMismatch(t *testing.T
 			TxIndex:   1,
 			LogIndex:  2,
 			BlockHash: common.Hash{0xff},
+			Address:   testChainDBEventLogAddress(0x12),
 			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x12}},
 		}},
 	}
@@ -427,6 +455,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalTxHashMismatch(t *testing
 			LogIndex:  1,
 			BlockHash: block.Hash(),
 			TxHash:    common.Hash{0xee},
+			Address:   testChainDBEventLogAddress(0x13),
 			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x13}},
 		}},
 	}
@@ -457,6 +486,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalTxIndexOutOfRange(t *test
 			LogIndex:  0,
 			BlockHash: block.Hash(),
 			TxHash:    txHash,
+			Address:   testChainDBEventLogAddress(0x14),
 			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x14}},
 		}},
 	}
@@ -488,6 +518,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogPayloadMismatch(t *tes
 			LogIndex:  0,
 			BlockHash: block.Hash(),
 			TxHash:    txHash,
+			Address:   testChainDBEventLogAddress(0x15),
 			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{{0x01}}, Data: []byte{0xbb}},
 		}},
 	}
@@ -525,6 +556,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogIndexOutOfRange(t *tes
 			LogIndex:  1,
 			BlockHash: block.Hash(),
 			TxHash:    txHash,
+			Address:   testChainDBEventLogAddress(0x16),
 			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x16}, Data: []byte{0x01}},
 		}},
 	}
@@ -562,6 +594,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogTxIndexMismatch(t *tes
 			LogIndex:  0,
 			BlockHash: block.Hash(),
 			TxHash:    txHashes[0],
+			Address:   testChainDBEventLogAddress(0x17),
 			Log:       canonicalLog,
 		}},
 	}
@@ -592,8 +625,8 @@ func TestChainDBIterateCoveredEventLogsRejectsUnsortedAtomicRows(t *testing.T) {
 	reader := &recordingCoveredEventLogReader{
 		covered: true,
 		rows: []EventLog{
-			{BlockNum: 10, TxIndex: 1, LogIndex: 1, Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
-			{BlockNum: 10, TxIndex: 1, LogIndex: 0, Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
+			{BlockNum: 10, TxIndex: 1, LogIndex: 1, Address: testChainDBEventLogAddress(0x10), Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
+			{BlockNum: 10, TxIndex: 1, LogIndex: 0, Address: testChainDBEventLogAddress(0x10), Log: &corepb.TransactionInfo_Log{Address: []byte{0x10}}},
 		},
 	}
 	cdb := NewMemoryChainDB()
@@ -683,6 +716,10 @@ func (r *recordingCoveredEventLogReader) IterateCoveredEventLogs(fromBlock, toBl
 func testChainDBEventLogBlock(number uint64) (*coretypes.Block, common.Hash) {
 	block, txHashes := testChainDBEventLogBlockWithTransactions(number, 1)
 	return block, txHashes[0]
+}
+
+func testChainDBEventLogAddress(b byte) common.Address {
+	return common.BytesToAddress([]byte{b})
 }
 
 func testChainDBEventLogBlockWithTransactions(number uint64, txCount int) (*coretypes.Block, []common.Hash) {
