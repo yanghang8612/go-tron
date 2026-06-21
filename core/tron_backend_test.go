@@ -1624,6 +1624,7 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	otherSecondTopic := tcommon.Hash{0x85}
 	otherTopic := tcommon.Hash{0x82}
 	block1, _ := testBackendLogBlock(1, nil)
+	block2, _ := testBackendLogBlock(2, nil)
 	block3, _ := testBackendLogBlock(3, nil)
 	bc.currentBlock.Store(block3)
 	bc.ChainDB().SetEventLogReader(fakeColdEventLogReader{
@@ -1695,19 +1696,18 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 				},
 			},
 			{
-				BlockNum:  3,
+				BlockNum:  2,
 				TxIndex:   0,
 				LogIndex:  0,
 				TxHash:    tcommon.Hash{0xa4},
-				BlockHash: block3.Hash(),
-				Address:   tcommon.BytesToAddress(goodAddress),
+				BlockHash: block2.Hash(),
+				Address:   tcommon.BytesToAddress(otherAddress),
 				Log: &corepb.TransactionInfo_Log{
-					Address: goodAddress,
+					Address: otherAddress,
 					Topics:  [][]byte{topic[:]},
 					Data:    []byte{0x04},
 				},
 			},
-			{BlockNum: 99},
 		},
 	})
 
@@ -1743,6 +1743,43 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	}
 	if logs[0].Data != "0x05" || logs[0].LogIndex != "0x3" {
 		t.Fatalf("cold OR/multi-topic filtered log = %+v, want log index 0x3 data 0x05", logs[0])
+	}
+}
+
+func TestTronBackend_GetLogsRejectsOutOfRangeCoveredColdEventLogRows(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	addr := bytes20(0x86)
+	topic := tcommon.Hash{0x86}
+	block3, _ := testBackendLogBlock(3, nil)
+	bc.currentBlock.Store(block3)
+	bc.ChainDB().SetEventLogReader(fakeColdEventLogReader{
+		covered: true,
+		rows: []rawdb.EventLog{{
+			BlockNum:  3,
+			TxIndex:   0,
+			LogIndex:  0,
+			TxHash:    tcommon.Hash{0xa7},
+			BlockHash: block3.Hash(),
+			Address:   tcommon.BytesToAddress(addr),
+			Log: &corepb.TransactionInfo_Log{
+				Address: addr,
+				Topics:  [][]byte{topic[:]},
+				Data:    []byte{0x07},
+			},
+		}},
+	})
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err == nil || logs != nil || !strings.Contains(err.Error(), "outside covered range [1,2]") {
+		t.Fatalf("GetLogs out-of-range covered cold row = logs %+v err %v, want archive data error", logs, err)
 	}
 }
 

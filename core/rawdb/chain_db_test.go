@@ -286,6 +286,57 @@ func TestChainDBIterateCoveredEventLogsSkipsIterationWhenUncovered(t *testing.T)
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsValidatesFallbackRows(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingBasicEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 43,
+			Log:      &corepb.TransactionInfo_Log{Address: []byte{0x43}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(40, 42, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for out-of-range fallback cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "outside covered range [40,42]") {
+		t.Fatalf("fallback out-of-range = covered %v err %v, want covered error", covered, err)
+	}
+	if reader.coveredCalls != 1 || reader.iterCalls != 1 {
+		t.Fatalf("fallback calls covered=%d iter=%d, want one coverage+iteration", reader.coveredCalls, reader.iterCalls)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsValidatesFallbackOrder(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingBasicEventLogReader{
+		covered: true,
+		rows: []EventLog{
+			{BlockNum: 50, TxIndex: 1, LogIndex: 0, Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
+			{BlockNum: 50, TxIndex: 0, LogIndex: 9, Log: &corepb.TransactionInfo_Log{Address: []byte{0x50}}},
+		},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var rows int
+	covered, err := cdb.IterateCoveredEventLogs(50, 50, EventLogFilter{}, func(EventLog) (bool, error) {
+		rows++
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "is not after previous") {
+		t.Fatalf("fallback unsorted = covered %v err %v, want ordering error", covered, err)
+	}
+	if rows != 1 {
+		t.Fatalf("callback rows = %d, want only first row before fallback ordering error", rows)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsRejectsOutOfRangeAtomicRow(t *testing.T) {
 	t.Parallel()
 

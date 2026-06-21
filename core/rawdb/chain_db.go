@@ -191,7 +191,7 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 	if err != nil || !covered {
 		return covered, err
 	}
-	return true, db.IterateEventLogs(fromBlock, toBlock, filter, fn)
+	return true, db.IterateEventLogs(fromBlock, toBlock, filter, coveredEventLogValidator(fromBlock, toBlock, fn))
 }
 
 func coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
