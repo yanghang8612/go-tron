@@ -626,12 +626,33 @@ func TestArchiveQuery_TriggerConstantContractAtUsesBlockStateRoot(t *testing.T) 
 	if len(got2.Result) != 32 || got2.Result[31] != 0x22 {
 		t.Fatalf("TriggerConstantContractAt(block2) result = %x, want trailing 0x22", got2.Result)
 	}
+	call1, err := b.CallAt(&witness, &contractAddr, nil, 0, block1.Number())
+	if err != nil {
+		t.Fatalf("CallAt(block1): %v", err)
+	}
+	if len(call1) != 32 || call1[31] != 0x11 {
+		t.Fatalf("CallAt(block1) result = %x, want trailing 0x11", call1)
+	}
+	call2, err := b.CallAt(&witness, &contractAddr, nil, 0, block2.Number())
+	if err != nil {
+		t.Fatalf("CallAt(block2): %v", err)
+	}
+	if len(call2) != 32 || call2[31] != 0x22 {
+		t.Fatalf("CallAt(block2) result = %x, want trailing 0x22", call2)
+	}
 	energy, err := b.EstimateEnergyAt(witness, contractAddr, nil, block1.Number())
 	if err != nil {
 		t.Fatalf("EstimateEnergyAt(block1): %v", err)
 	}
 	if energy <= 0 {
 		t.Fatalf("EstimateEnergyAt(block1) = %d, want positive energy", energy)
+	}
+	gas, err := b.EstimateGasAt(&witness, &contractAddr, []byte{0x01}, 0, block1.Number())
+	if err != nil {
+		t.Fatalf("EstimateGasAt(block1): %v", err)
+	}
+	if gas <= 0 {
+		t.Fatalf("EstimateGasAt(block1) = %d, want positive energy", gas)
 	}
 }
 
@@ -2338,5 +2359,11 @@ func TestArchiveQuery_FutureBlockRejected(t *testing.T) {
 	var slot tcommon.Hash
 	if _, err := b.GetStorageAtBlock(recipient, slot, future); err == nil {
 		t.Fatal("GetStorageAtBlock future block returned nil error")
+	}
+	if _, err := b.CallAt(&witness, &recipient, nil, 0, future); err == nil {
+		t.Fatal("CallAt future block returned nil error")
+	}
+	if _, err := b.EstimateGasAt(&witness, &recipient, []byte{0x01}, 0, future); err == nil {
+		t.Fatal("EstimateGasAt future block returned nil error")
 	}
 }
