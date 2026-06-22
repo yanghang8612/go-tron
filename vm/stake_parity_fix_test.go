@@ -8,6 +8,7 @@ import (
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -288,6 +289,47 @@ func TestUnDelegateOpcodeCrossReceiverIsolation(t *testing.T) {
 	// The valid receiver2 record is untouched.
 	if dr := statedb.ReadDelegatedResourceV2(owner, receiver2, false); dr == nil || dr.FrozenBalanceForEnergy != 40*tvmTRXPrecision {
 		t.Fatalf("receiver2 record disturbed: %+v", dr)
+	}
+}
+
+// TestUnDelegateOpcodeOwnerUntouchedWhenNoTransfer locks the C1 fix at the
+// opcode level: java gates the owner-side unDelegateIncrease on transferUsage > 0,
+// so when the receiver transferred no usage (here it never spent the delegated
+// energy) the owner's energy_usage / window / consume-time are left exactly as
+// they were. Pre-fix opUnDelegateResource folded unconditionally, decaying the
+// owner's usage and stamping latest_consume_time_for_energy = now.
+func TestUnDelegateOpcodeOwnerUntouchedWhenNoTransfer(t *testing.T) {
+	tvm, statedb, _ := newStakeParityTVM(t)
+	owner := stakeAddr(0x51)
+	receiver := stakeAddr(0x52)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision)
+	callDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision)
+
+	// Owner carries stale usage stamped at slot 0; the receiver never spent the
+	// delegated energy, so the proportional transfer is 0.
+	statedb.SetEnergyUsage(owner, 400)
+	statedb.SetLatestConsumeTimeForEnergy(owner, 0)
+	ownerWindowBefore := statedb.GetAccount(owner).RawEnergyWindowSize()
+
+	// Undelegate half a recovery window later, so an (incorrect) owner fold would
+	// visibly decay 400 -> 200 and move the consume time.
+	tvm.HeadSlot = int64(params.WindowSizeSlots / 2)
+	tvm.HasHeadSlot = true
+
+	if ret := callUnDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 15*tvmTRXPrecision); ret != 1 {
+		t.Fatalf("undelegate result: got %d, want 1", ret)
+	}
+
+	if got := statedb.GetEnergyUsage(owner); got != 400 {
+		t.Fatalf("owner energy usage changed on zero-transfer undelegate: got %d, want 400", got)
+	}
+	if got := statedb.GetLatestConsumeTimeForEnergy(owner); got != 0 {
+		t.Fatalf("owner energy consume time changed on zero-transfer undelegate: got %d, want 0", got)
+	}
+	if got := statedb.GetAccount(owner).RawEnergyWindowSize(); got != ownerWindowBefore {
+		t.Fatalf("owner energy window changed on zero-transfer undelegate: got %d, want %d", got, ownerWindowBefore)
 	}
 }
 
