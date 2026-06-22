@@ -144,6 +144,40 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 	}
 }
 
+// TestProcessProposals_SameCycleDescendingOrder locks the L3 fix: two proposals
+// touching the same DP key that expire in the SAME maintenance cycle must be
+// applied in DESCENDING id order, matching java ProposalController (latestProposalNum
+// down to 1). So the LOW-id proposal wins the final value (last write), and the
+// *_price_history string appends high-id-first. Pre-fix go iterated ascending,
+// flipping both the committed fee value and the history bytes.
+func TestProcessProposals_SameCycleDescendingOrder(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}}
+
+	// Two ENERGY_FEE (#11) proposals expiring in the same cycle, different values.
+	p0 := &rawdb.Proposal{ID: 0, Parameters: map[int64]int64{11: 200}, ExpirationTime: 5000, Approvals: active, State: rawdb.ProposalStatePending}
+	p1 := &rawdb.Proposal{ID: 1, Parameters: map[int64]int64{11: 300}, ExpirationTime: 5000, Approvals: active, State: rawdb.ProposalStatePending}
+	statedb.WriteProposal(0, p0)
+	statedb.WriteProposal(1, p1)
+	statedb.WriteProposalIndex([]int64{0, 1})
+
+	if err := ProcessProposals(db, statedb, dp, active, 5001, nil, nil); err != nil {
+		t.Fatalf("ProcessProposals: %v", err)
+	}
+
+	// Descending: apply id=1 (300) then id=0 (200) -> low id wins.
+	if got := dp.EnergyFee(); got != 200 {
+		t.Fatalf("energy_fee: got %d, want 200 (low id wins under descending order)", got)
+	}
+	// History appends high-id-first: "<default>,5000:300,5000:200".
+	want := "0:100,5000:300,5000:200"
+	if got := dp.EnergyPriceHistory(); got != want {
+		t.Fatalf("energy_price_history: got %q, want %q", got, want)
+	}
+}
+
 // TestApplyProposalSideEffects_AddSystemContract verifies that the proposals
 // that gate new system contracts (java-tron addSystemContractAndSetPermission
 // call sites) update both AvailableContractType and ActiveDefaultOperations.
