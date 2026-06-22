@@ -23,7 +23,15 @@ const version3_6_5 int32 = 9
 func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, cache *proposalScanCache) error {
 	activeCount := len(activeWitnesses)
 	ids := statedb.ReadProposalIndex()
-	for _, id := range ids {
+	// java ProposalController.processProposals iterates DESCENDING from
+	// latestProposalNum. ReadProposalIndex returns ascending (AppendProposalIndex
+	// appends strictly-increasing ids), so walk it backwards. For two proposals
+	// expiring in the SAME maintenance cycle that touch the same DP key, the
+	// application order must match java (low id wins last-write); the *_price_history
+	// params (#3/#11/#68) also append in this order, so the committed bytes diverge
+	// otherwise.
+	for i := len(ids) - 1; i >= 0; i-- {
+		id := ids[i]
 		// Already-resolved proposals are immutable on a linear chain (see
 		// proposalScanCache): skip the SystemKVGet + JSON decode entirely.
 		if cache.isTerminal(id) {
