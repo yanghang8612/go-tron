@@ -53,7 +53,7 @@ func TestCancelAllUnfreezeV2SplitsExpiredAndRefreezes(t *testing.T) {
 
 	energyWeightBefore := dp.TotalEnergyWeight()
 
-	expired := sdb.CancelAllUnfreezeV2(owner, now)
+	expired, deltas := sdb.CancelAllUnfreezeV2(owner, now)
 
 	if expired != 100*trxPrecisionState {
 		t.Fatalf("expired total: got %d, want %d", expired, 100*trxPrecisionState)
@@ -62,9 +62,17 @@ func TestCancelAllUnfreezeV2SplitsExpiredAndRefreezes(t *testing.T) {
 	if got := sdb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 200*trxPrecisionState {
 		t.Fatalf("refrozen energy: got %d, want %d", got, 200*trxPrecisionState)
 	}
-	// total_energy_weight += 200 (TRX units, = 200*1e6 / 1e6).
+	// The returned ENERGY weight delta is +200 (TRX units, = 200*1e6 / 1e6); the
+	// method no longer mutates dp itself — the caller applies it to the live dp.
+	if got := deltas[corepb.ResourceCode_ENERGY]; got != 200 {
+		t.Fatalf("returned energy weight delta: got %d, want 200", got)
+	}
+	if dp.TotalEnergyWeight() != energyWeightBefore {
+		t.Fatalf("CancelAllUnfreezeV2 must not mutate dp itself: %d -> %d", energyWeightBefore, dp.TotalEnergyWeight())
+	}
+	sdb.AddResourceWeightJournaled(dp, corepb.ResourceCode_ENERGY, deltas[corepb.ResourceCode_ENERGY])
 	if got := dp.TotalEnergyWeight() - energyWeightBefore; got != 200 {
-		t.Fatalf("total_energy_weight delta: got %d, want 200", got)
+		t.Fatalf("total_energy_weight delta after apply: got %d, want 200", got)
 	}
 	// Queue cleared.
 	if got := sdb.UnfreezeV2Count(owner); got != 0 {
@@ -88,7 +96,7 @@ func TestCancelAllUnfreezeV2AllExpiredNoRefreeze(t *testing.T) {
 	netWeightBefore := dp.TotalNetWeight()
 	energyWeightBefore := dp.TotalEnergyWeight()
 
-	expired := sdb.CancelAllUnfreezeV2(owner, now)
+	expired, deltas := sdb.CancelAllUnfreezeV2(owner, now)
 
 	if expired != 120*trxPrecisionState {
 		t.Fatalf("expired total: got %d, want %d", expired, 120*trxPrecisionState)
@@ -98,6 +106,10 @@ func TestCancelAllUnfreezeV2AllExpiredNoRefreeze(t *testing.T) {
 	}
 	if got := sdb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 0 {
 		t.Fatalf("energy must not be refrozen: got %d", got)
+	}
+	// All entries expired -> no refreeze -> no weight delta.
+	if deltas[corepb.ResourceCode_BANDWIDTH] != 0 || deltas[corepb.ResourceCode_ENERGY] != 0 {
+		t.Fatalf("weight deltas must be zero when all expired: %v", deltas)
 	}
 	if dp.TotalNetWeight() != netWeightBefore || dp.TotalEnergyWeight() != energyWeightBefore {
 		t.Fatalf("weights must be untouched: net %d->%d, energy %d->%d",

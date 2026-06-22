@@ -292,6 +292,73 @@ func TestUnDelegateOpcodeCrossReceiverIsolation(t *testing.T) {
 	}
 }
 
+// newProductionWiredStakeTVM mirrors the production block-execution wiring for
+// the staking opcodes: the live DynamicProperties is passed to NewTVM (-> the dp
+// every VM staking site must use) and StateDB.SetDynamicProperties is NOT called,
+// so the StateDB's own dp is a DISTINCT empty genesis default. Used to prove the
+// CANCELALLUNFREEZEV2 weight mutation lands on the live dp, not the empty one.
+func newProductionWiredStakeTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProperties) {
+	t.Helper()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	statedb, err := state.New(tcommon.Hash{}, sdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Intentionally NOT calling SetDynamicProperties — mirrors production.
+	dp := state.NewDynamicProperties()
+	dp.SetUnfreezeDelayDays(14)
+	dp.SetAllowCancelAllUnfreezeV2(true)
+	tvm := NewTVM(statedb, dp, tcommon.Address{}, 1, 1_000_000, tcommon.Address{}, 1,
+		TVMConfig{StakingV2: true})
+	tvm.SetDB(diskdb)
+	if statedb.DynamicProperties() == dp {
+		t.Fatal("precondition: production StateDB dp must DIFFER from the wired tvm.DynProps")
+	}
+	return tvm, statedb, dp
+}
+
+// TestCancelAllUnfreezeV2OpcodeWeightHitsLiveDpAndRevertsOnSnapshot locks the L5
+// fix: the refreeze weight delta from CANCELALLUNFREEZEV2 must (a) land on the
+// LIVE dp (tvm.DynProps) — pre-fix it mutated the StateDB's own dp, which is the
+// empty genesis default in production, so the live total_energy_weight never
+// moved — and (b) be journaled so a frame revert rolls it back (same class as the
+// 27,405,576 FREEZE-then-revert tw leak).
+func TestCancelAllUnfreezeV2OpcodeWeightHitsLiveDpAndRevertsOnSnapshot(t *testing.T) {
+	tvm, statedb, dp := newProductionWiredStakeTVM(t)
+	owner := stakeAddr(0x61)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+
+	const headerNow = int64(1_000_000)
+	dp.SetLatestBlockHeaderTimestamp(headerNow)
+	// One UNEXPIRED 200-TRX ENERGY entry -> refrozen -> weight delta +200.
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, 200*tvmTRXPrecision, headerNow+1)
+
+	liveBefore := dp.TotalEnergyWeight()
+	stateDpBefore := statedb.DynamicProperties().TotalEnergyWeight()
+
+	snap := statedb.Snapshot()
+	stack := newStack()
+	contract := NewContract(owner, owner, 0, 1_000_000)
+	if _, err := opCancelAllUnfreezeV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opCancelAllUnfreezeV2 error: %v", err)
+	}
+
+	// (a) dp-source: the live dp moved by +200, the empty StateDB dp did NOT.
+	if got := dp.TotalEnergyWeight() - liveBefore; got != 200 {
+		t.Fatalf("live total_energy_weight delta: got %d, want 200", got)
+	}
+	if got := statedb.DynamicProperties().TotalEnergyWeight(); got != stateDpBefore {
+		t.Fatalf("empty StateDB dp was mutated: %d -> %d (weight must hit the live dp)", stateDpBefore, got)
+	}
+
+	// (b) journaling: a frame revert rolls the weight delta back.
+	statedb.RevertToSnapshot(snap)
+	if got := dp.TotalEnergyWeight(); got != liveBefore {
+		t.Fatalf("total_energy_weight not rolled back on revert: got %d, want %d", got, liveBefore)
+	}
+}
+
 // TestUnDelegateOpcodeOwnerUntouchedWhenNoTransfer locks the C1 fix at the
 // opcode level: java gates the owner-side unDelegateIncrease on transferUsage > 0,
 // so when the receiver transferred no usage (here it never spent the delegated
