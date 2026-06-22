@@ -5,8 +5,6 @@
 package delegation
 
 import (
-	"math/big"
-
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -194,7 +192,7 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 		return 0
 	}
 
-	usageAsFrozen := resourceUsageToFrozenBalance(usage, totalLimit, totalWeight, harden)
+	usageAsFrozen := resourceUsageToFrozenBalance(usage, totalLimit, totalWeight)
 	v2Usage := usageAsFrozen - v1OwnFrozen - v1AcquiredFrozen - v2AcquiredFrozen
 	if v2Usage < 0 {
 		v2Usage = 0
@@ -206,17 +204,18 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 	return available
 }
 
-func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64, harden bool) int64 {
+// resourceUsageToFrozenBalance converts recovered usage back into the frozen
+// balance it represents. Mirrors java DelegateResourceActuator.validate and
+// DelegateResourceProcessor: (long)(usage * TRX_PRECISION * ((double)totalWeight
+// / totalLimit)) — a plain double cast on BOTH the actuator and VM paths,
+// UNGATED. AllowHardenResourceCalculation only switches the recovery averaging in
+// ResourceProcessor.increase (mirrored by computeResourceIncrease); java never
+// applies big.Int / harden to this product, so neither must go.
+func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64) int64 {
 	if usage <= 0 || totalLimit <= 0 || totalWeight <= 0 {
 		return 0
 	}
-	if !harden {
-		return int64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
-	}
-	n := new(big.Int).Mul(big.NewInt(usage), big.NewInt(params.TRXPrecision))
-	n.Mul(n, big.NewInt(totalWeight))
-	n.Quo(n, big.NewInt(totalLimit))
-	return n.Int64()
+	return int64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
 }
 
 func totalBandwidthFrozen(acct *types.Account) int64 {
