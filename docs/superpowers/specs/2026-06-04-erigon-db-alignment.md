@@ -1422,7 +1422,10 @@ Status:
   it to `ChainDB` alongside the chain-index sidecar. Strict block-balance-trace
   reads are now exported and the backend API uses them, so malformed or
   mismatched cold trace rows surface as archive data errors instead of being
-  collapsed into a false "trace not found" result.
+  collapsed into a false "trace not found" result. When the canonical block is
+  readable, strict hot/cold `BlockBalanceTrace` reads also bind any embedded
+  block identifier hash to the canonical block hash before archive APIs expose
+  the payload.
 - DB maintenance commands that rebuild, audit, or replay derived rows now open
   the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
   replay backfill uses that archive view when checking existing target rows, so

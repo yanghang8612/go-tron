@@ -2,8 +2,10 @@ package rawdb
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -119,6 +121,54 @@ func TestBlockBalanceTraceRejectsColdBlockNumberMismatch(t *testing.T) {
 	}
 	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 12); err == nil || !ok || trace == nil {
 		t.Fatalf("ReadBlockBalanceTraceStrict cold block-number mismatch = trace %+v ok %v err %v, want trace/ok/error", trace, ok, err)
+	}
+}
+
+func TestBlockBalanceTraceRejectsHotCanonicalHashMismatch(t *testing.T) {
+	db := NewMemoryChainDB()
+	block := testSyncStagedBlock(12, common.Hash{0x11})
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteBlockBalanceTrace(db, int64(block.Number()), &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   bytes.Repeat([]byte{0xee}, 32),
+			Number: int64(block.Number()),
+		},
+		Timestamp: 1200,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	if got := ReadBlockBalanceTrace(db, int64(block.Number())); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace hot hash mismatch = %+v, want nil compatibility miss", got)
+	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, int64(block.Number())); err == nil || !ok || trace == nil || !strings.Contains(err.Error(), "does not match canonical block") {
+		t.Fatalf("ReadBlockBalanceTraceStrict hot hash mismatch = trace %+v ok %v err %v, want canonical hash error", trace, ok, err)
+	}
+}
+
+func TestBlockBalanceTraceRejectsColdCanonicalHashMismatch(t *testing.T) {
+	db := NewMemoryChainDB()
+	block := testSyncStagedBlock(14, common.Hash{0x12})
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	cold := newFakeBalanceTraceReader()
+	db.SetBalanceTraceReader(cold)
+	cold.putBlockTrace(int64(block.Number()), &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   bytes.Repeat([]byte{0xdd}, 32),
+			Number: int64(block.Number()),
+		},
+		Timestamp: 1400,
+	})
+
+	if got := ReadBlockBalanceTrace(db, int64(block.Number())); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace cold hash mismatch = %+v, want nil compatibility miss", got)
+	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, int64(block.Number())); err == nil || !ok || trace == nil || !strings.Contains(err.Error(), "does not match canonical block") {
+		t.Fatalf("ReadBlockBalanceTraceStrict cold hash mismatch = trace %+v ok %v err %v, want canonical hash error", trace, ok, err)
 	}
 }
 

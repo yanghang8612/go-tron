@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -113,6 +114,9 @@ func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*cont
 			if err := validateBlockBalanceTraceForKey(blockNum, &trace, "read block balance trace"); err != nil {
 				return &trace, true, err
 			}
+			if err := validateBlockBalanceTraceCanonicalHash(db, blockNum, &trace, "read block balance trace"); err != nil {
+				return &trace, true, err
+			}
 			return &trace, true, nil
 		}
 	}
@@ -128,6 +132,9 @@ func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*cont
 	if err := validateBlockBalanceTraceForKey(blockNum, trace, "read cold block balance trace"); err != nil {
 		return trace, true, err
 	}
+	if err := validateBlockBalanceTraceCanonicalHash(db, blockNum, trace, "read cold block balance trace"); err != nil {
+		return trace, true, err
+	}
 	return trace, true, nil
 }
 
@@ -137,6 +144,29 @@ func validateBlockBalanceTraceForKey(blockNum int64, trace *contractpb.BlockBala
 	}
 	if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != blockNum {
 		return fmt.Errorf("rawdb: block balance trace payload number %d does not match key %d during %s", id.GetNumber(), blockNum, context)
+	}
+	return nil
+}
+
+func validateBlockBalanceTraceCanonicalHash(db ethdb.KeyValueReader, blockNum int64, trace *contractpb.BlockBalanceTrace, context string) error {
+	id := trace.GetBlockIdentifier()
+	if id == nil || len(id.GetHash()) == 0 || blockNum < 0 {
+		return nil
+	}
+	chain, ok := db.(*ChainDB)
+	if !ok || chain == nil {
+		return nil
+	}
+	block, exists, err := ReadBlockStrict(chain, uint64(blockNum))
+	if err != nil {
+		return fmt.Errorf("rawdb: block balance trace canonical block read during %s: %w", context, err)
+	}
+	if !exists {
+		return nil
+	}
+	canonicalHash := block.Hash()
+	if !bytes.Equal(id.GetHash(), canonicalHash.Bytes()) {
+		return fmt.Errorf("rawdb: block balance trace payload hash %x does not match canonical block %d hash %x during %s", id.GetHash(), blockNum, canonicalHash, context)
 	}
 	return nil
 }
