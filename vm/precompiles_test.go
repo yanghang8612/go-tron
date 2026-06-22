@@ -360,21 +360,30 @@ func TestBigModExpZeroModulusMatchesJavaTron(t *testing.T) {
 	input[97] = 1 // exp = 1
 	input[98] = 0 // mod = 0
 
+	// java PrecompiledContracts.ModExp (lines 711-715): zero modulus returns
+	// EMPTY_BYTE_ARRAY pre-Osaka, but new byte[modLen] (modLen zero-bytes) post-Osaka
+	// (TIP-7883). modLen == 1 here.
 	for _, tc := range []struct {
-		name   string
-		p      *bigModExp
-		energy uint64
+		name    string
+		p       *bigModExp
+		energy  uint64
+		wantLen int
 	}{
-		{name: "legacy", p: &bigModExp{istanbul: true}, energy: 100000},
-		{name: "osaka", p: &bigModExp{osaka: true}, energy: 500},
+		{name: "legacy", p: &bigModExp{istanbul: true}, energy: 100000, wantLen: 0},
+		{name: "osaka", p: &bigModExp{osaka: true}, energy: 500, wantLen: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, _, err := tc.p.Run(nullEVM(), zeroCaller, input, tc.energy)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if len(result) != 0 {
-				t.Fatalf("zero modulus should return empty payload like java-tron, got %x", result)
+			if len(result) != tc.wantLen {
+				t.Fatalf("zero modulus payload length: got %d (%x), want %d", len(result), result, tc.wantLen)
+			}
+			for i, b := range result {
+				if b != 0 {
+					t.Fatalf("zero modulus payload must be all zero bytes, byte %d = %#x", i, b)
+				}
 			}
 		})
 	}

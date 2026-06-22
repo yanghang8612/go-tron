@@ -176,7 +176,13 @@ func (c *bigModExp) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energ
 
 	var result []byte
 	if mod.Sign() == 0 {
-		result = []byte{}
+		// java PrecompiledContracts.ModExp: post-Osaka (TIP-7883) returns modLen
+		// zero-bytes for a zero modulus, pre-Osaka returns EMPTY_BYTE_ARRAY.
+		if c.osaka {
+			result = make([]byte, modLen)
+		} else {
+			result = []byte{}
+		}
 	} else {
 		r := new(big.Int).Exp(base, exp, mod)
 		// Left-pad result to modLen
