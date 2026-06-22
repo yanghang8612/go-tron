@@ -25,6 +25,36 @@ func writeChainTailPruneDependencyStage(t *testing.T, db ethdb.KeyValueWriter, s
 	return hash
 }
 
+func TestEffectiveChainFreezerTailRetainBlocksKeepsBlockHashWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		in   uint64
+		want uint64
+	}{
+		{name: "disabled", in: 0, want: 0},
+		{name: "below blockhash window", in: 1, want: ChainFreezerTailMinRetainBlocks},
+		{name: "one below blockhash window", in: ChainFreezerTailMinRetainBlocks - 1, want: ChainFreezerTailMinRetainBlocks},
+		{name: "at blockhash window", in: ChainFreezerTailMinRetainBlocks, want: ChainFreezerTailMinRetainBlocks},
+		{name: "above blockhash window", in: ChainFreezerTailMinRetainBlocks + 1, want: ChainFreezerTailMinRetainBlocks + 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EffectiveChainFreezerTailRetainBlocks(tt.in); got != tt.want {
+				t.Fatalf("EffectiveChainFreezerTailRetainBlocks(%d) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewChainFreezerTailPruneLifecycleNormalizesRetainBlocks(t *testing.T) {
+	l := NewChainFreezerTailPruneLifecycle(nil, nil, nil, ChainFreezerTailPruneLifecycleConfig{
+		RetainBlocks: 1,
+	})
+	if l.cfg.RetainBlocks != ChainFreezerTailMinRetainBlocks {
+		t.Fatalf("lifecycle retain blocks = %d, want %d", l.cfg.RetainBlocks, ChainFreezerTailMinRetainBlocks)
+	}
+}
+
 func TestPlanChainFreezerTailPruneRequiresStages(t *testing.T) {
 	input := ChainFreezerTailPrunePlanInput{
 		AncientHead:              100,

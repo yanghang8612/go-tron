@@ -779,7 +779,7 @@ func gtron(ctx *cli.Context) error {
 			"snapshotDir", stateSnapshotDir)
 	}
 	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
-		retainBlocks := chainConfig.EffectiveHistoryPruneWindow()
+		retainBlocks := statesnapshots.EffectiveChainFreezerTailRetainBlocks(chainConfig.EffectiveHistoryPruneWindow())
 		stack.RegisterLifecycle(statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
 			RetainBlocks: retainBlocks,
 			HeadBlock: func() uint64 {

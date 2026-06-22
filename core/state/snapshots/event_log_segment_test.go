@@ -1013,14 +1013,16 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
 		t.Fatalf("EventLogRangeCoveredForFilter stale empty index = %v/%v, want false/missing-candidate error", covered, err)
 	}
+	seen := 0
 	covered, err = mgr.IterateCoveredEventLogs(1, 1, EventLogFilter{
 		Addresses: []common.Address{common.BytesToAddress(addr)},
 		Topics:    [][]common.Hash{{topic}},
 	}, func(EventLog) (bool, error) {
+		seen++
 		return true, nil
 	})
-	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
-		t.Fatalf("IterateCoveredEventLogs stale empty index = %v/%v, want false/missing-candidate error", covered, err)
+	if err != nil || !covered || seen != 1 {
+		t.Fatalf("IterateCoveredEventLogs stale empty index = covered %v rows %d err %v, want true/1/nil", covered, seen, err)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
 	if err == nil || covered {
@@ -1157,6 +1159,14 @@ func TestEventLogIndexedRangeCoveredRejectsPartialIndex(t *testing.T) {
 	covered, err := mgr.EventLogRangeCoveredForFilter(1, 2, filter)
 	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
 		t.Fatalf("EventLogRangeCoveredForFilter partial index = %v/%v, want false/missing-candidate error", covered, err)
+	}
+	coveredRows := 0
+	covered, err = mgr.IterateCoveredEventLogs(1, 2, filter, func(EventLog) (bool, error) {
+		coveredRows++
+		return true, nil
+	})
+	if err != nil || !covered || coveredRows != 2 {
+		t.Fatalf("IterateCoveredEventLogs partial index = covered %v rows %d err %v, want true/2/nil", covered, coveredRows, err)
 	}
 	seen := 0
 	if err := mgr.IterateEventLogs(1, 2, filter, func(EventLog) (bool, error) {

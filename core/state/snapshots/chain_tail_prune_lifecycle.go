@@ -8,7 +8,16 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-const defaultChainFreezerTailPruneInterval = time.Minute
+const (
+	defaultChainFreezerTailPruneInterval = time.Minute
+
+	// ChainFreezerTailMinRetainBlocks is the minimum local freezer retention
+	// needed by the TVM BLOCKHASH opcode, which can read any ancestor inside
+	// the previous 256 blocks. Minimal-mode tail pruning must leave that
+	// window in the local freezer, because execution does not consult cold
+	// snapshot segments.
+	ChainFreezerTailMinRetainBlocks = uint64(256)
+)
 
 type ChainFreezerTailPruneLifecycleConfig struct {
 	RetainBlocks uint64
@@ -31,6 +40,7 @@ func NewChainFreezerTailPruneLifecycle(db ethdb.KeyValueReader, freezer ChainFre
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultChainFreezerTailPruneInterval
 	}
+	cfg.RetainBlocks = EffectiveChainFreezerTailRetainBlocks(cfg.RetainBlocks)
 	return &ChainFreezerTailPruneLifecycle{
 		db:      db,
 		freezer: freezer,
@@ -39,6 +49,15 @@ func NewChainFreezerTailPruneLifecycle(db ethdb.KeyValueReader, freezer ChainFre
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
+}
+
+// EffectiveChainFreezerTailRetainBlocks applies the BLOCKHASH safety floor to
+// a configured minimal-mode chain-freezer tail retention window.
+func EffectiveChainFreezerTailRetainBlocks(retainBlocks uint64) uint64 {
+	if retainBlocks == 0 || retainBlocks >= ChainFreezerTailMinRetainBlocks {
+		return retainBlocks
+	}
+	return ChainFreezerTailMinRetainBlocks
 }
 
 func (l *ChainFreezerTailPruneLifecycle) Start() error {

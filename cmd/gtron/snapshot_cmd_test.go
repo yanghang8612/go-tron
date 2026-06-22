@@ -542,6 +542,58 @@ func TestParseSnapshotCatalogPrivateKeyAcceptsSeed(t *testing.T) {
 	}
 }
 
+func TestSnapshotCatalogSigningKeyFromEnvironment(t *testing.T) {
+	seed := strings.Repeat("22", ed25519.SeedSize)
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_SIGNING_KEY": snapshotTestEnvValue("ed25519:" + seed),
+	})
+
+	key, err := snapshotCatalogSigningKey(ctx)
+	if err != nil {
+		t.Fatalf("snapshotCatalogSigningKey: %v", err)
+	}
+	want := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
+	if !bytes.Equal(key, want) {
+		t.Fatalf("signing key = %x, want %x", key, want)
+	}
+}
+
+func TestSnapshotCatalogSigningKeyFromFile(t *testing.T) {
+	flagSeed := strings.Repeat("33", ed25519.SeedSize)
+	fileSeed := strings.Repeat("44", ed25519.SeedSize)
+	keyFile := filepath.Join(t.TempDir(), "snapshot-signing-key.txt")
+	if err := os.WriteFile(keyFile, []byte("# active catalog key\ned25519:"+fileSeed+"\n"), 0o600); err != nil {
+		t.Fatalf("write signing key file: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.signing-key", flagSeed,
+		"--snapshot.signing-key-file", keyFile,
+	})
+
+	key, err := snapshotCatalogSigningKey(ctx)
+	if err != nil {
+		t.Fatalf("snapshotCatalogSigningKey: %v", err)
+	}
+	want := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x44}, ed25519.SeedSize))
+	if !bytes.Equal(key, want) {
+		t.Fatalf("signing key = %x, want file key %x", key, want)
+	}
+}
+
+func TestSnapshotCatalogSigningKeyFileRejectsMultipleKeys(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "snapshot-signing-key.txt")
+	if err := os.WriteFile(keyFile, []byte(strings.Repeat("55", ed25519.SeedSize)+"\n"+strings.Repeat("66", ed25519.SeedSize)+"\n"), 0o600); err != nil {
+		t.Fatalf("write signing key file: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.signing-key-file", keyFile,
+	})
+
+	if _, err := snapshotCatalogSigningKey(ctx); err == nil || !strings.Contains(err.Error(), "multiple keys") {
+		t.Fatalf("snapshotCatalogSigningKey multiple keys err = %v, want multiple keys", err)
+	}
+}
+
 func TestNormaliseSnapshotForkConfigHash(t *testing.T) {
 	raw := strings.Repeat("aa", 32)
 	got, err := normaliseSnapshotForkConfigHash("SHA256:" + strings.ToUpper(raw))
@@ -2026,6 +2078,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotTrustedCatalogKeyFileFlag,
 		snapshotForkConfigHashFlag,
 		snapshotCatalogSigningKeyFlag,
+		snapshotCatalogSigningKeyFileFlag,
 		snapshotFromBlockFlag,
 		snapshotToBlockFlag,
 		snapshotETLTempDirFlag,
@@ -2049,11 +2102,15 @@ func restoreSnapshotTestCLIFlagState() func() {
 	snapshotTrustedCatalogKeyHasBeenSet := snapshotTrustedCatalogKeyFlag.HasBeenSet
 	snapshotTrustedCatalogKeyFileValue, snapshotTrustedCatalogKeyFileHasBeenSet := snapshotTrustedCatalogKeyFileFlag.Value, snapshotTrustedCatalogKeyFileFlag.HasBeenSet
 	snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet := snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet
+	snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet := snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet
+	snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet := snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet
 	return func() {
 		snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet = snapshotURLValue, snapshotURLHasBeenSet
 		snapshotTrustedCatalogKeyFlag.HasBeenSet = snapshotTrustedCatalogKeyHasBeenSet
 		snapshotTrustedCatalogKeyFileFlag.Value, snapshotTrustedCatalogKeyFileFlag.HasBeenSet = snapshotTrustedCatalogKeyFileValue, snapshotTrustedCatalogKeyFileHasBeenSet
 		snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet = snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet
+		snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet = snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet
+		snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet = snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet
 	}
 }
 

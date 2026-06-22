@@ -58,8 +58,14 @@ var (
 		EnvVars: []string{"GTRON_SNAPSHOT_FORK_CONFIG_HASH"},
 	}
 	snapshotCatalogSigningKeyFlag = &cli.StringFlag{
-		Name:  "snapshot.signing-key",
-		Usage: "Ed25519 catalog signing key as a 32-byte seed or 64-byte private key in hex",
+		Name:    "snapshot.signing-key",
+		Usage:   "Ed25519 catalog signing key as a 32-byte seed or 64-byte private key in hex",
+		EnvVars: []string{"GTRON_SNAPSHOT_SIGNING_KEY"},
+	}
+	snapshotCatalogSigningKeyFileFlag = &cli.StringFlag{
+		Name:    "snapshot.signing-key-file",
+		Usage:   "File containing the Ed25519 catalog signing key as a 32-byte seed or 64-byte private key in hex",
+		EnvVars: []string{"GTRON_SNAPSHOT_SIGNING_KEY_FILE"},
 	}
 	snapshotFromBlockFlag = &cli.Uint64Flag{
 		Name:  "snapshot.from-block",
@@ -173,6 +179,7 @@ func snapshotCommand() *cli.Command {
 					dataDirFlag,
 					snapshotDirFlag,
 					snapshotCatalogSigningKeyFlag,
+					snapshotCatalogSigningKeyFileFlag,
 				},
 				Action: snapshotPublishCatalogCmd,
 			},
@@ -577,7 +584,7 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 func snapshotPublishCatalogCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
 	dir := snapshotDir(ctx, cfg.DataDir)
-	key, err := parseSnapshotCatalogPrivateKey(ctx.String("snapshot.signing-key"))
+	key, err := snapshotCatalogSigningKey(ctx)
 	if err != nil {
 		return err
 	}
@@ -1316,6 +1323,42 @@ func parseSnapshotTrustedCatalogKeys(values []string) ([]ed25519.PublicKey, erro
 		return nil, errors.New("snapshot catalog verification requires at least one --snapshot.trusted-key, --snapshot.trusted-key-file, GTRON_SNAPSHOT_TRUSTED_KEY, or GTRON_SNAPSHOT_TRUSTED_KEY_FILE")
 	}
 	return out, nil
+}
+
+func snapshotCatalogSigningKey(ctx *cli.Context) (ed25519.PrivateKey, error) {
+	if path := strings.TrimSpace(ctx.String("snapshot.signing-key-file")); path != "" {
+		raw, err := readSnapshotCatalogSigningKeyFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return parseSnapshotCatalogPrivateKey(raw)
+	}
+	return parseSnapshotCatalogPrivateKey(ctx.String("snapshot.signing-key"))
+}
+
+func readSnapshotCatalogSigningKeyFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read snapshot signing key file %s: %w", path, err)
+	}
+	var value string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if cut := strings.IndexByte(line, '#'); cut >= 0 {
+			line = strings.TrimSpace(line[:cut])
+		}
+		if line == "" {
+			continue
+		}
+		if value != "" {
+			return "", fmt.Errorf("snapshot signing key file %s contains multiple keys", path)
+		}
+		value = line
+	}
+	if value == "" {
+		return "", fmt.Errorf("snapshot signing key file %s is empty", path)
+	}
+	return value, nil
 }
 
 func parseSnapshotCatalogPublicKey(raw string) (ed25519.PublicKey, error) {
