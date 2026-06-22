@@ -1102,11 +1102,15 @@ func (c *getChainParameter) Run(tvm *TVM, _ tcommon.Address, input []byte, energ
 	switch code {
 	case 1: // TOTAL_NET_LIMIT
 		val = dp.TotalNetLimit()
+	case 2: // TOTAL_NET_WEIGHT
+		val = dp.TotalNetWeight()
 	case 3: // TOTAL_ENERGY_CURRENT_LIMIT
 		val = dp.TotalEnergyCurrentLimit()
+	case 4: // TOTAL_ENERGY_WEIGHT
+		val = dp.TotalEnergyWeight()
 	case 5: // UNFREEZE_DELAY_DAYS
 		val = dp.UnfreezeDelayDays()
-	default:
+	default: // java ChainParameterEnum.INVALID_PARAMETER_KEY -> 0
 		val = 0
 	}
 	return int64ToBytes32(val), cost, nil
@@ -1174,7 +1178,9 @@ func (c *expireUnfreezeBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte,
 	}
 	addr := tronAddrFromWord(input[0:32])
 	// Input time is in seconds; java-tron converts to milliseconds (* 1000).
-	timeSec := parseInt64FromWord(input, 32)
+	// Saturating decode (java DataWord.longValueSafe): an out-of-int64 time
+	// becomes maxInt64, not a wrapped/negative value.
+	timeSec := parseInt64SafeFromWord(input, 32)
 	if timeSec < 0 {
 		return make([]byte, 32), cost, nil
 	}
@@ -1266,7 +1272,10 @@ func (c *checkUnDelegateResource) Run(tvm *TVM, _ tcommon.Address, input []byte,
 		return make([]byte, 96), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	amount := parseInt64FromWord(input, 32)
+	// Saturating decode (java DataWord.longValueSafe): an out-of-int64 amount
+	// becomes maxInt64, not a wrapped/negative value that the amount<=0 guard
+	// below would wrongly reject where java proceeds.
+	amount := parseInt64SafeFromWord(input, 32)
 	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 64))
 	if !ok || amount <= 0 {
 		return make([]byte, 96), cost, nil

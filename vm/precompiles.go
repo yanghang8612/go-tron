@@ -232,6 +232,26 @@ func parseInt64FromWord(input []byte, offset int) int64 {
 	return int64(parseUint64FromWord(input, offset))
 }
 
+// parseInt64SafeFromWord mirrors java DataWord.longValueSafe(): a 32-byte word
+// whose value does not fit a signed int64 (any of the high 24 bytes set, or the
+// low-8 high bit set) saturates to maxInt64 instead of wrapping/truncating.
+// TRON's V2 staking/freeze query precompiles decode their numeric scalar params
+// (amount, time) this way; the raw parseInt64FromWord would feed a wrapped or
+// negative value where java uses Long.MAX_VALUE.
+func parseInt64SafeFromWord(input []byte, offset int) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	w := parseWord32(input, offset)
+	for _, b := range w[:24] {
+		if b != 0 {
+			return maxInt64
+		}
+	}
+	if v := int64(binary.BigEndian.Uint64(w[24:])); v >= 0 {
+		return v
+	}
+	return maxInt64
+}
+
 // javaIntMaxValue mirrors java's Integer.MAX_VALUE, returned by
 // DataWord.intValueSafe on overflow.
 const javaIntMaxValue = 2147483647

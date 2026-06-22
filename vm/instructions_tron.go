@@ -918,7 +918,15 @@ func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory,
 	}
 	withdrawable := tvmQueryReward(in.tvm, caller)
 	const maxInt64 = int64(^uint64(0) >> 1)
-	if withdrawable <= 0 || in.tvm.StateDB.GetBalance(caller) > maxInt64-withdrawable {
+	// java Program.withdrawReward runs execute()+commit() UNCONDITIONALLY (only a
+	// validate/execute exception skips them): the reward cycle bookkeeping
+	// (beginCycle/endCycle advance + the cycle-vote snapshot) is settled even when
+	// the net reward is 0. go must settle too — skipping tvmWithdrawReward on
+	// withdrawable==0 left beginCycle stale, diverging the contract's later reward
+	// computation (a re-claim/compound loop with 0 pending reward is common). The
+	// only non-settle path is the balance+reward int64 overflow (java's execute
+	// throws -> the child repository is never committed).
+	if withdrawable > 0 && in.tvm.StateDB.GetBalance(caller) > maxInt64-withdrawable {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1283,6 +1291,14 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
 
+	// java DelegateResourceProcessor.validate rejects any resourceType except
+	// BANDWIDTH/ENERGY (its switch default throws "valid [BANDWIDTH、ENERGY]");
+	// TRON_POWER is NOT delegatable. go must push 0 too rather than delegating it.
+	if resource != corepb.ResourceCode_BANDWIDTH && resource != corepb.ResourceCode_ENERGY {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+
 	// java DelegateResourceProcessor.validate checks the USAGE-ADJUSTED available
 	// balance (frozenV2ForResource − v2Usage), not the raw frozen amount — the
 	// same value the getDelegatableResource precompile returns. go previously
@@ -1373,6 +1389,15 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
+
+	// java UnDelegateResourceProcessor.validate switch rejects any resourceType
+	// except BANDWIDTH/ENERGY (default throws "valid [BANDWIDTH、ENERGY]"). go must
+	// push 0 too — otherwise a non-Energy/Bandwidth code would fall into the
+	// FrozenBalanceForEnergy branch below.
+	if resource != corepb.ResourceCode_BANDWIDTH && resource != corepb.ResourceCode_ENERGY {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 
 	// Validate against the per-pair UNLOCKED DelegatedResourceV2 record, NOT the
 	// aggregate delegated balance. Mirrors java UnDelegateResourceProcessor.
