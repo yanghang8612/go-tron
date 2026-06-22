@@ -1726,38 +1726,44 @@ func (s *StateDB) frozenV2WeightWithDelegated(addr tcommon.Address, resource cor
 // each entry on `now` exactly like java CancelAllUnfreezeV2Processor.execute
 // (now = getLatestBlockHeaderTimestamp) and go actuator
 // CancelAllUnfreezeV2Actuator.Execute:
-//   - UnfreezeExpireTime  > now  -> refrozen into FrozenV2 and the global
-//     total_{net,energy,tron_power}_weight ledger is adjusted by
-//     (newWeight - oldWeight).
+//   - UnfreezeExpireTime  > now  -> refrozen into FrozenV2; the per-resource
+//     total_{net,energy,tron_power}_weight delta (newWeight - oldWeight) is
+//     accumulated into the returned map.
 //   - UnfreezeExpireTime <= now  -> expired; its amount is accumulated and
-//     RETURNED so the caller (opCancelAllUnfreezeV2) can add it to balance.
+//     RETURNED so the caller can add it to balance.
 //
-// The queue is always cleared. Returns the total expired (withdrawable) amount.
-func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) int64 {
+// The queue is always cleared. The weight deltas are NOT applied here: the caller
+// must apply them to the LIVE DynamicProperties (the StateDB's own dp is the empty
+// genesis default in production) through a journaled path so a VM-frame revert
+// rolls them back — mirrors how the FREEZE/UNFREEZE opcodes own the weight
+// mutation via tvmAddResourceWeight. Returns (total expired, per-resource weight
+// delta in TRX units).
+func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) (int64, map[corepb.ResourceCode]int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
-		return 0
+		return 0, nil
 	}
 	entries := obj.account.UnfrozenV2()
 	if len(entries) == 0 {
-		return 0
+		return 0, nil
 	}
 	s.journalAccount(addr, obj)
 	var withdrawExpire int64
+	weightDeltas := make(map[corepb.ResourceCode]int64, 3)
 	for _, u := range entries {
 		if u.UnfreezeExpireTime > now {
-			// Refreeze and update the global resource weight by the delta.
+			// Refreeze and record the global resource weight delta for the caller.
 			oldWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
 			obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
 			newWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
-			s.addResourceWeightForCancel(u.Type, newWeight-oldWeight)
+			weightDeltas[u.Type] += newWeight - oldWeight
 		} else {
 			withdrawExpire += u.UnfreezeAmount
 		}
 	}
 	obj.account.ClearUnfrozenV2()
 	obj.markDirty()
-	return withdrawExpire
+	return withdrawExpire, weightDeltas
 }
 
 // applyResourceWeight adds delta to dp's matching total_*_weight, mirroring java
@@ -1775,12 +1781,6 @@ func applyResourceWeight(dp *DynamicProperties, resource corepb.ResourceCode, de
 	case corepb.ResourceCode_TRON_POWER:
 		dp.AddTotalTronPowerWeight(delta)
 	}
-}
-
-// addResourceWeightForCancel applies a weight delta to the matching global
-// total_*_weight, mirroring java repo.addTotalNet/Energy/TronPowerWeight.
-func (s *StateDB) addResourceWeightForCancel(resource corepb.ResourceCode, delta int64) {
-	applyResourceWeight(s.dynProps, resource, delta)
 }
 
 // AddResourceWeightJournaled applies a resource-weight delta to dp AND records a

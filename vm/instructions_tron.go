@@ -1235,9 +1235,22 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 	// SV-3: java cancelAllUnfreezeV2Action() increaseNonce() once up front
 	// (Program.java:2118), unconditionally (before validate/execute).
 	in.tvm.Nonce++
-	// CancelAllUnfreezeV2 refreezes unexpired entries (updating global weight)
-	// and returns the expired total, which java/actuator add to the balance.
-	expired := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address, now)
+	// CancelAllUnfreezeV2 refreezes unexpired entries and returns the per-resource
+	// total_*_weight deltas + the expired total (which java/actuator add to the
+	// balance). Apply the weight deltas to the LIVE dp (tvm.DynProps) through the
+	// journaled path so a frame revert rolls them back — the StateDB's own dp is
+	// the empty genesis default in production, and a freeze-then-revert must not
+	// leak the weight (same class as the 27,405,576 FREEZE/UNFREEZE leak fix).
+	expired, weightDeltas := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address, now)
+	for _, res := range []corepb.ResourceCode{
+		corepb.ResourceCode_BANDWIDTH,
+		corepb.ResourceCode_ENERGY,
+		corepb.ResourceCode_TRON_POWER,
+	} {
+		if d := weightDeltas[res]; d != 0 {
+			tvmAddResourceWeight(in.tvm, res, d)
+		}
+	}
 	if expired > 0 {
 		in.tvm.StateDB.AddBalance(contract.Address, expired)
 		// SV-3: java increaseNonce() a SECOND time when the WITHDRAW_EXPIRE_BALANCE
