@@ -53,21 +53,29 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	cancelAllV2 := dp.AllowCancelAllUnfreezeV2()
 
 	usage, lastTime, rawWindow, optimized := resState(statedb, acct, receiver, resource)
-	var totalLimit, totalWeight, totalFrozen int64
+	var totalLimit, totalWeight, totalFrozen, acquiredV2 int64
 	if resource == corepb.ResourceCode_BANDWIDTH {
 		totalLimit = dp.TotalNetLimit()
 		totalWeight = dp.TotalNetWeight()
 		totalFrozen = totalBandwidthFrozen(acct)
+		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 	} else {
 		totalLimit = dp.TotalEnergyCurrentLimit()
 		totalWeight = dp.TotalEnergyWeight()
 		totalFrozen = totalEnergyFrozen(acct)
+		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 	}
 
 	// Per-account window recovery (usage arg = 0 → pure recovery + window renorm).
 	recovered, newRaw, newOpt := computeResourceIncrease(rawWindow, optimized, usage, 0, lastTime, now, harden, cancelAllV2)
 
-	if totalFrozen > 0 && recovered > 0 {
+	// java UnDelegateResourceActuator/Processor: when the receiver's acquired V2
+	// delegated balance is below the undelegated amount (a TVM contract suicide then
+	// re-create clears acquired while a stale delegation record survives), it sets
+	// acquired=0 and SKIPS the proportional usage transfer — transferUsage stays 0
+	// and the receiver keeps its full recovered usage. The caller's
+	// SubAcquiredDelegatedFrozenV2 already clamps the balance to 0 (== setAcquired(0)).
+	if acquiredV2 >= unDelegateBalance && totalFrozen > 0 && recovered > 0 {
 		maxTransfer := int64(0)
 		if totalWeight > 0 {
 			maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * (float64(totalLimit) / float64(totalWeight)))
@@ -89,9 +97,10 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 // FoldUsageIntoOwner mirrors java-tron ResourceProcessor.unDelegateIncrease /
 // unDelegateIncreaseV2: recover the owner's usage against its PER-ACCOUNT window,
 // add transferUsage, and set the new owner window to the usage-weighted blend of
-// the owner's (post-recovery) window and the receiver's window. java calls this
-// UNCONDITIONALLY on undelegate (even at transferUsage==0 it recovers + writes the
-// owner), so callers must too.
+// the owner's (post-recovery) window and the receiver's window. java gates this on
+// `Objects.nonNull(receiverCapsule) && transferUsage > 0`, so the undelegate
+// callers must only invoke it when transferUsage > 0 (the selfdestruct-inheritor
+// merge calls it with the owner's full recovered usage, also > 0).
 func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resource corepb.ResourceCode, transferUsage, recvRawWindow int64, recvOptimized bool, now int64) {
 	acct := statedb.GetAccount(owner)
 	if acct == nil {

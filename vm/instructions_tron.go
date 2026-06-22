@@ -1431,8 +1431,12 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
-	// java unDelegateIncrease runs UNCONDITIONALLY and blends the receiver window.
-	delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, recvRawWindow, recvOptimized, resourceTime)
+	// java gates the owner-side unDelegateIncrease on
+	// `Objects.nonNull(receiverCapsule) && transferUsage > 0`; when the receiver
+	// transferred no usage the owner's usage/window/consume-time are untouched.
+	if transfer > 0 {
+		delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, recvRawWindow, recvOptimized, resourceTime)
+	}
 
 	// Decrement the per-pair record; delete record + index when fully drained.
 	// Mirrors actuator UnDelegateResourceActuator.Execute / java
