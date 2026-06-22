@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func TestBackfillBalanceTracesByReplayRejectsExistingMismatch(t *testing.T) {
 	if err := rawdb.WriteBlockBalanceTrace(sourceDB, 1, &contractpb.BlockBalanceTrace{
 		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
 			Number: 1,
-			Hash:   []byte{0x01},
+			Hash:   bytes.Repeat([]byte{0x01}, 32),
 		},
 	}); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace mismatch: %v", err)

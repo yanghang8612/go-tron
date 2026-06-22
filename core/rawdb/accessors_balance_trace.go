@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -152,6 +153,9 @@ func validateBlockBalanceTraceCanonicalHash(db ethdb.KeyValueReader, blockNum in
 	id := trace.GetBlockIdentifier()
 	if id == nil || len(id.GetHash()) == 0 || blockNum < 0 {
 		return nil
+	}
+	if len(id.GetHash()) != common.HashLength {
+		return fmt.Errorf("rawdb: block balance trace payload hash length %d during %s", len(id.GetHash()), context)
 	}
 	chain, ok := db.(*ChainDB)
 	if !ok || chain == nil {

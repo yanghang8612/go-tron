@@ -172,6 +172,46 @@ func TestBlockBalanceTraceRejectsColdCanonicalHashMismatch(t *testing.T) {
 	}
 }
 
+func TestBlockBalanceTraceRejectsHotMalformedHashLength(t *testing.T) {
+	db := NewMemoryChainDB()
+	if err := WriteBlockBalanceTrace(db, 16, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   []byte{0x16},
+			Number: 16,
+		},
+		Timestamp: 1600,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	if got := ReadBlockBalanceTrace(db, 16); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace hot malformed hash = %+v, want nil compatibility miss", got)
+	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 16); err == nil || !ok || trace == nil || !strings.Contains(err.Error(), "payload hash length 1") {
+		t.Fatalf("ReadBlockBalanceTraceStrict hot malformed hash = trace %+v ok %v err %v, want hash length error", trace, ok, err)
+	}
+}
+
+func TestBlockBalanceTraceRejectsColdMalformedHashLength(t *testing.T) {
+	db := NewMemoryChainDB()
+	cold := newFakeBalanceTraceReader()
+	db.SetBalanceTraceReader(cold)
+	cold.putBlockTrace(18, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   []byte{0x18},
+			Number: 18,
+		},
+		Timestamp: 1800,
+	})
+
+	if got := ReadBlockBalanceTrace(db, 18); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace cold malformed hash = %+v, want nil compatibility miss", got)
+	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, 18); err == nil || !ok || trace == nil || !strings.Contains(err.Error(), "payload hash length 1") {
+		t.Fatalf("ReadBlockBalanceTraceStrict cold malformed hash = trace %+v ok %v err %v, want hash length error", trace, ok, err)
+	}
+}
+
 func TestAccountTrace_FallsThroughToColdReader(t *testing.T) {
 	db := NewMemoryChainDB()
 	cold := newFakeBalanceTraceReader()

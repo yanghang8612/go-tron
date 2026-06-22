@@ -1425,7 +1425,8 @@ Status:
   collapsed into a false "trace not found" result. When the canonical block is
   readable, strict hot/cold `BlockBalanceTrace` reads also bind any embedded
   block identifier hash to the canonical block hash before archive APIs expose
-  the payload.
+  the payload; non-empty embedded hashes must be full 32-byte block hashes even
+  when the canonical block has already been pruned from local hot storage.
 - DB maintenance commands that rebuild, audit, or replay derived rows now open
   the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
   replay backfill uses that archive view when checking existing target rows, so

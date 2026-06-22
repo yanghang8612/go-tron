@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -14,7 +15,7 @@ func TestBlockBalanceTrace_RoundTrip(t *testing.T) {
 
 	trace := &contractpb.BlockBalanceTrace{
 		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
-			Hash:   []byte("blockhash"),
+			Hash:   bytes.Repeat([]byte{0xab}, 32),
 			Number: 1000,
 		},
 		Timestamp: 1234567890,
