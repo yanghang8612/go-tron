@@ -292,6 +292,42 @@ func TestUnDelegateOpcodeCrossReceiverIsolation(t *testing.T) {
 	}
 }
 
+// TestStakingPrecompileRejectsMalformedResourceType pins the resource-type operand
+// decode to java DataWord.longValueSafe: a type word with any high byte set must
+// map to neither BANDWIDTH(0) nor ENERGY(1)/POWER(2) and the precompile must return
+// ZERO (java returns longTo32Bytes(0)). go previously read only the low 8 bytes
+// (parseInt64FromWord), so a high-byte word with low byte 0 wrongly decoded as
+// BANDWIDTH and returned the real frozenV2 balance — inflating any reader.
+func TestStakingPrecompileRejectsMalformedResourceType(t *testing.T) {
+	tvm, statedb, _ := newStakeParityTVM(t)
+	owner := stakeAddr(0x71)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 100*tvmTRXPrecision)
+
+	mkInput := func(typeWord func([]byte)) []byte {
+		in := make([]byte, 64)
+		copy(in[12:32], owner[1:]) // address in the low 20 bytes of word 0
+		typeWord(in[32:64])
+		return in
+	}
+	// Clean type 0 (BANDWIDTH) → returns the real frozenV2 bandwidth balance.
+	cleanOut, _, err := (&unfreezableBalanceV2{}).Run(tvm, tcommon.Address{}, mkInput(func(w []byte) {}), 50)
+	if err != nil {
+		t.Fatalf("clean type: %v", err)
+	}
+	if got := int64FromWord(cleanOut); got != 100*tvmTRXPrecision {
+		t.Fatalf("clean type 0: got %d, want %d", got, 100*tvmTRXPrecision)
+	}
+	// Malformed: high byte set, low byte 0. java longValueSafe → maxInt64 → ZERO.
+	badOut, _, err := (&unfreezableBalanceV2{}).Run(tvm, tcommon.Address{}, mkInput(func(w []byte) { w[0] = 0xff }), 50)
+	if err != nil {
+		t.Fatalf("malformed type: %v", err)
+	}
+	if got := int64FromWord(badOut); got != 0 {
+		t.Fatalf("malformed high-byte type: got %d, want 0 (java longValueSafe rejects)", got)
+	}
+}
+
 // newProductionWiredStakeTVM mirrors the production block-execution wiring for
 // the staking opcodes: the live DynamicProperties is passed to NewTVM (-> the dp
 // every VM staking site must use) and StateDB.SetDynamicProperties is NOT called,

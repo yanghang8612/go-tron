@@ -65,43 +65,30 @@ func TestEnergyWindow_RecoveryDivergesOnWindow(t *testing.T) {
 		now      = int64(7_200) // 6h elapsed; well within both windows
 	)
 
-	cases := []struct {
-		name   string
-		harden bool
-	}{
-		{"legacy", false},
-		{"hardened", true},
+	perAccount := recoverStakingUsage(usage, lastTime, now, 14_400)
+	global := recoverStakingUsage(usage, lastTime, now, int64(params.WindowSizeSlots))
+
+	if want := int64(500_000); perAccount != want {
+		t.Fatalf("per-account-window recovery = %d, want %d", perAccount, want)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			perAccount := recoverStakingUsage(usage, lastTime, now, 14_400, tc.harden)
-			global := recoverStakingUsage(usage, lastTime, now, int64(params.WindowSizeSlots), tc.harden)
-
-			if want := int64(500_000); perAccount != want {
-				t.Fatalf("per-account-window recovery = %d, want %d", perAccount, want)
-			}
-			if want := int64(750_000); global != want {
-				t.Fatalf("global-window recovery = %d, want %d", global, want)
-			}
-			if perAccount == global {
-				t.Fatalf("expected divergence: per-account=%d global=%d", perAccount, global)
-			}
-		})
+	if want := int64(750_000); global != want {
+		t.Fatalf("global-window recovery = %d, want %d", global, want)
+	}
+	if perAccount == global {
+		t.Fatalf("expected divergence: per-account=%d global=%d", perAccount, global)
 	}
 }
 
-// TestRecoverStakingUsage_NonHardenMatchesSettlePath pins the non-harden branch
-// of recoverStakingUsage to java-tron's precision-averaging recovery
-// (RepositoryImpl.increase / getUsage, precision=1_000_000), which go-tron's
-// settle path already ports as core.increase (see core/energy_adaptive.go and
-// core/resource.go::recoverUsageWithHarden). The non-harden branch previously
-// did a plain `oldUsage * remaining / windowSize` truncate that drifted ~1 unit
-// per recovered block — a free-vs-burn bandwidth fork reachable on every
-// resourceUsage / checkUnDelegateResource / delegatableResource precompile call
-// while allowTvmFreezeV2 is active but allowHardenResourceCalculation
-// (proposal #97) is not (a real pre-#97 fork window on mainnet and Nile).
-func TestRecoverStakingUsage_NonHardenMatchesSettlePath(t *testing.T) {
+// TestRecoverStakingUsage_MatchesSettlePath pins recoverStakingUsage to java-tron's
+// precision-averaging recovery (RepositoryImpl.increase / getUsage, precision=
+// 1_000_000), which go-tron's settle path already ports as core.increase (see
+// core/energy_adaptive.go and core/resource.go). This VM-getter recovery is now
+// UNCONDITIONALLY primitive-long (no harden/BigInteger), matching RepositoryImpl
+// which — unlike chainbase ResourceProcessor.increase — has no harden gate at all.
+// A plain `oldUsage * remaining / windowSize` truncate would drift ~1 unit per
+// recovered block (a free-vs-burn bandwidth fork on every resourceUsage /
+// checkUnDelegateResource / delegatableResource precompile call).
+func TestRecoverStakingUsage_MatchesSettlePath(t *testing.T) {
 	cases := []struct {
 		name       string
 		oldUsage   int64
@@ -118,9 +105,9 @@ func TestRecoverStakingUsage_NonHardenMatchesSettlePath(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := recoverStakingUsage(tc.oldUsage, tc.lastTime, tc.now, tc.windowSize, false)
+			got := recoverStakingUsage(tc.oldUsage, tc.lastTime, tc.now, tc.windowSize)
 			if got != tc.want {
-				t.Fatalf("recoverStakingUsage(%d, %d, %d, %d, false) = %d, want %d (non-harden must use precision-averaging, not plain truncate)",
+				t.Fatalf("recoverStakingUsage(%d, %d, %d, %d) = %d, want %d (precision-averaging, not plain truncate)",
 					tc.oldUsage, tc.lastTime, tc.now, tc.windowSize, got, tc.want)
 			}
 		})
