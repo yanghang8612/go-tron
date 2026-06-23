@@ -105,6 +105,49 @@ func TestFreezeAmountNormalUnchanged(t *testing.T) {
 
 // newFreezeV2AmountTVM builds a Stake-2.0 TVM for the FREEZEBALANCEV2 /
 // UNFREEZEBALANCEV2 opcodes.
+// TestFreezeBalanceV2RejectsHighByteResourceType pins the V2 resource-type parse
+// to java Program.parseResourceCodeV2 (sValue().byteValueExact()): a word whose low
+// 32 bits are 0/1/2 but whose HIGH bytes are set does NOT fit a signed byte, so java
+// returns UNRECOGNIZED and the freeze is rejected (push 0, no state change). go
+// previously truncated to int32(low-32) and wrongly committed a BANDWIDTH freeze.
+func TestFreezeBalanceV2RejectsHighByteResourceType(t *testing.T) {
+	tvm, statedb, _ := newFreezeV2AmountTVM(t)
+	owner := stakeAddr(0x81)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1000*tvmTRXPrecision)
+
+	// Helper-level: 2^32 (low-32 = 0) must NOT decode to BANDWIDTH.
+	bad := new(uint256.Int).Lsh(uint256.NewInt(1), 32)
+	if validTVMStakeV2Resource(tvm, tvmResourceV2FromWord(bad)) {
+		t.Fatal("tvmResourceV2FromWord accepted a high-byte word (should be UNRECOGNIZED)")
+	}
+	if got := tvmResourceV2FromWord(uint256.NewInt(2)); got != corepb.ResourceCode_TRON_POWER {
+		t.Fatalf("clean type 2: got %v, want TRON_POWER", got)
+	}
+
+	// Opcode-level: freeze with the malformed resourceType word → push 0, no state change.
+	stack := newStack()
+	stack.push(uint256.NewInt(uint64(100 * tvmTRXPrecision))) // amount
+	stack.push(bad)                                           // resourceType (popped first)
+	contract := NewContract(owner, owner, 0, 5_000_000)
+	if _, err := opFreezeBalanceV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opFreezeBalanceV2: %v", err)
+	}
+	if ret := stack.pop(); ret.Uint64() != 0 {
+		t.Fatalf("malformed resourceType: pushed %d, want 0 (byteValueExact rejects)", ret.Uint64())
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH); got != 0 {
+		t.Fatalf("freeze committed on rejected resourceType: frozen BW = %d, want 0", got)
+	}
+	if got := statedb.GetBalance(owner); got != 1000*tvmTRXPrecision {
+		t.Fatalf("balance mutated on rejected resourceType: got %d, want %d", got, 1000*tvmTRXPrecision)
+	}
+	// Sanity: a clean BANDWIDTH(0) freeze still succeeds.
+	if ret := callFreezeV2(t, tvm, owner, uint256.NewInt(uint64(100*tvmTRXPrecision)), corepb.ResourceCode_BANDWIDTH); ret != 1 {
+		t.Fatalf("clean BANDWIDTH freeze: got %d, want 1", ret)
+	}
+}
+
 func newFreezeV2AmountTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProperties) {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
