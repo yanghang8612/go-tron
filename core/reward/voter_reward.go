@@ -60,17 +60,44 @@ func ComputeVoterReward(store SnapshotReader, dp *state.DynamicProperties, votes
 		beginCycle = oldEnd
 	}
 	if beginCycle < endCycle {
-		for _, v := range votes {
-			beginVi := store.ReadWitnessVI(beginCycle-1, v.Witness.Bytes())
-			endVi := store.ReadWitnessVI(endCycle-1, v.Witness.Bytes())
-			delta := new(big.Int).Sub(endVi, beginVi)
-			if delta.Sign() <= 0 {
-				continue
-			}
-			share := new(big.Int).Mul(delta, big.NewInt(v.Count))
-			share.Quo(share, DecimalOfViReward)
-			reward += share.Int64()
+		reward += viDifferenceReward(store, votes, beginCycle, endCycle)
+	}
+	return reward
+}
+
+// ComputeVoterRewardTVM mirrors java-tron VoteRewardUtil.computeReward — the
+// reward used by the TVM rewardBalance precompile (0x01000005) and the
+// WITHDRAWREWARD opcode (0xD9). Unlike the actuator/block path
+// (ComputeVoterReward / java MortgageService.computeReward), the TVM path applies
+// NO old-cycle pro-rata split: it is a PURE per-witness cumulative-VI difference
+// over the whole [beginCycle, endCycle). java keeps these two reward algorithms in
+// two separate functions; go must NOT reuse the split-aware ComputeVoterReward on
+// the TVM path or it over-counts a pre-fork voter's reward by the old-cycle term
+// (inflating any contract — e.g. a staked-TRX market — that reads the reward).
+func ComputeVoterRewardTVM(store SnapshotReader, votes []VoteEntry, beginCycle, endCycle int64) int64 {
+	if beginCycle >= endCycle {
+		return 0
+	}
+	return viDifferenceReward(store, votes, beginCycle, endCycle)
+}
+
+// viDifferenceReward is the per-witness cumulative-VI difference voter reward over
+// [beginCycle, endCycle): sum of (witnessVI[endCycle-1] - witnessVI[beginCycle-1])
+// * voteCount / 10^18, skipping non-positive deltas. Shared by the new-segment of
+// the actuator path and the whole of the TVM path — both mirror java's identical
+// VI loop (MortgageService.computeReward new segment / VoteRewardUtil.computeReward).
+func viDifferenceReward(store SnapshotReader, votes []VoteEntry, beginCycle, endCycle int64) int64 {
+	var reward int64
+	for _, v := range votes {
+		beginVi := store.ReadWitnessVI(beginCycle-1, v.Witness.Bytes())
+		endVi := store.ReadWitnessVI(endCycle-1, v.Witness.Bytes())
+		delta := new(big.Int).Sub(endVi, beginVi)
+		if delta.Sign() <= 0 {
+			continue
 		}
+		share := new(big.Int).Mul(delta, big.NewInt(v.Count))
+		share.Quo(share, DecimalOfViReward)
+		reward += share.Int64()
 	}
 	return reward
 }

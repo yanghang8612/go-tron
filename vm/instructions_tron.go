@@ -1001,7 +1001,7 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 	}
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
 		if votes := tvmReadSnapshotVotes(tvm.StateDB, beginCycle, addr); len(votes) > 0 {
-			tvmAdjustAllowance(tvm, addr, reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, votes, beginCycle, endCycle))
+			tvmAdjustAllowance(tvm, addr, reward.ComputeVoterRewardTVM(tvm.StateDB, votes, beginCycle, endCycle))
 		}
 		beginCycle++
 	}
@@ -1013,7 +1013,7 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 		return
 	}
 	if beginCycle < endCycle {
-		tvmAdjustAllowance(tvm, addr, reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, currentVotes, beginCycle, endCycle))
+		tvmAdjustAllowance(tvm, addr, reward.ComputeVoterRewardTVM(tvm.StateDB, currentVotes, beginCycle, endCycle))
 	}
 	_ = tvm.StateDB.WriteBeginCycle(addr.Bytes(), endCycle)
 	_ = tvm.StateDB.WriteEndCycle(addr.Bytes(), endCycle+1)
@@ -1041,7 +1041,7 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 	var pending int64
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
 		if votes := tvmReadSnapshotVotes(tvm.StateDB, beginCycle, addr); len(votes) > 0 {
-			pending += reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, votes, beginCycle, endCycle)
+			pending += reward.ComputeVoterRewardTVM(tvm.StateDB, votes, beginCycle, endCycle)
 		}
 		beginCycle++
 	}
@@ -1051,7 +1051,7 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 		return pending + allowance
 	}
 	if beginCycle < endCycle {
-		pending += reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, currentVotes, beginCycle, endCycle)
+		pending += reward.ComputeVoterRewardTVM(tvm.StateDB, currentVotes, beginCycle, endCycle)
 	}
 	return pending + allowance
 }
