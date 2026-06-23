@@ -778,6 +778,27 @@ func recordTVMPendingVotes(tvm *TVM, owner tcommon.Address, oldVotes, newVotes [
 	return tvm.StateDB.WriteVotes(owner, pending)
 }
 
+// tvmResourceV2FromWord mirrors java Program.parseResourceCodeV2: the V2 stake
+// opcodes (FREEZEBALANCEV2/UNFREEZEBALANCEV2/DELEGATERESOURCE/UNDELEGATERESOURCE)
+// read the resource-type as the FULL signed 256-bit word and require it to fit a
+// signed byte (BigInteger.byteValueExact, [-128,127]); a word with any high byte
+// set is UNRECOGNIZED — so validTVMStakeV2Resource rejects it (push 0, no state
+// change), NOT a silent low-bits truncation. (java's V1 parseResourceCode uses
+// intValue/low-32 instead — the two opcode families parse deliberately differently.)
+func tvmResourceV2FromWord(w *uint256.Int) corepb.ResourceCode {
+	b := w.Bytes32()
+	var sign byte
+	if b[31]&0x80 != 0 {
+		sign = 0xff
+	}
+	for i := 0; i < 31; i++ {
+		if b[i] != sign {
+			return corepb.ResourceCode(-1) // does not fit a signed byte → UNRECOGNIZED
+		}
+	}
+	return corepb.ResourceCode(int32(int8(b[31])))
+}
+
 func validTVMStakeV2Resource(tvm *TVM, resource corepb.ResourceCode) bool {
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
@@ -1127,7 +1148,7 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 	// (push 0, no state change). uint256ToInt64Exact carries the same semantics,
 	// replacing the old low-64-bit int64(amountWord.Uint64()) truncation.
 	amount, amountOK := uint256ToInt64Exact(&amountWord)
-	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
+	resource := tvmResourceV2FromWord(&resourceWord)
 	caller := contract.Address
 
 	// SV-3: java freezeBalanceV2() increaseNonce() once up front
@@ -1165,7 +1186,7 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	// (push 0, no state change). uint256ToInt64Exact carries the same semantics,
 	// replacing the old low-64-bit int64(amountWord.Uint64()) truncation.
 	amount, amountOK := uint256ToInt64Exact(&amountWord)
-	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
+	resource := tvmResourceV2FromWord(&resourceWord)
 	caller := contract.Address
 	// java UnfreezeBalanceV2Processor uses getLatestBlockHeaderTimestamp() for the
 	// unfreezing-count gate, the expired-withdrawal sweep, and the new entry's
@@ -1300,7 +1321,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
+	resource := tvmResourceV2FromWord(&resourceWord)
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
 
@@ -1399,7 +1420,7 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
+	resource := tvmResourceV2FromWord(&resourceWord)
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
 
