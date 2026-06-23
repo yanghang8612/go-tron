@@ -3,7 +3,6 @@ package vm
 import (
 	"crypto/sha256"
 	"math"
-	"math/big"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -1156,7 +1155,7 @@ func (c *unfreezableBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, en
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := freezeV2ResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := freezeV2ResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1218,7 +1217,7 @@ func (c *delegatableResource) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1276,7 +1275,7 @@ func (c *checkUnDelegateResource) Run(tvm *TVM, _ tcommon.Address, input []byte,
 	// becomes maxInt64, not a wrapped/negative value that the amount<=0 guard
 	// below would wrongly reject where java proceeds.
 	amount := parseInt64SafeFromWord(input, 32)
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 64))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 64))
 	if !ok || amount <= 0 {
 		return make([]byte, 96), cost, nil
 	}
@@ -1311,7 +1310,7 @@ func (c *resourceUsage) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 		return make([]byte, 64), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok || tvm.StateDB.GetAccount(addr) == nil {
 		return make([]byte, 64), cost, nil
 	}
@@ -1332,7 +1331,7 @@ func (c *totalResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1356,7 +1355,7 @@ func (c *totalDelegatedResource) Run(tvm *TVM, _ tcommon.Address, input []byte, 
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1380,7 +1379,7 @@ func (c *totalAcquiredResource) Run(tvm *TVM, _ tcommon.Address, input []byte, e
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1495,8 +1494,8 @@ func resourceUsageBalanceAndRestoreSeconds(tvm *TVM, addr tcommon.Address, resTy
 		return 0, 0
 	}
 	restoreSeconds := (lastTime + window - now) * params.BlockProducedInterval / 1000
-	recovered := recoverStakingUsage(usage, lastTime, now, window, dp.AllowHardenResourceCalculation())
-	balance := stakingUsageToBalance(recovered, totalWeight, totalLimit, dp.AllowHardenResourceCalculation())
+	recovered := recoverStakingUsage(usage, lastTime, now, window)
+	balance := stakingUsageToBalance(recovered, totalWeight, totalLimit)
 	return balance, restoreSeconds
 }
 
@@ -1593,7 +1592,16 @@ func stakingWindowSizeSlots(acc *types.Account, resType corepb.ResourceCode) int
 	return windowSize
 }
 
-func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64, harden bool) int64 {
+// recoverStakingUsage mirrors java RepositoryImpl.recover/increase (the VM-side
+// Repository getter behind the checkUnDelegateResource / resourceUsage /
+// totalAcquiredResource precompiles). That getter is UNCONDITIONALLY primitive
+// long — `divideCeil(lastUsage*precision, windowSize)` (precision=1_000_000, which
+// silently overflows int64 for large usage), decay, then usage*windowSize/precision.
+// It has NO AllowHardenResourceCalculation gate: unlike chainbase ResourceProcessor
+// .increase, RepositoryImpl.increase never widens to BigInteger, so go must keep
+// the int64-overflow/double-precision behavior on this VM read path regardless of
+// the harden flag.
+func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
@@ -1605,48 +1613,24 @@ func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64, harden bool)
 		return oldUsage
 	}
 	remaining := windowSize - elapsed
-	if harden {
-		averageLastUsage := divideCeilBigInt(
-			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForStaking)),
-			big.NewInt(windowSize),
-		)
-		decay := float64(remaining) / float64(windowSize)
-		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
-		return bigMulDivStaking(averageLastUsage, windowSize, resourcePrecisionForStaking)
-	}
-	// Non-harden: mirror core.increase(oldUsage, 0, lastTime, now, windowSize)
-	// exactly (java RepositoryImpl.increase/getUsage, precision=1_000_000) with
-	// int64 arithmetic to match java's `long` overflow semantics. A plain
-	// `oldUsage * remaining / windowSize` truncate drifts ~1 unit per recovered
-	// block — the same free-vs-burn fork fixed for the settle path in 6cfc163.
+	// int64 arithmetic to match java's `long` overflow semantics exactly.
 	averageLastUsage := divideCeilInt64(oldUsage*resourcePrecisionForStaking, windowSize)
 	decay := float64(remaining) / float64(windowSize)
 	averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
 	return averageLastUsage * windowSize / resourcePrecisionForStaking
 }
 
-func stakingUsageToBalance(usage, totalWeight, totalLimit int64, harden bool) int64 {
+// stakingUsageToBalance mirrors java RepositoryImpl.getAccount{Energy,Net}Usage
+// BalanceAndRestoreSeconds's lossy-double conversion: (long)((double)usage *
+// totalWeight / totalLimit * TRX_PRECISION). UNGATED — no harden/BigInteger.
+func stakingUsageToBalance(usage, totalWeight, totalLimit int64) int64 {
 	if usage <= 0 || totalWeight <= 0 || totalLimit <= 0 {
 		return 0
-	}
-	if harden {
-		n := new(big.Int).Mul(big.NewInt(usage), big.NewInt(totalWeight))
-		n.Mul(n, big.NewInt(trxPrecision))
-		n.Quo(n, big.NewInt(totalLimit))
-		return n.Int64()
 	}
 	return int64(float64(usage) * float64(totalWeight) / float64(totalLimit) * float64(trxPrecision))
 }
 
 const resourcePrecisionForStaking = int64(1_000_000)
-
-func divideCeilBigInt(numerator, denominator *big.Int) int64 {
-	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
-	if r.Sign() > 0 {
-		q.Add(q, big.NewInt(1))
-	}
-	return q.Int64()
-}
 
 // divideCeilInt64 mirrors core.divideCeil: ceil(numerator/denominator) in int64
 // arithmetic. Used by the non-harden recovery branch so it stays byte-identical
@@ -1657,12 +1641,6 @@ func divideCeilInt64(numerator, denominator int64) int64 {
 		result++
 	}
 	return result
-}
-
-func bigMulDivStaking(a, b, c int64) int64 {
-	n := new(big.Int).Mul(big.NewInt(a), big.NewInt(b))
-	n.Quo(n, big.NewInt(c))
-	return n.Int64()
 }
 
 func encodeInt64Words(values ...int64) []byte {
