@@ -208,6 +208,41 @@ func TestComputeVoterReward_OldRewardOpt_AcrossEffectiveCycle(t *testing.T) {
 	}
 }
 
+// TestComputeVoterRewardTVM_NoOldCycleSplit pins the Nile 34,621,401 fix: the TVM
+// reward path (rewardBalance precompile 0x05 + WITHDRAWREWARD 0xD9) must mirror
+// java VoteRewardUtil.computeReward — a PURE VI difference with NO old-cycle
+// pro-rata — whereas the actuator/block path (ComputeVoterReward, java
+// MortgageService.computeReward) DOES include the old segment. For a pre-fork
+// voter both are reachable; go previously reused the split version on the TVM
+// path, over-counting the reward by the old-cycle term and inflating any contract
+// (e.g. a staked-TRX market) that reads the reward → a liquidate solvency check
+// wrongly passed (REVERT "liquidate condition not met") where java liquidated.
+func TestComputeVoterRewardTVM_NoOldCycleSplit(t *testing.T) {
+	store := newRewardTestStore(t)
+	dp := state.NewDynamicProperties()
+	dp.SetNewRewardAlgorithmEffectiveCycle(5)
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x01})
+
+	// Old cycles 3,4: 100 votes each, voter 40, pool 100 → 40/cycle → 80 old total.
+	for c := int64(3); c < 5; c++ {
+		_ = store.WriteCycleVote(c, witness.Bytes(), 100)
+		_ = store.WriteCycleReward(c, witness.Bytes(), 100)
+	}
+	// New side: VI[2]=unwritten(0), VI[6]=2e18 → delta 2e18, voter 40 → 80.
+	_ = store.WriteWitnessVI(6, witness.Bytes(), new(big.Int).Mul(big.NewInt(2), DecimalOfViReward))
+
+	votes := []VoteEntry{{Witness: witness, Count: 40}}
+
+	// Actuator/native path: old (80) + new VI[3..7) (VI[6]-VI[4]=2e18 → 80) = 160.
+	if got := ComputeVoterReward(store, dp, votes, 3, 7); got != 160 {
+		t.Fatalf("actuator (split) reward: got %d, want 160 (80 old + 80 new)", got)
+	}
+	// TVM path: pure VI over [3,7) = VI[6]-VI[2] = 2e18-0 → 80. NO old-cycle term.
+	if got := ComputeVoterRewardTVM(store, votes, 3, 7); got != 80 {
+		t.Fatalf("TVM (no-split) reward: got %d, want 80 (pure VI, no old pro-rata)", got)
+	}
+}
+
 func TestComputeVoterReward_MultipleWitnesses(t *testing.T) {
 	store := newRewardTestStore(t)
 	dp := state.NewDynamicProperties()

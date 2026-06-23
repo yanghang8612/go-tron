@@ -54,6 +54,42 @@ func int64FromWord(out []byte) int64 {
 	return int64(binary.BigEndian.Uint64(out[24:]))
 }
 
+// TestRewardBalancePrecompile_NoOldCycleSplit pins the Nile 34,621,401 fix at the
+// precompile level: rewardBalance (0x05, via tvmQueryReward) must use the no-split
+// TVM reward (java VoteRewardUtil.computeReward = pure VI difference), NOT the
+// split actuator reward (java MortgageService). A pre-fork voter's old-cycle
+// CycleReward/CycleVote snapshots must be EXCLUDED from the TVM read. With the
+// pre-fix split reuse, this account would read 790; the correct no-split value is
+// the pure VI difference 300.
+func TestRewardBalancePrecompile_NoOldCycleSplit(t *testing.T) {
+	tvm, statedb, dp := newVoteRewardTVM(t) // currentCycle = 10
+	dp.SetNewRewardAlgorithmEffectiveCycle(8)
+	caller := voteRewardAddr(0x11)
+	witness := voteRewardAddr(0x12)
+	statedb.CreateAccount(caller, corepb.AccountType_Normal)
+	statedb.SetAllowance(caller, 0)
+	statedb.SetVotes(caller, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 100}})
+	_ = statedb.WriteBeginCycle(caller.Bytes(), 1)
+
+	// Pure-VI term over [1,10): VI[9]-VI[0] = 3e18 → 3e18*100/1e18 = 300.
+	_ = statedb.WriteWitnessVI(0, witness.Bytes(), new(big.Int))
+	_ = statedb.WriteWitnessVI(9, witness.Bytes(), new(big.Int).Mul(big.NewInt(3), reward.DecimalOfViReward))
+	// Old-cycle snapshots [1,8) that the SPLIT path would add (7×70=490) but the
+	// TVM no-split path must ignore.
+	for c := int64(1); c < 8; c++ {
+		_ = statedb.WriteCycleVote(c, witness.Bytes(), 1000)
+		_ = statedb.WriteCycleReward(c, witness.Bytes(), 700)
+	}
+
+	out, _, err := (&rewardBalance{}).Run(tvm, caller, nil, 500)
+	if err != nil {
+		t.Fatalf("rewardBalance error: %v", err)
+	}
+	if got := int64FromWord(out); got != 300 {
+		t.Fatalf("rewardBalance = %d, want 300 (pure VI, no old-cycle split; pre-fix split reuse would give 790)", got)
+	}
+}
+
 func TestRewardBalancePrecompileQueriesCallerReward(t *testing.T) {
 	tvm, statedb, _ := newVoteRewardTVM(t)
 	caller := voteRewardAddr(0x01)
