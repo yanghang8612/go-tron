@@ -391,7 +391,11 @@ For monitor scrape jobs outside the JSONL sampler, use
 or the database can otherwise be opened exclusively. The text metrics expose
 overall/component status values (`0=ok`, `1=warning`, `2=critical`), issue
 counts, normalized issue-kind counts by component/severity/kind, hidden freezer
-bytes, retired snapshot counters, and the persisted prune mode. When
+bytes, retired snapshot counters, the persisted prune mode, and
+`gtron_storage_stage_pipeline_*` gauges for the same canonical/post-`Finish`
+pipeline cursor exposed by `stage-status`. Offline JSON rows carry the same
+cursor as `stageAlertPipeline*` fields, so the sampler can distinguish storage
+maintenance backlog from actual storage-alert failures. When
 `--offline-db-check` is used with `--output`, the sampler also writes
 `${output}.storage-alerts.prom` by default and records
 `offlineDbCheckPrometheus` plus `offlineDbCheckPrometheusStatus` in the JSONL

@@ -294,6 +294,13 @@ def parse_alerts(text):
         "stageVerifyStatus": "unknown",
         "stageVerifyIssues": -1,
         "stageVerifyDetails": [],
+        "stageAlertPipelineComplete": False,
+        "stageAlertPipelinePending": -1,
+        "stageAlertPipelineIssues": -1,
+        "stageAlertPipelineNext": "",
+        "stageAlertPipelineNextStatus": "",
+        "stageAlertPipelineNextTarget": -1,
+        "stageAlertPipelineTasks": [],
         "modeAlertStatus": "unknown",
         "modeAlertIssues": -1,
         "modeAlertDetails": [],
@@ -321,6 +328,7 @@ def parse_alerts(text):
             "freezerAlertHiddenBytes": "freezerAlertHiddenBytes",
             "stageVerifyStatus": "stageStatus",
             "stageVerifyIssues": "stageIssues",
+            "stageAlertPipeline": "stagePipeline",
             "modeAlertStatus": "modeStatus",
             "modeAlertIssues": "modeIssues",
             "pruneMode": "pruneMode",
@@ -331,6 +339,32 @@ def parse_alerts(text):
         }
         for row_key, json_key in scalar_fields.items():
             if json_key in obj:
+                if row_key == "stageAlertPipeline":
+                    pipeline = obj.get(json_key, {})
+                    if isinstance(pipeline, dict):
+                        row["stageAlertPipelineComplete"] = bool(pipeline.get("complete", False))
+                        row["stageAlertPipelinePending"] = stage_status_int(pipeline.get("pending", -1))
+                        row["stageAlertPipelineIssues"] = stage_status_int(pipeline.get("issues", -1))
+                        row["stageAlertPipelineTasks"] = []
+                        for item in pipeline.get("tasks", []) or []:
+                            if not isinstance(item, dict):
+                                continue
+                            task = {
+                                "stage": str(item.get("stage", "")),
+                                "upstream": str(item.get("upstream", "")),
+                                "status": str(item.get("status", "")),
+                                "targetValue": stage_status_int(item.get("targetValue", -1)),
+                                "targetHash": str(item.get("targetHash", "")),
+                                "currentValue": stage_status_int(item.get("currentValue", -1)),
+                                "currentHash": str(item.get("currentHash", "")),
+                            }
+                            row["stageAlertPipelineTasks"].append(task)
+                        if row["stageAlertPipelineTasks"]:
+                            first = row["stageAlertPipelineTasks"][0]
+                            row["stageAlertPipelineNext"] = first.get("stage", "")
+                            row["stageAlertPipelineNextStatus"] = first.get("status", "")
+                            row["stageAlertPipelineNextTarget"] = first.get("targetValue", -1)
+                    continue
                 row[row_key] = obj[json_key]
         detail_fields = {
             "freezerAlertDetails": "freezerAlertDetails",
@@ -348,6 +382,12 @@ def parse_alerts(text):
         "freezerAlertHiddenBytes": r"hiddenSize=([0-9]+)",
         "stageVerifyStatus": r"stageStatus=([^ ]+)",
         "stageVerifyIssues": r"stageIssues=([0-9]+)",
+        "stageAlertPipelineComplete": r"stagePipelineComplete=([^ ]+)",
+        "stageAlertPipelinePending": r"stagePipelinePending=([0-9]+)",
+        "stageAlertPipelineIssues": r"stagePipelineIssues=([0-9]+)",
+        "stageAlertPipelineNext": r"stagePipelineNext=([^ ]+)",
+        "stageAlertPipelineNextStatus": r"stagePipelineNextStatus=([^ ]+)",
+        "stageAlertPipelineNextTarget": r"stagePipelineNextTarget=([0-9]+)",
         "modeAlertStatus": r"modeStatus=([^ ]+)",
         "modeAlertIssues": r"modeIssues=([0-9]+)",
         "pruneMode": r"pruneMode=([^ ]+)",
@@ -361,9 +401,9 @@ def parse_alerts(text):
         if not found:
             continue
         value = found[-1]
-        if key.endswith("Issues") or key.endswith("Bytes"):
+        if key.endswith("Issues") or key.endswith("Bytes") or key.endswith("Target"):
             row[key] = int(value)
-        elif key == "pruneModePersisted":
+        elif key in {"pruneModePersisted", "stageAlertPipelineComplete"}:
             row[key] = str(value).lower() in {"1", "true", "yes"}
         else:
             row[key] = value

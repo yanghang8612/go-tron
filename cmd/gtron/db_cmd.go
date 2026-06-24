@@ -296,6 +296,7 @@ type dbStorageAlertsJSON struct {
 	StageStatus                  string                    `json:"stageStatus"`
 	StageIssues                  int                       `json:"stageIssues"`
 	StageVerifyDetails           []dbStorageAlertIssueJSON `json:"stageVerifyDetails"`
+	StagePipeline                dbStageStatusPipelineJSON `json:"stagePipeline"`
 	ModeStatus                   string                    `json:"modeStatus"`
 	ModeIssues                   int                       `json:"modeIssues"`
 	ModeAlertDetails             []dbStorageAlertIssueJSON `json:"modeAlertDetails"`
@@ -412,6 +413,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if len(stageIssues) > 0 {
 		stageStatus = "critical"
 	}
+	stagePipeline := dbStageStatusPipeline(stageRows)
 	pruneMode, pruneModePersisted, modeIssues := dbModeAlertIssues(db, stageRows)
 	modeStatus := dbModeAlertStatus(modeIssues)
 
@@ -434,6 +436,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		StageStatus:                  stageStatus,
 		StageIssues:                  len(stageIssues),
 		StageVerifyDetails:           dbStageAlertIssueDetailsJSON(stageIssueDetails),
+		StagePipeline:                dbStageStatusPipelineJSONForCursor(stagePipeline),
 		ModeStatus:                   modeStatus,
 		ModeIssues:                   len(modeIssues),
 		ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
@@ -468,8 +471,15 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		}
 		return nil
 	}
-	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d stagePipelineComplete=%t stagePipelinePending=%d stagePipelineIssues=%d",
 		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues),
+		stagePipeline.Complete, stagePipeline.Pending, len(stagePipeline.Issues))
+	if len(stagePipeline.Tasks) > 0 {
+		next := stagePipeline.Tasks[0]
+		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d",
+			next.Stage, next.Status, next.TargetBlock)
+	}
+	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
 		snapshotInspection.FilesMissing, snapshotInspection.FilesSkippedActive, snapshotInspection.BytesPresent,
@@ -530,6 +540,7 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 	}
 
 	dbWriteStorageAlertIssuePrometheus(w, report)
+	dbWriteStorageStagePipelinePrometheus(w, report)
 
 	fmt.Fprintln(w, "# HELP gtron_storage_alert_freezer_hidden_bytes Bytes hidden by freezer virtual-tail pruning.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_alert_freezer_hidden_bytes gauge")
@@ -559,6 +570,42 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 	fmt.Fprintln(w, "# HELP gtron_storage_prune_mode_info Persisted Erigon-style prune mode selected for this datadir.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_prune_mode_info gauge")
 	fmt.Fprintf(w, "gtron_storage_prune_mode_info{%s} 1\n", modeLabels)
+}
+
+func dbWriteStorageStagePipelinePrometheus(w io.Writer, report dbStorageAlertsJSON) {
+	labels := dbPrometheusLabels(map[string]string{"datadir": report.Datadir})
+	fmt.Fprintln(w, "# HELP gtron_storage_stage_pipeline_complete Stage pipeline cursor completion: 1=complete, 0=pending or blocked.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_stage_pipeline_complete gauge")
+	complete := 0
+	if report.StagePipeline.Complete {
+		complete = 1
+	}
+	fmt.Fprintf(w, "gtron_storage_stage_pipeline_complete{%s} %d\n", labels, complete)
+
+	fmt.Fprintln(w, "# HELP gtron_storage_stage_pipeline_pending Pending canonical or storage-maintenance stage edges.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_stage_pipeline_pending gauge")
+	fmt.Fprintf(w, "gtron_storage_stage_pipeline_pending{%s} %d\n", labels, report.StagePipeline.Pending)
+
+	fmt.Fprintln(w, "# HELP gtron_storage_stage_pipeline_issues Stage pipeline ordering/hash issues blocking scheduling.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_stage_pipeline_issues gauge")
+	fmt.Fprintf(w, "gtron_storage_stage_pipeline_issues{%s} %d\n", labels, report.StagePipeline.Issues)
+
+	if len(report.StagePipeline.Tasks) == 0 {
+		return
+	}
+	next := report.StagePipeline.Tasks[0]
+	taskLabels := dbPrometheusLabels(map[string]string{
+		"datadir":  report.Datadir,
+		"stage":    next.Stage,
+		"status":   next.Status,
+		"upstream": next.Upstream,
+	})
+	fmt.Fprintln(w, "# HELP gtron_storage_stage_pipeline_next_target_block Target block for the next schedulable canonical or storage-maintenance stage edge.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_stage_pipeline_next_target_block gauge")
+	fmt.Fprintf(w, "gtron_storage_stage_pipeline_next_target_block{%s} %d\n", taskLabels, next.TargetValue)
+	fmt.Fprintln(w, "# HELP gtron_storage_stage_pipeline_next_current_block Current block for the next schedulable canonical or storage-maintenance stage edge.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_stage_pipeline_next_current_block gauge")
+	fmt.Fprintf(w, "gtron_storage_stage_pipeline_next_current_block{%s} %d\n", taskLabels, next.CurrentValue)
 }
 
 func dbWriteStorageAlertIssuePrometheus(w io.Writer, report dbStorageAlertsJSON) {

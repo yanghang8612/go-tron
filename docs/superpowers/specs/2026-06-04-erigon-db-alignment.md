@@ -719,6 +719,10 @@ Status:
   `pipeline.issues` for Nile soak sampling. This makes storage-maintenance
   backlog observable before the runtime loop is fully promoted into a stage
   scheduler.
+- `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
+  text, and Prometheus output. The Nile sampler preserves those
+  `stageAlertPipeline*` fields during offline DB checks, so production soaks can
+  separate storage-maintenance backlog from critical storage integrity alerts.
 - The cold snapshot builder now writes `SnapshotBuild` and
   `SnapshotLatestBuild` as hash-bound canonical block stages. It resolves the
   boundary hash before publishing the new stage row, and

@@ -957,6 +957,12 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"freezerIssues=0",
 		"stageStatus=ok",
 		"stageIssues=0",
+		"stagePipelineComplete=false",
+		"stagePipelinePending=7",
+		"stagePipelineIssues=0",
+		fmt.Sprintf("stagePipelineNext=%s", rawdb.StageSnapshotBuild),
+		"stagePipelineNextStatus=missing",
+		"stagePipelineNextTarget=4",
 		"modeStatus=ok",
 		"modeIssues=0",
 		"pruneMode=unknown",
@@ -988,6 +994,11 @@ func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_component_status{component="freezer",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_complete{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_pending{datadir="%s"} 7`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_issues{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_target_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 4`, dbPrometheusLabelValue(dataDir), rawdb.StageSnapshotBuild, rawdb.StageFinish),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_current_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 0`, dbPrometheusLabelValue(dataDir), rawdb.StageSnapshotBuild, rawdb.StageFinish),
 		fmt.Sprintf(`gtron_storage_alert_freezer_hidden_bytes{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
@@ -1034,6 +1045,7 @@ func TestDBStorageAlertsCmdPrometheusCriticalReturnsError(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_component_status{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_issues{datadir="%s"} 1`, dbPrometheusLabelValue(dataDir)),
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
@@ -1053,6 +1065,17 @@ func TestDBStorageAlertsPrometheusReportsIssueKinds(t *testing.T) {
 		},
 		StageStatus: "critical",
 		StageIssues: 1,
+		StagePipeline: dbStageStatusPipelineJSON{
+			Pending: 2,
+			Issues:  1,
+			Tasks: []dbStageStatusPipelineTaskJSON{{
+				Stage:        string(rawdb.StageChainFreezer),
+				Upstream:     string(rawdb.StageFinish),
+				Status:       string(rawdb.StageProgressPipelineTaskHashMismatch),
+				TargetValue:  12,
+				CurrentValue: 12,
+			}},
+		},
 		StageVerifyDetails: []dbStorageAlertIssueJSON{
 			{Severity: "critical", Detail: "SyncBodiesReady staged-body status=hash-mismatch"},
 		},
@@ -1069,6 +1092,9 @@ func TestDBStorageAlertsPrometheusReportsIssueKinds(t *testing.T) {
 		"# TYPE gtron_storage_alert_issue gauge",
 		`gtron_storage_alert_issue{component="freezer",datadir="/tmp/gtron",kind="tail-prune-stage-missing-canonical",severity="critical"} 2`,
 		`gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="unclassified",severity="critical"} 1`,
+		`gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2`,
+		`gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1`,
+		`gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="hash-mismatch",upstream="Finish"} 12`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("storage alert prometheus output missing %q:\n%s", want, got)
@@ -1311,6 +1337,12 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	}
 	if report.Status != "critical" || report.StageStatus != "critical" || report.StageIssues < 1 {
 		t.Fatalf("unexpected storage alert status: %+v", report)
+	}
+	if report.StagePipeline.Pending == 0 || report.StagePipeline.Issues != 1 || len(report.StagePipeline.Tasks) == 0 {
+		t.Fatalf("storage alert stage pipeline = %+v, want pending task and one hash/order issue", report.StagePipeline)
+	}
+	if first := report.StagePipeline.Tasks[0]; first.Stage != string(rawdb.StageSnapshotBuild) || first.Upstream != string(rawdb.StageFinish) || first.Status != string(rawdb.StageProgressPipelineTaskMissing) || first.TargetValue != block4.Number() {
+		t.Fatalf("storage alert first pipeline task = %+v, want missing SnapshotBuild after Finish", first)
 	}
 	if report.FreezerStatus != "ok" || report.FreezerIssues != 0 || report.FreezerAlertHiddenBytes != 0 {
 		t.Fatalf("unexpected freezer alert fields: %+v", report)
