@@ -241,6 +241,9 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)
 
+	// Flush the opt-in VM opcode trace (GTRON_TVM_TRACE) for sync-stall diagnosis.
+	vm.DumpTVMTrace(fmt.Sprintf("TriggerConstantContract %x energyUsed=%d err=%v", contractAddr[1:5], energyUsed, vmErr))
+
 	if vmErr != nil {
 		return &tronapi.TriggerResult{
 			Result:     ret,
