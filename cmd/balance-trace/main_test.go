@@ -111,6 +111,36 @@ func TestTxPrefixReportsColdBlockBalanceTraceError(t *testing.T) {
 	}
 }
 
+func TestReadBalanceTraceBlockReportsCorruptColdBlock(t *testing.T) {
+	chainDB := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), corruptBalanceTraceAncient{})
+
+	got, err := readBalanceTraceBlock(chainDB, 7)
+	if err == nil || !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("readBalanceTraceBlock = %+v/%v, want cold block decode error", got, err)
+	}
+}
+
+type corruptBalanceTraceAncient struct{}
+
+func (corruptBalanceTraceAncient) Ancient(kind string, _ uint64) ([]byte, error) {
+	if kind != rawdb.AncientBlocksTable {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return []byte{0xff}, nil
+}
+
+func (corruptBalanceTraceAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (corruptBalanceTraceAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (corruptBalanceTraceAncient) HasAncient(kind string, _ uint64) (bool, error) {
+	return kind == rawdb.AncientBlocksTable, nil
+}
+
 func testAddress(fill byte) tcommon.Address {
 	raw := make([]byte, tcommon.AddressLength)
 	raw[0] = tcommon.AddressPrefixMainnet

@@ -146,10 +146,12 @@ blocks/tx-infos/state-roots through `rawdb.Read*` are switched to
    Slice 3 only needs to inject a `NewFreezerReader(*freezer.Freezer)`
    into `NewChainDB` when the operator turns the freezer on.
 
-4. **`cmd/balance-trace` opens ancient when available.** The diagnostic
-   tool now detects `datadir/gtron/ancient` and uses a read-only freezer
-   reader so post-freezer datadirs still scan frozen blocks. Datadirs
-   without ancient files keep the pre-freezer `NoopAncient{}` behavior.
+4. **Diagnostics open cold storage when available.** `cmd/balance-trace`
+   and `cmd/reward-trace` detect `datadir/gtron/ancient`, open the
+   `state-snapshots` manager, and compose both behind `ChainDB` so
+   post-prune datadirs still scan frozen blocks and cold lookup rows.
+   Block scans use the strict block accessor, so corrupt hot/freezer/cold
+   block payloads fail the diagnostic instead of being reported as missing.
 
 5. **VM `opBlockHash` is intentionally KV-only.** The 256-block lookback
    window in `vm/instructions.go` sits entirely above the 128-block

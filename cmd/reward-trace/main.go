@@ -272,7 +272,11 @@ func main() {
 				continue
 			}
 			ts := int64(0)
-			if b := rawdb.ReadBlock(chaindb, n); b != nil {
+			b, err := readRewardTraceBlock(chaindb, n)
+			if err != nil {
+				log.Crit("read block timestamp", "block", n, "err", err)
+			}
+			if b != nil {
 				ts = b.Timestamp()
 			}
 			fmt.Printf("block %d: ts=%d\n", n, ts)
@@ -291,7 +295,11 @@ func main() {
 	nextMaint := dp.NextMaintenanceTime()
 	maintTimeOf := func(C int64) int64 { return nextMaint - (headCycle+1-C)*interval }
 	tsOf := func(n uint64) int64 {
-		if b := rawdb.ReadBlock(chaindb, n); b != nil {
+		b, err := readRewardTraceBlock(chaindb, n)
+		if err != nil {
+			log.Crit("read block timestamp", "block", n, "err", err)
+		}
+		if b != nil {
 			return b.Timestamp()
 		}
 		return 0
@@ -332,7 +340,10 @@ func main() {
 		fmt.Printf("=== scan-cycle %d (blocks [%d, %d)) witness=%x — votes here fold into cycleVote[%d] ===\n", C, s, e, w.Bytes(), C+1)
 		votes, unfreezes, triggers := 0, 0, 0
 		for n := s; n < e; n++ {
-			blk := rawdb.ReadBlock(chaindb, n)
+			blk, err := readRewardTraceBlock(chaindb, n)
+			if err != nil {
+				log.Crit("read block", "block", n, "err", err)
+			}
 			if blk == nil {
 				continue
 			}
@@ -594,6 +605,14 @@ func main() {
 			}
 		}
 	}
+}
+
+func readRewardTraceBlock(chaindb *rawdb.ChainDB, number uint64) (*types.Block, error) {
+	block, ok, err := rawdb.ReadBlockStrict(chaindb, number)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return block, nil
 }
 
 type rewardTraceColdReader interface {

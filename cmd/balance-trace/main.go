@@ -94,7 +94,10 @@ func main() {
 
 	hits := 0
 	for h := *from; h <= end; h++ {
-		blk := rawdb.ReadBlock(chaindb, h)
+		blk, err := readBalanceTraceBlock(chaindb, h)
+		if err != nil {
+			log.Crit("read block", "block", h, "err", err)
+		}
 		if blk == nil {
 			continue
 		}
@@ -150,6 +153,14 @@ func main() {
 	fmt.Printf("WitnessPayPerBlock=%d\n", dp.WitnessPayPerBlock())
 	fmt.Printf("ChangeDelegation=%v\n", dp.ChangeDelegation())
 	fmt.Printf("\n%d transactions touched %x in [%d..%d]\n", hits, target.Bytes(), *from, end)
+}
+
+func readBalanceTraceBlock(chaindb *rawdb.ChainDB, number uint64) (*types.Block, error) {
+	block, ok, err := rawdb.ReadBlockStrict(chaindb, number)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return block, nil
 }
 
 // inspectTx tries each known contract type and prints a one-line summary if

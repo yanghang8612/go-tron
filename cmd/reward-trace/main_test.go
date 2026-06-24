@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -118,6 +119,36 @@ func TestAttachRewardTraceColdReaders(t *testing.T) {
 	if len(logs) != 1 || logs[0].BlockNum != 7 {
 		t.Fatalf("IterateEventLogs cold rows = %+v, want block 7", logs)
 	}
+}
+
+func TestReadRewardTraceBlockReportsCorruptColdBlock(t *testing.T) {
+	chainDB := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), corruptRewardTraceAncient{})
+
+	got, err := readRewardTraceBlock(chainDB, 7)
+	if err == nil || !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("readRewardTraceBlock = %+v/%v, want cold block decode error", got, err)
+	}
+}
+
+type corruptRewardTraceAncient struct{}
+
+func (corruptRewardTraceAncient) Ancient(kind string, _ uint64) ([]byte, error) {
+	if kind != rawdb.AncientBlocksTable {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return []byte{0xff}, nil
+}
+
+func (corruptRewardTraceAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (corruptRewardTraceAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (corruptRewardTraceAncient) HasAncient(kind string, _ uint64) (bool, error) {
+	return kind == rawdb.AncientBlocksTable, nil
 }
 
 func testRewardTraceAddress(fill byte) tcommon.Address {
