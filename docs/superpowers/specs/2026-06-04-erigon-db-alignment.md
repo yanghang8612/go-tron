@@ -727,6 +727,10 @@ Status:
   `stageAlertPipeline*` fields in benchmark JSONL rows, and the storage
   benchmark acceptance checker verifies matching Prometheus pipeline metrics
   when a row includes the pipeline cursor.
+- `scripts/dev/nile_sync_acceptance.py` applies the same check for stopped-node
+  Nile samples: if an offline DB-check row carries `stageAlertPipeline*`, the
+  referenced storage-alert Prometheus artifact must include the matching
+  `gtron_storage_stage_pipeline_*` metrics.
 - The cold snapshot builder now writes `SnapshotBuild` and
   `SnapshotLatestBuild` as hash-bound canonical block stages. It resolves the
   boundary hash before publishing the new stage row, and

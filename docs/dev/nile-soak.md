@@ -365,7 +365,10 @@ stage-status file, accepts `catching-up` or `caught-up` staged-sync states, and
 rejects HTTP/sample failures, critical soak health, stage regressions, stage
 hash/staged-body/order issues, and non-monotonic sync-stage progress. Add
 `--require-caught-up` for final catch-up proof or `--all` to validate every
-selected row in a candidate window.
+selected row in a candidate window. When `--require-offline-db-check` is used
+and the JSONL row carries `stageAlertPipeline*` fields, the checker also
+requires the referenced Prometheus artifact to include the matching
+`gtron_storage_stage_pipeline_*` metrics.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.

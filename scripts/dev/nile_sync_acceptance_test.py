@@ -25,7 +25,11 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             prom.write_text(
                 '# TYPE gtron_storage_alert_status gauge\n'
                 '# TYPE gtron_storage_alert_issue gauge\n'
-                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n',
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n'
+                'gtron_storage_stage_pipeline_complete{datadir="/tmp/nile"} 0\n'
+                'gtron_storage_stage_pipeline_pending{datadir="/tmp/nile"} 2\n'
+                'gtron_storage_stage_pipeline_issues{datadir="/tmp/nile"} 0\n'
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 1000\n',
                 encoding="utf-8",
             )
             result = tmpdir / "samples.jsonl"
@@ -56,6 +60,12 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "offlineDbCheckStatus": "ok",
                         "offlineDbCheckPrometheusStatus": "ok",
                         "offlineDbCheckPrometheus": str(prom),
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 1000,
                         "height": 1000,
                         "fullStagedSyncHeadLagBlocks": 12,
                         "intervalStageSyncFinishBlocksPerMinute": 30.5,
@@ -252,6 +262,60 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("component='stage'", proc.stderr)
             self.assertIn("kind='stage-verification'", proc.stderr)
+
+    def test_rejects_offline_prometheus_artifact_missing_stage_pipeline_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "storage-alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "offlineDbCheck": True,
+                        "offlineDbCheckStatus": "ok",
+                        "offlineDbCheckPrometheusStatus": "ok",
+                        "offlineDbCheckPrometheus": str(prom),
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_target_block", proc.stderr)
 
 
 if __name__ == "__main__":

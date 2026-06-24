@@ -153,6 +153,7 @@ def check_prometheus_artifact(result_path, row):
         if needle not in text:
             issues.append(f"offlineDbCheckPrometheus artifact {path} missing {name}")
     issues.extend(check_prometheus_issue_kinds(path, text, row))
+    issues.extend(check_prometheus_stage_pipeline(path, text, row))
     return issues
 
 
@@ -211,6 +212,33 @@ def check_prometheus_issue_kinds(path, text, row):
                 f"offlineDbCheckPrometheus artifact {path} missing "
                 f"gtron_storage_alert_issue component={component!r} kind={kind!r} severity={severity!r}"
             )
+    return issues
+
+
+def check_prometheus_stage_pipeline(path, text, row):
+    if "stageAlertPipelinePending" not in row and "stageAlertPipelineIssues" not in row:
+        return []
+    issues = []
+    required = (
+        ("gtron_storage_stage_pipeline_pending{", "gtron_storage_stage_pipeline_pending"),
+        ("gtron_storage_stage_pipeline_issues{", "gtron_storage_stage_pipeline_issues"),
+    )
+    if "stageAlertPipelineComplete" in row:
+        required = (
+            ("gtron_storage_stage_pipeline_complete{", "gtron_storage_stage_pipeline_complete"),
+            *required,
+        )
+    if row.get("stageAlertPipelineNext"):
+        required = (
+            *required,
+            (
+                "gtron_storage_stage_pipeline_next_target_block{",
+                "gtron_storage_stage_pipeline_next_target_block",
+            ),
+        )
+    for needle, name in required:
+        if needle not in text:
+            issues.append(f"offlineDbCheckPrometheus artifact {path} missing {name}")
     return issues
 
 
