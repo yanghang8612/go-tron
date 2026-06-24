@@ -124,6 +124,17 @@ def as_number(row, field):
         return None
 
 
+def as_bool(row, field):
+    value = row.get(field)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "ok"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
 def parse_threshold(raw):
     if "=" not in raw:
         raise ValueError(f"{raw!r} must use FIELD=VALUE")
@@ -328,6 +339,54 @@ def check_minimal_tail_prune(rows, role):
     return issues
 
 
+def field_present(row, field):
+    return field in row and row.get(field) not in {None, ""}
+
+
+def check_non_negative_forbidden(row, field, reason):
+    if not field_present(row, field):
+        return []
+    value = as_number(row, field)
+    if value is not None and value >= 0:
+        return [f"{line_label(row)} {field}={value:g} is not allowed for {reason}"]
+    return []
+
+
+def check_prune_mode_semantics(rows):
+    issues = []
+    for row in latest_rows(rows).values():
+        mode = str(row.get("mode", "")).lower()
+        if not mode:
+            continue
+
+        persisted_mode = str(row.get("pruneMode", "")).lower()
+        if persisted_mode and persisted_mode != "unknown" and persisted_mode != mode:
+            issues.append(
+                f"{line_label(row)} pruneMode={row.get('pruneMode')!r} does not match mode={mode!r}"
+            )
+
+        if field_present(row, "pruneModePersisted") and not as_bool(row, "pruneModePersisted"):
+            issues.append(f"{line_label(row)} pruneModePersisted must be true")
+
+        if mode == "archive":
+            if as_number(row, "signedColdPrune") == 1.0:
+                issues.append(f"{line_label(row)} signedColdPrune must be false for archive")
+            for field in (
+                "chainLookupPruneToBlock",
+                "tailPrunedThroughBlock",
+                "balanceTracePruneToBlock",
+                "sectionBloomPruneToSection",
+            ):
+                issues.extend(check_non_negative_forbidden(row, field, "archive mode"))
+
+        if mode not in {"archive", "minimal"}:
+            issues.extend(
+                check_non_negative_forbidden(row, "tailPrunedThroughBlock", f"{mode} mode")
+            )
+
+    return issues
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate storage_benchmark.sh JSONL output against soak acceptance gates.",
@@ -360,6 +419,11 @@ def build_parser():
         "--require-minimal-tail-prune",
         action="store_true",
         help="require latest minimal row to prove signed cold lookup prune plus tail prune",
+    )
+    parser.add_argument(
+        "--require-prune-mode-semantics",
+        action="store_true",
+        help="require latest rows to preserve archive/blocks/minimal prune-mode semantics",
     )
     parser.add_argument(
         "--min",
@@ -396,6 +460,8 @@ def main(argv=None):
         issues.extend(check_prometheus_artifacts(args.result, rows))
     if args.require_minimal_tail_prune:
         issues.extend(check_minimal_tail_prune(rows, args.role))
+    if args.require_prune_mode_semantics:
+        issues.extend(check_prune_mode_semantics(rows))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
 
@@ -412,6 +478,8 @@ def main(argv=None):
         checks += len(latest)
     if args.require_minimal_tail_prune:
         checks += 1
+    if args.require_prune_mode_semantics:
+        checks += len(latest)
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"

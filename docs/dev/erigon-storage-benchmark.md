@@ -274,6 +274,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --role producer \
   --require-modes full,blocks,minimal,archive \
   --require-prometheus-artifacts \
+  --require-prune-mode-semantics \
   --require-minimal-tail-prune \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
@@ -282,8 +283,9 @@ The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
 Prometheus artifact with `gtron_storage_alert_status` and
 `gtron_storage_alert_issue`, confirms minimal-mode signed cold lookup pruning
-plus tail-prune evidence, and applies any project-specific numeric
-`--min`/`--max` thresholds.
+plus tail-prune evidence, rejects mode-semantics regressions such as
+`archive` rows with prune progress or `blocks` rows with freezer-tail pruning,
+and applies any project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:
 

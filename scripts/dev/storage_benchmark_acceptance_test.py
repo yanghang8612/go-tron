@@ -151,6 +151,141 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("signedColdPrune must be true", proc.stderr)
             self.assertIn("tailPrunedThroughBlock must be >= 0", proc.stderr)
 
+    def test_accepts_prune_mode_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "archive",
+                    "pruneMode": "archive",
+                    "signedColdPrune": 0,
+                    "chainLookupPruneToBlock": -1,
+                    "tailPrunedThroughBlock": -1,
+                    "balanceTracePruneToBlock": -1,
+                    "sectionBloomPruneToSection": -1,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "tailPrunedThroughBlock": -1,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                    "mode": "minimal",
+                    "pruneMode": "minimal",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "tailPrunedThroughBlock": 45,
+                },
+                {
+                    **base,
+                    "unix": 40,
+                    "mode": "full",
+                    "pruneMode": "full",
+                    "tailPrunedThroughBlock": -1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "archive,blocks,full,minimal",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_prune_mode_semantic_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "archive",
+                    "pruneMode": "archive",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 12,
+                    "tailPrunedThroughBlock": 9,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "tailPrunedThroughBlock": 7,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                    "mode": "full",
+                    "pruneMode": "minimal",
+                    "pruneModePersisted": "false",
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("signedColdPrune must be false for archive", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=7 is not allowed for blocks mode", proc.stderr)
+            self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
