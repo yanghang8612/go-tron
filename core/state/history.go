@@ -1242,7 +1242,11 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
 		return accountCacheEntry{account: acc, code: code}, nil
 	}
 
-	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(r.hotLatest(), addr)
+	latest, err := r.latestAtHead()
+	if err != nil {
+		return accountCacheEntry{}, err
+	}
+	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(latest, addr)
 	if err != nil {
 		return accountCacheEntry{}, fmt.Errorf("read live account latest %s: %w", addr.Hex(), err)
 	}
@@ -1277,7 +1281,11 @@ func (r *PersistentHistoryReader) readStorageLive(addr tcommon.Address, slot tco
 	if live, ok := r.live.(LiveContractReader); ok {
 		return live.GetState(addr, slot), nil
 	}
-	return readFlatStorageLatestWithReader(r.hotLatest(), addr, slot)
+	latest, err := r.latestAtHead()
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	return readFlatStorageLatestWithReader(latest, addr, slot)
 }
 
 func readFlatStorageLatest(db ethdb.KeyValueReader, addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {

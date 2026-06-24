@@ -264,6 +264,28 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	if err != nil {
 		t.Fatalf("build cold state-domain history: %v", err)
 	}
+	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/account-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold account latest: %v", err)
+	}
+	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		kvdomains.ContractStorage,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/contract-storage-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold contract storage latest: %v", err)
+	}
+	refs = append(refs, accountRef, accountAccessorRef, accountBTreeRef, storageRef, storageAccessorRef, storageBTreeRef)
 	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
 		t.Fatalf("publish cold state-domain history: %v", err)
 	}
@@ -286,6 +308,19 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	if hotChanges != 0 {
 		t.Fatalf("hot changes after prune = %d, want 0", hotChanges)
 	}
+	generation, _, err := rawdb.ReadStateKVGeneration(f.disk, addr)
+	if err != nil {
+		t.Fatalf("read hot kv generation before latest prune: %v", err)
+	}
+	if err := rawdb.DeleteStateAccountLatest(f.disk, addr); err != nil {
+		t.Fatalf("delete hot account latest: %v", err)
+	}
+	if err := rawdb.DeleteStateKVGeneration(f.disk, addr); err != nil {
+		t.Fatalf("delete hot kv generation: %v", err)
+	}
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, addr, generation, kvdomains.ContractStorage, nil); err != nil {
+		t.Fatalf("delete hot contract storage latest: %v", err)
+	}
 
 	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
 	if _, err := hotOnly.AccountAt(addr, 1); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
@@ -299,6 +334,13 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	}
 	if acc == nil || acc.Balance() != 100 {
 		t.Fatalf("cold AccountAt block 1 = %+v, want balance 100", acc)
+	}
+	headAcc, err := cold.AccountAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold AccountAt head: %v", err)
+	}
+	if headAcc == nil || headAcc.Balance() != 150 {
+		t.Fatalf("cold AccountAt head = %+v, want balance 150", headAcc)
 	}
 	gotStorage, err := cold.StorageAt(addr, slot, 1)
 	if err != nil {
