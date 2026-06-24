@@ -1831,6 +1831,12 @@ Status:
   block, while account-trace `AtOrBefore` reads reject cold lookups that point
   past the requested block. Older block-trace payloads that omit the block
   identifier remain readable.
+- Offline restart-sync rewind/replay now reads canonical blocks and incremental
+  unwind target state roots through strict freezer/cold-sidecar-aware
+  accessors. Corrupt ancient block rows, malformed state-root rows, or cold
+  hash lookup errors abort `RestartSyncFromHeight` with the original storage
+  error instead of collapsing into a misleading missing-block or zero-root
+  diagnosis.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

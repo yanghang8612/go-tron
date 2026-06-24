@@ -1,6 +1,8 @@
 package core
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -14,6 +16,45 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func TestRestartSyncFromHeightSurfacesColdBlockReadErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	wantErr := errors.New("cold freezer read failed")
+	chain := rawdb.NewChainDB(db, restartSyncFailingAncient{
+		kind:   rawdb.AncientBlocksTable,
+		number: 2,
+		err:    wantErr,
+	})
+	bc := &BlockChain{
+		db:      db,
+		chaindb: chain,
+		config:  params.MainnetChainConfig,
+	}
+	bc.currentBlock.Store(testRestartBlock(5))
+
+	err := bc.RestartSyncFromHeight(2, &params.Genesis{Config: params.MainnetChainConfig}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "cold freezer read failed") {
+		t.Fatalf("RestartSyncFromHeight err = %v, want cold freezer read error", err)
+	}
+	if !strings.Contains(err.Error(), "restart sync: read block 2") {
+		t.Fatalf("RestartSyncFromHeight err = %v, want restart read context", err)
+	}
+}
+
+func TestReadRestartSyncStateRootSurfacesColdLookupErrors(t *testing.T) {
+	chain := rawdb.NewMemoryChainDB()
+	wantErr := errors.New("cold chain index corrupt")
+	chain.SetChainIndexReader(restartSyncErrChainIndex{err: wantErr})
+	block := testRestartBlock(2)
+
+	_, err := readRestartSyncStateRoot(chain, block)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("readRestartSyncStateRoot err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "read state root for block 2") {
+		t.Fatalf("readRestartSyncStateRoot err = %v, want state-root context", err)
+	}
+}
 
 func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
@@ -175,6 +216,55 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 type coreRestartEvent struct {
 	phase string
 	block uint64
+}
+
+func testRestartBlock(number uint64) *types.Block {
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(number) * 3000,
+				Version:   params.BlockVersion,
+			},
+		},
+	})
+}
+
+type restartSyncFailingAncient struct {
+	kind   string
+	number uint64
+	err    error
+}
+
+func (a restartSyncFailingAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == a.kind && number == a.number {
+		return nil, a.err
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a restartSyncFailingAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a restartSyncFailingAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (a restartSyncFailingAncient) HasAncient(kind string, number uint64) (bool, error) {
+	return kind == a.kind && number == a.number, nil
+}
+
+type restartSyncErrChainIndex struct {
+	err error
+}
+
+func (i restartSyncErrChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, i.err
+}
+
+func (i restartSyncErrChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, i.err
 }
 
 func testRestartTransferTx(t *testing.T, from, to tcommon.Address, amount int64) *corepb.Transaction {
