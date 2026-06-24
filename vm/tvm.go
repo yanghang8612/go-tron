@@ -568,7 +568,15 @@ func keccak256(data []byte) [32]byte {
 	return out
 }
 
-func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract, contractVersion int32) ([]byte, tcommon.Address, uint64, error) {
+func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract, contractVersion int32) (data []byte, newAddr tcommon.Address, leftover uint64, outErr error) {
+	if tracer := tvm.cfg.Tracer; tracer != nil {
+		createOp := CREATE
+		if isCreate2 {
+			createOp = CREATE2
+		}
+		tvm.captureFrameStart(tracer, createOp, caller, contractAddr, true, code, energy, value)
+		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
+	}
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
@@ -745,7 +753,11 @@ func (tvm *TVM) isNewContract(addr tcommon.Address) bool {
 }
 
 // Call executes a contract call.
-func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, value int64) ([]byte, uint64, error) {
+func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, value int64) (data []byte, leftover uint64, outErr error) {
+	if tracer := tvm.cfg.Tracer; tracer != nil {
+		tvm.captureFrameStart(tracer, CALL, caller, addr, false, input, energy, value)
+		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
+	}
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
@@ -857,7 +869,11 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 }
 
 // CallToken executes a contract call with a TRC-10 token transfer.
-func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uint64, value int64, tokenID int64, tokenValue int64) ([]byte, uint64, error) {
+func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uint64, value int64, tokenID int64, tokenValue int64) (data []byte, leftover uint64, outErr error) {
+	if tracer := tvm.cfg.Tracer; tracer != nil {
+		tvm.captureFrameStart(tracer, CALLTOKEN, caller, addr, false, input, energy, value)
+		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
+	}
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
@@ -1027,7 +1043,11 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 }
 
 // StaticCall executes a call without state modifications.
-func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy uint64) (data []byte, leftover uint64, outErr error) {
+	if tracer := tvm.cfg.Tracer; tracer != nil {
+		tvm.captureFrameStart(tracer, STATICCALL, caller, addr, false, input, energy, 0)
+		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
+	}
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
@@ -1099,7 +1119,11 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 // caller and storage/address context. java-tron keeps these separate:
 // DELEGATECALL uses the parent caller plus the current contract context,
 // while CALLCODE uses the current contract for both.
-func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte, energy uint64, value int64, internalValue int64) ([]byte, uint64, error) {
+func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte, energy uint64, value int64, internalValue int64) (data []byte, leftover uint64, outErr error) {
+	if tracer := tvm.cfg.Tracer; tracer != nil {
+		tvm.captureFrameStart(tracer, DELEGATECALL, caller, addr, false, input, energy, value)
+		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
+	}
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}

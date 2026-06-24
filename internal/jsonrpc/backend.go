@@ -4,6 +4,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"github.com/tronprotocol/go-tron/vm/tracers"
 )
 
 // LogFilter selects logs across a block range with optional address/topic constraints.
@@ -59,6 +60,13 @@ type Backend interface {
 
 	// TVM execution (read-only simulation)
 	Call(from, to *common.Address, data []byte, value int64) ([]byte, error)
+
+	// Tracing (debug namespace). TraceCall replays a read-only call with the
+	// configured tracer (blockNumber nil = head, else archive at that block);
+	// TraceTransaction re-executes a historical tx from its parent state. Both
+	// return the tracer's rendered result.
+	TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error)
+	TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error)
 
 	// EstimateGas simulates execution and returns energy used.
 	EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)

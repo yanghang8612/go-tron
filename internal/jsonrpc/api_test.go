@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"github.com/tronprotocol/go-tron/vm/tracers"
 )
 
 // stubBackend is a test double implementing jsonrpc.Backend.
@@ -38,6 +39,18 @@ type stubBackend struct {
 	balanceAt int64
 	codeAt    []byte
 	storageAt common.Hash
+
+	// Trace recording (debug namespace): the *At methods capture the parsed
+	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
+	// return traceResult as the canned tracer output.
+	traceResult   interface{}
+	gotTraceFrom  *common.Address
+	gotTraceTo    *common.Address
+	gotTraceData  []byte
+	gotTraceValue int64
+	gotTraceBlock *uint64
+	gotTraceCfg   *tracers.TraceConfig
+	gotTraceHash  common.Hash
 }
 
 func (s *stubBackend) ChainID() int64                       { return s.chainID }
@@ -75,6 +88,20 @@ func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionI
 }
 func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) ([]byte, error) {
 	return s.callResult, nil
+}
+func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
+	s.gotTraceFrom = from
+	s.gotTraceTo = to
+	s.gotTraceData = data
+	s.gotTraceValue = value
+	s.gotTraceBlock = blockNumber
+	s.gotTraceCfg = cfg
+	return s.traceResult, nil
+}
+func (s *stubBackend) TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
+	s.gotTraceHash = hash
+	s.gotTraceCfg = cfg
+	return s.traceResult, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	return s.logs, nil

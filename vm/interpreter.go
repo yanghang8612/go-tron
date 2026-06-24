@@ -45,7 +45,7 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 
 // Run executes the contract's bytecode. Returns the result data and any error.
 func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
-	traceInit()
+	tracer := in.tvmConfig.Tracer
 	var (
 		pc    uint64 = 0
 		mem          = newMemory()
@@ -96,28 +96,52 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		op := contract.GetOp(pc)
 		operation := in.table[op]
 		if operation == nil {
-			return nil, newInvalidOpCodeError(op)
+			opErr := newInvalidOpCodeError(op)
+			if tracer != nil {
+				in.traceState(tracer, pc, op, contract.Energy, 0, mem, stack, contract, opErr)
+			}
+			return nil, opErr
 		}
 		in.currentOp = op
 		in.energyErr = nil
 		// Per-op base accumulator for the single-floor dynamic-energy penalty.
 		in.opBaseAccum = 0
 
+		// Remaining energy before this opcode's charges; the tracer reports it as
+		// the step's "gas" and the energyBefore-energyAfter delta as the cost.
+		pcStart := pc
+		energyBefore := contract.Energy
+
 		// Fork gate
 		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
-			return nil, newInvalidOpCodeError(op)
+			opErr := newInvalidOpCodeError(op)
+			if tracer != nil {
+				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
+			}
+			return nil, opErr
 		}
 
 		// Stack validation
 		if stack.len() < operation.minStack {
-			return nil, newStackUnderflowError(operation.minStack, stack.len())
+			opErr := newStackUnderflowError(operation.minStack, stack.len())
+			if tracer != nil {
+				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
+			}
+			return nil, opErr
 		}
 		if stack.len()-operation.minStack+operationStackReturns(op, operation) > stackLimit {
-			return nil, newStackOverflowError()
+			opErr := newStackOverflowError()
+			if tracer != nil {
+				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
+			}
+			return nil, opErr
 		}
 
 		// Static mode check
 		if in.readOnly && operation.writes {
+			if tracer != nil {
+				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, ErrWriteProtection)
+			}
 			return nil, ErrWriteProtection
 		}
 
@@ -126,18 +150,30 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// instruction-function callsites.
 		if operation.energyCost > 0 {
 			if !in.useEnergy(contract, operation.energyCost) {
-				return nil, in.outOfEnergyError()
+				opErr := in.outOfEnergyError()
+				if tracer != nil {
+					in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, stack, contract, opErr)
+				}
+				return nil, opErr
 			}
 		}
 
-		// Opt-in opcode trace (GTRON_TVM_TRACE): record the pre-execute stack so
-		// a comparison's operands are visible. No-op unless tracing is enabled.
-		if traceEnabled {
-			in.traceStep(contract.Address, pc, op, stack)
+		// Snapshot the PRE-execute operand stack: CaptureState is emitted AFTER
+		// the opcode runs (so the exact energy delta is known), but the trace must
+		// still show the operands the opcode consumed — exactly java-tron's
+		// pre-execute stack dump that makes a failing comparison's operands visible.
+		var preStack *Stack
+		if tracer != nil {
+			preStack = &Stack{data: append([]uint256.Int(nil), stack.data...)}
 		}
 
 		// Execute
 		ret, err := operation.execute(&pc, in, contract, mem, stack)
+
+		if tracer != nil {
+			in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, preStack, contract, err)
+		}
+
 		if err != nil {
 			if in.tvmConfig.DynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))

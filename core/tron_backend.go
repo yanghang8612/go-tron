@@ -26,6 +26,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
+	"github.com/tronprotocol/go-tron/vm/tracers"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -233,6 +234,13 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	cfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	// Opt-in opcode trace for sync-stall diagnosis (GTRON_TVM_TRACE=<file>):
+	// install a FileLogger tracer when the env var is set; nil/zero overhead
+	// otherwise. Superseded by debug_traceCall for richer JSON traces.
+	fileTracer := tracers.FileLoggerFromEnv()
+	if fileTracer != nil {
+		cfg.Tracer = fileTracer
+	}
 	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
 	// BLOCKHASH/CHAINID need chain data; route through the ancient-aware
 	// lookup so constant calls see the same hashes as block execution.
@@ -241,8 +249,9 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)
 
-	// Flush the opt-in VM opcode trace (GTRON_TVM_TRACE) for sync-stall diagnosis.
-	vm.DumpTVMTrace(fmt.Sprintf("TriggerConstantContract %x energyUsed=%d err=%v", contractAddr[1:5], energyUsed, vmErr))
+	if fileTracer != nil {
+		_ = fileTracer.Flush(fmt.Sprintf("TriggerConstantContract %x energyUsed=%d err=%v", contractAddr[1:5], energyUsed, vmErr))
+	}
 
 	if vmErr != nil {
 		return &tronapi.TriggerResult{
@@ -255,6 +264,173 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 		Result:     ret,
 		EnergyUsed: energyUsed,
 	}, nil
+}
+
+// traceEnergyCap is the generous energy ceiling for debug_trace* simulations.
+// geth uses a high gas cap for traces so the call runs to completion regardless
+// of the caller's fee limit; the struct logger's `limit` bounds the output.
+const traceEnergyCap = 500_000_000
+
+// TraceCall replays a read-only contract call with the configured tracer
+// installed, returning the tracer's rendered result. It mirrors
+// TriggerConstantContract's state setup: blockNumber==nil traces against a copy
+// of head state, otherwise against archive state as of that block (requires
+// --history.enabled). A revert is reported through the tracer result (failed/
+// error), not as an RPC error, matching geth.
+func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
+	if to == nil {
+		return nil, fmt.Errorf("debug_traceCall: 'to' address is required")
+	}
+	owner := tcommon.Address{}
+	if from != nil {
+		owner = *from
+	}
+
+	tracer, err := tracers.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	statedbCopy, dp, blockNum, blockTime, err := b.traceStateContext(blockNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	tvmCfg := vm.NewTVMConfig(blockNum, dp)
+	tvmCfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	tvmCfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	tvmCfg.Tracer = tracer
+
+	evm := vm.NewTVM(statedbCopy, dp, owner, blockNum, blockTime, tcommon.Address{}, 1, tvmCfg)
+	evm.SetDB(b.chain.vmKV(b.chain.buffer))
+
+	// The tracer captures the full execution; a revert/VM error is surfaced
+	// through the tracer result (StructLogger.failed / callFrame.error), so the
+	// vmErr is intentionally not propagated as an RPC error.
+	_, _, _ = evm.Call(owner, *to, data, traceEnergyCap, value)
+	return tracer.GetResult()
+}
+
+// traceStateContext resolves the state and block context for a trace: a nil
+// block number yields a copy of live head state with the cached head dynprops;
+// a concrete number yields a copy of archive state as of that block with the
+// dynprops rooted at that block (so fork gates match the historical block).
+func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *state.DynamicProperties, uint64, int64, error) {
+	if blockNumber == nil {
+		current := b.chain.CurrentBlock()
+		statedb, err := b.chain.openState(b.chain.HeadStateRoot())
+		if err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("open state: %w", err)
+		}
+		statedbCopy, err := statedb.Copy()
+		if err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("copy state: %w", err)
+		}
+		return statedbCopy, b.chain.DynProps(), current.Number(), current.Timestamp(), nil
+	}
+
+	num := *blockNumber
+	block := b.chain.GetBlockByNumber(num)
+	if block == nil {
+		return nil, nil, 0, 0, fmt.Errorf("block %d not found", num)
+	}
+	headNum := b.chain.CurrentBlock().Number()
+	if num == headNum {
+		return b.traceStateContext(nil)
+	}
+	if err := b.requireArchive(num, headNum); err != nil {
+		return nil, nil, 0, 0, err
+	}
+	root := b.chain.StateRootAtBlock(num)
+	if root == (tcommon.Hash{}) {
+		return nil, nil, 0, 0, fmt.Errorf("no state root for block %d", num)
+	}
+	statedb, err := b.chain.openState(root)
+	if err != nil {
+		return nil, nil, 0, 0, fmt.Errorf("open archive state at block %d: %w", num, err)
+	}
+	statedbCopy, err := statedb.Copy()
+	if err != nil {
+		return nil, nil, 0, 0, fmt.Errorf("copy state: %w", err)
+	}
+	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+	return statedbCopy, dp, num, block.Timestamp(), nil
+}
+
+// TraceTransaction re-executes a historical transaction with the configured
+// tracer and returns the tracer's result. It reproduces the tx's pre-state by
+// replaying its block from the PARENT post-state (archive — requires
+// --history.enabled), installing the tracer only on the target tx. A revert or
+// VM-result divergence is reflected in the tracer result, not surfaced as an RPC
+// error, so the trace is available even when the replay's contract result
+// disagrees with the recorded block (the exact case debug_traceTransaction is
+// meant to diagnose).
+func (b *TronBackend) TraceTransaction(hash tcommon.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
+	blockNumPtr := rawdb.ReadTransactionIndex(b.chain.chaindb, hash[:])
+	if blockNumPtr == nil {
+		return nil, fmt.Errorf("transaction %x not found", hash)
+	}
+	blockNum := *blockNumPtr
+	if blockNum == 0 {
+		return nil, fmt.Errorf("cannot trace a genesis-block transaction")
+	}
+	block := b.chain.GetBlockByNumber(blockNum)
+	if block == nil {
+		return nil, fmt.Errorf("block %d not found", blockNum)
+	}
+	txIndex := -1
+	for i, tx := range block.Transactions() {
+		if tx.Hash() == hash {
+			txIndex = i
+			break
+		}
+	}
+	if txIndex < 0 {
+		return nil, fmt.Errorf("transaction %x not found in block %d", hash, blockNum)
+	}
+
+	// Reproduce the tx's pre-state: open the parent block's post-state and replay
+	// this block's transactions up to and including the target.
+	parentNum := blockNum - 1
+	headNum := b.chain.CurrentBlock().Number()
+	if err := b.requireArchive(parentNum, headNum); err != nil {
+		return nil, err
+	}
+	parentRoot := b.chain.StateRootAtBlock(parentNum)
+	if parentRoot == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("no state root for parent block %d", parentNum)
+	}
+	parentState, err := b.chain.openState(parentRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open parent state at block %d: %w", parentNum, err)
+	}
+	statedbCopy, err := parentState.Copy()
+	if err != nil {
+		return nil, fmt.Errorf("copy state: %w", err)
+	}
+	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+
+	tracer, err := tracers.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	_, perr := ProcessBlockTraced(statedbCopy, dp, block, b.chain.vmKV(b.chain.buffer),
+		b.chain.ActiveWitnesses(), b.chain.GenesisTimestamp(), b.chain.Config().EnergyLimitForkBlockNum(),
+		false, b.chain.versionPassCache, txIndex, tracer, b.chain.effectiveGenesisHash())
+
+	res, gerr := tracer.GetResult()
+	if gerr != nil {
+		// GetResult only fails when the target tx never executed (e.g. a replay
+		// divergence aborted an earlier tx); surface the replay error then.
+		if perr != nil {
+			return nil, fmt.Errorf("trace replay aborted before target tx: %w", perr)
+		}
+		return nil, gerr
+	}
+	return res, nil
 }
 
 func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, error) {

@@ -267,6 +267,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
+	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
@@ -341,6 +342,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
+	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {

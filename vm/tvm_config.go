@@ -54,6 +54,13 @@ type TVMConfig struct {
 	// MultiSigCheckV2 this is a pure SR-version vote (no DP key / AllowFlag), so it
 	// is caller-wired from the rooted fork-vote store, not by NewTVMConfig.
 	CpuTimeGuard bool
+
+	// Tracer, when non-nil, receives the EIP-3155 hook stream during execution
+	// (per-opcode CaptureState plus frame CaptureStart/Enter/Exit/End). It is
+	// left nil by NewTVMConfig — only the debug_trace* backends and the
+	// GTRON_TVM_TRACE diagnostic path install one — so production execution
+	// pays a single nil check per opcode.
+	Tracer Tracer
 }
 
 // NewTVMConfig builds a TVMConfig from the current DynamicProperties and block number.

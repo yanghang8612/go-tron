@@ -78,6 +78,10 @@ type Context struct {
 	// block-apply path and reset on reorg; nil on producer / pool / unit-test
 	// contexts, which then fall through to the uncached store tally.
 	ForkPassCache *forks.VersionPassCache
+	// Tracer, when non-nil, is installed into the TVM config for this tx so the
+	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
+	// production path (block-apply, producer, pool) — zero overhead.
+	Tracer vm.Tracer
 }
 
 // PassVersion reports whether SR software-fork `version` has activated as of
