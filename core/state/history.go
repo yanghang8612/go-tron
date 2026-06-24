@@ -380,11 +380,15 @@ func (r *PersistentHistoryReader) AccountKVAt(owner tcommon.Address, domain kvdo
 		return nil, false, fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
 	}
 	if blockNum >= r.headNum {
-		generation, _, err := r.hotLatest().KVGeneration(owner)
+		latest, err := r.latestAtHead()
 		if err != nil {
 			return nil, false, err
 		}
-		return r.hotLatest().KVLatest(owner, generation, domain, key)
+		generation, _, err := latest.KVGeneration(owner)
+		if err != nil {
+			return nil, false, err
+		}
+		return latest.KVLatest(owner, generation, domain, key)
 	}
 	ok, err := r.stateDomainHistoryAvailable()
 	if err != nil || !ok {
@@ -401,11 +405,15 @@ func (r *PersistentHistoryReader) AccountKVPrefixAt(owner tcommon.Address, domai
 		return fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
 	}
 	if blockNum >= r.headNum {
-		generation, _, err := r.hotLatest().KVGeneration(owner)
+		latest, err := r.latestAtHead()
 		if err != nil {
 			return err
 		}
-		return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, fn)
+		generation, _, err := latest.KVGeneration(owner)
+		if err != nil {
+			return err
+		}
+		return r.readStateKVLatestPrefixWithReader(latest, owner, generation, domain, prefix, fn)
 	}
 	ok, err := r.stateDomainHistoryAvailable()
 	if err != nil {
@@ -425,7 +433,11 @@ func (r *PersistentHistoryReader) KVLatestPrefixAt(owner tcommon.Address, genera
 		return fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
 	}
 	if blockNum >= r.headNum {
-		return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, fn)
+		latest, err := r.latestAtHead()
+		if err != nil {
+			return err
+		}
+		return r.readStateKVLatestPrefixWithReader(latest, owner, generation, domain, prefix, fn)
 	}
 	ok, err := r.stateDomainHistoryAvailable()
 	if err != nil {
@@ -883,6 +895,10 @@ func (r *PersistentHistoryReader) readStateKVLatestPrefix(owner tcommon.Address,
 	if txNum != 0 {
 		latest = r.latestAtTxNum(txNum)
 	}
+	return r.readStateKVLatestPrefixWithReader(latest, owner, generation, domain, prefix, fn)
+}
+
+func (r *PersistentHistoryReader) readStateKVLatestPrefixWithReader(latest hotStateLatestReader, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
 	if latest, ok := latest.(hotStateLatestPrefixReader); ok {
 		return latest.KVLatestPrefix(owner, generation, domain, prefix, fn)
 	}

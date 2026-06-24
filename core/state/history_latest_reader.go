@@ -99,6 +99,18 @@ func (r *PersistentHistoryReader) latestAtTxNum(txNum uint64) hotStateLatestRead
 	}
 }
 
+func (r *PersistentHistoryReader) latestAtHead() (hotStateLatestReader, error) {
+	hot := r.hotLatest()
+	if r == nil || r.coldHistory == nil {
+		return hot, nil
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(r.headNum)
+	if err != nil {
+		return nil, err
+	}
+	return r.latestAtTxNum(headTxNum), nil
+}
+
 func defaultHotLatest(db ethdb.KeyValueReader) hotStateLatestReader {
 	return newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry())
 }

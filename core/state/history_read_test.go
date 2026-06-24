@@ -449,6 +449,21 @@ func TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory(t *t
 	if len(at2) != 2 || at2["reward/a"] != "a2" || at2["reward/c"] != "c2" {
 		t.Fatalf("cold block 2 prefix = %v, want reward/a=a2 reward/c=c2", at2)
 	}
+	headValue, ok, err := cold.AccountKVAt(owner, domain, []byte("reward/a"), f.head)
+	if err != nil {
+		t.Fatalf("cold AccountKVAt head: %v", err)
+	}
+	if !ok || string(headValue) != "a2" {
+		t.Fatalf("cold AccountKVAt head reward/a = %q ok=%v, want a2", headValue, ok)
+	}
+	headAccountPrefix := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", f.head)
+	if len(headAccountPrefix) != 2 || headAccountPrefix["reward/a"] != "a2" || headAccountPrefix["reward/c"] != "c2" {
+		t.Fatalf("cold head account prefix = %v, want reward/a=a2 reward/c=c2", headAccountPrefix)
+	}
+	headLatestPrefix := collectHistoryKVLatestPrefix(t, cold, owner, 0, domain, "reward/", f.head)
+	if len(headLatestPrefix) != 2 || headLatestPrefix["reward/a"] != "a2" || headLatestPrefix["reward/c"] != "c2" {
+		t.Fatalf("cold head latest prefix = %v, want reward/a=a2 reward/c=c2", headLatestPrefix)
+	}
 }
 
 func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
@@ -1570,6 +1585,18 @@ func collectHistoryAccountKVPrefix(t *testing.T, r *PersistentHistoryReader, own
 		return true, nil
 	}); err != nil {
 		t.Fatalf("AccountKVPrefixAt block %d prefix %q: %v", blockNum, prefix, err)
+	}
+	return out
+}
+
+func collectHistoryKVLatestPrefix(t *testing.T, r *PersistentHistoryReader, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix string, blockNum uint64) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := r.KVLatestPrefixAt(owner, generation, domain, []byte(prefix), blockNum, func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("KVLatestPrefixAt block %d prefix %q: %v", blockNum, prefix, err)
 	}
 	return out
 }
