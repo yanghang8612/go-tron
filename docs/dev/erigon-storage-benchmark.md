@@ -282,7 +282,9 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
 The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
 Prometheus artifact with `gtron_storage_alert_status` and
-`gtron_storage_alert_issue`, confirms minimal-mode signed cold lookup pruning
+`gtron_storage_alert_issue`, and when the row carries a stage-pipeline cursor it
+also verifies the Prometheus `gtron_storage_stage_pipeline_*` values and next
+target match that same row. It confirms minimal-mode signed cold lookup pruning
 plus tail-prune evidence, rejects mode-semantics regressions such as
 `archive` rows with prune progress or `blocks` rows with freezer-tail pruning,
 and applies any project-specific numeric `--min`/`--max` thresholds.

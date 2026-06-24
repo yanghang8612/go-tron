@@ -227,6 +227,37 @@ def prometheus_issue_keys(text):
     return keys
 
 
+def prometheus_metric_samples(text, metric):
+    samples = []
+    pattern = re.compile(rf"^{re.escape(metric)}(?:\{{([^}}]*)\}})?\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)$")
+    for line in text.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        try:
+            value = float(match.group(2))
+        except ValueError:
+            continue
+        samples.append((parse_prometheus_labels(match.group(1) or ""), value))
+    return samples
+
+
+def prometheus_metric_value(text, metric):
+    samples = prometheus_metric_samples(text, metric)
+    if not samples:
+        return None
+    return samples[-1][1]
+
+
+def check_prometheus_metric_value(label, path, text, metric, want):
+    got = prometheus_metric_value(text, metric)
+    if got is None:
+        return [f"{label} prometheus artifact {path} missing {metric}"]
+    if got != float(want):
+        return [f"{label} prometheus artifact {path} {metric}={got:g}, want {want:g}"]
+    return []
+
+
 def row_alert_issue_keys(row):
     keys = set()
     fields = {
@@ -285,6 +316,53 @@ def check_prometheus_stage_pipeline(label, path, text, row):
     for needle, name in required:
         if needle not in text:
             issues.append(f"{label} prometheus artifact {path} missing {name}")
+    if "stageAlertPipelineComplete" in row:
+        issues.extend(
+            check_prometheus_metric_value(
+                label,
+                path,
+                text,
+                "gtron_storage_stage_pipeline_complete",
+                1 if as_bool(row, "stageAlertPipelineComplete") else 0,
+            )
+        )
+    if "stageAlertPipelinePending" in row:
+        pending = as_number(row, "stageAlertPipelinePending")
+        if pending is not None:
+            issues.extend(
+                check_prometheus_metric_value(
+                    label, path, text, "gtron_storage_stage_pipeline_pending", pending
+                )
+            )
+    if "stageAlertPipelineIssues" in row:
+        count = as_number(row, "stageAlertPipelineIssues")
+        if count is not None:
+            issues.extend(
+                check_prometheus_metric_value(
+                    label, path, text, "gtron_storage_stage_pipeline_issues", count
+                )
+            )
+    next_stage = row.get("stageAlertPipelineNext")
+    if next_stage:
+        want_target = as_number(row, "stageAlertPipelineNextTarget")
+        want_status = str(row.get("stageAlertPipelineNextStatus", ""))
+        candidates = prometheus_metric_samples(text, "gtron_storage_stage_pipeline_next_target_block")
+        matched = [
+            value
+            for labels, value in candidates
+            if labels.get("stage") == str(next_stage)
+            and (not want_status or labels.get("status") == want_status)
+        ]
+        if not matched:
+            issues.append(
+                f"{label} prometheus artifact {path} missing next pipeline target "
+                f"stage={next_stage!r} status={want_status!r}"
+            )
+        elif want_target is not None and matched[-1] != want_target:
+            issues.append(
+                f"{label} prometheus artifact {path} next pipeline target "
+                f"stage={next_stage!r} status={want_status!r} value={matched[-1]:g}, want {want_target:g}"
+            )
     return issues
 
 
