@@ -121,8 +121,11 @@ func main() {
 	if headHash == (tcommon.Hash{}) {
 		log.Crit("no head block", "path", dbPath)
 	}
-	headRoot := rawdb.ReadBlockStateRoot(chaindb, headHash)
-	if headRoot == (tcommon.Hash{}) {
+	headRoot, ok, err := readRewardTraceBlockStateRoot(chaindb, headHash)
+	if err != nil {
+		log.Crit("read head state root", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	}
+	if !ok {
 		headRoot = rawdb.ReadGenesisStateRoot(db)
 	}
 	stateDB := state.NewDatabase(rawdb.WrapKeyValueStore(db))
@@ -131,9 +134,11 @@ func main() {
 		log.Crit("open statedb", "root", fmt.Sprintf("%x", headRoot[:]), "err", err)
 	}
 	dp := state.LoadDynamicProperties(db, statedb)
-	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
+	if hn, ok, err := readRewardTraceBlockNumber(chaindb, headHash); err != nil {
+		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	} else if ok {
 		fmt.Printf("head block=%d currentCycle=%d newRewardAlgoEffectiveCycle=%d allowOldRewardOpt=%v changeDelegation=%v\n",
-			*hn, dp.CurrentCycleNumber(), dp.NewRewardAlgorithmEffectiveCycle(), dp.AllowOldRewardOpt(), dp.ChangeDelegation())
+			hn, dp.CurrentCycleNumber(), dp.NewRewardAlgorithmEffectiveCycle(), dp.AllowOldRewardOpt(), dp.ChangeDelegation())
 	}
 
 	dec := reward.DecimalOfViReward
@@ -257,8 +262,10 @@ func main() {
 	// Block timestamps ARE in the block body, so we locate the era by timestamp and
 	// scan the raw block range for the vote/unfreeze tx that mis-folded the witness.
 	var headNum uint64
-	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
-		headNum = *hn
+	if hn, ok, err := readRewardTraceBlockNumber(chaindb, headHash); err != nil {
+		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	} else if ok {
+		headNum = hn
 	}
 
 	if *blockTs != "" {
@@ -605,6 +612,14 @@ func main() {
 			}
 		}
 	}
+}
+
+func readRewardTraceBlockNumber(chaindb *rawdb.ChainDB, hash tcommon.Hash) (uint64, bool, error) {
+	return rawdb.ReadBlockNumberStrict(chaindb, hash)
+}
+
+func readRewardTraceBlockStateRoot(chaindb *rawdb.ChainDB, hash tcommon.Hash) (tcommon.Hash, bool, error) {
+	return rawdb.ReadBlockStateRootStrict(chaindb, hash)
 }
 
 func readRewardTraceBlock(chaindb *rawdb.ChainDB, number uint64) (*types.Block, error) {

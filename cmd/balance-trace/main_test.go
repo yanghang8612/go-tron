@@ -120,6 +120,50 @@ func TestReadBalanceTraceBlockReportsCorruptColdBlock(t *testing.T) {
 	}
 }
 
+func TestReadBalanceTraceBlockNumberReportsColdIndexError(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	chainDB.SetChainIndexReader(balanceTraceErrChainIndex{err: errors.New("cold chain index corrupt")})
+
+	_, _, err := readBalanceTraceBlockNumber(chainDB, tcommon.BytesToHash(bytes.Repeat([]byte{0x77}, tcommon.HashLength)))
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("readBalanceTraceBlockNumber error = %v, want cold chain-index corruption", err)
+	}
+}
+
+func TestReadBalanceTraceBlockStateRootReportsCorruptColdRoot(t *testing.T) {
+	chainDB := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), corruptBalanceTraceStateRootAncient{})
+	chainDB.SetChainIndexReader(balanceTraceStaticChainIndex{blockNum: 7})
+
+	_, _, err := readBalanceTraceBlockStateRoot(chainDB, tcommon.BytesToHash(bytes.Repeat([]byte{0x88}, tcommon.HashLength)))
+	if err == nil || !strings.Contains(err.Error(), "block state root") {
+		t.Fatalf("readBalanceTraceBlockStateRoot error = %v, want corrupt cold state-root error", err)
+	}
+}
+
+type balanceTraceErrChainIndex struct {
+	err error
+}
+
+func (r balanceTraceErrChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+func (r balanceTraceErrChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+type balanceTraceStaticChainIndex struct {
+	blockNum uint64
+}
+
+func (r balanceTraceStaticChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return r.blockNum, true, nil
+}
+
+func (r balanceTraceStaticChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return r.blockNum, true, nil
+}
+
 type corruptBalanceTraceAncient struct{}
 
 func (corruptBalanceTraceAncient) Ancient(kind string, _ uint64) ([]byte, error) {
@@ -139,6 +183,27 @@ func (corruptBalanceTraceAncient) AncientCount(string) (uint64, error) {
 
 func (corruptBalanceTraceAncient) HasAncient(kind string, _ uint64) (bool, error) {
 	return kind == rawdb.AncientBlocksTable, nil
+}
+
+type corruptBalanceTraceStateRootAncient struct{}
+
+func (corruptBalanceTraceStateRootAncient) Ancient(kind string, _ uint64) ([]byte, error) {
+	if kind != rawdb.AncientStateRootsTable {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return []byte{0x01}, nil
+}
+
+func (corruptBalanceTraceStateRootAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (corruptBalanceTraceStateRootAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (corruptBalanceTraceStateRootAncient) HasAncient(kind string, _ uint64) (bool, error) {
+	return kind == rawdb.AncientStateRootsTable, nil
 }
 
 func testAddress(fill byte) tcommon.Address {

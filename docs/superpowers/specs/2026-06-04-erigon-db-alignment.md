@@ -1466,12 +1466,13 @@ Status:
   reads through the cold-sidecar-aware `ChainDB` boundary. `reward-trace` also
   attaches the same chain-index, section-bloom, and event-log sidecars so its
   block timestamp and cycle scans can cross hot-pruned block/index ranges. The
-  diagnostics use strict block reads for scans, and the balance diagnostic also
-  uses the strict transaction-info and trace readers for printed rows, so
-  malformed hot rows or corrupt/mismatched cold sidecars fail the diagnostic
-  instead of being reported as missing receipt or balance data. This keeps
-  historical balance and reward investigations usable after chain lookup and
-  balance trace pruning.
+  diagnostics use strict block-number, state-root, and block-body reads, and
+  the balance diagnostic also uses the strict transaction-info and trace
+  readers for printed rows, so malformed hot rows or corrupt/mismatched cold
+  sidecars fail the diagnostic instead of being reported as missing receipt,
+  missing balance data, or a false genesis-root fallback. This keeps historical
+  balance and reward investigations usable after chain lookup and balance trace
+  pruning.
 - Exact cold `BlockBalanceTrace` lookups skip balance-trace segment files whose
   block range cannot contain the requested block before opening them. This
   keeps unrelated missing or retired newer trace sidecars from blocking older

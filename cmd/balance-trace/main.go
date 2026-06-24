@@ -82,15 +82,18 @@ func main() {
 	if headHash == (tcommon.Hash{}) {
 		log.Crit("no head block", "path", dbPath)
 	}
-	headNum := rawdb.ReadBlockNumber(chaindb, headHash)
-	if headNum == nil {
+	headNum, ok, err := readBalanceTraceBlockNumber(chaindb, headHash)
+	if err != nil {
+		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	}
+	if !ok {
 		log.Crit("head block has no number entry", "hash", fmt.Sprintf("%x", headHash[:]))
 	}
 	end := *to
-	if end == 0 || end > *headNum {
-		end = *headNum
+	if end == 0 || end > headNum {
+		end = headNum
 	}
-	fmt.Printf("scanning blocks %d..%d for address %x (head=%d)\n", *from, end, target.Bytes(), *headNum)
+	fmt.Printf("scanning blocks %d..%d for address %x (head=%d)\n", *from, end, target.Bytes(), headNum)
 
 	hits := 0
 	for h := *from; h <= end; h++ {
@@ -123,8 +126,11 @@ func main() {
 	}
 
 	fmt.Printf("\n--- final state view ---\n")
-	headRoot := rawdb.ReadBlockStateRoot(chaindb, headHash)
-	if headRoot == (tcommon.Hash{}) {
+	headRoot, ok, err := readBalanceTraceBlockStateRoot(chaindb, headHash)
+	if err != nil {
+		log.Crit("read head state root", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	}
+	if !ok {
 		headRoot = rawdb.ReadGenesisStateRoot(db)
 	}
 	stateDB := state.NewDatabase(rawdb.WrapKeyValueStore(db))
@@ -153,6 +159,14 @@ func main() {
 	fmt.Printf("WitnessPayPerBlock=%d\n", dp.WitnessPayPerBlock())
 	fmt.Printf("ChangeDelegation=%v\n", dp.ChangeDelegation())
 	fmt.Printf("\n%d transactions touched %x in [%d..%d]\n", hits, target.Bytes(), *from, end)
+}
+
+func readBalanceTraceBlockNumber(chaindb *rawdb.ChainDB, hash tcommon.Hash) (uint64, bool, error) {
+	return rawdb.ReadBlockNumberStrict(chaindb, hash)
+}
+
+func readBalanceTraceBlockStateRoot(chaindb *rawdb.ChainDB, hash tcommon.Hash) (tcommon.Hash, bool, error) {
+	return rawdb.ReadBlockStateRootStrict(chaindb, hash)
 }
 
 func readBalanceTraceBlock(chaindb *rawdb.ChainDB, number uint64) (*types.Block, error) {

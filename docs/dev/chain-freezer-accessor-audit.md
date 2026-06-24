@@ -150,8 +150,9 @@ blocks/tx-infos/state-roots through `rawdb.Read*` are switched to
    and `cmd/reward-trace` detect `datadir/gtron/ancient`, open the
    `state-snapshots` manager, and compose both behind `ChainDB` so
    post-prune datadirs still scan frozen blocks and cold lookup rows.
-   Block scans use the strict block accessor, so corrupt hot/freezer/cold
-   block payloads fail the diagnostic instead of being reported as missing.
+   Head block-number, head state-root, and block scans use strict accessors, so
+   corrupt hot/freezer/cold payloads fail the diagnostic instead of being
+   reported as missing or triggering a false genesis-root fallback.
 
 5. **VM `opBlockHash` is intentionally KV-only.** The 256-block lookback
    window in `vm/instructions.go` sits entirely above the 128-block

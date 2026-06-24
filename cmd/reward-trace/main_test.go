@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -130,6 +131,50 @@ func TestReadRewardTraceBlockReportsCorruptColdBlock(t *testing.T) {
 	}
 }
 
+func TestReadRewardTraceBlockNumberReportsColdIndexError(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	chainDB.SetChainIndexReader(rewardTraceErrChainIndex{err: errors.New("cold chain index corrupt")})
+
+	_, _, err := readRewardTraceBlockNumber(chainDB, tcommon.BytesToHash(bytes.Repeat([]byte{0x77}, tcommon.HashLength)))
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("readRewardTraceBlockNumber error = %v, want cold chain-index corruption", err)
+	}
+}
+
+func TestReadRewardTraceBlockStateRootReportsCorruptColdRoot(t *testing.T) {
+	chainDB := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), corruptRewardTraceStateRootAncient{})
+	chainDB.SetChainIndexReader(rewardTraceStaticChainIndex{blockNum: 7})
+
+	_, _, err := readRewardTraceBlockStateRoot(chainDB, tcommon.BytesToHash(bytes.Repeat([]byte{0x88}, tcommon.HashLength)))
+	if err == nil || !strings.Contains(err.Error(), "block state root") {
+		t.Fatalf("readRewardTraceBlockStateRoot error = %v, want corrupt cold state-root error", err)
+	}
+}
+
+type rewardTraceErrChainIndex struct {
+	err error
+}
+
+func (r rewardTraceErrChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+func (r rewardTraceErrChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+type rewardTraceStaticChainIndex struct {
+	blockNum uint64
+}
+
+func (r rewardTraceStaticChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return r.blockNum, true, nil
+}
+
+func (r rewardTraceStaticChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return r.blockNum, true, nil
+}
+
 type corruptRewardTraceAncient struct{}
 
 func (corruptRewardTraceAncient) Ancient(kind string, _ uint64) ([]byte, error) {
@@ -149,6 +194,27 @@ func (corruptRewardTraceAncient) AncientCount(string) (uint64, error) {
 
 func (corruptRewardTraceAncient) HasAncient(kind string, _ uint64) (bool, error) {
 	return kind == rawdb.AncientBlocksTable, nil
+}
+
+type corruptRewardTraceStateRootAncient struct{}
+
+func (corruptRewardTraceStateRootAncient) Ancient(kind string, _ uint64) ([]byte, error) {
+	if kind != rawdb.AncientStateRootsTable {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return []byte{0x01}, nil
+}
+
+func (corruptRewardTraceStateRootAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (corruptRewardTraceStateRootAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (corruptRewardTraceStateRootAncient) HasAncient(kind string, _ uint64) (bool, error) {
+	return kind == rawdb.AncientStateRootsTable, nil
 }
 
 func testRewardTraceAddress(fill byte) tcommon.Address {
