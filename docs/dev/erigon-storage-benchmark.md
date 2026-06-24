@@ -74,6 +74,13 @@ The output path is printed at startup. Each JSON row contains:
 - `stageVerifyStatus`
 - `stageVerifyIssues`
 - `stageVerifyDetails`
+- `stageAlertPipelineComplete`
+- `stageAlertPipelinePending`
+- `stageAlertPipelineIssues`
+- `stageAlertPipelineNext`
+- `stageAlertPipelineNextStatus`
+- `stageAlertPipelineNextTarget`
+- `stageAlertPipelineTasks`
 - `snapshotAlertStatus`
 - `snapshotAlertIssues`
 - `snapshotAlertDetails`
@@ -179,8 +186,12 @@ registered. It also warns when retired snapshot files still occupy disk after
 compaction or replacement. The JSONL row includes
 `freezerAlertStatus`, `freezerAlertIssues`, `freezerAlertHiddenBytes`,
 `freezerAlertDetails`, `stageVerifyStatus`, `stageVerifyIssues`,
-`stageVerifyDetails`, `modeAlertStatus`, `modeAlertIssues`,
-`modeAlertDetails`, `pruneMode`, `pruneModePersisted`,
+`stageVerifyDetails`, `stageAlertPipelineComplete`,
+`stageAlertPipelinePending`, `stageAlertPipelineIssues`,
+`stageAlertPipelineNext`, `stageAlertPipelineNextStatus`,
+`stageAlertPipelineNextTarget`, `stageAlertPipelineTasks`,
+`modeAlertStatus`, `modeAlertIssues`, `modeAlertDetails`, `pruneMode`,
+`pruneModePersisted`,
 `snapshotAlertStatus`, `snapshotAlertIssues`, `snapshotAlertDetails`, and the
 `snapshotRetired*` counters; warning rows capture hidden freezer bytes and
 retired snapshot bytes that still await physical pruning. Each row also records
@@ -192,7 +203,9 @@ output exposes overall/component status gauges (`0=ok`, `1=warning`,
 `2=critical`), component issue counts, normalized issue-kind counts by
 component/severity/kind, hidden freezer bytes, retired snapshot counters, and
 the persisted prune mode without putting high-cardinality issue details into
-metric labels.
+metric labels. It also exposes `gtron_storage_stage_pipeline_*` gauges so
+external monitors can separate pending storage-maintenance stage work from
+critical storage-integrity failures.
 
 ## Sync Profile
 

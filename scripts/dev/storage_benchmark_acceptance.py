@@ -250,6 +250,33 @@ def check_prometheus_issue_kinds(label, path, text, row):
     return issues
 
 
+def check_prometheus_stage_pipeline(label, path, text, row):
+    if "stageAlertPipelinePending" not in row and "stageAlertPipelineIssues" not in row:
+        return []
+    issues = []
+    required = (
+        ("gtron_storage_stage_pipeline_pending{", "gtron_storage_stage_pipeline_pending"),
+        ("gtron_storage_stage_pipeline_issues{", "gtron_storage_stage_pipeline_issues"),
+    )
+    if "stageAlertPipelineComplete" in row:
+        required = (
+            ("gtron_storage_stage_pipeline_complete{", "gtron_storage_stage_pipeline_complete"),
+            *required,
+        )
+    if row.get("stageAlertPipelineNext"):
+        required = (
+            *required,
+            (
+                "gtron_storage_stage_pipeline_next_target_block{",
+                "gtron_storage_stage_pipeline_next_target_block",
+            ),
+        )
+    for needle, name in required:
+        if needle not in text:
+            issues.append(f"{label} prometheus artifact {path} missing {name}")
+    return issues
+
+
 def check_prometheus_artifacts(result_path, rows):
     issues = []
     for row in latest_rows(rows).values():
@@ -265,6 +292,7 @@ def check_prometheus_artifacts(result_path, rows):
             continue
         issues.extend(check_prometheus_text(line_label(row), path, text))
         issues.extend(check_prometheus_issue_kinds(line_label(row), path, text, row))
+        issues.extend(check_prometheus_stage_pipeline(line_label(row), path, text, row))
     return issues
 
 

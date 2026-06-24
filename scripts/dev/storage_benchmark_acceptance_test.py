@@ -246,6 +246,57 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("component='stage'", proc.stderr)
             self.assertIn("kind='stage-verification'", proc.stderr)
 
+    def test_rejects_prometheus_artifact_missing_stage_pipeline_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_target_block", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

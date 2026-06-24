@@ -72,6 +72,13 @@ RUN_FREEZER_ALERT_DETAILS="[]"
 RUN_STAGE_VERIFY_STATUS="not-run"
 RUN_STAGE_VERIFY_ISSUES=-1
 RUN_STAGE_VERIFY_DETAILS="[]"
+RUN_STAGE_ALERT_PIPELINE_COMPLETE="false"
+RUN_STAGE_ALERT_PIPELINE_PENDING=-1
+RUN_STAGE_ALERT_PIPELINE_ISSUES=-1
+RUN_STAGE_ALERT_PIPELINE_NEXT=""
+RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS=""
+RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET=-1
+RUN_STAGE_ALERT_PIPELINE_TASKS="[]"
 RUN_MODE_ALERT_STATUS="not-run"
 RUN_MODE_ALERT_ISSUES=-1
 RUN_MODE_ALERT_DETAILS="[]"
@@ -251,6 +258,13 @@ reset_run_metrics() {
   RUN_STAGE_VERIFY_STATUS="not-run"
   RUN_STAGE_VERIFY_ISSUES=-1
   RUN_STAGE_VERIFY_DETAILS="[]"
+  RUN_STAGE_ALERT_PIPELINE_COMPLETE="false"
+  RUN_STAGE_ALERT_PIPELINE_PENDING=-1
+  RUN_STAGE_ALERT_PIPELINE_ISSUES=-1
+  RUN_STAGE_ALERT_PIPELINE_NEXT=""
+  RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS=""
+  RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET=-1
+  RUN_STAGE_ALERT_PIPELINE_TASKS="[]"
   RUN_MODE_ALERT_STATUS="not-run"
   RUN_MODE_ALERT_ISSUES=-1
   RUN_MODE_ALERT_DETAILS="[]"
@@ -622,6 +636,110 @@ if found:
 PY
 }
 
+storage_alert_pipeline_values() {
+  local alert_out="$1"
+  python3 - "$alert_out" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+
+def as_int(value, default=-1):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def as_bool_text(value):
+    return "true" if str(value).lower() in {"1", "true", "yes"} else "false"
+
+
+row = {
+    "complete": "false",
+    "pending": -1,
+    "issues": -1,
+    "next": "",
+    "nextStatus": "",
+    "nextTarget": -1,
+    "tasks": [],
+}
+
+for line in text.splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        continue
+    try:
+        obj = json.loads(stripped)
+    except Exception:
+        continue
+    pipeline = obj.get("stagePipeline") if isinstance(obj, dict) else None
+    if not isinstance(pipeline, dict):
+        continue
+    row["complete"] = as_bool_text(pipeline.get("complete", False))
+    row["pending"] = as_int(pipeline.get("pending", -1))
+    row["issues"] = as_int(pipeline.get("issues", -1))
+    tasks = []
+    for item in pipeline.get("tasks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        task = {
+            "stage": str(item.get("stage", "")),
+            "upstream": str(item.get("upstream", "")),
+            "status": str(item.get("status", "")),
+            "targetValue": as_int(item.get("targetValue", -1)),
+            "targetHash": str(item.get("targetHash", "")),
+            "currentValue": as_int(item.get("currentValue", -1)),
+            "currentHash": str(item.get("currentHash", "")),
+        }
+        tasks.append(task)
+    row["tasks"] = tasks
+    if tasks:
+        first = tasks[0]
+        row["next"] = first.get("stage", "")
+        row["nextStatus"] = first.get("status", "")
+        row["nextTarget"] = first.get("targetValue", -1)
+    break
+else:
+    patterns = {
+        "complete": r"stagePipelineComplete=([^ ]+)",
+        "pending": r"stagePipelinePending=([0-9]+)",
+        "issues": r"stagePipelineIssues=([0-9]+)",
+        "next": r"stagePipelineNext=([^ ]+)",
+        "nextStatus": r"stagePipelineNextStatus=([^ ]+)",
+        "nextTarget": r"stagePipelineNextTarget=([0-9]+)",
+    }
+    found = {}
+    for key, pattern in patterns.items():
+        matches = re.findall(pattern, text)
+        if matches:
+            found[key] = matches[-1]
+    if "complete" in found:
+        row["complete"] = as_bool_text(found["complete"])
+    if "pending" in found:
+        row["pending"] = as_int(found["pending"], -1)
+    if "issues" in found:
+        row["issues"] = as_int(found["issues"], -1)
+    if "next" in found:
+        row["next"] = found["next"]
+    if "nextStatus" in found:
+        row["nextStatus"] = found["nextStatus"]
+    if "nextTarget" in found:
+        row["nextTarget"] = as_int(found["nextTarget"], -1)
+
+print(row["complete"])
+print(row["pending"])
+print(row["issues"])
+print(row["next"])
+print(row["nextStatus"])
+print(row["nextTarget"])
+print(json.dumps(row["tasks"], separators=(",", ":")))
+PY
+}
+
 run_storage_alert_gate() {
   local mode="$1"
   local role="$2"
@@ -683,6 +801,15 @@ run_storage_alert_gate() {
   RUN_STAGE_VERIFY_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '2p')"
   RUN_MODE_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '3p')"
   RUN_SNAPSHOT_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '4p')"
+  local pipeline_values
+  pipeline_values="$(storage_alert_pipeline_values "$alert_out")"
+  RUN_STAGE_ALERT_PIPELINE_COMPLETE="$(printf '%s\n' "$pipeline_values" | sed -n '1p')"
+  RUN_STAGE_ALERT_PIPELINE_PENDING="$(printf '%s\n' "$pipeline_values" | sed -n '2p')"
+  RUN_STAGE_ALERT_PIPELINE_ISSUES="$(printf '%s\n' "$pipeline_values" | sed -n '3p')"
+  RUN_STAGE_ALERT_PIPELINE_NEXT="$(printf '%s\n' "$pipeline_values" | sed -n '4p')"
+  RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS="$(printf '%s\n' "$pipeline_values" | sed -n '5p')"
+  RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET="$(printf '%s\n' "$pipeline_values" | sed -n '6p')"
+  RUN_STAGE_ALERT_PIPELINE_TASKS="$(printf '%s\n' "$pipeline_values" | sed -n '7p')"
   if [ "$ok" -ne 1 ]; then
     RUN_STORAGE_ALERT_FAILED=1
   fi
@@ -843,6 +970,10 @@ emit_result() {
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$RUN_FREEZER_ALERT_DETAILS" \
     "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" "$RUN_STAGE_VERIFY_DETAILS" \
+    "$RUN_STAGE_ALERT_PIPELINE_COMPLETE" "$RUN_STAGE_ALERT_PIPELINE_PENDING" \
+    "$RUN_STAGE_ALERT_PIPELINE_ISSUES" "$RUN_STAGE_ALERT_PIPELINE_NEXT" \
+    "$RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS" "$RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET" \
+    "$RUN_STAGE_ALERT_PIPELINE_TASKS" \
     "$RUN_MODE_ALERT_STATUS" "$RUN_MODE_ALERT_ISSUES" "$RUN_MODE_ALERT_DETAILS" \
     "$RUN_PRUNE_MODE" "$RUN_PRUNE_MODE_PERSISTED" \
     "$RUN_SNAPSHOT_ALERT_STATUS" "$RUN_SNAPSHOT_ALERT_ISSUES" "$RUN_SNAPSHOT_ALERT_DETAILS" \
@@ -873,7 +1004,10 @@ keys = [
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "freezerAlertDetails", "stageVerifyStatus", "stageVerifyIssues",
-    "stageVerifyDetails", "modeAlertStatus", "modeAlertIssues",
+    "stageVerifyDetails", "stageAlertPipelineComplete", "stageAlertPipelinePending",
+    "stageAlertPipelineIssues", "stageAlertPipelineNext",
+    "stageAlertPipelineNextStatus", "stageAlertPipelineNextTarget",
+    "stageAlertPipelineTasks", "modeAlertStatus", "modeAlertIssues",
     "modeAlertDetails", "pruneMode", "pruneModePersisted",
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
@@ -901,11 +1035,12 @@ ints = {
     "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
-    "stageVerifyIssues", "modeAlertIssues",
+    "stageVerifyIssues", "stageAlertPipelinePending", "stageAlertPipelineIssues",
+    "stageAlertPipelineNextTarget", "modeAlertIssues",
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
 }
-bools = {"pruneModePersisted"}
+bools = {"pruneModePersisted", "stageAlertPipelineComplete"}
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
     if key in ints:
@@ -914,7 +1049,13 @@ for key, value in zip(keys, values):
         row[key] = str(value).lower() in {"1", "true", "yes"}
     else:
         row[key] = value
-for key in ("freezerAlertDetails", "stageVerifyDetails", "modeAlertDetails", "snapshotAlertDetails"):
+for key in (
+    "freezerAlertDetails",
+    "stageVerifyDetails",
+    "stageAlertPipelineTasks",
+    "modeAlertDetails",
+    "snapshotAlertDetails",
+):
     try:
         parsed = json.loads(row.get(key, "[]"))
     except Exception:

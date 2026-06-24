@@ -55,6 +55,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                     gtron_storage_alert_status{datadir="/tmp/gtron"} 2
                     gtron_storage_alert_component_status{component="stage",datadir="/tmp/gtron"} 2
                     gtron_storage_alert_component_issues{component="stage",datadir="/tmp/gtron"} 1
+                    gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2
+                    gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1
+                    gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 12
                     # TYPE gtron_storage_alert_issue gauge
                     gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1
                     EOF
@@ -62,7 +65,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                         fi
                       done
                       cat <<'EOF'
-                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
+                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"stagePipeline":{"complete":false,"pending":2,"issues":1,"tasks":[{"stage":"ChainFreezer","upstream":"Finish","status":"behind","targetValue":12,"targetHash":"aa","currentValue":9,"currentHash":"bb"},{"stage":"SnapshotEventLogBuild","upstream":"Finish","status":"missing","targetValue":12,"targetHash":"aa"}]},"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
                     EOF
                       exit 1
                     fi
@@ -111,6 +114,24 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["status"], "storage-alerts-critical")
             self.assertEqual(row["stageVerifyStatus"], "critical")
             self.assertEqual(row["stageVerifyIssues"], 1)
+            self.assertFalse(row["stageAlertPipelineComplete"])
+            self.assertEqual(row["stageAlertPipelinePending"], 2)
+            self.assertEqual(row["stageAlertPipelineIssues"], 1)
+            self.assertEqual(row["stageAlertPipelineNext"], "ChainFreezer")
+            self.assertEqual(row["stageAlertPipelineNextStatus"], "behind")
+            self.assertEqual(row["stageAlertPipelineNextTarget"], 12)
+            self.assertEqual(
+                row["stageAlertPipelineTasks"][0],
+                {
+                    "stage": "ChainFreezer",
+                    "upstream": "Finish",
+                    "status": "behind",
+                    "targetValue": 12,
+                    "targetHash": "aa",
+                    "currentValue": 9,
+                    "currentHash": "bb",
+                },
+            )
             self.assertEqual(
                 row["stageVerifyDetails"],
                 [
@@ -156,6 +177,11 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertIn(
                 'gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1',
+                metrics,
+            )
+            self.assertIn('gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2', metrics)
+            self.assertIn(
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 12',
                 metrics,
             )
 
