@@ -48,6 +48,22 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
                         "heightRegressionBlocks": 0,
                         "stageProgressRegressionCount": 0,
                         "stageMismatchRows": 0,
@@ -100,6 +116,55 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
             self.assertIn("status=catching-up", proc.stdout)
+
+    def test_rejects_ready_row_without_full_stage_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "stageSyncPipelineMonotonic": True,
+                        "heightRegressionBlocks": 0,
+                        "stageProgressRegressionCount": 0,
+                        "stageMismatchRows": 0,
+                        "stageMissingCanonicalRows": 0,
+                        "stageStagedBodyIssueRows": 0,
+                        "stageIssueRows": 0,
+                        "stageOrderIssueRows": 0,
+                        "stageSyncPipelineViolationCount": 0,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("fullStagedSyncRequiredStages=None", proc.stderr)
+            self.assertIn("fullStagedSyncStageCount=None, want 6", proc.stderr)
+            self.assertIn("fullStagedSyncMissingStages=None, want []", proc.stderr)
 
     def test_rejects_stage_order_and_offline_failures(self):
         with tempfile.TemporaryDirectory() as tmp:

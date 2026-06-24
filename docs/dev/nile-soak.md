@@ -362,8 +362,10 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
 
 By default the checker validates the latest selected row, requires a captured
 stage-status file, accepts `catching-up` or `caught-up` staged-sync states, and
-rejects HTTP/sample failures, critical soak health, stage regressions, stage
-hash/staged-body/order issues, and non-monotonic sync-stage progress. Add
+requires all six sync stages to be present and hash-verified in the
+`fullStagedSync*` evidence fields. It also rejects HTTP/sample failures,
+critical soak health, stage regressions, stage hash/staged-body/order issues,
+and non-monotonic sync-stage progress. Add
 `--require-caught-up` for final catch-up proof or `--all` to validate every
 selected row in a candidate window. When `--require-offline-db-check` is used
 and the JSONL row carries `stageAlertPipeline*` fields, the checker also

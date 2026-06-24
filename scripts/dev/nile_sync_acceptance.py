@@ -24,6 +24,15 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
 
+FULL_STAGED_SYNC_REQUIRED_STAGES = (
+    "SyncBodies",
+    "SyncBodiesReady",
+    "SyncImport",
+    "SyncExecution",
+    "SyncCommitment",
+    "SyncFinish",
+)
+
 
 def load_rows(path):
     rows = []
@@ -242,6 +251,40 @@ def check_prometheus_stage_pipeline(path, text, row):
     return issues
 
 
+def check_full_staged_sync_evidence(row):
+    issues = []
+    required = row.get("fullStagedSyncRequiredStages")
+    expected = list(FULL_STAGED_SYNC_REQUIRED_STAGES)
+    if required != expected:
+        issues.append(f"fullStagedSyncRequiredStages={required!r}, want {expected!r}")
+
+    stage_count = as_number(row, "fullStagedSyncStageCount")
+    present_count = as_number(row, "fullStagedSyncPresentStageCount")
+    verified_count = as_number(row, "fullStagedSyncVerifiedStageCount")
+    expected_count = float(len(expected))
+    if stage_count != expected_count:
+        issues.append(f"fullStagedSyncStageCount={stage_count}, want {len(expected)}")
+    if present_count != expected_count:
+        issues.append(f"fullStagedSyncPresentStageCount={present_count}, want {len(expected)}")
+    if verified_count != expected_count:
+        issues.append(f"fullStagedSyncVerifiedStageCount={verified_count}, want {len(expected)}")
+
+    for field in (
+        "fullStagedSyncMissingStages",
+        "fullStagedSyncHashIssues",
+        "fullStagedSyncUnverifiedStages",
+    ):
+        value = row.get(field)
+        if value != []:
+            issues.append(f"{field}={value!r}, want []")
+
+    for field in ("fullStagedSyncStageCoverageRatio", "fullStagedSyncVerificationRatio"):
+        value = as_number(row, field)
+        if value != 1.0:
+            issues.append(f"{field}={value}, want 1")
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -256,6 +299,8 @@ def check_row(row, args):
 
     if args.require_stage_status and row.get("stageStatusFileStatus") != "ok":
         issues.append(f"stageStatusFileStatus={row.get('stageStatusFileStatus')!r}, want 'ok'")
+    if args.require_stage_status:
+        issues.extend(check_full_staged_sync_evidence(row))
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
     if args.require_caught_up:
