@@ -1464,7 +1464,9 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// genesis default (same class as the dynamic-energy / getChainParameter fix).
 	dp := stakingDynamicProperties(in.tvm)
 	resourceTime := in.tvm.ResourceTime()
-	transfer, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
+	// tvmForm=true: the 0xDF opcode path → java UnDelegateResourceProcessor's
+	// left-to-right (ub/TRX)*limit/weight unDelegateMaxUsage form.
+	transfer, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime, true)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)

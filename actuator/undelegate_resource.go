@@ -105,7 +105,9 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// That transferUsage is deducted from the receiver and folded into the
 	// owner's usage so neither party gets a free ride.
 	resourceTime := ctx.ResourceTime()
-	transferUsage, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, resourceTime)
+	// tvmForm=false: this is the actuator path → java UnDelegateResourceActuator's
+	// grouped (ub/TRX)*(limit/weight) unDelegateMaxUsage form.
+	transferUsage, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, resourceTime, false)
 
 	// Return to owner's frozen balance
 	ctx.State.AddFreezeV2(ownerAddr, c.Resource, c.Balance)

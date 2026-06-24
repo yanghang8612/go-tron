@@ -42,7 +42,14 @@ func writeResState(statedb *state.StateDB, addr tcommon.Address, resource corepb
 // remainder back. Returns the transferable amount AND the receiver's post-recovery
 // window so the owner-side combine (FoldUsageIntoOwner) can blend it in — exactly
 // java's unDelegateIncrease reading receiver.getWindowSize().
-func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperties, receiver tcommon.Address, resource corepb.ResourceCode, unDelegateBalance, now int64) (transfer, recvRawWindow int64, recvOptimized bool) {
+// tvmForm selects the unDelegateMaxUsage float evaluation order: java's
+// UnDelegateResourceProcessor (the 0xDF opcode, tvmForm=true) computes it
+// left-to-right `(ub/TRX) * limit / weight`, while UnDelegateResourceActuator
+// (tvmForm=false) groups the ratio `(ub/TRX) * (limit/weight)`. The two IEEE-754
+// orders differ by 1 at rare ULP boundaries, and when that cap binds it flips the
+// committed transferUsage — so the shared helper must use the form matching its
+// caller's java path.
+func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperties, receiver tcommon.Address, resource corepb.ResourceCode, unDelegateBalance, now int64, tvmForm bool) (transfer, recvRawWindow int64, recvOptimized bool) {
 	acct := statedb.GetAccount(receiver)
 	if acct == nil {
 		return 0, 0, false
@@ -76,7 +83,13 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	if acquiredV2 >= unDelegateBalance && totalFrozen > 0 && recovered > 0 {
 		maxTransfer := int64(0)
 		if totalWeight > 0 {
-			maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * (float64(totalLimit) / float64(totalWeight)))
+			if tvmForm {
+				// java UnDelegateResourceProcessor: (ub/TRX) * limit / weight (left-to-right).
+				maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * float64(totalLimit) / float64(totalWeight))
+			} else {
+				// java UnDelegateResourceActuator: (ub/TRX) * (limit/weight) (grouped ratio).
+				maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * (float64(totalLimit) / float64(totalWeight)))
+			}
 		}
 		transfer = int64(float64(recovered) * (float64(unDelegateBalance) / float64(totalFrozen)))
 		if transfer > maxTransfer {
