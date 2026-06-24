@@ -103,6 +103,7 @@ func TestProcessBlockRebuildsStandbyPaySetAtRewardTime(t *testing.T) {
 	_, _, err := processBlock(
 		statedb, dp, block, db, nil, 0, params.DefaultBlockNumForEnergyLimit,
 		false, tcommon.Hash{}, nil, staleSet, nil, processBlockPrefetchConfig{}, nil,
+		-1, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

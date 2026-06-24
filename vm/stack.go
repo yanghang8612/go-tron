@@ -45,3 +45,9 @@ func (s *Stack) dup(n int) {
 func (s *Stack) len() int {
 	return len(s.data)
 }
+
+// Data returns the underlying operand slice (bottom..top, top last). Tracers
+// read it to record per-opcode operands; callers must not mutate it.
+func (s *Stack) Data() []uint256.Int {
+	return s.data
+}

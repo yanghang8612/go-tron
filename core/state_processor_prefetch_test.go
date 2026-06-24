@@ -47,6 +47,8 @@ func TestProcessBlockStatePrefetchMatchesSerialStateRoot(t *testing.T) {
 			nil,
 			cfg,
 			nil,
+			-1,
+			nil,
 		)
 		if err != nil {
 			t.Fatalf("processBlock(prefetch=%v): %v", prefetch, err)

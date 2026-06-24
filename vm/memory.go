@@ -54,6 +54,12 @@ func (m *Memory) len() int {
 	return len(m.store)
 }
 
+// Data returns the backing memory bytes (no copy). Tracers read it to record
+// the memory image at a step; callers must not mutate the returned slice.
+func (m *Memory) Data() []byte {
+	return m.store
+}
+
 // resize grows memory to at least size bytes (never shrinks).
 func (m *Memory) resize(size uint64) {
 	if uint64(len(m.store)) >= size {
