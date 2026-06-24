@@ -406,3 +406,100 @@ func TestCheckStageProgressOrder(t *testing.T) {
 		t.Fatalf("genesis-only tail prune issues = %+v, want none without event-log stage", genesisTail)
 	}
 }
+
+func TestPlanStageProgressPipelineCursor(t *testing.T) {
+	var (
+		hashA = common.Hash{0x0a}
+		hashB = common.Hash{0x0b}
+		hashC = common.Hash{0x0c}
+	)
+	empty := PlanStageProgressPipelineCursor(nil)
+	if !empty.Complete || empty.Pending != 0 || len(empty.Tasks) != 0 || len(empty.Issues) != 0 {
+		t.Fatalf("empty cursor = %+v, want complete without tasks", empty)
+	}
+
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageHeaders: {
+			Stage:        StageHeaders,
+			BlockNum:     10,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageBodies: {
+			Stage:        StageBodies,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageExecution: {
+			Stage:        StageExecution,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageCommitment: {
+			Stage:        StageCommitment,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageSnapshotBuild: {
+			Stage:        StageSnapshotBuild,
+			BlockNum:     8,
+			BlockHash:    hashC,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     6,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+	})
+	if cursor.Complete || cursor.Pending != len(cursor.Tasks) || len(cursor.Tasks) < 4 {
+		t.Fatalf("cursor = %+v, want incomplete pending tasks", cursor)
+	}
+	wantTasks := map[StageID]StageProgressPipelineTaskStatus{
+		StageBodies:                    StageProgressPipelineTaskBehind,
+		StageSnapshotBuild:             StageProgressPipelineTaskHashMismatch,
+		StageSnapshotLatestBuild:       StageProgressPipelineTaskMissing,
+		StageSnapshotEventLogBuild:     StageProgressPipelineTaskMissing,
+		StageSnapshotPrune:             StageProgressPipelineTaskMissing,
+		StageChainFreezer:              StageProgressPipelineTaskBehind,
+		StageSnapshotSectionBloomPrune: StageProgressPipelineTaskMissing,
+		StageSnapshotBalanceTracePrune: StageProgressPipelineTaskMissing,
+	}
+	for stage, status := range wantTasks {
+		task, ok := stageProgressCursorTask(cursor.Tasks, stage)
+		if !ok {
+			t.Fatalf("cursor tasks missing %s in %+v", stage, cursor.Tasks)
+		}
+		if task.Status != status {
+			t.Fatalf("%s task status = %s, want %s", stage, task.Status, status)
+		}
+	}
+	if bodyTask, ok := stageProgressCursorTask(cursor.Tasks, StageBodies); !ok || bodyTask.TargetBlock != 10 || bodyTask.CurrentBlock != 8 || bodyTask.TargetHash != hashA || bodyTask.CurrentHash != hashB {
+		t.Fatalf("body task = %+v ok=%v, want target headers 10/hashA current 8/hashB", bodyTask, ok)
+	}
+	if snapshotTask, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotBuild); !ok || snapshotTask.TargetBlock != 8 || snapshotTask.TargetHash != hashB || snapshotTask.CurrentHash != hashC {
+		t.Fatalf("snapshot task = %+v ok=%v, want same-height hash mismatch against finish", snapshotTask, ok)
+	}
+	if len(cursor.Issues) == 0 {
+		t.Fatalf("cursor issues = nil, want hash/order issues for blocked stages")
+	}
+}
+
+func stageProgressCursorTask(tasks []StageProgressPipelineTask, stage StageID) (StageProgressPipelineTask, bool) {
+	for _, task := range tasks {
+		if task.Stage == stage {
+			return task, true
+		}
+	}
+	return StageProgressPipelineTask{}, false
+}

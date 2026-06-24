@@ -1044,14 +1044,15 @@ type dbStageStatusOptions struct {
 }
 
 type dbStageStatusJSON struct {
-	Datadir      string                   `json:"datadir"`
-	Known        int                      `json:"known"`
-	Rows         int                      `json:"rows"`
-	Status       string                   `json:"status"`
-	Verify       bool                     `json:"verify"`
-	Stages       []dbStageStatusRowJSON   `json:"stages"`
-	Issues       []string                 `json:"issues,omitempty"`
-	IssueDetails []dbStageStatusIssueJSON `json:"issueDetails,omitempty"`
+	Datadir      string                    `json:"datadir"`
+	Known        int                       `json:"known"`
+	Rows         int                       `json:"rows"`
+	Status       string                    `json:"status"`
+	Verify       bool                      `json:"verify"`
+	Pipeline     dbStageStatusPipelineJSON `json:"pipeline"`
+	Stages       []dbStageStatusRowJSON    `json:"stages"`
+	Issues       []string                  `json:"issues,omitempty"`
+	IssueDetails []dbStageStatusIssueJSON  `json:"issueDetails,omitempty"`
 }
 
 type dbStageStatusRowJSON struct {
@@ -1081,6 +1082,23 @@ type dbStageStatusIssueJSON struct {
 	HashMismatch    bool   `json:"hashMismatch,omitempty"`
 }
 
+type dbStageStatusPipelineJSON struct {
+	Complete bool                            `json:"complete"`
+	Pending  int                             `json:"pending"`
+	Issues   int                             `json:"issues"`
+	Tasks    []dbStageStatusPipelineTaskJSON `json:"tasks,omitempty"`
+}
+
+type dbStageStatusPipelineTaskJSON struct {
+	Stage        string `json:"stage"`
+	Upstream     string `json:"upstream"`
+	Status       string `json:"status"`
+	TargetValue  uint64 `json:"targetValue"`
+	TargetHash   string `json:"targetHash,omitempty"`
+	CurrentValue uint64 `json:"currentValue,omitempty"`
+	CurrentHash  string `json:"currentHash,omitempty"`
+}
+
 func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string, opts dbStageStatusOptions) error {
 	rows, err := dbStageStatusRows(db, canonical)
 	if err != nil {
@@ -1098,6 +1116,7 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		issueDetails = dbStageStatusIssueDetails(rows, db, stateSnapshotsDir(dataDir))
 		issues = dbStageStatusIssueStrings(issueDetails)
 	}
+	pipeline := dbStageStatusPipeline(rows)
 	if opts.JSON {
 		report := dbStageStatusJSON{
 			Datadir:      dataDir,
@@ -1105,6 +1124,7 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 			Rows:         present,
 			Status:       "ok",
 			Verify:       opts.Verify,
+			Pipeline:     dbStageStatusPipelineJSONForCursor(pipeline),
 			Stages:       dbStageStatusRowsJSON(rows),
 			Issues:       issues,
 			IssueDetails: issueDetails,
@@ -1143,6 +1163,21 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		}
 		fmt.Println()
 	}
+	fmt.Printf("Stage pipeline: complete=%t pending=%d issues=%d\n", pipeline.Complete, pipeline.Pending, len(pipeline.Issues))
+	for _, task := range pipeline.Tasks {
+		fmt.Printf("Stage pipeline task: stage=%s upstream=%s status=%s target=%d",
+			task.Stage, task.Upstream, task.Status, task.TargetBlock)
+		if task.TargetHasHash {
+			fmt.Printf(" targetHash=%x", task.TargetHash)
+		}
+		if task.CurrentBlock != 0 || task.CurrentHasHash {
+			fmt.Printf(" current=%d", task.CurrentBlock)
+			if task.CurrentHasHash {
+				fmt.Printf(" currentHash=%x", task.CurrentHash)
+			}
+		}
+		fmt.Println()
+	}
 	if opts.Verify && len(issues) > 0 {
 		return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
 	}
@@ -1171,6 +1206,45 @@ func dbStageStatusRowsJSON(rows []dbStageStatusRow) []dbStageStatusRowJSON {
 			item.Details = append([]string(nil), row.details...)
 		}
 		out = append(out, item)
+	}
+	return out
+}
+
+func dbStageStatusPipeline(rows []dbStageStatusRow) rawdb.StageProgressPipelineCursor {
+	byStage := make(map[rawdb.StageID]dbStageStatusRow, len(rows))
+	for _, row := range rows {
+		if row.present {
+			byStage[row.stage] = row
+		}
+	}
+	return rawdb.PlanStageProgressPipelineCursor(dbStageStatusProgressRows(byStage))
+}
+
+func dbStageStatusPipelineJSONForCursor(cursor rawdb.StageProgressPipelineCursor) dbStageStatusPipelineJSON {
+	out := dbStageStatusPipelineJSON{
+		Complete: cursor.Complete,
+		Pending:  cursor.Pending,
+		Issues:   len(cursor.Issues),
+	}
+	if len(cursor.Tasks) == 0 {
+		return out
+	}
+	out.Tasks = make([]dbStageStatusPipelineTaskJSON, 0, len(cursor.Tasks))
+	for _, task := range cursor.Tasks {
+		item := dbStageStatusPipelineTaskJSON{
+			Stage:        string(task.Stage),
+			Upstream:     string(task.Upstream),
+			Status:       string(task.Status),
+			TargetValue:  task.TargetBlock,
+			CurrentValue: task.CurrentBlock,
+		}
+		if task.TargetHasHash {
+			item.TargetHash = fmt.Sprintf("%x", task.TargetHash)
+		}
+		if task.CurrentHasHash {
+			item.CurrentHash = fmt.Sprintf("%x", task.CurrentHash)
+		}
+		out.Tasks = append(out.Tasks, item)
 	}
 	return out
 }

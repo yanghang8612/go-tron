@@ -575,6 +575,29 @@ class NileSyncSampleTest(unittest.TestCase):
                         "rows": 8,
                         "status": "critical",
                         "verify": True,
+                        "pipeline": {
+                            "complete": False,
+                            "pending": 2,
+                            "issues": 1,
+                            "tasks": [
+                                {
+                                    "stage": "SnapshotEventLogBuild",
+                                    "upstream": "Finish",
+                                    "status": "missing",
+                                    "targetValue": 82,
+                                    "targetHash": "11",
+                                },
+                                {
+                                    "stage": "ChainFreezer",
+                                    "upstream": "Finish",
+                                    "status": "behind",
+                                    "targetValue": 82,
+                                    "targetHash": "11",
+                                    "currentValue": 70,
+                                    "currentHash": "22",
+                                },
+                            ],
+                        },
                         "stages": [
                             {"group": "sync", "name": "SyncBodies", "present": True, "status": "present", "value": 100, "hash": "aa", "verified": "canonical"},
                             {"group": "sync", "name": "SyncBodiesReady", "present": True, "status": "present", "value": 96, "hash": "bb", "verified": "staged-hash-mismatch", "details": ["stagedBlock=96", "stagedHash=cc"]},
@@ -635,6 +658,24 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageStatusFileStatus"], "ok")
             self.assertEqual(row["stageKnown"], 32)
             self.assertEqual(row["stageRows"], 8)
+            self.assertFalse(row["stagePipelineComplete"])
+            self.assertEqual(row["stagePipelinePending"], 2)
+            self.assertEqual(row["stagePipelineIssues"], 1)
+            self.assertEqual(row["stagePipelineNext"], "SnapshotEventLogBuild")
+            self.assertEqual(row["stagePipelineNextStatus"], "missing")
+            self.assertEqual(row["stagePipelineNextTarget"], 82)
+            self.assertEqual(
+                row["stagePipelineTasks"][1],
+                {
+                    "stage": "ChainFreezer",
+                    "upstream": "Finish",
+                    "status": "behind",
+                    "targetValue": 82,
+                    "targetHash": "11",
+                    "currentValue": 70,
+                    "currentHash": "22",
+                },
+            )
             self.assertEqual(row["stageSyncBodies"], 100)
             self.assertEqual(row["stageSyncBodiesReady"], 96)
             self.assertEqual(row["stageSyncImport"], 95)

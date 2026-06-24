@@ -1458,6 +1458,8 @@ func TestDBStageStatusCmd(t *testing.T) {
 		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
 		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
 		"group=unknown name=FutureStage value=77 hash=none verified=unbound",
+		"Stage pipeline: complete=false pending=1",
+		fmt.Sprintf("Stage pipeline task: stage=%s upstream=%s status=missing target=1 targetHash=%x", rawdb.StageBodies, rawdb.StageHeaders, block1.Hash()),
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("stage status output missing %q:\n%s", want, output)
@@ -1477,6 +1479,12 @@ func TestDBStageStatusCmd(t *testing.T) {
 	}
 	if report.Datadir != dataDir || report.Known != len(rawdb.KnownStageProgressStages()) || report.Rows == 0 || report.Status != "critical" || report.Verify {
 		t.Fatalf("stage status json summary = %+v", report)
+	}
+	if report.Pipeline.Complete || report.Pipeline.Pending != 1 || len(report.Pipeline.Tasks) != 1 {
+		t.Fatalf("stage status pipeline = %+v, want one pending bodies task", report.Pipeline)
+	}
+	if task := report.Pipeline.Tasks[0]; task.Stage != string(rawdb.StageBodies) || task.Upstream != string(rawdb.StageHeaders) || task.Status != string(rawdb.StageProgressPipelineTaskMissing) || task.TargetValue != block1.Number() || task.TargetHash != fmt.Sprintf("%x", block1.Hash()) {
+		t.Fatalf("stage status pipeline task = %+v, want missing Bodies after Headers", task)
 	}
 	headersRow, ok := dbStageStatusJSONRow(report, rawdb.StageHeaders)
 	if !ok || !headersRow.Present || headersRow.Group != "canonical" || headersRow.Value != block1.Number() || headersRow.Hash != fmt.Sprintf("%x", block1.Hash()) || headersRow.Verified != "canonical" {

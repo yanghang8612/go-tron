@@ -712,6 +712,13 @@ Status:
   checker next to the downloader-owned sync-stage checker. This makes the
   post-import storage maintenance stages part of the same machine-verifiable
   staged pipeline model instead of CLI-local validation logic.
+- The same rawdb-owned dependency graph now has a scheduler-friendly stage
+  pipeline cursor. `gtron db stage-status` reports the next canonical or
+  post-`Finish` snapshot/prune/freezer edge that can advance, while
+  `stage-status --json` exposes `pipeline.pending`, `pipeline.tasks`, and
+  `pipeline.issues` for Nile soak sampling. This makes storage-maintenance
+  backlog observable before the runtime loop is fully promoted into a stage
+  scheduler.
 - The cold snapshot builder now writes `SnapshotBuild` and
   `SnapshotLatestBuild` as hash-bound canonical block stages. It resolves the
   boundary hash before publishing the new stage row, and

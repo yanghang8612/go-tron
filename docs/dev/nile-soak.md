@@ -247,7 +247,14 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageOrderIssueRows`, `stageSyncOrderIssueRows`,
 `stageStorageOrderIssueRows`, and `stageOrderIssueDetails`, so long soaks can
 filter directly on the stage edge that broke instead of parsing the free-form
-`issues` strings. The sampler also derives
+`issues` strings. Rows also include
+`stagePipelineComplete`, `stagePipelinePending`, `stagePipelineIssues`,
+`stagePipelineNext`, `stagePipelineNextStatus`,
+`stagePipelineNextTarget`, and `stagePipelineTasks` from the `stage-status`
+`pipeline` object. These fields describe the next canonical or
+post-`Finish` snapshot/prune/freezer stage edge that can be advanced; pending
+tasks are backlog diagnostics, not health failures by themselves.
+The sampler also derives
 `stageSyncBodiesReadyGapBlocks`, `stageSyncImportExecutionLagBlocks`,
 `stageSyncExecutionCommitmentLagBlocks`,
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus

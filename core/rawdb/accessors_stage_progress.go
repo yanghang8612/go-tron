@@ -142,6 +142,37 @@ type StageProgressOrderIssue struct {
 	HashMismatch    bool
 }
 
+type StageProgressPipelineTaskStatus string
+
+const (
+	StageProgressPipelineTaskMissing      StageProgressPipelineTaskStatus = "missing"
+	StageProgressPipelineTaskBehind       StageProgressPipelineTaskStatus = "behind"
+	StageProgressPipelineTaskHashMismatch StageProgressPipelineTaskStatus = "hash-mismatch"
+)
+
+type StageProgressPipelineTask struct {
+	Stage          StageID
+	Upstream       StageID
+	Status         StageProgressPipelineTaskStatus
+	TargetBlock    uint64
+	TargetHash     common.Hash
+	TargetHasHash  bool
+	CurrentBlock   uint64
+	CurrentHash    common.Hash
+	CurrentHasHash bool
+}
+
+// StageProgressPipelineCursor is a scheduler-friendly view of the canonical
+// and post-finish storage-maintenance stage graph. It reports stage dependency
+// edges that are ready to advance because their upstream progress is already
+// present, plus any ordering issues that require repair before scheduling.
+type StageProgressPipelineCursor struct {
+	Complete bool
+	Pending  int
+	Tasks    []StageProgressPipelineTask
+	Issues   []StageProgressOrderIssue
+}
+
 func (i StageProgressOrderIssue) String() string {
 	if i.MissingUpstream {
 		return fmt.Sprintf("%s requires %s", i.Downstream, i.Upstream)
@@ -150,6 +181,62 @@ func (i StageProgressOrderIssue) String() string {
 		return fmt.Sprintf("%s=%d/%x hash does not match %s=%d/%x", i.Downstream, i.DownstreamBlock, i.DownstreamHash, i.Upstream, i.UpstreamBlock, i.UpstreamHash)
 	}
 	return fmt.Sprintf("%s=%d ahead of %s=%d", i.Downstream, i.DownstreamBlock, i.Upstream, i.UpstreamBlock)
+}
+
+// PlanStageProgressPipelineCursor derives the next schedulable canonical or
+// storage-maintenance stage edges from already-read stage rows. It does not
+// mutate storage; callers can use the returned tasks to report or schedule the
+// fuller staged loop after Finish without trusting unchecked stage rows.
+func PlanStageProgressPipelineCursor(rows map[StageID]StageProgress) StageProgressPipelineCursor {
+	cursor := StageProgressPipelineCursor{
+		Issues: CheckStageProgressOrder(rows),
+	}
+	if len(rows) == 0 {
+		cursor.Complete = true
+		return cursor
+	}
+	for _, pair := range StageProgressOrderPairs() {
+		upstream, upstreamOK := rows[pair.Upstream]
+		if !upstreamOK {
+			continue
+		}
+		downstream, downstreamOK := rows[pair.Downstream]
+		if !downstreamOK {
+			cursor.Tasks = append(cursor.Tasks, StageProgressPipelineTask{
+				Stage:         pair.Downstream,
+				Upstream:      pair.Upstream,
+				Status:        StageProgressPipelineTaskMissing,
+				TargetBlock:   upstream.BlockNum,
+				TargetHash:    upstream.BlockHash,
+				TargetHasHash: upstream.HasBlockHash,
+			})
+			continue
+		}
+		task := StageProgressPipelineTask{
+			Stage:          pair.Downstream,
+			Upstream:       pair.Upstream,
+			TargetBlock:    upstream.BlockNum,
+			TargetHash:     upstream.BlockHash,
+			TargetHasHash:  upstream.HasBlockHash,
+			CurrentBlock:   downstream.BlockNum,
+			CurrentHash:    downstream.BlockHash,
+			CurrentHasHash: downstream.HasBlockHash,
+		}
+		switch {
+		case downstream.BlockNum < upstream.BlockNum:
+			task.Status = StageProgressPipelineTaskBehind
+		case downstream.BlockNum == upstream.BlockNum &&
+			downstream.HasBlockHash && upstream.HasBlockHash &&
+			downstream.BlockHash != upstream.BlockHash:
+			task.Status = StageProgressPipelineTaskHashMismatch
+		default:
+			continue
+		}
+		cursor.Tasks = append(cursor.Tasks, task)
+	}
+	cursor.Pending = len(cursor.Tasks)
+	cursor.Complete = cursor.Pending == 0 && len(cursor.Issues) == 0
+	return cursor
 }
 
 func CanonicalExecutionStages() []StageID {

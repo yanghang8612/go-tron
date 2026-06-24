@@ -431,6 +431,15 @@ def finalize_stage_status(row):
     row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
     return row
 
+def stage_status_int(value, default=-1):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+def stage_status_bool(value):
+    return str(value).lower() in {"1", "true", "yes"}
+
 def parse_stage_status_json(text, row):
     for line in text.splitlines():
         stripped = line.strip()
@@ -444,6 +453,30 @@ def parse_stage_status_json(text, row):
             continue
         row["stageKnown"] = int(obj.get("known", -1))
         row["stageRows"] = int(obj.get("rows", -1))
+        pipeline = obj.get("pipeline", {})
+        if isinstance(pipeline, dict):
+            row["stagePipelineComplete"] = bool(pipeline.get("complete", False))
+            row["stagePipelinePending"] = stage_status_int(pipeline.get("pending", -1))
+            row["stagePipelineIssues"] = stage_status_int(pipeline.get("issues", -1))
+            row["stagePipelineTasks"] = []
+            for item in pipeline.get("tasks", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                task = {
+                    "stage": str(item.get("stage", "")),
+                    "upstream": str(item.get("upstream", "")),
+                    "status": str(item.get("status", "")),
+                    "targetValue": stage_status_int(item.get("targetValue", -1)),
+                    "targetHash": str(item.get("targetHash", "")),
+                    "currentValue": stage_status_int(item.get("currentValue", -1)),
+                    "currentHash": str(item.get("currentHash", "")),
+                }
+                row["stagePipelineTasks"].append(task)
+            if row["stagePipelineTasks"]:
+                first = row["stagePipelineTasks"][0]
+                row["stagePipelineNext"] = first.get("stage", "")
+                row["stagePipelineNextStatus"] = first.get("status", "")
+                row["stagePipelineNextTarget"] = first.get("targetValue", -1)
         for item in obj.get("stages", []):
             if not isinstance(item, dict):
                 continue
@@ -547,6 +580,13 @@ def parse_stage_status(path):
         "stageStatusFileStatus": "skipped" if not path else "missing",
         "stageKnown": -1,
         "stageRows": -1,
+        "stagePipelineComplete": False,
+        "stagePipelinePending": -1,
+        "stagePipelineIssues": -1,
+        "stagePipelineNext": "",
+        "stagePipelineNextStatus": "",
+        "stagePipelineNextTarget": -1,
+        "stagePipelineTasks": [],
         "stageProgress": {},
         "stageMismatchRows": 0,
         "stageUnboundRows": 0,
@@ -591,6 +631,42 @@ def parse_stage_status(path):
                 row["stageKnown"] = int(known[-1])
             if rows:
                 row["stageRows"] = int(rows[-1])
+            continue
+        if line.startswith("Stage pipeline:"):
+            fields = {}
+            for token in line.split()[2:]:
+                if "=" not in token:
+                    continue
+                key, value = token.split("=", 1)
+                fields[key] = value
+            if "complete" in fields:
+                row["stagePipelineComplete"] = stage_status_bool(fields["complete"])
+            if "pending" in fields:
+                row["stagePipelinePending"] = stage_status_int(fields["pending"])
+            if "issues" in fields:
+                row["stagePipelineIssues"] = stage_status_int(fields["issues"])
+            continue
+        if line.startswith("Stage pipeline task:"):
+            fields = {}
+            for token in line.split()[3:]:
+                if "=" not in token:
+                    continue
+                key, value = token.split("=", 1)
+                fields[key] = value
+            task = {
+                "stage": fields.get("stage", ""),
+                "upstream": fields.get("upstream", ""),
+                "status": fields.get("status", ""),
+                "targetValue": stage_status_int(fields.get("target", "-1")),
+                "targetHash": fields.get("targetHash", ""),
+                "currentValue": stage_status_int(fields.get("current", "-1")),
+                "currentHash": fields.get("currentHash", ""),
+            }
+            row["stagePipelineTasks"].append(task)
+            if not row["stagePipelineNext"]:
+                row["stagePipelineNext"] = task["stage"]
+                row["stagePipelineNextStatus"] = task["status"]
+                row["stagePipelineNextTarget"] = task["targetValue"]
             continue
         if not line.startswith("Stage progress:"):
             continue
