@@ -144,15 +144,15 @@ type Result struct {
 	// TransactionInfo.ResourceReceipt fields 11-19. Owner* describe the tx
 	// fee-payer and are filled for every tx type (set in core.applyTransaction);
 	// *EnergyWindow are filled for smart-contract txs (set in vm_actuator).
-	OwnerBalance                  int64
-	OwnerFreeNetLeft              int64
-	OwnerFrozenNetLeft            int64
-	OwnerNetLastConsumeTime       int64
-	OwnerFreeNetLastConsumeTime   int64
-	OwnerFrozenForNet             int64
-	OwnerFrozenForEnergy          int64
-	OriginEnergyWindow            int64
-	CallerEnergyWindow            int64
+	OwnerBalance                int64
+	OwnerFreeNetLeft            int64
+	OwnerFrozenNetLeft          int64
+	OwnerNetLastConsumeTime     int64
+	OwnerFreeNetLastConsumeTime int64
+	OwnerFrozenForNet           int64
+	OwnerFrozenForEnergy        int64
+	OriginEnergyWindow          int64
+	CallerEnergyWindow          int64
 	// Diagnostic (cross-impl parity), non-consensus — ResourceReceipt fields
 	// 20-28, filled for smart-contract txs in vm_actuator. They decompose the
 	// energy bill: recovered_usage = energy_limit - energy_left, and the limit
@@ -166,6 +166,19 @@ type Result struct {
 	OriginEnergyLastConsumeTime int64
 	TotalEnergyWeight           int64
 	TotalEnergyCurrentLimit     int64
+
+	// energyPreCharges records the pre-VM energy pre-charge applied to the
+	// caller (and, under the consume_user_resource_percent split, the origin),
+	// mirroring java-tron VMActuator.getAccountEnergyLimitWithFixRatio /
+	// getTotalEnergyLimitWithFixRatio. The pre-charge raises the account's
+	// energy_usage toward its limit in the VM-visible state BEFORE execution so a
+	// contract reading its own caller/origin energy usage mid-VM (the staking-
+	// query precompiles) observes the same charged value java does. It is undone
+	// after the VM (restoreEnergyPreCharges) — java resetAccountUsage on success,
+	// discard on revert — leaving the post-VM energy settle (PayEnergyBill) byte-
+	// identical. Non-consensus carrier; never serialised.
+	energyPreCharges []energyPreCharge
+
 	NetUsage                      int64
 	NetFee                        int64
 	NetFeeForBandwidth            bool

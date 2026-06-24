@@ -259,6 +259,9 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	result := &Result{ContractAddress: contractAddr[:]}
 	energyLimit := uint64(accountEnergyLimit(ctx, owner, ctx.Tx.FeeLimit(), callValue, result))
+	// accountEnergyLimit pre-charged the creator's energy_usage into the
+	// VM-visible state; undo it after the VM on every return path (see executeTrigger).
+	defer restoreEnergyPreCharges(ctx, result)
 	if isReplayOutOfTime(ctx) {
 		setReplayOutOfTimeResult(result, energyLimit)
 		return result, nil
@@ -334,6 +337,10 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	result := &Result{}
 	result.ContractAddress = contractAddr[:]
 	energyLimit := uint64(triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result))
+	// triggerEnergyLimit pre-charged the caller/origin energy_usage into the
+	// VM-visible state; undo it after the VM (java resetAccountUsage on success,
+	// discard on revert) on every return path, before PayEnergyBill settles.
+	defer restoreEnergyPreCharges(ctx, result)
 	if isReplayOutOfTime(ctx) {
 		setReplayOutOfTimeResult(result, energyLimit)
 		return result, nil
@@ -453,6 +460,12 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 	energyFromBalance := maxInt64(ctx.State.GetBalance(account)-callValue, 0) / sunPerEnergy
 	availableEnergy := leftFrozenEnergy + energyFromBalance
 	energyFromFeeLimit := feeLimit / sunPerEnergy
+	// java getAccountEnergyLimitWithFixRatio pre-charges the caller's energy_usage
+	// (by min(leftFrozenEnergy, energyFromFeeLimit)) into the VM-visible state
+	// before VM.play, so a contract reading its own energy usage mid-VM sees the
+	// charged value. Undone after the VM by restoreEnergyPreCharges. Computed AFTER
+	// leftFrozenEnergy/availableEnergy so the returned limit is unaffected.
+	preChargeEnergyUsage(ctx, account, minInt64(leftFrozenEnergy, energyFromFeeLimit), result)
 	return minInt64(availableEnergy, energyFromFeeLimit)
 }
 
@@ -515,6 +528,14 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
 	originPercent := 100 - userPercent
 	if originPercent <= 0 {
+		// consume_user_resource_percent == 100: the origin contributes 0 to the
+		// limit, but java getTotalEnergyLimitWithFixRatio STILL runs the
+		// allowTvmFreezeV2 origin pre-charge with creatorEnergyLimit == 0 — it
+		// recovers the origin's energy_usage to now and refreshes its
+		// latestConsumeTime, so a contract reading the origin's own energy usage
+		// mid-VM sees the recovered value. (java skips the originEnergyLeft fetch
+		// here too, matching this early branch.)
+		preChargeEnergyUsage(ctx, origin, 0, result)
 		return callerEnergyLimit
 	}
 
@@ -546,6 +567,10 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 			minInt64(originEnergyLeft, originLimit),
 		)
 	}
+	// java getTotalEnergyLimitWithFixRatio pre-charges the origin (creator) by
+	// creatorEnergyLimit before VM.play (the caller was already pre-charged inside
+	// accountEnergyLimitWithFixRatio above). Undone after the VM.
+	preChargeEnergyUsage(ctx, origin, originEnergyLimit, result)
 	return callerEnergyLimit + originEnergyLimit
 }
 
