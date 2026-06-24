@@ -776,7 +776,7 @@ func (r *PersistentHistoryReader) readStateKVPrefixAsOf(owner tcommon.Address, g
 
 func (r *PersistentHistoryReader) readStateKVPrefixAsOfTxNum(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, targetTxNum, headTxNum uint64, fn func(key, value []byte) (bool, error)) error {
 	entries := make(map[string][]byte)
-	if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+	if err := r.readStateKVLatestPrefixInto(owner, generation, domain, prefix, headTxNum, entries); err != nil {
 		return err
 	}
 	if targetTxNum < headTxNum {
@@ -819,12 +819,13 @@ func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOfTxNum(owner tcommo
 		}
 		return cfg.IterateHotAccountKVPrefixAsOf(r.db, owner, domain, prefix, targetTxNum, headTxNum, fn)
 	}
-	generation, _, err := r.hotLatest().KVGeneration(owner)
+	latest := r.latestAtTxNum(headTxNum)
+	generation, _, err := latest.KVGeneration(owner)
 	if err != nil {
 		return err
 	}
 	entries := make(map[string][]byte)
-	if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+	if err := r.readStateKVLatestPrefixInto(owner, generation, domain, prefix, headTxNum, entries); err != nil {
 		return err
 	}
 	upperTxNum := headTxNum
@@ -851,11 +852,11 @@ func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOfTxNum(owner tcommo
 				if err != nil {
 					return err
 				}
+				upperTxNum = previousTxNum(change.TxNum)
 				entries = make(map[string][]byte)
-				if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+				if err := r.readStateKVLatestPrefixInto(owner, generation, domain, prefix, upperTxNum, entries); err != nil {
 					return err
 				}
-				upperTxNum = previousTxNum(change.TxNum)
 				generationChanged = true
 			}
 			if generationChanged {
@@ -874,7 +875,15 @@ type hotStateLatestPrefixReader interface {
 }
 
 func (r *PersistentHistoryReader) readHotStateKVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
-	if latest, ok := r.hotLatest().(hotStateLatestPrefixReader); ok {
+	return r.readStateKVLatestPrefix(owner, generation, domain, prefix, 0, fn)
+}
+
+func (r *PersistentHistoryReader) readStateKVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, txNum uint64, fn func(key, value []byte) (bool, error)) error {
+	latest := r.hotLatest()
+	if txNum != 0 {
+		latest = r.latestAtTxNum(txNum)
+	}
+	if latest, ok := latest.(hotStateLatestPrefixReader); ok {
 		return latest.KVLatestPrefix(owner, generation, domain, prefix, fn)
 	}
 	if r == nil || r.db == nil {
@@ -884,7 +893,11 @@ func (r *PersistentHistoryReader) readHotStateKVLatestPrefix(owner tcommon.Addre
 }
 
 func (r *PersistentHistoryReader) readHotStateKVLatestPrefixInto(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, entries map[string][]byte) error {
-	return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, func(key, value []byte) (bool, error) {
+	return r.readStateKVLatestPrefixInto(owner, generation, domain, prefix, 0, entries)
+}
+
+func (r *PersistentHistoryReader) readStateKVLatestPrefixInto(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, txNum uint64, entries map[string][]byte) error {
+	return r.readStateKVLatestPrefix(owner, generation, domain, prefix, txNum, func(key, value []byte) (bool, error) {
 		entries[string(key)] = append([]byte(nil), value...)
 		return true, nil
 	})

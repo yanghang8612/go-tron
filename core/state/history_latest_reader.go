@@ -20,6 +20,7 @@ type hotStateLatestReader interface {
 type coldStateLatestReader interface {
 	GetAccountLatest(owner tcommon.Address, txNum uint64) ([]byte, bool, error)
 	GetKVLatest(domain kvdomains.KVDomain, owner tcommon.Address, generation uint64, key []byte, txNum uint64) ([]byte, bool, error)
+	IterateKVLatestPrefix(domain kvdomains.KVDomain, owner tcommon.Address, generation uint64, prefix []byte, txNum uint64, fn func(key, value []byte) (bool, error)) error
 	GetKVGeneration(owner tcommon.Address, txNum uint64) (uint64, bool, error)
 }
 
@@ -132,6 +133,34 @@ func (r coldFallbackStateLatestReader) KVLatest(owner tcommon.Address, generatio
 		return nil, false, nil
 	}
 	return r.cold.GetKVLatest(domain, owner, generation, key, r.txNum)
+}
+
+func (r coldFallbackStateLatestReader) KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	seen := make(map[string]struct{})
+	stopped := false
+	if r.hot != nil {
+		if latest, ok := r.hot.(hotStateLatestPrefixReader); ok {
+			if err := latest.KVLatestPrefix(owner, generation, domain, prefix, func(key, value []byte) (bool, error) {
+				seen[string(key)] = struct{}{}
+				cont, err := fn(key, value)
+				if err != nil || !cont {
+					stopped = true
+				}
+				return cont, err
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	if stopped || r.cold == nil {
+		return nil
+	}
+	return r.cold.IterateKVLatestPrefix(domain, owner, generation, prefix, r.txNum, func(key, value []byte) (bool, error) {
+		if _, ok := seen[string(key)]; ok {
+			return true, nil
+		}
+		return fn(key, value)
+	})
 }
 
 func (r coldFallbackStateLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {

@@ -409,6 +409,18 @@ func TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory(t *t
 	if err != nil {
 		t.Fatalf("build cold state-domain history: %v", err)
 	}
+	latestRef, latestAccessorRef, latestBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		domain,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/system-reward-prefix-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold latest prefix domain: %v", err)
+	}
+	refs = append(refs, latestRef, latestAccessorRef, latestBTreeRef)
 	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
 		t.Fatalf("publish cold state-domain history: %v", err)
 	}
@@ -418,6 +430,9 @@ func TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory(t *t
 	}
 
 	f.pruneHotStateDomainHistory()
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, owner, 0, domain, []byte("reward/")); err != nil {
+		t.Fatalf("delete hot reward latest prefix: %v", err)
+	}
 	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
 	if err := hotOnly.AccountKVPrefixAt(owner, domain, []byte("reward/"), 1, func(key, value []byte) (bool, error) {
 		return true, nil
