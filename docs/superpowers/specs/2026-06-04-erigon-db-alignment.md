@@ -1460,14 +1460,17 @@ Status:
   replay backfill uses that archive view when checking existing target rows, so
   a pruned hot trace that is still present in a verified cold sidecar is counted
   as existing instead of being duplicated back into Pebble.
-- The standalone `cmd/balance-trace` diagnostic now opens the same
-  `state-snapshots` manager, wraps the chain freezer with snapshot fallback,
-  and routes transaction-info, account-trace, and block-balance-trace reads
-  through the cold-sidecar-aware `ChainDB` boundary. It also uses the strict
-  transaction-info and trace readers for printed rows, so malformed hot rows or
-  corrupt/mismatched cold sidecars fail the diagnostic instead of being reported
-  as missing receipt or balance data. This keeps historical balance
-  investigations usable after chain lookup and balance trace pruning.
+- The standalone `cmd/balance-trace` and `cmd/reward-trace` diagnostics now
+  open the same `state-snapshots` manager, wrap the chain freezer with snapshot
+  fallback, and route transaction-info, account-trace, and block-balance-trace
+  reads through the cold-sidecar-aware `ChainDB` boundary. `reward-trace` also
+  attaches the same chain-index, section-bloom, and event-log sidecars so its
+  block timestamp and cycle scans can cross hot-pruned block/index ranges. The
+  balance diagnostic also uses the strict transaction-info and trace readers
+  for printed rows, so malformed hot rows or corrupt/mismatched cold sidecars
+  fail the diagnostic instead of being reported as missing receipt or balance
+  data. This keeps historical balance and reward investigations usable after
+  chain lookup and balance trace pruning.
 - Exact cold `BlockBalanceTrace` lookups skip balance-trace segment files whose
   block range cannot contain the requested block before opening them. This
   keeps unrelated missing or retired newer trace sidecars from blocking older

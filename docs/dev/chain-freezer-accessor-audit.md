@@ -104,6 +104,7 @@ the ancient reader for a real `*freezer.Freezer`.
 | `core/genesis.go` | 54 | `rawdb.ReadBlock(db, 0)` | helper accepts `*ChainDB`; call sites that have raw KV wrap with `NoopAncient` |
 | `core/tron_backend.go` | 232, 236, 249, 257, 1143, 1160, 1239 | `rawdb.Read*(b.chain.db, …)` | `rawdb.Read*(b.chain.chaindb, …)` |
 | `cmd/balance-trace/main.go` | 60, 72, 94 | `rawdb.Read*(db, …)` (raw Pebble store) | snapshot-aware `rawdb.NewChainDB(db, rawdb.NewFallbackAncientReader(ancient, manager))`; auto-opens `datadir/gtron/ancient` and `datadir/gtron/state-snapshots`, then attaches chain-index, balance-trace, section-bloom, and event-log sidecars so diagnostics keep seeing cold archive rows after hot pruning |
+| `cmd/reward-trace/main.go` | 124, 134, 260, 275, 294, 335 | `rawdb.NewChainDB(db, ancient)` without snapshot sidecars | snapshot-aware `rawdb.NewFallbackAncientReader(ancient, manager)` plus chain-index, balance-trace, section-bloom, and event-log sidecars so timestamp/cycle scans can read cold blocks and lookup rows after hot pruning |
 | `vm/instructions.go` | 482 | `rawdb.ReadBlock(interpreter.tvm.DB, index)` | switched to dedicated `rawdb.ReadBlockKV` (KV-only; never consults ancient). Safe because `opBlockHash`'s 256-block window sits above the freezer margin so any frozen lookup would land in cold storage anyway. |
 
 ### Test-side migration

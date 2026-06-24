@@ -43,6 +43,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -107,7 +108,14 @@ func main() {
 		defer fz.Close()
 		ancient = rawdb.NewFreezerReader(fz)
 	}
+	snapshotPath := filepath.Join(*datadir, "gtron", "state-snapshots")
+	snapshotManager, err := statesnapshots.OpenManager(snapshotPath)
+	if err != nil {
+		log.Crit("open state snapshots", "path", snapshotPath, "err", err)
+	}
+	ancient = rawdb.NewFallbackAncientReader(ancient, snapshotManager)
 	chaindb := rawdb.NewChainDB(db, ancient)
+	attachRewardTraceColdReaders(chaindb, snapshotManager)
 
 	headHash := rawdb.ReadHeadBlockHash(db)
 	if headHash == (tcommon.Hash{}) {
@@ -586,6 +594,23 @@ func main() {
 			}
 		}
 	}
+}
+
+type rewardTraceColdReader interface {
+	rawdb.ChainIndexReader
+	rawdb.BalanceTraceReader
+	rawdb.SectionBloomReader
+	rawdb.EventLogReader
+}
+
+func attachRewardTraceColdReaders(chaindb *rawdb.ChainDB, reader rewardTraceColdReader) {
+	if chaindb == nil || reader == nil {
+		return
+	}
+	chaindb.SetChainIndexReader(reader)
+	chaindb.SetBalanceTraceReader(reader)
+	chaindb.SetSectionBloomReader(reader)
+	chaindb.SetEventLogReader(reader)
 }
 
 func votesStr(vs []*corepb.Vote) string {
