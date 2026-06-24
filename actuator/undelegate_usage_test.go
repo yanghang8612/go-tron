@@ -39,7 +39,7 @@ func TestTransferUsageFromReceiver_ProRata(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 10) // no time elapsed → no decay
 
 	// Undelegate 40 TRX — 40% of receiver's pool.
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
 
 	// Expected transfer = 500 × 40/100 = 200, capped at
 	// maxUsage = 40 × (43_200_000_000 / 1000) = 40 × 43_200_000 = 1_728_000_000 (no cap hit).
@@ -73,7 +73,7 @@ func TestTransferUsageFromReceiver_CapByMaxUsage(t *testing.T) {
 	// Undelegate 10 TRX.
 	// Raw pro-rata = 1_000_000 × 10/100 = 100_000.
 	// Max = (10 × 1_000) / 1_000_000 = 0 (integer truncation).
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 0 {
 		t.Fatalf("transfer should be clamped to 0: got %d", transfer)
 	}
@@ -91,7 +91,7 @@ func TestTransferUsageFromReceiver_NoUsage(t *testing.T) {
 	// No usage.
 
 	ctx := ctxFor(statedb, dp, 1000)
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 0 {
 		t.Fatalf("transfer with no usage: got %d, want 0", transfer)
 	}
@@ -124,7 +124,7 @@ func TestTransferUsageFromReceiver_SuicideRecreateGuard(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 7) // no decay
 
 	// acquired (30 TRX) < undelegate (40 TRX) -> guard fires -> transfer 0.
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 0 {
 		t.Fatalf("suicide/recreate guard: transfer got %d, want 0 (pre-fix would compute 1300*40/130=400)", transfer)
 	}
@@ -149,12 +149,43 @@ func TestTransferUsageFromReceiver_Energy(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 5)
 
 	// Undelegate 50 TRX — 25% of receiver's 200 TRX energy pool.
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 250 {
 		t.Fatalf("energy transfer: got %d, want 250", transfer)
 	}
 	if got := statedb.GetEnergyUsage(receiver); got != 750 {
 		t.Fatalf("receiver energy usage: got %d, want 750", got)
+	}
+}
+
+// TestTransferUsageFromReceiver_MaxUsageFormDiffersByPath pins the dual-impl fix
+// for unDelegateMaxUsage: java UnDelegateResourceActuator groups the ratio
+// `(ub/TRX)*(limit/weight)` (tvmForm=false) while UnDelegateResourceProcessor (the
+// 0xDF opcode) evaluates left-to-right `(ub/TRX)*limit/weight` (tvmForm=true). The
+// two IEEE-754 orders differ by 1 at ULP boundaries, and when this cap binds the
+// committed transferUsage (receiver net/energy usage) flips. The shared helper
+// must use the form matching its caller's java path.
+func TestTransferUsageFromReceiver_MaxUsageFormDiffersByPath(t *testing.T) {
+	const ub = int64(2096000000) // a known grouped-vs-ungrouped boundary triple
+	run := func(tvmForm bool) int64 {
+		statedb := setupStateDB(t)
+		dp := state.NewDynamicProperties()
+		dp.Set("total_net_limit", 72633748985)
+		dp.SetTotalNetWeight(917)
+		receiver := makeTestAddr(0x21)
+		seedAccount(statedb, receiver, 0)
+		statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, ub) // acquired==ub → guard passes
+		statedb.SetNetUsage(receiver, 300_000_000_000)                                    // proportional ≫ maxTransfer → cap binds
+		statedb.SetLatestConsumeTime(receiver, 0)
+		transfer, _, _ := delegation.TransferUsageFromReceiver(statedb, dp, receiver, corepb.ResourceCode_BANDWIDTH, ub, 0, tvmForm)
+		return transfer
+	}
+
+	if grouped := run(false); grouped != 166019997679 {
+		t.Fatalf("actuator (grouped) maxTransfer: got %d, want 166019997679", grouped)
+	}
+	if ungrouped := run(true); ungrouped != 166019997680 {
+		t.Fatalf("TVM (ungrouped) maxTransfer: got %d, want 166019997680", ungrouped)
 	}
 }
 
