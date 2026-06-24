@@ -1084,7 +1084,10 @@ func (c *getChainParameter) Run(tvm *TVM, _ tcommon.Address, input []byte, energ
 	if len(input) != 32 {
 		return make([]byte, 32), cost, nil
 	}
-	code := parseInt64FromWord(input, 0)
+	// java GetChainParameter.execute reads new DataWord(data).longValueSafe(): a
+	// high-byte code saturates to maxInt64 → ChainParameterEnum.INVALID → 0, NOT a
+	// low-byte truncation that could match a valid code 1..5.
+	code := parseInt64SafeFromWord(input, 0)
 	// Use the wired dp (tvm.DynProps), NOT tvm.StateDB.DynamicProperties():
 	// production never calls StateDB.SetDynamicProperties, so the StateDB dp is
 	// the empty genesis-default from state.New (e.g. unfreeze_delay_days=0,
@@ -1183,9 +1186,12 @@ func (c *expireUnfreezeBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte,
 	if timeSec < 0 {
 		return make([]byte, 32), cost, nil
 	}
+	// java ExpireUnfreezeBalanceV2.execute: saturate at Long.MAX_VALUE/1000, not
+	// 2^62/1000 — the threshold must match exactly (both saturated values exceed any
+	// real expire time so the sum is unchanged, but keep byte-parity with java).
 	var timeMs int64
-	if timeSec >= (1<<62)/1000 {
-		timeMs = 1<<63 - 1 // effectively max
+	if timeSec >= math.MaxInt64/1000 {
+		timeMs = math.MaxInt64
 	} else {
 		timeMs = timeSec * 1000
 	}
@@ -1239,7 +1245,9 @@ func (c *resourceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint6
 	}
 	target := tronAddrFromWord(input[0:32])
 	from := tronAddrFromWord(input[32:64])
-	typeCode := parseInt64FromWord(input, 64)
+	// java ResourceV2.execute reads words[2].longValueSafe() — a high-byte type
+	// word saturates to maxInt64 and is rejected, NOT truncated to its low bytes.
+	typeCode := parseInt64SafeFromWord(input, 64)
 
 	var balance int64
 	if from == target {
