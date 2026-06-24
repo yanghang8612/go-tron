@@ -7,6 +7,45 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+// TestQueryPrecompilesRejectHighByteOperands pins java DataWord.longValueSafe for
+// the getChainParameter (0x0b) param-code and the resourceV2 (0x10) resource-type
+// operands: a word with any high byte set saturates to maxInt64 and is rejected,
+// NOT truncated to its low bytes. go previously read the low 8 bytes, so a
+// high-byte word whose low bytes matched a valid code/type returned a live value
+// where java returns 0.
+func TestQueryPrecompilesRejectHighByteOperands(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	dp.Set("total_net_limit", 43_200_000_000)
+	acct := stakeAddr(0xA1)
+	statedb.CreateAccount(acct, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(acct, corepb.ResourceCode_BANDWIDTH, 100*tvmTRXPrecision)
+
+	// getChainParameter(0x0b): clean code 1 → TOTAL_NET_LIMIT; high-byte code → 0.
+	if out, _, err := (&getChainParameter{}).Run(tvm, tcommon.Address{}, int64ToBytes32(1), 50); err != nil || int64FromWord(out) != 43_200_000_000 {
+		t.Fatalf("getChainParameter(1): got %d err=%v, want 43200000000", int64FromWord(out), err)
+	}
+	badCode := int64ToBytes32(1)
+	badCode[0] = 0xff // high byte set, low-8 still == 1
+	if out, _, _ := (&getChainParameter{}).Run(tvm, tcommon.Address{}, badCode, 50); int64FromWord(out) != 0 {
+		t.Fatalf("getChainParameter(high-byte code): got %d, want 0 (longValueSafe→INVALID)", int64FromWord(out))
+	}
+
+	// resourceV2(0x10), from==target: clean type 0 → frozenV2 balance; high-byte type → 0.
+	mkRV2 := func(typeWord func([]byte)) []byte {
+		in := make([]byte, 96)
+		copy(in[12:32], acct[1:]) // target
+		copy(in[44:64], acct[1:]) // from == target
+		typeWord(in[64:96])
+		return in
+	}
+	if out, _, _ := (&resourceV2{}).Run(tvm, tcommon.Address{}, mkRV2(func(w []byte) {}), 50); int64FromWord(out) != 100*tvmTRXPrecision {
+		t.Fatalf("resourceV2(type 0): got %d, want %d", int64FromWord(out), 100*tvmTRXPrecision)
+	}
+	if out, _, _ := (&resourceV2{}).Run(tvm, tcommon.Address{}, mkRV2(func(w []byte) { w[0] = 0xff }), 50); int64FromWord(out) != 0 {
+		t.Fatalf("resourceV2(high-byte type): got %d, want 0 (longValueSafe rejects)", int64FromWord(out))
+	}
+}
+
 // Bug 1 — getChainParameter must return TOTAL_NET_WEIGHT (code 2) and
 // TOTAL_ENERGY_WEIGHT (code 4); go previously handled only 1/3/5 and returned 0.
 // java ChainParameterEnum maps 2->getTotalNetWeight, 4->getTotalEnergyWeight.
