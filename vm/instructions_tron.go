@@ -1334,12 +1334,15 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	}
 
 	// java DelegateResourceProcessor.validate checks the USAGE-ADJUSTED available
-	// balance (frozenV2ForResource − v2Usage), not the raw frozen amount — the
-	// same value the getDelegatableResource precompile returns. go previously
-	// compared against raw frozen, so a contract that had consumed resource could
-	// delegate more than java permits. delegatableFrozenV2 mirrors java
-	// FreezeV2Util.queryDelegatableResource.
-	if amount > delegatableFrozenV2(in.tvm, caller, resource) {
+	// balance (frozenV2ForResource − v2Usage). CRUCIAL: the DELEGATE opcode validate
+	// uses the SAME computation as DelegateResourceActuator.validate —
+	// Bandwidth/EnergyProcessor recover + netUsage = usage*TRX_PRECISION*((double)
+	// weight/limit) (F1) — NOT the getDelegatableResource precompile's RepositoryImpl
+	// recover + usage*weight/limit*TRX_PRECISION (F2). The two float evaluation orders
+	// diverge once usage*weight exceeds 2^53, flipping the accept/reject boundary. So
+	// use AvailableFrozenV2ForDelegation (the F1 helper the actuator uses), NOT
+	// delegatableFrozenV2 (the F2 helper that correctly backs the precompile).
+	if amount > delegation.AvailableFrozenV2ForDelegation(in.tvm.StateDB, stakingDynamicProperties(in.tvm), caller, resource, stakingNowSlot(in.tvm)) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
