@@ -963,6 +963,8 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		fmt.Sprintf("stagePipelineNext=%s", rawdb.StageSnapshotBuild),
 		"stagePipelineNextStatus=missing",
 		"stagePipelineNextTarget=4",
+		fmt.Sprintf("stagePipelineNextUpstream=%s", rawdb.StageFinish),
+		"stagePipelineNextCurrent=0",
 		"modeStatus=ok",
 		"modeIssues=0",
 		"pruneMode=unknown",

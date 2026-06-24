@@ -29,7 +29,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 'gtron_storage_stage_pipeline_complete{datadir="/tmp/nile"} 0\n'
                 'gtron_storage_stage_pipeline_pending{datadir="/tmp/nile"} 2\n'
                 'gtron_storage_stage_pipeline_issues{datadir="/tmp/nile"} 0\n'
-                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 1000\n',
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 1000\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 990\n',
                 encoding="utf-8",
             )
             result = tmpdir / "samples.jsonl"
@@ -82,6 +83,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "stageAlertPipelineNext": "SnapshotBuild",
                         "stageAlertPipelineNextStatus": "missing",
                         "stageAlertPipelineNextTarget": 1000,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 990,
                         "height": 1000,
                         "fullStagedSyncHeadLagBlocks": 12,
                         "intervalStageSyncFinishBlocksPerMinute": 30.5,
@@ -362,6 +365,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "stageAlertPipelineNext": "SnapshotBuild",
                         "stageAlertPipelineNextStatus": "missing",
                         "stageAlertPipelineNextTarget": 1000,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 990,
                     }
                 ],
             )
@@ -381,6 +386,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
             self.assertIn("missing gtron_storage_stage_pipeline_next_target_block", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_current_block", proc.stderr)
 
     def test_rejects_offline_prometheus_artifact_mismatched_stage_pipeline_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -393,11 +399,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
                 '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
                 '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
                 'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n'
                 'gtron_storage_stage_pipeline_complete{datadir="/tmp/nile"} 0\n'
                 'gtron_storage_stage_pipeline_pending{datadir="/tmp/nile"} 3\n'
                 'gtron_storage_stage_pipeline_issues{datadir="/tmp/nile"} 1\n'
-                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 999\n',
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 999\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/nile",stage="SnapshotBuild",status="missing",upstream="Finish"} 998\n',
                 encoding="utf-8",
             )
             result = tmpdir / "samples.jsonl"
@@ -424,6 +432,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "stageAlertPipelineNext": "SnapshotBuild",
                         "stageAlertPipelineNextStatus": "missing",
                         "stageAlertPipelineNextTarget": 1000,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 990,
                     }
                 ],
             )
@@ -444,6 +454,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("gtron_storage_stage_pipeline_pending=3, want 2", proc.stderr)
             self.assertIn("gtron_storage_stage_pipeline_issues=1, want 0", proc.stderr)
             self.assertIn("value=999, want 1000", proc.stderr)
+            self.assertIn("value=998, want 990", proc.stderr)
 
 
 if __name__ == "__main__":

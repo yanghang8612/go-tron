@@ -409,6 +409,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "stageAlertPipelineNext": "SnapshotBuild",
                         "stageAlertPipelineNextStatus": "missing",
                         "stageAlertPipelineNextTarget": 10,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8,
                         "modeAlertStatus": "ok",
                         "snapshotAlertStatus": "ok",
                         "storageAlertPrometheus": str(prom),
@@ -431,6 +433,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
             self.assertIn("missing gtron_storage_stage_pipeline_next_target_block", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_current_block", proc.stderr)
 
     def test_rejects_prometheus_artifact_mismatched_stage_pipeline_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,11 +446,13 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
                 '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
                 '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
                 'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
                 'gtron_storage_stage_pipeline_complete{datadir="/tmp/gtron"} 0\n'
                 'gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 3\n'
                 'gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1\n'
-                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 9\n',
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 9\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 7\n',
                 encoding="utf-8",
             )
             result = tmpdir / "results.jsonl"
@@ -468,6 +473,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "stageAlertPipelineNext": "SnapshotBuild",
                         "stageAlertPipelineNextStatus": "missing",
                         "stageAlertPipelineNextTarget": 10,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8,
                         "modeAlertStatus": "ok",
                         "snapshotAlertStatus": "ok",
                         "storageAlertPrometheus": str(prom),
@@ -491,6 +498,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("gtron_storage_stage_pipeline_pending=3, want 2", proc.stderr)
             self.assertIn("gtron_storage_stage_pipeline_issues=1, want 0", proc.stderr)
             self.assertIn("value=9, want 10", proc.stderr)
+            self.assertIn("value=7, want 8", proc.stderr)
 
 
 if __name__ == "__main__":

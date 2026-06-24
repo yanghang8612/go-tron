@@ -476,8 +476,8 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		stagePipeline.Complete, stagePipeline.Pending, len(stagePipeline.Issues))
 	if len(stagePipeline.Tasks) > 0 {
 		next := stagePipeline.Tasks[0]
-		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d",
-			next.Stage, next.Status, next.TargetBlock)
+		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d stagePipelineNextUpstream=%s stagePipelineNextCurrent=%d",
+			next.Stage, next.Status, next.TargetBlock, next.Upstream, next.CurrentBlock)
 	}
 	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,

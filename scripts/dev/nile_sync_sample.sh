@@ -300,6 +300,8 @@ def parse_alerts(text):
         "stageAlertPipelineNext": "",
         "stageAlertPipelineNextStatus": "",
         "stageAlertPipelineNextTarget": -1,
+        "stageAlertPipelineNextUpstream": "",
+        "stageAlertPipelineNextCurrent": -1,
         "stageAlertPipelineTasks": [],
         "modeAlertStatus": "unknown",
         "modeAlertIssues": -1,
@@ -364,6 +366,8 @@ def parse_alerts(text):
                             row["stageAlertPipelineNext"] = first.get("stage", "")
                             row["stageAlertPipelineNextStatus"] = first.get("status", "")
                             row["stageAlertPipelineNextTarget"] = first.get("targetValue", -1)
+                            row["stageAlertPipelineNextUpstream"] = first.get("upstream", "")
+                            row["stageAlertPipelineNextCurrent"] = first.get("currentValue", -1)
                     continue
                 row[row_key] = obj[json_key]
         detail_fields = {
@@ -388,6 +392,8 @@ def parse_alerts(text):
         "stageAlertPipelineNext": r"stagePipelineNext=([^ ]+)",
         "stageAlertPipelineNextStatus": r"stagePipelineNextStatus=([^ ]+)",
         "stageAlertPipelineNextTarget": r"stagePipelineNextTarget=([0-9]+)",
+        "stageAlertPipelineNextUpstream": r"stagePipelineNextUpstream=([^ ]+)",
+        "stageAlertPipelineNextCurrent": r"stagePipelineNextCurrent=([0-9]+)",
         "modeAlertStatus": r"modeStatus=([^ ]+)",
         "modeAlertIssues": r"modeIssues=([0-9]+)",
         "pruneMode": r"pruneMode=([^ ]+)",
@@ -401,7 +407,12 @@ def parse_alerts(text):
         if not found:
             continue
         value = found[-1]
-        if key.endswith("Issues") or key.endswith("Bytes") or key.endswith("Target"):
+        if (
+            key.endswith("Issues")
+            or key.endswith("Bytes")
+            or key.endswith("Target")
+            or key.endswith("Current")
+        ):
             row[key] = int(value)
         elif key in {"pruneModePersisted", "stageAlertPipelineComplete"}:
             row[key] = str(value).lower() in {"1", "true", "yes"}
@@ -517,6 +528,8 @@ def parse_stage_status_json(text, row):
                 row["stagePipelineNext"] = first.get("stage", "")
                 row["stagePipelineNextStatus"] = first.get("status", "")
                 row["stagePipelineNextTarget"] = first.get("targetValue", -1)
+                row["stagePipelineNextUpstream"] = first.get("upstream", "")
+                row["stagePipelineNextCurrent"] = first.get("currentValue", -1)
         for item in obj.get("stages", []):
             if not isinstance(item, dict):
                 continue
@@ -626,6 +639,8 @@ def parse_stage_status(path):
         "stagePipelineNext": "",
         "stagePipelineNextStatus": "",
         "stagePipelineNextTarget": -1,
+        "stagePipelineNextUpstream": "",
+        "stagePipelineNextCurrent": -1,
         "stagePipelineTasks": [],
         "stageProgress": {},
         "stageMismatchRows": 0,
@@ -707,6 +722,8 @@ def parse_stage_status(path):
                 row["stagePipelineNext"] = task["stage"]
                 row["stagePipelineNextStatus"] = task["status"]
                 row["stagePipelineNextTarget"] = task["targetValue"]
+                row["stagePipelineNextUpstream"] = task["upstream"]
+                row["stagePipelineNextCurrent"] = task["currentValue"]
             continue
         if not line.startswith("Stage progress:"):
             continue

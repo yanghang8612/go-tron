@@ -58,6 +58,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2
                     gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1
                     gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 12
+                    gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 9
                     # TYPE gtron_storage_alert_issue gauge
                     gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1
                     EOF
@@ -120,6 +121,8 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["stageAlertPipelineNext"], "ChainFreezer")
             self.assertEqual(row["stageAlertPipelineNextStatus"], "behind")
             self.assertEqual(row["stageAlertPipelineNextTarget"], 12)
+            self.assertEqual(row["stageAlertPipelineNextUpstream"], "Finish")
+            self.assertEqual(row["stageAlertPipelineNextCurrent"], 9)
             self.assertEqual(
                 row["stageAlertPipelineTasks"][0],
                 {
@@ -182,6 +185,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertIn('gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2', metrics)
             self.assertIn(
                 'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 12',
+                metrics,
+            )
+            self.assertIn(
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 9',
                 metrics,
             )
 

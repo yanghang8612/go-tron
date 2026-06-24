@@ -312,6 +312,10 @@ def check_prometheus_stage_pipeline(label, path, text, row):
                 "gtron_storage_stage_pipeline_next_target_block{",
                 "gtron_storage_stage_pipeline_next_target_block",
             ),
+            (
+                "gtron_storage_stage_pipeline_next_current_block{",
+                "gtron_storage_stage_pipeline_next_current_block",
+            ),
         )
     for needle, name in required:
         if needle not in text:
@@ -346,22 +350,50 @@ def check_prometheus_stage_pipeline(label, path, text, row):
     if next_stage:
         want_target = as_number(row, "stageAlertPipelineNextTarget")
         want_status = str(row.get("stageAlertPipelineNextStatus", ""))
+        want_upstream = str(row.get("stageAlertPipelineNextUpstream", ""))
+
+        def labels_match(labels):
+            return (
+                labels.get("stage") == str(next_stage)
+                and (not want_status or labels.get("status") == want_status)
+                and (not want_upstream or labels.get("upstream") == want_upstream)
+            )
+
         candidates = prometheus_metric_samples(text, "gtron_storage_stage_pipeline_next_target_block")
         matched = [
             value
             for labels, value in candidates
-            if labels.get("stage") == str(next_stage)
-            and (not want_status or labels.get("status") == want_status)
+            if labels_match(labels)
         ]
         if not matched:
             issues.append(
                 f"{label} prometheus artifact {path} missing next pipeline target "
-                f"stage={next_stage!r} status={want_status!r}"
+                f"stage={next_stage!r} status={want_status!r} upstream={want_upstream!r}"
             )
         elif want_target is not None and matched[-1] != want_target:
             issues.append(
                 f"{label} prometheus artifact {path} next pipeline target "
-                f"stage={next_stage!r} status={want_status!r} value={matched[-1]:g}, want {want_target:g}"
+                f"stage={next_stage!r} status={want_status!r} upstream={want_upstream!r} "
+                f"value={matched[-1]:g}, want {want_target:g}"
+            )
+
+        want_current = as_number(row, "stageAlertPipelineNextCurrent")
+        candidates = prometheus_metric_samples(text, "gtron_storage_stage_pipeline_next_current_block")
+        matched = [
+            value
+            for labels, value in candidates
+            if labels_match(labels)
+        ]
+        if not matched:
+            issues.append(
+                f"{label} prometheus artifact {path} missing next pipeline current "
+                f"stage={next_stage!r} status={want_status!r} upstream={want_upstream!r}"
+            )
+        elif want_current is not None and matched[-1] != want_current:
+            issues.append(
+                f"{label} prometheus artifact {path} next pipeline current "
+                f"stage={next_stage!r} status={want_status!r} upstream={want_upstream!r} "
+                f"value={matched[-1]:g}, want {want_current:g}"
             )
     return issues
 

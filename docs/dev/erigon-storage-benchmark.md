@@ -80,6 +80,8 @@ The output path is printed at startup. Each JSON row contains:
 - `stageAlertPipelineNext`
 - `stageAlertPipelineNextStatus`
 - `stageAlertPipelineNextTarget`
+- `stageAlertPipelineNextUpstream`
+- `stageAlertPipelineNextCurrent`
 - `stageAlertPipelineTasks`
 - `snapshotAlertStatus`
 - `snapshotAlertIssues`
@@ -189,7 +191,8 @@ compaction or replacement. The JSONL row includes
 `stageVerifyDetails`, `stageAlertPipelineComplete`,
 `stageAlertPipelinePending`, `stageAlertPipelineIssues`,
 `stageAlertPipelineNext`, `stageAlertPipelineNextStatus`,
-`stageAlertPipelineNextTarget`, `stageAlertPipelineTasks`,
+`stageAlertPipelineNextTarget`, `stageAlertPipelineNextUpstream`,
+`stageAlertPipelineNextCurrent`, `stageAlertPipelineTasks`,
 `modeAlertStatus`, `modeAlertIssues`, `modeAlertDetails`, `pruneMode`,
 `pruneModePersisted`,
 `snapshotAlertStatus`, `snapshotAlertIssues`, `snapshotAlertDetails`, and the
@@ -205,7 +208,8 @@ component/severity/kind, hidden freezer bytes, retired snapshot counters, and
 the persisted prune mode without putting high-cardinality issue details into
 metric labels. It also exposes `gtron_storage_stage_pipeline_*` gauges so
 external monitors can separate pending storage-maintenance stage work from
-critical storage-integrity failures.
+critical storage-integrity failures, including the next stage edge's
+stage/status/upstream labels and target/current block cursors.
 
 ## Sync Profile
 

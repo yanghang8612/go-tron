@@ -78,6 +78,8 @@ RUN_STAGE_ALERT_PIPELINE_ISSUES=-1
 RUN_STAGE_ALERT_PIPELINE_NEXT=""
 RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS=""
 RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET=-1
+RUN_STAGE_ALERT_PIPELINE_NEXT_UPSTREAM=""
+RUN_STAGE_ALERT_PIPELINE_NEXT_CURRENT=-1
 RUN_STAGE_ALERT_PIPELINE_TASKS="[]"
 RUN_MODE_ALERT_STATUS="not-run"
 RUN_MODE_ALERT_ISSUES=-1
@@ -264,6 +266,8 @@ reset_run_metrics() {
   RUN_STAGE_ALERT_PIPELINE_NEXT=""
   RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS=""
   RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET=-1
+  RUN_STAGE_ALERT_PIPELINE_NEXT_UPSTREAM=""
+  RUN_STAGE_ALERT_PIPELINE_NEXT_CURRENT=-1
   RUN_STAGE_ALERT_PIPELINE_TASKS="[]"
   RUN_MODE_ALERT_STATUS="not-run"
   RUN_MODE_ALERT_ISSUES=-1
@@ -665,6 +669,8 @@ row = {
     "next": "",
     "nextStatus": "",
     "nextTarget": -1,
+    "nextUpstream": "",
+    "nextCurrent": -1,
     "tasks": [],
 }
 
@@ -702,6 +708,8 @@ for line in text.splitlines():
         row["next"] = first.get("stage", "")
         row["nextStatus"] = first.get("status", "")
         row["nextTarget"] = first.get("targetValue", -1)
+        row["nextUpstream"] = first.get("upstream", "")
+        row["nextCurrent"] = first.get("currentValue", -1)
     break
 else:
     patterns = {
@@ -711,6 +719,8 @@ else:
         "next": r"stagePipelineNext=([^ ]+)",
         "nextStatus": r"stagePipelineNextStatus=([^ ]+)",
         "nextTarget": r"stagePipelineNextTarget=([0-9]+)",
+        "nextUpstream": r"stagePipelineNextUpstream=([^ ]+)",
+        "nextCurrent": r"stagePipelineNextCurrent=([0-9]+)",
     }
     found = {}
     for key, pattern in patterns.items():
@@ -729,6 +739,10 @@ else:
         row["nextStatus"] = found["nextStatus"]
     if "nextTarget" in found:
         row["nextTarget"] = as_int(found["nextTarget"], -1)
+    if "nextUpstream" in found:
+        row["nextUpstream"] = found["nextUpstream"]
+    if "nextCurrent" in found:
+        row["nextCurrent"] = as_int(found["nextCurrent"], -1)
 
 print(row["complete"])
 print(row["pending"])
@@ -736,6 +750,8 @@ print(row["issues"])
 print(row["next"])
 print(row["nextStatus"])
 print(row["nextTarget"])
+print(row["nextUpstream"])
+print(row["nextCurrent"])
 print(json.dumps(row["tasks"], separators=(",", ":")))
 PY
 }
@@ -809,7 +825,9 @@ run_storage_alert_gate() {
   RUN_STAGE_ALERT_PIPELINE_NEXT="$(printf '%s\n' "$pipeline_values" | sed -n '4p')"
   RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS="$(printf '%s\n' "$pipeline_values" | sed -n '5p')"
   RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET="$(printf '%s\n' "$pipeline_values" | sed -n '6p')"
-  RUN_STAGE_ALERT_PIPELINE_TASKS="$(printf '%s\n' "$pipeline_values" | sed -n '7p')"
+  RUN_STAGE_ALERT_PIPELINE_NEXT_UPSTREAM="$(printf '%s\n' "$pipeline_values" | sed -n '7p')"
+  RUN_STAGE_ALERT_PIPELINE_NEXT_CURRENT="$(printf '%s\n' "$pipeline_values" | sed -n '8p')"
+  RUN_STAGE_ALERT_PIPELINE_TASKS="$(printf '%s\n' "$pipeline_values" | sed -n '9p')"
   if [ "$ok" -ne 1 ]; then
     RUN_STORAGE_ALERT_FAILED=1
   fi
@@ -973,6 +991,7 @@ emit_result() {
     "$RUN_STAGE_ALERT_PIPELINE_COMPLETE" "$RUN_STAGE_ALERT_PIPELINE_PENDING" \
     "$RUN_STAGE_ALERT_PIPELINE_ISSUES" "$RUN_STAGE_ALERT_PIPELINE_NEXT" \
     "$RUN_STAGE_ALERT_PIPELINE_NEXT_STATUS" "$RUN_STAGE_ALERT_PIPELINE_NEXT_TARGET" \
+    "$RUN_STAGE_ALERT_PIPELINE_NEXT_UPSTREAM" "$RUN_STAGE_ALERT_PIPELINE_NEXT_CURRENT" \
     "$RUN_STAGE_ALERT_PIPELINE_TASKS" \
     "$RUN_MODE_ALERT_STATUS" "$RUN_MODE_ALERT_ISSUES" "$RUN_MODE_ALERT_DETAILS" \
     "$RUN_PRUNE_MODE" "$RUN_PRUNE_MODE_PERSISTED" \
@@ -1007,6 +1026,7 @@ keys = [
     "stageVerifyDetails", "stageAlertPipelineComplete", "stageAlertPipelinePending",
     "stageAlertPipelineIssues", "stageAlertPipelineNext",
     "stageAlertPipelineNextStatus", "stageAlertPipelineNextTarget",
+    "stageAlertPipelineNextUpstream", "stageAlertPipelineNextCurrent",
     "stageAlertPipelineTasks", "modeAlertStatus", "modeAlertIssues",
     "modeAlertDetails", "pruneMode", "pruneModePersisted",
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
@@ -1036,7 +1056,7 @@ ints = {
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
     "stageVerifyIssues", "stageAlertPipelinePending", "stageAlertPipelineIssues",
-    "stageAlertPipelineNextTarget", "modeAlertIssues",
+    "stageAlertPipelineNextTarget", "stageAlertPipelineNextCurrent", "modeAlertIssues",
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
 }

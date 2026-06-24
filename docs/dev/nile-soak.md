@@ -250,7 +250,8 @@ filter directly on the stage edge that broke instead of parsing the free-form
 `issues` strings. Rows also include
 `stagePipelineComplete`, `stagePipelinePending`, `stagePipelineIssues`,
 `stagePipelineNext`, `stagePipelineNextStatus`,
-`stagePipelineNextTarget`, and `stagePipelineTasks` from the `stage-status`
+`stagePipelineNextTarget`, `stagePipelineNextUpstream`,
+`stagePipelineNextCurrent`, and `stagePipelineTasks` from the `stage-status`
 `pipeline` object. These fields describe the next canonical or
 post-`Finish` snapshot/prune/freezer stage edge that can be advanced; pending
 tasks are backlog diagnostics, not health failures by themselves.
@@ -370,8 +371,8 @@ and non-monotonic sync-stage progress. Add
 selected row in a candidate window. When `--require-offline-db-check` is used
 and the JSONL row carries `stageAlertPipeline*` fields, the checker also
 requires the referenced Prometheus artifact to include matching
-`gtron_storage_stage_pipeline_*` values and next-target labels from the same
-offline DB check.
+`gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
+stage/status/upstream labels from the same offline DB check.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.
