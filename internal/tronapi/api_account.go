@@ -235,17 +235,11 @@ func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, bou
 		acc, err = api.backend.GetAccountById([]byte(accountID))
 	}
 	if err != nil {
-		if accountLookupNotFound(err) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{}"))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if acc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, acc.Proto())

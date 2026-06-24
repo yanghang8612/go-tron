@@ -839,27 +839,21 @@ func transactionLookupNotFound(err error) bool {
 }
 
 func blockLookupNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.TrimSpace(err.Error())
-	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
+	return readLookupMiss(err)
 }
 
 func accountLookupNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.TrimSpace(err.Error())
-	return msg == "account not found" || strings.HasPrefix(msg, "account not found at block ")
+	return readLookupMiss(err)
 }
 
 func contractLookupNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.TrimSpace(err.Error())
-	return msg == "contract not found"
+	return readLookupMiss(err)
+}
+
+func readLookupMiss(err error) bool {
+	// java-tron read APIs collapse storage/decode failures for block,
+	// account, and contract lookups into the same empty/not-found surface.
+	return err != nil
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.

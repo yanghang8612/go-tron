@@ -317,7 +317,7 @@ func (api *API) getSolidNowBlock(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "solid block not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
@@ -352,7 +352,7 @@ func (api *API) getSolidBlockByNum(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "block not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
@@ -410,7 +410,7 @@ func (api *API) getPbftNowBlock(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "pbft block not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
@@ -445,7 +445,7 @@ func (api *API) getPbftBlockByNum(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "block not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {

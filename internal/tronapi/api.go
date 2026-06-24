@@ -186,7 +186,7 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "block not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
@@ -236,17 +236,11 @@ func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn
 		acc, err = api.backend.GetAccount(addr)
 	}
 	if err != nil {
-		if accountLookupNotFound(err) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{}"))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if acc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, wireSortFrozenV2(acc.Proto()))
@@ -372,6 +366,11 @@ func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
 	w.Write(data)
 }
 
+func writeEmptyJSON(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("{}"))
+}
+
 func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
 	api.handleGetContract(w, r, nil)
 }
@@ -407,17 +406,11 @@ func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundF
 		sc, err = api.backend.GetContractAt(addr, boundFn())
 	}
 	if err != nil {
-		if contractLookupNotFound(err) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{}"))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if sc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, sc)
@@ -928,17 +921,11 @@ func blockNumberFromBlockIDBytes(hashBytes []byte) (uint64, bool) {
 func (api *API) writeBlockByHash(w http.ResponseWriter, hash common.Hash) {
 	block, err := api.backend.GetBlockByHash(hash)
 	if err != nil {
-		if blockLookupNotFound(err) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{}"))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())

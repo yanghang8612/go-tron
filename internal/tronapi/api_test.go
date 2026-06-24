@@ -527,7 +527,7 @@ func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
 	}
 }
 
-func TestGetBlockByNumSurfacesBackendError(t *testing.T) {
+func TestGetBlockByNumBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("rawdb: block 1 decode: corrupt")
 	srv := newTestServer(t, &stubBackend{blockErr: backendErr})
 	defer srv.Close()
@@ -537,12 +537,10 @@ func TestGetBlockByNumSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST getblockbynum: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("getblockbynum status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetBlockByIdSurfacesBackendError(t *testing.T) {
+func TestGetBlockByIdBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("rawdb: cold block index corrupt")
 	srv := newTestServer(t, &stubBackend{hashErr: backendErr})
 	defer srv.Close()
@@ -552,12 +550,10 @@ func TestGetBlockByIdSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST getblockbyid: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("getblockbyid status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetAccountSurfacesBackendError(t *testing.T) {
+func TestGetAccountBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("state history: cold account segment corrupt")
 	srv := newTestServer(t, &stubBackend{accountErr: backendErr})
 	defer srv.Close()
@@ -567,12 +563,10 @@ func TestGetAccountSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST getaccount: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetAccountByIdSurfacesBackendError(t *testing.T) {
+func TestGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("state history: cold account-id index corrupt")
 	srv := newTestServer(t, &stubBackend{accountIDErr: backendErr})
 	defer srv.Close()
@@ -582,12 +576,10 @@ func TestGetAccountByIdSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST getaccountbyid: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetContractSurfacesBackendError(t *testing.T) {
+func TestGetContractBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("state latest: contract metadata corrupt")
 	srv := newTestServer(t, &stubBackend{contractErr: backendErr})
 	defer srv.Close()
@@ -597,9 +589,7 @@ func TestGetContractSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST getcontract: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("getcontract status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
 func TestGetContractPreservesNotFoundErrorAsEmpty(t *testing.T) {
@@ -698,6 +688,20 @@ func testBytes(n int, start byte) []byte {
 		out[i] = start + byte(i)
 	}
 	return out
+}
+
+func assertHTTPEmptyObject(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("body = %q, want {}", string(body))
+	}
 }
 
 // --- Tests: delegation group ---

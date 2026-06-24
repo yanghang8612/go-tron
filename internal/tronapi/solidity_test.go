@@ -137,7 +137,7 @@ func TestSolidityGetBlockByNum_rejectsAboveSolid(t *testing.T) {
 	}
 }
 
-func TestSolidityGetBlockByNumSurfacesBackendError(t *testing.T) {
+func TestSolidityGetBlockByNumBackendErrorReturnsEmpty(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{blockErr: errors.New("rawdb: block 2 decode: corrupt")},
 		solidNum:    3,
@@ -151,12 +151,10 @@ func TestSolidityGetBlockByNumSurfacesBackendError(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for backend block error, got %d", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestSolidityGetAccountSurfacesBackendError(t *testing.T) {
+func TestSolidityGetAccountBackendErrorReturnsEmpty(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{accountAtErr: errors.New("state history: cold account segment corrupt")},
 		solidNum:    3,
@@ -170,12 +168,10 @@ func TestSolidityGetAccountSurfacesBackendError(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for backend account error, got %d", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestSolidityGetAccountByIdSurfacesBackendError(t *testing.T) {
+func TestSolidityGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{accountIDAtErr: errors.New("state history: cold account-id index corrupt")},
 		solidNum:    3,
@@ -189,12 +185,10 @@ func TestSolidityGetAccountByIdSurfacesBackendError(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for backend account-id error, got %d", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
-func TestSolidityGetContractSurfacesBackendError(t *testing.T) {
+func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
 	stub := &isolationStubBackend{
 		solidStubBackend: solidStubBackend{solidNum: 3, pbftNum: -1},
 		contractAtErr:    errors.New("state history: cold contract metadata corrupt"),
@@ -207,9 +201,7 @@ func TestSolidityGetContractSurfacesBackendError(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for backend contract error, got %d", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 	if stub.contractAtBlock != 3 {
 		t.Fatalf("GetContractAt block = %d, want solid block 3", stub.contractAtBlock)
 	}
