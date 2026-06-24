@@ -190,7 +190,17 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		// java always uses -removed/TRX.
 		var decrease int64
 		receiver := ctx.State.GetAccount(receiverAddr)
-		if ctx.DynProps.AllowTvmConstantinople() && receiver != nil && receiver.Type() == corepb.AccountType_Contract {
+		// java UnfreezeBalanceActuator takes the floor branch
+		// (decrease = -unfreezeBalance / TRX_PRECISION) whenever Constantinople is
+		// active AND the receiver is either a Contract OR no longer exists (a
+		// contract receiver that self-destructed). Only a live non-contract
+		// receiver gets the carry-preserving acquired-weight delta. Routing a
+		// missing receiver through DecrementReceiverAcquired (which returns 0)
+		// under-releases the global weight and drifts total_energy_weight HIGH.
+		// Completes a7fda66f (which only covered an existing Contract receiver);
+		// effective only under allow_new_reward — below that the `weight =
+		// -removed/TRX` floor override already matches java regardless.
+		if ctx.DynProps.AllowTvmConstantinople() && (receiver == nil || receiver.Type() == corepb.AccountType_Contract) {
 			decrease = -removed / trxPrecisionActuator
 		} else {
 			decrease = ctx.State.DecrementReceiverAcquired(receiverAddr, removed, uc.Resource, ctx.DynProps.AllowTvmSolidity059())

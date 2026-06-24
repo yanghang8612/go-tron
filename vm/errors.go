@@ -37,6 +37,16 @@ var (
 	// gtron mirrors that by surfacing this sentinel, which contractRetFromError
 	// maps to its default UNKNOWN(13) and which propagates from sub-calls.
 	ErrPrecompileUnknown = errors.New("precompiled contract: uncaught exception")
+	// ErrPrecompileTransferFailure mirrors java-tron
+	// Program.callToPrecompiledAddress's BytecodeExecutionException("transfer
+	// failure"): a TRX endowment on a precompile-targeted CALL whose
+	// MUtil.transfer -> validateForSmartContract rejects the credit (the
+	// precompile address has no account -> "no ToAccount", or the credit
+	// would overflow long). NOT a TransferException in java, so VM.play
+	// spends ALL remaining energy and the receipt records UNKNOWN(13) —
+	// Nile block 18,112,819. The message must stay byte-identical to java's
+	// resMessage.
+	ErrPrecompileTransferFailure = errors.New("transfer failure")
 )
 
 type invalidJumpError struct {
@@ -157,6 +167,7 @@ func shouldPropagateCallError(err error) bool {
 	return isFatalVMError(err) ||
 		errors.Is(err, ErrPrecompiledContract) ||
 		errors.Is(err, ErrPrecompileUnknown) ||
+		errors.Is(err, ErrPrecompileTransferFailure) ||
 		isTransferFailure(err)
 }
 

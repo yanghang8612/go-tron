@@ -77,6 +77,7 @@ func benchProcessBlockPrefetchVariant(b *testing.B, coldReadLatency time.Duratio
 			nil,
 			nil,
 			prefetch,
+			nil,
 		); err != nil {
 			b.Fatalf("ProcessBlock: %v", err)
 		}

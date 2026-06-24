@@ -47,6 +47,13 @@ type TVMConfig struct {
 	// it cannot be set by `NewTVMConfig`; the caller wires it from the rooted
 	// fork-vote store for the current execution state.
 	MultiSigCheckV2 bool
+	// CpuTimeGuard is true once VERSION_4_8_1_1 (block version 35) SR vote passed.
+	// java-tron's MUtil.checkCPUTimeForCreate2 / checkCPUTimeForModExp throw
+	// OutOfTimeException under this fork: a CREATE2 at MAX_DEPTH and the degenerate
+	// ModExp input (baseLen==0 && modLen==0 && expLen>1024) abort the tx. Like
+	// MultiSigCheckV2 this is a pure SR-version vote (no DP key / AllowFlag), so it
+	// is caller-wired from the rooted fork-vote store, not by NewTVMConfig.
+	CpuTimeGuard bool
 }
 
 // NewTVMConfig builds a TVMConfig from the current DynamicProperties and block number.

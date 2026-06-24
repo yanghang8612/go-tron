@@ -50,12 +50,72 @@ type StateDB struct {
 	// marks per change — the saved IO doesn't justify the complexity.
 	dirtyWitnesses map[tcommon.Address]struct{}
 
-	journal      *journal
-	snapshots    []int // journal length at each snapshot
+	// txFinalizeDirty tracks addresses whose contract storage was written
+	// (SetState) or which were self-destructed since the last
+	// FinalizeTransaction. FinalizeTransaction iterates this set instead of the
+	// full stateObjects map to flip zero-valued storage rows non-existent and
+	// delete self-destructed accounts at the transaction boundary.
+	//
+	// Completeness: a zero-valued cached storage slot can only come from
+	// SetState — GetStateWithExist never caches a zero/absent disk row (it
+	// early-returns), so every object the old full scan would have marked is in
+	// this set. Self-destructs are the only other thing the scan acted on, and
+	// SelfDestruct populates the set too.
+	//
+	// Stale entries (left by a reverted write/self-destruct) are harmless:
+	// FinalizeTransaction re-resolves the live object by address via
+	// stateObjects, and the v==0 / (selfDestructed && !deleted) guards no-op on
+	// a reverted object. It is therefore deliberately NOT cleared by
+	// RevertToSnapshot, matching dirtyWitnesses. It IS cleared at the end of
+	// every FinalizeTransaction (per-transaction scope).
+	txFinalizeDirty map[tcommon.Address]struct{}
+
+	// dirtyObjects tracks the addresses of every stateObject marked dirty since
+	// the last commit. dirtyAccountCommitPlans iterates this set instead of
+	// scanning the whole stateObjects map (which, on the reused-StateDB sync
+	// path, accumulates the entire range's mostly read-only working set).
+	//
+	// Population: markDirty records s.address through the stateObject's dirtySet
+	// back-pointer (set when an object enters the cache via getStateObject), and
+	// GetOrCreateAccount records the born-dirty address it creates. Every forward
+	// mutator obtains its object via getStateObject / GetOrCreateAccount before
+	// calling markDirty, so the back-pointer is always set first; the set is thus
+	// a complete superset of {addr : stateObjects[addr].dirty}.
+	//
+	// Revert: an object re-dirtied during RevertToSnapshot (journal replay) is
+	// already in the set from the forward mutation that journaled it, and an
+	// address stays in the set until the next commit clears it, so the set is
+	// never cleared by RevertToSnapshot — matching dirtyWitnesses. Stale entries
+	// (a created-then-reverted address, or one re-dirtied to its original value)
+	// are harmless: dirtyAccountCommitPlans re-resolves the live object by
+	// address and the obj == nil / !obj.dirty guards skip it.
+	//
+	// Lifecycle is PER-BLOCK: cleared once after the finalizeAccountCommitPlan
+	// loop. dirtyAccountCommitPlans and the finalize loop both run on the
+	// committing goroutine (the deferred-fold worker only folds captured data and
+	// never touches stateObjects/dirtyObjects), so there is no exec/worker race.
+	dirtyObjects map[tcommon.Address]struct{}
+
+	journal   *journal
+	snapshots []int // journal length at each snapshot
+
 	balanceTrace *balanceTraceRecorder
 	// balanceTraceSnapshots mirrors snapshots so balance history capture rolls
 	// back with StateDB snapshots used by TVM calls and failed transactions.
 	balanceTraceSnapshots []balanceTraceSnapshot
+
+	// transientStorage holds EIP-1153 (Cancun) TLOAD/TSTORE slots for the
+	// current transaction, keyed by (contract address, slot) — the same
+	// namespacing persistent storage uses. Writes are journaled
+	// (transientStorageChange) so RevertToSnapshot rolls them back with the
+	// enclosing call frame, mirroring java-tron's per-frame child
+	// RepositoryImpl that commits transient storage to its parent only on
+	// success and discards it on revert. The whole map is cleared at every
+	// FinalizeTransaction — the EIP-1153 end-of-transaction discard. Lazily
+	// allocated on first SetTransientState; left nil on a fresh or Copy()'d
+	// StateDB so a constant-call sees empty transient storage.
+	transientStorage map[transientStorageKey]tcommon.Hash
+
 	// domainChangeNoJournal mirrors block-final writes that intentionally
 	// bypass the snapshot/revert journal but still need temporal change rows.
 	domainChangeNoJournal []journalChange
@@ -148,6 +208,15 @@ type CommitOptions struct {
 	// pending latest batch before it is physically flushed. It is only valid
 	// together with CommitWithStatsOptionsInScope.
 	FlushLatestDomain func() error
+	// BlockNumber is the number of the block being committed. It tags the scoped
+	// latest writer's read-your-writes overlay entries so a later partial flush
+	// can prune the ones whose puts are durable in the buffer's committed layers
+	// (deep async-commit overlay pruning). It must match the buffer active-layer
+	// number the latest-domain ops bind to — BeginBlock(block.Number()) precedes
+	// the commit, so callers pass block.Number() here. Required on the scoped
+	// (CommitWithStatsOptionsInScope) path; ignored on the per-block fresh-writer
+	// path, which fully flushes and clears its overlay every commit.
+	BlockNumber uint64
 }
 
 // CommitScope carries the domain transaction objects reused by a staged range
@@ -474,14 +543,16 @@ type AccountSnapshot struct {
 // New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	return &StateDB{
-		db:             db,
-		stateObjects:   make(map[tcommon.Address]*stateObject),
-		witnesses:      make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses: make(map[tcommon.Address]struct{}),
-		journal:        newJournal(),
-		dynProps:       NewDynamicProperties(),
-		originRoot:     ethcommon.Hash(root),
-		codeStore:      newDefaultStateCodeStore(db),
+		db:              db,
+		stateObjects:    make(map[tcommon.Address]*stateObject),
+		witnesses:       make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses:  make(map[tcommon.Address]struct{}),
+		txFinalizeDirty: make(map[tcommon.Address]struct{}),
+		dirtyObjects:    make(map[tcommon.Address]struct{}),
+		journal:         newJournal(),
+		dynProps:        NewDynamicProperties(),
+		originRoot:      ethcommon.Hash(root),
+		codeStore:       newDefaultStateCodeStore(db),
 	}, nil
 }
 
@@ -751,6 +822,10 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	// new in-memory object until Commit removes the raw keys.
 	obj.codeDirty = true
 	obj.contractMetaDirty = true
+	// The new object is born dirty (created/accountDirty); record it directly
+	// since this path constructs the object instead of going through markDirty.
+	obj.dirtySet = s.dirtyObjects
+	s.dirtyObjects[addr] = struct{}{}
 	s.stateObjects[addr] = obj
 	return obj
 }
@@ -1004,6 +1079,28 @@ func (s *StateDB) AddFreezeV2(addr tcommon.Address, resourceType corepb.Resource
 	}
 	s.journalAccount(addr, obj)
 	obj.account.AddFreezeV2(resourceType, amount)
+	obj.markDirty()
+}
+
+// ClearV2Freeze zeroes an account's Stake-2.0 freeze state in place, mirroring
+// java-tron's clearOwnerFreezeV2 (clearFrozenV2 + setNetUsage(0) +
+// setNewWindowSize(BANDWIDTH,0) + setEnergyUsage(0) + setNewWindowSize(ENERGY,0)
+// + clearUnfrozenV2) used by the SELFDESTRUCT path under allow_tvm_freeze_v2.
+// Only the window *size* is zeroed (the optimized flag is left as the preceding
+// usage recovery set it, matching java setNewWindowSize); the latest-consume
+// times are likewise left untouched here.
+func (s *StateDB) ClearV2Freeze(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearFrozenV2()
+	obj.account.SetNetUsage(0)
+	obj.account.SetNewNetWindowSize(0)
+	obj.account.SetEnergyUsage(0)
+	obj.account.SetNewEnergyWindowSize(0)
+	obj.account.ClearUnfrozenV2()
 	obj.markDirty()
 }
 
@@ -1434,9 +1531,23 @@ func (s *StateDB) RevertToSnapshot(id int) {
 // StateDB commits only once per block, so keep the zero value cached for the
 // eventual disk delete but make later SSTORE cost checks see the row as absent.
 func (s *StateDB) FinalizeTransaction() {
-	for _, obj := range s.stateObjects {
-		for k, v := range obj.storage {
-			if v == (tcommon.Hash{}) {
+	for addr := range s.txFinalizeDirty {
+		// Re-resolve the live object by address: a reverted create/recreate may
+		// have replaced or removed the object since it was recorded, so the
+		// stale-pointer it was recorded under must not be used.
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			continue
+		}
+		// Scope to slots written this block (dirtyStorage), not the whole cached
+		// storage map. A zero-valued cached slot can only come from SetState
+		// (reads never cache a zero row), which adds it to dirtyStorage, and
+		// storageExists is NOT reset at commit — so a zero row from an earlier
+		// block already reads as absent and need not be re-marked. This is the
+		// same authoritative write set the commit path uses, and keeps the scan
+		// O(writes-this-block) instead of O(accumulated storage cache).
+		for k := range obj.dirtyStorage {
+			if obj.storage[k] == (tcommon.Hash{}) {
 				obj.storageExists[k] = false
 			}
 		}
@@ -1444,6 +1555,43 @@ func (s *StateDB) FinalizeTransaction() {
 			s.DeleteAccount(obj.address)
 		}
 	}
+	clear(s.txFinalizeDirty)
+	// EIP-1153: transient storage is discarded at the end of every
+	// transaction. clear() on a nil map is a no-op, and it preserves the map
+	// header so any journal entries still referencing it stay valid.
+	clear(s.transientStorage)
+}
+
+// transientStorageKey identifies an EIP-1153 transient storage slot by
+// (account address, 32-byte slot). Transient storage is namespaced per
+// contract address exactly like persistent storage.
+type transientStorageKey struct {
+	addr tcommon.Address
+	key  tcommon.Hash
+}
+
+// GetTransientState returns the transient storage value at (addr, key) for the
+// current transaction, or the zero hash if unset. EIP-1153 (Cancun).
+func (s *StateDB) GetTransientState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	return s.transientStorage[transientStorageKey{addr: addr, key: key}]
+}
+
+// SetTransientState writes value to the transient storage slot (addr, key) for
+// the current transaction. The write is journaled so RevertToSnapshot undoes it
+// with the enclosing call frame; the whole map is discarded at
+// FinalizeTransaction. A write that does not change the slot is skipped (no
+// journal entry), matching go-ethereum. EIP-1153 (Cancun).
+func (s *StateDB) SetTransientState(addr tcommon.Address, key, value tcommon.Hash) {
+	tk := transientStorageKey{addr: addr, key: key}
+	prev := s.transientStorage[tk] // zero hash if absent
+	if prev == value {
+		return
+	}
+	if s.transientStorage == nil {
+		s.transientStorage = make(map[transientStorageKey]tcommon.Hash)
+	}
+	s.journal.append(transientStorageChange{storage: s.transientStorage, tk: tk, prev: prev})
+	s.transientStorage[tk] = value
 }
 
 // AccountExists returns whether an account exists (non-nil and not deleted).
@@ -1583,26 +1731,96 @@ func (s *StateDB) GetFreezeV1ExpireTime(addr tcommon.Address, resourceType int64
 	return 0
 }
 
-// CancelAllUnfreezeV2 moves all pending V2 unfreeze entries back to frozen
-// and returns the total amount cancelled.
-func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address) int64 {
+// frozenV2WeightWithDelegated returns the V2 stake weight (in TRX) for a
+// resource on this account, mirroring java AccountCapsule
+// getFrozenV2BalanceWithDelegated for BANDWIDTH/ENERGY (frozen + outgoing
+// delegated) and getTronPowerFrozenV2Balance for TRON_POWER (no delegated leg).
+// Used to compute (newWeight - oldWeight) when refreezing cancelled unstakes.
+func (s *StateDB) frozenV2WeightWithDelegated(addr tcommon.Address, resource corepb.ResourceCode) int64 {
+	balance := s.GetFrozenV2Amount(addr, resource)
+	if resource != corepb.ResourceCode_TRON_POWER {
+		balance += s.GetDelegatedFrozenV2(addr, resource)
+	}
+	return balance / trxPrecisionState
+}
+
+// CancelAllUnfreezeV2 cancels the account's pending V2 unfreeze queue, splitting
+// each entry on `now` exactly like java CancelAllUnfreezeV2Processor.execute
+// (now = getLatestBlockHeaderTimestamp) and go actuator
+// CancelAllUnfreezeV2Actuator.Execute:
+//   - UnfreezeExpireTime  > now  -> refrozen into FrozenV2; the per-resource
+//     total_{net,energy,tron_power}_weight delta (newWeight - oldWeight) is
+//     accumulated into the returned map.
+//   - UnfreezeExpireTime <= now  -> expired; its amount is accumulated and
+//     RETURNED so the caller can add it to balance.
+//
+// The queue is always cleared. The weight deltas are NOT applied here: the caller
+// must apply them to the LIVE DynamicProperties (the StateDB's own dp is the empty
+// genesis default in production) through a journaled path so a VM-frame revert
+// rolls them back — mirrors how the FREEZE/UNFREEZE opcodes own the weight
+// mutation via tvmAddResourceWeight. Returns (total expired, per-resource weight
+// delta in TRX units).
+func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) (int64, map[corepb.ResourceCode]int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
-		return 0
+		return 0, nil
 	}
 	entries := obj.account.UnfrozenV2()
 	if len(entries) == 0 {
-		return 0
+		return 0, nil
 	}
 	s.journalAccount(addr, obj)
-	var total int64
+	var withdrawExpire int64
+	weightDeltas := make(map[corepb.ResourceCode]int64, 3)
 	for _, u := range entries {
-		total += u.UnfreezeAmount
-		obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+		if u.UnfreezeExpireTime > now {
+			// Refreeze and record the global resource weight delta for the caller.
+			oldWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
+			obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+			newWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
+			weightDeltas[u.Type] += newWeight - oldWeight
+		} else {
+			withdrawExpire += u.UnfreezeAmount
+		}
 	}
 	obj.account.ClearUnfrozenV2()
 	obj.markDirty()
-	return total
+	return withdrawExpire, weightDeltas
+}
+
+// applyResourceWeight adds delta to dp's matching total_*_weight, mirroring java
+// repo.addTotalNet/Energy/TronPowerWeight. Non-journaled: callers that need the
+// delta rolled back on a VM revert use StateDB.AddResourceWeightJournaled.
+func applyResourceWeight(dp *DynamicProperties, resource corepb.ResourceCode, delta int64) {
+	if delta == 0 || dp == nil {
+		return
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		dp.AddTotalNetWeight(delta)
+	case corepb.ResourceCode_ENERGY:
+		dp.AddTotalEnergyWeight(delta)
+	case corepb.ResourceCode_TRON_POWER:
+		dp.AddTotalTronPowerWeight(delta)
+	}
+}
+
+// AddResourceWeightJournaled applies a resource-weight delta to dp AND records a
+// journal entry so a later RevertToSnapshot rolls it back. The TVM staking
+// opcodes (FREEZE/UNFREEZE) and the selfdestruct resource release must use this:
+// java applies these to a discardable Repository whose delta is dropped on
+// revert, but gtron mutates the shared DynamicProperties directly and Set is not
+// journaled — so a freeze-opcode-then-revert would otherwise leak the weight and
+// over-count total_energy_weight. dp is passed explicitly (not s.dynProps)
+// because a VM frame may run against a DynamicProperties distinct from the
+// StateDB's own (the never-committed simulation path loads a fresh one); journal
+// and mutate the exact object the frame uses and commits.
+func (s *StateDB) AddResourceWeightJournaled(dp *DynamicProperties, resource corepb.ResourceCode, delta int64) {
+	if delta == 0 || dp == nil {
+		return
+	}
+	s.journal.append(resourceWeightChange{dp: dp, resource: resource, delta: delta})
+	applyResourceWeight(dp, resource, delta)
 }
 
 // UnfreezeV2Count returns the number of pending unfreeze entries.
@@ -1806,6 +2024,18 @@ func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
 	}
 	s.journalAccount(addr, obj)
 	obj.account.SetLatestWithdrawTime(t)
+	obj.markDirty()
+}
+
+// SetOldTronPower sets the account's old_tron_power field directly. Mirrors
+// java AccountCapsule.setOldTronPower; used by the suicide vote-cancel path.
+func (s *StateDB) SetOldTronPower(addr tcommon.Address, v int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetOldTronPower(v)
 	obj.markDirty()
 }
 
@@ -2232,6 +2462,10 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		prevDirty:  prevDirty,
 	})
 	obj.setStorage(key, value, true)
+	// A write to zero leaves a present-zero row that FinalizeTransaction must
+	// flip to non-existent; record the address so the boundary scan can skip
+	// untouched objects. (Non-zero writes here are harmless no-ops there.)
+	s.txFinalizeDirty[addr] = struct{}{}
 }
 
 func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
@@ -2409,6 +2643,9 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 		prev:    obj.selfDestructed,
 	})
 	obj.markSelfDestructed()
+	// FinalizeTransaction deletes self-destructed accounts at the boundary;
+	// record the address so the boundary scan can skip untouched objects.
+	s.txFinalizeDirty[addr] = struct{}{}
 }
 
 // DeleteAccount removes an account from flat account latest on commit.
@@ -2463,6 +2700,8 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		stateObjects:          make(map[tcommon.Address]*stateObject),
 		witnesses:             make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:        make(map[tcommon.Address]struct{}),
+		txFinalizeDirty:       make(map[tcommon.Address]struct{}),
+		dirtyObjects:          make(map[tcommon.Address]struct{}),
 		journal:               newJournal(),
 		dynProps:              s.dynProps,
 		originRoot:            s.originRoot,
@@ -2524,6 +2763,10 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		for k := range obj.dirtyStorage {
 			newObj.dirtyStorage[k] = struct{}{}
 		}
+		newObj.dirtySet = cp.dirtyObjects
+		if newObj.dirty {
+			cp.dirtyObjects[addr] = struct{}{}
+		}
 		cp.stateObjects[addr] = newObj
 	}
 	return cp, nil
@@ -2547,9 +2790,18 @@ type accountCommitPlan struct {
 }
 
 func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
-	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
-	for addr, obj := range s.stateObjects {
-		if !obj.dirty {
+	// Iterate the incrementally-maintained dirty-address set instead of scanning
+	// the whole stateObjects map (which accumulates the range's read-only working
+	// set on the reused-StateDB sync path). The set is a complete superset of the
+	// dirty objects; the obj == nil / !obj.dirty guards filter stale entries (a
+	// created-then-reverted address, or one re-dirtied to its original value),
+	// reproducing the old `for addr, obj := range s.stateObjects` filter exactly.
+	// The sort keeps the commit order address-deterministic, byte-identical to
+	// the full scan.
+	addrs := make([]tcommon.Address, 0, len(s.dirtyObjects))
+	for addr := range s.dirtyObjects {
+		obj := s.stateObjects[addr]
+		if obj == nil || !obj.dirty {
 			continue
 		}
 		addrs = append(addrs, addr)
@@ -2921,6 +3173,11 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		defer tx.Close()
 		accountKVTemporalTx = tx
 	}
+	// Tag this block's overlay puts with its number so a later partial flush can
+	// prune the entries whose puts become durable, instead of accumulating the
+	// whole staged range (the deep async-commit overlay leak). On the fresh-writer
+	// path this is harmless: that writer is fully flushed (overlay cleared) below.
+	accountKVLatestWriter.commitBlock = opts.BlockNumber
 	for _, plan := range plans {
 		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVTemporalTx); err != nil {
 			if scope != nil {
@@ -2963,6 +3220,12 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	for _, plan := range plans {
 		s.finalizeAccountCommitPlan(plan)
 	}
+	// Every dirty object has now been finalized (obj.dirty cleared); drop the
+	// per-block dirty-address set in one shot, mirroring dirtyWitnesses /
+	// txFinalizeDirty. clear() (not reassignment) keeps every cached object's
+	// dirtySet back-pointer valid for the next block. No object is marked dirty
+	// between dirtyAccountCommitPlans and here, so nothing is lost.
+	clear(s.dirtyObjects)
 	mark(&stats.Finalize)
 
 	touchUpdates, err := commitmentState.latestUpdatesFromTouches()
@@ -3295,6 +3558,11 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 // account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if obj, ok := s.stateObjects[addr]; ok {
+		// Heal objects that entered the cache without a back-pointer (Load*
+		// hydration, journal-revert re-creation) so their next markDirty records.
+		if obj.dirtySet == nil {
+			obj.dirtySet = s.dirtyObjects
+		}
 		return obj
 	}
 	data, ok, err := s.readStateAccountLatest(addr)
@@ -3314,6 +3582,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	obj.accountKVGeneration = envelope.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
 	obj.codeHash = envelope.CodeHash
+	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	return obj
 }

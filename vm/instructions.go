@@ -501,7 +501,11 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 		num.Clear()
 		return nil, nil
 	}
-	if hash, ok := tvmBlockHashByNumber(interpreter.tvm.DB, index); ok {
+	// The 256-block lookback window reaches past the freezer line. Production
+	// paths hand the VM a store implementing BlockHashByNumber whose lookup
+	// falls through to ancient; bare test stores still resolve via the hot
+	// canonical block-hash helper.
+	if hash, found := tvmBlockHashByNumber(interpreter.tvm.DB, index); found {
 		num.SetBytes(hash.Bytes())
 		return nil, nil
 	}
@@ -534,25 +538,49 @@ func opDifficulty(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 }
 
 func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(uint64(interpreter.tvm.StateDB.DynamicProperties().TotalEnergyCurrentLimit())))
+	// java-tron OperationActions.gasLimitAction pushes DataWord.ZERO(): TRON has
+	// no block gas limit, so GASLIMIT is always 0. Pushing the energy limit (a
+	// non-zero value) diverged any contract that mixes GASLIMIT into derived
+	// randomness (Nile 23,269,068: a GASLIMIT-seeded RNG flipped a branch, so
+	// gtron SUCCEEDED where java REVERTed).
+	stack.push(uint256.NewInt(0))
 	return nil, nil
 }
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) {
-		if hash, ok := tvmBlockHashByNumber(interpreter.tvm.DB, 0); ok {
-			var v uint256.Int
-			v.SetBytes(hash.Bytes())
-			stack.push(&v)
-			return nil, nil
+	// Mirrors java Program.getChainId (actuator/.../vm/program/Program.java):
+	//   chainId = getBlockByNum(0).getBlockId().getBytes();   // full 32 bytes
+	//   if (allowTvmCompatibleEvm() || allowOptimizedReturnValueOfChainId())
+	//       chainId = Arrays.copyOfRange(chainId, len-4, len); // low 4 bytes
+	// So the value is ALWAYS derived from the genesis block hash, never from a
+	// numeric chain id. Post-fork (either gate on) it is the LOW 4 bytes of the
+	// genesis hash (mainnet 0x2b6653dc, Nile 0xcd8690dc); pre-fork it is the
+	// full 32-byte genesis hash.
+	//
+	// Resolve the genesis hash through the same audited helper as BLOCKHASH:
+	// production stores fall through to ancient, while bare memdb tests can use
+	// hot canonical block rows.
+	postFork := interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId
+	if interpreter.tvm.DB != nil {
+		var genesisHash []byte
+		if hash, found := tvmBlockHashByNumber(interpreter.tvm.DB, 0); found {
+			genesisHash = hash.Bytes()
 		}
-		if interpreter.tvm.GenesisHash != (tcommon.Hash{}) {
+		if genesisHash == nil && interpreter.tvm.GenesisHash != (tcommon.Hash{}) {
+			genesisHash = interpreter.tvm.GenesisHash.Bytes()
+		}
+		if genesisHash != nil {
+			if postFork && len(genesisHash) >= 4 {
+				genesisHash = genesisHash[len(genesisHash)-4:]
+			}
 			var v uint256.Int
-			v.SetBytes(interpreter.tvm.GenesisHash.Bytes())
+			v.SetBytes(genesisHash)
 			stack.push(&v)
 			return nil, nil
 		}
 	}
+	// Last resort when the genesis block cannot be resolved at all (no DB):
+	// fall back to the numeric chain id so the opcode still yields a value.
 	v := uint256.NewInt(uint64(interpreter.tvm.ChainID))
 	stack.push(v)
 	return nil, nil
@@ -565,7 +593,19 @@ func opSelfBalance(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 }
 
 func opBaseFee(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(0))
+	// java-tron OperationActions.baseFeeAction pushes the chain energy fee
+	// (getEnergyFee(), sun per energy) unconditionally — not 0. Pushing 0
+	// diverged any London-era contract that reads block.basefee. (Sibling
+	// GASPRICE reads the same energy fee, but only for version-1 contracts.)
+	// Read the energy fee from the wired dp (tvm.DynProps), not the empty
+	// production StateDB dp — same dp-source class as the dynamic-energy /
+	// getChainParameter fixes (StateDB.DynamicProperties() is genesis-default in
+	// production, so EnergyFee() would be 0).
+	var fee int64
+	if dp := stakingDynamicProperties(interpreter.tvm); dp != nil {
+		fee = dp.EnergyFee()
+	}
+	stack.push(uint256.NewInt(uint64(fee)))
 	return nil, nil
 }
 
@@ -867,6 +907,31 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 
+	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
+	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
+
+	// java-tron OperationActions.suicideAction/suicideAction2 revert the SELFDESTRUCT
+	// (program.canSuicide()/canSuicide2()) when the contract still holds frozen
+	// resources: delegated V1 (both paths), the owner's own unexpired V1 frozen (new
+	// restriction path only), or any delegated-V2 / unexpired pending-V2-unfreeze.
+	// Without this go-tron destroys a contract java reverts.
+	if !interpreter.tvm.canSelfDestruct(contract.Address, oldSuicide) {
+		return nil, ErrExecutionReverted
+	}
+
+	// java-tron Program.suicide (Program.java:457) calls withdrawRewardAndCancelVote
+	// unconditionally at the top when allow_tvm_vote is active; suicide2 (547) runs
+	// it only AFTER its owner==obtainer early-return (543), i.e. for a distinct
+	// obtainer. So the old path always cancels votes; the new (restriction) path
+	// cancels only when owner != obtainer. It settles the contract's voter reward,
+	// CANCELs its votes (so the next maintenance fold removes them from the
+	// witnesses it voted for — else the witness vote tally drifts above the true
+	// voter sum and the standby-reward voteSum diverges) and rolls allowance into
+	// balance. Must precede the balance read so the inherited balance includes it.
+	if interpreter.tvmConfig.Vote && (oldSuicide || address != contract.Address) {
+		tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address)
+	}
+
 	interpreter.tvm.Nonce++
 	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
 	var tokenInfo map[string]int64
@@ -880,9 +945,7 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			}
 		}
 	}
-	interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
-	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
-	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
+	suicideIT := interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
 	if oldSuicide && sameOldSuicideAddress {
 		blackhole := interpreter.tvm.blackholeAddress()
 		if balance > 0 {
@@ -931,6 +994,28 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, inheritor)
 		} else if address != contract.Address {
 			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, address)
+		}
+	}
+	if interpreter.tvmConfig.StakingV2 {
+		// java-tron Program.suicide (Program.java:505-514) / suicide2 (574-581):
+		// when allow_tvm_freeze_v2 (Stake 2.0) is active, move the destroyed
+		// contract's FrozenV2 balances + usage to the inheritor and bump the
+		// suicide internal-tx value by any withdrawn expired-unfreeze balance. The
+		// inheritor selection matches the V1 block above (blackhole for a
+		// self-obtainer on old suicide; the obtainer otherwise). suicide2 returns
+		// before this when owner == obtainer, so the distinct-address guard holds.
+		var expireUnfrozenBalance int64
+		if oldSuicide {
+			inheritor := address
+			if address == contract.Address {
+				inheritor = interpreter.tvm.blackholeAddress()
+			}
+			expireUnfrozenBalance = interpreter.tvm.transferFrozenV2BalanceToInheritor(contract.Address, inheritor)
+		} else if address != contract.Address {
+			expireUnfrozenBalance = interpreter.tvm.transferFrozenV2BalanceToInheritor(contract.Address, address)
+		}
+		if expireUnfrozenBalance > 0 && suicideIT != nil && len(suicideIT.CallValueInfo) > 0 {
+			suicideIT.CallValueInfo[0].CallValue += expireUnfrozenBalance
 		}
 	}
 	if oldSuicide {

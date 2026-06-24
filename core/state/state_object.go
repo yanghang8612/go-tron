@@ -40,6 +40,12 @@ type stateObject struct {
 
 	// kvDirty holds pending generic-KV writes keyed by string(domainBE2||key).
 	kvDirty map[string]kvEntry
+
+	// dirtySet is a back-pointer to the owning StateDB's dirtyObjects set. It is
+	// set when the object enters the cache (getStateObject / GetOrCreateAccount /
+	// Copy) so that markDirty can record this object's address without the
+	// StateDB needing to scan. nil for detached objects (none ever mutated).
+	dirtySet map[tcommon.Address]struct{}
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
@@ -71,6 +77,9 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 
 func (s *stateObject) markDirty() {
 	s.dirty = true
+	if s.dirtySet != nil {
+		s.dirtySet[s.address] = struct{}{}
+	}
 }
 
 // Account returns the underlying account for direct mutation during genesis setup.

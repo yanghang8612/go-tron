@@ -38,7 +38,7 @@ func TestProcessProposals_AdaptiveEnergySideEffect(t *testing.T) {
 	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestProcessProposals_AllowNewRewardActivates(t *testing.T) {
 	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestProcessProposals_AdaptiveEnergyNoSideEffectWithoutVersion(t *testing.T)
 	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

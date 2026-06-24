@@ -39,7 +39,7 @@ func TestTransferUsageFromReceiver_ProRata(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 10) // no time elapsed → no decay
 
 	// Undelegate 40 TRX — 40% of receiver's pool.
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
 
 	// Expected transfer = 500 × 40/100 = 200, capped at
 	// maxUsage = 40 × (43_200_000_000 / 1000) = 40 × 43_200_000 = 1_728_000_000 (no cap hit).
@@ -73,7 +73,7 @@ func TestTransferUsageFromReceiver_CapByMaxUsage(t *testing.T) {
 	// Undelegate 10 TRX.
 	// Raw pro-rata = 1_000_000 × 10/100 = 100_000.
 	// Max = (10 × 1_000) / 1_000_000 = 0 (integer truncation).
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 0 {
 		t.Fatalf("transfer should be clamped to 0: got %d", transfer)
 	}
@@ -91,9 +91,46 @@ func TestTransferUsageFromReceiver_NoUsage(t *testing.T) {
 	// No usage.
 
 	ctx := ctxFor(statedb, dp, 1000)
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 0 {
 		t.Fatalf("transfer with no usage: got %d, want 0", transfer)
+	}
+}
+
+// TestTransferUsageFromReceiver_SuicideRecreateGuard locks java
+// UnDelegateResourceActuator/Processor's "TVM contract suicide, re-create"
+// branch: when the receiver's acquired V2 delegated balance is BELOW the
+// undelegated amount, java sets acquired=0 and SKIPS the proportional usage
+// transfer entirely (transferUsage stays 0, the receiver keeps its full
+// recovered usage). Pre-fix go had no such guard and computed a non-zero
+// transfer, reducing the receiver's usage and folding it into the owner.
+func TestTransferUsageFromReceiver_SuicideRecreateGuard(t *testing.T) {
+	statedb := setupStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.Set("total_net_limit", 43_200_000_000)
+	dp.SetTotalNetWeight(1000)
+
+	receiver := makeTestAddr(0x21)
+	seedAccount(statedb, receiver, 0)
+
+	// Receiver: 100 TRX own frozen V2 + only 30 TRX acquired (< the 40 TRX
+	// undelegate). Total pool = 130 TRX. Stale usage 1300 at the current slot
+	// (no decay).
+	statedb.AddFreezeV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
+	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 30*trxPrecisionTest)
+	statedb.SetNetUsage(receiver, 1300)
+	statedb.SetLatestConsumeTime(receiver, 7)
+
+	ctx := ctxFor(statedb, dp, 7) // no decay
+
+	// acquired (30 TRX) < undelegate (40 TRX) -> guard fires -> transfer 0.
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime, false)
+	if transfer != 0 {
+		t.Fatalf("suicide/recreate guard: transfer got %d, want 0 (pre-fix would compute 1300*40/130=400)", transfer)
+	}
+	// Receiver keeps its full recovered usage (un-reduced).
+	if got := statedb.GetNetUsage(receiver); got != 1300 {
+		t.Fatalf("receiver usage under guard: got %d, want 1300", got)
 	}
 }
 
@@ -112,12 +149,43 @@ func TestTransferUsageFromReceiver_Energy(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 5)
 
 	// Undelegate 50 TRX — 25% of receiver's 200 TRX energy pool.
-	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime, false)
 	if transfer != 250 {
 		t.Fatalf("energy transfer: got %d, want 250", transfer)
 	}
 	if got := statedb.GetEnergyUsage(receiver); got != 750 {
 		t.Fatalf("receiver energy usage: got %d, want 750", got)
+	}
+}
+
+// TestTransferUsageFromReceiver_MaxUsageFormDiffersByPath pins the dual-impl fix
+// for unDelegateMaxUsage: java UnDelegateResourceActuator groups the ratio
+// `(ub/TRX)*(limit/weight)` (tvmForm=false) while UnDelegateResourceProcessor (the
+// 0xDF opcode) evaluates left-to-right `(ub/TRX)*limit/weight` (tvmForm=true). The
+// two IEEE-754 orders differ by 1 at ULP boundaries, and when this cap binds the
+// committed transferUsage (receiver net/energy usage) flips. The shared helper
+// must use the form matching its caller's java path.
+func TestTransferUsageFromReceiver_MaxUsageFormDiffersByPath(t *testing.T) {
+	const ub = int64(2096000000) // a known grouped-vs-ungrouped boundary triple
+	run := func(tvmForm bool) int64 {
+		statedb := setupStateDB(t)
+		dp := state.NewDynamicProperties()
+		dp.Set("total_net_limit", 72633748985)
+		dp.SetTotalNetWeight(917)
+		receiver := makeTestAddr(0x21)
+		seedAccount(statedb, receiver, 0)
+		statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, ub) // acquired==ub → guard passes
+		statedb.SetNetUsage(receiver, 300_000_000_000)                                    // proportional ≫ maxTransfer → cap binds
+		statedb.SetLatestConsumeTime(receiver, 0)
+		transfer, _, _ := delegation.TransferUsageFromReceiver(statedb, dp, receiver, corepb.ResourceCode_BANDWIDTH, ub, 0, tvmForm)
+		return transfer
+	}
+
+	if grouped := run(false); grouped != 166019997679 {
+		t.Fatalf("actuator (grouped) maxTransfer: got %d, want 166019997679", grouped)
+	}
+	if ungrouped := run(true); ungrouped != 166019997680 {
+		t.Fatalf("TVM (ungrouped) maxTransfer: got %d, want 166019997680", ungrouped)
 	}
 }
 
@@ -241,5 +309,90 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	dr := statedb.ReadDelegatedResource(owner, receiver)
 	if dr == nil || dr.FrozenBalanceForBandwidth != 60*trxPrecisionTest {
 		t.Fatalf("delegation record frozen: got %+v", dr)
+	}
+}
+
+// TestUnDelegateResourceExecute_OwnerUntouchedWhenNoTransfer locks the C1 fix:
+// java gates the owner-side unDelegateIncrease on transferUsage > 0, so when the
+// receiver transferred no usage the owner's net_usage / window / consume-time are
+// left exactly as they were. Pre-fix go folded unconditionally, decaying the
+// owner's usage and stamping latest_consume_time = now.
+func TestUnDelegateResourceExecute_OwnerUntouchedWhenNoTransfer(t *testing.T) {
+	statedb := setupStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowDelegateResource(true)
+	dp.SetUnfreezeDelayDays(14)
+	dp.Set("total_net_limit", 43_200_000_000)
+	dp.SetTotalNetWeight(1000)
+
+	owner := makeTestAddr(0x41)
+	receiver := makeTestAddr(0x42)
+	seedAccount(statedb, owner, 0)
+	seedAccount(statedb, receiver, 0)
+
+	statedb.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
+	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
+	if err := statedb.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
+		From:                      owner,
+		To:                        receiver,
+		FrozenBalanceForBandwidth: 100 * trxPrecisionTest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Owner has stale usage 400 stamped at slot 0; the receiver never spent the
+	// delegated bandwidth (usage 0), so the proportional transfer is 0.
+	statedb.SetNetUsage(owner, 400)
+	statedb.SetLatestConsumeTime(owner, 0)
+	ownerWindowBefore := statedb.GetAccount(owner).RawNetWindowSize()
+
+	// Undelegate at half a recovery window later, so an (incorrect) owner fold
+	// would visibly decay 400 -> 200 and move the consume time.
+	now := int64(params.WindowSizeSlots / 2)
+
+	c := &contractpb.UnDelegateResourceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: receiver.Bytes(),
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         40 * trxPrecisionTest,
+	}
+	any, _ := anypb.New(c)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_UnDelegateResourceContract,
+				Parameter: any,
+			}},
+		},
+	})
+
+	act := &UnDelegateResourceActuator{}
+	ctx := &Context{
+		State:         statedb,
+		DynProps:      dp,
+		Tx:            tx,
+		BlockTime:     now,
+		PrevBlockTime: now,
+		HeadSlot:      now,
+		HasHeadSlot:   true,
+		BlockNumber:   100,
+	}
+
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	// Owner usage, window and consume time must be byte-unchanged.
+	if got := statedb.GetNetUsage(owner); got != 400 {
+		t.Fatalf("owner usage changed on zero-transfer undelegate: got %d, want 400", got)
+	}
+	if got := statedb.GetLatestConsumeTime(owner); got != 0 {
+		t.Fatalf("owner consume time changed on zero-transfer undelegate: got %d, want 0", got)
+	}
+	if got := statedb.GetAccount(owner).RawNetWindowSize(); got != ownerWindowBefore {
+		t.Fatalf("owner net window changed on zero-transfer undelegate: got %d, want %d", got, ownerWindowBefore)
 	}
 }

@@ -32,7 +32,23 @@ func makeTestChain(t *testing.T) *core.BlockChain {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := bc.Close(); err != nil {
+			t.Logf("close test chain: %v", err)
+		}
+	})
 	return bc
+}
+
+func waitUntil(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return cond()
 }
 
 func TestHandleBlockDropsBroadcastWhileSyncPaused(t *testing.T) {
@@ -68,19 +84,23 @@ func TestHandshakeSuccess(t *testing.T) {
 	h1.SetServer(srv1)
 	h2.SetServer(srv2)
 
-	srv1.Start()
+	if err := srv1.Start(); err != nil {
+		t.Fatalf("start srv1: %v", err)
+	}
 	defer srv1.Stop()
-	srv2.Start()
+	if err := srv2.Start(); err != nil {
+		t.Fatalf("start srv2: %v", err)
+	}
 	defer srv2.Stop()
 
-	srv2.AddPeer(srv1.ListenAddr())
-	time.Sleep(200 * time.Millisecond)
-
-	if h1.HandshakedPeerCount() != 1 {
-		t.Fatalf("h1 handshaked peers: want 1, got %d", h1.HandshakedPeerCount())
+	if err := srv2.AddPeer(srv1.ListenAddr()); err != nil {
+		t.Fatalf("add peer: %v", err)
 	}
-	if h2.HandshakedPeerCount() != 1 {
-		t.Fatalf("h2 handshaked peers: want 1, got %d", h2.HandshakedPeerCount())
+
+	if !waitUntil(3*time.Second, func() bool {
+		return h1.HandshakedPeerCount() == 1 && h2.HandshakedPeerCount() == 1
+	}) {
+		t.Fatalf("handshaked peers: h1=%d h2=%d, want 1/1", h1.HandshakedPeerCount(), h2.HandshakedPeerCount())
 	}
 }
 
@@ -134,10 +154,11 @@ func TestPbftMsgDispatch(t *testing.T) {
 	defer srv2.Stop()
 
 	srv2.AddPeer(srv1.ListenAddr())
-	time.Sleep(200 * time.Millisecond)
 
-	if h2.HandshakedPeerCount() != 1 {
-		t.Fatalf("expected 1 handshaked peer, got %d", h2.HandshakedPeerCount())
+	if !waitUntil(3*time.Second, func() bool {
+		return h1.HandshakedPeerCount() == 1 && h2.HandshakedPeerCount() == 1
+	}) {
+		t.Fatalf("handshaked peers: h1=%d h2=%d, want 1/1", h1.HandshakedPeerCount(), h2.HandshakedPeerCount())
 	}
 
 	// Send PBFT messages from h2 to h1 — stubs must dispatch without panic.
@@ -145,9 +166,8 @@ func TestPbftMsgDispatch(t *testing.T) {
 	peers2[0].Send(p2p.MsgPbftMsg, []byte{})
 	peers2[0].Send(p2p.MsgPbftCommitMsg, []byte{})
 
-	time.Sleep(50 * time.Millisecond)
 	// success = no panic, no disconnect
-	if h1.HandshakedPeerCount() != 1 {
+	if !waitUntil(time.Second, func() bool { return h1.HandshakedPeerCount() == 1 }) {
 		t.Fatalf("peer disconnected after PBFT messages")
 	}
 }
@@ -164,6 +184,11 @@ func TestHandshakeRejectsWrongGenesis(t *testing.T) {
 	}
 	core.SetupGenesisBlock(diskdb2, genesis2)
 	bc2, _ := core.NewBlockChain(diskdb2, sdb2, genesis2.Config)
+	t.Cleanup(func() {
+		if err := bc2.Close(); err != nil {
+			t.Logf("close mismatched genesis chain: %v", err)
+		}
+	})
 
 	pool := txpool.New()
 	h1 := NewTronHandler(bc1, pool, nil)

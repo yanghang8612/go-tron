@@ -2,6 +2,8 @@ package core
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -12,16 +14,42 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-// commitQueueCap is 0 (unbuffered) so the foreground send to the worker is a
-// rendezvous: applyBlockWithPlan(N+1)'s enqueue blocks until the worker has
-// received it, which (because the worker processes one job to completion before
-// the next receive) means block N is already committed and its buffer layer
-// promoted. This bounds the pipeline to depth 2 — one block committing on the
-// worker while one executes on the foreground — and therefore bounds in-flight
-// buffer layers to 2 (matching SetMaxInflight(2) in SetAsyncCommit). A buffered
-// queue would let the foreground run further ahead and need more in-flight
-// layers; depth-2 is where the ~1.4–1.5× overlap ceiling already sits.
-const commitQueueCap = 0
+// Async-commit pipeline depth D bounds how many blocks the exec foreground may
+// run ahead of the serial commit worker. The buffered commit queue holds D-2
+// jobs (worker processing 1 + queue D-2 + foreground's just-begun layer 1 = D
+// in-flight buffer layers, matching SetMaxInflight(D)); the send blocking on a
+// full queue is the backpressure that keeps BeginBlock from exceeding maxInflight.
+//
+//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2 — EXACTLY today.
+//   - D  > 2  → buffered + the cross-batch barrier-amortization path (see
+//     pipelinedCommit / InsertSession). Enabled ops-only, never wire-observable.
+//
+// The depth is resolved ONCE at NewBlockChain (so the commit worker, started in
+// the constructor, ranges a correctly-sized channel and is never orphaned by a
+// later re-make). SetAsyncCommit only toggles the buffer's in-flight cap.
+const (
+	defaultCommitPipelineDepth = 2
+	maxCommitPipelineDepth     = 16
+)
+
+// resolveCommitPipelineDepth reads the ops-only GTRON_ASYNC_COMMIT_DEPTH override,
+// clamped to [defaultCommitPipelineDepth, maxCommitPipelineDepth]. Unset, invalid,
+// or below the floor → the default (2 = today's behavior). It is never gated on
+// chain config / proposals — it changes only the internal commit schedule.
+func resolveCommitPipelineDepth() int {
+	v := os.Getenv("GTRON_ASYNC_COMMIT_DEPTH")
+	if v == "" {
+		return defaultCommitPipelineDepth
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < defaultCommitPipelineDepth {
+		return defaultCommitPipelineDepth
+	}
+	if n > maxCommitPipelineDepth {
+		return maxCommitPipelineDepth
+	}
+	return n
+}
 
 // commitJob is one block's deferred commit: the captured commitment fold plus
 // the inputs the publish tail consumes. Everything here is either immutable
@@ -47,18 +75,37 @@ type commitJob struct {
 // NewBlockChain), never concurrently with insertion. Default OFF — the
 // synchronous, byte-identical commit path runs unless this is set true.
 //
-// Enabling raises the buffer to two in-flight layers so the worker can write
-// block N's layer while the foreground writes block N+1's. It is deliberately
-// NOT wired to any chain-config / proposal value: async commit only changes the
-// internal commit *schedule*, never any wire-observable byte, so it must never
-// be visible on the network.
+// Enabling raises the buffer to bc.commitDepth in-flight layers so the worker can
+// write committing blocks' layers while the foreground writes later ones (depth 2
+// = today: one committing, one executing). The depth itself was resolved at
+// NewBlockChain and the commit queue sized to depth-2 there, so this only flips
+// the buffer's in-flight cap. It is deliberately NOT wired to any chain-config /
+// proposal value: async commit only changes the internal commit *schedule*, never
+// any wire-observable byte, so it must never be visible on the network.
 func (bc *BlockChain) SetAsyncCommit(enabled bool) {
 	bc.asyncCommit = enabled
 	if enabled {
-		bc.buffer.SetMaxInflight(2)
+		bc.buffer.SetMaxInflight(bc.commitDepth)
 	} else {
 		bc.buffer.SetMaxInflight(1)
 	}
+}
+
+// PipelinedCommitDepth returns the configured async-commit pipeline depth (≥2)
+// when async commit is enabled, else 0. Used by the sync drain loop to decide
+// whether to span one InsertSession across batches (depth > 2) for cross-batch
+// barrier amortization.
+func (bc *BlockChain) PipelinedCommitDepth() int {
+	if !bc.asyncCommit {
+		return 0
+	}
+	return bc.commitDepth
+}
+
+// pipelinedCommit reports whether the deep/amortized path is active (async commit
+// on AND depth > 2). At depth 2 the legacy per-range path runs unchanged.
+func (bc *BlockChain) pipelinedCommit() bool {
+	return bc.asyncCommit && bc.commitDepth > 2
 }
 
 // commitFoldHook, when non-nil, is invoked by the commit worker for each block
@@ -177,7 +224,26 @@ func (bc *BlockChain) commitAsync(
 	//    (Synchronous commit flushes at the true solidified because the layer is
 	//    committed in-line before this point; async must lag by one.)
 	cutoff := dynProps.LatestSolidifiedBlockNum()
-	if maxFlushable := int64(block.Number()) - 1; cutoff > maxFlushable {
+	// Cap the flush at the highest block whose buffer layer is already COMMITTED.
+	// At depth 2 that is block.Number()-1: the rendezvous enqueue only returned
+	// after the worker fully committed N-1 (CommitInflight done). At depth > 2 the
+	// worker publishes bc.CurrentBlock() BEFORE CommitInflight, so the published
+	// head's layer can still be in-flight; FlushLatestUpTo KEEPS ops targeting an
+	// in-flight layer (writeFiltered only applies committed targets), so a cutoff
+	// of currentBlock would leave the head block's latest-domain op queued while a
+	// later postFlush drops its (by-then committed) layer → "batch target layer is
+	// no longer pending". Track the newest COMMITTED layer instead — any op ≤ it
+	// targets a promoted layer and is flushed (not kept) before its layer is
+	// dropped. No committed layer yet ⇒ nothing is flushable this round.
+	maxFlushable := int64(block.Number()) - 1
+	if bc.pipelinedCommit() {
+		if n, ok := bc.buffer.NewestCommittedNumber(); ok {
+			maxFlushable = int64(n)
+		} else {
+			maxFlushable = 0
+		}
+	}
+	if cutoff > maxFlushable {
 		cutoff = maxFlushable
 	}
 	if cutoff > 0 {

@@ -16,13 +16,14 @@ type testCollector struct {
 	codes []byte
 }
 
-func (tc *testCollector) OnPeerConnected(p *p2p.Peer)                        {}
-func (tc *testCollector) OnPeerDisconnected(p *p2p.Peer)                     {}
+func (tc *testCollector) OnPeerConnected(p *p2p.Peer)                   {}
+func (tc *testCollector) OnPeerDisconnected(p *p2p.Peer)                {}
 func (tc *testCollector) OnMessage(p *p2p.Peer, code byte, data []byte) {}
 
 func TestBroadcastBlockSendsInventory(t *testing.T) {
 	// Set up two peers connected via pipe
 	c1, c2 := net.Pipe()
+	defer c2.Close()
 	h := &testCollector{}
 	peer := p2p.NewPeer(c1, "test:1", false, h)
 	peer.Start()
@@ -71,6 +72,7 @@ func TestBroadcastBlockSendsInventory(t *testing.T) {
 
 func TestBroadcastDeduplicates(t *testing.T) {
 	c1, c2 := net.Pipe()
+	defer c2.Close()
 	h := &testCollector{}
 	peer := p2p.NewPeer(c1, "test:1", false, h)
 	peer.Start()
@@ -122,6 +124,7 @@ func TestBroadcastDeduplicates(t *testing.T) {
 // the flush ticker fires are delivered in a single INV message to the peer.
 func TestBroadcastBatchesTxs(t *testing.T) {
 	c1, c2 := net.Pipe()
+	defer c2.Close()
 	h := &testCollector{}
 	peer := p2p.NewPeer(c1, "test:1", false, h)
 	peer.Start()
@@ -187,6 +190,7 @@ func TestBroadcastBatchesTxs(t *testing.T) {
 func TestBroadcastBlockFromExcludesOrigin(t *testing.T) {
 	// origin peer (should NOT receive INV)
 	o1, o2 := net.Pipe()
+	defer o2.Close()
 	originH := &testCollector{}
 	originPeer := p2p.NewPeer(o1, "origin:1", false, originH)
 	originPeer.Start()
@@ -210,6 +214,7 @@ func TestBroadcastBlockFromExcludesOrigin(t *testing.T) {
 
 	// other peer (should receive INV)
 	r1, r2 := net.Pipe()
+	defer r2.Close()
 	otherH := &testCollector{}
 	otherPeer := p2p.NewPeer(r1, "other:1", false, otherH)
 	otherPeer.Start()

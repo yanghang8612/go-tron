@@ -2,7 +2,9 @@ package core
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
+	"weak"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -354,6 +356,74 @@ func TestKhaosDB_GetBranch_WindowExceeded(t *testing.T) {
 	_, _, err := k2.GetBranch(ext[8].Hash(), forkTip.Hash())
 	if err != ErrNonCommonBlock {
 		t.Fatalf("want ErrNonCommonBlock after LCA eviction, got %v", err)
+	}
+}
+
+// pushWeak pushes a freshly-built block and returns a weak pointer to it, plus
+// its hash and number, WITHOUT leaking a strong reference into the caller's
+// frame. Keeping the block only inside this helper frame ensures no lingering
+// stack slot keeps it alive once the helper returns, so a later weak-pointer
+// check observes only references held by KhaosDB itself.
+func pushWeak(t *testing.T, k *KhaosDB, num uint64, parentHash tcommon.Hash) (weak.Pointer[types.Block], tcommon.Hash, uint64) {
+	t.Helper()
+	b := makeKhaosTestBlock(num, parentHash)
+	w := weak.Make(b)
+	h := b.Hash()
+	if _, err := k.Push(b); err != nil {
+		t.Fatalf("push block %d: %v", num, err)
+	}
+	return w, h, num
+}
+
+// TestKhaosDB_EvictedBlocksAreCollectable is a leak regression: once a block
+// slides out of the eviction window it must become collectable. java-tron keeps
+// each KhaosBlock's parent as a WeakReference (KhaosDatabase.java) precisely so
+// the decoded block can be GC'd after it leaves the window; a strong parent
+// pointer would chain head→…→genesis and pin every block (and its decoded
+// *types.Block) seen since process start — an unbounded heap leak under sync.
+func TestKhaosDB_EvictedBlocksAreCollectable(t *testing.T) {
+	const capacity = 64
+	const total = capacity * 4
+
+	k := NewKhaosDB()
+	k.SetMaxSize(capacity)
+	genesis := makeKhaosTestBlock(0, tcommon.Hash{})
+	k.Start(genesis)
+
+	earlyWeak, earlyHash, earlyNum := pushWeak(t, k, 1, genesis.Hash())
+	genesis = nil
+
+	// Extend far past capacity, threading ONLY the previous hash forward — never
+	// retaining a *types.Block — so the early block is reachable solely through
+	// whatever KhaosDB itself holds.
+	prevHash := earlyHash
+	for i := earlyNum + 1; i <= total; i++ {
+		b := makeKhaosTestBlock(i, prevHash)
+		if _, err := k.Push(b); err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+		prevHash = b.Hash()
+	}
+
+	if k.ContainsInMiniStore(earlyHash) {
+		t.Fatal("precondition failed: early block should have been evicted from miniStore")
+	}
+
+	var collected bool
+	for attempt := 0; attempt < 10; attempt++ {
+		runtime.GC()
+		if earlyWeak.Value() == nil {
+			collected = true
+			break
+		}
+	}
+	// Keep k alive across the whole GC loop: otherwise the compiler would treat
+	// k as dead after its last use above, collect the entire KhaosDB (head chain
+	// included), and the block would appear collectable even WITH the leak. In
+	// production KhaosDB lives for the process lifetime, so this models reality.
+	runtime.KeepAlive(k)
+	if !collected {
+		t.Fatal("evicted block is still reachable after GC: KhaosDB leaks the parent-pointer chain")
 	}
 }
 

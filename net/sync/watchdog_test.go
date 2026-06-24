@@ -75,11 +75,13 @@ func (f *fakePauseStatus) setPaused(v bool) {
 	f.paused = v
 }
 
-// fakeStarter implements SyncStarter and records every StartSync call.
+// fakeStarter implements SyncStarter and records every StartSync /
+// RecoverStalledFetch call.
 type fakeStarter struct {
-	mu      sync.Mutex
-	calls   []*p2p.Peer
-	syncing bool
+	mu       sync.Mutex
+	calls    []*p2p.Peer
+	recovers int
+	syncing  bool
 }
 
 func (f *fakeStarter) StartSync(peer *p2p.Peer) {
@@ -92,6 +94,18 @@ func (f *fakeStarter) IsSyncing() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.syncing
+}
+
+func (f *fakeStarter) RecoverStalledFetch() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recovers++
+}
+
+func (f *fakeStarter) recoverCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.recovers
 }
 
 func (f *fakeStarter) callCount() int {
@@ -170,7 +184,7 @@ func TestWatchdog_DirectCheckIsolation_NoTickerNeeded(t *testing.T) {
 		}
 	})
 
-	t.Run("syncing→no-start", func(t *testing.T) {
+	t.Run("syncing+stall→recover-not-start", func(t *testing.T) {
 		chain := &fakeChain{lastInsert: time.Now().Add(-time.Hour)}
 		peers := &fakePeerSource{best: dummyPeer}
 		pause := &fakePauseStatus{}
@@ -180,6 +194,38 @@ func TestWatchdog_DirectCheckIsolation_NoTickerNeeded(t *testing.T) {
 		w.checkIsolation()
 		if starter.callCount() != 0 {
 			t.Fatalf("syncing: StartSync calls = %d, want 0", starter.callCount())
+		}
+		if starter.recoverCount() != 1 {
+			t.Fatalf("syncing+stall: RecoverStalledFetch calls = %d, want 1", starter.recoverCount())
+		}
+	})
+
+	t.Run("syncing+recent→no-recover", func(t *testing.T) {
+		chain := &fakeChain{lastInsert: time.Now()}
+		peers := &fakePeerSource{best: dummyPeer}
+		pause := &fakePauseStatus{}
+		starter := &fakeStarter{syncing: true}
+		w := newTestWatchdog(t, chain, peers, pause, starter)
+
+		w.checkIsolation()
+		if starter.recoverCount() != 0 {
+			t.Fatalf("recent insert: RecoverStalledFetch calls = %d, want 0", starter.recoverCount())
+		}
+		if starter.callCount() != 0 {
+			t.Fatalf("recent insert: StartSync calls = %d, want 0", starter.callCount())
+		}
+	})
+
+	t.Run("syncing+stall+paused→no-recover", func(t *testing.T) {
+		chain := &fakeChain{lastInsert: time.Now().Add(-time.Hour)}
+		peers := &fakePeerSource{best: dummyPeer}
+		pause := &fakePauseStatus{paused: true}
+		starter := &fakeStarter{syncing: true}
+		w := newTestWatchdog(t, chain, peers, pause, starter)
+
+		w.checkIsolation()
+		if starter.recoverCount() != 0 {
+			t.Fatalf("paused: RecoverStalledFetch calls = %d, want 0", starter.recoverCount())
 		}
 	})
 

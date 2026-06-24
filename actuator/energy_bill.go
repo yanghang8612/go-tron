@@ -411,13 +411,28 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 
 	// The IN-VM energy-limit duplicate in java-tron is
-	// RepositoryImpl.calculateGlobalEnergyLimit (actuator module), which is
-	// UNCONDITIONALLY V1 integer-truncated plain-float — NO supportUnfreezeDelay
-	// (V2 fractional) branch and NO harden (BigInteger) branch. (The chainbase
-	// EnergyProcessor V2 path mirrored by core/resource.go::availableAccountEnergy
-	// is the separate RPC path and stays V2.) Keeping the sub-TRX fraction here
-	// over-grants the in-VM energy limit for non-whole-TRX stakes and can flip
-	// OUT_OF_ENERGY -> SUCCESS (same class as the 8,825,873 stall).
+	// RepositoryImpl.calculateGlobalEnergyLimit (actuator module). It is V1
+	// integer-truncated — NO supportUnfreezeDelay (V2 fractional) branch, so the
+	// sub-TRX fraction is dropped via weight = frozeBalance / TRX_PRECISION. (The
+	// chainbase EnergyProcessor V2 path mirrored by
+	// core/resource.go::availableAccountEnergy is the separate RPC path and stays
+	// V2.) Keeping the sub-TRX fraction here would over-grant the in-VM energy
+	// limit for non-whole-TRX stakes and can flip OUT_OF_ENERGY -> SUCCESS (same
+	// class as the 8,825,873 stall).
+	//
+	// It DOES, however, have a hardenResourceCalculation() (#97
+	// allow_harden_resource_calculation) branch that evaluates the ratio with
+	// BigInteger so weight*totalLimit can exceed 2^53 without float64 precision
+	// loss:
+	//   if (hardenResourceCalculation())
+	//     return BigInteger.valueOf(energyWeight)
+	//         .multiply(BigInteger.valueOf(totalEnergyLimit))
+	//         .divide(BigInteger.valueOf(totalEnergyWeight))
+	//         .longValueExact();
+	//   return (long) (energyWeight * ((double) totalEnergyLimit / totalEnergyWeight));
+	// Note: plain weight*limit/weight, NO TRX_PRECISION factor (that factor lives
+	// only in RepositoryImpl.usageToBalance, a different method). Pre-#97 stays on
+	// the plain-float path so old blocks replay byte-identically.
 	if frozen < params.TRXPrecision {
 		return 0
 	}
@@ -427,6 +442,13 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 	}
 	totalLimit := dp.TotalEnergyCurrentLimit()
 	weight := frozen / params.TRXPrecision
+	if dp.AllowHardenResourceCalculation() {
+		// java BigInteger ...divide(...).longValueExact(): truncating a*b/c.
+		// Reachable in-VM limits stay within int64, so this matches java exactly;
+		// java's longValueExact would throw (reject) on > int64, which bigMulDivInt64
+		// does not reproduce — tracked separately as low-risk B-2.
+		return bigMulDivInt64(weight, totalLimit, totalWeight)
+	}
 	return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
 }
 

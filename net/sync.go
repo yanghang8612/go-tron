@@ -97,6 +97,14 @@ type SyncService struct {
 	bufferedHash  map[tcommon.Hash]struct{}
 	blockPath     syncdl.BlockPath
 	targetHeadNum uint64
+	// syncedTipNum is the drain cursor: the highest block this session has
+	// popped for import. Under async-commit depth>2 the committed CurrentBlock
+	// lags the applied tip by up to the pipeline depth, so popping from
+	// CurrentBlock+1 would re-target an already-imported (and deleted) buffer
+	// entry and break the drain after every batch. Tracking the cursor lets the
+	// drain pop the whole buffered run in one pass. Equals CurrentBlock when
+	// async commit is off (the production default), so that path is unchanged.
+	syncedTipNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
 	// StartSync / checkIsolation / tryFindSyncPeer all short-circuit; the
@@ -248,6 +256,31 @@ func (ss *SyncService) IsSyncing() bool {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	return ss.syncing
+}
+
+// RecoverStalledFetch re-kicks the fetch scheduler of an active sync session
+// whose head has not advanced for a full watchdog StallThreshold. The trigger
+// is the async-commit depth>2 lost wakeup: the last fillFetchSlots ran against
+// a commit-worker-lagged CurrentBlock and parked every peer on "waiting for
+// local head", leaving no in-flight fetch or armed timer to re-evaluate once
+// the committed head caught up. Re-running the drain finishes any deep-pipeline
+// session (advancing the committed head to the applied tip) and re-fills the
+// fetch slots against that now-accurate head, re-requesting the next inventory
+// window. Called only by the watchdog goroutine — never the commit worker — so
+// re-entering the drain here cannot wedge the commit queue. No-op when not
+// syncing or paused.
+func (ss *SyncService) RecoverStalledFetch() {
+	if ss.stopping.Load() {
+		return
+	}
+	ss.mu.Lock()
+	syncing := ss.syncing
+	ss.mu.Unlock()
+	if !syncing || ss.pause.Paused() {
+		return
+	}
+	syncLog.Warn("Re-kicking stalled sync fetch", "head", ss.chain.CurrentBlock().Number())
+	ss.drainBufferedBlocks()
 }
 
 // SyncRemainingBlocks reports the current sync backlog when a sync session is
@@ -402,6 +435,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 		RestoreLimit: maxFetchBatch,
 	})
 	ss.applySessionStartupPlan(headBlock, startup)
+	ss.syncedTipNum = head
 	ss.stats.InitSession(now)
 	ss.bufferWait.Reset()
 	if startup.ResetPeerJoinThrottle {
@@ -1366,13 +1400,19 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
+	var sess *core.InsertSession
+	if ss.chain.PipelinedCommitDepth() > 2 {
+		sess = ss.chain.BeginInsertSession()
+	}
+	var lastPeer *p2p.Peer
+	paused := false
 drainLoop:
 	for {
 		now := time.Now()
 		ss.mu.Lock()
 		drainSession := syncdl.ApplyLocalDrainSessionRun(syncdl.LocalDrainSessionRunInput{
 			Progress: ss.sessionProgressLocked(),
-			Next:     ss.chain.CurrentBlock().Number() + 1,
+			Next:     ss.nextDrainBlockLocked(),
 			Max:      ss.importBatchLimitLocked(),
 		}, syncLocalDrainSessionRunApplier{service: ss, now: now})
 		switch {
@@ -1380,6 +1420,19 @@ drainLoop:
 			ss.mu.Unlock()
 			break drainLoop
 		case drainSession.EmptyDrain:
+			if sess != nil {
+				ss.mu.Unlock()
+				if ferr := sess.Finish(); ferr != nil {
+					if !paused {
+						ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
+						paused = true
+					}
+					sess = nil
+					break drainLoop
+				}
+				sess = nil
+				ss.mu.Lock()
+			}
 			prepareApplier := &syncEmptyDrainPreparationApplier{service: ss, now: now}
 			prepareResult := syncdl.ApplyEmptyDrainPreparationLockedRunPlan(syncdl.EmptyDrainPreparationInput{
 				Progress: ss.sessionProgressLocked(),
@@ -1396,7 +1449,13 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
-		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
+		if n := len(batch.Buffered); n > 0 {
+			lastPeer = batch.Buffered[n-1].Peer
+		}
+		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss, session: sess})
+		if importRun.Run.Outcome.Pause {
+			paused = true
+		}
 		loop := importRun.DrainLoopApply
 		if loop.StopLoop {
 			break drainLoop
@@ -1405,6 +1464,11 @@ drainLoop:
 			continue drainLoop
 		}
 		continue drainLoop
+	}
+	if sess != nil {
+		if ferr := sess.Finish(); ferr != nil && !paused {
+			ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
+		}
 	}
 }
 
@@ -1495,9 +1559,22 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 }
 
 func (ss *SyncService) runStagedBodyDrainLocked(now time.Time) syncdl.StagedBodyDrainRunResult {
-	next := ss.chain.CurrentBlock().Number() + 1
+	next := ss.nextDrainBlockLocked()
 	max := ss.importBatchLimitLocked()
 	return syncLocalDrainSessionRunApplier{service: ss, now: now}.ReadAndApplyStagedBodyDrain(next, max)
+}
+
+func (ss *SyncService) nextDrainBlockLocked() uint64 {
+	current := uint64(0)
+	if ss != nil && ss.chain != nil {
+		if head := ss.chain.CurrentBlock(); head != nil {
+			current = head.Number()
+		}
+	}
+	if ss.syncedTipNum > current {
+		return ss.syncedTipNum + 1
+	}
+	return current + 1
 }
 
 func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReadyLimit) {
@@ -1531,7 +1608,13 @@ func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, 
 }
 
 func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syncdl.BufferedBatch {
-	return syncdl.PopBufferedBatch(a.service.blockBuffer, a.service.bufferedHash, a.service.blockPath, &a.service.bufferWait, next, limit, a.now)
+	batch := syncdl.PopBufferedBatch(a.service.blockBuffer, a.service.bufferedHash, a.service.blockPath, &a.service.bufferWait, next, limit, a.now)
+	if n := len(batch.Buffered); n > 0 {
+		if popped := batch.Buffered[n-1].Num; popped > a.service.syncedTipNum {
+			a.service.syncedTipNum = popped
+		}
+	}
+	return batch
 }
 
 type syncIdleDrainApplier struct {
@@ -1617,6 +1700,9 @@ func (a *syncFetchSlotApplier) WaitLocalHead(_ syncdl.FetchSlotPlan) {
 	// below the last inventory tip it sent us on this peer (lastSyncNum >
 	// lastNum). Wait until the canonical head catches up before asking this
 	// peer for the next 2000-block window.
+	if a.peerState.fetchDelayTimer == nil {
+		a.service.armPeerDelayTimerLocked(a.peerState, minFetchRequestInterval)
+	}
 	syncLog.Trace("Sync peer waiting for local head",
 		"peer", a.peerState.peer.ID(),
 		"head", a.currentHead,
@@ -1918,6 +2004,7 @@ func (ss *SyncService) logDecodeBatchResult(result syncdl.BufferedBatchDecodeRes
 
 type syncImportBatchRunApplier struct {
 	service *SyncService
+	session *core.InsertSession
 }
 
 func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
@@ -1929,7 +2016,11 @@ func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 }
 
 func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatchExecutionAttempt) (time.Duration, error) {
-	result := syncdl.RunImportBatchExecutionAttemptWithStageHook(attempt, a.service.chain, time.Now)
+	var executor syncdl.ImportBatchStageHookExecutor = a.service.chain
+	if a.session != nil {
+		executor = a.session
+	}
+	result := syncdl.RunImportBatchExecutionAttemptWithStageHook(attempt, executor, time.Now)
 	return result.Elapsed, result.Err
 }
 
@@ -2490,6 +2581,7 @@ func (a syncSessionResetApplier) ClearBlockTracking() {
 	a.service.blockBuffer = nil
 	a.service.bufferedHash = nil
 	a.service.blockPath = nil
+	a.service.syncedTipNum = 0
 }
 
 func (a syncSessionResetApplier) ClearTarget() {

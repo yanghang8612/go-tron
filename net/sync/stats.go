@@ -30,10 +30,10 @@ type Snapshot struct {
 	// phase is the bottleneck.
 	ApplyStats core.ApplyStats
 
-	// TxKinds counts transactions applied in the window by TRON contract type.
-	// The Imported chain segment log renders this as txTop so long-running
-	// sync soaks can distinguish contract-heavy windows from transfer-heavy
-	// windows when throughput drops.
+	// TxKinds counts the transactions applied in the window by contract type
+	// (corepb.Transaction_Contract_ContractType name) for the "txTop" summary
+	// field — it tells whether a slow window is contract-heavy
+	// (TriggerSmartContract) vs transfer-heavy, etc. nil when none recorded.
 	TxKinds map[string]int
 }
 
@@ -103,8 +103,9 @@ func (s *Stats) AddBlocks(blocks, txs int, exec time.Duration) {
 	s.cur.ExecElapsed += exec
 }
 
-// AddTxKinds folds one batch's transaction contract-type breakdown into the
-// current rolling window. Nil/empty input is a no-op.
+// AddTxKinds folds one batch's breakdown of applied transactions by contract
+// type into the rolling window. Nil/empty is a no-op. Counts accumulate across
+// the window and reset with it (see SnapshotAndReset).
 func (s *Stats) AddTxKinds(kinds map[string]int) {
 	if len(kinds) == 0 {
 		return
@@ -121,8 +122,10 @@ func (s *Stats) AddTxKinds(kinds map[string]int) {
 	}
 }
 
-// TopTxKindsString renders the top transaction contract types by count. Ties
-// are sorted by name so the Imported chain segment log is stable.
+// TopTxKindsString renders the most frequent transaction contract types in a
+// window as a compact "TriggerSmartContract=900,TransferContract=400" string,
+// highest count first (ties broken by name asc). limit<=0 (or > distinct kinds)
+// emits all; empty input yields "".
 func TopTxKindsString(kinds map[string]int, limit int) string {
 	if len(kinds) == 0 {
 		return ""

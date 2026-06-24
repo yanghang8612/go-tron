@@ -53,6 +53,14 @@ type accountKVLatestBatch struct {
 	generation        func(tcommon.Address) (uint64, error)
 	changeSet         *domainChangeSetCapture
 	record            func(rawdb.StateCommitmentUpdate)
+	// commitBlock is the block number whose commit is currently writing through
+	// this batch. Every overlay put made while it is set is tagged with it, so a
+	// later partial flush can prune the entries whose puts are now durable in the
+	// buffer's committed layers (read-your-writes overlay pruning). It must equal
+	// the buffer active-layer number that the bufferBatch op binds to — both are
+	// block.Number(), and BeginBlock(block.Number()) precedes the block's commit
+	// puts. Threaded per block via CommitOptions.BlockNumber.
+	commitBlock uint64
 }
 
 type accountKVLatestPending struct {
@@ -62,16 +70,23 @@ type accountKVLatestPending struct {
 	key        []byte
 	value      []byte
 	deleted    bool
+	// number is the commit block that produced this entry, overwritten to the
+	// latest put's block on re-put of the same key (matching the map's
+	// overwrite-by-key semantics). Entries are pruned once a flush makes their
+	// number durable in latestStore.
+	number uint64
 }
 
 type accountLatestPending struct {
 	value   []byte
 	deleted bool
+	number  uint64
 }
 
 type kvGenerationPending struct {
 	generation uint64
 	deleted    bool
+	number     uint64
 }
 
 type accountKVIndexStore interface {
@@ -83,6 +98,11 @@ type accountKVIndexStore interface {
 type accountKVLayerBatch interface {
 	WriteUpTo(cutoff uint64) (remaining int, err error)
 	WriteCommitted(dropStale bool) (remaining int, err error)
+	// NewestCommittedNumber reports the block number of the newest committed
+	// (promoted, not-yet-flushed) buffer layer, or (0,false) when none is
+	// committed. A flush only makes an op durable once its layer is committed,
+	// so this bounds which overlay entries are safe to prune.
+	NewestCommittedNumber() (uint64, bool)
 }
 
 type accountKVLatestGenerationReader interface {
@@ -287,6 +307,15 @@ func (w *accountKVLatestBatch) flushUpTo(cutoff uint64) error {
 	if !ok {
 		return w.flush()
 	}
+	// Capture the newest committed block BEFORE the write: WriteUpTo only applies
+	// ops whose layer is committed, so the highest block it can make durable is
+	// min(cutoff, newest-committed). Production callers already cap cutoff at the
+	// newest committed (blockchain.go / async_commit.go), so min == cutoff there;
+	// the cap keeps the prune exact even if a caller passes a larger cutoff (it
+	// must not prune entries whose still-in-flight layer was not applied). Reading
+	// before the write is conservative — a layer that commits during the write is
+	// applied but left un-pruned this round (pruned next round), never over-pruned.
+	ncn, hasCommitted := layerBatch.NewestCommittedNumber()
 	remaining, err := layerBatch.WriteUpTo(cutoff)
 	if err != nil {
 		return err
@@ -294,6 +323,14 @@ func (w *accountKVLatestBatch) flushUpTo(cutoff uint64) error {
 	w.ops = remaining
 	if remaining == 0 {
 		w.clearPending()
+		return nil
+	}
+	if hasCommitted {
+		pruneCutoff := cutoff
+		if ncn < pruneCutoff {
+			pruneCutoff = ncn
+		}
+		w.prunePending(pruneCutoff)
 	}
 	return nil
 }
@@ -306,6 +343,10 @@ func (w *accountKVLatestBatch) flushCommitted(dropStale bool) error {
 	if !ok {
 		return w.flush()
 	}
+	// WriteCommitted applies every committed layer's ops, so the highest durable
+	// block afterwards is the newest committed one. Capture it BEFORE the write
+	// (same conservative ordering as flushUpTo).
+	ncn, hasCommitted := layerBatch.NewestCommittedNumber()
 	remaining, err := layerBatch.WriteCommitted(dropStale)
 	if err != nil {
 		return err
@@ -313,8 +354,43 @@ func (w *accountKVLatestBatch) flushCommitted(dropStale bool) error {
 	w.ops = remaining
 	if remaining == 0 {
 		w.clearPending()
+		return nil
+	}
+	if hasCommitted {
+		w.prunePending(ncn)
 	}
 	return nil
+}
+
+// prunePending drops overlay entries whose tagged block number is <= cutoff.
+// Those puts are now durable in latestStore (their buffer layer is committed and
+// flushed up to cutoff), so a subsequent readLatest / readAccountLatest /
+// readKVGeneration / iterateLatestPrefix falls through to latestStore and returns
+// the identical value/existence — the same fall-through clearPending relies on at
+// full flush, just triggered per-key as soon as the put is durable. Entries
+// tagged > cutoff correspond to ops still queued in the batch (their layer not
+// yet flushed) and MUST stay so read-your-writes keeps returning the latest
+// value. This bounds the overlay to the in-flight window under deep async commit
+// instead of accumulating the whole staged range.
+func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
+	if w == nil {
+		return
+	}
+	for k, e := range w.pending {
+		if e.number <= cutoff {
+			delete(w.pending, k)
+		}
+	}
+	for k, e := range w.accountPending {
+		if e.number <= cutoff {
+			delete(w.accountPending, k)
+		}
+	}
+	for k, e := range w.generationPending {
+		if e.number <= cutoff {
+			delete(w.generationPending, k)
+		}
+	}
 }
 
 func (w *accountKVLatestBatch) reset() {
@@ -490,6 +566,7 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 		domain:     domain,
 		key:        append([]byte(nil), logicalKey...),
 		value:      append([]byte(nil), value...),
+		number:     w.commitBlock,
 	}
 }
 
@@ -501,7 +578,8 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		w.accountPending = make(map[string]accountLatestPending)
 	}
 	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{
-		value: append([]byte(nil), value...),
+		value:  append([]byte(nil), value...),
+		number: w.commitBlock,
 	}
 }
 
@@ -512,7 +590,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestDelete(owner tcommon.Address
 	if w.accountPending == nil {
 		w.accountPending = make(map[string]accountLatestPending)
 	}
-	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{deleted: true}
+	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, generation uint64) {
@@ -522,7 +600,7 @@ func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, ge
 	if w.generationPending == nil {
 		w.generationPending = make(map[string]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{generation: generation}
+	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{generation: generation, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address) {
@@ -532,7 +610,7 @@ func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address)
 	if w.generationPending == nil {
 		w.generationPending = make(map[string]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{deleted: true}
+	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {
@@ -548,6 +626,7 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 		domain:     domain,
 		key:        append([]byte(nil), logicalKey...),
 		deleted:    true,
+		number:     w.commitBlock,
 	}
 }
 

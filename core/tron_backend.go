@@ -304,7 +304,12 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 	cfg := vm.NewTVMConfig(block.Number(), dp)
 	cfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	cfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	evm := vm.NewTVM(statedbCopy, dp, owner, block.Number(), block.Timestamp(), tcommon.Address{}, 1, cfg)
+	// BLOCKHASH/CHAINID need chain data; route through the ancient-aware
+	// lookup so constant calls see the same hashes as block execution.
+	evm.SetDB(b.chain.vmKV(b.chain.buffer))
 
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)
@@ -2976,7 +2981,7 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 		BlockNumber:                head.Number(),
 		EnergyLimitForkBlockNum:    b.chain.Config().EnergyLimitForkBlockNum(),
 		HasEnergyLimitForkBlockNum: true,
-		DB:                         validationBuf,
+		DB:                         b.chain.vmKV(validationBuf),
 		ActiveWitnesses:            b.chain.ActiveWitnesses(),
 	}
 

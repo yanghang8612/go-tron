@@ -93,6 +93,7 @@ func (p *canonicalBlockExecution) CommitState(writer ethdb.KeyValueWriter, block
 	if checkpoint && writer == nil {
 		return canonicalCommitResult{}, fmt.Errorf("canonical block execution: nil checkpoint writer")
 	}
+	opts.BlockNumber = block.Number()
 	if p.commit != nil {
 		opts.FlushLatestDomain = func() error { return nil }
 	}
@@ -149,6 +150,7 @@ func (p *canonicalBlockExecution) CommitStateCapture(block *types.Block, opts st
 		return state.CommitStats{}, fmt.Errorf("canonical block execution: nil stage pipeline")
 	}
 	p.state.SetDeferFold(true)
+	opts.BlockNumber = block.Number()
 	if p.commit != nil {
 		opts.FlushLatestDomain = func() error { return nil }
 	}

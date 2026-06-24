@@ -62,15 +62,16 @@ func TestStats_AddTxKindsAccumulatesAndResets(t *testing.T) {
 
 	s.AddTxKinds(map[string]int{"TransferContract": 3, "TriggerSmartContract": 5})
 	s.AddTxKinds(map[string]int{"TransferContract": 2, "VoteWitnessContract": 1})
-	s.AddTxKinds(nil)
+	s.AddTxKinds(nil) // no-op
 
 	snap := s.CurrentSnapshot()
 	if snap.TxKinds["TransferContract"] != 5 ||
 		snap.TxKinds["TriggerSmartContract"] != 5 ||
 		snap.TxKinds["VoteWitnessContract"] != 1 {
-		t.Fatalf("TxKinds = %v, want merged contract type counts", snap.TxKinds)
+		t.Fatalf("TxKinds = %v, want merged TransferContract=5,TriggerSmartContract=5,VoteWitnessContract=1", snap.TxKinds)
 	}
 
+	// SnapshotAndReset carries the kinds into the snapshot and clears the window.
 	out := s.SnapshotAndReset(time.Unix(1, 0))
 	if out.TxKinds["TransferContract"] != 5 {
 		t.Fatalf("snapshot lost TxKinds: %v", out.TxKinds)
@@ -78,9 +79,10 @@ func TestStats_AddTxKindsAccumulatesAndResets(t *testing.T) {
 	if got := s.CurrentSnapshot().TxKinds; len(got) != 0 {
 		t.Fatalf("TxKinds not cleared after reset: %v", got)
 	}
+	// The returned snapshot must not alias the now-reset accumulator.
 	s.AddTxKinds(map[string]int{"TransferContract": 1})
 	if out.TxKinds["TransferContract"] != 5 {
-		t.Fatalf("snapshot aliased live TxKinds: %v", out.TxKinds)
+		t.Fatalf("snapshot aliased the live accumulator: %v", out.TxKinds)
 	}
 }
 
@@ -94,11 +96,12 @@ func TestTopTxKindsString(t *testing.T) {
 	if got := TopTxKindsString(kinds, 2); got != "TriggerSmartContract=900,TransferContract=400" {
 		t.Fatalf("TopTxKindsString(2) = %q", got)
 	}
+	// limit<=0 or beyond len → all, count desc, ties broken by name asc.
 	if got := TopTxKindsString(map[string]int{"B": 5, "A": 5, "C": 1}, 0); got != "A=5,B=5,C=1" {
 		t.Fatalf("tie-break/all = %q, want A=5,B=5,C=1", got)
 	}
 	if got := TopTxKindsString(nil, 3); got != "" {
-		t.Fatalf("empty kinds = %q, want empty string", got)
+		t.Fatalf("empty kinds = %q, want \"\"", got)
 	}
 }
 

@@ -142,6 +142,44 @@ func TestUnfreezeV2_TronPower_Validate(t *testing.T) {
 	}
 }
 
+// TestUnfreezeV2_InvalidOldTronPower_TronPower_RecomputesVotes locks the L1 fix:
+// under AllowNewResourceModel, when old_tron_power is already invalid (-1) and the
+// account unfreezes a TRON_POWER stake while still holding TRON_POWER frozen +
+// votes, java UnfreezeBalanceV2Actuator.updateVote falls through (`default: break`)
+// to the proportional recompute against getAllTronPower() — it does NOT clear the
+// votes. Pre-fix go's `else` branch zeroed all votes for this case.
+func TestUnfreezeV2_InvalidOldTronPower_TronPower_RecomputesVotes(t *testing.T) {
+	const p = int64(1_000_000)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(7)
+	witness := makeTestAddr(0x77)
+	seedAccount(statedb, owner, 1000)
+	// 100 TRX TRON_POWER frozen; old_tron_power already invalidated by a prior
+	// V2 unfreeze, so getAllTronPower() == the explicit TRON_POWER frozen.
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_TRON_POWER, 100*p)
+	statedb.InvalidateOldTronPower(owner)
+	statedb.SetVotes(owner, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 80}})
+
+	tx := makeUnfreezeV2Tx(7, 30*p, corepb.ResourceCode_TRON_POWER)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowNewResourceModel(true)
+
+	if _, err := (&UnfreezeBalanceV2Actuator{}).Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	// Remaining TRON_POWER = 70 TRX -> getAllTronPower = 70_000_000.
+	// totalVotes(80) > 70 -> proportional: 80/80 * 70_000_000/1e6 = 70.
+	votes := statedb.GetVotes(owner)
+	if len(votes) != 1 {
+		t.Fatalf("votes must be retained (proportionally), not cleared: got %d entries", len(votes))
+	}
+	if votes[0].VoteCount != 70 {
+		t.Fatalf("recomputed vote count: got %d, want 70", votes[0].VoteCount)
+	}
+}
+
 // TestUnfreezeV2_Execute_DecrementsTotalWeight: V2 unfreeze must mirror
 // java-tron's UnfreezeBalanceV2Actuator.updateTotalResourceWeight by
 // decrementing total_{net,energy,tron_power}_weight. Without this, gtron

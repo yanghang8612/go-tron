@@ -49,6 +49,14 @@ type PauseStatus interface {
 type SyncStarter interface {
 	StartSync(peer *p2p.Peer)
 	IsSyncing() bool
+	// RecoverStalledFetch re-kicks the fetch scheduler of an already-active
+	// session whose head has not advanced for a full StallThreshold. The fetch
+	// state machine can park itself idle without finishing — e.g. the
+	// async-commit depth>2 lost wakeup where the last fillFetchSlots ran against
+	// a commit-worker-lagged head and chose to wait for the local head, which
+	// has since caught up. Invoked from the watchdog goroutine only (never the
+	// commit worker), so it cannot wedge the commit queue.
+	RecoverStalledFetch()
 }
 
 // StallLogger formats the "Polling peer (chain stalled)" log line. Injectable
@@ -147,25 +155,36 @@ func (w *Watchdog) loop(quit, done chan struct{}) {
 	}
 }
 
-// checkIsolation starts a sync if we are not already syncing and the chain
-// head has not advanced past StallThreshold. Tries BestSyncCandidate first
-// (peer with strictly-higher advertised head) and falls back to any
-// handshaked peer — java-tron's AdvService does not advertise new blocks
-// via INVENTORY until it considers our peer "ready", so the peer's cached
-// headNum can lag arbitrarily behind reality. Polling BuildChainSummary
-// against any peer lets java-tron re-evaluate.
+// checkIsolation recovers a stalled chain. It acts only once the head has sat
+// unchanged for StallThreshold:
+//
+//   - No sync session active: start one against the best candidate (peer with
+//     strictly-higher advertised head), falling back to any handshaked peer —
+//     java-tron's AdvService gates INVENTORY behind a ready-check so cached
+//     headNums can lag; polling BuildChainSummary lets it re-evaluate.
+//   - A sync session IS active but its head has not advanced for the full
+//     threshold: the fetch scheduler has gone idle without finishing (e.g. the
+//     async-commit depth>2 lost wakeup). Re-kick it via RecoverStalledFetch
+//     instead of short-circuiting on IsSyncing() — the old short-circuit left
+//     such a session wedged forever, since onFetchTimeout had nothing in flight
+//     to fire on either.
 func (w *Watchdog) checkIsolation() {
-	if w.starter == nil || w.starter.IsSyncing() {
+	if w.starter == nil || w.chain == nil {
 		return
 	}
 	if w.pause != nil && w.pause.Paused() {
 		return
 	}
-	if w.chain == nil || w.peers == nil {
-		return
-	}
 	stalledFor := time.Since(w.chain.LastInsertTime())
 	if stalledFor < w.StallThreshold {
+		return
+	}
+	if w.starter.IsSyncing() {
+		// Active session, head frozen past the threshold: re-kick the scheduler.
+		w.starter.RecoverStalledFetch()
+		return
+	}
+	if w.peers == nil {
 		return
 	}
 	candidate := w.peers.BestSyncCandidate(nil)

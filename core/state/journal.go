@@ -3,6 +3,7 @@ package state
 import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -184,6 +185,42 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountKVGeneration = e.prevGeneration
 	obj.accountKVGenerationDirty = e.prevGenerationDirty
 	obj.kvDirty = e.prevDirty
+}
+
+// transientStorageChange records a single EIP-1153 transient storage write for
+// revert. It captures the StateDB.transientStorage map by reference (maps are
+// reference types) rather than the *StateDB, because the journal revert
+// signature only exposes stateObjects/witnesses. Restoring prev (which may be
+// the zero hash for a slot that was previously unset) is sufficient: a reader
+// cannot distinguish an absent slot from one holding the zero hash.
+type transientStorageChange struct {
+	storage map[transientStorageKey]tcommon.Hash
+	tk      transientStorageKey
+	prev    tcommon.Hash
+}
+
+func (e transientStorageChange) revert(_ map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	e.storage[e.tk] = e.prev
+}
+
+// resourceWeightChange records a total_*_weight delta applied to the dynamic
+// properties inside a snapshot-scoped frame — a TVM resource-staking opcode
+// (FREEZE/UNFREEZE) or the selfdestruct release. java applies these to a
+// discardable Repository whose total_*_weight delta is dropped on revert; gtron
+// mutates the shared DynamicProperties directly and DynamicProperties.Set is not
+// journaled, so without this a freeze-opcode-then-revert would leak the weight
+// and over-count total_energy_weight. Like transientStorageChange it captures
+// the *DynamicProperties target by reference (the revert signature only exposes
+// stateObjects/witnesses) and applies the inverse through the non-journaled
+// applyResourceWeight, so reverting does not itself re-journal.
+type resourceWeightChange struct {
+	dp       *DynamicProperties
+	resource corepb.ResourceCode
+	delta    int64
+}
+
+func (e resourceWeightChange) revert(_ map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	applyResourceWeight(e.dp, e.resource, -e.delta)
 }
 
 // journal tracks state changes for snapshot/revert.

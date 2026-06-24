@@ -2,11 +2,13 @@ package vm
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -273,6 +275,30 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 	}
 }
 
+// validatePrecompileEndowment mirrors the transfer leg of java-tron
+// Program.callToPrecompiledAddress for a TRX endowment: MUtil.transfer ->
+// VMUtils.validateForSmartContract requires the TARGET account to already
+// exist ("Validate InternalTransfer error, no ToAccount...") and the credit
+// not to overflow long. Precompile addresses normally have no account and
+// are never auto-created on this path, so a value-bearing CALL into one
+// throws BytecodeExecutionException("transfer failure") in java — which is
+// not a TransferException, so VM.play spends ALL energy and the receipt
+// records UNKNOWN (Nile block 18,112,819, contract "Test".test(address(2))).
+// Returns nil for non-precompile targets; java's plain-contract path
+// auto-creates the recipient instead.
+func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) error {
+	if getPrecompile(addr, tvm.cfg) == nil {
+		return nil
+	}
+	if !tvm.StateDB.AccountExists(addr) {
+		return ErrPrecompileTransferFailure
+	}
+	if tvm.StateDB.GetBalance(addr) > math.MaxInt64-value {
+		return ErrPrecompileTransferFailure
+	}
+	return nil
+}
+
 // transferDelegatedResourceToInheritor mirrors java-tron
 // Program.transferDelegatedResourceToInheritor (Program.java:588-618), invoked
 // from suicide()/suicide2() when allow_tvm_freeze is active. It releases the
@@ -298,10 +324,10 @@ func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Ad
 	}
 	frozenBalanceForEnergy := ownerAccount.FrozenEnergyAmount()
 
-	if tvm.DynProps != nil {
-		tvm.DynProps.AddTotalNetWeight(-frozenBalanceForBandwidth / tvmTRXPrecision)
-		tvm.DynProps.AddTotalEnergyWeight(-frozenBalanceForEnergy / tvmTRXPrecision)
-	}
+	// Journaled so a reverting frame rolls the release back, matching java's
+	// discardable Repository (see StateDB.AddResourceWeightJournaled).
+	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_BANDWIDTH, -frozenBalanceForBandwidth/tvmTRXPrecision)
+	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_ENERGY, -frozenBalanceForEnergy/tvmTRXPrecision)
 	// java unconditionally calls repo.addBalance(inheritor, sum), but in the
 	// suicide flow the inheritor always pre-exists (createAccountIfNotExist for
 	// the obtainer, genesis for the blackhole), so addBalance(inheritor, 0) is a
@@ -316,6 +342,116 @@ func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Ad
 	if tvm.cfg.SelfdestructRestrict {
 		tvm.StateDB.ClearV1Freeze(owner)
 	}
+}
+
+// transferFrozenV2BalanceToInheritor mirrors java-tron
+// Program.transferFrozenV2BalanceToInheritor (Program.java:620-681), invoked
+// from suicide()/suicide2() when allow_tvm_freeze_v2 (Stake 2.0) is active. It
+// moves the destroyed contract's self-frozen V2 balances (BANDWIDTH/ENERGY/
+// TRON_POWER) to the inheritor, folds the owner's recovered resource usage into
+// the inheritor's recovery window (unDelegateIncrease), withdraws any expired
+// pending V2 unfreeze to the inheritor's liquid balance, and clears the owner's
+// V2 freeze/usage/window/unfreeze state (clearOwnerFreezeV2). Unlike the V1
+// release the global total_net_weight/total_energy_weight is left untouched: the
+// frozen weight follows the balance to the inheritor. Returns the expired
+// unfreeze balance, which the caller adds to the suicide internal-tx value.
+func (tvm *TVM) transferFrozenV2BalanceToInheritor(owner, inheritor tcommon.Address) int64 {
+	ownerAccount := tvm.StateDB.GetAccount(owner)
+	if ownerAccount == nil {
+		return 0
+	}
+	// java reads inheritorCapsule = repo.getAccount(inheritor) after the obtainer
+	// was materialised by createAccountIfNotExist in the balance-transfer step
+	// (always active alongside allow_tvm_freeze_v2). Ensure it exists so the
+	// frozen-V2 move and the usage fold are not silently dropped: AddFreezeV2 and
+	// the fold no-op on a missing account, unlike AddBalance which GetOrCreates.
+	tvm.maybeCreateNormalAccountForValueTransfer(inheritor)
+
+	// 1. Move the owner's self-frozen V2 balances to the inheritor (java
+	//    getFrozenV2List().forEach addFrozenBalanceForXxxV2). The global weight is
+	//    conserved — owner loses, inheritor gains — so there is no addTotal*Weight.
+	for _, resource := range []corepb.ResourceCode{
+		corepb.ResourceCode_BANDWIDTH,
+		corepb.ResourceCode_ENERGY,
+		corepb.ResourceCode_TRON_POWER,
+	} {
+		if amount := ownerAccount.GetFrozenV2Amount(resource); amount > 0 {
+			tvm.StateDB.AddFreezeV2(inheritor, resource, amount)
+		}
+	}
+
+	// 2. Fold the owner's recovered usage windows into the inheritor
+	//    (updateUsageForDelegated/updateUsage + unDelegateIncrease).
+	now := tvm.ResourceTime()
+	delegation.MergeUsageToInheritor(tvm.StateDB, tvm.DynProps, owner, inheritor, corepb.ResourceCode_BANDWIDTH, now)
+	delegation.MergeUsageToInheritor(tvm.StateDB, tvm.DynProps, owner, inheritor, corepb.ResourceCode_ENERGY, now)
+
+	// 3. Withdraw the owner's expired pending V2 unfreezes to the inheritor.
+	var expireUnfrozenBalance int64
+	nowTimestamp := tvm.DynProps.LatestBlockHeaderTimestamp()
+	for _, u := range ownerAccount.UnfrozenV2() {
+		if u.UnfreezeAmount > 0 && u.UnfreezeExpireTime <= nowTimestamp {
+			expireUnfrozenBalance += u.UnfreezeAmount
+		}
+	}
+	if expireUnfrozenBalance > 0 {
+		tvm.StateDB.AddBalance(inheritor, expireUnfrozenBalance)
+		tvm.Nonce++
+		tvm.addInternalTransaction(owner, inheritor, expireUnfrozenBalance, nil, "withdrawExpireUnfreezeWhileSuiciding", 0, 0)
+	}
+
+	// 4. clearOwnerFreezeV2: zero the owner's V2 freeze/usage/window/unfreeze.
+	tvm.StateDB.ClearV2Freeze(owner)
+	return expireUnfrozenBalance
+}
+
+// canSelfDestruct mirrors java-tron OperationActions.suicideAction/suicideAction2's
+// canSuicide()/canSuicide2() guard (Program.java): a contract still holding frozen
+// resources cannot self-destruct — the SELFDESTRUCT reverts. oldSuicide selects
+// canSuicide() (only the delegated-V1 check) vs canSuicide2() (also rejects the
+// owner's OWN unexpired V1 frozen bandwidth/energy). Both additionally run the V2
+// check (allow_tvm_freeze_v2): reject any delegated-V2 balance or unexpired pending
+// V2 unfreeze. Returns true (allowed) when the relevant forks are inactive. Without
+// this guard go-tron destroys a contract java would revert, and reaches the
+// inheritor-transfer with non-zero delegated balance java never sees.
+func (tvm *TVM) canSelfDestruct(owner tcommon.Address, oldSuicide bool) bool {
+	acct := tvm.StateDB.GetAccount(owner)
+	if acct == nil {
+		return true
+	}
+	var now int64
+	if tvm.DynProps != nil {
+		now = tvm.DynProps.LatestBlockHeaderTimestamp()
+	}
+	if tvm.cfg.Freeze {
+		if !oldSuicide {
+			// canSuicide2 (freezeV1Check): reject the owner's own unexpired V1 frozen.
+			for _, f := range acct.FrozenBandwidthList() {
+				if f.GetExpireTime() > now {
+					return false
+				}
+			}
+			if acct.FrozenEnergyAmount() > 0 && acct.FrozenEnergyExpireTime() > now {
+				return false
+			}
+		}
+		// canSuicide and canSuicide2: reject delegated V1.
+		if acct.DelegatedFrozenBandwidth() != 0 || acct.DelegatedFrozenEnergy() != 0 {
+			return false
+		}
+	}
+	if tvm.cfg.StakingV2 {
+		// freezeV2Check (allow_tvm_freeze_v2): reject delegated V2 + unexpired V2 unfreeze.
+		if acct.DelegatedFrozenV2BalanceForBandwidth() != 0 || acct.DelegatedFrozenV2BalanceForEnergy() != 0 {
+			return false
+		}
+		for _, u := range acct.UnfrozenV2() {
+			if u.GetUnfreezeExpireTime() > now {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Create deploys a new contract.
@@ -638,6 +774,11 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrTransferFailed
 		}
+		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, 0, err
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
@@ -681,6 +822,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
@@ -692,7 +834,18 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
@@ -733,6 +886,11 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrTransferFailed
 		}
+		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, 0, err
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
@@ -754,6 +912,24 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			return nil, energy, ErrTokenTransferFailed
 		}
 		if !tvm.StateDB.AccountExists(addr) {
+			// Symmetric to the TRX leg's validatePrecompileEndowment: java's
+			// callToPrecompiledAddress token path runs
+			// VMUtils.validateForSmartContract(..., tokenId, amount), which
+			// rejects a destination with no account ("...no ToAccount. And not
+			// allowed to create account in smart contract.", VMUtils.java:241)
+			// and is re-thrown as BytecodeExecutionException("transfer failure")
+			// (Program.java:1710-1716) — NOT a TransferException, so VM.play
+			// spends ALL energy and the receipt records UNKNOWN. Precompile
+			// addresses are never auto-created on this path, so surface
+			// ErrPrecompileTransferFailure (propagated by shouldPropagateCallError
+			// → spend-all) instead of the swallowed ErrInsufficientBalance.
+			// Plain-contract/plain-address targets are pre-created above by
+			// maybeCreateNormalAccountForValueTransfer, so they never reach here.
+			if getPrecompile(addr, tvm.cfg) != nil {
+				tvm.RevertLogs(logSnap)
+				tvm.StateDB.RevertToSnapshot(snap)
+				return nil, 0, ErrPrecompileTransferFailure
+			}
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
 		}
@@ -808,6 +984,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 	contract.TokenID = tokenID
@@ -827,7 +1004,18 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		// transfer failure (Program.callToAddress → refundEnergy) and only
 		// bills the energy actually executed; billing the full limit here
 		// drained the caller and broke cross-impl sync (stress harness ~blk 90).
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
@@ -876,6 +1064,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
@@ -947,6 +1136,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
@@ -964,7 +1154,18 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 		// transfer failure (Program.callToAddress → refundEnergy) and bills
 		// only the energy actually executed; billing the full limit here would
 		// drain the caller and break cross-impl consensus.
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {

@@ -69,3 +69,41 @@ func BenchmarkFoldSeqMap(b *testing.B)   { benchFoldIncremental(b, false, mapBas
 func BenchmarkFoldParMap(b *testing.B)   { benchFoldIncremental(b, true, mapBase) }
 func BenchmarkFoldSeqRawdb(b *testing.B) { benchFoldIncremental(b, false, rawdbBase) }
 func BenchmarkFoldParRawdb(b *testing.B) { benchFoldIncremental(b, true, rawdbBase) }
+
+// benchFoldCrossover sweeps small batch sizes against a DEEP pre-populated trie
+// to locate the sequential→parallel crossover op count — the data that justifies
+// ParallelFoldMinOps. A deeper base raises per-op traversal cost (more keccak +
+// branch reads per resolved key), so parallel wins at a LOWER op count than a
+// shallow trie; the live chain trie is far deeper still, so the measured
+// crossover here is a conservative upper bound on the production crossover.
+func benchFoldCrossover(b *testing.B, parallel bool, base int) {
+	store := rawdbBase()
+	trie := newCommitmentTrie(store)
+	if parallel {
+		trie.parallelMinOps = 1
+	}
+	if _, err := trie.Fold(buildRandomPuts(rand.New(rand.NewSource(1)), base)); err != nil {
+		b.Fatal(err)
+	}
+	for _, n := range []int{8, 16, 24, 32, 48, 64} {
+		batch := buildRandomPuts(rand.New(rand.NewSource(int64(7000+n))), n)
+		if _, err := trie.Fold(batch); err != nil {
+			b.Fatal(err)
+		}
+		b.Run(fmt.Sprintf("base=%d/batch=%d", base, n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				for j := range batch {
+					binary.BigEndian.PutUint64(batch[j].Value, uint64(i)<<20|uint64(j))
+				}
+				if _, err := trie.Fold(batch); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/update")
+		})
+	}
+}
+
+func BenchmarkFoldCrossoverSeq(b *testing.B) { benchFoldCrossover(b, false, 500_000) }
+func BenchmarkFoldCrossoverPar(b *testing.B) { benchFoldCrossover(b, true, 500_000) }

@@ -6,6 +6,31 @@ import (
 
 // opCreate deploys a new contract.
 // Stack: [value, offset, size] → [addr]
+// writeCallReturn copies a sub-call's return data into the caller's memory. java
+// truncates regular-call returns to the requested out-size always (callToAddress →
+// memorySaveLimited), but a SUCCESSFUL precompile's return was written at FULL length
+// (extending MSIZE past out-size) until allow_tvm_selfdestruct_restriction switched it
+// to truncated (Program.callToPrecompiledAddress). Replicate that fork-gated precompile
+// behavior so pre-restriction blocks replay identically; everything else truncates.
+func (in *Interpreter) writeCallReturn(memory *Memory, toPrecompile bool, callErr error, retOff, retSz uint64, ret []byte) {
+	if len(ret) == 0 {
+		return
+	}
+	if toPrecompile && callErr == nil && !in.tvmConfig.SelfdestructRestrict {
+		resizeMemory(memory, retOff, uint64(len(ret)))
+		memory.set(retOff, uint64(len(ret)), ret)
+		return
+	}
+	if retSz == 0 {
+		return
+	}
+	copyLen := retSz
+	if uint64(len(ret)) < copyLen {
+		copyLen = uint64(len(ret))
+	}
+	memory.set(retOff, copyLen, ret[:copyLen])
+}
+
 func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	value, offset, size := stack.pop(), stack.pop(), stack.pop()
 	off, sz, memCost, err := checkedMemoryExpansionCostWords(memory, &offset, &size, CREATE)
@@ -41,7 +66,18 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		result = addressToUint256(addr)
 	}
 	stack.push(&result)
-	interpreter.returnData = ret
+	// CREATE resets the return buffer UNCONDITIONALLY before the call
+	// (java-tron Program.createContract:797), so a successful or
+	// exceptionally-failed CREATE leaves the buffer empty; only a REVERTing
+	// child exposes its output through RETURNDATA* (Program.java:965). The
+	// success return value here is the deployed runtime code, which java
+	// never exposes. NOTE: CREATE2 differs — its reset is Osaka-gated; see
+	// opCreate2.
+	if err == ErrExecutionReverted {
+		interpreter.returnData = ret
+	} else {
+		interpreter.returnData = nil
+	}
 	return nil, nil
 }
 
@@ -81,6 +117,17 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	if !interpreter.tvm.cfg.Istanbul {
 		addressSeed = contract.Caller
 	}
+	// java-tron Program.createContract2: the compatibleEvm-gated stackPushZero (the
+	// Compatibility branch inside create2WithVersion) is the dead mainnet path; the
+	// live guard is an UNCONDITIONAL checkCPUTimeForCreate2() at MAX_DEPTH that throws
+	// OutOfTimeException once VERSION_4_8_1_1 passed. Without it CREATE2 is the only
+	// recursion vector with no effective depth cap on mainnet — unbounded recursion
+	// (state fork vs java's OUT_OF_TIME, and potential node stack overflow). Abort the
+	// tx with OUT_OF_TIME (ErrAlreadyTimeOut → spend-all) at depth, except on the
+	// compatibleEvm path (create2WithVersion's graceful ErrDepthExceeded → push 0).
+	if interpreter.tvmConfig.CpuTimeGuard && !interpreter.tvmConfig.Compatibility && interpreter.tvm.Depth > maxCallDepth {
+		return nil, ErrAlreadyTimeOut
+	}
 	ret, addr, remainingEnergy, err := interpreter.tvm.create2WithVersion(
 		contract.Address, addressSeed, code, energyForCall, val, salt, contract.Version,
 	)
@@ -93,7 +140,21 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		result = addressToUint256(addr)
 	}
 	stack.push(&result)
-	interpreter.returnData = ret
+	// CREATE2 resets the return buffer only under Osaka (java-tron
+	// Program.createContract2:1619 gates the reset on allowTvmOsaka). On
+	// every TRON network before Osaka — including all of Nile history and
+	// the current head — a successful or exceptionally-failed CREATE2
+	// therefore leaves the CALLER's prior return data INTACT; only a
+	// REVERTing child overwrites it (Program.java:965). The per-frame Run()
+	// reset already isolated the constructor and the defer restored the
+	// caller's pre-CREATE2 value, so we overwrite only on REVERT, or clear
+	// to empty once Osaka is active (matching CREATE). This asymmetry with
+	// CREATE is a java-tron historical quirk, not an oversight.
+	if err == ErrExecutionReverted {
+		interpreter.returnData = ret
+	} else if interpreter.tvm.cfg.Osaka {
+		interpreter.returnData = nil
+	}
 	return nil, nil
 }
 
@@ -165,13 +226,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	}
 	stack.push(&success)
 
-	if retSz > 0 && len(ret) > 0 {
-		copyLen := retSz
-		if uint64(len(ret)) < copyLen {
-			copyLen = uint64(len(ret))
-		}
-		memory.set(retOff, copyLen, ret[:copyLen])
-	}
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -235,13 +290,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		success.SetOne()
 	}
 	stack.push(&success)
-	if retSz > 0 && len(ret) > 0 {
-		copyLen := retSz
-		if uint64(len(ret)) < copyLen {
-			copyLen = uint64(len(ret))
-		}
-		memory.set(retOff, copyLen, ret[:copyLen])
-	}
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -293,13 +342,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		success.SetOne()
 	}
 	stack.push(&success)
-	if retSz > 0 && len(ret) > 0 {
-		copyLen := retSz
-		if uint64(len(ret)) < copyLen {
-			copyLen = uint64(len(ret))
-		}
-		memory.set(retOff, copyLen, ret[:copyLen])
-	}
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -351,13 +394,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 		success.SetOne()
 	}
 	stack.push(&success)
-	if retSz > 0 && len(ret) > 0 {
-		copyLen := retSz
-		if uint64(len(ret)) < copyLen {
-			copyLen = uint64(len(ret))
-		}
-		memory.set(retOff, copyLen, ret[:copyLen])
-	}
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {

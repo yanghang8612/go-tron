@@ -20,12 +20,31 @@ const version3_6_5 int32 = 9
 // rooted SystemProposal KV (Phase 3d), java-tron's revoking ProposalStore. db
 // remains the Reader+Writer for non-rooted chain/runtime data needed by future
 // side effects; mutable state writes go through statedb typed stores.
-func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
+func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, cache *proposalScanCache) error {
 	activeCount := len(activeWitnesses)
 	ids := statedb.ReadProposalIndex()
-	for _, id := range ids {
+	// java ProposalController.processProposals iterates DESCENDING from
+	// latestProposalNum. ReadProposalIndex returns ascending (AppendProposalIndex
+	// appends strictly-increasing ids), so walk it backwards. For two proposals
+	// expiring in the SAME maintenance cycle that touch the same DP key, the
+	// application order must match java (low id wins last-write); the *_price_history
+	// params (#3/#11/#68) also append in this order, so the committed bytes diverge
+	// otherwise.
+	for i := len(ids) - 1; i >= 0; i-- {
+		id := ids[i]
+		// Already-resolved proposals are immutable on a linear chain (see
+		// proposalScanCache): skip the SystemKVGet + JSON decode entirely.
+		if cache.isTerminal(id) {
+			continue
+		}
 		p := statedb.ReadProposal(id)
-		if p == nil || p.State != rawdb.ProposalStatePending {
+		if p == nil {
+			continue
+		}
+		if p.State != rawdb.ProposalStatePending {
+			// Reached terminal outside this scan (e.g. a ProposalDelete tx, or
+			// the cold-cache first pass): record it so later boundaries skip it.
+			cache.markTerminal(id)
 			continue
 		}
 		if p.ExpirationTime > maintenanceTime {
@@ -74,6 +93,8 @@ func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.D
 		if err := statedb.WriteProposal(id, p); err != nil {
 			return err
 		}
+		// p is now terminal; cache so subsequent boundaries skip it.
+		cache.markTerminal(id)
 	}
 	return nil
 }

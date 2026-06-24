@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -10,8 +11,11 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // chainFrom builds a deterministic linear chain of n unsigned blocks on top of
@@ -444,6 +448,64 @@ func TestAsyncCommit_RealFoldErrorUnwind(t *testing.T) {
 	// Don't assert Close success — commitErr is intentionally sticky (fail-fast).
 }
 
+// TestAsyncCommit_HeaderVerifyUsesRangeTip is the regression for the production
+// stall "insert block range index 1 block N: invalid block number". Under async
+// commit the serial commit worker publishes bc.CurrentBlock() off the critical
+// path, so the published head lags the executor's range-local tip by up to one
+// block. Header verification must validate a block's number / parent-hash / slot
+// linkage against the range-local tip (plan.parent), NOT bc.CurrentBlock() —
+// otherwise the 2nd+ block of an InsertBlocks range is rejected with
+// ErrInvalidBlockNumber because the worker has not yet published the previous
+// block's head.
+//
+// The existing async tests never catch this: with trivial in-memory blocks the
+// worker wins the publish race, so currentBlock stays caught up. Here we force
+// the production timing by delaying the worker's fold, which makes the worker lag
+// on EVERY block — exactly the regime where the real fold (~55% of commit cost)
+// loses the race on mainnet/Nile and surfaced as the block-101 sync stall.
+func TestAsyncCommit_HeaderVerifyUsesRangeTip(t *testing.T) {
+	witnessKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessAddr := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	genesis := fixedVerifyGenesis(witnessAddr)
+
+	// Real DPoS-signed wire blocks, re-unmarshalled cold — exactly what a peer
+	// delivers during sync. header verification (the path that returns
+	// "invalid block number") only runs with an engine wired, so this MUST be a
+	// newVerifierChain, not the engine-less async-flush helper.
+	const N = 6
+	raw := produceSignedBlocks(t, genesis, witnessKey, N, func(uint64) []*types.Transaction { return nil })
+
+	asyncBC := newVerifierChain(t, genesis)
+	asyncBC.SetAsyncCommit(true)
+	defer asyncBC.Close()
+
+	// Delay every fold so the commit worker reliably lags the foreground: by the
+	// time the foreground verifies block K+1's header, the worker has not yet
+	// stored currentBlock=K. The 20ms sleep dwarfs the foreground's khaos push +
+	// state open + header verify (all in-memory, microseconds), making the lag
+	// deterministic rather than timing-dependent — the same regime the real
+	// ~55%-of-commit fold produces on mainnet/Nile.
+	SetCommitFoldHookForTest(func(uint64) error {
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	})
+	defer SetCommitFoldHookForTest(nil)
+
+	if err := asyncBC.InsertBlocks(unmarshalBatch(t, raw)); err != nil {
+		t.Fatalf("InsertBlocks under a lagging commit worker: %v", err)
+	}
+	asyncBC.WaitForCommitSettled()
+	if errPtr := asyncBC.commitErr.Load(); errPtr != nil {
+		t.Fatalf("async commit recorded error: %v", *errPtr)
+	}
+	if got := asyncBC.CurrentBlock().Number(); got != N {
+		t.Fatalf("async head = %d, want %d", got, N)
+	}
+}
+
 // TestAsyncCommit_OffByDefault asserts the kill switch defaults off: a freshly
 // constructed chain is synchronous (maxInflight 1) so a second BeginBlock on the
 // buffer still panics — the structural guarantee behind OFF byte-identity.
@@ -464,4 +526,183 @@ func TestAsyncCommit_OffByDefault(t *testing.T) {
 	if got := bc.buffer.PendingBlocks(); len(got) > 1 {
 		t.Fatalf("sync path left %d pending layers, want <=1", len(got))
 	}
+}
+
+// newBlockhashProbeChain is newAsyncFlushChainOn plus a funded contract owner
+// and the allow_creation_of_contracts gate, so blocks can deploy and trigger
+// TVM contracts.
+func newBlockhashProbeChain(t *testing.T, witnessAddr, owner tcommon.Address) *BlockChain {
+	t.Helper()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+			{Address: owner, Balance: 100_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time":       1<<62 - 1, // no maintenance during the run
+			"allow_creation_of_contracts": 1,
+			// Modern create semantics (constructor RETURN becomes the runtime);
+			// pre-Constantinople TVM ignores the return and pattern-scans the
+			// creation bytes instead. The Nile era this test replays had
+			// Constantinople active.
+			"allow_tvm_constantinople": 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	return bc
+}
+
+// makeBlockhashProbeDeployTx deploys a contract whose 9-byte runtime stores
+// blockhash(block.number - 1) into storage slot 0:
+//
+//	PUSH1 1; NUMBER; SUB; BLOCKHASH; PUSH1 0; SSTORE; STOP
+func makeBlockhashProbeDeployTx(owner tcommon.Address) *types.Transaction {
+	runtime := []byte{0x60, 0x01, 0x43, 0x03, 0x40, 0x60, 0x00, 0x55, 0x00}
+	creation := append([]byte{0x68}, runtime...)              // PUSH9 <runtime>
+	creation = append(creation, 0x60, 0x00, 0x52)             // PUSH1 0; MSTORE
+	creation = append(creation, 0x60, 0x09, 0x60, 0x17, 0xf3) // RETURN mem[23:32)
+	csc := &contractpb.CreateSmartContract{
+		OwnerAddress: owner.Bytes(),
+		NewContract: &contractpb.SmartContract{
+			OriginAddress: owner.Bytes(),
+			Name:          "BlockhashProbe",
+			Bytecode:      creation,
+		},
+	}
+	param, _ := anypb.New(csc)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			FeeLimit:   1_000_000_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_CreateSmartContract,
+				Parameter: param,
+			}},
+		},
+		Ret: []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}},
+	})
+}
+
+func makeBlockhashProbeTriggerTx(owner, contractAddr tcommon.Address) *types.Transaction {
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner.Bytes(),
+		ContractAddress: contractAddr.Bytes(),
+	}
+	param, _ := anypb.New(tsc)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			FeeLimit:   1_000_000_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TriggerSmartContract,
+				Parameter: param,
+			}},
+		},
+		Ret: []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}},
+	})
+}
+
+// buildTxBlock chains a block carrying txs on top of parent, mirroring
+// buildTestBlock's deterministic header shape.
+func buildTxBlock(parent *types.Block, witnessAddr tcommon.Address, txs ...*types.Transaction) *types.Block {
+	pbTxs := make([]*corepb.Transaction, 0, len(txs))
+	for _, tx := range txs {
+		pbTxs = append(pbTxs, tx.Proto())
+	}
+	num := int64(parent.Number()) + 1
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         num,
+				Timestamp:      num * 3000,
+				ParentHash:     parent.Hash().Bytes(),
+				WitnessAddress: witnessAddr.Bytes(),
+			},
+		},
+		Transactions: pbTxs,
+	})
+}
+
+// TestAsyncCommit_BlockHashSeesInFlightParent replays the Nile 10,552,292
+// stall mechanism (OneSwap removeOrders, SUCCESS->REVERT). Under
+// GTRON_ASYNC_COMMIT=1 the parent block's b-<num> row is written only by the
+// commit worker's metadata batch, so a tx in block N executing
+// BLOCKHASH(N-1) raced the worker and read 0 — java-tron always serves the
+// parent hash. OneSwap derives limit-order ids as
+// uint22(blockhash(block.number-1) ^ tx.origin); the zero hash collapsed
+// gtron's ids to uint22(origin), silently diverging the on-chain order book
+// at placement and surfacing 277k blocks later when removeOrders could not
+// find the canonical ids.
+func TestAsyncCommit_BlockHashSeesInFlightParent(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	owner := testProcessorAddr(0x7A)
+
+	run := func(t *testing.T, async bool) {
+		bc := newBlockhashProbeChain(t, witnessAddr, owner)
+		defer bc.Close()
+		if async {
+			bc.SetAsyncCommit(true)
+		}
+
+		deploy := makeBlockhashProbeDeployTx(owner)
+		b1 := buildTxBlock(bc.CurrentBlock(), witnessAddr, deploy)
+		if err := bc.InsertBlock(b1); err != nil {
+			t.Fatalf("deploy block: %v", err)
+		}
+		bc.WaitForCommitSettled()
+		txID := deploy.Hash()
+		info := rawdb.ReadTransactionInfo(bc.chaindb, txID[:])
+		if info == nil || len(info.ContractAddress) == 0 {
+			t.Fatal("deploy txinfo missing contract address")
+		}
+		contractAddr := tcommon.BytesToAddress(info.ContractAddress)
+
+		b2 := buildTxBlock(b1, witnessAddr)
+		b3 := buildTxBlock(b2, witnessAddr, makeBlockhashProbeTriggerTx(owner, contractAddr))
+
+		if async {
+			// Deterministically lose the publish race: stall the commit worker
+			// on b2 so b3's execution provably runs while b2's metadata batch
+			// (its b-<num> row) has not reached Pebble.
+			SetCommitFoldHookForTest(func(blockNum uint64) error {
+				if blockNum == b2.Number() {
+					time.Sleep(150 * time.Millisecond)
+				}
+				return nil
+			})
+			defer SetCommitFoldHookForTest(nil)
+		}
+
+		if err := bc.InsertBlocks([]*types.Block{b2, b3}); err != nil {
+			t.Fatalf("InsertBlocks: %v", err)
+		}
+		bc.WaitForCommitSettled()
+		bc.WaitForFlushSettled()
+
+		statedb, err := bc.openState(bc.HeadStateRoot())
+		if err != nil {
+			t.Fatalf("openState: %v", err)
+		}
+		got := statedb.GetState(contractAddr, uint64ToDataWord(0))
+		if want := b2.Hash(); got != want {
+			t.Fatalf("blockhash(parent) stored by block %d: got %x, want %x", b3.Number(), got, want)
+		}
+	}
+
+	// Control: the synchronous path persists the parent's metadata inline
+	// before the next block executes, so it resolves today.
+	t.Run("sync", func(t *testing.T) { run(t, false) })
+	t.Run("async", func(t *testing.T) { run(t, true) })
 }

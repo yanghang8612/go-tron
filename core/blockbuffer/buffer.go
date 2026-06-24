@@ -41,9 +41,21 @@ import (
 var ErrNotFound = errors.New("blockbuffer: not found")
 
 // layer is a single applyBlock's worth of buffered mutations.
+//
+// mu guards this layer's writes/deletes maps. It is INDEPENDENT of the buffer's
+// b.mu (which guards the inflight/layers slices): a writer mutating one layer's
+// maps (foreground on the newest in-flight layer, the commit worker on an older
+// one, writeFiltered/flush on committed ones) takes only that layer's mu, so
+// writers targeting DISJOINT layers run concurrently instead of serializing on
+// b.mu. Lock ordering is always b.mu → layer.mu, never the reverse: map writers
+// capture the target under a brief b.mu.RLock, release it, then take layer.mu;
+// readers hold b.mu.RLock for the (in-memory, fast) layer walk and take each
+// layer's mu.RLock as they touch it. No path holds a layer.mu while acquiring
+// b.mu, so the two never deadlock.
 type layer struct {
 	blockHash common.Hash
 	number    uint64
+	mu        sync.RWMutex
 	writes    map[string][]byte
 	deletes   map[string]struct{}
 }
@@ -238,8 +250,13 @@ func (b *bufferBatch) Write() error {
 	}
 	b.parent.flushMu.Lock()
 	defer b.parent.flushMu.Unlock()
-	b.parent.mu.Lock()
-	defer b.parent.mu.Unlock()
+	// RLock (not Lock): the slice membership reads need only a shared lock, and
+	// RLock still excludes structural writers (BeginBlock/Commit/Discard take
+	// b.mu.Lock), so the inflight/layers sets stay stable for the whole call.
+	// applyBatchOpToLayer takes the per-target layer lock, so map mutations to
+	// different layers (foreground/worker) proceed concurrently.
+	b.parent.mu.RLock()
+	defer b.parent.mu.RUnlock()
 	for _, op := range b.ops {
 		target := op.target
 		if target == nil {
@@ -258,6 +275,8 @@ func (b *bufferBatch) Write() error {
 
 func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
 	k := string(op.key)
+	target.mu.Lock()
+	defer target.mu.Unlock()
 	if op.delete {
 		delete(target.writes, k)
 		target.deletes[k] = struct{}{}
@@ -301,11 +320,24 @@ func (b *bufferBatch) WriteCommitted(dropStale bool) (int, error) {
 	return b.writeFiltered(func(*layer) bool { return true }, dropStale)
 }
 
+// NewestCommittedNumber exposes the parent buffer's newest committed-layer block
+// number so a range-owned latest-domain writer can prune its read-your-writes
+// overlay down to the highest durable block after a partial flush.
+func (b *bufferBatch) NewestCommittedNumber() (uint64, bool) {
+	if b.closed || b.parent == nil {
+		return 0, false
+	}
+	return b.parent.NewestCommittedNumber()
+}
+
 func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale bool) (int, error) {
 	b.parent.flushMu.Lock()
 	defer b.parent.flushMu.Unlock()
-	b.parent.mu.Lock()
-	defer b.parent.mu.Unlock()
+	// RLock: see Write. Structural writers are still excluded (they Lock), so the
+	// membership classification is stable; applyBatchOpToLayer locks each target
+	// layer so committed-layer applies don't block disjoint-layer writers.
+	b.parent.mu.RLock()
+	defer b.parent.mu.RUnlock()
 
 	kept := b.ops[:0]
 	keptSize := 0
@@ -403,6 +435,36 @@ func (b *Buffer) SetMaxInflight(n int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.maxInflight = n
+}
+
+// MaxInflight returns the effective in-flight layer cap (the zero value reads as
+// 1, the single-active default). Exported for the async-commit depth wiring and
+// its tests.
+func (b *Buffer) MaxInflight() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.effectiveMaxInflight()
+}
+
+// NewestCommittedNumber returns the block number of the newest COMMITTED
+// (CommitInflight'd, not-yet-flushed) layer, or (0,false) if none. Committed
+// layers are ordered oldest→newest, so the newest is the tail. Used by the
+// async-commit deep path (depth>2) to cap the flush cutoff at a fully-committed
+// block: the commit worker publishes bc.CurrentBlock() BEFORE CommitInflight, so
+// the head block's layer can still be in-flight, and FlushLatestUpTo KEEPS ops
+// targeting an in-flight layer (writeFiltered only applies committed targets).
+// Capping at currentBlock therefore leaves the head block's latest-domain op
+// queued while a later postFlush drops its (by-then committed) layer →
+// "batch target layer is no longer pending". The newest committed number is the
+// highest block whose layer is guaranteed promoted, so any op ≤ it is flushed
+// (not kept) before its layer can be dropped.
+func (b *Buffer) NewestCommittedNumber() (uint64, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if len(b.layers) == 0 {
+		return 0, false
+	}
+	return b.layers[len(b.layers)-1].number, true
 }
 
 func (b *Buffer) layerPendingLocked(target *layer) bool {
@@ -613,33 +675,56 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 	return out
 }
 
+// lookup checks one layer for key under that layer's read lock. The returned
+// value ALIASES the layer's storage (no copy); it stays valid even after a
+// concurrent write because writes replace the map entry with a fresh slice and
+// never mutate the backing array in place. found and tomb are mutually
+// exclusive. Taking key as []byte keeps the `m[string(key)]` map index
+// allocation-free (the compiler elides the conversion), so GetNoCopy stays
+// alloc-free on a buffer hit.
+func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if _, t := l.deletes[string(key)]; t {
+		return nil, false, true
+	}
+	if val, ok := l.writes[string(key)]; ok {
+		return val, true, false
+	}
+	return nil, false, false
+}
+
 // Get returns the value for key, searching active layer first, then
 // layered stack newest-first, then the base reader. Tombstones short-
 // circuit and return ErrNotFound. Safe to call concurrently with mutators.
+//
+// b.mu.RLock is held only for the in-memory layer walk (keeping the
+// inflight/layers slices stable); each layer's own map is read under its
+// layer.mu via lookup. The (potentially slow) base read runs after b.mu is
+// released, exactly as before.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
-	k := string(key)
 	b.mu.RLock()
 	// In-flight layers first, newest-first (the foreground's active layer wins
 	// over an older worker-owned layer), then committed layers newest-first.
 	for i := len(b.inflight) - 1; i >= 0; i-- {
-		l := b.inflight[i]
-		if _, tomb := l.deletes[k]; tomb {
+		v, found, tomb := b.inflight[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := l.writes[k]; ok {
+		if found {
 			out := append([]byte(nil), v...)
 			b.mu.RUnlock()
 			return out, nil
 		}
 	}
 	for i := len(b.layers) - 1; i >= 0; i-- {
-		l := b.layers[i]
-		if _, tomb := l.deletes[k]; tomb {
+		v, found, tomb := b.layers[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := l.writes[k]; ok {
+		if found {
 			out := append([]byte(nil), v...)
 			b.mu.RUnlock()
 			return out, nil
@@ -661,29 +746,30 @@ func (b *Buffer) Get(key []byte) ([]byte, error) {
 // field it retains and never holds the input past the decode. Reads that fall
 // through to the base reader use the base's own (copying) Get.
 func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
-	// Index the maps with string(key) inline: the compiler elides the string
-	// allocation for map lookup/comma-ok index expressions, so this read is
-	// fully allocation-free on a buffer hit (unlike Get, which both allocates
-	// the key string and copies the value).
+	// lookup keeps the map index allocation-free (string(key) in the index
+	// expression is elided by the compiler), so this read stays alloc-free on a
+	// buffer hit — it returns the layer's internal slice directly. b.mu.RLock
+	// keeps the slices stable for the walk; each layer's map is read under its
+	// own lock inside lookup.
 	b.mu.RLock()
 	for i := len(b.inflight) - 1; i >= 0; i-- {
-		l := b.inflight[i]
-		if _, tomb := l.deletes[string(key)]; tomb {
+		v, found, tomb := b.inflight[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := l.writes[string(key)]; ok {
+		if found {
 			b.mu.RUnlock()
 			return v, nil
 		}
 	}
 	for i := len(b.layers) - 1; i >= 0; i-- {
-		l := b.layers[i]
-		if _, tomb := l.deletes[string(key)]; tomb {
+		v, found, tomb := b.layers[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := l.writes[string(key)]; ok {
+		if found {
 			b.mu.RUnlock()
 			return v, nil
 		}
@@ -698,26 +784,25 @@ func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 // Has reports whether key exists, honoring tombstones. Safe to call
 // concurrently with mutators.
 func (b *Buffer) Has(key []byte) (bool, error) {
-	k := string(key)
 	b.mu.RLock()
 	for i := len(b.inflight) - 1; i >= 0; i-- {
-		l := b.inflight[i]
-		if _, tomb := l.deletes[k]; tomb {
+		_, found, tomb := b.inflight[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return false, nil
 		}
-		if _, ok := l.writes[k]; ok {
+		if found {
 			b.mu.RUnlock()
 			return true, nil
 		}
 	}
 	for i := len(b.layers) - 1; i >= 0; i-- {
-		l := b.layers[i]
-		if _, tomb := l.deletes[k]; tomb {
+		_, found, tomb := b.layers[i].lookup(key)
+		if tomb {
 			b.mu.RUnlock()
 			return false, nil
 		}
-		if _, ok := l.writes[k]; ok {
+		if found {
 			b.mu.RUnlock()
 			return true, nil
 		}
@@ -732,30 +817,35 @@ func (b *Buffer) Has(key []byte) (bool, error) {
 // Put stores a key/value pair in the active layer.
 // Panics if no layer is active (writes outside an applyBlock are a bug).
 func (b *Buffer) Put(key, value []byte) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
 	active := b.newestInflightLocked()
+	b.mu.RUnlock()
 	if active == nil {
 		panic("blockbuffer: Put called with no active layer")
 	}
 	k := string(key)
+	v := append([]byte(nil), value...)
+	active.mu.Lock()
 	delete(active.deletes, k)
-	active.writes[k] = append([]byte(nil), value...)
+	active.writes[k] = v
+	active.mu.Unlock()
 	return nil
 }
 
 // Delete tombstones a key in the active layer.
 // Panics if no layer is active.
 func (b *Buffer) Delete(key []byte) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
 	active := b.newestInflightLocked()
+	b.mu.RUnlock()
 	if active == nil {
 		panic("blockbuffer: Delete called with no active layer")
 	}
 	k := string(key)
+	active.mu.Lock()
 	delete(active.writes, k)
 	active.deletes[k] = struct{}{}
+	active.mu.Unlock()
 	return nil
 }
 
@@ -1029,7 +1119,9 @@ type overlayState struct {
 func newOverlayState() *overlayState { return &overlayState{m: make(map[string]overlayOp)} }
 
 // walk folds layer l into the overlay, keeping only keys in [prefix+start, …)
-// that have the given prefix. Caller holds the buffer read lock.
+// that have the given prefix. Caller holds the buffer read lock (for slice
+// stability); this takes l's own lock for the map iteration so it is race-free
+// against a concurrent foreground/worker write to l.
 func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if l == nil {
 		return
@@ -1042,6 +1134,8 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 		}
 		return k >= lo
 	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	for k, v := range l.writes {
 		if !matches(k) {
 			continue

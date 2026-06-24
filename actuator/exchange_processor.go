@@ -2,7 +2,6 @@ package actuator
 
 import (
 	"errors"
-	"math"
 	"math/big"
 	"strconv"
 
@@ -31,12 +30,25 @@ func newExchangeProcessor(useStrictMath bool) *exchangeProcessor {
 	return &exchangeProcessor{supply: exchangeProcessorSupply, useStrictMath: useStrictMath}
 }
 
-// pow routes between math.Pow and strictmath.Pow per the gate.
+// pow reproduces java-tron's exchange pow per the `allow_strict_math` gate.
+//
+//   - Strict path (proposal #87 onward, useStrictMath==true): pure
+//     strictmath.Pow, mirroring java Maths.pow(a, b, true) ==
+//     StrictMathWrapper.pow. The arm override table is NOT consulted here —
+//     #87 standardizes on StrictMath across platforms.
+//   - Non-strict path (pre-#87 mainnet history): the x86 gold standard was
+//     native Math.pow. strictmath.Pow (== Java StrictMath.pow) reproduces it
+//     for every historical input except the 48 entries where StrictMath.pow
+//     != x86 Math.pow; exchangePowOverride patches exactly those, mirroring
+//     java arm MathWrapper.pow (StrictMath.pow + powData.getOrDefault).
 func (p *exchangeProcessor) pow(a, b float64) float64 {
 	if p.useStrictMath {
 		return strictmath.Pow(a, b)
 	}
-	return math.Pow(a, b)
+	if r, ok := exchangePowOverride(a, b); ok {
+		return r
+	}
+	return strictmath.Pow(a, b)
 }
 
 // exchangeToSupply mints "supply" tokens from a sale of `quant` of the sell token.
@@ -146,8 +158,13 @@ func ratToInt64Trunc(x *big.Rat) (int64, error) {
 	return q.Int64(), nil
 }
 
+// ratToFloat64 converts an exact rational to float64 with a single IEEE-754
+// round-to-nearest-even step, matching java BigDecimal.doubleValue() in
+// SafeExchangeProcessor. big.Rat.Float64 is the correctly-rounded conversion;
+// the previous big.Float.SetPrec(64) approach double-rounded (64-bit then
+// 53-bit) and diverged from java by 1 ULP on some inputs.
 func ratToFloat64(x *big.Rat) float64 {
-	f, _ := new(big.Float).SetPrec(64).SetRat(x).Float64()
+	f, _ := x.Float64()
 	return f
 }
 

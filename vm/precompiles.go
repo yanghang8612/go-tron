@@ -56,7 +56,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	case addrFromUint(0x04):
 		return &dataCopy{}
 	case addrFromUint(0x05):
-		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka}
+		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka, cpuTimeGuard: cfg.CpuTimeGuard}
 	case addrFromUint(0x06):
 		return &bn128Add{istanbul: cfg.Istanbul}
 	case addrFromUint(0x07):
@@ -230,4 +230,59 @@ func parseUint64FromWord(input []byte, offset int) uint64 {
 // parseInt64FromWord reads an int64 from a 32-byte word (using uint64 then cast).
 func parseInt64FromWord(input []byte, offset int) int64 {
 	return int64(parseUint64FromWord(input, offset))
+}
+
+// parseInt64SafeFromWord mirrors java DataWord.longValueSafe(): a 32-byte word
+// whose value does not fit a signed int64 (any of the high 24 bytes set, or the
+// low-8 high bit set) saturates to maxInt64 instead of wrapping/truncating.
+// TRON's V2 staking/freeze query precompiles decode their numeric scalar params
+// (amount, time) this way; the raw parseInt64FromWord would feed a wrapped or
+// negative value where java uses Long.MAX_VALUE.
+func parseInt64SafeFromWord(input []byte, offset int) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	w := parseWord32(input, offset)
+	for _, b := range w[:24] {
+		if b != 0 {
+			return maxInt64
+		}
+	}
+	if v := int64(binary.BigEndian.Uint64(w[24:])); v >= 0 {
+		return v
+	}
+	return maxInt64
+}
+
+// javaIntMaxValue mirrors java's Integer.MAX_VALUE, returned by
+// DataWord.intValueSafe on overflow.
+const javaIntMaxValue = 2147483647
+
+// wordCount mirrors DataWord.parseArray: words.length = data.length / WORD_SIZE
+// (truncating any trailing partial word).
+func wordCount(input []byte) int {
+	return len(input) / tronPrecompileWordSize
+}
+
+// wordIntValueSafe reads the word at word index wordIdx of input and returns its
+// value with java DataWord.intValueSafe semantics: if any byte above the low 4
+// is non-zero, or the low-4-byte signed int is negative (>= 2^31), it saturates
+// to Integer.MAX_VALUE. ok is false when wordIdx is out of the truncated word
+// array (mirroring DataWord.parseArray's AIOOBE on words[wordIdx]).
+func wordIntValueSafe(input []byte, wordIdx int) (value int, ok bool) {
+	if wordIdx < 0 || wordIdx >= wordCount(input) {
+		return 0, false
+	}
+	start := wordIdx * tronPrecompileWordSize
+	w := input[start : start+tronPrecompileWordSize]
+	// bytesOccupied > 4  ⇔  any non-zero byte in w[0:28].
+	for i := 0; i < tronPrecompileWordSize-4; i++ {
+		if w[i] != 0 {
+			return javaIntMaxValue, true
+		}
+	}
+	// low 4 bytes as a signed 32-bit int (java intValue keeps the low 32 bits).
+	v := int32(uint32(w[28])<<24 | uint32(w[29])<<16 | uint32(w[30])<<8 | uint32(w[31]))
+	if v < 0 {
+		return javaIntMaxValue, true
+	}
+	return int(v), true
 }

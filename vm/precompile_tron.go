@@ -3,7 +3,6 @@ package vm
 import (
 	"crypto/sha256"
 	"math"
-	"math/big"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -104,33 +103,138 @@ func parseAddressArray(data []byte, byteOffset int) []tcommon.Address {
 	return result
 }
 
-func parseFixed65SigArray(data []byte, byteOffset int) [][]byte {
-	if byteOffset+32 > len(data) {
-		return nil
-	}
-	count := int(parseUint64FromWord(data, byteOffset))
-	if count <= 0 || count > 256 {
-		return nil
-	}
-	result := make([][]byte, count)
-	for i := 0; i < count; i++ {
-		relOff := int(parseUint64FromWord(data, byteOffset+32*(1+i)))
-		dataPos := byteOffset + relOff + 64
-		sig := make([]byte, 65)
-		if dataPos < len(data) {
-			copy(sig, data[dataPos:])
-		}
-		result[i] = sig
-	}
-	return result
-}
-
 func validAbiEncoding(data []byte, headerWords, itemWords int) bool {
 	if len(data) == 0 || len(data)%tronPrecompileWordSize != 0 {
 		return false
 	}
 	tail := len(data) - headerWords*tronPrecompileWordSize
 	return tail > 0 && tail%(itemWords*tronPrecompileWordSize) == 0
+}
+
+// ── Word-index array decoders (allow_tvm_selfdestruct_restriction, #94) ───────
+//
+// Under the restriction fork java reads array sizes and element offsets by WORD
+// INDEX, not by exact byte offset: words[byteOffset/WORD_SIZE]. These mirror
+// PrecompiledContracts.extractSigArray / extractBytesArray / extractBytes32Array
+// (java-tron c3263dc9, PrecompiledContracts.java:390-426) bit-for-bit, including
+// the DataWord.intValueSafe saturation and the AIOOBE homing.
+//
+// `oob` reports an out-of-bounds word access (java AIOOBE). The caller maps it:
+//   0x0a ValidateMultiSign — reads happen OUTSIDE the inner try, so AIOOBE
+//     escapes the precompile → spendAllEnergy + UNKNOWN(13).
+//   0x09 BatchValidateSign — the whole doExecute is inside a try/catch(Throwable)
+//     → Pair.of(true, new byte[32]) (zero-success).
+// extractBytes (Arrays.copyOfRange) throws AIOOBE when the start offset is < 0 or
+// > data.length, but PADS with zeroes when end > data.length.
+
+// extractSigArrayWordIndex ports extractSigArray: fixed 65-byte elements.
+func extractSigArrayWordIndex(words []byte, offset int) (sigs [][]byte, oob bool) {
+	if offset > wordCount(words)-1 {
+		return nil, false // java guard → empty array (not oob)
+	}
+	length, _ := wordIntValueSafe(words, offset)
+	result := make([][]byte, 0, clampArrayLen(length))
+	for i := 0; i < length; i++ {
+		elemWord, ok := wordIntValueSafe(words, offset+i+1)
+		if !ok {
+			return nil, true // words[offset+i+1] AIOOBE
+		}
+		bytesOffset := elemWord / tronPrecompileWordSize
+		start := (bytesOffset + offset + 2) * tronPrecompileWordSize
+		sig, ok := copyOfRangePadded(words, start, 65)
+		if !ok {
+			return nil, true
+		}
+		result = append(result, sig)
+	}
+	return result, false
+}
+
+// extractBytesArrayWordIndex ports extractBytesArray: variable-length elements
+// (length word at words[offset+bytesOffset+1], then bytesLen bytes).
+func extractBytesArrayWordIndex(words []byte, offset int) (out [][]byte, oob bool) {
+	if offset > wordCount(words)-1 {
+		return nil, false
+	}
+	length, _ := wordIntValueSafe(words, offset)
+	result := make([][]byte, 0, clampArrayLen(length))
+	for i := 0; i < length; i++ {
+		elemWord, ok := wordIntValueSafe(words, offset+i+1)
+		if !ok {
+			return nil, true
+		}
+		bytesOffset := elemWord / tronPrecompileWordSize
+		lenWord, ok := wordIntValueSafe(words, offset+bytesOffset+1)
+		if !ok {
+			return nil, true
+		}
+		start := (bytesOffset + offset + 2) * tronPrecompileWordSize
+		elem, ok := copyOfRangePadded(words, start, lenWord)
+		if !ok {
+			return nil, true
+		}
+		result = append(result, elem)
+	}
+	return result, false
+}
+
+// extractBytes32ArrayWordIndex ports extractBytes32Array: inlined 32-byte
+// elements (no per-element offset table). NB: java's extractBytes32Array has NO
+// offset > words.length-1 guard, so words[offset] itself can AIOOBE.
+func extractBytes32ArrayWordIndex(words []byte, offset int) (out [][]byte, oob bool) {
+	length, ok := wordIntValueSafe(words, offset)
+	if !ok {
+		return nil, true // words[offset] AIOOBE (no guard in java)
+	}
+	result := make([][]byte, 0, clampArrayLen(length))
+	for i := 0; i < length; i++ {
+		w, ok := wordAtIndexBytes(words, offset+i+1)
+		if !ok {
+			return nil, true
+		}
+		result = append(result, w)
+	}
+	return result, false
+}
+
+// clampArrayLen bounds a slice pre-allocation so a hostile size word (saturated
+// to Integer.MAX_VALUE) can't OOM the make() before the element loop trips oob.
+// java allocates new byte[len][] eagerly, but the very next words[] read inside
+// the loop AIOOBEs for any oversized len on a finite input; gtron reaches the
+// same homing without the huge allocation. The size *value* itself is unchanged
+// (the caller's > MAX_SIZE check sees the true saturated size).
+func clampArrayLen(length int) int {
+	const cap = 256
+	if length < 0 || length > cap {
+		return 0
+	}
+	return length
+}
+
+// copyOfRangePadded mirrors Arrays.copyOfRange(data, start, start+size): AIOOBE
+// when start < 0 or start > len(data); otherwise a fresh size-byte slice with
+// the overlap copied and the tail zero-padded.
+func copyOfRangePadded(data []byte, start, size int) ([]byte, bool) {
+	if size < 0 || start < 0 || start > len(data) {
+		return nil, false
+	}
+	out := make([]byte, size)
+	if start < len(data) {
+		copy(out, data[start:])
+	}
+	return out, true
+}
+
+// wordAtIndexBytes returns the 32 bytes of the word at word index wordIdx, or
+// ok=false if it is out of the truncated word array.
+func wordAtIndexBytes(data []byte, wordIdx int) ([]byte, bool) {
+	if wordIdx < 0 || wordIdx >= wordCount(data) {
+		return nil, false
+	}
+	start := wordIdx * tronPrecompileWordSize
+	w := make([]byte, tronPrecompileWordSize)
+	copy(w, data[start:start+tronPrecompileWordSize])
+	return w, true
 }
 
 // ── 0x09 BatchValidateSign ────────────────────────────────────────────────────
@@ -179,17 +283,40 @@ func (c *batchValidateSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	// word[2]: byte offset to addrs array
 	addrsOffset := int(parseUint64FromWord(input, 64))
 
-	var sigs [][]byte
+	var sigs, addrs [][]byte
 	if tvm != nil && tvm.cfg.SelfdestructRestrict {
-		if int(parseUint64FromWord(input, sigsOffset)) > maxBatchSignSize ||
-			int(parseUint64FromWord(input, addrsOffset)) > maxBatchSignSize {
+		// java reads the size by WORD INDEX (words[words[1|2].intValueSafe()/32]).
+		// The offset words go through DataWord.intValueSafe (saturating to
+		// Integer.MAX_VALUE on high bytes / >= 2^31) BEFORE the /WORD_SIZE, so a
+		// crafted high-byte offset yields a huge out-of-bounds word index, not a
+		// small low-8 read. Any out-of-bounds word access throws AIOOBE, but
+		// BatchValidateSign.execute wraps doExecute in try/catch(Throwable) →
+		// (true, 32-zero).
+		sigsOffsetWord, _ := wordIntValueSafe(input, 1)  // word[1] in bounds (len >= 96)
+		addrsOffsetWord, _ := wordIntValueSafe(input, 2) // word[2] in bounds (len >= 96)
+		sigSizeIdx := sigsOffsetWord / tronPrecompileWordSize
+		addrSizeIdx := addrsOffsetWord / tronPrecompileWordSize
+		sigArraySize, ok1 := wordIntValueSafe(input, sigSizeIdx)
+		addrArraySize, ok2 := wordIntValueSafe(input, addrSizeIdx)
+		if !ok1 || !ok2 {
+			return make([]byte, 32), true // java outer catch(Throwable)
+		}
+		if sigArraySize > maxBatchSignSize || addrArraySize > maxBatchSignSize {
+			return make([]byte, 32), true // DATA_FALSE
+		}
+		var oob bool
+		sigs, oob = extractSigArrayWordIndex(input, sigSizeIdx)
+		if oob {
 			return make([]byte, 32), true
 		}
-		sigs = parseFixed65SigArray(input, sigsOffset)
+		addrs, oob = extractBytes32ArrayWordIndex(input, addrSizeIdx)
+		if oob {
+			return make([]byte, 32), true
+		}
 	} else {
 		sigs = parseBytesArray(input, sigsOffset)
+		addrs = addrWordsToBytes(parseAddressArray(input, addrsOffset))
 	}
-	addrs := parseAddressArray(input, addrsOffset)
 
 	if len(sigs) == 0 || len(sigs) > maxBatchSignSize || len(sigs) != len(addrs) {
 		return make([]byte, 32), true
@@ -198,11 +325,45 @@ func (c *batchValidateSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	result := make([]byte, 32)
 	for i, sig := range sigs {
 		recovered := recoverTronAddr(sig, hash)
-		if recovered == addrs[i] {
+		// java DataWord.equalAddressByteArray compares the last 20 bytes of the
+		// 32-byte address word against the recovered address. addrs[i] is a raw
+		// 32-byte word; recovered is a 21-byte TRON address (0x41 || 20).
+		if equalAddressLast20(addrs[i], recovered.Bytes()) {
 			result[i] = 1
 		}
 	}
 	return result, true
+}
+
+// addrWordsToBytes maps decoded TRON addresses back to the raw 32-byte ABI words
+// the restriction path compares against, so the legacy (restriction-OFF) branch
+// can share equalAddressLast20.
+func addrWordsToBytes(addrs []tcommon.Address) [][]byte {
+	out := make([][]byte, len(addrs))
+	for i, a := range addrs {
+		w := make([]byte, 32)
+		// a is 0x41 || 20-byte body; place the 20-byte body in the word's low 20.
+		copy(w[12:], a[1:])
+		out[i] = w
+	}
+	return out
+}
+
+// equalAddressLast20 mirrors DataWord.equalAddressByteArray: compares the last
+// 20 bytes of both byte slices, false if either is shorter than 20.
+func equalAddressLast20(a, b []byte) bool {
+	if len(a) < 20 || len(b) < 20 {
+		return false
+	}
+	ai, bi := len(a)-20, len(b)-20
+	for ai < len(a) && bi < len(b) {
+		if a[ai] != b[bi] {
+			return false
+		}
+		ai++
+		bi++
+	}
+	return true
 }
 
 // ── 0x0a ValidateMultiSign ───────────────────────────────────────────────────
@@ -247,10 +408,8 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	// 4 words throws an uncaught ArrayIndexOutOfBoundsException → spendAllEnergy +
 	// tx failure with contractResult.UNKNOWN(13). gtron previously returned
 	// DATA_FALSE+success here — a latent fork. Surface the uncaught-exception
-	// sentinel instead. (DEFERRED, needs a faithful extractBytesArray port: the
-	// restriction-ON oob-sigsOffset direct index words[sigsOffset/32] and the
-	// in-loop words[offset+i+1] accesses also throw; restriction-OFF already
-	// matches java because extractBytesArray bounds-checks offset → DATA_FALSE.)
+	// sentinel instead. The restriction-ON sigsOffset word index and the in-loop
+	// element-offset word accesses are now ported faithfully below (D-2).
 	if len(input) < 128 {
 		return nil, false, ErrPrecompileUnknown
 	}
@@ -279,10 +438,29 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 
 	var sigs [][]byte
 	if tvm != nil && tvm.cfg.SelfdestructRestrict {
-		if int(parseUint64FromWord(input, sigsOffset)) > maxMultiSignSize {
-			return falseResult, true, nil
+		// java reads the size by WORD INDEX (words[words[3].intValueSafe()/32]).
+		// The offset word itself goes through DataWord.intValueSafe, so a value
+		// with non-zero high bytes (or >= 2^31) saturates to Integer.MAX_VALUE
+		// BEFORE the /WORD_SIZE — making the word index huge (and out of bounds)
+		// rather than a small low-8-byte read. Both the size read (line 1067) and
+		// extractSigArray (line 1073) sit OUTSIDE ValidateMultiSign.execute's
+		// inner try, so an out-of-bounds word access throws AIOOBE that escapes
+		// the precompile → VM spendAllEnergy + contractResult.UNKNOWN(13).
+		// gtron mirror = ErrPrecompileUnknown.
+		sigsOffsetWord, _ := wordIntValueSafe(input, 3) // word[3] in bounds (len >= 128)
+		sizeIdx := sigsOffsetWord / tronPrecompileWordSize
+		sigArraySize, ok := wordIntValueSafe(input, sizeIdx)
+		if !ok {
+			return nil, false, ErrPrecompileUnknown // words[sizeIdx] AIOOBE
 		}
-		sigs = parseFixed65SigArray(input, sigsOffset)
+		if sigArraySize > maxMultiSignSize {
+			return falseResult, true, nil // DATA_FALSE
+		}
+		var oob bool
+		sigs, oob = extractSigArrayWordIndex(input, sizeIdx)
+		if oob {
+			return nil, false, ErrPrecompileUnknown
+		}
 	} else {
 		sigs = parseBytesArray(input, sigsOffset)
 	}
@@ -906,17 +1084,35 @@ func (c *getChainParameter) Run(tvm *TVM, _ tcommon.Address, input []byte, energ
 	if len(input) != 32 {
 		return make([]byte, 32), cost, nil
 	}
-	code := parseInt64FromWord(input, 0)
-	dp := tvm.StateDB.DynamicProperties()
+	// java GetChainParameter.execute reads new DataWord(data).longValueSafe(): a
+	// high-byte code saturates to maxInt64 → ChainParameterEnum.INVALID → 0, NOT a
+	// low-byte truncation that could match a valid code 1..5.
+	code := parseInt64SafeFromWord(input, 0)
+	// Use the wired dp (tvm.DynProps), NOT tvm.StateDB.DynamicProperties():
+	// production never calls StateDB.SetDynamicProperties, so the StateDB dp is
+	// the empty genesis-default from state.New (e.g. unfreeze_delay_days=0,
+	// total_energy_current_limit=50e9) — getChainParameter would return stale
+	// defaults instead of the live chain values. Same class as the dynamic-energy
+	// fix. Nile 34,563,685: STRXG1 read getChainParameter(5)=UNFREEZE_DELAY_DAYS
+	// and got 0 (vs java 14), diverging its rental/round math (expected SUCCESS,
+	// got REVERT).
+	dp := stakingDynamicProperties(tvm)
+	if dp == nil {
+		return int64ToBytes32(0), cost, nil
+	}
 	var val int64
 	switch code {
 	case 1: // TOTAL_NET_LIMIT
 		val = dp.TotalNetLimit()
+	case 2: // TOTAL_NET_WEIGHT
+		val = dp.TotalNetWeight()
 	case 3: // TOTAL_ENERGY_CURRENT_LIMIT
 		val = dp.TotalEnergyCurrentLimit()
+	case 4: // TOTAL_ENERGY_WEIGHT
+		val = dp.TotalEnergyWeight()
 	case 5: // UNFREEZE_DELAY_DAYS
 		val = dp.UnfreezeDelayDays()
-	default:
+	default: // java ChainParameterEnum.INVALID_PARAMETER_KEY -> 0
 		val = 0
 	}
 	return int64ToBytes32(val), cost, nil
@@ -962,7 +1158,7 @@ func (c *unfreezableBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, en
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := freezeV2ResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := freezeV2ResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -984,13 +1180,18 @@ func (c *expireUnfreezeBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte,
 	}
 	addr := tronAddrFromWord(input[0:32])
 	// Input time is in seconds; java-tron converts to milliseconds (* 1000).
-	timeSec := parseInt64FromWord(input, 32)
+	// Saturating decode (java DataWord.longValueSafe): an out-of-int64 time
+	// becomes maxInt64, not a wrapped/negative value.
+	timeSec := parseInt64SafeFromWord(input, 32)
 	if timeSec < 0 {
 		return make([]byte, 32), cost, nil
 	}
+	// java ExpireUnfreezeBalanceV2.execute: saturate at Long.MAX_VALUE/1000, not
+	// 2^62/1000 — the threshold must match exactly (both saturated values exceed any
+	// real expire time so the sum is unchanged, but keep byte-parity with java).
 	var timeMs int64
-	if timeSec >= (1<<62)/1000 {
-		timeMs = 1<<63 - 1 // effectively max
+	if timeSec >= math.MaxInt64/1000 {
+		timeMs = math.MaxInt64
 	} else {
 		timeMs = timeSec * 1000
 	}
@@ -1022,7 +1223,7 @@ func (c *delegatableResource) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1044,7 +1245,9 @@ func (c *resourceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint6
 	}
 	target := tronAddrFromWord(input[0:32])
 	from := tronAddrFromWord(input[32:64])
-	typeCode := parseInt64FromWord(input, 64)
+	// java ResourceV2.execute reads words[2].longValueSafe() — a high-byte type
+	// word saturates to maxInt64 and is rejected, NOT truncated to its low bytes.
+	typeCode := parseInt64SafeFromWord(input, 64)
 
 	var balance int64
 	if from == target {
@@ -1076,8 +1279,11 @@ func (c *checkUnDelegateResource) Run(tvm *TVM, _ tcommon.Address, input []byte,
 		return make([]byte, 96), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	amount := parseInt64FromWord(input, 32)
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 64))
+	// Saturating decode (java DataWord.longValueSafe): an out-of-int64 amount
+	// becomes maxInt64, not a wrapped/negative value that the amount<=0 guard
+	// below would wrongly reject where java proceeds.
+	amount := parseInt64SafeFromWord(input, 32)
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 64))
 	if !ok || amount <= 0 {
 		return make([]byte, 96), cost, nil
 	}
@@ -1112,7 +1318,7 @@ func (c *resourceUsage) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 		return make([]byte, 64), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok || tvm.StateDB.GetAccount(addr) == nil {
 		return make([]byte, 64), cost, nil
 	}
@@ -1133,7 +1339,7 @@ func (c *totalResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1157,7 +1363,7 @@ func (c *totalDelegatedResource) Run(tvm *TVM, _ tcommon.Address, input []byte, 
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1181,7 +1387,7 @@ func (c *totalAcquiredResource) Run(tvm *TVM, _ tcommon.Address, input []byte, e
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input[0:32])
-	resType, ok := stakingResourceFromInt(parseInt64FromWord(input, 32))
+	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
@@ -1296,8 +1502,8 @@ func resourceUsageBalanceAndRestoreSeconds(tvm *TVM, addr tcommon.Address, resTy
 		return 0, 0
 	}
 	restoreSeconds := (lastTime + window - now) * params.BlockProducedInterval / 1000
-	recovered := recoverStakingUsage(usage, lastTime, now, window, dp.AllowHardenResourceCalculation())
-	balance := stakingUsageToBalance(recovered, totalWeight, totalLimit, dp.AllowHardenResourceCalculation())
+	recovered := recoverStakingUsage(usage, lastTime, now, window)
+	balance := stakingUsageToBalance(recovered, totalWeight, totalLimit)
 	return balance, restoreSeconds
 }
 
@@ -1394,7 +1600,16 @@ func stakingWindowSizeSlots(acc *types.Account, resType corepb.ResourceCode) int
 	return windowSize
 }
 
-func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64, harden bool) int64 {
+// recoverStakingUsage mirrors java RepositoryImpl.recover/increase (the VM-side
+// Repository getter behind the checkUnDelegateResource / resourceUsage /
+// totalAcquiredResource precompiles). That getter is UNCONDITIONALLY primitive
+// long — `divideCeil(lastUsage*precision, windowSize)` (precision=1_000_000, which
+// silently overflows int64 for large usage), decay, then usage*windowSize/precision.
+// It has NO AllowHardenResourceCalculation gate: unlike chainbase ResourceProcessor
+// .increase, RepositoryImpl.increase never widens to BigInteger, so go must keep
+// the int64-overflow/double-precision behavior on this VM read path regardless of
+// the harden flag.
+func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
@@ -1406,45 +1621,34 @@ func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64, harden bool)
 		return oldUsage
 	}
 	remaining := windowSize - elapsed
-	if harden {
-		averageLastUsage := divideCeilBigInt(
-			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForStaking)),
-			big.NewInt(windowSize),
-		)
-		decay := float64(remaining) / float64(windowSize)
-		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
-		return bigMulDivStaking(averageLastUsage, windowSize, resourcePrecisionForStaking)
-	}
-	return oldUsage * remaining / windowSize
+	// int64 arithmetic to match java's `long` overflow semantics exactly.
+	averageLastUsage := divideCeilInt64(oldUsage*resourcePrecisionForStaking, windowSize)
+	decay := float64(remaining) / float64(windowSize)
+	averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+	return averageLastUsage * windowSize / resourcePrecisionForStaking
 }
 
-func stakingUsageToBalance(usage, totalWeight, totalLimit int64, harden bool) int64 {
+// stakingUsageToBalance mirrors java RepositoryImpl.getAccount{Energy,Net}Usage
+// BalanceAndRestoreSeconds's lossy-double conversion: (long)((double)usage *
+// totalWeight / totalLimit * TRX_PRECISION). UNGATED — no harden/BigInteger.
+func stakingUsageToBalance(usage, totalWeight, totalLimit int64) int64 {
 	if usage <= 0 || totalWeight <= 0 || totalLimit <= 0 {
 		return 0
-	}
-	if harden {
-		n := new(big.Int).Mul(big.NewInt(usage), big.NewInt(totalWeight))
-		n.Mul(n, big.NewInt(trxPrecision))
-		n.Quo(n, big.NewInt(totalLimit))
-		return n.Int64()
 	}
 	return int64(float64(usage) * float64(totalWeight) / float64(totalLimit) * float64(trxPrecision))
 }
 
 const resourcePrecisionForStaking = int64(1_000_000)
 
-func divideCeilBigInt(numerator, denominator *big.Int) int64 {
-	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
-	if r.Sign() > 0 {
-		q.Add(q, big.NewInt(1))
+// divideCeilInt64 mirrors core.divideCeil: ceil(numerator/denominator) in int64
+// arithmetic. Used by the non-harden recovery branch so it stays byte-identical
+// to the settle path's core.increase (and to java's primitive-long path).
+func divideCeilInt64(numerator, denominator int64) int64 {
+	result := numerator / denominator
+	if numerator%denominator > 0 {
+		result++
 	}
-	return q.Int64()
-}
-
-func bigMulDivStaking(a, b, c int64) int64 {
-	n := new(big.Int).Mul(big.NewInt(a), big.NewInt(b))
-	n.Quo(n, big.NewInt(c))
-	return n.Int64()
+	return result
 }
 
 func encodeInt64Words(values ...int64) []byte {

@@ -99,7 +99,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
-		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
+		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, bc.vmKV(buildBuf), bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
 		if err != nil {
 			h := tx.Hash()
 			log.Debug("Skipping tx in build", "tx", fmt.Sprintf("%x", h[:8]), "err", err)
@@ -110,7 +110,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
 		statedb.FinalizeTransaction()
-		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
+		// Producer builds a single block: nothing to amortize, so no fork-pass
+		// cache (the block-apply path threads bc.versionPassCache instead).
+		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, nil)
 	}
 
 	var accountStateRoot tcommon.Hash
@@ -121,10 +123,14 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		}
 	}
 
-	// Per-block adaptive energy limit adjustment.
+	// Per-block adaptive energy limit adjustment. Under harden, a ceiling overflow
+	// is a consensus-invalid state (java would reject such a block), so abandon the
+	// build rather than emit a block peers would reject.
 	if dynProps.AllowAdaptiveEnergy() {
 		UpdateTotalEnergyAverageUsage(dynProps, bc.GenesisTimestamp())
-		UpdateAdaptiveTotalEnergyLimit(dynProps)
+		if err := UpdateAdaptiveTotalEnergyLimit(dynProps); err != nil {
+			return nil, fmt.Errorf("adaptive total energy limit: %w", err)
+		}
 	}
 
 	// Pay block reward to witness (brokerage-aware once change_delegation is on)
@@ -136,7 +142,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb)); err != nil {
+		// nil cache: the producer builds a single block, not a replay of many
+		// boundaries, so the terminal-skip cache has nothing to amortise. Result
+		// is identical to the cached path (the cache only elides redundant reads).
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb), nil); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{

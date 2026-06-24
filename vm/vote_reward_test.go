@@ -54,6 +54,42 @@ func int64FromWord(out []byte) int64 {
 	return int64(binary.BigEndian.Uint64(out[24:]))
 }
 
+// TestRewardBalancePrecompile_NoOldCycleSplit pins the Nile 34,621,401 fix at the
+// precompile level: rewardBalance (0x05, via tvmQueryReward) must use the no-split
+// TVM reward (java VoteRewardUtil.computeReward = pure VI difference), NOT the
+// split actuator reward (java MortgageService). A pre-fork voter's old-cycle
+// CycleReward/CycleVote snapshots must be EXCLUDED from the TVM read. With the
+// pre-fix split reuse, this account would read 790; the correct no-split value is
+// the pure VI difference 300.
+func TestRewardBalancePrecompile_NoOldCycleSplit(t *testing.T) {
+	tvm, statedb, dp := newVoteRewardTVM(t) // currentCycle = 10
+	dp.SetNewRewardAlgorithmEffectiveCycle(8)
+	caller := voteRewardAddr(0x11)
+	witness := voteRewardAddr(0x12)
+	statedb.CreateAccount(caller, corepb.AccountType_Normal)
+	statedb.SetAllowance(caller, 0)
+	statedb.SetVotes(caller, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 100}})
+	_ = statedb.WriteBeginCycle(caller.Bytes(), 1)
+
+	// Pure-VI term over [1,10): VI[9]-VI[0] = 3e18 → 3e18*100/1e18 = 300.
+	_ = statedb.WriteWitnessVI(0, witness.Bytes(), new(big.Int))
+	_ = statedb.WriteWitnessVI(9, witness.Bytes(), new(big.Int).Mul(big.NewInt(3), reward.DecimalOfViReward))
+	// Old-cycle snapshots [1,8) that the SPLIT path would add (7×70=490) but the
+	// TVM no-split path must ignore.
+	for c := int64(1); c < 8; c++ {
+		_ = statedb.WriteCycleVote(c, witness.Bytes(), 1000)
+		_ = statedb.WriteCycleReward(c, witness.Bytes(), 700)
+	}
+
+	out, _, err := (&rewardBalance{}).Run(tvm, caller, nil, 500)
+	if err != nil {
+		t.Fatalf("rewardBalance error: %v", err)
+	}
+	if got := int64FromWord(out); got != 300 {
+		t.Fatalf("rewardBalance = %d, want 300 (pure VI, no old-cycle split; pre-fix split reuse would give 790)", got)
+	}
+}
+
 func TestRewardBalancePrecompileQueriesCallerReward(t *testing.T) {
 	tvm, statedb, _ := newVoteRewardTVM(t)
 	caller := voteRewardAddr(0x01)
@@ -271,5 +307,61 @@ func TestVoteWitnessOpcodeExpandsMemoryAtLimit(t *testing.T) {
 	wantEnergy := uint64(100_000_000) - memoryEnergyCost(tvmMemoryLimit)
 	if got := contract.Energy; got != wantEnergy {
 		t.Fatalf("remaining energy: got %d, want %d", got, wantEnergy)
+	}
+}
+
+// TestSelfDestructCancelsVotes locks java-tron Program.withdrawRewardAndCancelVote:
+// when a voting contract self-destructs under allow_tvm_vote, its votes must be
+// cancelled — a pending VotesStore record with empty NewVotes so the next
+// maintenance fold subtracts them from the witnesses — and its allowance rolled
+// into balance. Without this the witness vote tally drifts above the voter sum
+// (the Nile 21,210,788 stall: witness 41a3ee67 tally = voter-sum + 1).
+func TestSelfDestructCancelsVotes(t *testing.T) {
+	tvm, statedb, _ := newVoteRewardTVM(t)
+	contract := voteRewardAddr(0x11)
+	witness := voteRewardAddr(0x12)
+	statedb.CreateAccount(contract, corepb.AccountType_Contract)
+	statedb.AddBalance(contract, 100)
+	statedb.SetAllowance(contract, 5)
+	statedb.SetVotes(contract, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 7}})
+	// beginCycle > currentCycle (10) -> tvmWithdrawReward returns early (no reward math).
+	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
+
+	tvmWithdrawRewardAndCancelVote(tvm, contract)
+
+	if vs := statedb.GetVotes(contract); len(vs) != 0 {
+		t.Fatalf("persistent votes not cleared on suicide: %v", vs)
+	}
+	rec := statedb.ReadVotes(contract)
+	if rec == nil {
+		t.Fatal("expected a pending vote-cancellation record so the maintenance fold subtracts the votes")
+	}
+	if len(rec.NewVotes) != 0 {
+		t.Fatalf("cancellation record NewVotes must be empty, got %v", rec.NewVotes)
+	}
+	if len(rec.OldVotes) != 1 || tcommon.BytesToAddress(rec.OldVotes[0].VoteAddress) != witness || rec.OldVotes[0].VoteCount != 7 {
+		t.Fatalf("cancellation record OldVotes must be [witness:7], got %v", rec.OldVotes)
+	}
+	if bal := statedb.GetBalance(contract); bal != 105 {
+		t.Fatalf("allowance not rolled into balance: got %d want 105", bal)
+	}
+	if al := statedb.GetAllowance(contract); al != 0 {
+		t.Fatalf("allowance not zeroed: got %d", al)
+	}
+}
+
+// TestSelfDestructNoVotesNoRecord: a non-voting contract self-destruct must not
+// fabricate a pending vote record (which would spuriously move a witness tally).
+func TestSelfDestructNoVotesNoRecord(t *testing.T) {
+	tvm, statedb, _ := newVoteRewardTVM(t)
+	contract := voteRewardAddr(0x21)
+	statedb.CreateAccount(contract, corepb.AccountType_Contract)
+	statedb.AddBalance(contract, 50)
+	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
+
+	tvmWithdrawRewardAndCancelVote(tvm, contract)
+
+	if rec := statedb.ReadVotes(contract); rec != nil {
+		t.Fatalf("no votes -> no cancellation record, got %v", rec)
 	}
 }

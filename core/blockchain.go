@@ -11,6 +11,7 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus"
@@ -152,7 +153,15 @@ type BlockChain struct {
 	witnessBlockCache map[tcommon.Address]int64
 	forkStatsCache    map[int32][]byte
 	cycleRewards      *cycleRewardAccumulator
-	fc                *forks.ForkController
+	// proposalCache skips re-reading already-resolved proposals during the
+	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
+	// failed apply. See proposalScanCache.
+	proposalCache *proposalScanCache
+	// versionPassCache skips the per-tx fork-stats read + vote tally for an SR
+	// fork version that has already activated. Node-local; reset on reorg /
+	// failed apply (same discipline as proposalCache). See forks.VersionPassCache.
+	versionPassCache *forks.VersionPassCache
+	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -208,6 +217,7 @@ type BlockChain struct {
 	// With asyncCommit false (the default) the guard in applyBlockWithPlan is not
 	// taken and the synchronous commit path runs unchanged — byte-identical.
 	asyncCommit    bool
+	commitDepth    int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
 	commitQueue    chan *commitJob
 	commitPending  *flushBarrier
 	commitWorkerWg sync.WaitGroup
@@ -358,6 +368,12 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		}
 		return block.Hash(), true
 	}))
+	// Resolve the async-commit pipeline depth ONCE here and size the commit queue
+	// to depth-2 (the backpressure bound). The commit worker, started below in
+	// this constructor, ranges this exact channel for its lifetime — sizing it
+	// here (not in the later SetAsyncCommit) keeps the worker from ever being
+	// orphaned on a re-made channel. depth-2 == 0 ⇒ the unbuffered rendezvous.
+	commitDepth := resolveCommitPipelineDepth()
 	bc := &BlockChain{
 		db:                db,
 		chaindb:           chaindb,
@@ -367,13 +383,16 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		buffer:            buffer,
 		flushQueue:        make(chan uint64, flushQueueCap),
 		flushPending:      newFlushBarrier(),
-		commitQueue:       make(chan *commitJob, commitQueueCap),
+		commitDepth:       commitDepth,
+		commitQueue:       make(chan *commitJob, commitDepth-2),
 		commitPending:     newFlushBarrier(),
 		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
 		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
 		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
 		witnessBlockCache: make(map[tcommon.Address]int64),
 		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
+		proposalCache:     newProposalScanCache(),
+		versionPassCache:  forks.NewVersionPassCache(),
 	}
 	var err error
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
@@ -749,6 +768,35 @@ func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor
 
 	// The global head advanced. If it doesn't extend the canonical tip → fork.
 	if newHead.ParentHash() != current.Hash() {
+		// Fully settle a deferred (session/deep) executor before the rewind so
+		// switchFork sees exactly the precondition the per-call path gives it: a
+		// quiesced worker and an empty range executor whose blocks are committed +
+		// flushed to the same on-disk image the synchronous reorg rewinds. A
+		// cross-batch InsertSession reuses ONE executor across forward batches and
+		// defers the drain/flush to Finish; if a reorg interrupts mid-session that
+		// executor still holds applied-but-unflushed latest-domain rows (open
+		// scope) and an advanced range tip, which would leak (non-deterministically
+		// with the worker's flush progress) into the re-applied branch. Replicate
+		// insertBlocksLocked's async settle here: drain → Close (flush scope into
+		// the committed layers) → postFlush(solidified) → Reset. No-op when the
+		// executor never applied a block in this range (commit == nil) — the common
+		// case where the competing branch was all nothing-to-apply until its
+		// heavier tip, so the per-call path is byte-identical.
+		if bc.asyncCommit && executor != nil && executor.commit != nil {
+			bc.WaitForCommitSettled()
+			if errPtr := bc.commitErr.Load(); errPtr != nil {
+				return fmt.Errorf("async commit failed before fork: %w", *errPtr)
+			}
+			if err := executor.Close(); err != nil {
+				return fmt.Errorf("settle executor scope before fork: %w", err)
+			}
+			if solidified := bc.cachedDynProps().LatestSolidifiedBlockNum(); solidified > 0 {
+				if err := bc.postFlush(solidified); err != nil {
+					return fmt.Errorf("flush before fork: %w", err)
+				}
+			}
+			executor.Reset()
+		}
 		if err := bc.switchFork(newHead); err != nil {
 			bc.khaosDB.RemoveBlk(block.Hash())
 			return fmt.Errorf("switchFork: %w", err)
@@ -783,6 +831,23 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	return executor.Apply(block)
 }
 
+// headerParentChainReader pins CurrentBlock() to a specific parent block for
+// header verification. Under async commit the published bc.CurrentBlock() is
+// advanced off the critical path by the serial commit worker, so it lags the
+// executor's range-local tip by up to one block (see range_executor.go tip()).
+// Verifying a block's number / parent-hash / slot linkage against that lagging
+// head spuriously rejects the 2nd+ block of an InsertBlocks range with
+// ErrInvalidBlockNumber. The other ChainReader reads VerifyHeaderWithDynProps
+// performs — GenesisTimestamp (immutable) and ActiveWitnesses (changes only at a
+// maintenance boundary, advanced synchronously in the foreground) — are not
+// worker-lagged, so they delegate to the embedded BlockChain unchanged.
+type headerParentChainReader struct {
+	consensus.ChainReader
+	parent *types.Block
+}
+
+func (r headerParentChainReader) CurrentBlock() *types.Block { return r.parent }
+
 // applyBlockWithPlan executes, commits, and persists one linear-extension
 // block from a range-owned execution plan. If plan.state is non-nil, it must
 // already represent the current canonical head's post-state; on success the
@@ -807,6 +872,25 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err := plan.Validate(block, historyEnabled); err != nil {
 		return err
 	}
+
+	// When this block runs maintenance, ProcessProposals records terminal
+	// proposal marks against the state it produces. If the apply then fails,
+	// that state is abandoned, so the marks may no longer match committed
+	// canonical state — drop the whole cache (it rebuilds lazily next boundary).
+	maintenanceProcessed := false
+	defer func() {
+		if retErr != nil {
+			// A pass memoized while executing this (now-abandoned) block stays
+			// valid — the gate reads the committed-parent bitmap, which the
+			// revert restores — but reset anyway to mirror proposalCache's
+			// failed-apply discipline and stay robust to future mid-block
+			// fork-stats writers. Cheap: the cache rebuilds lazily.
+			bc.versionPassCache.Reset()
+			if maintenanceProcessed {
+				bc.proposalCache.reset()
+			}
+		}
+	}()
 
 	stats := applyStats{last: time.Now()}
 	applyStart := stats.last
@@ -903,16 +987,21 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// InsertBlock because:
 	//   - applyBlock is the single chokepoint for state application from both
 	//     linear extension and switchFork's re-apply loop;
-	//   - bc.CurrentBlock() == block's actual parent at this point (the
-	//     re-apply loop advances current sequentially), so VerifyHeader's
-	//     parent-linkage and "ts > parent.ts" checks line up correctly even
-	//     during a fork rewind;
+	//   - the parent-linkage and "ts > parent.ts" checks must run against the
+	//     block's true parent — the range-local executor tip captured in
+	//     `current` (= plan.parent), NOT bc.CurrentBlock(). Under async commit the
+	//     serial commit worker publishes bc.CurrentBlock() off the critical path,
+	//     so it lags `current` by up to one block; verifying the 2nd+ block of a
+	//     range against that stale head would reject it with ErrInvalidBlockNumber
+	//     (the block-101 sync stall). headerParentChainReader pins CurrentBlock()
+	//     to `current` — with async off the two are identical, so it is a no-op
+	//     there and during a fork rewind;
 	//   - bad blocks may briefly enter the KhaosDB mini-store but never reach
 	//     state — KhaosDB's size bound caps the DoS surface, and the orphan is
 	//     pruned by the caller on the returned error.
 	// Skipped when bc.engine is nil (test path; see SetEngine).
 	if bc.engine != nil {
-		if err := bc.engine.VerifyHeaderWithDynProps(bc, block, dynProps); err != nil {
+		if err := bc.engine.VerifyHeaderWithDynProps(headerParentChainReader{bc, current}, block, dynProps); err != nil {
 			return err
 		}
 	}
@@ -1033,9 +1122,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config))
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), bc.versionPassCache)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config))
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), bc.versionPassCache)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -1118,9 +1207,13 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records and governance side-effects live in rooted
 			// StateDB domains.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb)); err != nil {
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb), bc.proposalCache); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
+			// ProcessProposals may have recorded terminal marks against state
+			// that this block's apply could still abandon on a later error.
+			// Drop them if so (handled by the deferred reset below).
+			maintenanceProcessed = true
 			adapter := &chainHeaderAdapter{
 				statedb:          statedb,
 				dynProps:         dynProps,
@@ -1211,6 +1304,18 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	bc.updateFork(statedb, block)
 	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("stage tapos ref: %w", err)
+	}
+	// Stage the block body alongside the TAPOS row so BLOCKHASH lookups from
+	// the NEXT blocks of an insert range resolve through the buffer. The
+	// durable b-<num> row is written by writeBlockMetadataBatch, but under
+	// async commit that batch runs on the commit worker, so block N+1's
+	// execution raced it and read blockhash(N) as 0 while java-tron always
+	// serves the parent hash — Nile 10,552,292 stalled exactly here (OneSwap
+	// derives limit-order ids from blockhash(block.number-1) ^ tx.origin, so
+	// the zero hash silently diverged the order book at placement). Layered
+	// staging keeps the row fork-rewindable, like the TAPOS ref above.
+	if err := rawdb.WriteBlock(bc.buffer, block); err != nil {
+		return fmt.Errorf("stage block body: %w", err)
 	}
 	if n := len(block.Transactions()); n > 0 {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
@@ -1347,11 +1452,25 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// async flusher. Layers above solidified stay in memory and remain
 	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
 	// invariant that Manager.eraseBlock can never pop past solidified.
-	solidified := dynProps.LatestSolidifiedBlockNum()
-	if err := plan.FlushLatestUpTo(solidified); err != nil {
+	// Cap the flush cutoff at the newest COMMITTED layer. In normal forward
+	// application solidified <= the just-committed block, so this is a no-op.
+	// But switchFork re-applies a branch while dynProps can still report the
+	// pre-reorg solidified (a high-water mark that may exceed the freshly
+	// re-applied block); an uncapped cutoff lets the async flush worker — running
+	// block N-1's postFlush(solidified) — drop block N's just-committed layer
+	// before block N's own FlushLatestUpTo flushes its scope op into it, orphaning
+	// that op → "batch target layer is no longer pending". Capping at the newest
+	// committed layer keeps each postFlush from dropping the current block's
+	// layer. (Same flush-cutoff invariant the depth>2 path enforces via
+	// NewestCommittedNumber.)
+	cutoff := dynProps.LatestSolidifiedBlockNum()
+	if nc, ok := bc.buffer.NewestCommittedNumber(); ok && int64(nc) < cutoff {
+		cutoff = int64(nc)
+	}
+	if err := plan.FlushLatestUpTo(cutoff); err != nil {
 		return err
 	}
-	if err := bc.postFlush(solidified); err != nil {
+	if err := bc.postFlush(cutoff); err != nil {
 		return err
 	}
 	stats.mark(&stats.Persist)
@@ -1708,6 +1827,14 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.clearRewardAccountCache()
 	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
+	// A rewound proposal may revert from terminal back to PENDING on the new
+	// branch; drop the node-local terminal-skip cache so the re-applied branch
+	// re-reads proposal state from scratch.
+	bc.proposalCache.reset()
+	// Likewise a reorg can rewind below a version's activation block, reverting
+	// it to pending on the new branch; drop the fork-pass memo so the re-applied
+	// branch re-evaluates each version from live fork-stats. See forks.VersionPassCache.
+	bc.versionPassCache.Reset()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
@@ -2400,4 +2527,37 @@ func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessV
 		}
 	}
 	return result
+}
+
+// vmKVStore augments a block-processing KV view (chain buffer, build buffer,
+// or a validation layer) with the ancient-aware block-hash lookup the VM
+// needs (rawdb.BlockHashReader). The slice-3 freezer prunes hot b-<num> rows
+// past (solidified - margin), which sits inside BLOCKHASH's 256-block window
+// and eventually covers genesis (CHAINID); the fall-through below keeps both
+// opcodes resolving after pruning. Plain KV reads and writes pass through to
+// the wrapped view unchanged.
+type vmKVStore struct {
+	actuator.BufferedKVStore
+	chaindb *rawdb.ChainDB
+}
+
+func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	// Hot path: the wrapped view (buffer layers fall through to Pebble),
+	// covering everything the freezer has not pruned, including blocks of
+	// an in-flight insert batch that only exist in the buffer.
+	if reader, ok := s.BufferedKVStore.(rawdb.BlockHashReader); ok {
+		if hash, found := reader.BlockHashByNumber(number); found {
+			return hash, true
+		}
+	}
+	// Frozen path: ancient-first ReadBlock (the hot row is already gone).
+	if blk := rawdb.ReadBlock(s.chaindb, number); blk != nil {
+		return blk.Hash(), true
+	}
+	return tcommon.Hash{}, false
+}
+
+// vmKV wraps a processing view for handoff to the actuator/VM layer.
+func (bc *BlockChain) vmKV(view actuator.BufferedKVStore) vmKVStore {
+	return vmKVStore{BufferedKVStore: view, chaindb: bc.chaindb}
 }

@@ -17,20 +17,23 @@ import (
 // the precompile with success=false).
 
 // validateMultiSignInputN builds the SelfdestructRestrict-layout input for
-// `len(sigs)` signatures, using fixed-65 per-element slots. The header
-// matches validateMultiSignInput: owner / permID / msgData / sigsOffset
-// (=160). After the count word at byte 160 the precompile reads
-// per-element relative offsets at byteOffset+32*(1+i), then the 65-byte
-// signature payload at byteOffset + relOff + 64. We pack signatures
-// back-to-back immediately after the per-element offsets table.
+// `len(sigs)` signatures, using fixed-65 per-element slots laid out WORD-ALIGNED,
+// matching standard Solidity ABI encoding (each 65-byte bytes element occupies
+// 3 words / 96 bytes, zero-padded) — i.e. exactly what java-tron's own
+// ValidateMultiSignContractTest produces via AbiUtil.parseParameters. java's
+// extractSigArray reads the per-element offset as a WORD index
+// (words[offset+i+1].intValueSafe()/WORD_SIZE) and reads the sig from the
+// word-aligned position (bytesOffset+offset+2)*WORD_SIZE, so element payloads
+// MUST start on a word boundary. (The earlier tight-packed 65-byte-stride layout
+// only decoded under gtron's pre-D-2 byte-arithmetic parser, which diverged from
+// java for any non-word-aligned element offset; see multisign_offset_parity_test.go.)
 func validateMultiSignInputN(owner tcommon.Address, permID int64, msgData []byte, sigs [][]byte) []byte {
 	n := len(sigs)
 	const sigsOffset = 160 // 5 * 32
-	headerEnd := sigsOffset + 32 + 32*n
-	totalLen := headerEnd + 65*n
-	if rem := totalLen % 32; rem != 0 {
-		totalLen += 32 - rem
-	}
+	const sigSlot = 96     // 65-byte sig padded to 3 words
+	tablePos := sigsOffset + 32
+	payloadBase := tablePos + 32*n
+	totalLen := payloadBase + sigSlot*n
 	input := make([]byte, totalLen)
 	copy(input[0:32], stakingAddrWord(owner))
 	copy(input[32:64], int64ToBytes32(permID))
@@ -38,12 +41,13 @@ func validateMultiSignInputN(owner tcommon.Address, permID int64, msgData []byte
 	copy(input[96:128], int64ToBytes32(int64(sigsOffset)))
 	copy(input[sigsOffset:sigsOffset+32], int64ToBytes32(int64(n)))
 	for i := range sigs {
-		// payload_i lives at headerEnd + i*65, i.e.
-		// sigsOffset + relOff_i + 64 with relOff_i = 32 + 32*n + i*65 - 64.
-		// Simpler: relOff_i = (headerEnd - sigsOffset - 64) + i*65.
-		relOff := int64(headerEnd-sigsOffset-64) + int64(i*65)
-		copy(input[sigsOffset+32+32*i:sigsOffset+32+32*(i+1)], int64ToBytes32(relOff))
-		copy(input[headerEnd+i*65:headerEnd+(i+1)*65], sigs[i])
+		// payload_i lives at the word-aligned slot payloadBase + i*96. java reads
+		// it at (bytesOffset + sigsOffset/32 + 2)*32, so encode the element offset
+		// word as bytesOffset*32 with bytesOffset = payloadPos/32 - sigsOffset/32 - 2.
+		payloadPos := payloadBase + i*sigSlot
+		bytesOffsetWords := payloadPos/32 - sigsOffset/32 - 2
+		copy(input[tablePos+32*i:tablePos+32*(i+1)], int64ToBytes32(int64(bytesOffsetWords*32)))
+		copy(input[payloadPos:payloadPos+65], sigs[i])
 	}
 	return input
 }

@@ -131,24 +131,39 @@ func updateVotesAfterUnfreezeV2(ctx *Context, ownerAddr common.Address, resource
 	if len(votes) == 0 {
 		return nil
 	}
-	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+	// Mirror java UnfreezeBalanceV2Actuator.updateVote control flow.
+	newResourceModel := forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps)
+	if newResourceModel {
 		account := ctx.State.GetAccount(ownerAddr)
-		if account != nil && account.OldTronPowerIsInvalid() &&
-			(resource == corepb.ResourceCode_BANDWIDTH || resource == corepb.ResourceCode_ENERGY) {
-			return nil
+		if account != nil && account.OldTronPowerIsInvalid() {
+			// old_tron_power already invalid: a BANDWIDTH/ENERGY unfreeze leaves
+			// votes alone; a TRON_POWER unfreeze falls through to the proportional
+			// recompute below (java `default: break`), which must use getAllTronPower.
+			if resource == corepb.ResourceCode_BANDWIDTH || resource == corepb.ResourceCode_ENERGY {
+				return nil
+			}
+		} else {
+			// Not invalid yet: clear all votes at once (new-resource-model start).
+			return clearVotesWithPendingDelta(ctx, ownerAddr, votes)
 		}
-		return clearVotesWithPendingDelta(ctx, ownerAddr, votes)
 	}
 
 	var totalVotes int64
 	for _, v := range votes {
 		totalVotes += v.VoteCount
 	}
-	if totalVotes == 0 {
+	// java: ownedTronPower = supportAllowNewResourceModel ? getAllTronPower() :
+	// getTronPower(); return when it covers the votes, then when totalVote == 0.
+	var ownedTronPower int64
+	if newResourceModel {
+		ownedTronPower = ctx.State.GetAllTronPower(ownerAddr)
+	} else {
+		ownedTronPower = ctx.State.GetLegacyTronPower(ownerAddr)
+	}
+	if ownedTronPower >= totalVotes*int64(params.TRXPrecision) {
 		return nil
 	}
-	ownedTronPower := ctx.State.GetLegacyTronPower(ownerAddr)
-	if totalVotes <= ownedTronPower/int64(params.TRXPrecision) {
+	if totalVotes == 0 {
 		return nil
 	}
 	newVotes := make([]*corepb.Vote, 0, len(votes))

@@ -15,7 +15,6 @@ type Interpreter struct {
 	readOnly   bool   // static call mode
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
-	transient  map[uint256.Int]uint256.Int // transient storage for TLOAD/TSTORE (EIP-1153)
 	currentOp  OpCode
 	energyErr  error
 
@@ -41,7 +40,6 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 		tvm:       tvm,
 		table:     newJumpTable(),
 		tvmConfig: cfg,
-		transient: make(map[uint256.Int]uint256.Int),
 	}
 }
 
@@ -53,9 +51,20 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		stack        = newStack()
 	)
 	parentFactor, parentRawEnergyUsed := in.factor, in.rawEnergyUsed
+	// The return-data buffer is per-frame state: java-tron gives every
+	// Program its own returnDataBuffer, so RETURNDATASIZE is 0 at frame
+	// entry until the frame completes a call of its own (EIP-211). gtron
+	// shares one Interpreter across frames, so without this reset a child
+	// frame would observe the parent's last call result — which breaks
+	// solc's "returndatasize as cheap PUSH0" idiom in proxy fallbacks
+	// (calldatacopy(ptr, returndatasize(), calldatasize())) and shifted
+	// the forwarded calldata of Nile tx 62420abd… (block 14,151,095).
+	parentReturnData := in.returnData
+	in.returnData = nil
 	defer func() {
 		in.factor = parentFactor
 		in.rawEnergyUsed = parentRawEnergyUsed
+		in.returnData = parentReturnData
 	}()
 
 	// Fetch (and advance) the contract's dynamic-energy factor once at

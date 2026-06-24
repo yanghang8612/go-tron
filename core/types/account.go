@@ -709,6 +709,13 @@ func (a *Account) ClearUnfrozenV2() {
 	a.pb.UnfrozenV2 = nil
 }
 
+// ClearFrozenV2 removes all FreezeV2 entries, mirroring java-tron
+// AccountCapsule.clearFrozenV2 used by the SELFDESTRUCT path under
+// allow_tvm_freeze_v2 (clearOwnerFreezeV2).
+func (a *Account) ClearFrozenV2() {
+	a.pb.FrozenV2 = nil
+}
+
 // Marshal serializes the account proto deterministically. The Deterministic
 // option only fixes the ordering of protobuf map fields (Asset, AssetV2,
 // FreeAssetNetUsage*, LatestAssetOperationTime*); without it Go map iteration

@@ -2828,6 +2828,30 @@ type ResourceReceipt struct {
 	OwnerFrozenForEnergy        int64 `protobuf:"varint,17,opt,name=owner_frozen_for_energy,json=ownerFrozenForEnergy,proto3" json:"owner_frozen_for_energy,omitempty"`
 	OriginEnergyWindow          int64 `protobuf:"varint,18,opt,name=origin_energy_window,json=originEnergyWindow,proto3" json:"origin_energy_window,omitempty"`
 	CallerEnergyWindow          int64 `protobuf:"varint,19,opt,name=caller_energy_window,json=callerEnergyWindow,proto3" json:"caller_energy_window,omitempty"`
+	// Diagnostic (cross-impl parity) — fields 20-28, non-consensus, never hashed.
+	// They make a smart-contract energy bill fully decomposable from a single
+	// gettransactioninfobyid: the available stake-energy already recorded in
+	// origin_energy_left/caller_energy_left (fields 9/10) splits via
+	//
+	//	recovered_usage = energy_limit - energy_left
+	//
+	// so diffing *_energy_limit vs java pinpoints a total_energy_weight / limit
+	// divergence, while diffing (limit - left) pinpoints a recovery divergence —
+	// no node re-sync or manual getaccountresource math needed. The limit itself
+	// is reproducible as floor(frozen_for_energy/TRX * total_energy_current_limit
+	// / total_energy_weight); the recovered usage is reproducible from
+	// *_energy_usage_pre + *_energy_last_consume_time + *_energy_window + the
+	// block slot. Captured at execution start for the contract origin/caller.
+	// Populated only for smart-contract transactions; proto3 omits zero values.
+	CallerEnergyLimit           int64 `protobuf:"varint,20,opt,name=caller_energy_limit,json=callerEnergyLimit,proto3" json:"caller_energy_limit,omitempty"`
+	OriginEnergyLimit           int64 `protobuf:"varint,21,opt,name=origin_energy_limit,json=originEnergyLimit,proto3" json:"origin_energy_limit,omitempty"`
+	OriginFrozenForEnergy       int64 `protobuf:"varint,22,opt,name=origin_frozen_for_energy,json=originFrozenForEnergy,proto3" json:"origin_frozen_for_energy,omitempty"`
+	CallerEnergyUsagePre        int64 `protobuf:"varint,23,opt,name=caller_energy_usage_pre,json=callerEnergyUsagePre,proto3" json:"caller_energy_usage_pre,omitempty"`
+	OriginEnergyUsagePre        int64 `protobuf:"varint,24,opt,name=origin_energy_usage_pre,json=originEnergyUsagePre,proto3" json:"origin_energy_usage_pre,omitempty"`
+	CallerEnergyLastConsumeTime int64 `protobuf:"varint,25,opt,name=caller_energy_last_consume_time,json=callerEnergyLastConsumeTime,proto3" json:"caller_energy_last_consume_time,omitempty"`
+	OriginEnergyLastConsumeTime int64 `protobuf:"varint,26,opt,name=origin_energy_last_consume_time,json=originEnergyLastConsumeTime,proto3" json:"origin_energy_last_consume_time,omitempty"`
+	TotalEnergyWeight           int64 `protobuf:"varint,27,opt,name=total_energy_weight,json=totalEnergyWeight,proto3" json:"total_energy_weight,omitempty"`
+	TotalEnergyCurrentLimit     int64 `protobuf:"varint,28,opt,name=total_energy_current_limit,json=totalEnergyCurrentLimit,proto3" json:"total_energy_current_limit,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -2991,6 +3015,69 @@ func (x *ResourceReceipt) GetOriginEnergyWindow() int64 {
 func (x *ResourceReceipt) GetCallerEnergyWindow() int64 {
 	if x != nil {
 		return x.CallerEnergyWindow
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetCallerEnergyLimit() int64 {
+	if x != nil {
+		return x.CallerEnergyLimit
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOriginEnergyLimit() int64 {
+	if x != nil {
+		return x.OriginEnergyLimit
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOriginFrozenForEnergy() int64 {
+	if x != nil {
+		return x.OriginFrozenForEnergy
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetCallerEnergyUsagePre() int64 {
+	if x != nil {
+		return x.CallerEnergyUsagePre
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOriginEnergyUsagePre() int64 {
+	if x != nil {
+		return x.OriginEnergyUsagePre
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetCallerEnergyLastConsumeTime() int64 {
+	if x != nil {
+		return x.CallerEnergyLastConsumeTime
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOriginEnergyLastConsumeTime() int64 {
+	if x != nil {
+		return x.OriginEnergyLastConsumeTime
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetTotalEnergyWeight() int64 {
+	if x != nil {
+		return x.TotalEnergyWeight
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetTotalEnergyCurrentLimit() int64 {
+	if x != nil {
+		return x.TotalEnergyCurrentLimit
 	}
 	return 0
 }
@@ -7602,7 +7689,7 @@ const file_core_Tron_proto_rawDesc = "" +
 	"\x04vout\x18\x02 \x01(\x03R\x04vout\x12\x16\n" +
 	"\x06pubKey\x18\x03 \x01(\fR\x06pubKey\"9\n" +
 	"\tTXOutputs\x12,\n" +
-	"\aoutputs\x18\x01 \x03(\v2\x12.protocol.TXOutputR\aoutputs\"\x92\a\n" +
+	"\aoutputs\x18\x01 \x03(\v2\x12.protocol.TXOutputR\aoutputs\"\x92\v\n" +
 	"\x0fResourceReceipt\x12!\n" +
 	"\fenergy_usage\x18\x01 \x01(\x03R\venergyUsage\x12\x1d\n" +
 	"\n" +
@@ -7624,7 +7711,16 @@ const file_core_Tron_proto_rawDesc = "" +
 	"\x14owner_frozen_for_net\x18\x10 \x01(\x03R\x11ownerFrozenForNet\x125\n" +
 	"\x17owner_frozen_for_energy\x18\x11 \x01(\x03R\x14ownerFrozenForEnergy\x120\n" +
 	"\x14origin_energy_window\x18\x12 \x01(\x03R\x12originEnergyWindow\x120\n" +
-	"\x14caller_energy_window\x18\x13 \x01(\x03R\x12callerEnergyWindow\"\xb1\x01\n" +
+	"\x14caller_energy_window\x18\x13 \x01(\x03R\x12callerEnergyWindow\x12.\n" +
+	"\x13caller_energy_limit\x18\x14 \x01(\x03R\x11callerEnergyLimit\x12.\n" +
+	"\x13origin_energy_limit\x18\x15 \x01(\x03R\x11originEnergyLimit\x127\n" +
+	"\x18origin_frozen_for_energy\x18\x16 \x01(\x03R\x15originFrozenForEnergy\x125\n" +
+	"\x17caller_energy_usage_pre\x18\x17 \x01(\x03R\x14callerEnergyUsagePre\x125\n" +
+	"\x17origin_energy_usage_pre\x18\x18 \x01(\x03R\x14originEnergyUsagePre\x12D\n" +
+	"\x1fcaller_energy_last_consume_time\x18\x19 \x01(\x03R\x1bcallerEnergyLastConsumeTime\x12D\n" +
+	"\x1forigin_energy_last_consume_time\x18\x1a \x01(\x03R\x1boriginEnergyLastConsumeTime\x12.\n" +
+	"\x13total_energy_weight\x18\x1b \x01(\x03R\x11totalEnergyWeight\x12;\n" +
+	"\x1atotal_energy_current_limit\x18\x1c \x01(\x03R\x17totalEnergyCurrentLimit\"\xb1\x01\n" +
 	"\x11MarketOrderDetail\x12\"\n" +
 	"\fmakerOrderId\x18\x01 \x01(\fR\fmakerOrderId\x12\"\n" +
 	"\ftakerOrderId\x18\x02 \x01(\fR\ftakerOrderId\x12*\n" +
