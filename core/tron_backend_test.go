@@ -1068,7 +1068,7 @@ func TestTronBackend_GetLogsFallsBackWhenSectionBloomMissing(t *testing.T) {
 	}
 }
 
-func TestTronBackend_GetLogsRejectsMissingTransactionInfoCoverage(t *testing.T) {
+func TestTronBackend_GetLogsSkipsMissingTransactionInfoCoverage(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
 	block1, _ := testBackendLogBlock(1, nil)
@@ -1083,8 +1083,45 @@ func TestTronBackend_GetLogsRejectsMissingTransactionInfoCoverage(t *testing.T) 
 		FromBlock: &from,
 		ToBlock:   &to,
 	})
-	if err == nil || !strings.Contains(err.Error(), "incomplete transaction info coverage") {
-		t.Fatalf("GetLogs missing TransactionRet = logs %d err %v, want incomplete transaction info coverage error", len(logs), err)
+	if err != nil {
+		t.Fatalf("GetLogs missing TransactionRet: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("GetLogs missing TransactionRet returned %d logs, want none", len(logs))
+	}
+}
+
+func TestTronBackend_GetLogsSkipsIncompleteTransactionInfoCoverage(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x12)
+	topic := tcommon.Hash{0xab}
+	block1, _ := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x03, 0x04},
+	})
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, nil); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs incomplete TransactionRet: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("GetLogs incomplete TransactionRet returned %d logs, want none", len(logs))
 	}
 }
 

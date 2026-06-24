@@ -15,6 +15,8 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+var ErrIncompleteTransactionInfoCoverage = errors.New("rawdb: incomplete transaction info coverage")
+
 type RebuildTransactionDerivedIndexesResult struct {
 	FromBlock               uint64
 	ToBlock                 uint64
@@ -476,7 +478,7 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 // describe the canonical transaction list before derived log indexes trust them.
 func ValidateTransactionInfosForBlock(blockNum uint64, txs []*types.Transaction, infos []*corepb.TransactionInfo, context string) error {
 	if len(infos) != len(txs) {
-		return fmt.Errorf("rawdb: incomplete transaction info coverage for block %d during %s: have %d entries for %d transactions", blockNum, context, len(infos), len(txs))
+		return fmt.Errorf("%w for block %d during %s: have %d entries for %d transactions", ErrIncompleteTransactionInfoCoverage, blockNum, context, len(infos), len(txs))
 	}
 	for txIndex, info := range infos {
 		if info == nil {

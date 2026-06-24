@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -2640,12 +2641,12 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 			return nil, err
 		}
 		if !hasInfos {
-			if num == 0 {
-				continue
-			}
-			infos = nil
+			continue
 		}
 		if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
+			if errors.Is(err, rawdb.ErrIncompleteTransactionInfoCoverage) {
+				continue
+			}
 			return nil, err
 		}
 
