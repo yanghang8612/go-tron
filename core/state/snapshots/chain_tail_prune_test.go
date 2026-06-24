@@ -25,6 +25,18 @@ func writeChainTailPruneDependencyStage(t *testing.T, db ethdb.KeyValueWriter, s
 	return hash
 }
 
+const (
+	chainTailPruneTestHeadBlock     = ChainFreezerTailMinRetainBlocks + 100
+	chainTailPruneTestRetentionTail = chainTailPruneTestHeadBlock - ChainFreezerTailMinRetainBlocks + 1
+)
+
+func chainTailPruneHeadForRetentionTail(tail uint64) uint64 {
+	if tail == 0 {
+		return ChainFreezerTailMinRetainBlocks - 1
+	}
+	return ChainFreezerTailMinRetainBlocks + tail - 1
+}
+
 func TestEffectiveChainFreezerTailRetainBlocksKeepsBlockHashWindow(t *testing.T) {
 	tests := []struct {
 		name string
@@ -58,7 +70,7 @@ func TestNewChainFreezerTailPruneLifecycleNormalizesRetainBlocks(t *testing.T) {
 func TestPlanChainFreezerTailPruneRequiresStages(t *testing.T) {
 	input := ChainFreezerTailPrunePlanInput{
 		AncientHead:              100,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        90,
 		ChainLookupPruneBlock:    90,
@@ -81,7 +93,7 @@ func TestPlanChainFreezerTailPruneAllowsGenesisOnlyWithoutEventLogStage(t *testi
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              10,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        0,
 		HasChainFreezerBlock:     true,
@@ -91,8 +103,8 @@ func TestPlanChainFreezerTailPruneAllowsGenesisOnlyWithoutEventLogStage(t *testi
 	if !plan.CanPrune || plan.TargetTail != 1 {
 		t.Fatalf("genesis-only plan = %+v, want target tail 1", plan)
 	}
-	if plan.CoverageBlock != 0 || plan.CoverageTail != 1 || plan.RetentionTail != 91 {
-		t.Fatalf("genesis-only bounds = %+v, want coverage block/tail 0/1 and retention tail 91", plan)
+	if plan.CoverageBlock != 0 || plan.CoverageTail != 1 || plan.RetentionTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("genesis-only bounds = %+v, want coverage block/tail 0/1 and retention tail %d", plan, chainTailPruneTestRetentionTail)
 	}
 }
 
@@ -100,7 +112,7 @@ func TestPlanChainFreezerTailPruneCapsMissingEventLogStageAtGenesis(t *testing.T
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              200,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        95,
 		HasChainFreezerBlock:     true,
@@ -110,8 +122,8 @@ func TestPlanChainFreezerTailPruneCapsMissingEventLogStageAtGenesis(t *testing.T
 	if !plan.CanPrune || plan.TargetTail != 1 {
 		t.Fatalf("plan without event-log stage = %+v, want genesis-only target tail 1", plan)
 	}
-	if plan.CoverageBlock != 0 || plan.CoverageTail != 1 || plan.RetentionTail != 91 {
-		t.Fatalf("plan bounds without event-log stage = %+v, want coverage block/tail 0/1 and retention tail 91", plan)
+	if plan.CoverageBlock != 0 || plan.CoverageTail != 1 || plan.RetentionTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("plan bounds without event-log stage = %+v, want coverage block/tail 0/1 and retention tail %d", plan, chainTailPruneTestRetentionTail)
 	}
 }
 
@@ -119,7 +131,7 @@ func TestPlanChainFreezerTailPruneCapsAtLookupCoverage(t *testing.T) {
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              200,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        95,
 		HasChainFreezerBlock:     true,
@@ -131,8 +143,8 @@ func TestPlanChainFreezerTailPruneCapsAtLookupCoverage(t *testing.T) {
 	if !plan.CanPrune || plan.TargetTail != 81 {
 		t.Fatalf("plan = %+v, want target tail 81", plan)
 	}
-	if plan.CoverageBlock != 80 || plan.CoverageTail != 81 || plan.RetentionTail != 91 {
-		t.Fatalf("plan bounds = %+v, want coverage block/tail 80/81 and retention tail 91", plan)
+	if plan.CoverageBlock != 80 || plan.CoverageTail != 81 || plan.RetentionTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("plan bounds = %+v, want coverage block/tail 80/81 and retention tail %d", plan, chainTailPruneTestRetentionTail)
 	}
 }
 
@@ -140,7 +152,7 @@ func TestPlanChainFreezerTailPruneCapsAtEventLogCoverage(t *testing.T) {
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              200,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        95,
 		HasChainFreezerBlock:     true,
@@ -152,8 +164,8 @@ func TestPlanChainFreezerTailPruneCapsAtEventLogCoverage(t *testing.T) {
 	if !plan.CanPrune || plan.TargetTail != 71 {
 		t.Fatalf("plan = %+v, want target tail 71", plan)
 	}
-	if plan.CoverageBlock != 70 || plan.CoverageTail != 71 || plan.RetentionTail != 91 {
-		t.Fatalf("plan bounds = %+v, want event-log coverage block/tail 70/71 and retention tail 91", plan)
+	if plan.CoverageBlock != 70 || plan.CoverageTail != 71 || plan.RetentionTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("plan bounds = %+v, want event-log coverage block/tail 70/71 and retention tail %d", plan, chainTailPruneTestRetentionTail)
 	}
 }
 
@@ -161,20 +173,20 @@ func TestPlanChainFreezerTailPruneCapsAtRetentionWindow(t *testing.T) {
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              200,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
-		ChainFreezerBlock:        95,
+		ChainFreezerBlock:        150,
 		HasChainFreezerBlock:     true,
-		ChainLookupPruneBlock:    95,
+		ChainLookupPruneBlock:    150,
 		HasChainLookupPruneBlock: true,
-		EventLogBuildBlock:       95,
+		EventLogBuildBlock:       150,
 		HasEventLogBuildBlock:    true,
 	})
-	if !plan.CanPrune || plan.TargetTail != 91 {
-		t.Fatalf("plan = %+v, want target tail 91", plan)
+	if !plan.CanPrune || plan.TargetTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("plan = %+v, want target tail %d", plan, chainTailPruneTestRetentionTail)
 	}
-	if plan.CoverageTail != 96 || plan.RetentionTail != 91 {
-		t.Fatalf("plan bounds = %+v, want coverage tail 96 and retention tail 91", plan)
+	if plan.CoverageTail != 151 || plan.RetentionTail != chainTailPruneTestRetentionTail {
+		t.Fatalf("plan bounds = %+v, want coverage tail 151 and retention tail %d", plan, chainTailPruneTestRetentionTail)
 	}
 }
 
@@ -182,7 +194,7 @@ func TestPlanChainFreezerTailPruneCapsAtAncientHead(t *testing.T) {
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              0,
 		AncientHead:              50,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        95,
 		HasChainFreezerBlock:     true,
@@ -198,9 +210,9 @@ func TestPlanChainFreezerTailPruneCapsAtAncientHead(t *testing.T) {
 
 func TestPlanChainFreezerTailPruneNoopsWhenCurrentTailSatisfiesLimits(t *testing.T) {
 	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
-		CurrentTail:              91,
+		CurrentTail:              96,
 		AncientHead:              200,
-		HeadBlock:                100,
+		HeadBlock:                chainTailPruneTestHeadBlock,
 		RetainBlocks:             10,
 		ChainFreezerBlock:        95,
 		HasChainFreezerBlock:     true,
@@ -209,8 +221,27 @@ func TestPlanChainFreezerTailPruneNoopsWhenCurrentTailSatisfiesLimits(t *testing
 		EventLogBuildBlock:       95,
 		HasEventLogBuildBlock:    true,
 	})
-	if plan.CanPrune || plan.TargetTail != 91 || plan.Reason != chainFreezerTailPruneReasonCurrentTailCovered {
+	if plan.CanPrune || plan.TargetTail != 96 || plan.Reason != chainFreezerTailPruneReasonCurrentTailCovered {
 		t.Fatalf("plan = %+v, want no-op at current tail", plan)
+	}
+}
+
+func TestPlanChainFreezerTailPruneFloorsRetainBlocksForBlockHashWindow(t *testing.T) {
+	plan := PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
+		CurrentTail:              0,
+		AncientHead:              400,
+		HeadBlock:                300,
+		RetainBlocks:             1,
+		ChainFreezerBlock:        300,
+		HasChainFreezerBlock:     true,
+		ChainLookupPruneBlock:    300,
+		HasChainLookupPruneBlock: true,
+		EventLogBuildBlock:       300,
+		HasEventLogBuildBlock:    true,
+	})
+	wantTail := uint64(300 - ChainFreezerTailMinRetainBlocks + 1)
+	if !plan.CanPrune || plan.TargetTail != wantTail || plan.RetentionTail != wantTail {
+		t.Fatalf("plan = %+v, want BLOCKHASH-floored target/retention tail %d", plan, wantTail)
 	}
 }
 
@@ -237,12 +268,12 @@ func TestPlanChainFreezerTailPruneFromDB(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 95)
-	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
+	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, chainTailPruneTestHeadBlock, 10)
 	if err != nil {
 		t.Fatalf("PlanChainFreezerTailPruneFromDB: %v", err)
 	}
-	if !plan.CanPrune || plan.TargetTail != 91 {
-		t.Fatalf("plan from db = %+v, want target tail 91", plan)
+	if !plan.CanPrune || plan.TargetTail != 96 {
+		t.Fatalf("plan from db = %+v, want target tail 96", plan)
 	}
 }
 
@@ -281,7 +312,7 @@ func TestPlanChainFreezerTailPruneFromDBCapsMissingEventLogStageAtGenesis(t *tes
 	db := rawdb.NewMemoryDatabase()
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 95)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 95)
-	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, 100, 10)
+	plan, err := PlanChainFreezerTailPruneFromDB(db, 0, 200, chainTailPruneTestHeadBlock, 10)
 	if err != nil {
 		t.Fatalf("PlanChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -316,7 +347,7 @@ func TestApplyChainFreezerTailPruneFromDBAllowsGenesisOnlyWithoutEventLogStage(t
 	db := rawdb.NewMemoryDatabase()
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 1)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 1)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(1), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -373,7 +404,7 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -436,7 +467,7 @@ func TestApplyChainFreezerTailPruneFromDBRepairsMissingStageAfterTailMoved(t *te
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -482,7 +513,7 @@ func TestApplyChainFreezerTailPruneFromDBRejectsStageHashConflictBeforeTruncate(
 		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
 	}
 
-	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(1), 3)
 	if err == nil || !strings.Contains(err.Error(), "does not match pruned block hash") {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB err = %v, want stage hash conflict", err)
 	}
@@ -522,7 +553,7 @@ func TestApplyChainFreezerTailPruneFromDBRejectsStageAheadBeforeTruncate(t *test
 		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
 	}
 
-	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, 10, 3)
+	_, err = ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(1), 3)
 	if err == nil || !strings.Contains(err.Error(), "stage 1 is ahead of pruned block 0") {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB err = %v, want stage-ahead rejection", err)
 	}
@@ -558,7 +589,7 @@ func TestApplyChainFreezerTailPruneRequiresEventLogColdCoverage(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -598,7 +629,7 @@ func TestApplyChainFreezerTailPruneRequiresEventLogIndexCoverage(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -635,7 +666,7 @@ func TestApplyChainFreezerTailPruneRequiresChainIndexColdCoverage(t *testing.T) 
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -660,7 +691,7 @@ func TestApplyChainFreezerTailPruneFromDBRequiresColdCoverage(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, rawdb.NoopAncient{}, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, rawdb.NoopAncient{}, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -708,7 +739,7 @@ func TestApplyChainFreezerTailPruneRejectsColdCoverageGap(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -757,7 +788,7 @@ func TestApplyChainFreezerTailPruneRejectsUnreadableColdCoverageSegment(t *testi
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 8)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 8)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(7), 3)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}
@@ -817,7 +848,7 @@ func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 10)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 10)
 	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 10)
-	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 11, 4)
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, chainTailPruneHeadForRetentionTail(8), 4)
 	if err != nil {
 		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
 	}

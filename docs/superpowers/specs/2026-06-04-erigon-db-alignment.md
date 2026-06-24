@@ -906,6 +906,9 @@ Status:
   `SnapshotChainLookupPrune`, and `SnapshotEventLogBuild` stage progress,
   converts inclusive coverage block `N` into freezer tail `N+1`, and caps the
   target by the ancient append head plus the recent-block retention window.
+  The planner itself floors non-zero retention to the 256-block TVM
+  `BLOCKHASH` window, so lower operator windows or direct helper calls cannot
+  hide ancient blocks that execution may still read.
   DB-backed planning now reads those dependency stages through hash-bound
   verification, using the freezer/snapshot-aware chain reader when local hot
   block bodies have already moved cold. The event-log build boundary keeps

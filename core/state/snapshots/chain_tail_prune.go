@@ -41,7 +41,8 @@ type ChainFreezerTailPrunePlanInput struct {
 	HeadBlock uint64
 
 	// RetainBlocks is the number of recent canonical blocks that must remain
-	// readable from local hot/ancient storage. Zero disables pruning.
+	// readable from local hot/ancient storage. Zero disables pruning; non-zero
+	// values are floored to the TVM BLOCKHASH safety window.
 	RetainBlocks uint64
 
 	// ChainFreezerBlock is the highest block whose numbered chain rows are
@@ -144,9 +145,10 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonTailAboveAncientHead)
 	}
 
+	retainBlocks := EffectiveChainFreezerTailRetainBlocks(input.RetainBlocks)
 	coverageBlock := minUint64(input.ChainFreezerBlock, input.ChainLookupPruneBlock)
 	coverageTail := tailAfterInclusiveBlock(coverageBlock)
-	retentionTail := retainedHistoryTail(input.HeadBlock, input.RetainBlocks)
+	retentionTail := retainedHistoryTail(input.HeadBlock, retainBlocks)
 	targetTail := minUint64(coverageTail, retentionTail)
 	targetTail = minUint64(targetTail, input.AncientHead)
 	if targetTail > 1 {
