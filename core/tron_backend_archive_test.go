@@ -21,6 +21,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm/tracers"
 )
 
 // Archive-query RPC surface over flat temporal state history.
@@ -2113,6 +2114,18 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 		}
 		if gas == 0 {
 			t.Fatalf("%s EstimateGasAt(contract, %d) = 0, want positive energy", label, blockNum)
+		}
+		trace, err := b.TraceCall(&witness, &contract, nil, 0, &blockNum, &tracers.TraceConfig{})
+		if err != nil {
+			t.Fatalf("%s TraceCall(contract, %d): %v", label, blockNum, err)
+		}
+		exec, ok := trace.(*tracers.ExecutionResult)
+		if !ok {
+			t.Fatalf("%s TraceCall(contract, %d) result type = %T, want *ExecutionResult", label, blockNum, trace)
+		}
+		if exec.Failed || !strings.HasSuffix(exec.ReturnValue, hex.EncodeToString([]byte{want})) {
+			t.Fatalf("%s TraceCall(contract, %d) failed=%v return=%s, want trailing 0x%02x",
+				label, blockNum, exec.Failed, exec.ReturnValue, want)
 		}
 	}
 

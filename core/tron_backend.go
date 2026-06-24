@@ -235,7 +235,11 @@ func (b *TronBackend) GetContractAt(addr tcommon.Address, blockNum uint64) (*con
 func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	current := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()
-	return b.triggerConstantContractAtRoot(owner, contractAddr, data, energyLimit, root, current, nil, 0)
+	historyBlock := uint64(0)
+	if current != nil {
+		historyBlock = current.Number()
+	}
+	return b.triggerConstantContractAtRoot(owner, contractAddr, data, energyLimit, root, current, nil, historyBlock)
 }
 
 func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
@@ -272,28 +276,9 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 	if block == nil {
 		return nil, fmt.Errorf("block context not available")
 	}
-	if root == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("state root for block %d not available", block.Number())
-	}
-	statedb, err := b.chain.openState(root)
+	statedbCopy, err := b.archiveExecutionState(root, block.Number(), history, historyBlock)
 	if err != nil {
-		return nil, fmt.Errorf("open state: %w", err)
-	}
-
-	// Use a copy of state so read-only calls don't pollute
-	statedbCopy, err := statedb.Copy()
-	if err != nil {
-		return nil, fmt.Errorf("copy state: %w", err)
-	}
-	if history != nil {
-		statedbCopy.SetHistoricalLatestView(history, historyBlock)
-		if codeColdHistory, ok := b.stateColdHistory.(state.StateCodeColdHistoryAtOrBefore); ok {
-			txNum, err := b.archiveStateTxNumAtBlockEnd(historyBlock)
-			if err != nil {
-				return nil, fmt.Errorf("resolve archive code txnum for block %d: %w", historyBlock, err)
-			}
-			statedbCopy.SetCodeColdHistory(codeColdHistory, txNum)
-		}
+		return nil, err
 	}
 
 	if energyLimit <= 0 {
@@ -341,6 +326,34 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 	}, nil
 }
 
+func (b *TronBackend) archiveExecutionState(root tcommon.Hash, blockNum uint64, history *state.PersistentHistoryReader, historyBlock uint64) (*state.StateDB, error) {
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("state root for block %d not available", blockNum)
+	}
+	statedb, err := b.chain.openState(root)
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+
+	statedbCopy, err := statedb.Copy()
+	if err != nil {
+		return nil, fmt.Errorf("copy state: %w", err)
+	}
+	if history == nil {
+		return statedbCopy, nil
+	}
+
+	statedbCopy.SetHistoricalLatestView(history, historyBlock)
+	if codeColdHistory, ok := b.stateColdHistory.(state.StateCodeColdHistoryAtOrBefore); ok {
+		txNum, err := b.archiveStateTxNumAtBlockEnd(historyBlock)
+		if err != nil {
+			return nil, fmt.Errorf("resolve archive code txnum for block %d: %w", historyBlock, err)
+		}
+		statedbCopy.SetCodeColdHistory(codeColdHistory, txNum)
+	}
+	return statedbCopy, nil
+}
+
 // traceEnergyCap is the generous energy ceiling for debug_trace* simulations.
 // geth uses a high gas cap for traces so the call runs to completion regardless
 // of the caller's fee limit; the struct logger's `limit` bounds the output.
@@ -366,19 +379,20 @@ func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value in
 		return nil, err
 	}
 
-	statedbCopy, dp, blockNum, blockTime, err := b.traceStateContext(blockNumber)
+	statedbCopy, dp, block, release, err := b.traceStateContext(blockNumber)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
-	tvmCfg := vm.NewTVMConfig(blockNum, dp)
+	tvmCfg := vm.NewTVMConfig(block.Number(), dp)
 	tvmCfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	tvmCfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	tvmCfg.Tracer = tracer
 
-	evm := vm.NewTVM(statedbCopy, dp, owner, blockNum, blockTime, tcommon.Address{}, 1, tvmCfg)
+	evm := vm.NewTVM(statedbCopy, dp, owner, block.Number(), block.Timestamp(), tcommon.Address{}, 1, tvmCfg)
 	evm.SetDB(b.chain.vmKV(b.chain.buffer))
 
 	// The tracer captures the full execution; a revert/VM error is surfaced
@@ -392,46 +406,52 @@ func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value in
 // block number yields a copy of live head state with the cached head dynprops;
 // a concrete number yields a copy of archive state as of that block with the
 // dynprops rooted at that block (so fork gates match the historical block).
-func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *state.DynamicProperties, uint64, int64, error) {
+func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *state.DynamicProperties, *types.Block, func(), error) {
+	release := func() {}
 	if blockNumber == nil {
 		current := b.chain.CurrentBlock()
-		statedb, err := b.chain.openState(b.chain.HeadStateRoot())
-		if err != nil {
-			return nil, nil, 0, 0, fmt.Errorf("open state: %w", err)
+		if current == nil {
+			return nil, nil, nil, release, fmt.Errorf("current block not available")
 		}
-		statedbCopy, err := statedb.Copy()
+		statedbCopy, err := b.archiveExecutionState(b.chain.HeadStateRoot(), current.Number(), nil, current.Number())
 		if err != nil {
-			return nil, nil, 0, 0, fmt.Errorf("copy state: %w", err)
+			return nil, nil, nil, release, err
 		}
-		return statedbCopy, b.chain.DynProps(), current.Number(), current.Timestamp(), nil
+		dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+		dp.SetLatestBlockHeaderNumber(int64(current.Number()))
+		dp.SetLatestBlockHeaderTimestamp(current.Timestamp())
+		dp.SetLatestBlockHeaderHash(current.Hash())
+		return statedbCopy, dp, current, release, nil
 	}
 
 	num := *blockNumber
-	block := b.chain.GetBlockByNumber(num)
+	block, err := b.GetBlockByNumber(num)
+	if err != nil {
+		return nil, nil, nil, release, err
+	}
 	if block == nil {
-		return nil, nil, 0, 0, fmt.Errorf("block %d not found", num)
+		return nil, nil, nil, release, fmt.Errorf("block %d not found", num)
 	}
-	headNum := b.chain.CurrentBlock().Number()
-	if num == headNum {
-		return b.traceStateContext(nil)
-	}
-	if err := b.requireArchive(num, headNum); err != nil {
-		return nil, nil, 0, 0, err
-	}
-	root := b.chain.StateRootAtBlock(num)
-	if root == (tcommon.Hash{}) {
-		return nil, nil, 0, 0, fmt.Errorf("no state root for block %d", num)
-	}
-	statedb, err := b.chain.openState(root)
+	session, err := b.archiveStateAt(num)
 	if err != nil {
-		return nil, nil, 0, 0, fmt.Errorf("open archive state at block %d: %w", num, err)
+		return nil, nil, nil, release, err
 	}
-	statedbCopy, err := statedb.Copy()
+	release = session.Close
+	root, err := b.archiveExecutionRoot(num, session)
 	if err != nil {
-		return nil, nil, 0, 0, fmt.Errorf("copy state: %w", err)
+		release()
+		return nil, nil, nil, func() {}, err
+	}
+	statedbCopy, err := b.archiveExecutionState(root, num, session.reader, num)
+	if err != nil {
+		release()
+		return nil, nil, nil, func() {}, err
 	}
 	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
-	return statedbCopy, dp, num, block.Timestamp(), nil
+	dp.SetLatestBlockHeaderNumber(int64(block.Number()))
+	dp.SetLatestBlockHeaderTimestamp(block.Timestamp())
+	dp.SetLatestBlockHeaderHash(block.Hash())
+	return statedbCopy, dp, block, release, nil
 }
 
 // TraceTransaction re-executes a historical transaction with the configured
@@ -443,16 +463,21 @@ func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *s
 // disagrees with the recorded block (the exact case debug_traceTransaction is
 // meant to diagnose).
 func (b *TronBackend) TraceTransaction(hash tcommon.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
-	blockNumPtr := rawdb.ReadTransactionIndex(b.chain.chaindb, hash[:])
-	if blockNumPtr == nil {
+	blockNum, ok, err := rawdb.ReadTransactionIndexStrict(b.chain.chaindb, hash[:])
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, fmt.Errorf("transaction %x not found", hash)
 	}
-	blockNum := *blockNumPtr
 	if blockNum == 0 {
 		return nil, fmt.Errorf("cannot trace a genesis-block transaction")
 	}
-	block := b.chain.GetBlockByNumber(blockNum)
-	if block == nil {
+	block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !hasBlock {
 		return nil, fmt.Errorf("block %d not found", blockNum)
 	}
 	txIndex := -1
@@ -469,21 +494,18 @@ func (b *TronBackend) TraceTransaction(hash tcommon.Hash, cfg *tracers.TraceConf
 	// Reproduce the tx's pre-state: open the parent block's post-state and replay
 	// this block's transactions up to and including the target.
 	parentNum := blockNum - 1
-	headNum := b.chain.CurrentBlock().Number()
-	if err := b.requireArchive(parentNum, headNum); err != nil {
+	session, err := b.archiveStateAt(parentNum)
+	if err != nil {
 		return nil, err
 	}
-	parentRoot := b.chain.StateRootAtBlock(parentNum)
-	if parentRoot == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("no state root for parent block %d", parentNum)
-	}
-	parentState, err := b.chain.openState(parentRoot)
+	defer session.Close()
+	parentRoot, err := b.archiveExecutionRoot(parentNum, session)
 	if err != nil {
-		return nil, fmt.Errorf("open parent state at block %d: %w", parentNum, err)
+		return nil, err
 	}
-	statedbCopy, err := parentState.Copy()
+	statedbCopy, err := b.archiveExecutionState(parentRoot, parentNum, session.reader, parentNum)
 	if err != nil {
-		return nil, fmt.Errorf("copy state: %w", err)
+		return nil, err
 	}
 	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
 

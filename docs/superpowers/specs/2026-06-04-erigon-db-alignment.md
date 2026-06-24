@@ -1668,6 +1668,11 @@ Status:
   before any API-specific reconstruction starts. Regression coverage proves the
   lock is held for successful sessions and released when the gate rejects a
   query.
+- JSON-RPC `debug_traceCall` and `debug_traceTransaction` now use the same
+  archive execution-state setup as `eth_call`: historical traces can run from
+  cold state-domain/code snapshots after hot block state roots, latest rows, and
+  code rows are pruned, and transaction tracing uses strict tx/block readers so
+  corrupt archive rows surface instead of looking like misses.
 - Event-log archive reads now include backend coverage for block-hash single
   block filters after hot transaction-info rows are removed, proving the cold
   event-log segment path is not limited to from/to range filters. A stronger
