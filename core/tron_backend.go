@@ -98,8 +98,9 @@ func (b *TronBackend) SetPeerLister(fn func() []*tronapi.PeerInfo) {
 }
 
 // SetStateColdHistory wires snapshot-backed flat history into archive reads.
-// Hot history remains the primary source; this reader only supplies pruned
-// StateDomainChange rows that have been moved to cold snapshot segments.
+// Hot rows remain the primary source; this reader supplies pruned
+// StateDomainChange rows and, when present, cold latest-domain segments after
+// hot latest rows have been moved out of Pebble.
 func (b *TronBackend) SetStateColdHistory(source state.StateDomainChangeColdHistory) {
 	b.stateColdHistory = source
 }

@@ -17,6 +17,12 @@ type hotStateLatestReader interface {
 	Code(hash tcommon.Hash) ([]byte, bool, error)
 }
 
+type coldStateLatestReader interface {
+	GetAccountLatest(owner tcommon.Address, txNum uint64) ([]byte, bool, error)
+	GetKVLatest(domain kvdomains.KVDomain, owner tcommon.Address, generation uint64, key []byte, txNum uint64) ([]byte, bool, error)
+	GetKVGeneration(owner tcommon.Address, txNum uint64) (uint64, bool, error)
+}
+
 type registryHotStateLatestReader struct {
 	db       ethdb.KeyValueReader
 	registry snapshots.DomainRegistry
@@ -76,8 +82,76 @@ func (r *PersistentHistoryReader) hotLatest() hotStateLatestReader {
 	return newRegistryHotStateLatestReader(r.db, snapshots.DefaultDomainRegistry())
 }
 
+func (r *PersistentHistoryReader) latestAtTxNum(txNum uint64) hotStateLatestReader {
+	hot := r.hotLatest()
+	if r == nil || r.coldHistory == nil {
+		return hot
+	}
+	cold, ok := r.coldHistory.(coldStateLatestReader)
+	if !ok {
+		return hot
+	}
+	return coldFallbackStateLatestReader{
+		hot:   hot,
+		cold:  cold,
+		txNum: txNum,
+	}
+}
+
 func defaultHotLatest(db ethdb.KeyValueReader) hotStateLatestReader {
 	return newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry())
+}
+
+type coldFallbackStateLatestReader struct {
+	hot   hotStateLatestReader
+	cold  coldStateLatestReader
+	txNum uint64
+}
+
+func (r coldFallbackStateLatestReader) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
+	if r.hot != nil {
+		value, ok, err := r.hot.AccountLatest(owner)
+		if err != nil || ok {
+			return value, ok, err
+		}
+	}
+	if r.cold == nil {
+		return nil, false, nil
+	}
+	return r.cold.GetAccountLatest(owner, r.txNum)
+}
+
+func (r coldFallbackStateLatestReader) KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if r.hot != nil {
+		value, ok, err := r.hot.KVLatest(owner, generation, domain, key)
+		if err != nil || ok {
+			return value, ok, err
+		}
+	}
+	if r.cold == nil {
+		return nil, false, nil
+	}
+	return r.cold.GetKVLatest(domain, owner, generation, key, r.txNum)
+}
+
+func (r coldFallbackStateLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
+	if r.hot != nil {
+		generation, ok, err := r.hot.KVGeneration(owner)
+		if err != nil || ok {
+			return generation, ok, err
+		}
+	}
+	if r.cold == nil {
+		return 0, false, nil
+	}
+	return r.cold.GetKVGeneration(owner, r.txNum)
+}
+
+func (r coldFallbackStateLatestReader) Code(hash tcommon.Hash) ([]byte, bool, error) {
+	if r.hot == nil {
+		return nil, false, nil
+	}
+	return r.hot.Code(hash)
 }
 
 func decodeHotAccountEnvelope(latest hotStateLatestReader, addr tcommon.Address) (*StateAccountV2, bool, error) {

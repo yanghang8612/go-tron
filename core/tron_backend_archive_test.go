@@ -1961,6 +1961,10 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 	if err != nil || !ok {
 		t.Fatalf("read block 3 tx range: ok=%v err=%v", ok, err)
 	}
+	range4, ok, err := rawdb.ReadStateTxRange(bc.buffer, 4)
+	if err != nil || !ok {
+		t.Fatalf("read block 4 tx range: ok=%v err=%v", ok, err)
+	}
 
 	contract := testInsertAddr(42)
 	slot := tcommon.Hash{0xAA}
@@ -2051,12 +2055,34 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 	if err != nil {
 		t.Fatalf("build cold state-domain-change segment: %v", err)
 	}
-	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(bc.buffer, dir, range2.BeginTxNum, range3.EndTxNum, "latest/code-2-3.seg")
+	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(bc.buffer, dir, range2.BeginTxNum, range4.EndTxNum, "latest/accounts-code-storage-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold account latest segment: %v", err)
+	}
+	kvGenerationRef, kvGenerationAccessorRef, kvGenerationBTreeRef, err := statesnapshots.BuildKVGenerationSegmentFilesFromDB(bc.buffer, dir, range2.BeginTxNum, range4.EndTxNum, "latest/kv-generation-code-storage-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold kv generation segment: %v", err)
+	}
+	metadataRef, metadataAccessorRef, metadataBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(bc.buffer, dir, kvdomains.ContractMetadata, range2.BeginTxNum, range4.EndTxNum, "latest/contract-metadata-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold contract metadata segment: %v", err)
+	}
+	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(bc.buffer, dir, kvdomains.ContractStorage, range2.BeginTxNum, range4.EndTxNum, "latest/contract-storage-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold contract storage segment: %v", err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(bc.buffer, dir, range2.BeginTxNum, range4.EndTxNum, "latest/code-2-4.seg")
 	if err != nil {
 		t.Fatalf("build cold code segment: %v", err)
 	}
-	refs := append(historyRefs, codeRef, codeAccessorRef, codeBTreeRef)
-	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range3.EndTxNum, refs)); err != nil {
+	refs := append(historyRefs,
+		accountRef, accountAccessorRef, accountBTreeRef,
+		kvGenerationRef, kvGenerationAccessorRef, kvGenerationBTreeRef,
+		metadataRef, metadataAccessorRef, metadataBTreeRef,
+		storageRef, storageAccessorRef, storageBTreeRef,
+		codeRef, codeAccessorRef, codeBTreeRef,
+	)
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range4.EndTxNum, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
 	mgr, err := statesnapshots.OpenManager(dir)
@@ -2098,6 +2124,24 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 		if err := rawdb.DeleteStateTxRange(bc.buffer, n); err != nil {
 			t.Fatalf("DeleteStateTxRange(%d): %v", n, err)
 		}
+	}
+	generation, generationExists, err := rawdb.ReadStateKVGeneration(bc.buffer, contract)
+	if err != nil {
+		t.Fatalf("ReadStateKVGeneration(contract): %v", err)
+	}
+	if err := rawdb.DeleteStateAccountLatest(bc.buffer, contract); err != nil {
+		t.Fatalf("delete hot account latest: %v", err)
+	}
+	if generationExists {
+		if err := rawdb.DeleteStateKVGeneration(bc.buffer, contract); err != nil {
+			t.Fatalf("delete hot kv generation: %v", err)
+		}
+	}
+	if err := rawdb.DeleteStateKVLatest(bc.buffer, contract, generation, kvdomains.ContractMetadata, []byte("meta")); err != nil {
+		t.Fatalf("delete hot contract metadata: %v", err)
+	}
+	if err := rawdb.DeleteStateKVLatestPrefix(bc.buffer, contract, generation, kvdomains.ContractStorage, nil); err != nil {
+		t.Fatalf("delete hot contract storage latest: %v", err)
 	}
 	if err := rawdb.DeleteStateCode(bc.buffer, codeHash2); err != nil {
 		t.Fatalf("delete hot code2: %v", err)

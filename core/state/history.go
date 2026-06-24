@@ -561,7 +561,8 @@ func (r *PersistentHistoryReader) readStateAccountLatestAsOf(owner tcommon.Addre
 		}
 		return cfg.ReadHotAccountLatestAsOf(r.db, owner, targetTxNum, headTxNum)
 	}
-	value, exists, err := r.hotLatest().AccountLatest(owner)
+	latest := r.latestAtTxNum(headTxNum)
+	value, exists, err := latest.AccountLatest(owner)
 	if err != nil {
 		return nil, false, err
 	}
@@ -601,7 +602,8 @@ func (r *PersistentHistoryReader) readStateKVAsOfTxNum(owner tcommon.Address, ge
 		}
 		return cfg.ReadHotKVLatestAsOf(r.db, owner, generation, domain, key, targetTxNum, headTxNum)
 	}
-	value, exists, err := r.hotLatest().KVLatest(owner, generation, domain, key)
+	latest := r.latestAtTxNum(headTxNum)
+	value, exists, err := latest.KVLatest(owner, generation, domain, key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -666,7 +668,8 @@ func (r *PersistentHistoryReader) readStateKVGenerationAsOfTxNum(owner tcommon.A
 		}
 		return cfg.ReadHotKVGenerationAsOf(r.db, owner, targetTxNum, headTxNum)
 	}
-	generation, exists, err := r.hotLatest().KVGeneration(owner)
+	latest := r.latestAtTxNum(headTxNum)
+	generation, exists, err := latest.KVGeneration(owner)
 	if err != nil {
 		return 0, false, err
 	}
@@ -712,11 +715,12 @@ func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, 
 		}
 		return cfg.ReadHotAccountKVAsOf(r.db, owner, domain, key, targetTxNum, headTxNum)
 	}
-	generation, _, err := r.hotLatest().KVGeneration(owner)
+	latest := r.latestAtTxNum(headTxNum)
+	generation, _, err := latest.KVGeneration(owner)
 	if err != nil {
 		return nil, false, err
 	}
-	value, exists, err := r.hotLatest().KVLatest(owner, generation, domain, key)
+	value, exists, err := latest.KVLatest(owner, generation, domain, key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -740,7 +744,7 @@ func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, 
 				if err != nil {
 					return nil, false, err
 				}
-				value, exists, err = r.hotLatest().KVLatest(owner, generation, domain, key)
+				value, exists, err = latest.KVLatest(owner, generation, domain, key)
 				if err != nil {
 					return nil, false, err
 				}
