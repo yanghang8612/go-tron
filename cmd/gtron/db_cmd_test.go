@@ -100,6 +100,20 @@ func TestDBRebuildToBlockSurfacesHeadLookupErrors(t *testing.T) {
 	}
 }
 
+func TestDBBalanceTraceReplayHeadBlockNumberSurfacesLookupErrors(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	head := common.Hash{0x43}
+	chainDB.SetChainIndexReader(dbRebuildErrChainIndex{err: fmt.Errorf("cold chain index corrupt")})
+
+	_, err := dbBalanceTraceReplayHeadBlockNumber(chainDB, head)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("dbBalanceTraceReplayHeadBlockNumber err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "balance trace replay snapshot seed: existing replay head") {
+		t.Fatalf("dbBalanceTraceReplayHeadBlockNumber err = %v, want replay seed context", err)
+	}
+}
+
 func TestDBRebuildSectionBloomsCmd(t *testing.T) {
 	dataDir := t.TempDir()
 	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)

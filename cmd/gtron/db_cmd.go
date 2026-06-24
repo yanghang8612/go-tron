@@ -2151,12 +2151,12 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	replayChain := rawdb.NewChainDB(replayDB, rawdb.NoopAncient{})
 	headHash := rawdb.ReadHeadBlockHash(replayChain)
 	if headHash != (common.Hash{}) {
-		headNum := rawdb.ReadBlockNumber(replayChain, headHash)
-		if headNum == nil {
-			return nil, fmt.Errorf("balance trace replay snapshot seed: existing replay head %x has no block number", headHash)
+		headNum, err := dbBalanceTraceReplayHeadBlockNumber(replayChain, headHash)
+		if err != nil {
+			return nil, err
 		}
-		if *headNum > 0 {
-			result.ExistingHeadBlock = *headNum
+		if headNum > 0 {
+			result.ExistingHeadBlock = headNum
 			result.Skipped = true
 			return result, nil
 		}
@@ -2223,6 +2223,17 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	result.Boundary = boundary
 	result.CopiedRecentBlocks = copied
 	return result, nil
+}
+
+func dbBalanceTraceReplayHeadBlockNumber(chain *rawdb.ChainDB, headHash common.Hash) (uint64, error) {
+	headNum, ok, err := rawdb.ReadBlockNumberStrict(chain, headHash)
+	if err != nil {
+		return 0, fmt.Errorf("balance trace replay snapshot seed: existing replay head %x block number lookup: %w", headHash, err)
+	}
+	if !ok {
+		return 0, fmt.Errorf("balance trace replay snapshot seed: existing replay head %x has no block number", headHash)
+	}
+	return headNum, nil
 }
 
 func dbWriteGenesisWitnesses(db ethdb.KeyValueWriter, genesis *params.Genesis) {
