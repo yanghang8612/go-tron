@@ -45,6 +45,7 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 
 // Run executes the contract's bytecode. Returns the result data and any error.
 func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
+	traceInit()
 	var (
 		pc    uint64 = 0
 		mem          = newMemory()
@@ -127,6 +128,12 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			if !in.useEnergy(contract, operation.energyCost) {
 				return nil, in.outOfEnergyError()
 			}
+		}
+
+		// Opt-in opcode trace (GTRON_TVM_TRACE): record the pre-execute stack so
+		// a comparison's operands are visible. No-op unless tracing is enabled.
+		if traceEnabled {
+			in.traceStep(contract.Address, pc, op, stack)
 		}
 
 		// Execute
