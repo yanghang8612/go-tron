@@ -104,9 +104,26 @@ func (r *PersistentHistoryReader) latestAtHead() (hotStateLatestReader, error) {
 	if r == nil || r.coldHistory == nil {
 		return hot, nil
 	}
-	headTxNum, err := r.stateTxNumAtBlockEnd(r.headNum)
+	row, ok, err := r.stateTxRangeForBlock(r.headNum)
 	if err != nil {
 		return nil, err
+	}
+	if ok {
+		if row.EndTxNum < row.BeginTxNum {
+			return nil, errors.New("state history: invalid stored state tx range")
+		}
+		return r.latestAtTxNum(row.EndTxNum), nil
+	}
+	cold, ok := r.coldHistory.(StateLatestColdTxNum)
+	if !ok {
+		return hot, nil
+	}
+	headTxNum, ok, err := cold.LatestStateTxNum()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return hot, nil
 	}
 	return r.latestAtTxNum(headTxNum), nil
 }

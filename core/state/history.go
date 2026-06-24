@@ -260,6 +260,11 @@ type StateCodeColdHistoryAtOrBefore interface {
 	GetCodeAtOrBefore(hash tcommon.Hash, txNum uint64) ([]byte, bool, error)
 }
 
+// StateLatestColdTxNum reports the txNum boundary for cold latest snapshots.
+type StateLatestColdTxNum interface {
+	LatestStateTxNum() (uint64, bool, error)
+}
+
 // reqCacheKey identifies one (kind, addr [, slot], blockNum) cache entry.
 type reqCacheKey struct {
 	kind     uint8 // 0=account, 1=code, 2=storage

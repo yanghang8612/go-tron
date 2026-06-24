@@ -358,6 +358,80 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	}
 }
 
+func TestPersistentHistoryReaderHeadLatestUsesColdSnapshotTxNumWithoutStateRange(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x83)
+	var slot tcommon.Hash
+	slot[31] = 0x83
+	value := tcommon.HexToHash("83")
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(addr, corepb.AccountType_Contract)
+		s.AddBalance(addr, 83)
+		s.SetState(addr, slot, value)
+	})
+
+	dir := t.TempDir()
+	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(
+		f.disk,
+		dir,
+		100,
+		110,
+		"latest/account-100-110.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold account latest: %v", err)
+	}
+	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		kvdomains.ContractStorage,
+		100,
+		110,
+		"latest/contract-storage-100-110.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold contract storage latest: %v", err)
+	}
+	manifest := statesnapshots.NewManifest(100, 110, []statesnapshots.SegmentRef{
+		accountRef, accountAccessorRef, accountBTreeRef,
+		storageRef, storageAccessorRef, storageBTreeRef,
+	})
+	if err := statesnapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("publish cold latest manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	if err := rawdb.DeleteStateTxRange(f.disk, f.head); err != nil {
+		t.Fatalf("delete hot head tx range: %v", err)
+	}
+	if err := rawdb.DeleteStateAccountLatest(f.disk, addr); err != nil {
+		t.Fatalf("delete hot account latest: %v", err)
+	}
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, addr, 0, kvdomains.ContractStorage, nil); err != nil {
+		t.Fatalf("delete hot contract storage latest: %v", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	acc, err := cold.AccountAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold AccountAt head without tx range: %v", err)
+	}
+	if acc == nil || acc.Balance() != 83 {
+		t.Fatalf("cold AccountAt head without tx range = %+v, want balance 83", acc)
+	}
+	gotStorage, err := cold.StorageAt(addr, slot, f.head)
+	if err != nil {
+		t.Fatalf("cold StorageAt head without tx range: %v", err)
+	}
+	if gotStorage != value {
+		t.Fatalf("cold StorageAt head without tx range = %x, want %x", gotStorage, value)
+	}
+}
+
 func TestPersistentHistoryReaderAccountKVPrefixAtUsesStateDomainHistory(t *testing.T) {
 	f := newHistoryFixture(t)
 	owner := testAddr(0x77)

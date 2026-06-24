@@ -766,6 +766,30 @@ func (m *Manager) Manifest() *Manifest {
 	return &cp
 }
 
+// LatestStateTxNum reports the manifest txNum boundary for cold latest reads.
+func (m *Manager) LatestStateTxNum() (uint64, bool, error) {
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return 0, false, err
+	}
+	hasLatest := false
+	registry := DefaultDomainRegistry()
+	for _, ref := range manifest.Segments {
+		cfg, ok := registry.ConfigForRef(ref)
+		if ok && cfg.HasLatest && ref.Kind == SegmentLatest {
+			hasLatest = true
+			break
+		}
+	}
+	if !hasLatest {
+		return 0, false, nil
+	}
+	if manifest.Progress != nil && manifest.Progress.LatestBuildTxNum != 0 {
+		return manifest.Progress.LatestBuildTxNum, true, nil
+	}
+	return manifest.VisibleTxEnd, true, nil
+}
+
 func (m *Manager) GetLatest(domain kvdomains.KVDomain, key []byte, txNum uint64) ([]byte, bool, error) {
 	return m.getLatestValue(SegmentDatasetKVLatest, domain, key, txNum)
 }
