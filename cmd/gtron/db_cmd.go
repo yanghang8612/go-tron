@@ -2321,14 +2321,17 @@ func dbRebuildToBlock(ctx *cli.Context, chainDB *rawdb.ChainDB) (uint64, error) 
 	if head == (common.Hash{}) {
 		return 0, fmt.Errorf("db rebuild requires --db.to-block when no head block is recorded")
 	}
-	num := rawdb.ReadBlockNumber(chainDB, head)
-	if num == nil {
+	num, ok, err := rawdb.ReadBlockNumberStrict(chainDB, head)
+	if err != nil {
+		return 0, fmt.Errorf("db rebuild resolve head block number for hash %x: %w", head[:], err)
+	}
+	if !ok {
 		return 0, fmt.Errorf("db rebuild cannot resolve head block number for hash %x", head[:])
 	}
-	if *num < ctx.Uint64("db.from-block") {
-		return 0, fmt.Errorf("db rebuild block range [%d,%d] is inverted", ctx.Uint64("db.from-block"), *num)
+	if num < ctx.Uint64("db.from-block") {
+		return 0, fmt.Errorf("db rebuild block range [%d,%d] is inverted", ctx.Uint64("db.from-block"), num)
 	}
-	return *num, nil
+	return num, nil
 }
 
 func dbETLOptions(ctx *cli.Context) (etl.Options, error) {

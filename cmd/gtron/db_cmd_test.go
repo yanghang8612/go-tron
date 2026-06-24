@@ -87,6 +87,19 @@ func TestDBRebuildTxIndexesCmdDefaultsToHead(t *testing.T) {
 	}
 }
 
+func TestDBRebuildToBlockSurfacesHeadLookupErrors(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	head := common.Hash{0x42}
+	rawdb.WriteHeadBlockHash(chainDB, head)
+	chainDB.SetChainIndexReader(dbRebuildErrChainIndex{err: fmt.Errorf("cold chain index corrupt")})
+
+	ctx := makeDBTestContext(t, []string{"--db.from-block", "1"})
+	_, err := dbRebuildToBlock(ctx, chainDB)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("dbRebuildToBlock err = %v, want cold chain index error", err)
+	}
+}
+
 func TestDBRebuildSectionBloomsCmd(t *testing.T) {
 	dataDir := t.TempDir()
 	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
@@ -2822,6 +2835,18 @@ func dbRebuildBlockBalanceID(block *coretypes.Block) *contractpb.BlockBalanceTra
 		Hash:   append([]byte(nil), block.Hash().Bytes()...),
 		Number: int64(block.Number()),
 	}
+}
+
+type dbRebuildErrChainIndex struct {
+	err error
+}
+
+func (r dbRebuildErrChainIndex) BlockNumberByHash(common.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+func (r dbRebuildErrChainIndex) TransactionBlockNumberByHash(common.Hash) (uint64, bool, error) {
+	return 0, false, r.err
 }
 
 func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
