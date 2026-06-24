@@ -201,7 +201,9 @@ func TestTotalEnergyLimitWithFixRatio_PreChargesOriginAtPercent100(t *testing.T)
 	}
 
 	result := &Result{}
-	totalEnergyLimitWithFixRatio(ctx, origin, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+	if _, err := totalEnergyLimitWithFixRatio(ctx, origin, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result); err != nil {
+		t.Fatalf("totalEnergyLimitWithFixRatio returned error: %v", err)
+	}
 
 	if got := ctx.State.GetLatestConsumeTimeForEnergy(origin); got != ctx.HeadSlot {
 		t.Fatalf("origin lastConsumeTimeForEnergy = %d, want now=%d "+

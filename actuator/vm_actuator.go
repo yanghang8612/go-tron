@@ -336,7 +336,16 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	result := &Result{}
 	result.ContractAddress = contractAddr[:]
-	energyLimit := uint64(triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result))
+	energyLimitVal, err := triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result)
+	if err != nil {
+		// java getTotalEnergyLimitWithFixRatio throws ContractValidateException
+		// (e.g. origin_energy_limit < 0) before VM.play, which rejects the whole
+		// block. Returning the error makes applyTransaction revert and reject the
+		// block identically. No pre-charge restore is needed: the reject precedes
+		// the origin pre-charge, and applyTransaction reverts the caller pre-charge.
+		return nil, err
+	}
+	energyLimit := uint64(energyLimitVal)
 	// triggerEnergyLimit pre-charged the caller/origin energy_usage into the
 	// VM-visible state; undo it after the VM (java resetAccountUsage on success,
 	// discard on revert) on every return path, before PayEnergyBill settles.
@@ -497,36 +506,52 @@ func accountEnergyLimitWithFloatRatio(ctx *Context, account common.Address, feeL
 	return minInt64(leftFrozenEnergy+energyFromBalance, energyFromFeeLimit)
 }
 
-func triggerEnergyLimit(ctx *Context, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) int64 {
+func triggerEnergyLimit(ctx *Context, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) (int64, error) {
 	contract := ctx.State.GetContract(contractAddr)
 	if contract == nil {
-		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result), nil
 	}
 	origin := common.BytesToAddress(contract.OriginAddress)
 	if origin == (common.Address{}) || origin == caller {
-		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result), nil
 	}
 	if !ctx.State.AccountExists(origin) && ctx.DynProps.AllowTvmConstantinople() {
-		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result), nil
 	}
 	if energyLimitHardForkActive(ctx) {
 		return totalEnergyLimitWithFixRatio(ctx, origin, caller, contractAddr, feeLimit, callValue, result)
 	}
-	return totalEnergyLimitWithFloatRatio(ctx, origin, caller, contractAddr, feeLimit, callValue)
+	return totalEnergyLimitWithFloatRatio(ctx, origin, caller, contractAddr, feeLimit, callValue), nil
 }
 
-func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) int64 {
+func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) (int64, error) {
 	callerEnergyLimit := accountEnergyLimitWithFixRatio(ctx, caller, feeLimit, callValue, result)
 	if origin == caller {
-		return callerEnergyLimit
+		return callerEnergyLimit, nil
 	}
 	contract := ctx.State.GetContract(contractAddr)
 	if contract == nil {
-		return callerEnergyLimit
+		return callerEnergyLimit, nil
 	}
 
 	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
 	originPercent := 100 - userPercent
+
+	// java getTotalEnergyLimitWithFixRatio rejects a stored contract whose
+	// origin_energy_limit < 0 here — before the percent branches, for ALL
+	// consume_user_resource_percent values — by throwing ContractValidateException
+	// (VMActuator.validate -> processTransaction propagates it, rejecting the whole
+	// block). A negative limit can reach state only via a pre-energy-limit-fork
+	// CreateSmartContract: the `originEnergyLimit > 0` create-time validation is
+	// gated behind energyLimitHardForkActive in both impls, and both store the raw
+	// proto value. Match java so such a trigger is rejected identically instead of
+	// silently proceeding with a negative limit (a latent consensus divergence).
+	// 0 maps to creatorDefaultEnergyLimit (positive), so the guard is `< 0`.
+	originLimit := contractOriginEnergyLimit(contract)
+	if originLimit < 0 {
+		return 0, errors.New("originEnergyLimit can't be < 0")
+	}
+
 	if originPercent <= 0 {
 		// consume_user_resource_percent == 100: the origin contributes 0 to the
 		// limit, but java getTotalEnergyLimitWithFixRatio STILL runs the
@@ -536,7 +561,7 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 		// mid-VM sees the recovered value. (java skips the originEnergyLeft fetch
 		// here too, matching this early branch.)
 		preChargeEnergyUsage(ctx, origin, 0, result)
-		return callerEnergyLimit
+		return callerEnergyLimit, nil
 	}
 
 	originEnergyLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
@@ -557,7 +582,6 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 		}
 	}
 
-	originLimit := contractOriginEnergyLimit(contract)
 	var originEnergyLimit int64
 	if userPercent <= 0 {
 		originEnergyLimit = minInt64(originEnergyLeft, originLimit)
@@ -571,7 +595,7 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	// creatorEnergyLimit before VM.play (the caller was already pre-charged inside
 	// accountEnergyLimitWithFixRatio above). Undone after the VM.
 	preChargeEnergyUsage(ctx, origin, originEnergyLimit, result)
-	return callerEnergyLimit + originEnergyLimit
+	return callerEnergyLimit + originEnergyLimit, nil
 }
 
 func totalEnergyLimitWithFloatRatio(ctx *Context, origin, caller, contractAddr common.Address, feeLimit, callValue int64) int64 {
