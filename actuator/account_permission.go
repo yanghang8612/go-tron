@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unicode/utf16"
 
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -115,7 +116,11 @@ func validatePermission(p *corepb.Permission, dp *state.DynamicProperties) error
 	if p.Threshold <= 0 {
 		return errors.New("permission's threshold should be greater than 0")
 	}
-	if p.PermissionName != "" && len(p.PermissionName) > 32 {
+	// java AccountPermissionUpdateActuator checks `name.length() > 32`, where
+	// String.length() counts UTF-16 code units — NOT UTF-8 bytes. A name of up to
+	// 32 characters (e.g. 32 Chinese chars = 96 bytes) is valid; counting bytes
+	// here wrongly rejected it (Nile 38,418,800 stall).
+	if p.PermissionName != "" && len(utf16.Encode([]rune(p.PermissionName))) > 32 {
 		return errors.New("permission's name is too long")
 	}
 	if p.ParentId != 0 {
