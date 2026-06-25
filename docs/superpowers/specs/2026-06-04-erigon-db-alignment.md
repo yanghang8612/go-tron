@@ -1853,6 +1853,10 @@ Status:
   surface corrupt cold state-root rows, cold hash lookup failures, or malformed
   block rows directly, while the legacy `StateRootAtBlock` zero-on-error
   contract remains available for compatibility-only callers.
+- Producer block assembly and `openCurrentState` now share the same strict
+  known-block state-root resolver. Parent/current cold state-root failures
+  abort with storage context instead of falling through to a zero or stale
+  `account_state_root` baseline.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

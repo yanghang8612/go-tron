@@ -1967,14 +1967,24 @@ func (bc *BlockChain) stateRootAtBlockStrict(num uint64) (tcommon.Hash, bool, er
 	if !ok {
 		return tcommon.Hash{}, false, nil
 	}
+	return bc.stateRootForKnownBlockStrict(block)
+}
+
+func (bc *BlockChain) stateRootForKnownBlockStrict(block *types.Block) (tcommon.Hash, bool, error) {
+	if bc == nil {
+		return tcommon.Hash{}, false, errors.New("state root for block: nil blockchain")
+	}
+	if block == nil {
+		return tcommon.Hash{}, false, errors.New("state root for block: nil block")
+	}
 	root, ok, err := rawdb.ReadBlockStateRootStrict(bc.chaindb, block.Hash())
 	if err != nil {
-		return tcommon.Hash{}, false, fmt.Errorf("state root for block %d (%x): %w", num, block.Hash(), err)
+		return tcommon.Hash{}, false, fmt.Errorf("state root for block %d (%x): %w", block.Number(), block.Hash(), err)
 	}
 	if ok {
 		return root, true, nil
 	}
-	if num == 0 {
+	if block.Number() == 0 {
 		return rawdb.ReadGenesisStateRoot(bc.db), true, nil
 	}
 	// Backwards-compat fallback for chain databases written before
@@ -2134,14 +2144,12 @@ func (bc *BlockChain) openState(root tcommon.Hash) (*state.StateDB, error) {
 
 func (bc *BlockChain) openCurrentState() (*state.StateDB, error) {
 	current := bc.CurrentBlock()
-	root := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
-	if root == (tcommon.Hash{}) && current.Number() == 0 {
-		root = rawdb.ReadGenesisStateRoot(bc.db)
+	root, ok, err := bc.stateRootForKnownBlockStrict(current)
+	if err != nil {
+		return nil, err
 	}
-	if root == (tcommon.Hash{}) {
-		// Backwards-compat fallback for chain databases written before
-		// blockStateRootPrefix existed.
-		root = current.AccountStateRoot()
+	if !ok {
+		return nil, fmt.Errorf("state root for current block %d not available", current.Number())
 	}
 	return bc.openState(root)
 }

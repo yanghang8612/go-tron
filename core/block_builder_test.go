@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -61,6 +62,33 @@ func TestBuildBlock_EmptyPool(t *testing.T) {
 	}
 	if got := block.Version(); got != params.BlockVersion {
 		t.Fatalf("block version: want %d, got %d", params.BlockVersion, got)
+	}
+}
+
+func TestBuildBlockSurfacesParentColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	parent := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, parent); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: parent.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+	bc := &BlockChain{
+		db:      db,
+		chaindb: chain,
+		stateDB: state.NewDatabase(db),
+	}
+	bc.currentBlock.Store(parent)
+
+	_, err := BuildBlock(bc, txpool.New(), testProcessorAddr(0xFF), 3000)
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("BuildBlock err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "parent state root") {
+		t.Fatalf("BuildBlock err = %v, want parent state-root context", err)
 	}
 }
 

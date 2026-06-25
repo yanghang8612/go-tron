@@ -81,6 +81,29 @@ func TestLoadForkLCABlockAndRootSurfacesColdStateRootErrors(t *testing.T) {
 	}
 }
 
+func TestOpenCurrentStateSurfacesColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+	bc := &BlockChain{db: db, chaindb: chain}
+	bc.currentBlock.Store(block)
+
+	_, err := bc.openCurrentState()
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("openCurrentState err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "state root for block 2") {
+		t.Fatalf("openCurrentState err = %v, want state-root context", err)
+	}
+}
+
 func blockchainStartupBlock(number uint64) *types.Block {
 	return types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
