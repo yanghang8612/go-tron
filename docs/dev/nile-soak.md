@@ -372,7 +372,10 @@ selected row in a candidate window. When `--require-offline-db-check` is used
 and the JSONL row carries `stageAlertPipeline*` fields, the checker also
 requires the referenced Prometheus artifact to include matching
 `gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
-stage/status/upstream labels from the same offline DB check.
+stage/status/upstream labels from the same offline DB check. When the row
+contains `datadir`, the Prometheus samples must carry the same `datadir` label,
+so aggregated artifacts cannot satisfy a Nile row with metrics from another
+node.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.

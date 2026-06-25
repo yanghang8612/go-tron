@@ -175,13 +175,22 @@ def parse_prometheus_labels(raw):
     return labels
 
 
-def prometheus_issue_keys(text):
+def prometheus_label_matches(row, labels):
+    want_datadir = row.get("datadir")
+    if want_datadir:
+        return labels.get("datadir") == str(want_datadir)
+    return True
+
+
+def prometheus_issue_keys(text, row):
     keys = set()
     for line in text.splitlines():
         match = re.match(r"^gtron_storage_alert_issue\{([^}]*)\}\s+", line.strip())
         if not match:
             continue
         labels = parse_prometheus_labels(match.group(1))
+        if not prometheus_label_matches(row, labels):
+            continue
         component = labels.get("component")
         kind = labels.get("kind")
         severity = labels.get("severity")
@@ -205,15 +214,17 @@ def prometheus_metric_samples(text, metric):
     return samples
 
 
-def prometheus_metric_value(text, metric):
+def prometheus_metric_value(text, metric, row=None):
     samples = prometheus_metric_samples(text, metric)
+    if row is not None:
+        samples = [(labels, value) for labels, value in samples if prometheus_label_matches(row, labels)]
     if not samples:
         return None
     return samples[-1][1]
 
 
-def check_prometheus_metric_value(path, text, metric, want):
-    got = prometheus_metric_value(text, metric)
+def check_prometheus_metric_value(path, text, metric, want, row):
+    got = prometheus_metric_value(text, metric, row)
     if got is None:
         return [f"offlineDbCheckPrometheus artifact {path} missing {metric}"]
     if got != float(want):
@@ -245,7 +256,7 @@ def row_alert_issue_keys(row):
 
 def check_prometheus_issue_kinds(path, text, row):
     issues = []
-    actual = prometheus_issue_keys(text)
+    actual = prometheus_issue_keys(text, row)
     for component, kind, severity in sorted(row_alert_issue_keys(row)):
         if (component, kind, severity) not in actual:
             issues.append(
@@ -290,6 +301,7 @@ def check_prometheus_stage_pipeline(path, text, row):
                 text,
                 "gtron_storage_stage_pipeline_complete",
                 1 if as_bool(row, "stageAlertPipelineComplete") else 0,
+                row,
             )
         )
     if "stageAlertPipelinePending" in row:
@@ -297,7 +309,7 @@ def check_prometheus_stage_pipeline(path, text, row):
         if pending is not None:
             issues.extend(
                 check_prometheus_metric_value(
-                    path, text, "gtron_storage_stage_pipeline_pending", pending
+                    path, text, "gtron_storage_stage_pipeline_pending", pending, row
                 )
             )
     if "stageAlertPipelineIssues" in row:
@@ -305,7 +317,7 @@ def check_prometheus_stage_pipeline(path, text, row):
         if count is not None:
             issues.extend(
                 check_prometheus_metric_value(
-                    path, text, "gtron_storage_stage_pipeline_issues", count
+                    path, text, "gtron_storage_stage_pipeline_issues", count, row
                 )
             )
     next_stage = row.get("stageAlertPipelineNext")
@@ -316,7 +328,7 @@ def check_prometheus_stage_pipeline(path, text, row):
 
         def labels_match(labels):
             return (
-                labels.get("stage") == str(next_stage)
+                prometheus_label_matches(row, labels) and labels.get("stage") == str(next_stage)
                 and (not want_status or labels.get("status") == want_status)
                 and (not want_upstream or labels.get("upstream") == want_upstream)
             )
