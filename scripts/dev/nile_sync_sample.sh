@@ -1506,6 +1506,8 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         row["fullStagedSyncStatus"] = "missing-stage"
     elif row["fullStagedSyncHashIssues"]:
         row["fullStagedSyncStatus"] = "hash-issue"
+    elif row["fullStagedSyncUnverifiedStages"]:
+        row["fullStagedSyncStatus"] = "unverified-stage"
     elif pipeline_violations:
         row["fullStagedSyncStatus"] = "pipeline-violation"
     elif finish_head_lag > 0:

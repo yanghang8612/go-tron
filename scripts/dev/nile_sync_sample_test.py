@@ -1325,6 +1325,63 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["soakHealthStatus"], "critical")
             self.assertIn("stage-hash-mismatch", row["soakHealthIssues"])
 
+    def test_sample_reports_full_staged_sync_unverified_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=100 hash=dd",
+                        "Stage progress: group=sync name=SyncCommitment value=100 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=100 hash=ff verified=canonical",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["stageMismatchRows"], 0)
+            self.assertEqual(row["fullStagedSyncStatus"], "unverified-stage")
+            self.assertFalse(row["fullStagedSyncReady"])
+            self.assertFalse(row["fullStagedSyncCompleteAtHead"])
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 5)
+            self.assertEqual(row["fullStagedSyncMissingStages"], [])
+            self.assertEqual(row["fullStagedSyncHashIssues"], [])
+            self.assertEqual(row["fullStagedSyncUnverifiedStages"], ["SyncExecution"])
+            self.assertEqual(row["fullStagedSyncCompleteBlock"], 100)
+            self.assertEqual(row["fullStagedSyncHeadLagBlocks"], 0)
+
     def test_sample_reports_staged_body_verification_issues(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

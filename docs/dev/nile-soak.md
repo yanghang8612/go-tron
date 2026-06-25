@@ -336,6 +336,11 @@ For a production Nile run, capture these checks:
 3. Confirm `stageSyncPipelineMonotonic=true`, or manually check
    `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
    stageSyncExecution >= stageSyncCommitment >= stageSyncFinish`.
+   Full staged sync requires each sync stage to be hash-verified:
+   `SyncBodies`/`SyncBodiesReady` may be `staged` or `canonical`; import,
+   execution, commitment, and finish must be `canonical`. If a required stage
+   is present but lacks verification evidence, the sampler reports
+   `fullStagedSyncStatus=unverified-stage` and does not mark it ready.
 4. Confirm `stageSyncBottleneck` moves as expected during catch-up; a persistent
    large `import-execution`, `execution-commitment`, `commitment-finish`, or
    `finish-head` lag is the signal to profile that stage.
