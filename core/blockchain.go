@@ -805,9 +805,29 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 type headerParentChainReader struct {
 	consensus.ChainReader
 	parent *types.Block
+	// state is the parent's post-state (= the pre-state of the block being
+	// verified), used to resolve a witness's delegated block-signing key during
+	// signature validation under AllowMultiSign. nil ⇒ WitnessPermissionSigner
+	// falls back to the witness address, matching a non-delegating witness.
+	state *state.StateDB
 }
 
 func (r headerParentChainReader) CurrentBlock() *types.Block { return r.parent }
+
+// WitnessPermissionSigner resolves the address authorized to sign blocks for
+// witnessAddr from the parent state — java-tron
+// AccountCapsule.getWitnessPermissionAddress. dpos.VerifyHeaderWithDynProps
+// consults it (via an optional interface) only when AllowMultiSign is active.
+func (r headerParentChainReader) WitnessPermissionSigner(witnessAddr tcommon.Address) tcommon.Address {
+	if r.state == nil {
+		return witnessAddr
+	}
+	acc := r.state.GetAccount(witnessAddr)
+	if acc == nil {
+		return witnessAddr
+	}
+	return acc.WitnessPermissionAddress()
+}
 
 // applyBlockWithPlan executes, commits, and persists one linear-extension
 // block from a range-owned execution plan. If plan.state is non-nil, it must
@@ -962,7 +982,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	//     pruned by the caller on the returned error.
 	// Skipped when bc.engine is nil (test path; see SetEngine).
 	if bc.engine != nil {
-		if err := bc.engine.VerifyHeaderWithDynProps(headerParentChainReader{bc, current}, block, dynProps); err != nil {
+		if err := bc.engine.VerifyHeaderWithDynProps(headerParentChainReader{bc, current, statedb}, block, dynProps); err != nil {
 			return err
 		}
 	}
