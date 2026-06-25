@@ -479,3 +479,39 @@ func TestMakeDefaultWitnessPermission(t *testing.T) {
 		t.Errorf("Keys[0].Weight: want 1, got %d", p.Keys[0].Weight)
 	}
 }
+
+// TestWitnessPermissionAddress pins java-tron
+// AccountCapsule.getWitnessPermissionAddress, which block signature validation
+// uses under AllowMultiSign: the first key of the witness permission, or the
+// account's own address when no witness permission (or an empty key set) is
+// configured. The delegated case is the Nile 45,490,765 stall (SR 417d6fd4
+// delegated block signing to 415624c1).
+func TestWitnessPermissionAddress(t *testing.T) {
+	acc := makeTestAccount()
+	own := acc.Address()
+
+	// No witness permission set ⇒ own address.
+	if got := acc.WitnessPermissionAddress(); got != own {
+		t.Fatalf("no witness permission: want own %x, got %x", own, got)
+	}
+
+	// Witness permission with an empty key set ⇒ own address.
+	acc.SetWitnessPermission(&corepb.Permission{Type: corepb.Permission_Witness})
+	if got := acc.WitnessPermissionAddress(); got != own {
+		t.Fatalf("empty-key witness permission: want own %x, got %x", own, got)
+	}
+
+	// Witness permission delegating to a separate key ⇒ that key's address.
+	deleg := common.BytesToAddress([]byte{
+		0x41, 0x56, 0x24, 0xc1, 0x2e, 0x30, 0x8b, 0x03, 0xa1, 0xa6,
+		0xb2, 0x1d, 0x9b, 0x86, 0xe3, 0x94, 0x2f, 0xac, 0x1a, 0xb9,
+	})
+	acc.SetWitnessPermission(&corepb.Permission{
+		Type:      corepb.Permission_Witness,
+		Threshold: 1,
+		Keys:      []*corepb.Key{{Address: deleg.Bytes(), Weight: 1}},
+	})
+	if got := acc.WitnessPermissionAddress(); got != deleg {
+		t.Fatalf("delegated witness permission: want %x, got %x", deleg, got)
+	}
+}

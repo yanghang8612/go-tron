@@ -6,11 +6,14 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // setupVerifyChain stands up a single-witness chain wired with a real DPoS
@@ -348,5 +351,87 @@ func TestInsertBlock_AcceptsValidSignedBlock(t *testing.T) {
 	}
 	if got := bc.CurrentBlock().Number(); got != 1 {
 		t.Fatalf("chain head: got %d, want 1", got)
+	}
+}
+
+// TestVerifyHeader_DelegatedWitnessPermissionSignature is the end-to-end parity
+// test for the Nile 45,490,765 fix. It drives the REAL headerParentChainReader
+// — which resolves the witness's block-signing key from the parent state
+// (java getWitnessPermissionAddress) — through dpos.VerifyHeaderWithDynProps.
+// When AllowMultiSign is active and the SR has delegated block signing to a
+// separate key via its witness permission, a block signed by that delegated key
+// verifies; the same block is rejected when AllowMultiSign is off or the SR has
+// not delegated, and any other key is always rejected. SR 417d6fd4 delegated to
+// 415624c1 on-chain — the exact shape exercised here.
+func TestVerifyHeader_DelegatedWitnessPermissionSignature(t *testing.T) {
+	bc, _, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessAddr := bc.ActiveWitnesses()[0]
+
+	delegKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegAddr := crypto.PubkeyToAddress(&delegKey.PublicKey)
+	otherKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parent state where the SR delegated block signing to delegAddr.
+	delegatedState, err := state.New(tcommon.Hash{}, state.NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegatedState.CreateAccount(witnessAddr, corepb.AccountType_Normal)
+	delegatedState.SetPermissions(witnessAddr, nil, &corepb.Permission{
+		Type:      corepb.Permission_Witness,
+		Threshold: 1,
+		Keys:      []*corepb.Key{{Address: delegAddr.Bytes(), Weight: 1}},
+	}, nil)
+
+	// Parent state where the SR has NOT delegated (default witness account).
+	plainState, err := state.New(tcommon.Hash{}, state.NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainState.CreateAccount(witnessAddr, corepb.AccountType_Normal)
+
+	build := func(signer *ecdsa.PrivateKey) *types.Block {
+		result, err := BuildBlock(bc, txpool.New(), witnessAddr, int64(params.BlockProducedInterval))
+		if err != nil {
+			t.Fatalf("BuildBlock: %v", err)
+		}
+		if err := SignBlock(result.Block, signer); err != nil {
+			t.Fatalf("SignBlock: %v", err)
+		}
+		return result.Block
+	}
+	// verify runs the real headerParentChainReader (embedding bc, reading st)
+	// through the engine's signature/schedule verification.
+	verify := func(st *state.StateDB, multiSign bool, b *types.Block) error {
+		dp := bc.DynProps().Copy()
+		dp.SetAllowMultiSign(multiSign)
+		reader := headerParentChainReader{bc, bc.CurrentBlock(), st}
+		return bc.engine.VerifyHeaderWithDynProps(reader, b, dp)
+	}
+
+	// 1. Delegated key + AllowMultiSign + delegation in parent state ⇒ accepted.
+	if err := verify(delegatedState, true, build(delegKey)); err != nil {
+		t.Fatalf("delegated-signed block must verify under AllowMultiSign: %v", err)
+	}
+	// 2. Delegated key but AllowMultiSign off ⇒ compared to witness_address ⇒ rejected.
+	if err := verify(delegatedState, false, build(delegKey)); !errors.Is(err, dpos.ErrInvalidSignature) {
+		t.Fatalf("delegated-signed block must be rejected with AllowMultiSign off, got %v", err)
+	}
+	// 3. Delegated key + AllowMultiSign but the SR did NOT delegate ⇒ rejected.
+	if err := verify(plainState, true, build(delegKey)); !errors.Is(err, dpos.ErrInvalidSignature) {
+		t.Fatalf("delegated-signed block must be rejected without a witness permission, got %v", err)
+	}
+	// 4. An unauthorized key is rejected even with delegation in effect.
+	if err := verify(delegatedState, true, build(otherKey)); !errors.Is(err, dpos.ErrInvalidSignature) {
+		t.Fatalf("unauthorized signer must be rejected, got %v", err)
 	}
 }

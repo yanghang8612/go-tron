@@ -1,12 +1,17 @@
 package dpos
 
 import (
+	"crypto/ecdsa"
+	"crypto/sha256"
 	"errors"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // buildBlock constructs a minimal types.Block with the given header fields
@@ -150,5 +155,119 @@ func TestVerifyHeader_RejectsSameAbsSlot(t *testing.T) {
 	block := buildBlock(2, 4000, parent.Hash())
 	if err := VerifyHeader(chain, block); !errors.Is(err, ErrInvalidTimestamp) {
 		t.Fatalf("expected ErrInvalidTimestamp (same abs-slot as parent), got %v", err)
+	}
+}
+
+// signedHeaderBlock builds a slot-aligned block at the given height/timestamp,
+// stamps witnessAddr into the header, and signs the canonical header hash
+// (sha256 of the marshaled BlockHeaderRaw) with key — exactly as
+// core.SignBlock / recoverWitness do. The recovered signer is therefore
+// crypto.PubkeyToAddress(key.PublicKey), which may differ from witnessAddr (the
+// delegated-signing case).
+func signedHeaderBlock(t *testing.T, number uint64, ts int64, parentHash [32]byte, witnessAddr common.Address, key *ecdsa.PrivateKey) *types.Block {
+	t.Helper()
+	raw := &corepb.BlockHeaderRaw{
+		Number:         int64(number),
+		Timestamp:      ts,
+		ParentHash:     parentHash[:],
+		WitnessAddress: witnessAddr.Bytes(),
+	}
+	data, err := proto.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	hash := sha256.Sum256(data)
+	sig, err := crypto.Sign(hash[:], key)
+	if err != nil {
+		t.Fatalf("sign header: %v", err)
+	}
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: raw, WitnessSignature: sig},
+	})
+}
+
+// TestVerifyHeader_MultiSignWitnessPermission pins java-tron
+// BlockCapsule.validateSignature: when AllowMultiSign is active, the recovered
+// block signer is compared to the witness account's witness-permission address
+// (AccountCapsule.getWitnessPermissionAddress — a key the SR may delegate block
+// signing to), NOT block.witness_address. Pre-AllowMultiSign (and for witnesses
+// that never delegated) it is still compared to block.witness_address.
+//
+// This is the Nile 45,490,765 stall: SR 417d6fd4 delegated block signing to
+// 415624c1 via its witness permission, so a block signed by 415624c1 was valid
+// on-chain, but gtron rejected it for not being signed by 417d6fd4.
+func TestVerifyHeader_MultiSignWitnessPermission(t *testing.T) {
+	witnessKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessAddr := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	delegAddr := crypto.PubkeyToAddress(&delegKey.PublicKey)
+
+	genesis := genesisAt(0)
+	// Resolver mirroring an SR that delegated block signing to delegAddr.
+	delegated := func(addr common.Address) common.Address {
+		if addr == witnessAddr {
+			return delegAddr
+		}
+		return addr
+	}
+	// run verifies a block produced by witnessAddr in slot 1 (ts 3000). CLO is
+	// left off so the timestamp gates are skipped and verification reaches the
+	// signature check, then the schedule check (which witnessAddr — the sole
+	// active SR — satisfies). The error (or nil) is thus determined solely by
+	// the signature comparison under test.
+	run := func(multiSign bool, permSigner func(common.Address) common.Address, b *types.Block) error {
+		dp := state.NewDynamicProperties()
+		dp.SetAllowMultiSign(multiSign)
+		chain := &mockChainReader{
+			currentBlock: genesis,
+			genesisTime:  0,
+			witnesses:    []common.Address{witnessAddr},
+			dp:           dp,
+			permSigner:   permSigner,
+		}
+		return VerifyHeaderWithDynProps(chain, b, dp)
+	}
+
+	delegBlock := signedHeaderBlock(t, 1, 3000, genesis.Hash(), witnessAddr, delegKey)
+	ownBlock := signedHeaderBlock(t, 1, 3000, genesis.Hash(), witnessAddr, witnessKey)
+	otherBlock := signedHeaderBlock(t, 1, 3000, genesis.Hash(), witnessAddr, otherKey)
+
+	// 1. AllowMultiSign on + delegation to delegAddr + signed by delegKey ⇒ valid.
+	if err := run(true, delegated, delegBlock); err != nil {
+		t.Fatalf("delegated-key block must be accepted under AllowMultiSign: %v", err)
+	}
+	// 2. Same delegated-key block, AllowMultiSign OFF ⇒ compared to
+	//    witness_address (≠ delegAddr) ⇒ rejected.
+	if err := run(false, delegated, delegBlock); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("delegated-key block must be rejected when AllowMultiSign is off, got %v", err)
+	}
+	// 3. AllowMultiSign on but witness did NOT delegate (resolver returns
+	//    witness_address) ⇒ delegated-key signature rejected.
+	if err := run(true, nil, delegBlock); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("delegated-key block must be rejected without a matching witness permission, got %v", err)
+	}
+	// 4. Witness signs with its own key under AllowMultiSign (no delegation) ⇒
+	//    getWitnessPermissionAddress returns witness_address ⇒ valid.
+	if err := run(true, nil, ownBlock); err != nil {
+		t.Fatalf("own-key block must remain valid under AllowMultiSign: %v", err)
+	}
+	// 5. Default path unchanged: own-key block with AllowMultiSign off ⇒ valid.
+	if err := run(false, nil, ownBlock); err != nil {
+		t.Fatalf("own-key block must remain valid pre-AllowMultiSign: %v", err)
+	}
+	// 6. An unauthorized third key is rejected even with delegation in effect
+	//    (only the delegated key — not any key — is accepted).
+	if err := run(true, delegated, otherBlock); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("unauthorized signer must be rejected under AllowMultiSign, got %v", err)
 	}
 }

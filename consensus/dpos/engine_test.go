@@ -15,6 +15,11 @@ type mockChainReader struct {
 	witnesses    []common.Address
 	maintTime    int64
 	dp           *state.DynamicProperties
+	// permSigner, when set, resolves a witness address to the address
+	// authorized to sign its blocks (java getWitnessPermissionAddress). It
+	// makes mockChainReader satisfy the optional witnessSignerResolver
+	// interface that VerifyHeaderWithDynProps consults under AllowMultiSign.
+	permSigner func(common.Address) common.Address
 }
 
 func (m *mockChainReader) CurrentBlock() *types.Block           { return m.currentBlock }
@@ -27,6 +32,13 @@ func (m *mockChainReader) DynProps() *state.DynamicProperties {
 		m.dp = state.NewDynamicProperties()
 	}
 	return m.dp
+}
+
+func (m *mockChainReader) WitnessPermissionSigner(witnessAddr common.Address) common.Address {
+	if m.permSigner != nil {
+		return m.permSigner(witnessAddr)
+	}
+	return witnessAddr
 }
 
 func testEngineAddr(b byte) common.Address {
