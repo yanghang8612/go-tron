@@ -1946,19 +1946,44 @@ func (bc *BlockChain) StateDB() *state.Database {
 // /walletsolidity/getaccount returns live (possibly-reorgable) balances,
 // which is the bug the audit's "Solidity API isolation" P1 called out.
 func (bc *BlockChain) StateRootAtBlock(num uint64) tcommon.Hash {
-	block := bc.GetBlockByNumber(num)
-	if block == nil {
-		return tcommon.Hash{}
-	}
-	if root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash()); root != (tcommon.Hash{}) {
+	root, ok, err := bc.stateRootAtBlockStrict(num)
+	if err == nil && ok {
 		return root
 	}
+	return tcommon.Hash{}
+}
+
+func (bc *BlockChain) stateRootAtBlockStrict(num uint64) (tcommon.Hash, bool, error) {
+	if bc == nil {
+		return tcommon.Hash{}, false, errors.New("state root at block: nil blockchain")
+	}
+	if current := bc.CurrentBlock(); current != nil && num > current.Number() {
+		return tcommon.Hash{}, false, nil
+	}
+	block, ok, err := rawdb.ReadBlockStrict(bc.chaindb, num)
+	if err != nil {
+		return tcommon.Hash{}, false, fmt.Errorf("read block %d for state root: %w", num, err)
+	}
+	if !ok {
+		return tcommon.Hash{}, false, nil
+	}
+	root, ok, err := rawdb.ReadBlockStateRootStrict(bc.chaindb, block.Hash())
+	if err != nil {
+		return tcommon.Hash{}, false, fmt.Errorf("state root for block %d (%x): %w", num, block.Hash(), err)
+	}
+	if ok {
+		return root, true, nil
+	}
 	if num == 0 {
-		return rawdb.ReadGenesisStateRoot(bc.db)
+		return rawdb.ReadGenesisStateRoot(bc.db), true, nil
 	}
 	// Backwards-compat fallback for chain databases written before
 	// blockStateRootPrefix existed; matches HeadStateRoot's behaviour.
-	return block.AccountStateRoot()
+	root = block.AccountStateRoot()
+	if root == (tcommon.Hash{}) {
+		return tcommon.Hash{}, false, nil
+	}
+	return root, true, nil
 }
 
 // HeadStateRoot returns the post-apply state root of the canonical head

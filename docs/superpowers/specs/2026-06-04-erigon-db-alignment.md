@@ -1848,6 +1848,11 @@ Status:
   strict accessors before reloading consensus caches or re-applying the new
   branch. Cold lookup/state-root errors now abort the fork switch with storage
   context instead of replaying from a zero-root cache baseline.
+- Archive execution root selection now has a strict state-root path for
+  error-returning callers. `historyReaderAt` and `archiveExecutionRoot`
+  surface corrupt cold state-root rows, cold hash lookup failures, or malformed
+  block rows directly, while the legacy `StateRootAtBlock` zero-on-error
+  contract remains available for compatibility-only callers.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

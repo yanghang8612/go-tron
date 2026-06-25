@@ -1685,6 +1685,64 @@ func TestArchiveQuery_ArchiveStateSessionReleasesChainMutexOnGateError(t *testin
 	}
 }
 
+func TestArchiveExecutionRootSurfacesColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+	bc := &BlockChain{db: db, chaindb: chain}
+	bc.currentBlock.Store(block)
+	b := &TronBackend{chain: bc}
+
+	_, err := b.archiveExecutionRoot(block.Number(), nil)
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("archiveExecutionRoot err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "state root for block 2") {
+		t.Fatalf("archiveExecutionRoot err = %v, want state-root context", err)
+	}
+}
+
+func TestHistoryReaderAtSurfacesColdStateRootErrorsAndUnlocks(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+	bc := &BlockChain{db: db, chaindb: chain}
+	bc.currentBlock.Store(block)
+	b := &TronBackend{chain: bc}
+
+	_, _, _, err := b.historyReaderAt()
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("historyReaderAt err = %v, want cold state-root error", err)
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		b.chain.chainmu.Lock()
+		close(locked)
+		b.chain.chainmu.Unlock()
+	}()
+
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("historyReaderAt error path leaked chainmu")
+	}
+}
+
 // TestArchiveQuery_GetAccountAtPrunedRootNoHistory verifies that on a
 // non-archive node, GetAccountAt for a block whose state root was pruned
 // returns ErrArchiveHistoryDisabled (actionable) rather than reconstructing

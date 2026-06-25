@@ -260,11 +260,15 @@ func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Addr
 }
 
 func (b *TronBackend) archiveExecutionRoot(blockNum uint64, session *archiveStateSession) (tcommon.Hash, error) {
-	if root := b.chain.StateRootAtBlock(blockNum); root != (tcommon.Hash{}) {
+	if root, ok, err := b.chain.stateRootAtBlockStrict(blockNum); err != nil {
+		return tcommon.Hash{}, err
+	} else if ok {
 		return root, nil
 	}
 	if session != nil && blockNum < session.headNum {
-		if root := b.chain.StateRootAtBlock(session.headNum); root != (tcommon.Hash{}) {
+		if root, ok, err := b.chain.stateRootAtBlockStrict(session.headNum); err != nil {
+			return tcommon.Hash{}, err
+		} else if ok {
 			return root, nil
 		}
 		return tcommon.Hash{}, fmt.Errorf("state root for head block %d not available", session.headNum)
@@ -2496,7 +2500,15 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, func(), error) {
 	b.chain.chainmu.Lock()
 	headNum := b.chain.CurrentBlock().Number()
-	root := b.chain.StateRootAtBlock(headNum)
+	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
+	if err != nil {
+		b.chain.chainmu.Unlock()
+		return nil, 0, nil, err
+	}
+	if !ok {
+		b.chain.chainmu.Unlock()
+		return nil, 0, nil, fmt.Errorf("state root for head block %d not available", headNum)
+	}
 	live, err := b.chain.openState(root)
 	if err != nil {
 		b.chain.chainmu.Unlock()
