@@ -2407,9 +2407,9 @@ func (b *TronBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceReque
 	}
 	responseID := requestedID
 	if uint64(traceBlock) != block.Number() {
-		traceBlockObj := b.chain.GetBlockByNumber(uint64(traceBlock))
-		if traceBlockObj == nil {
-			return nil, fmt.Errorf("account trace block %d not found", traceBlock)
+		traceBlockObj, err := b.GetBlockByNumber(uint64(traceBlock))
+		if err != nil {
+			return nil, fmt.Errorf("read account trace block %d: %w", traceBlock, err)
 		}
 		responseID = blockBalanceIdentifier(traceBlockObj)
 	}
@@ -2462,9 +2462,9 @@ func (b *TronBackend) balanceTraceBlock(id *contractpb.BlockBalanceTrace_BlockId
 	if len(id.GetHash()) != tcommon.HashLength {
 		return nil, fmt.Errorf("block_identifier hash length not equals 32")
 	}
-	block := b.chain.GetBlockByNumber(uint64(id.GetNumber()))
-	if block == nil {
-		return nil, fmt.Errorf("block %d not found", id.GetNumber())
+	block, err := b.GetBlockByNumber(uint64(id.GetNumber()))
+	if err != nil {
+		return nil, err
 	}
 	if !bytes.Equal(block.Hash().Bytes(), id.GetHash()) {
 		return nil, fmt.Errorf("number and hash do not match")

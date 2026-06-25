@@ -275,6 +275,15 @@ func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
 	if tx, gotBlock, idx, err := backend.GetTransactionByHash(txHash); err == nil || tx != nil || gotBlock != nil || idx != 0 || !strings.Contains(err.Error(), "block 1 decode") {
 		t.Fatalf("GetTransactionByHash corrupt block body = tx:%+v block:%+v idx:%d err:%v, want decode error", tx, gotBlock, idx, err)
 	}
+	if trace, err := backend.GetBlockBalanceTrace(testBackendBalanceBlockID(block)); err == nil || trace != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetBlockBalanceTrace corrupt block body = %+v/%v, want decode error", trace, err)
+	}
+	if trace, err := backend.GetAccountBalanceTrace(&contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: testCoreAddr(9).Bytes()},
+		BlockIdentifier:   testBackendBalanceBlockID(block),
+	}); err == nil || trace != nil || !strings.Contains(err.Error(), "block 1 decode") {
+		t.Fatalf("GetAccountBalanceTrace corrupt block body = %+v/%v, want decode error", trace, err)
+	}
 }
 
 // TestTronBackend_GetBalance verifies GetBalance opens state and returns int64.

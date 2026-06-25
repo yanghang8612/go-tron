@@ -1455,6 +1455,11 @@ Status:
   block identifier hash to the canonical block hash before archive APIs expose
   the payload; non-empty embedded hashes must be full 32-byte block hashes even
   when the canonical block has already been pruned from local hot storage.
+  Balance-trace block identifiers now resolve their canonical block through the
+  same strict ChainDB block accessor, and account-trace responses use that
+  strict path when translating an older trace row back to its block identifier,
+  so corrupt hot/freezer block bodies surface as data errors instead of
+  misleading "block not found" or false response identifiers.
 - DB maintenance commands that rebuild, audit, or replay derived rows now open
   the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
   replay backfill uses that archive view when checking existing target rows, so
