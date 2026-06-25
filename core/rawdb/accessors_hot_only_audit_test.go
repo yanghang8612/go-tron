@@ -140,12 +140,20 @@ func TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries(t *testing.T) {
 		"core/state/snapshots/cold_builder.go": {
 			"ReadBlockHashByNumber": {},
 		},
-		"vm/instructions.go": {
-			"ReadBlockHashByNumber": {},
-		},
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production block-hash-by-number reads must stay behind audited freezer/cold-index boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestVMBlockHashReadsUseStrictBoundary(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	vmRoot := filepath.Join(repoRoot, "vm")
+	offenders := auditForbiddenRawDBCalls(t, vmRoot, map[string]struct{}{
+		"ReadBlockHashByNumber": {},
+	}, nil)
+	if len(offenders) > 0 {
+		t.Fatalf("VM BLOCKHASH/CHAINID paths must use strict block-hash reads so corrupt hot/freezer rows abort execution:\n%s", strings.Join(offenders, "\n"))
 	}
 }
 

@@ -870,7 +870,9 @@ Status:
   is absent. Execution stores now also expose an optional strict block-hash
   reader, so corrupt hot/freezer block rows in the BLOCKHASH window or genesis
   hash lookup abort execution with the storage error instead of being
-  translated into hash zero or a numeric chain-id fallback.
+  translated into hash zero or a numeric chain-id fallback. A rawdb source
+  audit now prevents VM code from regressing to the legacy no-error
+  `ReadBlockHashByNumber` path.
 - Freezer startup repair is covered for table cardinality mismatch: writable
   opens truncate all freezer tables to the common low head, while readonly opens
   reject mismatched heads instead of silently serving a partial ancient view.
