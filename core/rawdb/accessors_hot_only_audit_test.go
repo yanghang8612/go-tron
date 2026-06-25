@@ -125,19 +125,7 @@ func TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries(t *testing.T) {
 		"actuator/actuator.go": {
 			"ReadBlockHashByNumber": {},
 		},
-		"cmd/gtron/db_cmd.go": {
-			"ReadBlockHashByNumber": {},
-		},
-		"cmd/gtron/freezer_adapter.go": {
-			"ReadBlockHashByNumber": {},
-		},
 		"core/blockbuffer/buffer.go": {
-			"ReadBlockHashByNumber": {},
-		},
-		"core/state/pruning/pruner.go": {
-			"ReadBlockHashByNumber": {},
-		},
-		"core/state/snapshots/cold_builder.go": {
 			"ReadBlockHashByNumber": {},
 		},
 	})

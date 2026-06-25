@@ -114,3 +114,21 @@ func TestVMKVStoreBlockHashStrictSurfacesCorruptAncient(t *testing.T) {
 		t.Fatalf("BlockHashByNumberStrict corrupt ancient = %x,%v,%v; want present decode error", hash, ok, err)
 	}
 }
+
+func TestChainDBBlockHashReaderStrictSurfacesCorruptAncient(t *testing.T) {
+	kv := ethrawdb.NewMemoryDatabase()
+	reader := chainDBBlockHashReader{
+		db: rawdb.NewChainDB(kv, stubAncient{
+			blocks: map[uint64][]byte{50: []byte("not-a-valid-block")},
+		}),
+	}
+	buf := blockbuffer.New(kv)
+	buf.SetBlockHashReader(reader)
+
+	if _, ok := buf.BlockHashByNumber(50); ok {
+		t.Fatal("legacy Buffer BlockHashByNumber resolved corrupt ancient block")
+	}
+	if hash, ok, err := buf.BlockHashByNumberStrict(50); err == nil || !ok || hash != (tcommon.Hash{}) || !strings.Contains(err.Error(), "block 50 decode") {
+		t.Fatalf("Buffer BlockHashByNumberStrict corrupt ancient = %x,%v,%v; want present decode error", hash, ok, err)
+	}
+}

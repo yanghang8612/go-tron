@@ -872,7 +872,9 @@ Status:
   hash lookup abort execution with the storage error instead of being
   translated into hash zero or a numeric chain-id fallback. A rawdb source
   audit now prevents VM code from regressing to the legacy no-error
-  `ReadBlockHashByNumber` path.
+  `ReadBlockHashByNumber` path, and the chain's shared blockbuffer cold reader
+  now implements the strict variant as well as the compatibility no-error
+  method.
 - Freezer startup repair is covered for table cardinality mismatch: writable
   opens truncate all freezer tables to the common low head, while readonly opens
   reject mismatched heads instead of silently serving a partial ancient view.
@@ -1101,7 +1103,9 @@ Status:
   eliminated outside rawdb itself. TVM `BLOCKHASH`/legacy `CHAINID` now resolve
   through freezer-aware strict `BlockHashByNumber`/`ReadBlockHashByNumber`
   paths when available, and the pruning finish-stage guard uses freezer-aware
-  canonical hash lookups. A rawdb
+  canonical hash lookups. The remaining no-error block-hash helper calls are
+  limited by source audit to the `blockbuffer` compatibility method and the
+  actuator legacy genesis-hash fallback. A rawdb
   source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
   separately pins the raw freezer copy helpers to the explicit
   `cmd/gtron/freezer_adapter.go` boundary. Actuator historical compatibility

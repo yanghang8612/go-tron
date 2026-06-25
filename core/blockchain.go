@@ -361,13 +361,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
 	buffer := blockbuffer.New(db)
-	buffer.SetBlockHashReader(blockbuffer.BlockHashReaderFunc(func(number uint64) (tcommon.Hash, bool) {
-		block := rawdb.ReadBlock(chaindb, number)
-		if block == nil {
-			return tcommon.Hash{}, false
-		}
-		return block.Hash(), true
-	}))
+	buffer.SetBlockHashReader(chainDBBlockHashReader{db: chaindb})
 	// Resolve the async-commit pipeline depth ONCE here and size the commit queue
 	// to depth-2 (the backpressure bound). The commit worker, started below in
 	// this constructor, ranges this exact channel for its lifetime — sizing it
@@ -463,6 +457,26 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	bc.startCommitWorker()
 
 	return bc, nil
+}
+
+type chainDBBlockHashReader struct {
+	db *rawdb.ChainDB
+}
+
+func (r chainDBBlockHashReader) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	block := rawdb.ReadBlock(r.db, number)
+	if block == nil {
+		return tcommon.Hash{}, false
+	}
+	return block.Hash(), true
+}
+
+func (r chainDBBlockHashReader) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	block, ok, err := rawdb.ReadBlockStrict(r.db, number)
+	if err != nil || !ok {
+		return tcommon.Hash{}, ok, err
+	}
+	return block.Hash(), true, nil
 }
 
 func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
