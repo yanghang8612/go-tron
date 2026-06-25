@@ -256,6 +256,18 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetAssetIssueByAccount(addr)
 			return err
 		}},
+		{name: "GetMarketOrderByID", call: func() error {
+			_, err := backend.GetMarketOrderByID([]byte("order"))
+			return err
+		}},
+		{name: "GetMarketOrdersByAccount", call: func() error {
+			_, err := backend.GetMarketOrdersByAccount(addr)
+			return err
+		}},
+		{name: "GetMarketPriceByPair", call: func() error {
+			_, err := backend.GetMarketPriceByPair([]byte("sell"), []byte("buy"))
+			return err
+		}},
 		{name: "ListExchanges", call: func() error {
 			_, err := backend.ListExchanges()
 			return err

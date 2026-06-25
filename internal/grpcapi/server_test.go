@@ -42,6 +42,7 @@ type testBackend struct {
 	accountIDErr            error
 	accountIDAtErr          error
 	assetErr                error
+	marketErr               error
 	tx                      *corepb.Transaction
 	txErr                   error
 	txInfoErr               error
@@ -271,18 +272,20 @@ func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum u
 func (b *testBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
 	return nil, b.assetErr
 }
-func (b *testBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
+func (b *testBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
 func (b *testBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
 	return nil, nil
 }
-func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
-	return nil
+func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	return nil, nil
 }
-func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	return nil
+func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
 	return nil, nil
@@ -1011,6 +1014,38 @@ func TestGetMarketOrderById_NotFound(t *testing.T) {
 	_, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head market state root corrupt")
+	client := newTestClient(t, &testBackend{marketErr: backendErr})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetMarketOrderById", call: func() error {
+			_, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: []byte("order")})
+			return err
+		}},
+		{name: "GetMarketOrderByAccount", call: func() error {
+			_, err := client.GetMarketOrderByAccount(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+			return err
+		}},
+		{name: "GetMarketPriceByPair", call: func() error {
+			_, err := client.GetMarketPriceByPair(context.Background(), &corepb.MarketOrderPair{
+				SellTokenId: []byte("sell"),
+				BuyTokenId:  []byte("buy"),
+			})
+			return err
+		}},
+	}
+	for _, check := range checks {
+		err := check.call()
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("%s error = %v, want Internal", check.name, err)
+		}
 	}
 }
 

@@ -1808,12 +1808,12 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) (*contractpb.
 	return sysKV.ReadAssetIssue(id), nil
 }
 
-func (b *TronBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
-	return sysKV.ReadMarketOrder(orderID)
+	return sysKV.ReadMarketOrder(orderID), nil
 }
 
 func (b *TronBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
@@ -1830,10 +1830,10 @@ func (b *TronBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*co
 	return order, nil
 }
 
-func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.MarketOrder {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) ([]*corepb.MarketOrder, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	mao := sysKV.ReadMarketAccountOrder(addr[:])
 	var orders []*corepb.MarketOrder
@@ -1842,7 +1842,7 @@ func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.M
 			orders = append(orders, o)
 		}
 	}
-	return orders
+	return orders, nil
 }
 
 func (b *TronBackend) GetMarketOrdersByAccountAt(addr tcommon.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
@@ -1869,12 +1869,12 @@ func (b *TronBackend) GetMarketOrdersByAccountAt(addr tcommon.Address, blockNum 
 	return orders, nil
 }
 
-func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
-	return sysKV.ReadMarketPriceList(sellTokenID, buyTokenID)
+	return sysKV.ReadMarketPriceList(sellTokenID, buyTokenID), nil
 }
 
 func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {

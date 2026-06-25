@@ -236,11 +236,11 @@ type Backend interface {
 	GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error)
 
 	// Market queries (Phase 13)
-	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder
+	GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error)
 	GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error)
-	GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder
+	GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error)
 	GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error)
-	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList
+	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error)
 	GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error)
 
 	// Exchange queries

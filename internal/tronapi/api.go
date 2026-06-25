@@ -1893,15 +1893,14 @@ func (api *API) handleGetMarketOrderByID(w http.ResponseWriter, r *http.Request,
 	}
 	var order *corepb.MarketOrder
 	if boundFn == nil {
-		order = api.backend.GetMarketOrderByID(orderID)
+		order, err = api.backend.GetMarketOrderByID(orderID)
 	} else {
-		var err error
 		blockNum := boundFn()
 		order, err = api.backend.GetMarketOrderByIDAt(orderID, blockNum)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	if order == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1935,15 +1934,14 @@ func (api *API) handleGetMarketOrdersFromAccount(w http.ResponseWriter, r *http.
 	}
 	var orders []*corepb.MarketOrder
 	if boundFn == nil {
-		orders = api.backend.GetMarketOrdersByAccount(addr)
+		orders, err = api.backend.GetMarketOrdersByAccount(addr)
 	} else {
-		var err error
 		blockNum := boundFn()
 		orders, err = api.backend.GetMarketOrdersByAccountAt(addr, blockNum)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	var list []map[string]any
 	for _, o := range orders {
@@ -1984,15 +1982,14 @@ func (api *API) handleGetMarketPriceByPair(w http.ResponseWriter, r *http.Reques
 	}
 	var pl *corepb.MarketPriceList
 	if boundFn == nil {
-		pl = api.backend.GetMarketPriceByPair(sell, buy)
+		pl, err = api.backend.GetMarketPriceByPair(sell, buy)
 	} else {
-		var err error
 		blockNum := boundFn()
 		pl, err = api.backend.GetMarketPriceByPairAt(sell, buy, blockNum)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	if pl == nil {
 		w.Header().Set("Content-Type", "application/json")

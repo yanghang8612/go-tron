@@ -742,9 +742,9 @@ func (s *isolationStubBackend) GetAssetIssueListPaginatedAt(offset, limit int, b
 	return []*contractpb.AssetIssueContract{assetSentinel("bound-page", 12)}, nil
 }
 
-func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
+func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
 	s.liveMarketOrderCalls++
-	return &corepb.MarketOrder{OrderId: []byte("live-order"), SellTokenQuantity: 1, BuyTokenQuantity: 2}
+	return &corepb.MarketOrder{OrderId: []byte("live-order"), SellTokenQuantity: 1, BuyTokenQuantity: 2}, nil
 }
 
 func (s *isolationStubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
@@ -760,9 +760,9 @@ func (s *isolationStubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uin
 	}, nil
 }
 
-func (s *isolationStubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
+func (s *isolationStubBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
 	s.liveMarketOrdersCalls++
-	return []*corepb.MarketOrder{{OrderId: []byte("live-account-order"), SellTokenQuantity: 3}}
+	return []*corepb.MarketOrder{{OrderId: []byte("live-account-order"), SellTokenQuantity: 3}}, nil
 }
 
 func (s *isolationStubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
@@ -778,13 +778,13 @@ func (s *isolationStubBackend) GetMarketOrdersByAccountAt(addr common.Address, b
 	}}, nil
 }
 
-func (s *isolationStubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+func (s *isolationStubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
 	s.liveMarketPriceCalls++
 	return &corepb.MarketPriceList{
 		SellTokenId: sellTokenID,
 		BuyTokenId:  buyTokenID,
 		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 4, BuyTokenQuantity: 5}},
-	}
+	}, nil
 }
 
 func (s *isolationStubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {

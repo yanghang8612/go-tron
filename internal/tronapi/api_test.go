@@ -70,6 +70,7 @@ type stubBackend struct {
 	proposalErr   error
 	proposalAtErr error
 	assetErr      error
+	marketErr     error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -278,18 +279,20 @@ func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.A
 }
 
 // --- New Phase 13 methods (Market order queries) ---
-func (s *stubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
+func (s *stubBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
+	return nil, s.marketErr
+}
 func (s *stubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
-	return nil
+func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
+	return nil, s.marketErr
 }
 func (s *stubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	return nil
+func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
+	return nil, s.marketErr
 }
 func (s *stubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
 	return nil, nil
@@ -1240,6 +1243,33 @@ func TestAssetIssueLiveQueriesSurfaceBackendError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestServer(t, &stubBackend{assetErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head market state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "order by id", path: "/wallet/getmarketorderbyid", body: `{"value":"order","visible":true}`},
+		{name: "orders by account", path: "/wallet/getmarketordersfromaccount", body: `{"address":"4101000000000000000000000000000000000000000000"}`},
+		{name: "price by pair", path: "/wallet/getmarketpricebypair", body: `{"sell_token_id":"sell","buy_token_id":"buy","visible":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{marketErr: backendErr})
 			defer srv.Close()
 			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
 			if err != nil {

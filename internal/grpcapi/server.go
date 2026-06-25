@@ -728,7 +728,10 @@ func (s *Server) GetMarketOrderById(_ context.Context, in *apipb.BytesMessage) (
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "order id required")
 	}
-	order := s.backend.GetMarketOrderByID(in.Value)
+	order, err := s.backend.GetMarketOrderByID(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if order == nil {
 		return nil, status.Error(codes.NotFound, "market order not found")
 	}
@@ -741,7 +744,10 @@ func (s *Server) GetMarketOrderByAccount(_ context.Context, in *apipb.BytesMessa
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	orders := s.backend.GetMarketOrdersByAccount(addr)
+	orders, err := s.backend.GetMarketOrdersByAccount(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &corepb.MarketOrderList{Orders: orders}, nil
 }
 
@@ -750,7 +756,10 @@ func (s *Server) GetMarketPriceByPair(_ context.Context, in *corepb.MarketOrderP
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	pl := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	pl, err := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if pl == nil {
 		return &corepb.MarketPriceList{}, nil
 	}

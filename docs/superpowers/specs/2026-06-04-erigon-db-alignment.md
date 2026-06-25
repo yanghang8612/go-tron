@@ -1879,7 +1879,7 @@ Status:
   state or resolve the head state root through that strict current-state path
   too: account/contract reads, constant-call simulation, account resource/net,
   JSON-RPC live balance/code/storage, debug trace calls,
-  witness/proposal/exchange lists, TRC10 asset live queries,
+  witness/proposal/exchange lists, TRC10 asset and market live queries,
   account-id/proposal-id lookups, delegation, freeze-v2 availability, reward
   reads, and broadcast-time transaction validation no longer route through
   `HeadStateRoot()`'s legacy zero-on-error fallback. Cold head state-root

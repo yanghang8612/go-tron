@@ -268,7 +268,7 @@ func (b *solidTestBackend) GetAssetIssueListPaginatedAt(offset, limit int, block
 	return b.testBackend.GetAssetIssueListPaginatedAt(offset, limit, blockNum)
 }
 
-func (b *solidTestBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
+func (b *solidTestBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
 	b.liveMarketOrder++
 	return b.testBackend.GetMarketOrderByID(orderID)
 }
@@ -281,7 +281,7 @@ func (b *solidTestBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64)
 	return b.testBackend.GetMarketOrderByIDAt(orderID, blockNum)
 }
 
-func (b *solidTestBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
+func (b *solidTestBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
 	b.liveMarketOrders++
 	return b.testBackend.GetMarketOrdersByAccount(addr)
 }
@@ -294,7 +294,7 @@ func (b *solidTestBackend) GetMarketOrdersByAccountAt(addr common.Address, block
 	return b.testBackend.GetMarketOrdersByAccountAt(addr, blockNum)
 }
 
-func (b *solidTestBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+func (b *solidTestBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
 	b.liveMarketPrice++
 	return b.testBackend.GetMarketPriceByPair(sellTokenID, buyTokenID)
 }
