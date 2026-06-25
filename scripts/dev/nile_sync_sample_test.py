@@ -1381,6 +1381,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["fullStagedSyncUnverifiedStages"], ["SyncExecution"])
             self.assertEqual(row["fullStagedSyncCompleteBlock"], 100)
             self.assertEqual(row["fullStagedSyncHeadLagBlocks"], 0)
+            self.assertEqual(row["soakHealthStatus"], "critical")
+            self.assertIn("full-staged-sync-unverified", row["soakHealthIssues"])
 
     def test_sample_reports_staged_body_verification_issues(self):
         with tempfile.TemporaryDirectory() as tmp:

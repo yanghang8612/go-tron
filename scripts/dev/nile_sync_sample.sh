@@ -1695,6 +1695,7 @@ def build_soak_health(
     stage_sync_bottleneck_lag,
     sync_log,
     stage_stalled,
+    full_staged_sync,
 ):
     critical = []
     warning = []
@@ -1723,6 +1724,8 @@ def build_soak_health(
         add(critical, "stage-order-issue")
     if number(stages, "stageIssueRows", 0) > 0:
         add(critical, "stage-status-issue")
+    if full_staged_sync.get("fullStagedSyncUnverifiedStages"):
+        add(critical, "full-staged-sync-unverified")
     if number(stages, "stageUnboundRows", 0) > 0:
         add(warning, "stage-unbound-rows")
     if restart_recovery_status == "stalled":
@@ -2239,6 +2242,7 @@ soak_health = build_soak_health(
     stage_sync_bottleneck_lag,
     sync_log,
     stage_stalled,
+    full_staged_sync,
 )
 if interval_seconds > 0:
     soak_efficiency_window = "interval"

@@ -341,6 +341,8 @@ For a production Nile run, capture these checks:
    execution, commitment, and finish must be `canonical`. If a required stage
    is present but lacks verification evidence, the sampler reports
    `fullStagedSyncStatus=unverified-stage` and does not mark it ready.
+   The same row is also marked with the `full-staged-sync-unverified` critical
+   health issue.
 4. Confirm `stageSyncBottleneck` moves as expected during catch-up; a persistent
    large `import-execution`, `execution-commitment`, `commitment-finish`, or
    `finish-head` lag is the signal to profile that stage.
