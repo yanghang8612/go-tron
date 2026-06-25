@@ -92,7 +92,11 @@ func TestArchiveQuery_BalanceAtBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBalanceAt(recipient, head): %v", err)
 	}
-	if live := b.GetBalance(recipient); headGot != live {
+	live, err := b.GetBalance(recipient)
+	if err != nil {
+		t.Fatalf("GetBalance(recipient): %v", err)
+	}
+	if headGot != live {
 		t.Errorf("GetBalanceAt(recipient, head) = %d, live GetBalance = %d", headGot, live)
 	}
 	if headGot != want[numBlocks] {

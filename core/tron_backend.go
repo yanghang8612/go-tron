@@ -2382,13 +2382,16 @@ func (b *TronBackend) BlockNumber() uint64 {
 	return b.chain.CurrentBlock().Number()
 }
 
-func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
-	root := b.chain.HeadStateRoot()
+func (b *TronBackend) GetBalance(addr tcommon.Address) (int64, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return 0, fmt.Errorf("read head state root: %w", err)
+	}
 	statedb, err := b.chain.openState(root)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("open head state: %w", err)
 	}
-	return statedb.GetBalance(addr)
+	return statedb.GetBalance(addr), nil
 }
 
 func (b *TronBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
@@ -2443,22 +2446,28 @@ func (b *TronBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_Bloc
 	return trace, nil
 }
 
-func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
-	root := b.chain.HeadStateRoot()
+func (b *TronBackend) GetCode(addr tcommon.Address) ([]byte, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read head state root: %w", err)
+	}
 	statedb, err := b.chain.openState(root)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("open head state: %w", err)
 	}
-	return statedb.GetCode(addr)
+	return statedb.GetCode(addr), nil
 }
 
-func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
-	root := b.chain.HeadStateRoot()
+func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return tcommon.Hash{}, fmt.Errorf("read head state root: %w", err)
+	}
 	statedb, err := b.chain.openState(root)
 	if err != nil {
-		return tcommon.Hash{}
+		return tcommon.Hash{}, fmt.Errorf("open head state: %w", err)
 	}
-	return statedb.GetState(addr, slot)
+	return statedb.GetState(addr, slot), nil
 }
 
 func (b *TronBackend) balanceTraceBlock(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*types.Block, error) {

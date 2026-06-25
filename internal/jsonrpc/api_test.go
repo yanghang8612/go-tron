@@ -51,6 +51,7 @@ type stubBackend struct {
 	balanceAt int64
 	codeAt    []byte
 	storageAt common.Hash
+	liveErr   error
 
 	// Trace recording (debug namespace): the *At methods capture the parsed
 	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
@@ -65,12 +66,25 @@ type stubBackend struct {
 	gotTraceHash  common.Hash
 }
 
-func (s *stubBackend) ChainID() int64                       { return s.chainID }
-func (s *stubBackend) BlockNumber() uint64                  { return s.blockNumber }
-func (s *stubBackend) GetBalance(addr common.Address) int64 { return s.balance }
-func (s *stubBackend) GetCode(addr common.Address) []byte   { return s.code }
-func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) common.Hash {
-	return s.storage
+func (s *stubBackend) ChainID() int64      { return s.chainID }
+func (s *stubBackend) BlockNumber() uint64 { return s.blockNumber }
+func (s *stubBackend) GetBalance(addr common.Address) (int64, error) {
+	if s.liveErr != nil {
+		return 0, s.liveErr
+	}
+	return s.balance, nil
+}
+func (s *stubBackend) GetCode(addr common.Address) ([]byte, error) {
+	if s.liveErr != nil {
+		return nil, s.liveErr
+	}
+	return s.code, nil
+}
+func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) (common.Hash, error) {
+	if s.liveErr != nil {
+		return common.Hash{}, s.liveErr
+	}
+	return s.storage, nil
 }
 func (s *stubBackend) GetBalanceAt(addr common.Address, blockNum uint64) (int64, error) {
 	if s.atErr != nil {
@@ -291,6 +305,45 @@ func TestEthGetStorageAt(t *testing.T) {
 			t.Fatalf("oversized slot: result should be a hex string, got %v", resp["result"])
 		}
 	})
+}
+
+func TestEthLiveStateMethodsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("cold head state root corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "balance",
+			method: "eth_getBalance",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "latest"},
+		},
+		{
+			name:   "code",
+			method: "eth_getCode",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "latest"},
+		},
+		{
+			name:   "storage",
+			method: "eth_getStorageAt",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "0x0", "latest"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{liveErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
 }
 
 func TestEthCall(t *testing.T) {

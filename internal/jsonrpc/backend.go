@@ -41,9 +41,9 @@ type Backend interface {
 	GetBlockByHash(hash common.Hash) (*types.Block, error)
 
 	// Account state (always reads latest/current state)
-	GetBalance(addr common.Address) int64 // returns SUN; handler multiplies by 1e12
-	GetCode(addr common.Address) []byte
-	GetStorageAt(addr common.Address, slot common.Hash) common.Hash
+	GetBalance(addr common.Address) (int64, error) // returns SUN; handler multiplies by 1e12
+	GetCode(addr common.Address) ([]byte, error)
+	GetStorageAt(addr common.Address, slot common.Hash) (common.Hash, error)
 
 	// Archive state — the value AS OF the end of blockNum, reconstructed via
 	// the State History Index. Callers pass the resolved block number (the

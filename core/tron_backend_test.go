@@ -172,6 +172,18 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetAccountResource(addr)
 			return err
 		}},
+		{name: "GetBalance", call: func() error {
+			_, err := backend.GetBalance(addr)
+			return err
+		}},
+		{name: "GetCode", call: func() error {
+			_, err := backend.GetCode(addr)
+			return err
+		}},
+		{name: "GetStorageAt", call: func() error {
+			_, err := backend.GetStorageAt(addr, tcommon.Hash{})
+			return err
+		}},
 		{name: "TraceCall", call: func() error {
 			_, err := backend.TraceCall(&addr, &addr, nil, 0, nil, &tracers.TraceConfig{})
 			return err
@@ -325,7 +337,10 @@ func TestTronBackend_GetBalance(t *testing.T) {
 	defer cleanup()
 	b := &TronBackend{chain: bc}
 	addr := tcommon.Address{}
-	bal := b.GetBalance(addr)
+	bal, err := b.GetBalance(addr)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
 	if bal < 0 {
 		t.Fatalf("GetBalance should not return negative: %d", bal)
 	}
@@ -479,7 +494,10 @@ func TestTronBackend_GetCode(t *testing.T) {
 	defer cleanup()
 	b := &TronBackend{chain: bc}
 	addr := tcommon.Address{}
-	code := b.GetCode(addr)
+	code, err := b.GetCode(addr)
+	if err != nil {
+		t.Fatalf("GetCode: %v", err)
+	}
 	// An empty address has no contract code
 	if len(code) > 0 {
 		t.Logf("GetCode returned non-empty code: %d bytes", len(code))
@@ -493,7 +511,10 @@ func TestTronBackend_GetStorageAt(t *testing.T) {
 	b := &TronBackend{chain: bc}
 	addr := tcommon.Address{}
 	slot := tcommon.Hash{}
-	val := b.GetStorageAt(addr, slot)
+	val, err := b.GetStorageAt(addr, slot)
+	if err != nil {
+		t.Fatalf("GetStorageAt: %v", err)
+	}
 	_ = val // just verify no panic
 }
 

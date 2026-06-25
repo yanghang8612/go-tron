@@ -102,7 +102,10 @@ func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
 	}
 	var balSUN int64
 	if isLatest {
-		balSUN = e.backend.GetBalance(addr)
+		balSUN, err = e.backend.GetBalance(addr)
+		if err != nil {
+			return "", err
+		}
 	} else if balSUN, err = e.backend.GetBalanceAt(addr, blockNum); err != nil {
 		return "", err
 	}
@@ -124,7 +127,11 @@ func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
 		return "", err
 	}
 	if isLatest {
-		return hexBytes(e.backend.GetCode(addr)), nil
+		code, err := e.backend.GetCode(addr)
+		if err != nil {
+			return "", err
+		}
+		return hexBytes(code), nil
 	}
 	code, err := e.backend.GetCodeAt(addr, blockNum)
 	if err != nil {
@@ -149,7 +156,10 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 		return "", err
 	}
 	if isLatest {
-		val := e.backend.GetStorageAt(addr, slot)
+		val, err := e.backend.GetStorageAt(addr, slot)
+		if err != nil {
+			return "", err
+		}
 		return hexBytes(val[:]), nil
 	}
 	val, err := e.backend.GetStorageAtBlock(addr, slot, blockNum)

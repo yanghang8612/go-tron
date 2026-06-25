@@ -486,7 +486,10 @@ func (api *API) ethGetBalance(params json.RawMessage) (interface{}, error) {
 	}
 	var balSUN int64
 	if isLatest {
-		balSUN = api.backend.GetBalance(addr)
+		balSUN, err = api.backend.GetBalance(addr)
+		if err != nil {
+			return nil, err
+		}
 	} else if balSUN, err = api.backend.GetBalanceAt(addr, blockNum); err != nil {
 		return nil, err
 	}
@@ -509,7 +512,11 @@ func (api *API) ethGetCode(params json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 	if isLatest {
-		return hexBytes(api.backend.GetCode(addr)), nil
+		code, err := api.backend.GetCode(addr)
+		if err != nil {
+			return nil, err
+		}
+		return hexBytes(code), nil
 	}
 	code, err := api.backend.GetCodeAt(addr, blockNum)
 	if err != nil {
@@ -534,7 +541,10 @@ func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 	if isLatest {
-		val := api.backend.GetStorageAt(addr, slot)
+		val, err := api.backend.GetStorageAt(addr, slot)
+		if err != nil {
+			return nil, err
+		}
 		return hexBytes(val[:]), nil
 	}
 	val, err := api.backend.GetStorageAtBlock(addr, slot, blockNum)
