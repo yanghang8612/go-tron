@@ -68,6 +68,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteBlock": 988,
                         "fullStagedSyncHeadBlock": 1000,
                         "fullStagedSyncHeadLagBlocks": 12,
+                        "fullStagedSyncCompletionRatio": 0.988,
+                        "fullStagedSyncPipelineLagBlocks": 12,
+                        "fullStagedSyncBottleneck": "finish-head",
+                        "fullStagedSyncBottleneckLagBlocks": 12,
+                        "fullStagedSyncBottleneckLagShare": 1.0,
+                        "stageSyncPipelineLagBlocks": 12,
+                        "stageSyncBottleneck": "finish-head",
+                        "stageSyncBottleneckLagBlocks": 12,
                         "heightRegressionBlocks": 0,
                         "stageProgressRegressionCount": 0,
                         "stageMismatchRows": 0,
@@ -191,6 +199,106 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "fullStagedSyncHeadLagBlocks=12, want 10",
                 proc.stderr,
             )
+
+    def test_rejects_full_staged_sync_derived_metric_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "catching-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": False,
+                        "stageSyncPipelineMonotonic": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
+                        "fullStagedSyncCompleteBlock": 990,
+                        "fullStagedSyncHeadBlock": 1000,
+                        "fullStagedSyncHeadLagBlocks": 10,
+                        "fullStagedSyncCompletionRatio": 0.1,
+                        "fullStagedSyncPipelineLagBlocks": 9,
+                        "fullStagedSyncBottleneck": "none",
+                        "fullStagedSyncBottleneckLagBlocks": 12,
+                        "fullStagedSyncBottleneckLagShare": 0.5,
+                        "stageSyncPipelineLagBlocks": 10,
+                        "stageSyncBottleneck": "finish-head",
+                        "stageSyncBottleneckLagBlocks": 10,
+                        "heightRegressionBlocks": 0,
+                        "stageProgressRegressionCount": 0,
+                        "stageMismatchRows": 0,
+                        "stageMissingCanonicalRows": 0,
+                        "stageStagedBodyIssueRows": 0,
+                        "stageIssueRows": 0,
+                        "stageOrderIssueRows": 0,
+                        "stageSyncPipelineViolationCount": 0,
+                        "height": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("fullStagedSyncCompletionRatio=0.1, want 0.99", proc.stderr)
+            self.assertIn(
+                "fullStagedSyncPipelineLagBlocks=9 is below fullStagedSyncHeadLagBlocks=10",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncPipelineLagBlocks=9, want stageSyncPipelineLagBlocks=10",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncBottleneckLagBlocks=12 exceeds fullStagedSyncPipelineLagBlocks=9",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncBottleneck='none', want a concrete bottleneck",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncBottleneck='none', want stageSyncBottleneck='finish-head'",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncBottleneckLagBlocks=12, want stageSyncBottleneckLagBlocks=10",
+                proc.stderr,
+            )
+            self.assertIn("fullStagedSyncBottleneckLagShare=0.5, want 1.33333", proc.stderr)
 
     def test_rejects_ready_row_without_full_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

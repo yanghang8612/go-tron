@@ -103,6 +103,12 @@ def as_bool(row, field):
     return False
 
 
+def approx_equal(got, want, tolerance=1e-9):
+    if got is None or want is None:
+        return False
+    return abs(got - want) <= tolerance
+
+
 def filter_rows(rows, args):
     out = []
     for row in rows:
@@ -451,6 +457,74 @@ def check_full_staged_sync_evidence(row):
             issues.append(
                 f"fullStagedSyncHeadLagBlocks={lag:g}, want {head - complete:g} "
                 "from fullStagedSyncHeadBlock-fullStagedSyncCompleteBlock"
+            )
+    completion_ratio = as_number(row, "fullStagedSyncCompletionRatio")
+    if complete is not None and head is not None and head > 0:
+        want = complete / head
+        if not approx_equal(completion_ratio, want):
+            issues.append(
+                f"fullStagedSyncCompletionRatio={completion_ratio}, want {want:g} "
+                "from fullStagedSyncCompleteBlock/fullStagedSyncHeadBlock"
+            )
+
+    pipeline_lag = as_number(row, "fullStagedSyncPipelineLagBlocks")
+    if pipeline_lag is None or pipeline_lag < 0:
+        issues.append(f"fullStagedSyncPipelineLagBlocks={pipeline_lag}, want >= 0")
+    elif lag is not None and lag >= 0 and pipeline_lag < lag:
+        issues.append(
+            f"fullStagedSyncPipelineLagBlocks={pipeline_lag:g} is below "
+            f"fullStagedSyncHeadLagBlocks={lag:g}"
+        )
+    stage_pipeline_lag = as_number(row, "stageSyncPipelineLagBlocks")
+    if (
+        pipeline_lag is not None
+        and stage_pipeline_lag is not None
+        and not approx_equal(pipeline_lag, stage_pipeline_lag)
+    ):
+        issues.append(
+            f"fullStagedSyncPipelineLagBlocks={pipeline_lag:g}, "
+            f"want stageSyncPipelineLagBlocks={stage_pipeline_lag:g}"
+        )
+
+    bottleneck = str(row.get("fullStagedSyncBottleneck", ""))
+    bottleneck_lag = as_number(row, "fullStagedSyncBottleneckLagBlocks")
+    if bottleneck_lag is None or bottleneck_lag < 0:
+        issues.append(f"fullStagedSyncBottleneckLagBlocks={bottleneck_lag}, want >= 0")
+    elif pipeline_lag is not None and pipeline_lag >= 0:
+        if bottleneck_lag > pipeline_lag:
+            issues.append(
+                f"fullStagedSyncBottleneckLagBlocks={bottleneck_lag:g} exceeds "
+                f"fullStagedSyncPipelineLagBlocks={pipeline_lag:g}"
+            )
+        if pipeline_lag == 0 and bottleneck != "none":
+            issues.append(f"fullStagedSyncBottleneck={bottleneck!r}, want 'none' when pipeline lag is 0")
+        if pipeline_lag > 0 and bottleneck in {"", "none", "unknown"}:
+            issues.append(
+                f"fullStagedSyncBottleneck={bottleneck!r}, want a concrete bottleneck "
+                "when pipeline lag is positive"
+            )
+    stage_bottleneck = str(row.get("stageSyncBottleneck", ""))
+    if bottleneck and stage_bottleneck and bottleneck != stage_bottleneck:
+        issues.append(
+            f"fullStagedSyncBottleneck={bottleneck!r}, want stageSyncBottleneck={stage_bottleneck!r}"
+        )
+    stage_bottleneck_lag = as_number(row, "stageSyncBottleneckLagBlocks")
+    if (
+        bottleneck_lag is not None
+        and stage_bottleneck_lag is not None
+        and not approx_equal(bottleneck_lag, stage_bottleneck_lag)
+    ):
+        issues.append(
+            f"fullStagedSyncBottleneckLagBlocks={bottleneck_lag:g}, "
+            f"want stageSyncBottleneckLagBlocks={stage_bottleneck_lag:g}"
+        )
+    bottleneck_share = as_number(row, "fullStagedSyncBottleneckLagShare")
+    if pipeline_lag is not None and bottleneck_lag is not None:
+        want_share = (bottleneck_lag / pipeline_lag) if pipeline_lag > 0 else -1.0
+        if not approx_equal(bottleneck_share, want_share):
+            issues.append(
+                f"fullStagedSyncBottleneckLagShare={bottleneck_share}, want {want_share:g} "
+                "from fullStagedSyncBottleneckLagBlocks/fullStagedSyncPipelineLagBlocks"
             )
 
     height = as_number(row, "height")
