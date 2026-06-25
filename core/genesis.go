@@ -66,8 +66,11 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	// SetupGenesisBlock intentionally takes `ethdb.KeyValueStore` rather
 	// than `*rawdb.ChainDB` because it runs before NewBlockChain
 	// constructs bc.chaindb; the local wrap is the cleanest bridge.
-	storedBlock := rawdb.ReadBlock(rawdb.NewChainDB(db, ancient), 0)
-	if storedBlock != nil {
+	storedBlock, stored, err := rawdb.ReadBlockStrict(rawdb.NewChainDB(db, ancient), 0)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("read existing genesis block: %w", err)
+	}
+	if stored {
 		storedHash := storedBlock.Hash()
 
 		// Compute the expected hash on a scratch store. genesisBlockAndStateRoot

@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -451,6 +452,22 @@ func TestSetupGenesisBlockWithAncientFindsFrozenGenesis(t *testing.T) {
 	}
 	if gotHash != genesisHash {
 		t.Fatalf("genesis hash = %x, want %x", gotHash, genesisHash)
+	}
+}
+
+func TestSetupGenesisBlockWithAncientSurfacesCorruptFrozenGenesis(t *testing.T) {
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+
+	_, _, err := SetupGenesisBlockWithAncient(diskdb, staticAncientRow{
+		kind:   rawdb.AncientBlocksTable,
+		number: 0,
+		data:   []byte("not-a-valid-genesis-block"),
+	}, genesis)
+	if err == nil || !strings.Contains(err.Error(), "read existing genesis block") || !strings.Contains(err.Error(), "block 0 decode") {
+		t.Fatalf("SetupGenesisBlockWithAncient err = %v, want corrupt frozen genesis decode error", err)
 	}
 }
 

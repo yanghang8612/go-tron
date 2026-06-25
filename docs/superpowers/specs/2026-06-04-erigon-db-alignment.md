@@ -1847,7 +1847,10 @@ Status:
   cold chain-index failures, and the resolved head block must exist and match
   the stored head hash before `BlockChain` construction can continue. This
   prevents archive/minimal nodes from silently falling back to genesis when
-  cold head metadata is corrupt or unreadable.
+  cold head metadata is corrupt or unreadable. The earlier
+  `SetupGenesisBlockWithAncient` idempotency check now uses the strict genesis
+  block reader too, so a corrupt frozen genesis row aborts startup instead of
+  being treated as a missing genesis that can be rewritten into the hot DB.
 - Fork rewind LCA loading is strict as well: `switchFork` resolves the LCA
   block number, block body, and state root through freezer/cold-sidecar-aware
   strict accessors before reloading consensus caches or re-applying the new
