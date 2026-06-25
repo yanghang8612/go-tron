@@ -253,11 +253,22 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "unix": 20,
                     "mode": "blocks",
                     "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": -1,
                     "tailPrunedThroughBlock": 7,
                 },
                 {
                     **base,
                     "unix": 30,
+                    "mode": "minimal",
+                    "pruneMode": "minimal",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 10,
+                    "tailPrunedThroughBlock": 12,
+                },
+                {
+                    **base,
+                    "unix": 40,
                     "mode": "full",
                     "pruneMode": "minimal",
                     "pruneModePersisted": "false",
@@ -282,7 +293,9 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("signedColdPrune must be false for archive", proc.stderr)
             self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for blocks mode", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=7 is not allowed for blocks mode", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
             self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
             self.assertIn("pruneModePersisted must be true", proc.stderr)
 

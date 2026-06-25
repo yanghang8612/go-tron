@@ -299,8 +299,10 @@ carries a stage-pipeline cursor it also verifies the Prometheus
 stage/status/upstream labels match that same row. It confirms minimal-mode
 signed cold lookup pruning plus tail-prune evidence, rejects mode-semantics
 regressions such as `archive` rows with prune progress or `blocks` rows with
-freezer-tail pruning, and applies any project-specific numeric `--min`/`--max`
-thresholds.
+freezer-tail pruning, requires signed cold prune rows in `blocks`/`minimal` to
+carry a valid chain-lookup prune boundary, and rejects `minimal` tail-prune
+boundaries that exceed the matching lookup-prune boundary. It also applies any
+project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:
 

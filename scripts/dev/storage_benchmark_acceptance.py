@@ -538,6 +538,28 @@ def check_prune_mode_semantics(rows):
                 check_non_negative_forbidden(row, "tailPrunedThroughBlock", f"{mode} mode")
             )
 
+        signed_cold_prune = as_number(row, "signedColdPrune") == 1.0
+        chain_lookup = as_number(row, "chainLookupPruneToBlock")
+        if mode in {"blocks", "minimal"} and signed_cold_prune:
+            if chain_lookup is None or chain_lookup < 0:
+                issues.append(
+                    f"{line_label(row)} chainLookupPruneToBlock must be >= 0 "
+                    f"when signedColdPrune is true for {mode} mode"
+                )
+
+        tail_pruned = as_number(row, "tailPrunedThroughBlock")
+        if mode == "minimal" and tail_pruned is not None and tail_pruned >= 0:
+            if chain_lookup is None or chain_lookup < 0:
+                issues.append(
+                    f"{line_label(row)} chainLookupPruneToBlock must be >= 0 "
+                    "when tailPrunedThroughBlock is set for minimal mode"
+                )
+            elif tail_pruned > chain_lookup:
+                issues.append(
+                    f"{line_label(row)} tailPrunedThroughBlock={tail_pruned:g} exceeds "
+                    f"chainLookupPruneToBlock={chain_lookup:g}"
+                )
+
     return issues
 
 
