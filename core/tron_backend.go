@@ -143,10 +143,9 @@ func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {
 }
 
 func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
-	root := b.chain.HeadStateRoot()
-	statedb, err := b.chain.openState(root)
+	statedb, err := b.chain.openCurrentState()
 	if err != nil {
-		return nil, fmt.Errorf("open state: %w", err)
+		return nil, fmt.Errorf("open head state: %w", err)
 	}
 	acc := statedb.GetAccount(addr)
 	if acc == nil {
@@ -206,10 +205,9 @@ func (b *TronBackend) PendingTransactionCount() int {
 }
 
 func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContract, error) {
-	root := b.chain.HeadStateRoot()
-	statedb, err := b.chain.openState(root)
+	statedb, err := b.chain.openCurrentState()
 	if err != nil {
-		return nil, fmt.Errorf("open state: %w", err)
+		return nil, fmt.Errorf("open head state: %w", err)
 	}
 	sc := statedb.GetContract(addr)
 	if sc == nil {

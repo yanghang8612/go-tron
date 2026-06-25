@@ -114,6 +114,34 @@ func TestTronBackend_BlockHashReadsSurfaceColdIndexError(t *testing.T) {
 	}
 }
 
+func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    fmt.Errorf("cold state root read failed"),
+	})
+	bc := &BlockChain{
+		db:      db,
+		chaindb: chain,
+		stateDB: state.NewDatabase(db),
+	}
+	bc.currentBlock.Store(block)
+	backend := &TronBackend{chain: bc}
+	addr := testCoreAddr(1)
+
+	if _, err := backend.GetAccount(addr); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("GetAccount error = %v, want cold state-root error", err)
+	}
+	if _, err := backend.GetContract(addr); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("GetContract error = %v, want cold state-root error", err)
+	}
+}
+
 func TestTronBackend_BlockHashReadsSurfaceCorruptIndexedBody(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	genesis := &params.Genesis{

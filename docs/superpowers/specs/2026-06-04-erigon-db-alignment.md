@@ -1857,6 +1857,11 @@ Status:
   known-block state-root resolver. Parent/current cold state-root failures
   abort with storage context instead of falling through to a zero or stale
   `account_state_root` baseline.
+- Live `TronBackend.GetAccount` and `GetContract` now open the head state via
+  that strict current-state path as well. Cold head state-root lookup failures
+  surface as backend errors instead of being translated through
+  `HeadStateRoot()`'s legacy zero-on-error fallback into misleading
+  not-found results.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
