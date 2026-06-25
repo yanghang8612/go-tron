@@ -76,6 +76,12 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "stageSyncPipelineLagBlocks": 12,
                         "stageSyncBottleneck": "finish-head",
                         "stageSyncBottleneckLagBlocks": 12,
+                        "stageStalled": False,
+                        "stageStalledCount": 0,
+                        "stageStalledStage": "",
+                        "stageStalledSeconds": 0,
+                        "stageStalledLagBlocks": -1,
+                        "stageStalls": [],
                         "heightRegressionBlocks": 0,
                         "stageProgressRegressionCount": 0,
                         "stageMismatchRows": 0,
@@ -299,6 +305,191 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
             self.assertIn("fullStagedSyncBottleneckLagShare=0.5, want 1.33333", proc.stderr)
+
+    def test_accepts_warning_stage_stall_with_consistent_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "warning",
+                        "soakHealthIssues": ["stage-stalled"],
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "catching-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": False,
+                        "stageSyncPipelineMonotonic": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
+                        "fullStagedSyncCompleteBlock": 990,
+                        "fullStagedSyncHeadBlock": 1000,
+                        "fullStagedSyncHeadLagBlocks": 10,
+                        "fullStagedSyncCompletionRatio": 0.99,
+                        "fullStagedSyncPipelineLagBlocks": 10,
+                        "fullStagedSyncBottleneck": "finish-head",
+                        "fullStagedSyncBottleneckLagBlocks": 10,
+                        "fullStagedSyncBottleneckLagShare": 1.0,
+                        "stageSyncPipelineLagBlocks": 10,
+                        "stageSyncBottleneck": "finish-head",
+                        "stageSyncBottleneckLagBlocks": 10,
+                        "stageStalled": True,
+                        "stageStalledCount": 1,
+                        "stageStalledStage": "stageSyncExecution",
+                        "stageStalledSeconds": 120,
+                        "stageStalledLagBlocks": 7,
+                        "stageStalls": [
+                            {
+                                "stage": "stageSyncExecution",
+                                "stalledSeconds": 120,
+                                "lagBlocks": 7,
+                            }
+                        ],
+                        "heightRegressionBlocks": 0,
+                        "stageProgressRegressionCount": 0,
+                        "stageMismatchRows": 0,
+                        "stageMissingCanonicalRows": 0,
+                        "stageStagedBodyIssueRows": 0,
+                        "stageIssueRows": 0,
+                        "stageOrderIssueRows": 0,
+                        "stageSyncPipelineViolationCount": 0,
+                        "height": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--allow-warning-health",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_inconsistent_stage_stall_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "warning",
+                        "soakHealthIssues": [],
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "catching-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": False,
+                        "stageSyncPipelineMonotonic": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
+                        "fullStagedSyncCompleteBlock": 990,
+                        "fullStagedSyncHeadBlock": 1000,
+                        "fullStagedSyncHeadLagBlocks": 10,
+                        "fullStagedSyncCompletionRatio": 0.99,
+                        "fullStagedSyncPipelineLagBlocks": 10,
+                        "fullStagedSyncBottleneck": "finish-head",
+                        "fullStagedSyncBottleneckLagBlocks": 10,
+                        "fullStagedSyncBottleneckLagShare": 1.0,
+                        "stageSyncPipelineLagBlocks": 10,
+                        "stageSyncBottleneck": "finish-head",
+                        "stageSyncBottleneckLagBlocks": 10,
+                        "stageStalled": True,
+                        "stageStalledCount": 2,
+                        "stageStalledStage": "stageSyncExecution",
+                        "stageStalledSeconds": 10,
+                        "stageStalledLagBlocks": 5,
+                        "stageStalls": [
+                            {
+                                "stage": "stageSyncImport",
+                                "stalledSeconds": 20,
+                                "lagBlocks": 7,
+                            }
+                        ],
+                        "heightRegressionBlocks": 0,
+                        "stageProgressRegressionCount": 0,
+                        "stageMismatchRows": 0,
+                        "stageMissingCanonicalRows": 0,
+                        "stageStagedBodyIssueRows": 0,
+                        "stageIssueRows": 0,
+                        "stageOrderIssueRows": 0,
+                        "stageSyncPipelineViolationCount": 0,
+                        "height": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--allow-warning-health",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("stageStalledCount=2, want len(stageStalls)=1", proc.stderr)
+            self.assertIn("stageStalled=true but soakHealthIssues lacks 'stage-stalled'", proc.stderr)
+            self.assertIn(
+                "stageStalledStage='stageSyncExecution', want primary stalled stage 'stageSyncImport'",
+                proc.stderr,
+            )
+            self.assertIn("stageStalledSeconds=10, want primary stalled seconds 20", proc.stderr)
+            self.assertIn("stageStalledLagBlocks=5, want primary stalled lag 7", proc.stderr)
 
     def test_rejects_ready_row_without_full_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

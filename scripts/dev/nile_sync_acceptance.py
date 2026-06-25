@@ -546,6 +546,95 @@ def check_full_staged_sync_evidence(row):
     return issues
 
 
+def check_stage_stall_evidence(row):
+    fields = (
+        "stageStalled",
+        "stageStalledCount",
+        "stageStalledStage",
+        "stageStalledSeconds",
+        "stageStalledLagBlocks",
+        "stageStalls",
+    )
+    if not any(field in row for field in fields):
+        return []
+
+    issues = []
+    stalled = as_bool(row, "stageStalled")
+    stalls = row.get("stageStalls")
+    if stalls is None:
+        stalls = []
+    if not isinstance(stalls, list):
+        issues.append(f"stageStalls={stalls!r}, want list")
+        stalls = []
+
+    count = as_number(row, "stageStalledCount")
+    if count is not None and count != len(stalls):
+        issues.append(f"stageStalledCount={count:g}, want len(stageStalls)={len(stalls)}")
+
+    health_issues = row.get("soakHealthIssues")
+    has_stage_stalled_issue = isinstance(health_issues, list) and "stage-stalled" in health_issues
+    if stalled and not has_stage_stalled_issue:
+        issues.append("stageStalled=true but soakHealthIssues lacks 'stage-stalled'")
+    if not stalled and has_stage_stalled_issue:
+        issues.append("soakHealthIssues contains 'stage-stalled' but stageStalled is false")
+
+    stage = str(row.get("stageStalledStage", ""))
+    seconds = as_number(row, "stageStalledSeconds")
+    lag = as_number(row, "stageStalledLagBlocks")
+    if not stalled:
+        if stalls:
+            issues.append(f"stageStalls has {len(stalls)} entries while stageStalled is false")
+        if stage:
+            issues.append(f"stageStalledStage={stage!r}, want '' when stageStalled is false")
+        if seconds is not None and seconds != 0:
+            issues.append(f"stageStalledSeconds={seconds:g}, want 0 when stageStalled is false")
+        if lag is not None and lag > 0:
+            issues.append(f"stageStalledLagBlocks={lag:g}, want <= 0 when stageStalled is false")
+        return issues
+
+    if not stalls:
+        issues.append("stageStalled=true but stageStalls is empty")
+    if not stage:
+        issues.append("stageStalledStage is empty while stageStalled is true")
+    if seconds is None or seconds <= 0:
+        issues.append(f"stageStalledSeconds={seconds}, want > 0 when stageStalled is true")
+    if lag is None or lag <= 0:
+        issues.append(f"stageStalledLagBlocks={lag}, want > 0 when stageStalled is true")
+
+    primary = None
+    for stall in stalls:
+        if not isinstance(stall, dict):
+            issues.append(f"stageStalls entry {stall!r} is not an object")
+            continue
+        if primary is None:
+            primary = stall
+            continue
+        current_key = (
+            as_number(stall, "stalledSeconds") or 0,
+            as_number(stall, "lagBlocks") or 0,
+        )
+        primary_key = (
+            as_number(primary, "stalledSeconds") or 0,
+            as_number(primary, "lagBlocks") or 0,
+        )
+        if current_key > primary_key:
+            primary = stall
+    if primary is not None:
+        primary_stage = str(primary.get("stage", ""))
+        primary_seconds = as_number(primary, "stalledSeconds")
+        primary_lag = as_number(primary, "lagBlocks")
+        if stage and primary_stage and stage != primary_stage:
+            issues.append(f"stageStalledStage={stage!r}, want primary stalled stage {primary_stage!r}")
+        if seconds is not None and primary_seconds is not None and seconds != primary_seconds:
+            issues.append(
+                f"stageStalledSeconds={seconds:g}, want primary stalled seconds {primary_seconds:g}"
+            )
+        if lag is not None and primary_lag is not None and lag != primary_lag:
+            issues.append(f"stageStalledLagBlocks={lag:g}, want primary stalled lag {primary_lag:g}")
+
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -578,6 +667,7 @@ def check_row(row, args):
 
     if row.get("stageSyncPipelineMonotonic") is not None and not as_bool(row, "stageSyncPipelineMonotonic"):
         issues.append("stageSyncPipelineMonotonic=false")
+    issues.extend(check_stage_stall_evidence(row))
 
     for field in ZERO_ISSUE_FIELDS:
         value = as_number(row, field)
