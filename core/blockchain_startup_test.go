@@ -45,6 +45,42 @@ func TestNewBlockChainWithAncientSurfacesGenesisColdReadErrors(t *testing.T) {
 	}
 }
 
+func TestLoadForkLCABlockAndRootSurfacesColdLookupErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	lcaHash := tcommon.Hash{0x44}
+	chain.SetChainIndexReader(blockchainStartupErrChainIndex{err: errors.New("cold chain index corrupt")})
+
+	_, _, err := loadForkLCABlockAndRoot(chain, db, lcaHash)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "load LCA block") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want LCA context", err)
+	}
+}
+
+func TestLoadForkLCABlockAndRootSurfacesColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+
+	_, _, err := loadForkLCABlockAndRoot(chain, db, block.Hash())
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "state root") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want state-root context", err)
+	}
+}
+
 func blockchainStartupBlock(number uint64) *types.Block {
 	return types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{

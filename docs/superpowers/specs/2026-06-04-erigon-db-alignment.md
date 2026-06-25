@@ -1843,6 +1843,11 @@ Status:
   the stored head hash before `BlockChain` construction can continue. This
   prevents archive/minimal nodes from silently falling back to genesis when
   cold head metadata is corrupt or unreadable.
+- Fork rewind LCA loading is strict as well: `switchFork` resolves the LCA
+  block number, block body, and state root through freezer/cold-sidecar-aware
+  strict accessors before reloading consensus caches or re-applying the new
+  branch. Cold lookup/state-root errors now abort the fork switch with storage
+  context instead of replaying from a zero-root cache baseline.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

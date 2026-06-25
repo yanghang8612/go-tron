@@ -1821,11 +1821,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// pre-switch head here, so compute the LCA root explicitly rather than
 	// relying on HeadStateRoot(). Both the active witness list (Phase 3c) and
 	// the rooted dynprops live in the system-KV at the LCA root.
-	lcaRoot := rawdb.ReadBlockStateRoot(bc.chaindb, lcaHash)
-	if lcaRoot == (tcommon.Hash{}) {
-		if n := rawdb.ReadBlockNumber(bc.chaindb, lcaHash); n != nil && *n == 0 {
-			lcaRoot = rawdb.ReadGenesisStateRoot(bc.db)
-		}
+	lcaBlock, lcaRoot, err := loadForkLCABlockAndRoot(bc.chaindb, bc.db, lcaHash)
+	if err != nil {
+		return err
 	}
 	// An orphan-branch maintenance block may have called SetActiveWitnesses,
 	// mutating the in-memory atomic. Its rooted write was dropped with the
@@ -1851,15 +1849,6 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// it to pending on the new branch; drop the fork-pass memo so the re-applied
 	// branch re-evaluates each version from live fork-stats. See forks.VersionPassCache.
 	bc.versionPassCache.Reset()
-
-	var lcaBlock *types.Block
-	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
-	if numPtr != nil {
-		lcaBlock = rawdb.ReadBlock(bc.chaindb, *numPtr)
-	}
-	if lcaBlock == nil {
-		return fmt.Errorf("LCA block %x not found in DB", lcaHash)
-	}
 
 	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
 	bc.currentBlock.Store(lcaBlock)
@@ -1907,6 +1896,37 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 		}
 	}
 	return forkExecutor.Close()
+}
+
+func loadForkLCABlockAndRoot(chain *rawdb.ChainDB, db ethdb.KeyValueReader, lcaHash tcommon.Hash) (*types.Block, tcommon.Hash, error) {
+	num, ok, err := rawdb.ReadBlockNumberStrict(chain, lcaHash)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %x number: %w", lcaHash, err)
+	}
+	if !ok {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %x has no block number", lcaHash)
+	}
+	block, ok, err := rawdb.ReadBlockStrict(chain, num)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %d (%x): %w", num, lcaHash, err)
+	}
+	if !ok {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %d (%x) not found in DB", num, lcaHash)
+	}
+	if block.Hash() != lcaHash {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %d hash mismatch: have %x want %x", num, block.Hash(), lcaHash)
+	}
+	root, ok, err := rawdb.ReadBlockStateRootStrict(chain, lcaHash)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %d (%x) state root: %w", num, lcaHash, err)
+	}
+	if ok {
+		return block, root, nil
+	}
+	if num == 0 {
+		return block, rawdb.ReadGenesisStateRoot(db), nil
+	}
+	return block, block.AccountStateRoot(), nil
 }
 
 // LastInsertTime returns when the last block was successfully inserted.
