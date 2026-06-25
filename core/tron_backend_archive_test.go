@@ -1664,6 +1664,22 @@ func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	}
 }
 
+func TestArchiveExecutionRootUsesSessionHeadRoot(t *testing.T) {
+	want := tcommon.HexToHash("0x1234")
+	b := &TronBackend{}
+
+	got, err := b.archiveExecutionRoot(9, &archiveStateSession{
+		headNum:  9,
+		headRoot: want,
+	})
+	if err != nil {
+		t.Fatalf("archiveExecutionRoot: %v", err)
+	}
+	if got != want {
+		t.Fatalf("archiveExecutionRoot = %x, want session head root %x", got, want)
+	}
+}
+
 func TestArchiveQuery_ArchiveStateSessionReleasesChainMutexOnGateError(t *testing.T) {
 	b, _, _ := archiveBackend(t)
 
@@ -1724,7 +1740,7 @@ func TestHistoryReaderAtSurfacesColdStateRootErrorsAndUnlocks(t *testing.T) {
 	bc.currentBlock.Store(block)
 	b := &TronBackend{chain: bc}
 
-	_, _, _, err := b.historyReaderAt()
+	_, _, _, _, err := b.historyReaderAt()
 	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
 		t.Fatalf("historyReaderAt err = %v, want cold state-root error", err)
 	}

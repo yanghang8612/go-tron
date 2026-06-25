@@ -276,18 +276,16 @@ func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Addr
 }
 
 func (b *TronBackend) archiveExecutionRoot(blockNum uint64, session *archiveStateSession) (tcommon.Hash, error) {
+	if session != nil && blockNum == session.headNum {
+		return session.headRoot, nil
+	}
 	if root, ok, err := b.chain.stateRootAtBlockStrict(blockNum); err != nil {
 		return tcommon.Hash{}, err
 	} else if ok {
 		return root, nil
 	}
 	if session != nil && blockNum < session.headNum {
-		if root, ok, err := b.chain.stateRootAtBlockStrict(session.headNum); err != nil {
-			return tcommon.Hash{}, err
-		} else if ok {
-			return root, nil
-		}
-		return tcommon.Hash{}, fmt.Errorf("state root for head block %d not available", session.headNum)
+		return session.headRoot, nil
 	}
 	return tcommon.Hash{}, fmt.Errorf("state root for block %d not available", blockNum)
 }
@@ -762,11 +760,7 @@ func (b *TronBackend) GetAccountResourceAt(addr tcommon.Address, blockNum uint64
 	}
 	defer session.Close()
 	if blockNum == session.headNum {
-		root := b.chain.StateRootAtBlock(session.headNum)
-		if root == (tcommon.Hash{}) {
-			return nil, fmt.Errorf("no state root for block %d", session.headNum)
-		}
-		return b.accountResourceAtRoot(addr, root)
+		return b.accountResourceAtRoot(addr, session.headRoot)
 	}
 	acc, err := session.reader.AccountAt(addr, blockNum)
 	if err != nil {
@@ -2161,11 +2155,7 @@ func (b *TronBackend) GetAccountNetAt(addr tcommon.Address, blockNum uint64) (*a
 	}
 	defer session.Close()
 	if blockNum == session.headNum {
-		root := b.chain.StateRootAtBlock(session.headNum)
-		if root == (tcommon.Hash{}) {
-			return nil, fmt.Errorf("no state root for block %d", session.headNum)
-		}
-		return b.accountNetAtRoot(addr, root)
+		return b.accountNetAtRoot(addr, session.headRoot)
 	}
 	acc, err := session.reader.AccountAt(addr, blockNum)
 	if err != nil {
@@ -2522,30 +2512,31 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 // range, mode, and prune-window gates cannot be skipped. Direct callers remain
 // responsible for the flat-history availability gate (see requireArchive) and
 // must call the returned release function.
-func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, func(), error) {
+func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
 	b.chain.chainmu.Lock()
 	headNum := b.chain.CurrentBlock().Number()
 	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
 	if err != nil {
 		b.chain.chainmu.Unlock()
-		return nil, 0, nil, err
+		return nil, 0, tcommon.Hash{}, nil, err
 	}
 	if !ok {
 		b.chain.chainmu.Unlock()
-		return nil, 0, nil, fmt.Errorf("state root for head block %d not available", headNum)
+		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("state root for head block %d not available", headNum)
 	}
 	live, err := b.chain.openState(root)
 	if err != nil {
 		b.chain.chainmu.Unlock()
-		return nil, 0, nil, fmt.Errorf("open head state: %w", err)
+		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
-	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, b.chain.chainmu.Unlock, nil
+	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, root, b.chain.chainmu.Unlock, nil
 }
 
 type archiveStateSession struct {
-	reader  *state.PersistentHistoryReader
-	headNum uint64
-	release func()
+	reader   *state.PersistentHistoryReader
+	headNum  uint64
+	headRoot tcommon.Hash
+	release  func()
 }
 
 func (s *archiveStateSession) Close() {
@@ -2557,14 +2548,15 @@ func (s *archiveStateSession) Close() {
 }
 
 func (b *TronBackend) archiveStateAt(blockNum uint64) (*archiveStateSession, error) {
-	reader, headNum, releaseHistory, err := b.historyReaderAt()
+	reader, headNum, headRoot, releaseHistory, err := b.historyReaderAt()
 	if err != nil {
 		return nil, err
 	}
 	session := &archiveStateSession{
-		reader:  reader,
-		headNum: headNum,
-		release: releaseHistory,
+		reader:   reader,
+		headNum:  headNum,
+		headRoot: headRoot,
+		release:  releaseHistory,
 	}
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		session.Close()
