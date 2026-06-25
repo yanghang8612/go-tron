@@ -26,6 +26,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // newTestBlockchain creates an in-memory BlockChain with a genesis block for testing.
@@ -133,12 +134,80 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 	bc.currentBlock.Store(block)
 	backend := &TronBackend{chain: bc}
 	addr := testCoreAddr(1)
-
-	if _, err := backend.GetAccount(addr); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
-		t.Fatalf("GetAccount error = %v, want cold state-root error", err)
+	transferParam, err := anypb.New(&contractpb.TransferContract{
+		OwnerAddress: addr.Bytes(),
+		ToAddress:    testCoreAddr(2).Bytes(),
+		Amount:       1,
+	})
+	if err != nil {
+		t.Fatalf("pack transfer contract: %v", err)
 	}
-	if _, err := backend.GetContract(addr); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
-		t.Fatalf("GetContract error = %v, want cold state-root error", err)
+	transferTx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: transferParam,
+			}},
+		},
+	})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetAccount", call: func() error {
+			_, err := backend.GetAccount(addr)
+			return err
+		}},
+		{name: "GetContract", call: func() error {
+			_, err := backend.GetContract(addr)
+			return err
+		}},
+		{name: "TriggerConstantContract", call: func() error {
+			_, err := backend.TriggerConstantContract(addr, addr, nil, 1_000_000)
+			return err
+		}},
+		{name: "GetAccountResource", call: func() error {
+			_, err := backend.GetAccountResource(addr)
+			return err
+		}},
+		{name: "GetDelegatedResourceV2", call: func() error {
+			_, err := backend.GetDelegatedResourceV2(addr, addr)
+			return err
+		}},
+		{name: "GetDelegatedResourceAccountIndexV2", call: func() error {
+			_, err := backend.GetDelegatedResourceAccountIndexV2(addr)
+			return err
+		}},
+		{name: "CanDelegateResource", call: func() error {
+			_, err := backend.CanDelegateResource(addr, 1, corepb.ResourceCode_BANDWIDTH)
+			return err
+		}},
+		{name: "GetCanWithdrawUnfreezeAmount", call: func() error {
+			_, err := backend.GetCanWithdrawUnfreezeAmount(addr, 0)
+			return err
+		}},
+		{name: "GetAvailableUnfreezeCount", call: func() error {
+			_, err := backend.GetAvailableUnfreezeCount(addr)
+			return err
+		}},
+		{name: "GetReward", call: func() error {
+			_, err := backend.GetReward(addr)
+			return err
+		}},
+		{name: "GetAccountNet", call: func() error {
+			_, err := backend.GetAccountNet(addr)
+			return err
+		}},
+		{name: "ValidateTransaction", call: func() error {
+			return backend.ValidateTransaction(transferTx)
+		}},
+	}
+
+	for _, check := range checks {
+		if err := check.call(); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+			t.Fatalf("%s error = %v, want cold state-root error", check.name, err)
+		}
 	}
 }
 
