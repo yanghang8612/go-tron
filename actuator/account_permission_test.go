@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -55,6 +56,48 @@ func TestAccountPermissionValidate(t *testing.T) {
 	ctx.State.AddBalance(owner, 100_000_000) // cover UpdateAccountPermissionFee
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate failed: %v", err)
+	}
+}
+
+// TestAccountPermissionNameLengthCountsUTF16 pins java-tron
+// AccountPermissionUpdateActuator's `name.length() > 32` check: java
+// String.length() counts UTF-16 code units, NOT UTF-8 bytes. A 32-character
+// Chinese name (96 UTF-8 bytes) sits exactly on the boundary and must be
+// ACCEPTED — go was rejecting it on byte length, stalling the Nile re-sync at
+// block 38,418,800 (tx 0, an AccountPermissionUpdate whose active permission was
+// named "我的时候了吗丁啉哦…好了叫", 32 runes / 96 bytes).
+func TestAccountPermissionNameLengthCountsUTF16(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	validate := func(name string) error {
+		active := accountActivePermission(owner)
+		active.PermissionName = name
+		c := &contractpb.AccountPermissionUpdateContract{
+			OwnerAddress: owner[:],
+			Owner:        accountOwnerPermission(owner, 1),
+			Actives:      []*corepb.Permission{active},
+		}
+		ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+		ctx.DynProps.SetAllowMultiSign(true)
+		ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+		ctx.State.AddBalance(owner, 100_000_000)
+		return (&AccountPermissionUpdateActuator{}).Validate(ctx)
+	}
+
+	// 32 Chinese chars = 96 UTF-8 bytes = 32 UTF-16 code units → boundary, ACCEPT.
+	if err := validate(strings.Repeat("好", 32)); err != nil {
+		t.Fatalf("32-char (96-byte) permission name wrongly rejected: %v", err)
+	}
+	// 33 UTF-16 code units → REJECT.
+	if err := validate(strings.Repeat("好", 33)); err == nil {
+		t.Fatal("33-char permission name should be rejected")
+	}
+	// 16 emojis = 16 runes but 32 UTF-16 code units (surrogate pairs) → ACCEPT;
+	// 17 emojis = 34 UTF-16 units → REJECT. Pins UTF-16, not plain rune count.
+	if err := validate(strings.Repeat("😀", 16)); err != nil {
+		t.Fatalf("16-emoji (32 UTF-16) permission name wrongly rejected: %v", err)
+	}
+	if err := validate(strings.Repeat("😀", 17)); err == nil {
+		t.Fatal("17-emoji (34 UTF-16) permission name should be rejected")
 	}
 }
 

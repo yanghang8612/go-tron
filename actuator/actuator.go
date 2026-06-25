@@ -174,15 +174,28 @@ type Result struct {
 	// 20-28, filled for smart-contract txs in vm_actuator. They decompose the
 	// energy bill: recovered_usage = energy_limit - energy_left, and the limit
 	// is floor(frozen_for_energy/TRX * TotalEnergyCurrentLimit/TotalEnergyWeight).
-	CallerEnergyLimit             int64
-	OriginEnergyLimit             int64
-	OriginFrozenForEnergy         int64
-	CallerEnergyUsagePre          int64
-	OriginEnergyUsagePre          int64
-	CallerEnergyLastConsumeTime   int64
-	OriginEnergyLastConsumeTime   int64
-	TotalEnergyWeight             int64
-	TotalEnergyCurrentLimit       int64
+	CallerEnergyLimit           int64
+	OriginEnergyLimit           int64
+	OriginFrozenForEnergy       int64
+	CallerEnergyUsagePre        int64
+	OriginEnergyUsagePre        int64
+	CallerEnergyLastConsumeTime int64
+	OriginEnergyLastConsumeTime int64
+	TotalEnergyWeight           int64
+	TotalEnergyCurrentLimit     int64
+
+	// energyPreCharges records the pre-VM energy pre-charge applied to the
+	// caller (and, under the consume_user_resource_percent split, the origin),
+	// mirroring java-tron VMActuator.getAccountEnergyLimitWithFixRatio /
+	// getTotalEnergyLimitWithFixRatio. The pre-charge raises the account's
+	// energy_usage toward its limit in the VM-visible state BEFORE execution so a
+	// contract reading its own caller/origin energy usage mid-VM (the staking-
+	// query precompiles) observes the same charged value java does. It is undone
+	// after the VM (restoreEnergyPreCharges) — java resetAccountUsage on success,
+	// discard on revert — leaving the post-VM energy settle (PayEnergyBill) byte-
+	// identical. Non-consensus carrier; never serialised.
+	energyPreCharges []energyPreCharge
+
 	NetUsage                      int64
 	NetFee                        int64
 	NetFeeForBandwidth            bool

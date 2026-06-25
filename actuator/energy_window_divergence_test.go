@@ -333,7 +333,11 @@ func TestNile8825873CanonicalParentStateLeavesTx3OutOfEnergyBudget(t *testing.T)
 	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime()); got != 20_297 {
 		t.Fatalf("origin energy left before tx3 = %d, want 20297", got)
 	}
-	if got := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, &Result{}); got != 20_297 {
+	got, err := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, &Result{})
+	if err != nil {
+		t.Fatalf("triggerEnergyLimit returned error: %v", err)
+	}
+	if got != 20_297 {
 		t.Fatalf("tx3 invoke energy limit = %d, want 20297; 27461-energy deposit must be OUT_OF_ENERGY", got)
 	}
 }

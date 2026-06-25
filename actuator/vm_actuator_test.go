@@ -248,7 +248,10 @@ func TestVMActuatorTriggerEnergyLimit_FixRatioCapsByBalanceAndOrigin(t *testing.
 	})
 
 	result := &Result{}
-	got := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+	got, err := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+	if err != nil {
+		t.Fatalf("triggerEnergyLimit returned error: %v", err)
+	}
 	const want = int64(4_263_937)
 	if got != want {
 		t.Fatalf("triggerEnergyLimit = %d, want %d", got, want)
@@ -299,7 +302,9 @@ func TestVMActuatorTriggerEnergyLimit_FixRatioCapturesEnergyWindows(t *testing.T
 	ctx.State.SetEnergyWindow(origin, 6_789, false)
 
 	result := &Result{}
-	triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+	if _, err := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result); err != nil {
+		t.Fatalf("triggerEnergyLimit returned error: %v", err)
+	}
 
 	if result.CallerEnergyWindow != 12_345 {
 		t.Fatalf("CallerEnergyWindow = %d, want 12345", result.CallerEnergyWindow)
