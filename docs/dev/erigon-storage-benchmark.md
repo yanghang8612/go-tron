@@ -186,8 +186,8 @@ stages or a non-`minimal` datadir with freezer-tail prune progress; the same
 mode/stage contradiction is rejected during node startup before services are
 registered. It also warns when retired snapshot files still occupy disk after
 compaction or replacement. The JSONL row includes
-`freezerAlertStatus`, `freezerAlertIssues`, `freezerAlertHiddenBytes`,
-`freezerAlertDetails`, `stageVerifyStatus`, `stageVerifyIssues`,
+`storageAlertStatus`, `freezerAlertStatus`, `freezerAlertIssues`,
+`freezerAlertHiddenBytes`, `freezerAlertDetails`, `stageVerifyStatus`, `stageVerifyIssues`,
 `stageVerifyDetails`, `stageAlertPipelineComplete`,
 `stageAlertPipelinePending`, `stageAlertPipelineIssues`,
 `stageAlertPipelineNext`, `stageAlertPipelineNextStatus`,
@@ -291,8 +291,10 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
 The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
 Prometheus artifact with `gtron_storage_alert_status` and
-`gtron_storage_alert_issue` for the row's `datadir`, and when the row carries a
-stage-pipeline cursor it also verifies the Prometheus
+`gtron_storage_alert_issue` for the row's `datadir`, verifies
+`storageAlertStatus` against `gtron_storage_alert_status`
+(`0=ok`, `1=warning`, `2=critical`) when the field is present, and when the row
+carries a stage-pipeline cursor it also verifies the Prometheus
 `gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
 stage/status/upstream labels match that same row. It confirms minimal-mode
 signed cold lookup pruning plus tail-prune evidence, rejects mode-semantics

@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ALERT_STATUS_FIELDS = (
+    "storageAlertStatus",
     "freezerAlertStatus",
     "stageVerifyStatus",
     "modeAlertStatus",
@@ -19,6 +20,12 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_storage_alert_status{", "gtron_storage_alert_status"),
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
+
+PROMETHEUS_STATUS_VALUES = {
+    "ok": 0,
+    "warning": 1,
+    "critical": 2,
+}
 
 
 def row_sort_key(row):
@@ -204,6 +211,7 @@ def check_prometheus_text(label, path, text, row):
         issues.extend(
             check_prometheus_metric_present(label, path, text, "gtron_storage_alert_status", row)
         )
+        issues.extend(check_prometheus_alert_status_value(label, path, text, row))
     return issues
 
 
@@ -277,6 +285,20 @@ def check_prometheus_metric_present(label, path, text, metric, row):
     if prometheus_metric_value(text, metric, row) is None:
         return [f"{label} prometheus artifact {path} missing {metric}"]
     return []
+
+
+def check_prometheus_alert_status_value(label, path, text, row):
+    status = str(row.get("storageAlertStatus", "")).lower()
+    if status not in PROMETHEUS_STATUS_VALUES:
+        return []
+    return check_prometheus_metric_value(
+        label,
+        path,
+        text,
+        "gtron_storage_alert_status",
+        PROMETHEUS_STATUS_VALUES[status],
+        row,
+    )
 
 
 def row_alert_issue_keys(row):

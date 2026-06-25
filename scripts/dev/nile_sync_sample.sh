@@ -288,6 +288,7 @@ def load_json(path):
 
 def parse_alerts(text):
     row = {
+        "storageAlertStatus": "unknown",
         "freezerAlertStatus": "unknown",
         "freezerAlertIssues": -1,
         "freezerAlertHiddenBytes": -1,
@@ -325,6 +326,7 @@ def parse_alerts(text):
         if not isinstance(obj, dict):
             continue
         scalar_fields = {
+            "storageAlertStatus": "status",
             "freezerAlertStatus": "freezerStatus",
             "freezerAlertIssues": "freezerIssues",
             "freezerAlertHiddenBytes": "freezerAlertHiddenBytes",
@@ -381,6 +383,7 @@ def parse_alerts(text):
             row[row_key] = value if isinstance(value, list) else []
         return row
     patterns = {
+        "storageAlertStatus": r"status=([^ ]+)",
         "freezerAlertStatus": r"freezerStatus=([^ ]+)",
         "freezerAlertIssues": r"freezerIssues=([0-9]+)",
         "freezerAlertHiddenBytes": r"hiddenSize=([0-9]+)",

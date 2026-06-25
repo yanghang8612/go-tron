@@ -1698,6 +1698,7 @@ class NileSyncSampleTest(unittest.TestCase):
                 'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/nile",stage="ChainFreezer",status="behind",upstream="Finish"} 9',
                 metrics,
             )
+            self.assertEqual(row["storageAlertStatus"], "critical")
             self.assertEqual(row["stageVerifyStatus"], "critical")
             self.assertEqual(row["stageVerifyIssues"], 1)
             self.assertFalse(row["stageAlertPipelineComplete"])

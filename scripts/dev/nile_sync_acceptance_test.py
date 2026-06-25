@@ -340,6 +340,71 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("missing gtron_storage_alert_status", proc.stderr)
 
+    def test_rejects_prometheus_alert_status_value_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "storage-alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
+                        "offlineDbCheck": True,
+                        "offlineDbCheckStatus": "ok",
+                        "offlineDbCheckPrometheusStatus": "ok",
+                        "offlineDbCheckPrometheus": str(prom),
+                        "storageAlertStatus": "critical",
+                        "datadir": "/tmp/nile",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_storage_alert_status=0, want 2", proc.stderr)
+
     def test_rejects_offline_prometheus_artifact_missing_structured_issue_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

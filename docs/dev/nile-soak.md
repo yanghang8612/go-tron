@@ -385,8 +385,8 @@ state.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --json --datadir <dir>` and include
-freezer/stage/mode/snapshot alert fields in the row. The row keeps both
-aggregate counts and detail arrays:
+the overall `storageAlertStatus` plus freezer/stage/mode/snapshot alert fields
+in the row. The row keeps both aggregate counts and detail arrays:
 `freezerAlertDetails`, `stageVerifyDetails`, `modeAlertDetails`, and
 `snapshotAlertDetails`. `modeAlertDetails` flags persisted prune-mode conflicts
 such as `archive` datadirs with hot-prune or tail-prune progress. Do not
@@ -412,6 +412,10 @@ maintenance backlog from actual storage-alert failures. When
 `offlineDbCheckPrometheus` plus `offlineDbCheckPrometheusStatus` in the JSONL
 row. Use `--storage-alert-prometheus-file <file>` to place that artifact at a
 stable path for external scrape jobs.
+The acceptance checker compares `storageAlertStatus` with
+`gtron_storage_alert_status` (`0=ok`, `1=warning`, `2=critical`) when both are
+present, so a scrape artifact with the right labels but stale status value is
+rejected.
 
 ## Shielded TRC20 Replay Recovery
 

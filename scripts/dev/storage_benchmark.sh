@@ -69,6 +69,7 @@ RUN_FREEZER_ALERT_STATUS="not-run"
 RUN_FREEZER_ALERT_ISSUES=-1
 RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
 RUN_FREEZER_ALERT_DETAILS="[]"
+RUN_STORAGE_ALERT_STATUS="not-run"
 RUN_STAGE_VERIFY_STATUS="not-run"
 RUN_STAGE_VERIFY_ISSUES=-1
 RUN_STAGE_VERIFY_DETAILS="[]"
@@ -257,6 +258,7 @@ reset_run_metrics() {
   RUN_FREEZER_ALERT_ISSUES=-1
   RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
   RUN_FREEZER_ALERT_DETAILS="[]"
+  RUN_STORAGE_ALERT_STATUS="not-run"
   RUN_STAGE_VERIFY_STATUS="not-run"
   RUN_STAGE_VERIFY_ISSUES=-1
   RUN_STAGE_VERIFY_DETAILS="[]"
@@ -777,7 +779,8 @@ run_storage_alert_gate() {
   else
     echo "warning: storage-alerts prometheus metrics failed; see $alert_prometheus" >>"$log_path"
   fi
-  local freezer_status freezer_issues hidden stage_status stage_issues mode_status mode_issues prune_mode prune_mode_persisted snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
+  local alert_status freezer_status freezer_issues hidden stage_status stage_issues mode_status mode_issues prune_mode prune_mode_persisted snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
+  alert_status="$(storage_alert_field "$alert_out" status 'status=([^ ]+)')"
   freezer_status="$(storage_alert_field "$alert_out" freezerStatus 'freezerStatus=([^ ]+)')"
   freezer_issues="$(storage_alert_field "$alert_out" freezerIssues 'freezerIssues=([0-9]+)')"
   hidden="$(storage_alert_field "$alert_out" freezerAlertHiddenBytes 'hiddenSize=([0-9]+)')"
@@ -794,6 +797,7 @@ run_storage_alert_gate() {
   retired_missing="$(storage_alert_field "$alert_out" snapshotRetiredMissing 'retiredMissing=([0-9]+)')"
   retired_skipped="$(storage_alert_field "$alert_out" snapshotRetiredSkippedActive 'retiredSkippedActive=([0-9]+)')"
   retired_bytes="$(storage_alert_field "$alert_out" snapshotRetiredBytes 'retiredBytes=([0-9]+)')"
+  RUN_STORAGE_ALERT_STATUS="${alert_status:-unknown}"
   RUN_FREEZER_ALERT_STATUS="${freezer_status:-unknown}"
   RUN_FREEZER_ALERT_ISSUES="${freezer_issues:--1}"
   RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"
@@ -985,6 +989,7 @@ emit_result() {
     "$RUN_RETIRED_PRUNE_MISSING" "$RUN_RETIRED_PRUNE_SKIPPED_ACTIVE" \
     "$RUN_RETIRED_PRUNE_BYTES_DELETED" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
+    "$RUN_STORAGE_ALERT_STATUS" \
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$RUN_FREEZER_ALERT_DETAILS" \
     "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" "$RUN_STAGE_VERIFY_DETAILS" \
@@ -1021,7 +1026,7 @@ keys = [
     "retiredPruneSegments", "retiredPruneDeleted", "retiredPruneMissing",
     "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
-    "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
+    "storageAlertStatus", "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "freezerAlertDetails", "stageVerifyStatus", "stageVerifyIssues",
     "stageVerifyDetails", "stageAlertPipelineComplete", "stageAlertPipelinePending",
     "stageAlertPipelineIssues", "stageAlertPipelineNext",

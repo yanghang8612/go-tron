@@ -178,6 +178,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                 'gtron_storage_alert_component_issues{component="stage",datadir="/tmp/gtron"} 1',
                 metrics,
             )
+            self.assertEqual(row["storageAlertStatus"], "critical")
             self.assertIn(
                 'gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1',
                 metrics,

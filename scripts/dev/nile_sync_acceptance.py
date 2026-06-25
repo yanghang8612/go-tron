@@ -24,6 +24,12 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
 
+PROMETHEUS_STATUS_VALUES = {
+    "ok": 0,
+    "warning": 1,
+    "critical": 2,
+}
+
 FULL_STAGED_SYNC_REQUIRED_STAGES = (
     "SyncBodies",
     "SyncBodiesReady",
@@ -165,6 +171,7 @@ def check_prometheus_artifact(result_path, row):
         issues.extend(
             check_prometheus_metric_present(path, text, "gtron_storage_alert_status", row)
         )
+        issues.extend(check_prometheus_alert_status_value(path, text, row))
     issues.extend(check_prometheus_issue_kinds(path, text, row))
     issues.extend(check_prometheus_stage_pipeline(path, text, row))
     return issues
@@ -240,6 +247,19 @@ def check_prometheus_metric_present(path, text, metric, row):
     if prometheus_metric_value(text, metric, row) is None:
         return [f"offlineDbCheckPrometheus artifact {path} missing {metric}"]
     return []
+
+
+def check_prometheus_alert_status_value(path, text, row):
+    status = str(row.get("storageAlertStatus", "")).lower()
+    if status not in PROMETHEUS_STATUS_VALUES:
+        return []
+    return check_prometheus_metric_value(
+        path,
+        text,
+        "gtron_storage_alert_status",
+        PROMETHEUS_STATUS_VALUES[status],
+        row,
+    )
 
 
 def row_alert_issue_keys(row):
