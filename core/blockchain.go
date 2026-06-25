@@ -402,10 +402,14 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	// Load genesis
-	bc.genesisBlock = rawdb.ReadBlock(chaindb, 0)
-	if bc.genesisBlock == nil {
+	genesisBlock, ok, err := rawdb.ReadBlockStrict(chaindb, 0)
+	if err != nil {
+		return nil, fmt.Errorf("read genesis block: %w", err)
+	}
+	if !ok {
 		return nil, errors.New("genesis block not found in database")
 	}
+	bc.genesisBlock = genesisBlock
 
 	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -422,7 +426,10 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// flush to head) or crashed (last async flush to a solidified block).
 	// Block bodies written ahead of the flushed head are harmless orphans that
 	// re-sync re-applies. No startup state rebuild is required.
-	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
+	head, err := loadStoredHeadBlock(chaindb, bc.genesisBlock)
+	if err != nil {
+		return nil, err
+	}
 	bc.currentBlock.Store(head)
 	if err := bc.ensureCanonicalStageHead(head); err != nil {
 		return nil, err
@@ -478,20 +485,29 @@ func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
 	return nil
 }
 
-func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Block {
+func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) (*types.Block, error) {
 	headHash := rawdb.ReadHeadBlockHash(chaindb)
 	if headHash == (tcommon.Hash{}) {
-		return genesis
+		return genesis, nil
 	}
-	num := rawdb.ReadBlockNumber(chaindb, headHash)
-	if num == nil {
-		return genesis
+	num, ok, err := rawdb.ReadBlockNumberStrict(chaindb, headHash)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head %x block number: %w", headHash, err)
 	}
-	block := rawdb.ReadBlock(chaindb, *num)
-	if block == nil {
-		return genesis
+	if !ok {
+		return nil, fmt.Errorf("stored head %x has no block number", headHash)
 	}
-	return block
+	block, ok, err := rawdb.ReadBlockStrict(chaindb, num)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head block %d (%x): %w", num, headHash, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("stored head block %d (%x) not found", num, headHash)
+	}
+	if block.Hash() != headHash {
+		return nil, fmt.Errorf("stored head block %d hash mismatch: have %x want %x", num, block.Hash(), headHash)
+	}
+	return block, nil
 }
 
 func syncKeyValueStore(db ethdb.KeyValueStore) error {

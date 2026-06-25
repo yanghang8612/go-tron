@@ -1837,6 +1837,12 @@ Status:
   hash lookup errors abort `RestartSyncFromHeight` with the original storage
   error instead of collapsing into a misleading missing-block or zero-root
   diagnosis.
+- Startup head loading now uses the same strict chain boundary: genesis block
+  reads preserve ancient/freezer errors, persisted head hash lookups surface
+  cold chain-index failures, and the resolved head block must exist and match
+  the stored head hash before `BlockChain` construction can continue. This
+  prevents archive/minimal nodes from silently falling back to genesis when
+  cold head metadata is corrupt or unreadable.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
