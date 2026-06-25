@@ -433,6 +433,42 @@ def check_full_staged_sync_evidence(row):
         value = as_number(row, field)
         if value != 1.0:
             issues.append(f"{field}={value}, want 1")
+
+    complete = as_number(row, "fullStagedSyncCompleteBlock")
+    head = as_number(row, "fullStagedSyncHeadBlock")
+    lag = as_number(row, "fullStagedSyncHeadLagBlocks")
+    for field, value in (
+        ("fullStagedSyncCompleteBlock", complete),
+        ("fullStagedSyncHeadBlock", head),
+        ("fullStagedSyncHeadLagBlocks", lag),
+    ):
+        if value is None or value < 0:
+            issues.append(f"{field}={value}, want >= 0")
+    if complete is not None and head is not None and lag is not None:
+        if head < complete:
+            issues.append(f"fullStagedSyncHeadBlock={head:g} is below complete block {complete:g}")
+        elif lag != head - complete:
+            issues.append(
+                f"fullStagedSyncHeadLagBlocks={lag:g}, want {head - complete:g} "
+                "from fullStagedSyncHeadBlock-fullStagedSyncCompleteBlock"
+            )
+
+    height = as_number(row, "height")
+    if height is not None and head is not None and head != height:
+        issues.append(f"fullStagedSyncHeadBlock={head:g}, want height {height:g}")
+
+    status = str(row.get("fullStagedSyncStatus", "unknown"))
+    complete_at_head = as_bool(row, "fullStagedSyncCompleteAtHead")
+    if status == "caught-up" and (lag != 0 or not complete_at_head):
+        issues.append(
+            "full staged sync caught-up row is inconsistent: "
+            f"lag={lag} completeAtHead={row.get('fullStagedSyncCompleteAtHead')!r}"
+        )
+    if status == "catching-up" and ((lag is not None and lag <= 0) or complete_at_head):
+        issues.append(
+            "full staged sync catching-up row is inconsistent: "
+            f"lag={lag} completeAtHead={row.get('fullStagedSyncCompleteAtHead')!r}"
+        )
     return issues
 
 
