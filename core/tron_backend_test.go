@@ -25,6 +25,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm/tracers"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -171,6 +172,18 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetAccountResource(addr)
 			return err
 		}},
+		{name: "TraceCall", call: func() error {
+			_, err := backend.TraceCall(&addr, &addr, nil, 0, nil, &tracers.TraceConfig{})
+			return err
+		}},
+		{name: "ListWitnesses", call: func() error {
+			_, err := backend.ListWitnesses()
+			return err
+		}},
+		{name: "GetAccountById", call: func() error {
+			_, err := backend.GetAccountById([]byte("account-id"))
+			return err
+		}},
 		{name: "GetDelegatedResourceV2", call: func() error {
 			_, err := backend.GetDelegatedResourceV2(addr, addr)
 			return err
@@ -197,6 +210,26 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 		}},
 		{name: "GetAccountNet", call: func() error {
 			_, err := backend.GetAccountNet(addr)
+			return err
+		}},
+		{name: "ListProposals", call: func() error {
+			_, err := backend.ListProposals()
+			return err
+		}},
+		{name: "ListProposalsPaginated", call: func() error {
+			_, err := backend.ListProposalsPaginated(0, 10)
+			return err
+		}},
+		{name: "GetProposalByID", call: func() error {
+			_, err := backend.GetProposalByID(1)
+			return err
+		}},
+		{name: "ListExchanges", call: func() error {
+			_, err := backend.ListExchanges()
+			return err
+		}},
+		{name: "ListExchangesPaginated", call: func() error {
+			_, err := backend.ListExchangesPaginated(0, 10)
 			return err
 		}},
 		{name: "ValidateTransaction", call: func() error {

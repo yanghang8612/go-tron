@@ -1878,11 +1878,12 @@ Status:
 - Live head-state `TronBackend` APIs that return errors now open the head
   state or resolve the head state root through that strict current-state path
   too: account/contract reads, constant-call simulation, account resource/net,
-  delegation, freeze-v2 availability, reward reads, and broadcast-time
-  transaction validation no longer route through `HeadStateRoot()`'s legacy
-  zero-on-error fallback. Cold head state-root lookup failures surface as
-  backend errors instead of misleading not-found, empty-resource, or zero-value
-  results.
+  debug trace calls, witness/proposal/exchange lists, account-id/proposal-id
+  lookups, delegation, freeze-v2 availability, reward reads, and
+  broadcast-time transaction validation no longer route through
+  `HeadStateRoot()`'s legacy zero-on-error fallback. Cold head state-root
+  lookup failures surface as backend errors instead of misleading not-found,
+  empty-resource, or zero-value results.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

@@ -157,6 +157,18 @@ func (b *TronBackend) headStateRootStrict() (tcommon.Hash, error) {
 	return root, nil
 }
 
+func (b *TronBackend) headSystemStateStrict() (*state.StateDB, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read head state root: %w", err)
+	}
+	statedb, err := b.chain.openState(root)
+	if err != nil {
+		return nil, fmt.Errorf("open head state: %w", err)
+	}
+	return statedb, nil
+}
+
 func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	statedb, err := b.chain.openCurrentState()
 	if err != nil {
@@ -431,7 +443,11 @@ func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *s
 		if current == nil {
 			return nil, nil, nil, release, fmt.Errorf("current block not available")
 		}
-		statedbCopy, err := b.archiveExecutionState(b.chain.HeadStateRoot(), current.Number(), nil, current.Number())
+		root, err := b.headStateRootStrict()
+		if err != nil {
+			return nil, nil, nil, release, fmt.Errorf("read head state root: %w", err)
+		}
+		statedbCopy, err := b.archiveExecutionState(root, current.Number(), nil, current.Number())
 		if err != nil {
 			return nil, nil, nil, release, err
 		}
@@ -918,9 +934,9 @@ func chainParametersFromDynamicProperties(dynProps *state.DynamicProperties) []t
 }
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
-	statedb := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if statedb == nil {
-		return nil, nil
+	statedb, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	witnessAddrs := statedb.ReadWitnessIndex()
 	pendingDeltas, _ := pendingVoteDeltas(statedb)
@@ -1127,9 +1143,9 @@ func (b *TronBackend) BuildProposalDeleteTransaction(owner tcommon.Address, prop
 }
 
 func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil, nil
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	ids := sysKV.ReadProposalIndex()
 	result := make([]*tronapi.ProposalInfo, 0, len(ids))
@@ -1876,22 +1892,22 @@ func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blo
 // walking ids 1..latest_exchange_num as RpcApiService.getExchangeList does. The
 // V1/V2 bucket is selected through the same AllowSameTokenName final-store gate
 // java-tron uses for exchange reads.
-func (b *TronBackend) listExchangesAtHead() []*corepb.Exchange {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) listExchangesAtHead() ([]*corepb.Exchange, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	// latest_exchange_num is read from the cached DynProps, which tracks the same
 	// head this opens sysKV at; both are head-only, so they stay in sync.
 	dynProps := b.chain.DynProps()
 	if dynProps.AllowSameTokenName() {
-		return sysKV.ListExchangesV2(dynProps.LatestExchangeNum())
+		return sysKV.ListExchangesV2(dynProps.LatestExchangeNum()), nil
 	}
-	return sysKV.ListExchanges(dynProps.LatestExchangeNum())
+	return sysKV.ListExchanges(dynProps.LatestExchangeNum()), nil
 }
 
 func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
-	return b.listExchangesAtHead(), nil
+	return b.listExchangesAtHead()
 }
 
 func (b *TronBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
@@ -2043,7 +2059,10 @@ func (b *TronBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint6
 }
 
 func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
-	all := b.listExchangesAtHead()
+	all, err := b.listExchangesAtHead()
+	if err != nil {
+		return nil, err
+	}
 	if len(all) == 0 {
 		return []*corepb.Exchange{}, nil
 	}
@@ -2098,9 +2117,9 @@ func (b *TronBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 	// The account-id index is rooted (SystemAccountIndex): resolve it from the
 	// system-KV at the head state root, mirroring ListWitnesses' rooted read.
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil, fmt.Errorf("account not found")
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	addrBytes, ok, err := sysKV.ReadAccountIdIndexStrict(accountID)
 	if err != nil {
@@ -2214,9 +2233,9 @@ func (b *TronBackend) BuildContractTransaction(contractType corepb.Transaction_C
 }
 
 func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil, fmt.Errorf("proposal %d not found", id)
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	p := sysKV.ReadProposal(id)
 	if p == nil {
