@@ -179,6 +179,13 @@ type BlockHashReader interface {
 	BlockHashByNumber(number uint64) (common.Hash, bool)
 }
 
+// BlockHashReaderStrict is the error-returning variant used by execution and
+// verification paths that must distinguish a genuinely missing canonical block
+// from a corrupt or unreadable hot/freezer block row.
+type BlockHashReaderStrict interface {
+	BlockHashByNumberStrict(number uint64) (common.Hash, bool, error)
+}
+
 // ReadBlockKV is the KV-only variant of ReadBlock, for callers that hold a
 // plain `ethdb.KeyValueReader`. NOTE: hot b-<num> rows are deleted by the
 // slice-3 freezer once a block is frozen (default margin: 128 blocks below

@@ -25,6 +25,7 @@ package blockbuffer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // ErrNotFound is returned by Get/Has when the key is tombstoned in a layer.
@@ -195,6 +197,38 @@ func (b *Buffer) BlockHashByNumber(number uint64) (common.Hash, bool) {
 		return common.Hash{}, false
 	}
 	return reader.BlockHashByNumber(number)
+}
+
+// BlockHashByNumberStrict resolves a canonical block hash like
+// BlockHashByNumber, but preserves malformed hot rows and cold/freezer lookup
+// errors for execution paths that can abort instead of producing hash 0.
+func (b *Buffer) BlockHashByNumberStrict(number uint64) (common.Hash, bool, error) {
+	if b == nil {
+		return common.Hash{}, false, nil
+	}
+	if data, ok, err := rawdb.ReadBlockRawStrict(b, number); err != nil {
+		return common.Hash{}, ok, err
+	} else if ok {
+		block, err := types.UnmarshalBlock(data)
+		if err != nil {
+			return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode: %w", number, err)
+		}
+		if block.Number() != number {
+			return common.Hash{}, true, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
+		}
+		return block.Hash(), true, nil
+	}
+	b.mu.RLock()
+	reader := b.blockHashReader
+	b.mu.RUnlock()
+	if reader == nil {
+		return common.Hash{}, false, nil
+	}
+	if strict, ok := reader.(rawdb.BlockHashReaderStrict); ok {
+		return strict.BlockHashByNumberStrict(number)
+	}
+	hash, found := reader.BlockHashByNumber(number)
+	return hash, found, nil
 }
 
 // NewBatch creates a write batch whose operations are owned by the active layer

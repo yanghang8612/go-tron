@@ -867,7 +867,10 @@ Status:
   hot block-body rows are frozen/pruned: `BLOCKHASH` tries the execution buffer
   first and then a cold `BlockHashByNumber` hook wired to `ChainDB`; `CHAINID`
   falls back to the execution context's genesis hash when hot genesis block data
-  is absent.
+  is absent. Execution stores now also expose an optional strict block-hash
+  reader, so corrupt hot/freezer block rows in the BLOCKHASH window or genesis
+  hash lookup abort execution with the storage error instead of being
+  translated into hash zero or a numeric chain-id fallback.
 - Freezer startup repair is covered for table cardinality mismatch: writable
   opens truncate all freezer tables to the common low head, while readonly opens
   reject mismatched heads instead of silently serving a partial ancient view.
@@ -1094,8 +1097,9 @@ Status:
   reward/allowance through the cold history manager.
 - The remaining production chain `rawdb.ReadBlockKV` call sites have been
   eliminated outside rawdb itself. TVM `BLOCKHASH`/legacy `CHAINID` now resolve
-  through freezer-aware `BlockHashByNumber`/`ReadBlockHashByNumber`, and the
-  pruning finish-stage guard uses freezer-aware canonical hash lookups. A rawdb
+  through freezer-aware strict `BlockHashByNumber`/`ReadBlockHashByNumber`
+  paths when available, and the pruning finish-stage guard uses freezer-aware
+  canonical hash lookups. A rawdb
   source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
   separately pins the raw freezer copy helpers to the explicit
   `cmd/gtron/freezer_adapter.go` boundary. Actuator historical compatibility

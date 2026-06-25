@@ -7,6 +7,7 @@ package core
 // margin 128 < the opcode's 256-block window).
 
 import (
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -93,5 +94,23 @@ func TestVMKVStoreBlockHashFallsThroughToAncient(t *testing.T) {
 				t.Fatalf("BlockHashByNumber(%d) = %x,%v want %x,%v", tc.number, got, ok, tc.want, tc.found)
 			}
 		})
+	}
+}
+
+func TestVMKVStoreBlockHashStrictSurfacesCorruptAncient(t *testing.T) {
+	kv := ethrawdb.NewMemoryDatabase()
+	buf := blockbuffer.New(kv)
+	store := vmKVStore{
+		BufferedKVStore: buf,
+		chaindb: rawdb.NewChainDB(kv, stubAncient{
+			blocks: map[uint64][]byte{50: []byte("not-a-valid-block")},
+		}),
+	}
+
+	if _, ok := store.BlockHashByNumber(50); ok {
+		t.Fatal("legacy BlockHashByNumber resolved corrupt ancient block")
+	}
+	if hash, ok, err := store.BlockHashByNumberStrict(50); err == nil || !ok || hash != (tcommon.Hash{}) || !strings.Contains(err.Error(), "block 50 decode") {
+		t.Fatalf("BlockHashByNumberStrict corrupt ancient = %x,%v,%v; want present decode error", hash, ok, err)
 	}
 }

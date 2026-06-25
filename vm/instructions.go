@@ -472,17 +472,21 @@ type blockHashByNumberReader interface {
 	BlockHashByNumber(number uint64) (tcommon.Hash, bool)
 }
 
-func tvmBlockHashByNumber(db KVReadWriter, number uint64) (tcommon.Hash, bool) {
+func tvmBlockHashByNumber(db KVReadWriter, number uint64) (tcommon.Hash, bool, error) {
 	if db == nil {
-		return tcommon.Hash{}, false
+		return tcommon.Hash{}, false, nil
 	}
-	if hash := rawdb.ReadBlockHashByNumber(db, number); hash != (tcommon.Hash{}) {
-		return hash, true
+	if hash, found, err := rawdb.ReadBlockHashByNumberStrict(db, number); err != nil || found {
+		return hash, found, err
+	}
+	if reader, ok := db.(rawdb.BlockHashReaderStrict); ok {
+		return reader.BlockHashByNumberStrict(number)
 	}
 	if reader, ok := db.(blockHashByNumberReader); ok {
-		return reader.BlockHashByNumber(number)
+		hash, found := reader.BlockHashByNumber(number)
+		return hash, found, nil
 	}
-	return tcommon.Hash{}, false
+	return tcommon.Hash{}, false, nil
 }
 
 func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
@@ -505,7 +509,11 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 	// paths hand the VM a store implementing BlockHashByNumber whose lookup
 	// falls through to ancient; bare test stores still resolve via the hot
 	// canonical block-hash helper.
-	if hash, found := tvmBlockHashByNumber(interpreter.tvm.DB, index); found {
+	hash, found, err := tvmBlockHashByNumber(interpreter.tvm.DB, index)
+	if err != nil {
+		return nil, err
+	}
+	if found {
 		num.SetBytes(hash.Bytes())
 		return nil, nil
 	}
@@ -563,7 +571,9 @@ func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	postFork := interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId
 	if interpreter.tvm.DB != nil {
 		var genesisHash []byte
-		if hash, found := tvmBlockHashByNumber(interpreter.tvm.DB, 0); found {
+		if hash, found, err := tvmBlockHashByNumber(interpreter.tvm.DB, 0); err != nil {
+			return nil, err
+		} else if found {
 			genesisHash = hash.Bytes()
 		}
 		if genesisHash == nil && interpreter.tvm.GenesisHash != (tcommon.Hash{}) {

@@ -2626,6 +2626,25 @@ func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	return tcommon.Hash{}, false
 }
 
+func (s vmKVStore) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	// Hot/buffered path first. Buffer implements the strict variant, so
+	// malformed staged rows fail before execution can silently push hash 0.
+	if reader, ok := s.BufferedKVStore.(rawdb.BlockHashReaderStrict); ok {
+		if hash, found, err := reader.BlockHashByNumberStrict(number); err != nil || found {
+			return hash, found, err
+		}
+	} else if reader, ok := s.BufferedKVStore.(rawdb.BlockHashReader); ok {
+		if hash, found := reader.BlockHashByNumber(number); found {
+			return hash, true, nil
+		}
+	}
+	block, found, err := rawdb.ReadBlockStrict(s.chaindb, number)
+	if err != nil || !found {
+		return tcommon.Hash{}, found, err
+	}
+	return block.Hash(), true, nil
+}
+
 // vmKV wraps a processing view for handoff to the actuator/VM layer.
 func (bc *BlockChain) vmKV(view actuator.BufferedKVStore) vmKVStore {
 	return vmKVStore{BufferedKVStore: view, chaindb: bc.chaindb}
