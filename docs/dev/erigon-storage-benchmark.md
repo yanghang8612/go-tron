@@ -200,9 +200,11 @@ compaction or replacement. The JSONL row includes
 retired snapshot bytes that still await physical pruning. Each row also records
 `storageAlertPrometheus`, the Prometheus text artifact produced from the same
 storage-alert gate for archive/soak monitor ingestion.
-The acceptance checker binds those Prometheus samples to the row's `datadir`
-label when present, so an aggregated metrics file cannot satisfy one datadir's
-storage row with another datadir's stage or alert metrics.
+The acceptance checker binds `gtron_storage_alert_status`,
+`gtron_storage_alert_issue`, and `gtron_storage_stage_pipeline_*` samples to
+the row's `datadir` label when present, so an aggregated metrics file cannot
+satisfy one datadir's storage row with another datadir's stage or alert
+metrics.
 For external monitors that scrape command output instead of JSONL harness rows,
 run `gtron db storage-alerts --prometheus --datadir <dir>`. The Prometheus text
 output exposes overall/component status gauges (`0=ok`, `1=warning`,
@@ -289,13 +291,14 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
 The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
 Prometheus artifact with `gtron_storage_alert_status` and
-`gtron_storage_alert_issue`, and when the row carries a stage-pipeline cursor it
-also verifies the Prometheus `gtron_storage_stage_pipeline_*` values,
-next-target/current cursors, and stage/status/upstream labels match that same
-row. It confirms minimal-mode signed cold lookup pruning plus tail-prune
-evidence, rejects mode-semantics regressions such as `archive` rows with prune
-progress or `blocks` rows with freezer-tail pruning, and applies any
-project-specific numeric `--min`/`--max` thresholds.
+`gtron_storage_alert_issue` for the row's `datadir`, and when the row carries a
+stage-pipeline cursor it also verifies the Prometheus
+`gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
+stage/status/upstream labels match that same row. It confirms minimal-mode
+signed cold lookup pruning plus tail-prune evidence, rejects mode-semantics
+regressions such as `archive` rows with prune progress or `blocks` rows with
+freezer-tail pruning, and applies any project-specific numeric `--min`/`--max`
+thresholds.
 
 Recorded samples:
 

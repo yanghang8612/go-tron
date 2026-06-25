@@ -195,11 +195,15 @@ def resolve_artifact(result_path, raw_path):
     return result_path.parent / path
 
 
-def check_prometheus_text(label, path, text):
+def check_prometheus_text(label, path, text, row):
     issues = []
     for needle, name in PROMETHEUS_REQUIRED_SNIPPETS:
         if needle not in text:
             issues.append(f"{label} prometheus artifact {path} missing {name}")
+    if "gtron_storage_alert_status{" in text:
+        issues.extend(
+            check_prometheus_metric_present(label, path, text, "gtron_storage_alert_status", row)
+        )
     return issues
 
 
@@ -266,6 +270,12 @@ def check_prometheus_metric_value(label, path, text, metric, want, row):
         return [f"{label} prometheus artifact {path} missing {metric}"]
     if got != float(want):
         return [f"{label} prometheus artifact {path} {metric}={got:g}, want {want:g}"]
+    return []
+
+
+def check_prometheus_metric_present(label, path, text, metric, row):
+    if prometheus_metric_value(text, metric, row) is None:
+        return [f"{label} prometheus artifact {path} missing {metric}"]
     return []
 
 
@@ -423,7 +433,7 @@ def check_prometheus_artifacts(result_path, rows):
         except OSError as exc:
             issues.append(f"{line_label(row)} prometheus artifact {path}: {exc}")
             continue
-        issues.extend(check_prometheus_text(line_label(row), path, text))
+        issues.extend(check_prometheus_text(line_label(row), path, text, row))
         issues.extend(check_prometheus_issue_kinds(line_label(row), path, text, row))
         issues.extend(check_prometheus_stage_pipeline(line_label(row), path, text, row))
     return issues

@@ -161,6 +161,10 @@ def check_prometheus_artifact(result_path, row):
     for needle, name in PROMETHEUS_REQUIRED_SNIPPETS:
         if needle not in text:
             issues.append(f"offlineDbCheckPrometheus artifact {path} missing {name}")
+    if "gtron_storage_alert_status{" in text:
+        issues.extend(
+            check_prometheus_metric_present(path, text, "gtron_storage_alert_status", row)
+        )
     issues.extend(check_prometheus_issue_kinds(path, text, row))
     issues.extend(check_prometheus_stage_pipeline(path, text, row))
     return issues
@@ -229,6 +233,12 @@ def check_prometheus_metric_value(path, text, metric, want, row):
         return [f"offlineDbCheckPrometheus artifact {path} missing {metric}"]
     if got != float(want):
         return [f"offlineDbCheckPrometheus artifact {path} {metric}={got:g}, want {want:g}"]
+    return []
+
+
+def check_prometheus_metric_present(path, text, metric, row):
+    if prometheus_metric_value(text, metric, row) is None:
+        return [f"offlineDbCheckPrometheus artifact {path} missing {metric}"]
     return []
 
 
