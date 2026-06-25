@@ -41,6 +41,7 @@ type testBackend struct {
 	accountAtErr            error
 	accountIDErr            error
 	accountIDAtErr          error
+	assetErr                error
 	tx                      *corepb.Transaction
 	txErr                   error
 	txInfoErr               error
@@ -243,26 +244,32 @@ func (b *testBackend) GetTransactionFromPending(txID string) (*corepb.Transactio
 }
 func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) { return nil, nil }
 func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                       { return nil, nil }
-func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract     { return nil }
+func (b *testBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
 func (b *testBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (b *testBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract { return nil }
+func (b *testBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
 func (b *testBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract { return nil }
+func (b *testBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
 func (b *testBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	return nil
+func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (b *testBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
-	return nil
+func (b *testBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
 }
 func (b *testBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
 func (b *testBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
@@ -963,6 +970,39 @@ func TestGetAssetIssueList_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestAssetIssueLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head asset state root corrupt")
+	client := newTestClient(t, &testBackend{assetErr: backendErr})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetAssetIssueById", call: func() error {
+			_, err := client.GetAssetIssueById(context.Background(), &apipb.BytesMessage{Value: []byte("1000001")})
+			return err
+		}},
+		{name: "GetAssetIssueByAccount", call: func() error {
+			_, err := client.GetAssetIssueByAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+			return err
+		}},
+		{name: "GetAssetIssueList", call: func() error {
+			_, err := client.GetAssetIssueList(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedAssetIssueList", call: func() error {
+			_, err := client.GetPaginatedAssetIssueList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, check := range checks {
+		err := check.call()
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("%s error = %v, want Internal", check.name, err)
+		}
 	}
 }
 

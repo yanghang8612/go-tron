@@ -216,7 +216,7 @@ func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2At(addr common.Addr
 	return b.testBackend.GetDelegatedResourceAccountIndexV2At(addr, blockNum)
 }
 
-func (b *solidTestBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+func (b *solidTestBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
 	b.liveAssetID++
 	return b.testBackend.GetAssetIssueByID(id)
 }
@@ -229,7 +229,7 @@ func (b *solidTestBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*cont
 	return b.testBackend.GetAssetIssueByIDAt(id, blockNum)
 }
 
-func (b *solidTestBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+func (b *solidTestBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
 	b.liveAssetName++
 	return b.testBackend.GetAssetIssueByName(name)
 }
@@ -242,7 +242,7 @@ func (b *solidTestBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (
 	return b.testBackend.GetAssetIssueByNameAt(name, blockNum)
 }
 
-func (b *solidTestBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+func (b *solidTestBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
 	b.liveAssetList++
 	return b.testBackend.GetAssetIssueList()
 }
@@ -255,7 +255,7 @@ func (b *solidTestBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.A
 	return b.testBackend.GetAssetIssueListAt(blockNum)
 }
 
-func (b *solidTestBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+func (b *solidTestBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
 	b.liveAssetPage++
 	return b.testBackend.GetAssetIssueListPaginated(offset, limit)
 }

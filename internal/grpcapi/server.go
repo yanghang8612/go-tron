@@ -688,7 +688,10 @@ func (s *Server) GetAssetIssueById(_ context.Context, in *apipb.BytesMessage) (*
 		}
 		id = id*10 + int64(b-'0')
 	}
-	ac := s.backend.GetAssetIssueByID(id)
+	ac, err := s.backend.GetAssetIssueByID(id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
@@ -701,7 +704,10 @@ func (s *Server) GetAssetIssueByAccount(_ context.Context, in *corepb.Account) (
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Address)
-	ac := s.backend.GetAssetIssueByAccount(addr)
+	ac, err := s.backend.GetAssetIssueByAccount(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return &apipb.AssetIssueList{}, nil
 	}
@@ -710,7 +716,10 @@ func (s *Server) GetAssetIssueByAccount(_ context.Context, in *corepb.Account) (
 
 // GetAssetIssueList returns all TRC10 tokens.
 func (s *Server) GetAssetIssueList(_ context.Context, _ *apipb.EmptyMessage) (*apipb.AssetIssueList, error) {
-	assets := s.backend.GetAssetIssueList()
+	assets, err := s.backend.GetAssetIssueList()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
@@ -1229,7 +1238,10 @@ func (s *Server) GetPaginatedAssetIssueList(_ context.Context, in *apipb.Paginat
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	assets := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	assets, err := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 

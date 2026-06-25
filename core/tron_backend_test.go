@@ -236,6 +236,26 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetProposalByID(1)
 			return err
 		}},
+		{name: "GetAssetIssueByID", call: func() error {
+			_, err := backend.GetAssetIssueByID(1)
+			return err
+		}},
+		{name: "GetAssetIssueByName", call: func() error {
+			_, err := backend.GetAssetIssueByName([]byte("asset"))
+			return err
+		}},
+		{name: "GetAssetIssueList", call: func() error {
+			_, err := backend.GetAssetIssueList()
+			return err
+		}},
+		{name: "GetAssetIssueListPaginated", call: func() error {
+			_, err := backend.GetAssetIssueListPaginated(0, 10)
+			return err
+		}},
+		{name: "GetAssetIssueByAccount", call: func() error {
+			_, err := backend.GetAssetIssueByAccount(addr)
+			return err
+		}},
 		{name: "ListExchanges", call: func() error {
 			_, err := backend.ListExchanges()
 			return err

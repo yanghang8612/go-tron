@@ -702,9 +702,9 @@ func assetSentinel(id string, supply int64) *contractpb.AssetIssueContract {
 	}
 }
 
-func (s *isolationStubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+func (s *isolationStubBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
 	s.liveAssetIDCalls++
-	return assetSentinel("live-id", 1)
+	return assetSentinel("live-id", 1), nil
 }
 
 func (s *isolationStubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -712,9 +712,9 @@ func (s *isolationStubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*
 	return assetSentinel("bound-id", 9), nil
 }
 
-func (s *isolationStubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+func (s *isolationStubBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
 	s.liveAssetNameCalls++
-	return assetSentinel("live-name", 2)
+	return assetSentinel("live-name", 2), nil
 }
 
 func (s *isolationStubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -722,9 +722,9 @@ func (s *isolationStubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint6
 	return assetSentinel("bound-name", 99), nil
 }
 
-func (s *isolationStubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+func (s *isolationStubBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
 	s.liveAssetListCalls++
-	return []*contractpb.AssetIssueContract{assetSentinel("live-list", 3)}
+	return []*contractpb.AssetIssueContract{assetSentinel("live-list", 3)}, nil
 }
 
 func (s *isolationStubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
@@ -732,9 +732,9 @@ func (s *isolationStubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contract
 	return []*contractpb.AssetIssueContract{assetSentinel("bound-list", 11)}, nil
 }
 
-func (s *isolationStubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+func (s *isolationStubBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
 	s.liveAssetPageCalls++
-	return []*contractpb.AssetIssueContract{assetSentinel("live-page", 4)}
+	return []*contractpb.AssetIssueContract{assetSentinel("live-page", 4)}, nil
 }
 
 func (s *isolationStubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {

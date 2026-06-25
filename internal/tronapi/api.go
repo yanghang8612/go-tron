@@ -1705,16 +1705,16 @@ func (api *API) handleGetAssetIssueByID(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	var asset *contractpb.AssetIssueContract
+	var err error
 	if boundFn == nil {
-		asset = api.backend.GetAssetIssueByID(id)
+		asset, err = api.backend.GetAssetIssueByID(id)
 	} else {
-		var err error
 		blockNum := boundFn()
 		asset, err = api.backend.GetAssetIssueByIDAt(id, blockNum)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1748,15 +1748,14 @@ func (api *API) handleGetAssetIssueByName(w http.ResponseWriter, r *http.Request
 	}
 	var asset *contractpb.AssetIssueContract
 	if boundFn == nil {
-		asset = api.backend.GetAssetIssueByName(nameBytes)
+		asset, err = api.backend.GetAssetIssueByName(nameBytes)
 	} else {
-		var err error
 		blockNum := boundFn()
 		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, blockNum)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1776,13 +1775,13 @@ func (api *API) handleGetAssetIssueList(w http.ResponseWriter, r *http.Request, 
 		err    error
 	)
 	if boundFn == nil {
-		assets = api.backend.GetAssetIssueList()
+		assets, err = api.backend.GetAssetIssueList()
 	} else {
 		assets, err = api.backend.GetAssetIssueListAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	var list []map[string]any
 	for _, a := range assets {
@@ -1818,13 +1817,13 @@ func (api *API) handleGetPaginatedAssetIssueList(w http.ResponseWriter, r *http.
 		err    error
 	)
 	if boundFn == nil {
-		assets = api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+		assets, err = api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
 	} else {
 		assets, err = api.backend.GetAssetIssueListPaginatedAt(body.Offset, body.Limit, boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	var list []map[string]any
 	for _, a := range assets {
@@ -1857,7 +1856,11 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByAccount(addr)
+	asset, err := api.backend.GetAssetIssueByAccount(addr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

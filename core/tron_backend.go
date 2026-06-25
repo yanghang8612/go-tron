@@ -1605,12 +1605,12 @@ func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 // [firstAssetTokenID, token_id_num] because the KV trie cannot be prefix-scanned.
 const firstAssetTokenID int64 = 1_000_001
 
-func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
-	return sysKV.ReadAssetIssue(id)
+	return sysKV.ReadAssetIssue(id), nil
 }
 
 func (b *TronBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -1627,14 +1627,14 @@ func (b *TronBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractp
 	return asset, nil
 }
 
-func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	dp := b.chain.DynProps()
 	if !dp.AllowSameTokenName() {
-		return sysKV.ReadAssetIssueByName(name)
+		return sysKV.ReadAssetIssueByName(name), nil
 	}
 	var match *contractpb.AssetIssueContract
 	for _, asset := range sysKV.ListAssetsV2(firstAssetTokenID, dp.TokenIdNum()) {
@@ -1642,19 +1642,19 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueCon
 			continue
 		}
 		if match != nil {
-			return nil
+			return nil, nil
 		}
 		match = asset
 	}
 	if id, err := strconv.ParseInt(string(name), 10, 64); err == nil {
 		if asset := sysKV.ReadAssetIssue(id); asset != nil {
 			if match != nil && match.Id != asset.Id {
-				return nil
+				return nil, nil
 			}
 			match = asset
 		}
 	}
-	return match
+	return match, nil
 }
 
 func (b *TronBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -1704,7 +1704,7 @@ func (b *TronBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*cont
 	return match, nil
 }
 
-func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+func (b *TronBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
 	return b.listAssetsAtHead()
 }
 
@@ -1712,16 +1712,19 @@ func (b *TronBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetI
 	return b.listAssetsAt(blockNum)
 }
 
-func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	all := b.listAssetsAtHead()
+func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
+	all, err := b.listAssetsAtHead()
+	if err != nil {
+		return nil, err
+	}
 	if offset >= len(all) {
-		return nil
+		return nil, nil
 	}
 	end := offset + limit
 	if end > len(all) {
 		end = len(all)
 	}
-	return all[offset:end]
+	return all[offset:end], nil
 }
 
 func (b *TronBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
@@ -1751,16 +1754,16 @@ func (b *TronBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum u
 // unaffected; post-fork the legacy bucket is frozen so the divergence is
 // bounded. Flagged for stress-harness verification rather than fixed here, to
 // keep the migration a pure storage move.
-func (b *TronBackend) listAssetsAtHead() []*contractpb.AssetIssueContract {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) listAssetsAtHead() ([]*contractpb.AssetIssueContract, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	latest := b.chain.DynProps().TokenIdNum()
 	if !b.chain.DynProps().AllowSameTokenName() {
-		return sysKV.ListAssetsLegacy(firstAssetTokenID, latest)
+		return sysKV.ListAssetsLegacy(firstAssetTokenID, latest), nil
 	}
-	return sysKV.ListAssetsV2(firstAssetTokenID, latest)
+	return sysKV.ListAssetsV2(firstAssetTokenID, latest), nil
 }
 
 func (b *TronBackend) listAssetsAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
@@ -1788,21 +1791,21 @@ func (b *TronBackend) listAssetsAt(blockNum uint64) ([]*contractpb.AssetIssueCon
 	return assets, nil
 }
 
-func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.AssetIssueContract {
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return nil
+func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) (*contractpb.AssetIssueContract, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
 	}
 	id, ok := sysKV.ReadAssetOwnerIndex(addr[:])
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if !b.chain.DynProps().AllowSameTokenName() {
 		if asset := sysKV.ReadAssetIssue(id); asset != nil {
-			return sysKV.ReadAssetIssueByName(asset.Name)
+			return sysKV.ReadAssetIssueByName(asset.Name), nil
 		}
 	}
-	return sysKV.ReadAssetIssue(id)
+	return sysKV.ReadAssetIssue(id), nil
 }
 
 func (b *TronBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {

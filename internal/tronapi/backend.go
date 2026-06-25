@@ -225,15 +225,15 @@ type Backend interface {
 	ListNodes() ([]*PeerInfo, error)
 
 	// Asset queries (TRC10)
-	GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
+	GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error)
 	GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error)
-	GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract
+	GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error)
 	GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error)
-	GetAssetIssueList() []*contractpb.AssetIssueContract
+	GetAssetIssueList() ([]*contractpb.AssetIssueContract, error)
 	GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error)
-	GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract
+	GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error)
 	GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error)
-	GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract
+	GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error)
 
 	// Market queries (Phase 13)
 	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder

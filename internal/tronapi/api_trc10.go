@@ -168,7 +168,11 @@ func (api *API) getAssetIssueListByName(w http.ResponseWriter, r *http.Request) 
 		httpFieldErr(w, "value", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName(nameBytes)
+	asset, err := api.backend.GetAssetIssueByName(nameBytes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var items []*contractpb.AssetIssueContract
 	if asset != nil {
 		items = []*contractpb.AssetIssueContract{asset}

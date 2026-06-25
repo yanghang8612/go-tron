@@ -69,6 +69,7 @@ type stubBackend struct {
 	proposals     []*tronapi.ProposalInfo
 	proposalErr   error
 	proposalAtErr error
+	assetErr      error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -248,32 +249,32 @@ func (s *stubBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 }
 
 // --- New Phase 12 methods (TRC10 asset queries) ---
-func (s *stubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
 func (s *stubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
 func (s *stubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
 func (s *stubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
 func (s *stubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
 
 // --- New Phase 13 methods (Market order queries) ---
@@ -1221,6 +1222,37 @@ func TestGetAssetIssueListByName(t *testing.T) {
 		t.Fatalf("expected assetIssue key, got %v", result)
 	}
 }
+
+func TestAssetIssueLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head asset state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "by id", path: "/wallet/getassetissuebyid", body: `{"value":"1000001"}`},
+		{name: "by name", path: "/wallet/getassetissuebyname", body: `{"value":"TOKEN","visible":true}`},
+		{name: "list", path: "/wallet/getassetissuelist", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedassetissuelist", body: `{"offset":0,"limit":10}`},
+		{name: "by account", path: "/wallet/getassetissuebyaccount", body: `{"address":"4101000000000000000000000000000000000000000000"}`},
+		{name: "list by name", path: "/wallet/getassetissuelistbyname", body: `{"value":"TOKEN","visible":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{assetErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
 func TestClearABI(t *testing.T) {
 	testTxBuilder(t, "/wallet/clearabi",
 		`{"owner_address":"4101","contract_address":"4102"}`)
