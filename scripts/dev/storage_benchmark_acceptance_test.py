@@ -174,6 +174,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "signedColdPrune": 0,
                     "chainLookupPruneToBlock": -1,
                     "tailPrunedThroughBlock": -1,
+                    "coldFreezerToBlock": -1,
+                    "derivedIndexToBlock": -1,
                     "balanceTracePruneToBlock": -1,
                     "sectionBloomPruneToSection": -1,
                 },
@@ -184,6 +186,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "pruneMode": "blocks",
                     "signedColdPrune": 1,
                     "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
                     "tailPrunedThroughBlock": -1,
                 },
                 {
@@ -193,6 +196,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "pruneMode": "minimal",
                     "signedColdPrune": 1,
                     "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "derivedIndexToBlock": 50,
                     "tailPrunedThroughBlock": 45,
                 },
                 {
@@ -259,11 +264,24 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 },
                 {
                     **base,
+                    "unix": 25,
+                    "role": "observer",
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 49,
+                    "tailPrunedThroughBlock": -1,
+                },
+                {
+                    **base,
                     "unix": 30,
                     "mode": "minimal",
                     "pruneMode": "minimal",
                     "signedColdPrune": 1,
                     "chainLookupPruneToBlock": 10,
+                    "coldFreezerToBlock": 11,
+                    "derivedIndexToBlock": 9,
                     "tailPrunedThroughBlock": 12,
                 },
                 {
@@ -281,8 +299,6 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     sys.executable,
                     str(SCRIPT),
                     str(result),
-                    "--role",
-                    "producer",
                     "--require-prune-mode-semantics",
                 ],
                 cwd=REPO_ROOT,
@@ -294,8 +310,11 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("signedColdPrune must be false for archive", proc.stderr)
             self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for blocks mode", proc.stderr)
+            self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=7 is not allowed for blocks mode", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
+            self.assertIn("coldFreezerToBlock=11.0 must cover tailPrunedThroughBlock=12", proc.stderr)
+            self.assertIn("derivedIndexToBlock=9.0 must cover tailPrunedThroughBlock=12", proc.stderr)
             self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
             self.assertIn("pruneModePersisted must be true", proc.stderr)
 

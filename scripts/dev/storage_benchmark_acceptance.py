@@ -540,11 +540,17 @@ def check_prune_mode_semantics(rows):
 
         signed_cold_prune = as_number(row, "signedColdPrune") == 1.0
         chain_lookup = as_number(row, "chainLookupPruneToBlock")
+        cold_freezer = as_number(row, "coldFreezerToBlock")
         if mode in {"blocks", "minimal"} and signed_cold_prune:
             if chain_lookup is None or chain_lookup < 0:
                 issues.append(
                     f"{line_label(row)} chainLookupPruneToBlock must be >= 0 "
                     f"when signedColdPrune is true for {mode} mode"
+                )
+            elif cold_freezer is None or cold_freezer < chain_lookup:
+                issues.append(
+                    f"{line_label(row)} coldFreezerToBlock={cold_freezer} must cover "
+                    f"chainLookupPruneToBlock={chain_lookup:g}"
                 )
 
         tail_pruned = as_number(row, "tailPrunedThroughBlock")
@@ -558,6 +564,17 @@ def check_prune_mode_semantics(rows):
                 issues.append(
                     f"{line_label(row)} tailPrunedThroughBlock={tail_pruned:g} exceeds "
                     f"chainLookupPruneToBlock={chain_lookup:g}"
+                )
+            if cold_freezer is None or cold_freezer < tail_pruned:
+                issues.append(
+                    f"{line_label(row)} coldFreezerToBlock={cold_freezer} must cover "
+                    f"tailPrunedThroughBlock={tail_pruned:g}"
+                )
+            derived_index = as_number(row, "derivedIndexToBlock")
+            if tail_pruned > 0 and (derived_index is None or derived_index < tail_pruned):
+                issues.append(
+                    f"{line_label(row)} derivedIndexToBlock={derived_index} must cover "
+                    f"tailPrunedThroughBlock={tail_pruned:g}"
                 )
 
     return issues
