@@ -153,7 +153,12 @@ func (bc *BlockChain) commitAsync(
 	rewardAcctAddrs []tcommon.Address,
 	txInfos []*corepb.TransactionInfo,
 ) error {
-	// 1. Write latest-domain rows to the scope + capture the fold inputs.
+	// 1. Write latest-domain rows to the scope + capture the fold inputs. On the
+	//    deep pipeline (depth>2) tag the scoped latest writer so its prunePending
+	//    verifies durability before dropping read-your-writes overlay entries — the
+	//    guard against a lost write if an entry's block tag ever diverges from the
+	//    buffer layer its op bound to. Depth 2 keeps the fast byte-identical prune.
+	commitOpts.DeepAsync = bc.pipelinedCommit()
 	commitStats, err := plan.CommitStateCapture(block, commitOpts)
 	if err != nil {
 		return err

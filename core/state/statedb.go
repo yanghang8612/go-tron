@@ -212,6 +212,14 @@ type CommitOptions struct {
 	// (CommitWithStatsOptionsInScope) path; ignored on the per-block fresh-writer
 	// path, which fully flushes and clears its overlay every commit.
 	BlockNumber uint64
+	// DeepAsync marks the deep async-commit pipeline (GTRON_ASYNC_COMMIT_DEPTH >
+	// 2). It makes the scoped latest writer's prunePending verify each overlay
+	// entry is actually durable in the underlying store before dropping it, rather
+	// than trusting the BlockNumber tag — the guard against a read-your-writes lost
+	// write if the tag ever diverges from the buffer layer the op bound to. At
+	// depth 2 it is false and the fast tag-based prune (byte-identical to the
+	// synchronous path) is kept.
+	DeepAsync bool
 }
 
 // CommitScope carries the domain transaction objects reused by a staged range
@@ -3060,6 +3068,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	// whole staged range (the deep async-commit overlay leak). On the fresh-writer
 	// path this is harmless: that writer is fully flushed (overlay cleared) below.
 	accountKVLatestWriter.commitBlock = opts.BlockNumber
+	accountKVLatestWriter.deepAsync = opts.DeepAsync
 	for _, plan := range plans {
 		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVTemporalTx); err != nil {
 			if scope != nil {
