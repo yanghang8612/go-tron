@@ -335,6 +335,20 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "unix": 40,
                     "mode": "full",
                     "pruneMode": "full",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
+                },
+                {
+                    **base,
+                    "unix": 50,
+                    "mode": "snap",
+                    "pruneMode": "snap",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
                     "tailPrunedThroughBlock": -1,
                     "tailPrunedFiles": 0,
                 },
@@ -349,7 +363,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--role",
                     "producer",
                     "--require-modes",
-                    "archive,blocks,full,minimal",
+                    "archive,blocks,full,minimal,snap",
                     "--require-prune-mode-semantics",
                 ],
                 cwd=REPO_ROOT,
@@ -424,6 +438,17 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "mode": "full",
                     "pruneMode": "minimal",
                     "pruneModePersisted": "false",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": -1,
+                },
+                {
+                    **base,
+                    "unix": 50,
+                    "mode": "snap",
+                    "pruneMode": "snap",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 49,
                 },
             ]
             write_result(result, rows)
@@ -453,6 +478,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("derivedIndexToBlock=9.0 must cover tailPrunedThroughBlock=12", proc.stderr)
             self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
             self.assertIn("pruneModePersisted must be true", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
+            self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
 
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:

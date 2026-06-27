@@ -566,7 +566,7 @@ def check_prune_mode_semantics(rows):
         chain_lookup = as_number(row, "chainLookupPruneToBlock")
         cold_freezer = as_number(row, "coldFreezerToBlock")
         tail_pruned_files = as_number(row, "tailPrunedFiles")
-        if mode in {"blocks", "minimal"} and signed_cold_prune:
+        if mode != "archive" and signed_cold_prune:
             if chain_lookup is None or chain_lookup < 0:
                 issues.append(
                     f"{line_label(row)} chainLookupPruneToBlock must be >= 0 "
