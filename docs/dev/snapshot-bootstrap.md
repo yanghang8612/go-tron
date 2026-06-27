@@ -146,7 +146,9 @@ gtron snapshot build-derived-indexes \
 gtron snapshot publish-catalog \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
-  --snapshot.signing-key <ed25519-seed-or-private-key-hex>
+  --snapshot.signing-key-file /secure/path/catalog-signing-key.hex
+
+# For automated publish jobs, GTRON_SNAPSHOT_SIGNING_KEY_FILE is equivalent.
 
 gtron snapshot prune-retired \
   --datadir /path/to/datadir \

@@ -124,7 +124,8 @@ Options:
   --build-cold-freezer           After producer run, build chain-freezer snapshot
   --build-derived-indexes        After producer run, build cold trace/bloom/log sidecars
   --signed-cold-prune            Build freezer snapshot, sign catalog, prune hot lookups
-  --snapshot-signing-seed HEX    Ed25519 seed/private key for signed-cold-prune
+  --snapshot-signing-seed HEX    Ed25519 seed/private key for signed-cold-prune;
+                                  written to a temp key file before invoking gtron
   --sync-max-diff N              Sync profile success threshold (default: 2)
   --history-window N             Inject [history] prune_window for short prune drills
 
@@ -850,11 +851,18 @@ run_signed_cold_prune_drill() {
   fi
   RUN_SIGNED_COLD_PRUNE=1
 
+  local signing_key_file="$WORKDIR/$mode-snapshot-signing-key.hex"
+  local old_umask
+  old_umask="$(umask)"
+  umask 077
+  printf '%s\n' "$SNAPSHOT_SIGNING_SEED" >"$signing_key_file"
+  umask "$old_umask"
+
   local publish_out="$WORKDIR/$mode-publish-catalog.out"
   echo "publishing signed snapshot catalog" >>"$log_path"
   if ! run_logged "$publish_out" "$GTRON" snapshot publish-catalog \
     --datadir "$datadir" \
-    --snapshot.signing-key "$SNAPSHOT_SIGNING_SEED" >>"$log_path"; then
+    --snapshot.signing-key-file "$signing_key_file" >>"$log_path"; then
     die "snapshot publish-catalog failed; see $log_path"
   fi
   local signer
