@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/binary"
 
+	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
@@ -230,6 +231,16 @@ func parseUint64FromWord(input []byte, offset int) uint64 {
 // parseInt64FromWord reads an int64 from a 32-byte word (using uint64 then cast).
 func parseInt64FromWord(input []byte, offset int) int64 {
 	return int64(parseUint64FromWord(input, offset))
+}
+
+// parseLenIntValueSafe mirrors java PrecompiledContracts.parseLen:
+// `new DataWord(parseBytes(data, idx, 32)).intValueSafe()`. A length word occupying
+// more than 4 bytes (or whose low-32 is negative) saturates to Integer.MAX_VALUE, not
+// its truncated low-64 bits — so a huge length no longer slips past a `> bound` guard
+// as a small (or zero) value.
+func parseLenIntValueSafe(input []byte, offset int) uint64 {
+	w := new(uint256.Int).SetBytes(parseWord32(input, offset))
+	return uint64(wordToIntValueSafe(w))
 }
 
 // parseInt64SafeFromWord mirrors java DataWord.longValueSafe(): a 32-byte word

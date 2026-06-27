@@ -367,6 +367,144 @@ func TestAccountKVLatestBatchFlushCommittedPrunes(t *testing.T) {
 	}
 }
 
+// TestAccountKVLatestBatchDurabilityPruneGuardsLostWrite pins the deep-async
+// (GTRON_ASYNC_COMMIT_DEPTH>2) lost-write guard. It reproduces the loss engine:
+// an overlay entry tagged with block 1 whose buffer op actually binds to layer 2
+// (the commitBlock==op-layer assumption broken). A flush at cutoff 1 promotes and
+// applies only layer 1, so the entry's op is NOT yet durable. With the durability
+// gate (deepAsync) prunePending must KEEP the entry so read-your-writes still
+// returns the value; the fast tag-based prune drops it and the value is lost —
+// which is exactly the Nile 45,490,766 symptom (a committed SSTORE that vanished
+// from the latest domain). Running both modes proves the gate is what prevents
+// the loss, not incidental test setup.
+func TestAccountKVLatestBatchDurabilityPruneGuardsLostWrite(t *testing.T) {
+	domain := kvdomains.SystemDelegation
+	key := []byte("k")
+	o2 := pruneTestOwner(2)
+
+	// kept reports, for the over-prune scenario, whether each overlay type still
+	// serves o2's value/generation after the flush. All three overlays (KV,
+	// account-latest, generation) tag with commitBlock and prune together, so the
+	// durability gate must protect all three.
+	type kept struct{ kv, acct, gen bool }
+	run := func(deepAsync bool) kept {
+		writer, buf := newPruneTestWriter(t, 8)
+		writer.deepAsync = deepAsync
+
+		// Block 1: a normal entry — tag 1, op binds to layer 1.
+		buf.BeginBlock(pruneBlockHash(1), 1)
+		writer.commitBlock = 1
+		if err := writer.DomainPut(pruneTestOwner(1), domain, key, pruneTestVal(1)); err != nil {
+			t.Fatalf("put o1: %v", err)
+		}
+		// Block 2 is now the active layer, but the writer keeps tagging with
+		// commitBlock 1 — the invariant break. o2's ops bind to layer 2 while their
+		// overlay entries are tagged 1.
+		buf.BeginBlock(pruneBlockHash(2), 2)
+		if err := writer.DomainPut(o2, domain, key, pruneTestVal(2)); err != nil {
+			t.Fatalf("put o2 kv: %v", err)
+		}
+		if err := writer.writeAccountLatest(o2, pruneTestVal(2)); err != nil {
+			t.Fatalf("put o2 account: %v", err)
+		}
+		if err := writer.writeKVGeneration(o2, 99); err != nil {
+			t.Fatalf("put o2 generation: %v", err)
+		}
+		// Commit only layer 1; layer 2 stays in-flight. WriteUpTo(1) applies o1's
+		// op (layer 1) but NOT o2's (layer 2 > cutoff). prunePending then sees the
+		// o2 entries tagged 1 <= cutoff 1.
+		buf.CommitBlock()
+		if err := writer.flushUpTo(1); err != nil {
+			t.Fatalf("flushUpTo(1): %v", err)
+		}
+		kvVal, kvOK, err := writer.readLatest(o2, 0, domain, key)
+		if err != nil {
+			t.Fatalf("readLatest(o2): %v", err)
+		}
+		acctVal, acctOK, err := writer.readAccountLatest(o2)
+		if err != nil {
+			t.Fatalf("readAccountLatest(o2): %v", err)
+		}
+		genVal, genOK, err := writer.readKVGeneration(o2)
+		if err != nil {
+			t.Fatalf("readKVGeneration(o2): %v", err)
+		}
+		return kept{
+			kv:   kvOK && string(kvVal) == string(pruneTestVal(2)),
+			acct: acctOK && string(acctVal) == string(pruneTestVal(2)),
+			gen:  genOK && genVal == 99,
+		}
+	}
+
+	// With the durability gate: o2's ops are not durable (layer 2 unflushed), so
+	// all three overlay entries are retained and still read.
+	if got := run(true); !got.kv || !got.acct || !got.gen {
+		t.Fatalf("deepAsync prune lost a write: kept=%+v, want all true", got)
+	}
+	// Without it (fast tag-based prune): all three are dropped and lost — confirming
+	// the test exercises the real loss engine across all overlays and the gate is
+	// the fix.
+	if got := run(false); got.kv || got.acct || got.gen {
+		t.Fatalf("fast tag-based prune unexpectedly retained a write: kept=%+v, want all false", got)
+	}
+}
+
+// TestAccountKVLatestBatchDurabilityPruneGuardsLostDelete is the tombstone twin
+// of the lost-write guard: a delete tombstone tagged with block 1 whose delete op
+// binds to layer 2. Flushing at cutoff 1 does not apply the delete, so the key is
+// still present in the underlying store. The durability gate must KEEP the
+// tombstone (so reads see the deletion); the fast prune drops it and the read
+// falls through to the stale pre-delete value (a lost delete).
+func TestAccountKVLatestBatchDurabilityPruneGuardsLostDelete(t *testing.T) {
+	domain := kvdomains.SystemDelegation
+	key := []byte("k")
+	o := pruneTestOwner(1)
+
+	run := func(deepAsync bool) (string, bool) {
+		writer, buf := newPruneTestWriter(t, 8)
+		writer.deepAsync = deepAsync
+
+		// Block 1: write the key and make it durable (commit + flush layer 1). Its
+		// put overlay entry is pruned here (durable), leaving the value on disk.
+		buf.BeginBlock(pruneBlockHash(1), 1)
+		writer.commitBlock = 1
+		if err := writer.DomainPut(o, domain, key, pruneTestVal(1)); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		buf.CommitBlock()
+		if err := writer.flushUpTo(1); err != nil {
+			t.Fatalf("flushUpTo(1): %v", err)
+		}
+		// Block 2 active; tag the delete with block 1 while its op binds to layer 2
+		// — the invariant break for a tombstone. layer 2 is left in-flight.
+		buf.BeginBlock(pruneBlockHash(2), 2)
+		if err := writer.DomainDel(o, domain, key); err != nil {
+			t.Fatalf("del: %v", err)
+		}
+		// Flush at cutoff 1: the delete op (layer 2) is NOT applied, but the
+		// tombstone is tagged 1 <= 1, so it is a prune candidate.
+		if err := writer.flushUpTo(1); err != nil {
+			t.Fatalf("flushUpTo(1) post-delete: %v", err)
+		}
+		got, ok, err := writer.readLatest(o, 0, domain, key)
+		if err != nil {
+			t.Fatalf("readLatest: %v", err)
+		}
+		return string(got), ok
+	}
+
+	// With the gate: the delete is not durable, so the tombstone is kept → the key
+	// reads as absent.
+	if _, ok := run(true); ok {
+		t.Fatal("deepAsync prune lost the delete: key reads as present, want deleted")
+	}
+	// Without it: the tombstone is dropped and the read falls through to the stale
+	// pre-delete value — confirming the lost-delete engine and the gate's effect.
+	if got, ok := run(false); !ok || got != string(pruneTestVal(1)) {
+		t.Fatalf("fast prune unexpectedly hid the stale value: got %q ok=%v, want stale %q present", got, ok, pruneTestVal(1))
+	}
+}
+
 // TestCommitScopeThreadsBlockNumberToLatestWriter pins the production threading:
 // CommitOptions.BlockNumber must reach the scope's reused latest writer so its
 // overlay entries are tagged with the committing block (and thus prunable).
@@ -381,10 +519,13 @@ func TestCommitScopeThreadsBlockNumberToLatestWriter(t *testing.T) {
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
 		t.Fatalf("set kv: %v", err)
 	}
-	if _, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{BlockNumber: 7}); err != nil {
+	if _, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{BlockNumber: 7, DeepAsync: true}); err != nil {
 		t.Fatalf("scoped commit: %v", err)
 	}
 	if scope.latestWriter.commitBlock != 7 {
 		t.Fatalf("scope latest writer commitBlock = %d, want 7 (CommitOptions.BlockNumber must thread through)", scope.latestWriter.commitBlock)
+	}
+	if !scope.latestWriter.deepAsync {
+		t.Fatal("scope latest writer deepAsync = false, want true (CommitOptions.DeepAsync must thread through)")
 	}
 }

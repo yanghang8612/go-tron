@@ -7,6 +7,7 @@ package vm
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"math/big"
 
 	"github.com/holiman/uint256"
@@ -95,10 +96,8 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 			cost += EnergyCallNewAcct
 		}
 	}
-	if !in.useEnergy(contract, cost) {
-		return nil, ErrOutOfEnergy
-	}
 
+	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
@@ -106,6 +105,9 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
+	}
+	if !in.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
 	}
 	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
 	// calcMemEnergy(oldMemSize, in.max(out)); separate in/ret charges
@@ -118,7 +120,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	resizeMemory(mem, inOff, inSz)
 	resizeMemory(mem, retOff, retSz)
 
-	callEnergy := gas.Uint64()
+	callEnergy := javaCallEnergyRequest(&gas)
 	callEnergy = in.tvm.adjustedCallEnergy(contract, callEnergy)
 	contract.UseEnergy(callEnergy)
 	if tokenValueNonZero {
@@ -234,6 +236,17 @@ func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Sta
 	return nil, nil
 }
 
+// javaResourceCodeV1 decodes a V1 freeze/unfreeze/freezeExpireTime resourceType
+// word like java DataWord.intValue() (Program.parseResourceCode:
+// `switch (resourceType.intValue())`, and freezeExpireTime's
+// `int resourceCode = resourceType.intValue()`): the LOW 32 bits as a SIGNED int,
+// truncating/wrapping — NOT the saturating intValueSafe the V2 staking opcodes use.
+// A raw int64(low-64) decode rejected words like 2^32 (low-32 == 0 == BANDWIDTH)
+// that java accepts, flipping contractRet in the V1-freeze window.
+func javaResourceCodeV1(v *uint256.Int) int64 {
+	return int64(int32(v.Uint64()))
+}
+
 // ── 0xD5 FREEZE ───────────────────────────────────────────────────────────────
 // Stack: receiverAddr, amount, resourceType → success
 // resourceType: 0=BANDWIDTH, 1=ENERGY
@@ -265,7 +278,7 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	// int64(amountWord.Uint64()) truncation that let a huge word freeze its
 	// low bits.
 	amount, amountOK := uint256ToInt64Exact(&amountWord)
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
 
@@ -367,7 +380,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	// unconditionally (before validate/execute), feeding a later CREATE address.
 	in.tvm.Nonce++
 
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
 	nowMs := tvmLatestBlockHeaderTimestamp(in.tvm)
@@ -443,7 +456,7 @@ func opFreezeExpireTime(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	resourceWord := stack.pop()
 	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 
 	var expireMs int64
 	if addr != contract.Address {
@@ -478,6 +491,15 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	cost, needed, err := voteWitnessMemoryEnergyCost(in, mem, &witnessOffsetWord, &witnessCountWord, &amountOffsetWord, &amountCountWord)
 	if err != nil {
 		return nil, err
+	}
+	// java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy(...); calcMemEnergy
+	// runs checkMemorySize (the 3 MB OOM guard, inside voteWitnessMemoryEnergyCost
+	// above) before this base is spent. Charge the 30000 base here, after the OOM
+	// check, instead of as a static jump-table energyCost the interpreter loop
+	// would spend ahead of the memory check — which flips OUT_OF_MEMORY to
+	// OUT_OF_ENERGY when <30000 energy remains and the array exceeds 3 MB.
+	if !in.useEnergy(contract, EnergyVoteWitness) {
+		return nil, ErrOutOfEnergy
 	}
 	if cost > 0 {
 		if !in.useEnergy(contract, cost) {
@@ -709,17 +731,28 @@ func wordToIntValueSafe(v *uint256.Int) int32 {
 	return int32(v32)
 }
 
-// memoryArrayLengthSafe reads the 32-byte dynamic-array length word at `offset`
-// and applies java DataWord.intValueSafe() to it (java Program.voteWitness:2276
-// reads `memoryLoad(offset).intValueSafe()`). It returns -1 — a sentinel that can
-// never equal a non-negative intValueSafe count — when the word lies outside the
-// (already energy-charged, pre-resized) memory, preserving go-tron's existing
-// requirement that the length word be in allocated memory (locked by
-// TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks).
+// memoryArrayLengthSafe mirrors java Program.voteWitness's
+// `memoryLoad(offset).intValueSafe()` (Program.java:2277). java's memoryLoad ->
+// Memory.readWord -> Memory.read zero-EXTENDS memory to cover [offset, offset+32)
+// before reading (Memory.java:36), so a length word past the currently-allocated
+// region reads as 0 — it is NOT an error. The base energy era (#81
+// allowEnergyAdjustment OFF) charges no dynamic-array length word, so memory is
+// never pre-resized for a zero-length array; java still reads 0 there and a vote
+// with count 0 succeeds. gtron previously returned a -1 sentinel here, throwing
+// errVoteWitnessMemoryLength -> spendAll + UNKNOWN, diverging from java's SUCCESS
+// (Nile block 47,612,095, tx 686f2a89…e5e5c).
+//
+// `offset` is a non-negative java int (<= math.MaxInt32, from intValueSafe). java's
+// extend computes addExact(offset, 32), which throws ArithmeticException when
+// offset+32 overflows int — an uncaught exception java maps to
+// contractResult.UNKNOWN(13) with spendAllEnergy. We mirror that (and avoid a
+// ~2 GiB allocation) by returning the -1 sentinel for that range, which makes the
+// caller raise errVoteWitnessMemoryLength (also UNKNOWN + spendAll).
 func memoryArrayLengthSafe(mem *Memory, offset int64) int64 {
-	if mem == nil || offset < 0 || offset+32 > int64(mem.len()) {
+	if mem == nil || offset < 0 || offset > math.MaxInt32-32 {
 		return -1
 	}
+	resizeMemory(mem, uint64(offset), 32) // java Memory.read()'s zero-extend side effect
 	var w uint256.Int
 	w.SetBytes(mem.getCopy(offset, 32))
 	return int64(wordToIntValueSafe(&w))

@@ -21,6 +21,19 @@ var (
 	ErrInvalidSignature   = errors.New("invalid block signature")
 )
 
+// witnessSignerResolver is the optional capability a ChainReader exposes to
+// resolve a witness's authorized block-signing address from the parent state —
+// java-tron AccountCapsule.getWitnessPermissionAddress: the first key of the
+// account's witness permission, or the witness address itself when no witness
+// permission is set. VerifyHeaderWithDynProps consults it only when
+// AllowMultiSign is active. A reader that does not implement it makes block
+// validation fall back to comparing the recovered signer against
+// block.witness_address, which is correct for every witness that has not
+// delegated block signing via a custom witness permission.
+type witnessSignerResolver interface {
+	WitnessPermissionSigner(witnessAddr common.Address) common.Address
+}
+
 // VerifyHeader is the back-compat entry point that loads dp via
 // chain.DynProps() (which reads through the buffer overlay). Hot-path callers
 // inside applyBlock should call VerifyHeaderWithDynProps directly with a dp
@@ -93,15 +106,32 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 	if err != nil {
 		return ErrInvalidSignature
 	}
-	// java-tron's Manager.pushBlock → validateSignature compares the
-	// recovered signer to BlockHeader.raw.witness_address (not the schedule).
-	// Without this, a producer with a leaked SR key could mint a block with
-	// the SR's address as the schedule-side witness while stamping a
-	// different attacker-controlled address into block.witness_address —
-	// applyBlock's downstream calls (payBlockReward, updateSolidifiedBlock,
-	// flipWitnessIsJobs) all key off block.WitnessAddress(), so the reward
-	// and is_jobs flip would route to the attacker.
-	if witness != block.WitnessAddress() {
+	// java-tron's Manager.pushBlock → BlockCapsule.validateSignature compares
+	// the recovered signer to the witness account's authorized block-signing
+	// address (not the schedule). With AllowMultiSign off — and for every SR
+	// that has not delegated block signing — that address is
+	// BlockHeader.raw.witness_address. Without this comparison, a producer with
+	// a leaked SR key could mint a block with the SR's address as the
+	// schedule-side witness while stamping a different attacker-controlled
+	// address into block.witness_address — applyBlock's downstream calls
+	// (payBlockReward, updateSolidifiedBlock, flipWitnessIsJobs) all key off
+	// block.WitnessAddress(), so the reward and is_jobs flip would route to the
+	// attacker.
+	//
+	// When AllowMultiSign is active, java compares instead to
+	// accountStore.get(witness_address).getWitnessPermissionAddress() — the
+	// first key of the witness permission, which an SR may set to a separate
+	// block-signing key (Nile 45,490,765: 417d6fd4 delegated signing to
+	// 415624c1). The chain reader resolves that key from the parent state; a
+	// reader that cannot (no witnessSignerResolver) falls back to
+	// witness_address, which is correct for every non-delegating witness.
+	expectedSigner := block.WitnessAddress()
+	if dp.AllowMultiSign() {
+		if r, ok := chain.(witnessSignerResolver); ok {
+			expectedSigner = r.WitnessPermissionSigner(block.WitnessAddress())
+		}
+	}
+	if witness != expectedSigner {
 		return ErrInvalidSignature
 	}
 
@@ -139,9 +169,11 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 		return ErrInvalidWitness
 	}
 	// Match java-tron DposService.validBlock: compare the schedule against
-	// block.witness_address (transitively, since we just enforced signer ==
-	// block.witness_address). This phrasing yields the more intuitive
-	// ErrInvalidWitness when an SR mints in a slot that doesn't belong to it.
+	// block.witness_address. The schedule is keyed on SR addresses, so this
+	// uses block.witness_address directly (not the recovered signer, which may
+	// be a delegated witness-permission key under AllowMultiSign). It yields the
+	// more intuitive ErrInvalidWitness when an SR mints in a slot that doesn't
+	// belong to it.
 	if witnesses[idx] != block.WitnessAddress() {
 		log.Warn("DPoS scheduled witness mismatch",
 			"number", block.Number(), "slot", slot, "idx", idx, "activeWitnesses", len(witnesses),

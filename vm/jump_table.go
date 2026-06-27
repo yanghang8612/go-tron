@@ -148,8 +148,12 @@ func newJumpTable() JumpTable {
 	tbl[RETURN] = &operation{execute: opReturn, energyCost: EnergyZero, minStack: 2, maxStack: 1024}
 	tbl[REVERT] = &operation{execute: opRevert, energyCost: EnergyZero, minStack: 2, maxStack: 1024}
 	tbl[SELFDESTRUCT] = &operation{execute: opSelfDestruct, minStack: 1, maxStack: 1024, writes: true}
-	tbl[CREATE] = &operation{execute: opCreate, energyCost: EnergyCreate, minStack: 3, maxStack: 1022, writes: true}
-	tbl[CREATE2] = &operation{execute: opCreate2, energyCost: EnergyCreate, minStack: 4, maxStack: 1021, writes: true}
+	// CREATE/CREATE2 charge the 32000 base INSIDE the handler, after the 3 MB
+	// memory OOM guard (java getCreateCost = CREATE + calcMemEnergy, OOM-first).
+	// Charging it here as a static cost would let the interpreter loop spend it
+	// ahead of the memory check, flipping OUT_OF_MEMORY to OUT_OF_ENERGY.
+	tbl[CREATE] = &operation{execute: opCreate, minStack: 3, maxStack: 1022, writes: true}
+	tbl[CREATE2] = &operation{execute: opCreate2, minStack: 4, maxStack: 1021, writes: true}
 	tbl[CALL] = &operation{execute: opCall, minStack: 7, maxStack: 1018}
 	tbl[CALLCODE] = &operation{execute: opCallCode, minStack: 7, maxStack: 1018}
 	tbl[DELEGATECALL] = &operation{execute: opDelegateCall, minStack: 6, maxStack: 1019}
@@ -214,7 +218,11 @@ func newJumpTable() JumpTable {
 
 	// TRON extensions — voting / rewards (AllowTvmVote)
 	vote := func(c TVMConfig) bool { return c.Vote }
-	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness, energyCost: EnergyVoteWitness,
+	// VOTEWITNESS charges the 30000 VOTE_WITNESS base INSIDE the handler, after the
+	// 3 MB memory OOM guard (java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy,
+	// OOM-first). A static cost here would let the interpreter loop spend it ahead
+	// of the memory check, flipping OUT_OF_MEMORY to OUT_OF_ENERGY.
+	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness,
 		minStack: 4, maxStack: 1021, writes: true, enabledFn: vote}
 	tbl[WITHDRAWREWARD] = &operation{execute: opWithdrawReward, energyCost: EnergyWithdrawReward,
 		minStack: 0, maxStack: 1024, writes: true, enabledFn: vote}

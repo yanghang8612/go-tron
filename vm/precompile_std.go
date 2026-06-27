@@ -130,9 +130,13 @@ func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) 
 
 func (c *bigModExp) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	var (
-		baseLen = new(big.Int).SetBytes(getInput(input, 0, 32)).Uint64()
-		expLen  = new(big.Int).SetBytes(getInput(input, 32, 32)).Uint64()
-		modLen  = new(big.Int).SetBytes(getInput(input, 64, 32)).Uint64()
+		// java PrecompiledContracts.parseLen decodes each length via
+		// DataWord.intValueSafe() (saturate to Integer.MAX_VALUE for a >4-byte or
+		// negative word), NOT raw low-64 bits — otherwise an expLen word of 2^64
+		// truncates to 0 and skips the VERSION_4_8_1_1 degenerate OutOfTime guard.
+		baseLen = parseLenIntValueSafe(input, 0)
+		expLen  = parseLenIntValueSafe(input, 32)
+		modLen  = parseLenIntValueSafe(input, 64)
 	)
 
 	// Skip the 96-byte header

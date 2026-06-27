@@ -56,11 +56,20 @@ type accountKVLatestBatch struct {
 	// commitBlock is the block number whose commit is currently writing through
 	// this batch. Every overlay put made while it is set is tagged with it, so a
 	// later partial flush can prune the entries whose puts are now durable in the
-	// buffer's committed layers (read-your-writes overlay pruning). It must equal
+	// buffer's committed layers (read-your-writes overlay pruning). It SHOULD equal
 	// the buffer active-layer number that the bufferBatch op binds to — both are
 	// block.Number(), and BeginBlock(block.Number()) precedes the block's commit
 	// puts. Threaded per block via CommitOptions.BlockNumber.
 	commitBlock uint64
+	// deepAsync is set on the deep async-commit pipeline (GTRON_ASYNC_COMMIT_DEPTH
+	// > 2). On that path prunePending verifies each candidate is actually durable
+	// in the underlying store before dropping it, instead of trusting the
+	// commitBlock tag — a defence against any case where the commitBlock==op-layer
+	// invariant above breaks and the overlay entry would otherwise be pruned while
+	// its buffer op has not yet been applied/flushed (the read-your-writes lost
+	// write). At depth 2 (deepAsync=false) the invariant holds and the fast
+	// tag-based prune is kept, preserving the byte-identical/synchronous path.
+	deepAsync bool
 }
 
 type accountKVLatestPending struct {
@@ -78,12 +87,14 @@ type accountKVLatestPending struct {
 }
 
 type accountLatestPending struct {
+	owner   tcommon.Address
 	value   []byte
 	deleted bool
 	number  uint64
 }
 
 type kvGenerationPending struct {
+	owner      tcommon.Address
 	generation uint64
 	deleted    bool
 	number     uint64
@@ -377,20 +388,80 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		return
 	}
 	for k, e := range w.pending {
-		if e.number <= cutoff {
+		if e.number > cutoff {
+			continue
+		}
+		if !w.deepAsync || w.kvPendingDurable(e) {
 			delete(w.pending, k)
 		}
 	}
 	for k, e := range w.accountPending {
-		if e.number <= cutoff {
+		if e.number > cutoff {
+			continue
+		}
+		if !w.deepAsync || w.accountPendingDurable(e) {
 			delete(w.accountPending, k)
 		}
 	}
 	for k, e := range w.generationPending {
-		if e.number <= cutoff {
+		if e.number > cutoff {
+			continue
+		}
+		if !w.deepAsync || w.generationPendingDurable(e) {
 			delete(w.generationPending, k)
 		}
 	}
+}
+
+// kvPendingDurable reports whether overlay entry e is now durable in the
+// underlying latest store — the buffer's committed layers + disk, which
+// latestStore reads through (the write-only batch is bypassed). Only then is it
+// safe to drop the read-your-writes overlay entry: a subsequent readLatest falls
+// through to latestStore and returns the identical value/existence. If e's buffer
+// op has NOT been applied yet (e.g. it bound to a layer above the flush cutoff,
+// breaking the commitBlock==op-layer assumption), latestStore still returns the
+// OLD value, so this keeps the entry — guarding the deep async-commit lost write.
+// On a read error it conservatively keeps the entry. Used only when deepAsync.
+func (w *accountKVLatestBatch) kvPendingDurable(e accountKVLatestPending) bool {
+	if w.latestStore == nil {
+		return true
+	}
+	val, exists, err := w.latestStore.ReadKVLatest(e.owner, e.generation, e.domain, e.key)
+	if err != nil {
+		return false
+	}
+	if e.deleted {
+		return !exists
+	}
+	return exists && bytes.Equal(val, e.value)
+}
+
+func (w *accountKVLatestBatch) accountPendingDurable(e accountLatestPending) bool {
+	if w.latestStore == nil {
+		return true
+	}
+	val, exists, err := w.latestStore.ReadAccountLatest(e.owner)
+	if err != nil {
+		return false
+	}
+	if e.deleted {
+		return !exists
+	}
+	return exists && bytes.Equal(val, e.value)
+}
+
+func (w *accountKVLatestBatch) generationPendingDurable(e kvGenerationPending) bool {
+	if w.latestStore == nil {
+		return true
+	}
+	gen, exists, err := w.latestStore.ReadKVGeneration(e.owner)
+	if err != nil {
+		return false
+	}
+	if e.deleted {
+		return !exists
+	}
+	return exists && gen == e.generation
 }
 
 func (w *accountKVLatestBatch) reset() {
@@ -578,6 +649,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		w.accountPending = make(map[string]accountLatestPending)
 	}
 	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{
+		owner:  owner,
 		value:  append([]byte(nil), value...),
 		number: w.commitBlock,
 	}
@@ -590,7 +662,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestDelete(owner tcommon.Address
 	if w.accountPending == nil {
 		w.accountPending = make(map[string]accountLatestPending)
 	}
-	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{deleted: true, number: w.commitBlock}
+	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{owner: owner, deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, generation uint64) {
@@ -600,7 +672,7 @@ func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, ge
 	if w.generationPending == nil {
 		w.generationPending = make(map[string]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{generation: generation, number: w.commitBlock}
+	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{owner: owner, generation: generation, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address) {
@@ -610,7 +682,7 @@ func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address)
 	if w.generationPending == nil {
 		w.generationPending = make(map[string]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{deleted: true, number: w.commitBlock}
+	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{owner: owner, deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {

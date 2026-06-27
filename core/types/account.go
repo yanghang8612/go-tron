@@ -489,6 +489,20 @@ func (a *Account) SetOwnerPermission(p *corepb.Permission)        { a.pb.OwnerPe
 func (a *Account) SetWitnessPermission(p *corepb.Permission)      { a.pb.WitnessPermission = p }
 func (a *Account) SetActivePermission(perms []*corepb.Permission) { a.pb.ActivePermission = perms }
 
+// WitnessPermissionAddress returns the address authorized to sign blocks on
+// this account's behalf: the first key of the witness permission, or the
+// account's own address when no witness permission is set. Mirrors java-tron
+// AccountCapsule.getWitnessPermissionAddress, which block signature validation
+// consults when AllowMultiSign is active so a witness may delegate block
+// signing to a separate key.
+func (a *Account) WitnessPermissionAddress() common.Address {
+	wp := a.pb.WitnessPermission
+	if wp == nil || len(wp.Keys) == 0 {
+		return a.Address()
+	}
+	return common.BytesToAddress(wp.Keys[0].Address)
+}
+
 // MakeDefaultOwnerPermission builds the default Owner permission for addr:
 // type=Owner, id=0, name="owner", threshold=1, parent_id=0, single key
 // (addr, weight=1), no operations bitmap. Mirrors java-tron

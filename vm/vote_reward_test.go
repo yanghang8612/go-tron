@@ -229,6 +229,44 @@ func TestVoteWitnessOpcodeAllowsEmptyVoteListToClearVotes(t *testing.T) {
 	}
 }
 
+// TestVoteWitnessOpcodeOutOfBoundsLengthWordReadsZero locks the Nile block
+// 47,612,095 parity fix (tx 686f2a89…e5e5c). java Program.voteWitness reads each
+// array length word via memoryLoad(offset), whose Memory.read() zero-EXTENDS
+// memory to cover [offset, offset+32) before reading (Memory.java:36) — so a
+// length word past the currently-allocated region reads 0, NOT a sentinel. The
+// on-chain tx passes witnessCount == amountCount == 0 with both offsets at
+// 0x2fffe1 (offset+32 = 3 MiB + 1, one byte past the base-era memory). In the
+// base energy era (#81 allowEnergyAdjustment OFF) getVoteWitnessCost charges no
+// dynamic-array length word, so memory is never pre-resized; java still reads
+// 0 == 0 for both length words and the empty vote succeeds (pushes 1, SUCCESS).
+// gtron previously returned a -1 sentinel from memoryArrayLengthSafe for the
+// out-of-bounds word, threw errVoteWitnessMemoryLength → spendAll + UNKNOWN, and
+// stalled the sync (expected SUCCESS actual UNKNOWN).
+func TestVoteWitnessOpcodeOutOfBoundsLengthWordReadsZero(t *testing.T) {
+	tvm, statedb, _ := newVoteRewardTVM(t) // default config: base era, EnergyAdjustment OFF
+	caller := voteRewardAddr(0x44)
+	seedPendingTVMReward(statedb, tvm, caller, voteRewardAddr(0x45), 5, 0)
+
+	mem := newMemory()
+	mem.set32(0x40, uint256.NewInt(0x80)) // solidity free-pointer init; mem.len() == 0x60
+	const offset = 0x2fffe1               // Nile 47,612,095 probe: offset+32 = 3 MiB + 1, past mem
+
+	stack := newStack()
+	stack.push(uint256.NewInt(offset)) // witnessArrayOffset
+	stack.push(uint256.NewInt(0))      // witnessArrayLength
+	stack.push(uint256.NewInt(offset)) // amountArrayOffset
+	stack.push(uint256.NewInt(0))      // amountArrayLength
+	contract := NewContract(caller, caller, 0, 100000)
+
+	if _, err := opVoteWitness(nil, tvm.interpreter, contract, mem, stack); err != nil {
+		t.Fatalf("out-of-bounds zero-length vote: got err %v, want success (java reads 0 from extended memory)", err)
+	}
+	gotWord := stack.pop()
+	if got := gotWord.Uint64(); got != 1 {
+		t.Fatalf("voteWitness result: got %d, want 1", got)
+	}
+}
+
 func TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks(t *testing.T) {
 	tvm, _, _ := newVoteRewardTVM(t)
 	caller := voteRewardAddr(0x41)
@@ -246,14 +284,21 @@ func TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks(t *testing.T) {
 		return err
 	}
 
-	if err := run(TVMConfig{Vote: true}, 0); err != errVoteWitnessMemoryLength {
-		t.Fatalf("legacy zero-length arrays should not charge dynamic-array length word, got %v", err)
+	// opVoteWitness charges the 30000 VOTE_WITNESS base itself (after the memory
+	// OOM guard, mirroring java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy),
+	// so each run is funded with exactly the base: the only thing that tips it into
+	// OUT_OF_ENERGY is the per-fork memory length-word charge on top.
+	if err := run(TVMConfig{Vote: true}, EnergyVoteWitness); err != nil {
+		// base era charges no dynamic-array length word, so the zero-length vote
+		// fits in the base alone: the length words read 0 from java's zero-extended
+		// memory (Program.java:2277), matching count 0 with no throw.
+		t.Fatalf("base era should not charge dynamic-array length word, got %v", err)
 	}
-	if err := run(TVMConfig{Vote: true, EnergyAdjustment: true}, 5); err != ErrOutOfEnergy {
-		t.Fatalf("energy-adjusted zero-length arrays should charge 64 bytes of memory, got %v", err)
+	if err := run(TVMConfig{Vote: true, EnergyAdjustment: true}, EnergyVoteWitness); err != ErrOutOfEnergy {
+		t.Fatalf("energy-adjusted zero-length arrays should charge 64 bytes of memory atop the base, got %v", err)
 	}
-	if err := run(TVMConfig{Vote: true, Osaka: true}, 5); err != ErrOutOfEnergy {
-		t.Fatalf("Osaka zero-length arrays should charge 64 bytes of memory, got %v", err)
+	if err := run(TVMConfig{Vote: true, Osaka: true}, EnergyVoteWitness); err != ErrOutOfEnergy {
+		t.Fatalf("Osaka zero-length arrays should charge 64 bytes of memory atop the base, got %v", err)
 	}
 }
 
@@ -304,7 +349,9 @@ func TestVoteWitnessOpcodeExpandsMemoryAtLimit(t *testing.T) {
 	if got := mem.len(); got != int(tvmMemoryLimit) {
 		t.Fatalf("memory size: got %d, want %d", got, tvmMemoryLimit)
 	}
-	wantEnergy := uint64(100_000_000) - memoryEnergyCost(tvmMemoryLimit)
+	// opVoteWitness now charges the 30000 VOTE_WITNESS base in-handler (after the
+	// OOM guard) plus the memory-expansion delta.
+	wantEnergy := uint64(100_000_000) - EnergyVoteWitness - memoryEnergyCost(tvmMemoryLimit)
 	if got := contract.Energy; got != wantEnergy {
 		t.Fatalf("remaining energy: got %d, want %d", got, wantEnergy)
 	}
