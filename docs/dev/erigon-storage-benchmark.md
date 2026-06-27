@@ -288,6 +288,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-modes full,blocks,minimal,snap,archive \
   --require-prometheus-artifacts \
   --require-prune-mode-semantics \
+  --require-archive-api-evidence \
   --require-minimal-tail-prune \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
@@ -317,8 +318,15 @@ freezer-tail file deletion outside `minimal`, and positive `tailPrunedFiles`
 in `minimal` must be paired with a valid `tailPrunedThroughBlock`. With
 `--require-minimal-physical-tail-prune`, it also requires the latest minimal
 row to prove physical freezer-tail file deletion through `tailPrunedFiles`.
-It also applies any
-project-specific numeric `--min`/`--max` thresholds.
+With `--require-archive-api-evidence`, at least one latest selected row must
+prove historical archive API reads by reporting `archiveApiStatus=ok`,
+`archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
+below the sampled `height`, and `archiveApiMethods` covering the default
+method set (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_call`,
+and `eth_getLogs`). If the row also reports `tailPrunedThroughBlock`, the
+archive API block must be at or below that prune boundary so the row proves
+post-prune archive reads rather than a latest-state fallback. It also applies
+any project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:
 

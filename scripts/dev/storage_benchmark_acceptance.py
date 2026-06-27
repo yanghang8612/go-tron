@@ -27,6 +27,14 @@ PROMETHEUS_STATUS_VALUES = {
     "critical": 2,
 }
 
+DEFAULT_ARCHIVE_API_METHODS = (
+    "eth_getBalance",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_call",
+    "eth_getLogs",
+)
+
 
 def row_sort_key(row):
     unix = row.get("unix")
@@ -79,6 +87,16 @@ def split_modes(values):
             if mode:
                 modes.append(mode)
     return modes
+
+
+def split_csv_values(values):
+    out = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if item:
+                out.append(item)
+    return out
 
 
 def line_label(row):
@@ -611,6 +629,81 @@ def check_prune_mode_semantics(rows):
     return issues
 
 
+def archive_api_methods(row):
+    raw = row.get("archiveApiMethods")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return set()
+    return {str(method) for method in raw}
+
+
+def check_archive_api_evidence(rows, required_methods):
+    issues = []
+    latest = list(latest_rows(rows).values())
+    evidence_rows = [
+        row
+        for row in latest
+        if any(
+            field in row
+            for field in (
+                "archiveApiStatus",
+                "archiveApiChecks",
+                "archiveApiMethods",
+                "archiveApiBlock",
+            )
+        )
+    ]
+    if not evidence_rows:
+        return ["required archive API evidence has no selected latest row"]
+
+    for row in evidence_rows:
+        status = str(row.get("archiveApiStatus", "")).lower()
+        if status != "ok":
+            issues.append(f"{line_label(row)} archiveApiStatus={row.get('archiveApiStatus')!r}, want 'ok'")
+
+        checks = as_number(row, "archiveApiChecks")
+        if checks is None or checks <= 0:
+            issues.append(f"{line_label(row)} archiveApiChecks={checks}, want > 0")
+
+        failures = as_number(row, "archiveApiFailures")
+        if failures is None:
+            issues.append(f"{line_label(row)} archiveApiFailures={failures}, want 0")
+        elif failures != 0:
+            issues.append(f"{line_label(row)} archiveApiFailures={failures:g}, want 0")
+
+        block = as_number(row, "archiveApiBlock")
+        if block is None or block < 0:
+            issues.append(f"{line_label(row)} archiveApiBlock={block}, want >= 0 historical block")
+        else:
+            height = as_number(row, "height")
+            if height is not None and block >= height:
+                issues.append(
+                    f"{line_label(row)} archiveApiBlock={block:g} must be below height={height:g}"
+                )
+            tail_pruned = as_number(row, "tailPrunedThroughBlock")
+            if tail_pruned is not None and tail_pruned >= 0 and block > tail_pruned:
+                issues.append(
+                    f"{line_label(row)} archiveApiBlock={block:g} must be <= "
+                    f"tailPrunedThroughBlock={tail_pruned:g} to prove post-prune archive reads"
+                )
+
+        methods = archive_api_methods(row)
+        if methods is None:
+            issues.append(f"{line_label(row)} archiveApiMethods is missing")
+        elif not methods:
+            issues.append(f"{line_label(row)} archiveApiMethods must be a non-empty list")
+        else:
+            missing = sorted(set(required_methods) - methods)
+            if missing:
+                issues.append(
+                    f"{line_label(row)} archiveApiMethods missing required methods: "
+                    + ",".join(missing)
+                )
+
+    return issues
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate storage_benchmark.sh JSONL output against soak acceptance gates.",
@@ -655,6 +748,23 @@ def build_parser():
         help="require latest rows to preserve archive/blocks/minimal prune-mode semantics",
     )
     parser.add_argument(
+        "--require-archive-api-evidence",
+        action="store_true",
+        help="require latest rows to include successful historical archive API evidence",
+    )
+    parser.add_argument(
+        "--archive-api-method",
+        action="append",
+        default=[],
+        help="archive API method that must appear in archiveApiMethods; repeatable",
+    )
+    parser.add_argument(
+        "--archive-api-methods",
+        action="append",
+        default=[],
+        help="comma-separated archive API methods that must appear in archiveApiMethods",
+    )
+    parser.add_argument(
         "--min",
         dest="minimums",
         action="append",
@@ -693,6 +803,11 @@ def main(argv=None):
         issues.extend(check_minimal_physical_tail_prune(rows, args.role))
     if args.require_prune_mode_semantics:
         issues.extend(check_prune_mode_semantics(rows))
+    archive_api_methods_required = split_csv_values(args.archive_api_method + args.archive_api_methods)
+    if not archive_api_methods_required:
+        archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
+    if args.require_archive_api_evidence:
+        issues.extend(check_archive_api_evidence(rows, archive_api_methods_required))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
 
@@ -713,6 +828,8 @@ def main(argv=None):
         checks += 1
     if args.require_prune_mode_semantics:
         checks += len(latest)
+    if args.require_archive_api_evidence:
+        checks += 1
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"

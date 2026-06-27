@@ -481,6 +481,156 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
             self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
 
+    def test_accepts_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_call",
+                        "eth_getLogs",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("required archive API evidence has no selected latest row", proc.stderr)
+
+    def test_rejects_invalid_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                    "archiveApiStatus": "failed",
+                    "archiveApiChecks": 0,
+                    "archiveApiFailures": 2,
+                    "archiveApiBlock": 100,
+                    "archiveApiMethods": ["eth_getBalance"],
+                },
+                {
+                    "unix": 20,
+                    "profile": "producer",
+                    "mode": "snap",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 1,
+                    "archiveApiBlock": 45,
+                    "archiveApiMethods": "eth_getBalance",
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiStatus='failed', want 'ok'", proc.stderr)
+            self.assertIn("archiveApiChecks=0.0, want > 0", proc.stderr)
+            self.assertIn("archiveApiFailures=2, want 0", proc.stderr)
+            self.assertIn("archiveApiFailures=None, want 0", proc.stderr)
+            self.assertIn("archiveApiBlock=100 must be below height=100", proc.stderr)
+            self.assertIn("archiveApiMethods missing required methods", proc.stderr)
+            self.assertIn("archiveApiBlock=45 must be <= tailPrunedThroughBlock=40", proc.stderr)
+            self.assertIn("archiveApiMethods must be a non-empty list", proc.stderr)
+
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
