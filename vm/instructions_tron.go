@@ -236,6 +236,17 @@ func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Sta
 	return nil, nil
 }
 
+// javaResourceCodeV1 decodes a V1 freeze/unfreeze/freezeExpireTime resourceType
+// word like java DataWord.intValue() (Program.parseResourceCode:
+// `switch (resourceType.intValue())`, and freezeExpireTime's
+// `int resourceCode = resourceType.intValue()`): the LOW 32 bits as a SIGNED int,
+// truncating/wrapping — NOT the saturating intValueSafe the V2 staking opcodes use.
+// A raw int64(low-64) decode rejected words like 2^32 (low-32 == 0 == BANDWIDTH)
+// that java accepts, flipping contractRet in the V1-freeze window.
+func javaResourceCodeV1(v *uint256.Int) int64 {
+	return int64(int32(v.Uint64()))
+}
+
 // ── 0xD5 FREEZE ───────────────────────────────────────────────────────────────
 // Stack: receiverAddr, amount, resourceType → success
 // resourceType: 0=BANDWIDTH, 1=ENERGY
@@ -267,7 +278,7 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	// int64(amountWord.Uint64()) truncation that let a huge word freeze its
 	// low bits.
 	amount, amountOK := uint256ToInt64Exact(&amountWord)
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
 
@@ -369,7 +380,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	// unconditionally (before validate/execute), feeding a later CREATE address.
 	in.tvm.Nonce++
 
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
 	nowMs := tvmLatestBlockHeaderTimestamp(in.tvm)
@@ -445,7 +456,7 @@ func opFreezeExpireTime(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	resourceWord := stack.pop()
 	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
-	resourceType := int64(resourceWord.Uint64())
+	resourceType := javaResourceCodeV1(&resourceWord)
 
 	var expireMs int64
 	if addr != contract.Address {
