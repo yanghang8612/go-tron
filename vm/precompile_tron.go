@@ -419,8 +419,12 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 
 	// word[0]: owner address
 	ownerAddr := tronAddrFromWord(parseWord32(input, 0))
-	// word[1]: permission ID
-	permID := int(parseInt64FromWord(input, 32))
+	// word[1]: permission ID. java reads it via words[1].intValueSafe()
+	// (PrecompiledContracts.java:1059) — a >4-byte or negative word saturates to
+	// Integer.MAX_VALUE — then hashes ByteArray.fromInt(permID) and looks up
+	// getPermissionById(permID). A raw low-64 read would decode a different id
+	// (e.g. a 2^64 word -> 0, the owner permission) and diverge.
+	permID, _ := wordIntValueSafe(input, 1) // word[1] in bounds (len >= 128 above)
 	// word[2]: 32-byte message data (to be included in the signed hash)
 	msgData := parseWord32(input, 64)
 	// word[3]: byte offset to sigs array
@@ -584,13 +588,13 @@ func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy 
 	epk := input[64:96]
 	proof := input[96:288]
 	bindingSig := input[288:352]
-	value := parseInt64FromWord(input, 352)
+	value := shieldedValueBalance(input, 352)
 	signHash := input[384:416]
 	frontier, ok := shieldedParseFrontier(input, 416)
 	if !ok {
 		return shieldedFailurePayload(), cost, nil
 	}
-	leafCount := parseUint64FromWord(input, 1472)
+	leafCount := shieldedLeafCount(input, 1472)
 	if leafCount >= shieldedTreeWidth {
 		return shieldedFailurePayload(), cost, nil
 	}
@@ -630,13 +634,13 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	signHash := input[160:192]
 	value := int64(0)
 	if hasValueBalance {
-		value = parseInt64FromWord(input, 192)
+		value = shieldedValueBalance(input, 192)
 	}
 	frontier, ok := shieldedParseFrontier(input, frontierOffset)
 	if !ok {
 		return shieldedFailurePayload(), cost, nil
 	}
-	leafCount := parseUint64FromWord(input, leafCountOffset)
+	leafCount := shieldedLeafCount(input, leafCountOffset)
 	if leafCount >= shieldedTreeWidth-1 {
 		return shieldedFailurePayload(), cost, nil
 	}
@@ -738,7 +742,7 @@ func (c *verifyBurnProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy 
 		Proof:                   input[128:320],
 		SpendAuthoritySignature: input[320:384],
 	}
-	value := parseInt64FromWord(input, 384)
+	value := shieldedValueBalance(input, 384)
 	bindingSig := input[416:480]
 	signHash := input[480:512]
 	if err := zksnark.VerifyShieldedTRC20Burn(spend, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
@@ -780,6 +784,23 @@ func (c *shieldedMerkleHash) RunWithStatus(_ *TVM, _ tcommon.Address, input []by
 
 func shieldedFailurePayload() []byte {
 	return make([]byte, 32)
+}
+
+// shieldedValueBalance decodes a shielded value/valueBalance scalar like java
+// PrecompiledContracts.parseLong -> DataWord.longValueSafe(): a word occupying more
+// than 8 bytes (or with a negative low-8) saturates to Long.MAX_VALUE rather than
+// wrapping to its low-64 bits, so a crafted high-byte word can no longer flip the
+// librustzcash binding-signature check.
+func shieldedValueBalance(input []byte, offset int) int64 {
+	return parseInt64SafeFromWord(input, offset)
+}
+
+// shieldedLeafCount decodes a shielded leafCount the same way (java parseLong ->
+// longValueSafe), as an unsigned tree index. A high-byte word saturates to
+// Long.MAX_VALUE, which trips the `>= TREE_WIDTH(2^32)` bound where a raw low-64
+// read would have slipped a small value past it.
+func shieldedLeafCount(input []byte, offset int) uint64 {
+	return uint64(parseInt64SafeFromWord(input, offset))
 }
 
 func shieldedSuccessPayload() []byte {

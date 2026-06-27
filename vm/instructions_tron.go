@@ -120,7 +120,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	resizeMemory(mem, inOff, inSz)
 	resizeMemory(mem, retOff, retSz)
 
-	callEnergy := gas.Uint64()
+	callEnergy := javaCallEnergyRequest(&gas)
 	callEnergy = in.tvm.adjustedCallEnergy(contract, callEnergy)
 	contract.UseEnergy(callEnergy)
 	if tokenValueNonZero {

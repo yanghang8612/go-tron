@@ -320,11 +320,17 @@ func opCallValue(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 
 func opCallDataLoad(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	x := stack.peek()
-	offset := x.Uint64()
 	var data [32]byte
 	input := contract.Input
-	if offset < uint64(len(input)) {
-		copy(data[:], input[offset:])
+	// java ProgramInvokeImpl.getDataValue reads the index through the FULL 256-bit
+	// value() and returns a zero word when it exceeds MAX_MSG_DATA (Integer.MAX_VALUE)
+	// or the truncated index is past the calldata. A raw .Uint64() truncation would
+	// read real bytes for a word like 2^64+k; require the full word to fit and be
+	// in range (len(input) is always far below 2^31, so this matches java exactly).
+	if x.IsUint64() {
+		if offset := x.Uint64(); offset < uint64(len(input)) {
+			copy(data[:], input[offset:])
+		}
 	}
 	x.SetBytes(data[:])
 	return nil, nil
@@ -350,7 +356,7 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Input, dataOffset.Uint64(), size)
+	data := getDataSlice(contract.Input, javaCopySourceOffset(&dataOffset), size)
 	memory.set(off, size, data)
 	return nil, nil
 }
@@ -375,7 +381,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Code, codeOffset.Uint64(), size)
+	data := getDataSlice(contract.Code, javaCopySourceOffset(&codeOffset), size)
 	memory.set(off, size, data)
 	return nil, nil
 }
@@ -402,7 +408,7 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	}
 	resizeMemory(memory, off, size)
 	code := interpreter.tvm.StateDB.GetCode(address)
-	data := getDataSlice(code, codeOffset.Uint64(), size)
+	data := getDataSlice(code, javaCopySourceOffset(&codeOffset), size)
 	memory.set(off, size, data)
 	return nil, nil
 }
@@ -1097,4 +1103,14 @@ func getDataSlice(data []byte, offset, size uint64) []byte {
 		copy(result, data[offset:])
 	}
 	return result
+}
+
+// javaCopySourceOffset mirrors how java decodes the SOURCE offset of the
+// CALLDATACOPY/CODECOPY/EXTCODECOPY family (getDataCopy / codeCopyAction /
+// extCodeCopyAction read it via DataWord.intValueSafe()): a word occupying more
+// than 4 bytes (or whose low-32 is negative) saturates to Integer.MAX_VALUE, which
+// is always >= the source length, so getDataSlice yields zeros — not the low-64
+// source bytes a raw .Uint64() would have copied.
+func javaCopySourceOffset(v *uint256.Int) uint64 {
+	return uint64(wordToIntValueSafe(v))
 }

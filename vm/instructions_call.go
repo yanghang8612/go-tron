@@ -4,6 +4,20 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// javaCallEnergyRequest mirrors java Program.getCallEnergy's FULL 256-bit compare
+// (`requested.compareTo(available) > 0 ? available : requested`): a requested-energy
+// word that exceeds uint64 is necessarily greater than the caller's available
+// energy, so it must forward the available cap — never its truncated low-64 bits.
+// adjustedCallEnergy applies the min against available, so a saturated uint64 here
+// clamps to available, matching java. Words that fit uint64 already carry their full
+// value (the > available case was already handled by adjustedCallEnergy's min).
+func javaCallEnergyRequest(v *uint256.Int) uint64 {
+	if v.IsUint64() {
+		return v.Uint64()
+	}
+	return ^uint64(0)
+}
+
 // opCreate deploys a new contract.
 // Stack: [value, offset, size] → [addr]
 // writeCallReturn copies a sub-call's return data into the caller's memory. java
@@ -67,6 +81,16 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		contract.Address, code, energyForCall, val, contract.Version,
 	)
 	contract.Energy += remainingEnergy
+	// A fatal VM error (OutOfTime / JVM-stack-overflow) raised inside the
+	// constructor must abort the whole tx, not push 0 and continue: java VM.play
+	// re-throws these (VM.java outer catch) and createContractImpl's VM.play is not
+	// in a try/catch, so they escape to VMActuator -> OUT_OF_TIME + spendAll. Mirror
+	// the CALL family's shouldPropagateCallError gate. Non-fatal create failures
+	// (revert, OOE, bytecode/transfer exceptions) still push 0 like java's
+	// stackPushZero.
+	if isFatalVMError(err) {
+		return nil, err
+	}
 
 	var result uint256.Int
 	if err != nil {
@@ -148,6 +172,13 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		contract.Address, addressSeed, code, energyForCall, val, salt, contract.Version,
 	)
 	contract.Energy += remainingEnergy
+	// Propagate a fatal constructor error (OutOfTime / JVM-stack-overflow) instead
+	// of swallowing it — see opCreate. The depth self-guard above only catches a
+	// timeout raised BEFORE entering the constructor; one raised INSIDE it (e.g. a
+	// precompile CPU-time abort) surfaces here as err.
+	if isFatalVMError(err) {
+		return nil, err
+	}
 
 	var result uint256.Int
 	if err != nil {
@@ -182,7 +213,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	addr := uint256ToAddress(&addrVal)
 	valueNonZero := !value.IsZero()
 	val, valueOK := uint256ToInt64Exact(&value)
-	gas := energyVal.Uint64()
+	gas := javaCallEnergyRequest(&energyVal)
 
 	if interpreter.readOnly && valueNonZero {
 		return nil, ErrWriteProtection
@@ -264,7 +295,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	addr := uint256ToAddress(&addrVal)
 	valueNonZero := !value.IsZero()
 	val, valueOK := uint256ToInt64Exact(&value)
-	gas := energyVal.Uint64()
+	gas := javaCallEnergyRequest(&energyVal)
 
 	cost := uint64(EnergyCall)
 	if valueNonZero {
@@ -328,7 +359,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	energyVal, addrVal, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
 
 	addr := uint256ToAddress(&addrVal)
-	gas := energyVal.Uint64()
+	gas := javaCallEnergyRequest(&energyVal)
 
 	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, DELEGATECALL)
@@ -380,7 +411,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	energyVal, addrVal, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
 
 	addr := uint256ToAddress(&addrVal)
-	gas := energyVal.Uint64()
+	gas := javaCallEnergyRequest(&energyVal)
 
 	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, STATICCALL)
