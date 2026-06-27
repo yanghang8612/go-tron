@@ -307,7 +307,9 @@ regressions such as `archive` rows with prune progress or `blocks` rows with
 freezer-tail pruning, requires signed cold prune rows in `blocks`/`minimal` to
 carry a valid chain-lookup prune boundary covered by `coldFreezerToBlock`, and
 rejects `minimal` tail-prune boundaries that exceed the matching lookup-prune,
-cold-freezer, or derived-index coverage boundary. With
+cold-freezer, or derived-index coverage boundary. It also rejects physical
+freezer-tail file deletion outside `minimal`, and positive `tailPrunedFiles`
+in `minimal` must be paired with a valid `tailPrunedThroughBlock`. With
 `--require-minimal-physical-tail-prune`, it also requires the latest minimal
 row to prove physical freezer-tail file deletion through `tailPrunedFiles`.
 It also applies any

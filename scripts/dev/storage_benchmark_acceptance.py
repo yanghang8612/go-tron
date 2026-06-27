@@ -519,6 +519,15 @@ def check_non_negative_forbidden(row, field, reason):
     return []
 
 
+def check_positive_forbidden(row, field, reason):
+    if not field_present(row, field):
+        return []
+    value = as_number(row, field)
+    if value is not None and value > 0:
+        return [f"{line_label(row)} {field}={value:g} is not allowed for {reason}"]
+    return []
+
+
 def check_prune_mode_semantics(rows):
     issues = []
     for row in latest_rows(rows).values():
@@ -550,10 +559,13 @@ def check_prune_mode_semantics(rows):
             issues.extend(
                 check_non_negative_forbidden(row, "tailPrunedThroughBlock", f"{mode} mode")
             )
+        if mode != "minimal":
+            issues.extend(check_positive_forbidden(row, "tailPrunedFiles", f"{mode} mode"))
 
         signed_cold_prune = as_number(row, "signedColdPrune") == 1.0
         chain_lookup = as_number(row, "chainLookupPruneToBlock")
         cold_freezer = as_number(row, "coldFreezerToBlock")
+        tail_pruned_files = as_number(row, "tailPrunedFiles")
         if mode in {"blocks", "minimal"} and signed_cold_prune:
             if chain_lookup is None or chain_lookup < 0:
                 issues.append(
@@ -567,6 +579,12 @@ def check_prune_mode_semantics(rows):
                 )
 
         tail_pruned = as_number(row, "tailPrunedThroughBlock")
+        if mode == "minimal" and tail_pruned_files is not None and tail_pruned_files > 0:
+            if tail_pruned is None or tail_pruned < 0:
+                issues.append(
+                    f"{line_label(row)} tailPrunedThroughBlock must be >= 0 "
+                    "when tailPrunedFiles is positive for minimal mode"
+                )
         if mode == "minimal" and tail_pruned is not None and tail_pruned >= 0:
             if chain_lookup is None or chain_lookup < 0:
                 issues.append(

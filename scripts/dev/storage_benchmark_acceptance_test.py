@@ -231,6 +231,53 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("tailPrunedFiles=0.0, want > 0", proc.stderr)
 
+    def test_rejects_minimal_tail_files_without_tail_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "pruneMode": "minimal",
+                    "pruneModePersisted": True,
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 100,
+                    "coldFreezerToBlock": 100,
+                    "derivedIndexToBlock": 100,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "tailPrunedThroughBlock must be >= 0 when tailPrunedFiles is positive",
+                proc.stderr,
+            )
+
     def test_accepts_prune_mode_semantics(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -254,6 +301,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "signedColdPrune": 0,
                     "chainLookupPruneToBlock": -1,
                     "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
                     "coldFreezerToBlock": -1,
                     "derivedIndexToBlock": -1,
                     "balanceTracePruneToBlock": -1,
@@ -268,6 +316,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "chainLookupPruneToBlock": 50,
                     "coldFreezerToBlock": 50,
                     "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
                 },
                 {
                     **base,
@@ -279,6 +328,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "coldFreezerToBlock": 50,
                     "derivedIndexToBlock": 50,
                     "tailPrunedThroughBlock": 45,
+                    "tailPrunedFiles": 0,
                 },
                 {
                     **base,
@@ -286,6 +336,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "mode": "full",
                     "pruneMode": "full",
                     "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
                 },
             ]
             write_result(result, rows)
@@ -332,6 +383,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "signedColdPrune": 1,
                     "chainLookupPruneToBlock": 12,
                     "tailPrunedThroughBlock": 9,
+                    "tailPrunedFiles": 1,
                 },
                 {
                     **base,
@@ -341,6 +393,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "signedColdPrune": 1,
                     "chainLookupPruneToBlock": -1,
                     "tailPrunedThroughBlock": 7,
+                    "tailPrunedFiles": 2,
                 },
                 {
                     **base,
@@ -352,6 +405,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "chainLookupPruneToBlock": 50,
                     "coldFreezerToBlock": 49,
                     "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 1,
                 },
                 {
                     **base,
@@ -389,9 +443,11 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("signedColdPrune must be false for archive", proc.stderr)
             self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
+            self.assertIn("tailPrunedFiles=1 is not allowed for archive mode", proc.stderr)
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for blocks mode", proc.stderr)
             self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=7 is not allowed for blocks mode", proc.stderr)
+            self.assertIn("tailPrunedFiles=2 is not allowed for blocks mode", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
             self.assertIn("coldFreezerToBlock=11.0 must cover tailPrunedThroughBlock=12", proc.stderr)
             self.assertIn("derivedIndexToBlock=9.0 must cover tailPrunedThroughBlock=12", proc.stderr)
