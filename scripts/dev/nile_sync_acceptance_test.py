@@ -306,6 +306,90 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
             self.assertIn("fullStagedSyncBottleneckLagShare=0.5, want 1.33333", proc.stderr)
 
+    def test_rejects_caught_up_row_with_ready_false(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "stageStatusFileStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": False,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "stageSyncPipelineMonotonic": True,
+                        "fullStagedSyncRequiredStages": [
+                            "SyncBodies",
+                            "SyncBodiesReady",
+                            "SyncImport",
+                            "SyncExecution",
+                            "SyncCommitment",
+                            "SyncFinish",
+                        ],
+                        "fullStagedSyncStageCount": 6,
+                        "fullStagedSyncPresentStageCount": 6,
+                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncMissingStages": [],
+                        "fullStagedSyncHashIssues": [],
+                        "fullStagedSyncUnverifiedStages": [],
+                        "fullStagedSyncStageCoverageRatio": 1.0,
+                        "fullStagedSyncVerificationRatio": 1.0,
+                        "fullStagedSyncCompleteBlock": 1000,
+                        "fullStagedSyncHeadBlock": 1000,
+                        "fullStagedSyncHeadLagBlocks": 0,
+                        "fullStagedSyncCompletionRatio": 1.0,
+                        "fullStagedSyncPipelineLagBlocks": 0,
+                        "fullStagedSyncBottleneck": "none",
+                        "fullStagedSyncBottleneckLagBlocks": 0,
+                        "fullStagedSyncBottleneckLagShare": -1.0,
+                        "stageSyncPipelineLagBlocks": 0,
+                        "stageSyncBottleneck": "none",
+                        "stageSyncBottleneckLagBlocks": 0,
+                        "heightRegressionBlocks": 0,
+                        "stageProgressRegressionCount": 0,
+                        "stageMismatchRows": 0,
+                        "stageMissingCanonicalRows": 0,
+                        "stageStagedBodyIssueRows": 0,
+                        "stageIssueRows": 0,
+                        "stageOrderIssueRows": 0,
+                        "stageSyncPipelineViolationCount": 0,
+                        "height": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-caught-up",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "fullStagedSyncReady=False, want True for status 'caught-up'",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncCompleteAtHead=True, want False from ready=False",
+                proc.stderr,
+            )
+            self.assertIn("full staged sync is not caught up", proc.stderr)
+
     def test_accepts_warning_stage_stall_with_consistent_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

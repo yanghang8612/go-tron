@@ -533,6 +533,21 @@ def check_full_staged_sync_evidence(row):
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
     complete_at_head = as_bool(row, "fullStagedSyncCompleteAtHead")
+    ready = as_bool(row, "fullStagedSyncReady")
+    want_ready = status in {"catching-up", "caught-up"}
+    if ready != want_ready:
+        issues.append(
+            f"fullStagedSyncReady={row.get('fullStagedSyncReady')!r}, "
+            f"want {want_ready!r} for status {status!r}"
+        )
+    if lag is not None:
+        want_complete_at_head = ready and lag == 0
+        if complete_at_head != want_complete_at_head:
+            issues.append(
+                f"fullStagedSyncCompleteAtHead={row.get('fullStagedSyncCompleteAtHead')!r}, "
+                f"want {want_complete_at_head!r} from ready={ready!r} "
+                f"and fullStagedSyncHeadLagBlocks={lag:g}"
+            )
     if status == "caught-up" and (lag != 0 or not complete_at_head):
         issues.append(
             "full staged sync caught-up row is inconsistent: "
@@ -654,10 +669,15 @@ def check_row(row, args):
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
     if args.require_caught_up:
-        if status != "caught-up" or not as_bool(row, "fullStagedSyncCompleteAtHead"):
+        if (
+            status != "caught-up"
+            or not as_bool(row, "fullStagedSyncReady")
+            or not as_bool(row, "fullStagedSyncCompleteAtHead")
+        ):
             issues.append(
                 "full staged sync is not caught up: "
-                f"status={status!r} completeAtHead={row.get('fullStagedSyncCompleteAtHead')!r}"
+                f"status={status!r} ready={row.get('fullStagedSyncReady')!r} "
+                f"completeAtHead={row.get('fullStagedSyncCompleteAtHead')!r}"
             )
     elif status not in {"catching-up", "caught-up"} or not as_bool(row, "fullStagedSyncReady"):
         issues.append(
