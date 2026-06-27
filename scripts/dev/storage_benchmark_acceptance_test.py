@@ -151,6 +151,86 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("signedColdPrune must be true", proc.stderr)
             self.assertIn("tailPrunedThroughBlock must be >= 0", proc.stderr)
 
+    def test_accepts_minimal_physical_tail_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 100,
+                    "tailPrunedThroughBlock": 95,
+                    "tailPrunedFiles": 2,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-physical-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_minimal_physical_tail_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 100,
+                    "tailPrunedThroughBlock": 95,
+                    "tailPrunedFiles": 0,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-physical-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("tailPrunedFiles=0.0, want > 0", proc.stderr)
+
     def test_accepts_prune_mode_semantics(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

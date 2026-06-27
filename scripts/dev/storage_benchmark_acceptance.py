@@ -493,6 +493,19 @@ def check_minimal_tail_prune(rows, role):
     return issues
 
 
+def check_minimal_physical_tail_prune(rows, role):
+    row = latest_for(rows, mode="minimal", role=role)
+    if row is None:
+        scope = "minimal" if role is None else f"minimal/{role}"
+        return [f"required minimal physical tail-prune evidence has no selected {scope} row"]
+
+    issues = []
+    tail_pruned_files = as_number(row, "tailPrunedFiles")
+    if tail_pruned_files is None or tail_pruned_files <= 0:
+        issues.append(f"{line_label(row)} tailPrunedFiles={tail_pruned_files}, want > 0")
+    return issues
+
+
 def field_present(row, field):
     return field in row and row.get(field) not in {None, ""}
 
@@ -614,6 +627,11 @@ def build_parser():
         help="require latest minimal row to prove signed cold lookup prune plus tail prune",
     )
     parser.add_argument(
+        "--require-minimal-physical-tail-prune",
+        action="store_true",
+        help="require latest minimal row to report physical freezer tail-file deletion",
+    )
+    parser.add_argument(
         "--require-prune-mode-semantics",
         action="store_true",
         help="require latest rows to preserve archive/blocks/minimal prune-mode semantics",
@@ -651,8 +669,10 @@ def main(argv=None):
     issues.extend(check_statuses(rows, args.allow_warning))
     if args.require_prometheus_artifacts:
         issues.extend(check_prometheus_artifacts(args.result, rows))
-    if args.require_minimal_tail_prune:
+    if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:
         issues.extend(check_minimal_tail_prune(rows, args.role))
+    if args.require_minimal_physical_tail_prune:
+        issues.extend(check_minimal_physical_tail_prune(rows, args.role))
     if args.require_prune_mode_semantics:
         issues.extend(check_prune_mode_semantics(rows))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
@@ -669,7 +689,9 @@ def main(argv=None):
     checks = 1 + len(required_modes) + len(args.minimums) + len(args.maximums)
     if args.require_prometheus_artifacts:
         checks += len(latest)
-    if args.require_minimal_tail_prune:
+    if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:
+        checks += 1
+    if args.require_minimal_physical_tail_prune:
         checks += 1
     if args.require_prune_mode_semantics:
         checks += len(latest)

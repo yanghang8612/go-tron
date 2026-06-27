@@ -288,6 +288,11 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
 
+For a long enough minimal-mode soak that should cross freezer shard boundaries,
+add `--require-minimal-physical-tail-prune` so the run must also report
+`tailPrunedFiles > 0`. Keep that gate off for short smoke samples where the
+virtual tail can advance without deleting a physical shard file.
+
 The checker verifies required mode coverage, rejects non-clean storage-alert
 statuses by default, checks that each latest selected sample has a readable
 Prometheus artifact with `gtron_storage_alert_status` and
@@ -302,7 +307,10 @@ regressions such as `archive` rows with prune progress or `blocks` rows with
 freezer-tail pruning, requires signed cold prune rows in `blocks`/`minimal` to
 carry a valid chain-lookup prune boundary covered by `coldFreezerToBlock`, and
 rejects `minimal` tail-prune boundaries that exceed the matching lookup-prune,
-cold-freezer, or derived-index coverage boundary. It also applies any
+cold-freezer, or derived-index coverage boundary. With
+`--require-minimal-physical-tail-prune`, it also requires the latest minimal
+row to prove physical freezer-tail file deletion through `tailPrunedFiles`.
+It also applies any
 project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:
