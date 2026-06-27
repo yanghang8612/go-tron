@@ -56,6 +56,7 @@ type testBackend struct {
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	rangeErr                error
 }
 
 func (b *testBackend) CurrentBlock() *types.Block { return b.block }
@@ -135,6 +136,9 @@ func (b *testBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error
 	b.rangeCalls++
 	b.lastRangeStart = start
 	b.lastRangeEnd = end
+	if b.rangeErr != nil {
+		return nil, b.rangeErr
+	}
 	if len(b.blocks) > 0 {
 		var result []*types.Block
 		for _, blk := range b.blocks {
@@ -803,6 +807,33 @@ func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
 	}
 }
 
+func TestGetBlockByLimitNextBackendErrorReturnsEmpty(t *testing.T) {
+	backend := &testBackend{rangeErr: errors.New("rawdb: block 2 decode: corrupt")}
+	client := newTestClient(t, backend)
+
+	resp, err := client.GetBlockByLimitNext(context.Background(), &apipb.BlockLimit{StartNum: 1, EndNum: 3})
+	if err != nil {
+		t.Fatalf("GetBlockByLimitNext: %v", err)
+	}
+	if len(resp.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLimitNext returned %d blocks, want 0", len(resp.GetBlock()))
+	}
+	if backend.rangeCalls != 1 || backend.lastRangeStart != 1 || backend.lastRangeEnd != 3 {
+		t.Fatalf("range call = %d [%d,%d), want 1 [1,3)", backend.rangeCalls, backend.lastRangeStart, backend.lastRangeEnd)
+	}
+
+	resp2, err := client.GetBlockByLimitNext2(context.Background(), &apipb.BlockLimit{StartNum: 1, EndNum: 3})
+	if err != nil {
+		t.Fatalf("GetBlockByLimitNext2: %v", err)
+	}
+	if len(resp2.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLimitNext2 returned %d blocks, want 0", len(resp2.GetBlock()))
+	}
+	if backend.rangeCalls != 2 {
+		t.Fatalf("range calls = %d, want 2", backend.rangeCalls)
+	}
+}
+
 func TestGetBlockByLatestNum(t *testing.T) {
 	blk := makeBlock(10)
 	client := newTestClient(t, &testBackend{block: blk})
@@ -812,6 +843,30 @@ func TestGetBlockByLatestNum(t *testing.T) {
 	}
 	if len(resp.GetBlock()) == 0 {
 		t.Fatal("want at least one block")
+	}
+}
+
+func TestGetBlockByLatestNumBackendErrorReturnsEmpty(t *testing.T) {
+	backend := &testBackend{block: makeBlock(10), rangeErr: errors.New("rawdb: block 10 decode: corrupt")}
+	client := newTestClient(t, backend)
+
+	resp, err := client.GetBlockByLatestNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if err != nil {
+		t.Fatalf("GetBlockByLatestNum: %v", err)
+	}
+	if len(resp.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLatestNum returned %d blocks, want 0", len(resp.GetBlock()))
+	}
+
+	resp2, err := client.GetBlockByLatestNum2(context.Background(), &apipb.NumberMessage{Num: 1})
+	if err != nil {
+		t.Fatalf("GetBlockByLatestNum2: %v", err)
+	}
+	if len(resp2.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLatestNum2 returned %d blocks, want 0", len(resp2.GetBlock()))
+	}
+	if backend.rangeCalls != 2 {
+		t.Fatalf("range calls = %d, want 2", backend.rangeCalls)
 	}
 }
 

@@ -56,6 +56,7 @@ type stubBackend struct {
 	hashErr                 error
 	txErr                   error
 	txInfoErr               error
+	rangeErr                error
 	rangeCalls              int
 	lastRangeStart          uint64
 	lastRangeEnd            uint64
@@ -142,6 +143,9 @@ func (s *stubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error
 	s.rangeCalls++
 	s.lastRangeStart = start
 	s.lastRangeEnd = end
+	if s.rangeErr != nil {
+		return nil, s.rangeErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
@@ -528,6 +532,33 @@ func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
 				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", stub.rangeCalls)
 			}
 		})
+	}
+}
+
+func TestGetBlockByLimitNextBackendErrorReturnsEmptyList(t *testing.T) {
+	stub := &stubBackend{rangeErr: errors.New("rawdb: block 2 decode: corrupt")}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbylimitnext", "application/json", strings.NewReader(`{"startNum":1,"endNum":3}`))
+	if err != nil {
+		t.Fatalf("POST getblockbylimitnext: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Block []json.RawMessage `json:"block"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode getblockbylimitnext: %v", err)
+	}
+	if len(body.Block) != 0 {
+		t.Fatalf("block list len = %d, want 0", len(body.Block))
+	}
+	if stub.rangeCalls != 1 || stub.lastRangeStart != 1 || stub.lastRangeEnd != 3 {
+		t.Fatalf("range call = %d [%d,%d), want 1 [1,3)", stub.rangeCalls, stub.lastRangeStart, stub.lastRangeEnd)
 	}
 }
 

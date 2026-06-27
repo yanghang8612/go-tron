@@ -298,7 +298,7 @@ func (s *Server) GetBlockByLimitNext(_ context.Context, in *apipb.BlockLimit) (*
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockList{}, nil
 	}
 	result := make([]*corepb.Block, len(blocks))
 	for i, b := range blocks {
@@ -318,7 +318,7 @@ func (s *Server) GetBlockByLimitNext2(_ context.Context, in *apipb.BlockLimit) (
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockListExtention{}, nil
 	}
 	result := make([]*apipb.BlockExtention, len(blocks))
 	for i, b := range blocks {
@@ -354,7 +354,7 @@ func (s *Server) GetBlockByLatestNum(_ context.Context, in *apipb.NumberMessage)
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockList{}, nil
 	}
 	result := make([]*corepb.Block, len(blocks))
 	for i, b := range blocks {
@@ -383,7 +383,7 @@ func (s *Server) GetBlockByLatestNum2(_ context.Context, in *apipb.NumberMessage
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockListExtention{}, nil
 	}
 	result := make([]*apipb.BlockExtention, len(blocks))
 	for i, b := range blocks {

@@ -31,6 +31,7 @@ type boundBlockStubBackend struct {
 	solidStubBackend
 	block          *types.Block
 	hashCalls      int
+	rangeErr       error
 	rangeCalls     int
 	lastRangeStart uint64
 	lastRangeEnd   uint64
@@ -55,6 +56,9 @@ func (s *boundBlockStubBackend) GetBlocksByRange(start, end uint64) ([]*types.Bl
 	s.rangeCalls++
 	s.lastRangeStart = start
 	s.lastRangeEnd = end
+	if s.rangeErr != nil {
+		return nil, s.rangeErr
+	}
 	if s.block == nil {
 		return nil, nil
 	}
@@ -319,6 +323,36 @@ func TestPbftGetBlockByLimitNextRejectsAbovePbftBeforeBackend(t *testing.T) {
 	}
 	if stub.rangeCalls != 0 {
 		t.Fatalf("GetBlocksByRange called %d times for unconfirmed range, want 0", stub.rangeCalls)
+	}
+}
+
+func TestBoundGetBlockByLimitNextBackendErrorReturnsEmptyList(t *testing.T) {
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: -1},
+		rangeErr:         errors.New("rawdb: block 4 decode: corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getblockbylimitnext", "application/json", strings.NewReader(`{"startNum":4,"endNum":6}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with empty block list, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Block []json.RawMessage `json:"block"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Block) != 0 {
+		t.Fatalf("block list len = %d, want 0", len(body.Block))
+	}
+	if stub.rangeCalls != 1 || stub.lastRangeStart != 4 || stub.lastRangeEnd != 6 {
+		t.Fatalf("range call = %d [%d,%d), want 1 [4,6)", stub.rangeCalls, stub.lastRangeStart, stub.lastRangeEnd)
 	}
 }
 

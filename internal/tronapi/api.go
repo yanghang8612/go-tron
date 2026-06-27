@@ -950,9 +950,13 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 func (api *API) writeBlockRange(w http.ResponseWriter, start, end uint64) {
 	blocks, err := api.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeBlockListJSON(w, nil)
 		return
 	}
+	writeBlockListJSON(w, blocks)
+}
+
+func writeBlockListJSON(w http.ResponseWriter, blocks []*types.Block) {
 	var blockList []map[string]interface{}
 	for _, b := range blocks {
 		data, err := MarshalBlock(b.Proto())
