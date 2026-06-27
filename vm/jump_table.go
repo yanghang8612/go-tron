@@ -218,7 +218,11 @@ func newJumpTable() JumpTable {
 
 	// TRON extensions — voting / rewards (AllowTvmVote)
 	vote := func(c TVMConfig) bool { return c.Vote }
-	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness, energyCost: EnergyVoteWitness,
+	// VOTEWITNESS charges the 30000 VOTE_WITNESS base INSIDE the handler, after the
+	// 3 MB memory OOM guard (java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy,
+	// OOM-first). A static cost here would let the interpreter loop spend it ahead
+	// of the memory check, flipping OUT_OF_MEMORY to OUT_OF_ENERGY.
+	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness,
 		minStack: 4, maxStack: 1021, writes: true, enabledFn: vote}
 	tbl[WITHDRAWREWARD] = &operation{execute: opWithdrawReward, energyCost: EnergyWithdrawReward,
 		minStack: 0, maxStack: 1024, writes: true, enabledFn: vote}

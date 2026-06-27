@@ -492,6 +492,15 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	if err != nil {
 		return nil, err
 	}
+	// java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy(...); calcMemEnergy
+	// runs checkMemorySize (the 3 MB OOM guard, inside voteWitnessMemoryEnergyCost
+	// above) before this base is spent. Charge the 30000 base here, after the OOM
+	// check, instead of as a static jump-table energyCost the interpreter loop
+	// would spend ahead of the memory check — which flips OUT_OF_MEMORY to
+	// OUT_OF_ENERGY when <30000 energy remains and the array exceeds 3 MB.
+	if !in.useEnergy(contract, EnergyVoteWitness) {
+		return nil, ErrOutOfEnergy
+	}
 	if cost > 0 {
 		if !in.useEnergy(contract, cost) {
 			return nil, ErrOutOfEnergy

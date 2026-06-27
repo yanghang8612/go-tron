@@ -284,17 +284,21 @@ func TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks(t *testing.T) {
 		return err
 	}
 
-	if err := run(TVMConfig{Vote: true}, 0); err != nil {
+	// opVoteWitness charges the 30000 VOTE_WITNESS base itself (after the memory
+	// OOM guard, mirroring java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy),
+	// so each run is funded with exactly the base: the only thing that tips it into
+	// OUT_OF_ENERGY is the per-fork memory length-word charge on top.
+	if err := run(TVMConfig{Vote: true}, EnergyVoteWitness); err != nil {
 		// base era charges no dynamic-array length word, so the zero-length vote
-		// succeeds on 0 energy: the length words read 0 from java's zero-extended
+		// fits in the base alone: the length words read 0 from java's zero-extended
 		// memory (Program.java:2277), matching count 0 with no throw.
 		t.Fatalf("base era should not charge dynamic-array length word, got %v", err)
 	}
-	if err := run(TVMConfig{Vote: true, EnergyAdjustment: true}, 5); err != ErrOutOfEnergy {
-		t.Fatalf("energy-adjusted zero-length arrays should charge 64 bytes of memory, got %v", err)
+	if err := run(TVMConfig{Vote: true, EnergyAdjustment: true}, EnergyVoteWitness); err != ErrOutOfEnergy {
+		t.Fatalf("energy-adjusted zero-length arrays should charge 64 bytes of memory atop the base, got %v", err)
 	}
-	if err := run(TVMConfig{Vote: true, Osaka: true}, 5); err != ErrOutOfEnergy {
-		t.Fatalf("Osaka zero-length arrays should charge 64 bytes of memory, got %v", err)
+	if err := run(TVMConfig{Vote: true, Osaka: true}, EnergyVoteWitness); err != ErrOutOfEnergy {
+		t.Fatalf("Osaka zero-length arrays should charge 64 bytes of memory atop the base, got %v", err)
 	}
 }
 
@@ -345,7 +349,9 @@ func TestVoteWitnessOpcodeExpandsMemoryAtLimit(t *testing.T) {
 	if got := mem.len(); got != int(tvmMemoryLimit) {
 		t.Fatalf("memory size: got %d, want %d", got, tvmMemoryLimit)
 	}
-	wantEnergy := uint64(100_000_000) - memoryEnergyCost(tvmMemoryLimit)
+	// opVoteWitness now charges the 30000 VOTE_WITNESS base in-handler (after the
+	// OOM guard) plus the memory-expansion delta.
+	wantEnergy := uint64(100_000_000) - EnergyVoteWitness - memoryEnergyCost(tvmMemoryLimit)
 	if got := contract.Energy; got != wantEnergy {
 		t.Fatalf("remaining energy: got %d, want %d", got, wantEnergy)
 	}
