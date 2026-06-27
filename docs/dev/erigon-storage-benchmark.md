@@ -14,7 +14,7 @@ datadir size split by hot Pebble, ancient freezer, and state snapshots:
 ```bash
 scripts/dev/storage_benchmark.sh \
   --profile producer \
-  --modes full,blocks,minimal,archive \
+  --modes full,blocks,minimal,snap,archive \
   --target-blocks 120 \
   --freezer-margin 3 \
   --freezer-interval 1s \
@@ -130,12 +130,13 @@ scripts/dev/storage_benchmark.sh \
 ```
 
 This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, runs
-`gtron snapshot prune-chain-lookups` with the catalog signer as a trusted key,
-and then runs `gtron snapshot prune-retired` for each selected mode. `blocks`
-stops there and should report lookup-prune plus retired snapshot-file cleanup
-with no freezer-tail prune. `minimal` then restarts once so the tail-prune
-lifecycle can run. Use a small `--history-window` for short dev samples;
-production and soak runs should use the intended retention window.
+`gtron snapshot prune-chain-lookups` with the catalog signer as a trusted key
+for non-`archive` modes, and then runs `gtron snapshot prune-retired` for each
+selected mode. `full`, `snap`, and `blocks` should report lookup-prune plus
+retired snapshot-file cleanup with no freezer-tail prune. `minimal` then
+restarts once so the tail-prune lifecycle can run. Use a small
+`--history-window` for short dev samples; production and soak runs should use
+the intended retention window.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -224,7 +225,7 @@ catch-up time and follower datadir size:
 ```bash
 scripts/dev/storage_benchmark.sh \
   --profile sync \
-  --modes full,blocks,minimal \
+  --modes full,blocks,minimal,snap \
   --target-blocks 120 \
   --sync-max-diff 2 \
   --keep
@@ -267,6 +268,9 @@ staged-body mismatches.
 - `minimal`: should be evaluated with `--signed-cold-prune` after verified
   cold chain-freezer, chain-index, and indexed event-log coverage exists; the
   drill reports lookup-prune coverage and the restart-time tail-prune boundary.
+- `snap`: should prune hot history only after immutable state-domain snapshot
+  coverage exists, making it the evidence path for snapshot-assisted state
+  compaction.
 - `archive`: should retain all temporal state rows and is expected to consume
   more hot storage.
 
@@ -281,7 +285,7 @@ After collecting a candidate run, gate the JSONL with the acceptance checker:
 ```bash
 scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --role producer \
-  --require-modes full,blocks,minimal,archive \
+  --require-modes full,blocks,minimal,snap,archive \
   --require-prometheus-artifacts \
   --require-prune-mode-semantics \
   --require-minimal-tail-prune \

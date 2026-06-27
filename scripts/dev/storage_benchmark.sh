@@ -8,7 +8,7 @@ set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 GTRON="${GTRON:-$BASEDIR/build/bin/gtron}"
-MODES="full,blocks,minimal,archive"
+MODES="full,blocks,minimal,snap,archive"
 PROFILE="producer"
 TARGET_BLOCKS=30
 TIMEOUT=180
@@ -108,7 +108,7 @@ Profiles:
 
 Options:
   --profile producer|sync        Benchmark profile (default: producer)
-  --modes full,blocks,minimal,archive
+  --modes full,blocks,minimal,snap,archive
                                   Comma-separated prune modes
   --target-blocks N              Block height target (default: 30)
   --timeout SECONDS              Per-wait timeout (default: 180)
@@ -130,7 +130,7 @@ Options:
   --history-window N             Inject [history] prune_window for short prune drills
 
 Examples:
-  scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,archive --target-blocks 80
+  scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
   scripts/dev/storage_benchmark.sh --profile sync --modes full,blocks,minimal --target-blocks 100
 EOF
 }
@@ -844,6 +844,10 @@ run_signed_cold_prune_drill() {
   local datadir="$3"
   local log_path="$4"
   if [ "$SIGNED_COLD_PRUNE" -ne 1 ]; then
+    return
+  fi
+  if [ "$mode" = "archive" ]; then
+    echo "skipping signed cold prune for archive mode" >>"$log_path"
     return
   fi
   if [ "$RUN_COLD_FREEZER_TO_BLOCK" -lt 0 ]; then

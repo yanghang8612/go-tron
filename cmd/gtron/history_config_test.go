@@ -47,6 +47,20 @@ func TestApplyHistoryConfig_PruneModeArchive(t *testing.T) {
 	}
 }
 
+func TestApplyHistoryConfig_PruneModeSnap(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--prune.mode", "snap"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeSnap {
+		t.Errorf("--prune.mode snap: mode = %q, want %q", got, params.HistoryModeSnap)
+	}
+	if !cfg.HistoryEnabled {
+		t.Error("snap prune mode did not auto-enable HistoryEnabled")
+	}
+}
+
 func TestApplyHistoryConfig_PruneModeBlocksAndMinimal(t *testing.T) {
 	for _, mode := range []string{params.HistoryModeBlocks, params.HistoryModeMinimal} {
 		t.Run(mode, func(t *testing.T) {
