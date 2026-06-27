@@ -38,6 +38,15 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		return nil, err
 	}
 
+	// java getCreateCost = CREATE + calcMemEnergy(...); calcMemEnergy runs
+	// checkMemorySize (the 3 MB OOM guard, above) before this base is spent. So
+	// charge the 32000 CREATE base here, after the OOM check, instead of as a
+	// static jump-table energyCost that the interpreter loop would spend ahead of
+	// the memory check (which would wrongly surface OUT_OF_ENERGY for a >3 MB
+	// init-code region when <32000 energy remains).
+	if !interpreter.useEnergy(contract, EnergyCreate) {
+		return nil, ErrOutOfEnergy
+	}
 	if memCost > 0 {
 		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
@@ -90,6 +99,13 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		return nil, err
 	}
 
+	// java getCreate2Cost = CREATE + calcMemEnergy(...) + sizeInWords*SHA3_WORD;
+	// the 3 MB OOM guard inside calcMemEnergy precedes spending. Charge the CREATE
+	// base here (after the OOM check) rather than via the static jump-table cost —
+	// see opCreate.
+	if !interpreter.useEnergy(contract, EnergyCreate) {
+		return nil, ErrOutOfEnergy
+	}
 	if memCost > 0 {
 		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
@@ -179,10 +195,13 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 			cost += EnergyCallNewAcct
 		}
 	}
-	if !interpreter.useEnergy(contract, cost) {
-		return nil, ErrOutOfEnergy
-	}
 
+	// java EnergyCost.getCalculateCallCost adds calcMemEnergy(oldMemSize,
+	// in.max(out)) to the base cost, and calcMemEnergy runs checkMemorySize
+	// (the 3 MB OUT_OF_MEMORY guard) BEFORE the single energyCost >
+	// energyLimitLeft OUT_OF_ENERGY comparison. So validate both memory regions
+	// (OOM) before charging the base cost, else a >3 MB region wrongly surfaces
+	// as OUT_OF_ENERGY when the base cost alone exhausts remaining energy.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALL)
 	if err != nil {
 		return nil, err
@@ -190,6 +209,9 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALL)
 	if err != nil {
 		return nil, err
+	}
+	if !interpreter.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
 	}
 	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
 	// calcMemEnergy(oldMemSize, in.max(out)). Charging in and ret separately
@@ -248,10 +270,8 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	if valueNonZero {
 		cost += EnergyCallValueTx
 	}
-	if !interpreter.useEnergy(contract, cost) {
-		return nil, ErrOutOfEnergy
-	}
 
+	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALLCODE)
 	if err != nil {
 		return nil, err
@@ -259,6 +279,9 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALLCODE)
 	if err != nil {
 		return nil, err
+	}
+	if !interpreter.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
 	}
 	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
 		if !interpreter.useEnergy(contract, memCost) {
@@ -307,10 +330,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	addr := uint256ToAddress(&addrVal)
 	gas := energyVal.Uint64()
 
-	if !interpreter.useEnergy(contract, EnergyCall) {
-		return nil, ErrOutOfEnergy
-	}
-
+	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, DELEGATECALL)
 	if err != nil {
 		return nil, err
@@ -318,6 +338,9 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, DELEGATECALL)
 	if err != nil {
 		return nil, err
+	}
+	if !interpreter.useEnergy(contract, EnergyCall) {
+		return nil, ErrOutOfEnergy
 	}
 	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
 		if !interpreter.useEnergy(contract, memCost) {
@@ -359,10 +382,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	addr := uint256ToAddress(&addrVal)
 	gas := energyVal.Uint64()
 
-	if !interpreter.useEnergy(contract, EnergyCall) {
-		return nil, ErrOutOfEnergy
-	}
-
+	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, STATICCALL)
 	if err != nil {
 		return nil, err
@@ -370,6 +390,9 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, STATICCALL)
 	if err != nil {
 		return nil, err
+	}
+	if !interpreter.useEnergy(contract, EnergyCall) {
+		return nil, ErrOutOfEnergy
 	}
 	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
 		if !interpreter.useEnergy(contract, memCost) {

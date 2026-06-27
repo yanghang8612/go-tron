@@ -96,10 +96,8 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 			cost += EnergyCallNewAcct
 		}
 	}
-	if !in.useEnergy(contract, cost) {
-		return nil, ErrOutOfEnergy
-	}
 
+	// OUT_OF_MEMORY (3 MB guard) precedes OUT_OF_ENERGY — see opCall.
 	inOff, inSz, _, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
@@ -107,6 +105,9 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	retOff, retSz, _, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
+	}
+	if !in.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
 	}
 	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
 	// calcMemEnergy(oldMemSize, in.max(out)); separate in/ret charges
