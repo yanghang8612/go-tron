@@ -102,13 +102,15 @@ func runOpsErr(t *testing.T, code []byte, cfg TVMConfig, energyLimit uint64) err
 	return err
 }
 
-// TestCreateFamilyMemoryLimitPrecedesOutOfEnergy mirrors the CALL-family case for
-// CREATE/CREATE2: java getCreateCost/getCreate2Cost is CREATE + calcMemEnergy(…)
-// where calcMemEnergy runs checkMemorySize (OUT_OF_MEMORY) before the cost is
-// spent. gtron carries the 32000 CREATE base as a static jump-table energyCost
-// that the interpreter loop charges before the handler validates the 3 MB limit,
-// so a >3 MB init-code region with <32000 energy left must still be OUT_OF_MEMORY.
-func TestCreateFamilyMemoryLimitPrecedesOutOfEnergy(t *testing.T) {
+// TestStaticBaseOpsMemoryLimitPrecedesOutOfEnergy covers the ops whose base cost
+// lives as a static jump-table energyCost the interpreter loop charges BEFORE the
+// handler runs — CREATE/CREATE2 (32000) and VOTEWITNESS (30000). java folds that
+// base into getEnergyCost alongside calcMemEnergy, whose checkMemorySize
+// (OUT_OF_MEMORY) precedes the spend, so a >3 MB region with insufficient energy
+// for the base alone must still surface as OUT_OF_MEMORY, not OUT_OF_ENERGY. These
+// must be driven through the interpreter loop (not a direct handler call) to
+// exercise the loop's static-cost charge.
+func TestStaticBaseOpsMemoryLimitPrecedesOutOfEnergy(t *testing.T) {
 	// size operand = 3 MB + 1 (0x300001), offset/value/salt = 0.
 	const sz0, sz1, sz2 = 0x30, 0x00, 0x01
 
@@ -123,6 +125,26 @@ func TestCreateFamilyMemoryLimitPrecedesOutOfEnergy(t *testing.T) {
 		// Enough for the three pushes (9) but well under the 32000 CREATE base.
 		if err := runOpsErr(t, code, TVMConfig{}, 100); !errors.Is(err, ErrOutOfMemory) {
 			t.Fatalf("CREATE: got %v, want ErrOutOfMemory", err)
+		}
+	})
+
+	t.Run("VOTEWITNESS", func(t *testing.T) {
+		// VOTEWITNESS carries the 30000 VOTE_WITNESS base as a static jump-table
+		// energyCost (java getVoteWitnessCost = VOTE_WITNESS + calcMemEnergy, whose
+		// checkMemorySize is OOM-first). A witness array of 100000 elements needs
+		// 100000*32+32 ≈ 3.2 MB > the 3 MB cap, so with <30000 energy left it must
+		// be OUT_OF_MEMORY, not OUT_OF_ENERGY.
+		// pops: amountCount, amountOffset, witnessCount, witnessOffset
+		code := []byte{
+			byte(PUSH1), 0x00, // witnessOffset (bottom)
+			byte(PUSH3), 0x01, 0x86, 0xA0, // witnessCount = 100000
+			byte(PUSH1), 0x00, // amountOffset
+			byte(PUSH1), 0x00, // amountCount (top)
+			byte(VOTEWITNESS),
+		}
+		cfg := TVMConfig{Vote: true, EnergyAdjustment: true}
+		if err := runOpsErr(t, code, cfg, 100); !errors.Is(err, ErrOutOfMemory) {
+			t.Fatalf("VOTEWITNESS: got %v, want ErrOutOfMemory", err)
 		}
 	})
 
