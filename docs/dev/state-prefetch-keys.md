@@ -16,6 +16,7 @@ hints and never change actuator validation behaviour.
 | `state.AccountPrefetchKey(addr)` | `ReadStateAccountLatest(addr)` |
 | `state.ContractMetadataPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row |
 | `state.ContractCodePrefetchKey(addr)` | `ReadStateAccountLatest(addr)` envelope, then `ReadStateCode(CodeHash)` when present |
+| `state.ContractOriginAccountPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row, then `ReadStateAccountLatest(origin_address)` when present |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemMarket, key)` | market order/account/price-list/price-count/order-book rows derivable from the envelope |
@@ -29,9 +30,9 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Contract family | Prefetch hints |
 | --- | --- |
 | TRX and TRC10 transfer | owner account, recipient account; transfer-style recipient contract metadata where a contract-address check may follow; TRC10 legacy metadata, name index, and numeric-id V2 metadata |
-| TVM trigger | owner account, contract account, contract metadata, contract code row |
+| TVM trigger | owner account, contract account, contract metadata, contract code row, contract origin account from metadata |
 | TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata |
-| Contract settings | owner account, target contract account, target contract metadata |
+| Contract settings | owner account, target contract account, target contract metadata, target contract origin account from metadata |
 | Vote witness | voter account, each voted witness account |
 | Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows |
 | Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
@@ -52,9 +53,6 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 - Second-stage market/exchange rows that require first reading an order,
   exchange, or price list, such as maker order ids behind a matched price level
   and the opposite exchange token id.
-- Contract origin account for update-setting/update-energy-limit/clear-ABI.
-  It is read from contract metadata first, so it needs chained prefetch or a
-  metadata-aware second pass.
 - Additional TVM runtime CALL/DELEGATECALL target code rows and storage slots.
   Those become known only during VM execution and need a VM hook, not
   tx-envelope extraction.

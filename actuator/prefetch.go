@@ -75,6 +75,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		}
 		if contract, ok := b.addOwnerAndContract(&m); ok {
 			b.add(state.ContractCodePrefetchKey(contract))
+			b.add(state.ContractOriginAccountPrefetchKey(contract))
 		}
 
 	case corepb.Transaction_Contract_CreateSmartContract:
@@ -98,21 +99,27 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addOwnerAndContract(&m)
+		if contract, ok := b.addOwnerAndContract(&m); ok {
+			b.add(state.ContractOriginAccountPrefetchKey(contract))
+		}
 
 	case corepb.Transaction_Contract_UpdateEnergyLimitContract:
 		var m contractpb.UpdateEnergyLimitContract
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addOwnerAndContract(&m)
+		if contract, ok := b.addOwnerAndContract(&m); ok {
+			b.add(state.ContractOriginAccountPrefetchKey(contract))
+		}
 
 	case corepb.Transaction_Contract_ClearABIContract:
 		var m contractpb.ClearABIContract
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addOwnerAndContract(&m)
+		if contract, ok := b.addOwnerAndContract(&m); ok {
+			b.add(state.ContractOriginAccountPrefetchKey(contract))
+		}
 
 	case corepb.Transaction_Contract_VoteWitnessContract:
 		var m contractpb.VoteWitnessContract

@@ -28,6 +28,7 @@ const (
 	PrefetchAccountKVLatest
 	PrefetchContractStorage
 	PrefetchContractCode
+	PrefetchContractOriginAccount
 )
 
 // PrefetchKey describes one read-only latest-domain warmup. It intentionally
@@ -70,6 +71,10 @@ func ContractMetadataPrefetchKey(owner tcommon.Address) PrefetchKey {
 
 func ContractCodePrefetchKey(owner tcommon.Address) PrefetchKey {
 	return PrefetchKey{Kind: PrefetchContractCode, Owner: owner}
+}
+
+func ContractOriginAccountPrefetchKey(contract tcommon.Address) PrefetchKey {
+	return PrefetchKey{Kind: PrefetchContractOriginAccount, Owner: contract}
 }
 
 func ContractStoragePrefetchKey(owner tcommon.Address, slot tcommon.Hash) PrefetchKey {
@@ -269,6 +274,8 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		return ok, err
 	case PrefetchContractCode:
 		return prefetchContractCode(db, key.Owner)
+	case PrefetchContractOriginAccount:
+		return prefetchContractOriginAccount(db, key)
 	default:
 		return false, fmt.Errorf("state prefetch: unknown kind %d", key.Kind)
 	}
@@ -308,4 +315,32 @@ func prefetchContractCode(db ethdb.KeyValueReader, owner tcommon.Address) (bool,
 	}
 	_, ok, err = rawdb.ReadStateCodeStrict(db, account.CodeHash)
 	return ok, err
+}
+
+func prefetchContractOriginAccount(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
+	generation, ok, err := prefetchGeneration(db, key)
+	if err != nil || !ok {
+		return false, err
+	}
+	meta, err := prefetchContractMetadata(db, key.Owner, generation)
+	if err != nil || meta == nil {
+		return false, err
+	}
+	origin, ok := prefetchTRONAddress(meta.GetOriginAddress())
+	if !ok {
+		return false, nil
+	}
+	_, ok, err = rawdb.ReadStateAccountLatest(db, origin)
+	return ok, err
+}
+
+func prefetchTRONAddress(raw []byte) (tcommon.Address, bool) {
+	if len(raw) != tcommon.AddressLength {
+		return tcommon.Address{}, false
+	}
+	addr := tcommon.BytesToAddress(raw)
+	if !addr.ValidPrefix() {
+		return tcommon.Address{}, false
+	}
+	return addr, true
 }

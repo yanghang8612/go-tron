@@ -157,6 +157,90 @@ func TestStatePrefetcherContractCodeMissesWithoutChangingSemantics(t *testing.T)
 	}
 }
 
+func TestStatePrefetcherWarmsContractOriginAccountFromMetadata(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	contract := testAddr(0x60)
+	origin := testAddr(0x61)
+	metaBytes := mustMarshalPrefetchContractMetadata(t, &contractpb.SmartContract{
+		OriginAddress: origin.Bytes(),
+	})
+	if err := rawdb.WriteStateKVLatest(db, contract, 0, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes); err != nil {
+		t.Fatalf("WriteStateKVLatest metadata: %v", err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, origin, []byte("origin-account")); err != nil {
+		t.Fatalf("WriteStateAccountLatest origin: %v", err)
+	}
+
+	hit, err := prefetchLatest(db, ContractOriginAccountPrefetchKey(contract))
+	if err != nil {
+		t.Fatalf("prefetch contract origin account: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch contract origin account hit = false, want true")
+	}
+}
+
+func TestStatePrefetcherContractOriginAccountMissesWithoutChangingSemantics(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, ethdb.KeyValueWriter, tcommon.Address)
+	}{
+		{
+			name: "missing metadata",
+		},
+		{
+			name: "malformed metadata",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, contract tcommon.Address) {
+				t.Helper()
+				if err := rawdb.WriteStateKVLatest(db, contract, 0, kvdomains.ContractMetadata, contractMetaKVKey, []byte{0xff}); err != nil {
+					t.Fatalf("WriteStateKVLatest malformed metadata: %v", err)
+				}
+			},
+		},
+		{
+			name: "invalid origin address",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, contract tcommon.Address) {
+				t.Helper()
+				metaBytes := mustMarshalPrefetchContractMetadata(t, &contractpb.SmartContract{
+					OriginAddress: []byte{tcommon.AddressPrefixMainnet, 0x01},
+				})
+				if err := rawdb.WriteStateKVLatest(db, contract, 0, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes); err != nil {
+					t.Fatalf("WriteStateKVLatest invalid origin metadata: %v", err)
+				}
+			},
+		},
+		{
+			name: "missing origin account",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, contract tcommon.Address) {
+				t.Helper()
+				metaBytes := mustMarshalPrefetchContractMetadata(t, &contractpb.SmartContract{
+					OriginAddress: testAddr(0x6f).Bytes(),
+				})
+				if err := rawdb.WriteStateKVLatest(db, contract, 0, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes); err != nil {
+					t.Fatalf("WriteStateKVLatest missing origin metadata: %v", err)
+				}
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := rawdb.NewMemoryDatabase()
+			contract := testAddr(byte(0x70 + i))
+			if tt.setup != nil {
+				tt.setup(t, db, contract)
+			}
+			hit, err := prefetchLatest(db, ContractOriginAccountPrefetchKey(contract))
+			if err != nil {
+				t.Fatalf("prefetch contract origin account: %v", err)
+			}
+			if hit {
+				t.Fatal("prefetch contract origin account hit = true, want false")
+			}
+		})
+	}
+}
+
 func TestStatePrefetcherDropsWhenQueueFull(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := testAddr(0x45)
@@ -203,4 +287,13 @@ func TestStatePrefetcherStopIsIdempotentAndDropsAfterStop(t *testing.T) {
 	if stats := p.Stats(); stats.Dropped != 1 {
 		t.Fatalf("stats after enqueue stopped = %+v, want one drop", stats)
 	}
+}
+
+func mustMarshalPrefetchContractMetadata(t *testing.T, meta *contractpb.SmartContract) []byte {
+	t.Helper()
+	data, err := proto.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal contract metadata: %v", err)
+	}
+	return data
 }

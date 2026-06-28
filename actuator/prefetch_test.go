@@ -44,6 +44,53 @@ func TestPrefetchKeysForTriggerSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.AccountPrefetchKey(contract))
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
 	assertPrefetchHas(t, keys, state.ContractCodePrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.ContractOriginAccountPrefetchKey(contract))
+}
+
+func TestPrefetchKeysForContractSettingsWarmOriginAccount(t *testing.T) {
+	owner := makeTestAddr(0x30)
+	contract := makeTestAddr(0x31)
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "update setting",
+			typ:  corepb.Transaction_Contract_UpdateSettingContract,
+			msg: &contractpb.UpdateSettingContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+		{
+			name: "update energy limit",
+			typ:  corepb.Transaction_Contract_UpdateEnergyLimitContract,
+			msg: &contractpb.UpdateEnergyLimitContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+		{
+			name: "clear abi",
+			typ:  corepb.Transaction_Contract_ClearABIContract,
+			msg: &contractpb.ClearABIContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newPrefetchTestTx(t, tt.typ, tt.msg)
+			keys := PrefetchKeysFor(tx)
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(contract))
+			assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
+			assertPrefetchHas(t, keys, state.ContractOriginAccountPrefetchKey(contract))
+		})
+	}
 }
 
 func TestPrefetchKeysForTransferAssetSystemAssetRows(t *testing.T) {
