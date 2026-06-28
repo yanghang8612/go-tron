@@ -112,6 +112,13 @@ counts for the event-log-index sidecars. These counters are the first profiling
 signal for whether the sorted sidecar is selective enough or needs a
 recsplit-style accessor.
 
+Cold state-domain history segments are block-compressed by default when the
+producer lifecycle emits them. For A/B storage measurements or an emergency
+rollback to raw segment emission, start the producer with
+`--snapshot.compress-history=false` or set
+`GTRON_SNAPSHOT_COMPRESS_HISTORY=false`; existing compressed and raw segments
+remain readable either way.
+
 ## Signed Cold Prune Drill
 
 Run the producer profile with `--signed-cold-prune` to exercise the minimum

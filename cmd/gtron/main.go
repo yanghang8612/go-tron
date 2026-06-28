@@ -156,6 +156,12 @@ var (
 		Name:  "history.enabled",
 		Usage: "Turn on flat temporal state capture. Required to populate as-of history; archive mode implies it.",
 	}
+	snapshotCompressHistoryFlag = &cli.BoolFlag{
+		Name:    "snapshot.compress-history",
+		Usage:   "Write new cold state-history segments in block-compressed format; set false to emit legacy raw segments",
+		Value:   true,
+		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_HISTORY"},
+	}
 	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
 		Name:  "state.commitment.checkpoints",
 		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
@@ -272,6 +278,7 @@ var app = &cli.App{
 		gcmodeFlag,
 		pruneModeFlag,
 		historyEnabledFlag,
+		snapshotCompressHistoryFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
@@ -361,6 +368,8 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	compressHistorySegments := applySnapshotCompressionConfig(ctx)
+	log.Info("Cold history compression configured", "enabled", compressHistorySegments)
 	dbPath := chainDataDir(cfg.DataDir)
 
 	// In dev mode, parse witness key early so we can build the genesis with it
