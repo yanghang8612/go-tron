@@ -26,6 +26,11 @@ SIGNED_COLD_PRUNE=0
 SNAPSHOT_SIGNING_SEED="1111111111111111111111111111111111111111111111111111111111111111"
 SYNC_MAX_DIFF=2
 HISTORY_WINDOW=0
+ARCHIVE_API_PROBE=0
+ARCHIVE_API_BLOCK=-1
+ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
+ARCHIVE_API_STORAGE_SLOT="0x0"
+ARCHIVE_API_CALL_DATA=""
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -97,6 +102,11 @@ RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
 RUN_SNAPSHOT_RETIRED_BYTES=-1
 RUN_STORAGE_ALERT_FAILED=0
 RUN_STORAGE_ALERT_PROMETHEUS=""
+RUN_ARCHIVE_API_STATUS="not-run"
+RUN_ARCHIVE_API_CHECKS=0
+RUN_ARCHIVE_API_FAILURES=0
+RUN_ARCHIVE_API_BLOCK=-1
+RUN_ARCHIVE_API_METHODS="[]"
 
 usage() {
   cat <<'EOF'
@@ -128,6 +138,11 @@ Options:
                                   written to a temp key file before invoking gtron
   --sync-max-diff N              Sync profile success threshold (default: 2)
   --history-window N             Inject [history] prune_window for short prune drills
+  --archive-api-probe            Probe historical JSON-RPC archive APIs and emit archiveApi* fields
+  --archive-api-block N          Historical block for archive API probe (default: height-1)
+  --archive-api-address HEX      0x41-prefixed TRON address for account/contract probes
+  --archive-api-storage-slot HEX Storage slot for eth_getStorageAt probe (default: 0x0)
+  --archive-api-call-data HEX    Include eth_call with this calldata against archive-api-address
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -161,6 +176,11 @@ while [ "$#" -gt 0 ]; do
     --snapshot-signing-seed) SNAPSHOT_SIGNING_SEED="${2:?}"; shift 2 ;;
     --sync-max-diff) SYNC_MAX_DIFF="${2:?}"; shift 2 ;;
     --history-window) HISTORY_WINDOW="${2:?}"; shift 2 ;;
+    --archive-api-probe) ARCHIVE_API_PROBE=1; shift ;;
+    --archive-api-block) ARCHIVE_API_BLOCK="${2:?}"; shift 2 ;;
+    --archive-api-address) ARCHIVE_API_ADDRESS="${2:?}"; shift 2 ;;
+    --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
+    --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -287,6 +307,11 @@ reset_run_metrics() {
   RUN_SNAPSHOT_RETIRED_BYTES=-1
   RUN_STORAGE_ALERT_FAILED=0
   RUN_STORAGE_ALERT_PROMETHEUS=""
+  RUN_ARCHIVE_API_STATUS="not-run"
+  RUN_ARCHIVE_API_CHECKS=0
+  RUN_ARCHIVE_API_FAILURES=0
+  RUN_ARCHIVE_API_BLOCK=-1
+  RUN_ARCHIVE_API_METHODS="[]"
 }
 
 block_num() {
@@ -541,6 +566,107 @@ collect_event_log_index_stats() {
   RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS="${topic_max:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS="${topic_singleton:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS="${topic_multi:-0}"
+}
+
+archive_api_probe_values() {
+  local endpoint="$1"
+  local block="$2"
+  local address="$3"
+  local slot="$4"
+  local call_data="$5"
+  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" <<'PY'
+import json
+import subprocess
+import sys
+
+endpoint = sys.argv[1]
+block = int(sys.argv[2])
+address = sys.argv[3]
+slot = sys.argv[4]
+call_data = sys.argv[5]
+block_tag = hex(block)
+
+calls = [
+    ("eth_getBalance", [address, block_tag]),
+    ("eth_getCode", [address, block_tag]),
+    ("eth_getStorageAt", [address, slot, block_tag]),
+    ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
+]
+if call_data:
+    calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
+
+methods = []
+failures = 0
+for idx, (method, params) in enumerate(calls, 1):
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": idx, "method": method, "params": params},
+        separators=(",", ":"),
+    )
+    try:
+        proc = subprocess.run(
+            [
+                "curl",
+                "-sf",
+                "--max-time",
+                "5",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                payload,
+                endpoint,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        failures += 1
+        continue
+    if proc.returncode != 0:
+        failures += 1
+        continue
+    try:
+        response = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        failures += 1
+        continue
+    if response.get("error") is not None or "result" not in response:
+        failures += 1
+        continue
+    methods.append(method)
+
+print("ok" if failures == 0 else "failed")
+print(len(calls))
+print(failures)
+print(block)
+print(json.dumps(methods, separators=(",", ":")))
+PY
+}
+
+run_archive_api_probe() {
+  local jrpc_port="$1"
+  local height="$2"
+  local log_path="$3"
+  if [ "$ARCHIVE_API_PROBE" -ne 1 ]; then
+    return
+  fi
+  local probe_block="$ARCHIVE_API_BLOCK"
+  if [ "$probe_block" -lt 0 ]; then
+    if [ "$height" -gt 0 ]; then
+      probe_block=$((height - 1))
+    else
+      probe_block=0
+    fi
+  fi
+  local values
+  echo "probing archive JSON-RPC APIs at block $probe_block" >>"$log_path"
+  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA")"
+  RUN_ARCHIVE_API_STATUS="$(printf '%s\n' "$values" | sed -n '1p')"
+  RUN_ARCHIVE_API_CHECKS="$(printf '%s\n' "$values" | sed -n '2p')"
+  RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"
+  RUN_ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '4p')"
+  RUN_ARCHIVE_API_METHODS="$(printf '%s\n' "$values" | sed -n '5p')"
+  echo "archive API probe status=$RUN_ARCHIVE_API_STATUS checks=$RUN_ARCHIVE_API_CHECKS failures=$RUN_ARCHIVE_API_FAILURES block=$RUN_ARCHIVE_API_BLOCK methods=$RUN_ARCHIVE_API_METHODS" >>"$log_path"
 }
 
 run_logged() {
@@ -955,6 +1081,7 @@ run_signed_cold_prune_drill() {
     start_node "$mode post-prune restart" "$mode" "$datadir" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 13))" 1 "" "$restart_log"
     restart_pid="$STARTED_PID"
     sleep 3
+    run_archive_api_probe "$((port_base + 13))" "$TARGET_BLOCKS" "$restart_log"
     stop_pid "$restart_pid"
     cat "$restart_log" >>"$log_path"
     local pruned_through pruned_files
@@ -1016,6 +1143,8 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_SEGMENTS" "$RUN_SNAPSHOT_RETIRED_FILES" \
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
+    "$RUN_ARCHIVE_API_STATUS" "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_FAILURES" \
+    "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -1048,7 +1177,8 @@ keys = [
     "modeAlertDetails", "pruneMode", "pruneModePersisted",
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
-    "snapshotRetiredBytes", "storageAlertPrometheus",
+    "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
+    "archiveApiBlock", "archiveApiMethods", "storageAlertPrometheus",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -1076,6 +1206,7 @@ ints = {
     "stageAlertPipelineNextTarget", "stageAlertPipelineNextCurrent", "modeAlertIssues",
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
+    "archiveApiChecks", "archiveApiFailures", "archiveApiBlock",
 }
 bools = {"pruneModePersisted", "stageAlertPipelineComplete"}
 row = {"unix": int(time.time())}
@@ -1092,6 +1223,7 @@ for key in (
     "stageAlertPipelineTasks",
     "modeAlertDetails",
     "snapshotAlertDetails",
+    "archiveApiMethods",
 ):
     try:
         parsed = json.loads(row.get(key, "[]"))
@@ -1137,6 +1269,7 @@ run_producer_mode() {
   local height
   height="$(wait_for_block "$((port_base + 1))" "$TARGET_BLOCKS" "$mode producer")"
   local elapsed=$((SECONDS - start))
+  run_archive_api_probe "$((port_base + 3))" "$height" "$log_path"
   stop_pid "$pid"
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
   maybe_build_derived_indexes "$datadir" "$height" "$log_path"
@@ -1172,6 +1305,7 @@ run_sync_mode() {
   local height
   height="$(wait_for_sync_close "$((port_base + 1))" "$((port_base + 11))")"
   local elapsed=$((SECONDS - start))
+  run_archive_api_probe "$((port_base + 13))" "$height" "$node_log"
   stop_pid "$node_pid"
   stop_pid "$sr_pid"
   run_storage_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"

@@ -13,6 +13,109 @@ SCRIPT = REPO_ROOT / "scripts" / "dev" / "storage_benchmark.sh"
 
 
 class StorageBenchmarkTest(unittest.TestCase):
+    def test_emits_archive_api_probe_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            bindir = tmpdir / "bin"
+            bindir.mkdir()
+            fake_curl = bindir / "curl"
+            fake_curl.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    url="${@: -1}"
+                    case "$url" in
+                      */wallet/getnowblock)
+                        printf '%s\\n' '{"blockID":"0000000200000000000000000000000000000000000000000000000000000000","block_header":{"raw_data":{"number":2}}}'
+                        ;;
+                      */wallet/getnodeinfo)
+                        printf '%s\\n' '{"currentBlock":2}'
+                        ;;
+                      http://127.0.0.1:*)
+                        printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":"0x0"}'
+                        ;;
+                      *)
+                        printf '%s\\n' '{}'
+                        ;;
+                    esac
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_curl, 0o755)
+
+            fake_gtron = tmpdir / "gtron"
+            fake_gtron.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    if [ "${1:-}" = "db" ] && [ "${2:-}" = "storage-alerts" ]; then
+                      for arg in "$@"; do
+                        if [ "$arg" = "--prometheus" ]; then
+                          cat <<'EOF'
+                    # TYPE gtron_storage_alert_status gauge
+                    # TYPE gtron_storage_alert_issue gauge
+                    gtron_storage_alert_status{datadir="/tmp/gtron"} 0
+                    EOF
+                          exit 0
+                        fi
+                      done
+                      cat <<'EOF'
+                    {"datadir":"/tmp/gtron","status":"ok","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"ok","stageIssues":0,"stageVerifyDetails":[],"stagePipeline":{"complete":true,"pending":0,"issues":0,"tasks":[]},"modeStatus":"ok","modeIssues":0,"modeAlertDetails":[],"pruneMode":"full","pruneModePersisted":true,"snapshotStatus":"ok","snapshotIssues":0,"snapshotAlertDetails":[],"snapshotRetiredSegments":0,"snapshotRetiredFiles":0,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":0}
+                    EOF
+                      exit 0
+                    fi
+                    trap 'exit 0' TERM INT
+                    while true; do sleep 1; done
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_gtron, 0o755)
+
+            workdir = tmpdir / "work"
+            output = tmpdir / "results.jsonl"
+            env = dict(os.environ)
+            env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--profile",
+                    "producer",
+                    "--modes",
+                    "full",
+                    "--target-blocks",
+                    "2",
+                    "--timeout",
+                    "5",
+                    "--workdir",
+                    str(workdir),
+                    "--output",
+                    str(output),
+                    "--gtron",
+                    str(fake_gtron),
+                    "--no-build",
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            rows = output.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
+            row = json.loads(rows[0])
+            self.assertEqual(row["archiveApiStatus"], "ok")
+            self.assertEqual(row["archiveApiChecks"], 4)
+            self.assertEqual(row["archiveApiFailures"], 0)
+            self.assertEqual(row["archiveApiBlock"], 1)
+            self.assertEqual(
+                row["archiveApiMethods"],
+                ["eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_getLogs"],
+            )
+
     def test_emits_storage_alert_failure_row_with_details(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -499,14 +499,13 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "height": 200,
                     "tailPrunedThroughBlock": 90,
                     "archiveApiStatus": "ok",
-                    "archiveApiChecks": 5,
+                    "archiveApiChecks": 4,
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiMethods": [
                         "eth_getBalance",
                         "eth_getCode",
                         "eth_getStorageAt",
-                        "eth_call",
                         "eth_getLogs",
                     ],
                 }
@@ -529,6 +528,29 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+            require_call = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call.returncode,
+                0,
+                require_call.stdout + require_call.stderr,
+            )
+            self.assertIn("archiveApiMethods missing required methods: eth_call", require_call.stderr)
 
     def test_rejects_missing_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

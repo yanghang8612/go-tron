@@ -125,6 +125,7 @@ scripts/dev/storage_benchmark.sh \
   --freezer-margin 3 \
   --freezer-interval 1s \
   --signed-cold-prune \
+  --archive-api-probe \
   --history-window 8 \
   --keep
 ```
@@ -137,6 +138,13 @@ retired snapshot-file cleanup with no freezer-tail prune. `minimal` then
 restarts once so the tail-prune lifecycle can run. Use a small
 `--history-window` for short dev samples; production and soak runs should use
 the intended retention window.
+
+With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
+surface (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and
+`eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields. Pass
+`--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
+when a run needs to target a known historical contract/account. Pass
+`--archive-api-call-data` as well to include `eth_call` against that address.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -322,8 +330,10 @@ With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
-method set (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_call`,
-and `eth_getLogs`). If the row also reports `tailPrunedThroughBlock`, the
+method set (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and
+`eth_getLogs`). Add `--archive-api-method eth_call` when the samples also pass
+`--archive-api-call-data` against a known historical contract. If the row also
+reports `tailPrunedThroughBlock`, the
 archive API block must be at or below that prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. It also applies
 any project-specific numeric `--min`/`--max` thresholds.

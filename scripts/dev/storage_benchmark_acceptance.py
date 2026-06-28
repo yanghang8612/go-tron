@@ -31,7 +31,6 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBalance",
     "eth_getCode",
     "eth_getStorageAt",
-    "eth_call",
     "eth_getLogs",
 )
 
@@ -803,9 +802,10 @@ def main(argv=None):
         issues.extend(check_minimal_physical_tail_prune(rows, args.role))
     if args.require_prune_mode_semantics:
         issues.extend(check_prune_mode_semantics(rows))
-    archive_api_methods_required = split_csv_values(args.archive_api_method + args.archive_api_methods)
-    if not archive_api_methods_required:
-        archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
+    archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
+    for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
+        if method not in archive_api_methods_required:
+            archive_api_methods_required.append(method)
     if args.require_archive_api_evidence:
         issues.extend(check_archive_api_evidence(rows, archive_api_methods_required))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
