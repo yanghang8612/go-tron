@@ -268,6 +268,7 @@ reset_run_metrics() {
   RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
   RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
   RUN_CHAIN_LOOKUP_TX_INDEXES=0
+  RUN_RETIRED_PRUNE_RAN="false"
   RUN_RETIRED_PRUNE_SEGMENTS=0
   RUN_RETIRED_PRUNE_DELETED=0
   RUN_RETIRED_PRUNE_MISSING=0
@@ -1099,6 +1100,7 @@ run_signed_cold_prune_drill() {
   retired_missing="$(sed -n 's/.*missing=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
   retired_skipped="$(sed -n 's/.*skippedActive=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
   retired_bytes_deleted="$(sed -n 's/.*bytesDeleted=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  RUN_RETIRED_PRUNE_RAN="true"
   RUN_RETIRED_PRUNE_SEGMENTS="${retired_segments:-0}"
   RUN_RETIRED_PRUNE_DELETED="${retired_deleted:-0}"
   RUN_RETIRED_PRUNE_MISSING="${retired_missing:-0}"
@@ -1156,7 +1158,7 @@ emit_result() {
     "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" "$RUN_SECTION_BLOOM_ROWS" \
     "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
-    "$RUN_RETIRED_PRUNE_SEGMENTS" "$RUN_RETIRED_PRUNE_DELETED" \
+    "$RUN_RETIRED_PRUNE_RAN" "$RUN_RETIRED_PRUNE_SEGMENTS" "$RUN_RETIRED_PRUNE_DELETED" \
     "$RUN_RETIRED_PRUNE_MISSING" "$RUN_RETIRED_PRUNE_SKIPPED_ACTIVE" \
     "$RUN_RETIRED_PRUNE_BYTES_DELETED" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
@@ -1196,8 +1198,8 @@ keys = [
     "sectionBloomPruneToSection", "sectionBloomRowsPruned",
     "signedColdPrune", "chainLookupPruneToBlock",
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
-    "retiredPruneSegments", "retiredPruneDeleted", "retiredPruneMissing",
-    "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
+    "retiredPruneRan", "retiredPruneSegments", "retiredPruneDeleted",
+    "retiredPruneMissing", "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "storageAlertStatus", "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "freezerAlertDetails", "stageVerifyStatus", "stageVerifyIssues",
@@ -1240,7 +1242,7 @@ ints = {
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
     "archiveApiChecks", "archiveApiFailures", "archiveApiBlock",
 }
-bools = {"pruneModePersisted", "stageAlertPipelineComplete"}
+bools = {"pruneModePersisted", "retiredPruneRan", "stageAlertPipelineComplete"}
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
     if key in ints:

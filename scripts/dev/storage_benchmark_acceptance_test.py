@@ -630,6 +630,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "stageVerifyStatus": "ok",
                     "modeAlertStatus": "ok",
                     "snapshotAlertStatus": "ok",
+                    "retiredPruneRan": True,
                     "retiredPruneSegments": 1,
                     "retiredPruneDeleted": 2,
                     "retiredPruneMissing": 0,
@@ -678,6 +679,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "stageVerifyStatus": "ok",
                     "modeAlertStatus": "ok",
                     "snapshotAlertStatus": "ok",
+                    "retiredPruneRan": False,
                     "retiredPruneSegments": 1,
                     "retiredPruneDeleted": 0,
                     "retiredPruneMissing": 1,
@@ -709,6 +711,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             )
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("retiredPruneRan=False, want true", proc.stderr)
             self.assertIn("retiredPruneMissing=1, want 0", proc.stderr)
             self.assertIn("retiredPruneSkippedActive=1, want 0", proc.stderr)
             self.assertIn("snapshotRetiredBytes=1024, want 0 after prune-retired", proc.stderr)

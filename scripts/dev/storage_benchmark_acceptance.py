@@ -811,6 +811,8 @@ def as_non_negative_int(row, field):
     return None
 
 
+RETIRED_PRUNE_RAN_FIELD = "retiredPruneRan"
+
 RETIRED_PRUNE_FIELDS = (
     "retiredPruneSegments",
     "retiredPruneDeleted",
@@ -829,11 +831,15 @@ SNAPSHOT_RETIRED_ZERO_FIELDS = (
 
 
 def retired_prune_evidence_row(row):
-    return any(field in row for field in RETIRED_PRUNE_FIELDS + SNAPSHOT_RETIRED_ZERO_FIELDS)
+    return RETIRED_PRUNE_RAN_FIELD in row or any(
+        field in row for field in RETIRED_PRUNE_FIELDS + SNAPSHOT_RETIRED_ZERO_FIELDS
+    )
 
 
 def check_retired_prune_row(row):
     issues = []
+    if not as_bool(row, RETIRED_PRUNE_RAN_FIELD):
+        issues.append(f"{line_label(row)} {RETIRED_PRUNE_RAN_FIELD}={row.get(RETIRED_PRUNE_RAN_FIELD)!r}, want true")
     for field in RETIRED_PRUNE_FIELDS:
         value = as_non_negative_int(row, field)
         if value is None:

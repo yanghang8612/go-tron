@@ -59,6 +59,7 @@ The output path is printed at startup. Each JSON row contains:
 - `chainLookupPruneToBlock`
 - `chainLookupBlockIndexes`
 - `chainLookupTxIndexes`
+- `retiredPruneRan`
 - `retiredPruneSegments`
 - `retiredPruneDeleted`
 - `retiredPruneMissing`
@@ -164,9 +165,9 @@ deleting anything, so the JSON row can report trace/bloom hot-row reclamation
 alongside chain lookup pruning.
 
 `prune-retired` verifies the active manifest before deleting retired snapshot
-segment files. The JSON row reports the retired segment count, deleted/missing
-file count, active-file skips, and reclaimed bytes through the `retiredPrune*`
-fields.
+segment files. The JSON row reports `retiredPruneRan=true` plus the retired
+segment count, deleted/missing file count, active-file skips, and reclaimed
+bytes through the `retiredPrune*` fields.
 
 After the drill, `gtron db freezer-status --datadir <dir>` prints the local
 freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and
@@ -348,10 +349,10 @@ in `minimal` must be paired with a valid `tailPrunedThroughBlock`. With
 `--require-minimal-physical-tail-prune`, it also requires the latest minimal
 row to prove physical freezer-tail file deletion through `tailPrunedFiles`.
 Use `--require-retired-prune-mode minimal` to require the latest minimal row to
-prove `snapshot prune-retired` ran cleanly: retired-prune missing/skipped-active
-counts must be zero and the post-check `snapshotRetired*` bytes/files counters
-must be zero, so immutable snapshot rotation does not leave reclaimable files
-behind.
+prove `snapshot prune-retired` ran cleanly: `retiredPruneRan` must be true,
+retired-prune missing/skipped-active counts must be zero, and the post-check
+`snapshotRetired*` bytes/files counters must be zero, so immutable snapshot
+rotation does not leave reclaimable files behind.
 With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
