@@ -384,7 +384,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-stage-detail-evidence \
   --require-archive-api-evidence \
   --min-height 100000 \
-  --max-lag-blocks 5000
+  --max-lag-blocks 5000 \
+  --min-sync-rate 1.0
 ```
 
 By default the checker validates the latest selected row, requires a captured
@@ -404,6 +405,12 @@ present, the checker also cross-checks each stage detail against the aggregate
 soak gates so older sampler rows cannot pass without that per-stage evidence.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
+Use `--min-sync-rate` to turn sync-speed evidence into a hard gate; it checks
+the best available blocks-per-second field in this order:
+`intervalBlocksPerSecond`, `intervalStageSyncFinishBlocksPerSecond`,
+`soakEfficiencyBlocksPerSecond`, `syncLogBlocksPerSecond`, then
+`blocksPerSecond`. Tune the threshold to the host/network baseline; keep it low
+for early smoke runs and raise it for dedicated Nile soak hardware.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production

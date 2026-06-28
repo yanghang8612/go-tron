@@ -56,6 +56,14 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getLogs",
 )
 
+SYNC_RATE_FIELDS = (
+    "intervalBlocksPerSecond",
+    "intervalStageSyncFinishBlocksPerSecond",
+    "soakEfficiencyBlocksPerSecond",
+    "syncLogBlocksPerSecond",
+    "blocksPerSecond",
+)
+
 
 def load_rows(path):
     rows = []
@@ -178,6 +186,29 @@ def check_thresholds(row, raws, op_name, predicate):
         if not predicate(got, want):
             issues.append(f"{raw}: {field}={got:g} failed {op_name} {want:g}")
     return issues
+
+
+def sync_rate_evidence(row):
+    for field in SYNC_RATE_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_min_sync_rate(row, minimum):
+    if minimum is None:
+        return []
+    field, value = sync_rate_evidence(row)
+    if field is None:
+        return [
+            "sync rate evidence missing: none of "
+            + ",".join(SYNC_RATE_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value < minimum:
+        return [f"{field}={value:g} failed >= min sync rate {minimum:g} blocks/s"]
+    return []
 
 
 def resolve_artifact(result_path, raw_path):
@@ -942,6 +973,7 @@ def check_row(row, args):
         if lag is None or lag > args.max_lag_blocks:
             issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
 
+    issues.extend(check_min_sync_rate(row, args.min_sync_rate))
     issues.extend(check_thresholds(row, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(row, args.maximums, "<=", lambda got, want: got <= want))
     return issues
@@ -1017,6 +1049,15 @@ def build_parser():
         "--max-lag-blocks",
         type=float,
         help="require fullStagedSyncHeadLagBlocks to be no greater than this value",
+    )
+    parser.add_argument(
+        "--min-sync-rate",
+        type=float,
+        metavar="BLOCKS_PER_SECOND",
+        help=(
+            "require selected rows to prove at least this sync rate using the "
+            "best available interval/stage/log throughput field"
+        ),
     )
     parser.add_argument(
         "--min",
