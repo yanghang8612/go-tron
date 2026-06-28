@@ -452,8 +452,9 @@ type ImportBatchRunPlanApplier interface {
 
 // ImportBatchRunResult reports the outcome of applying an import-batch run
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
-// means canonical import failed or the imported-prefix progress could not be
-// durably recorded, so the caller should leave the drain loop.
+// means canonical import failed, imported-prefix progress could not be durably
+// recorded, or a scheduler-owned resume phase is pending, so the caller should
+// leave the drain loop.
 type ImportBatchRunResult struct {
 	Plan                 ImportBatchRunPlan
 	Decode               BufferedBatchDecodeResult
@@ -470,6 +471,8 @@ type ImportBatchRunResult struct {
 	HasRecord            bool
 	ExecutionDiagnostics ImportBatchExecutionPlanDiagnostics
 	StageDiagnostics     ImportStagePlanDiagnostics
+	ResumePhasePlan      ImportStagePhasePlan
+	HasResumePhasePlan   bool
 	Steps                []ImportBatchRunStepAction
 	ContinueDrain        bool
 	StopDrain            bool
@@ -673,6 +676,10 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.Outcome.RecordApplied {
 				result.Progress = attempt.ProgressPlan(plan.Batch, result.Outcome.Applied)
 				result.StageDiagnostics = result.Progress.StageDiagnostics
+				if resume, ok := result.Progress.RemainingCurrentPhasePlan(); ok {
+					result.ResumePhasePlan = resume
+					result.HasResumePhasePlan = true
+				}
 				if result.Progress.OK {
 					result.RecordPlan = PlanImportedBatchRecord(result.Progress, elapsed)
 					result.RecordApply = applier.ApplyImportedBatchRecord(result.RecordPlan)
@@ -682,7 +689,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.Outcome.Pause {
 				applier.PauseImport(result.Outcome.PausePeer, result.Outcome.PauseNum, insertErr)
 			}
-			result.StopDrain = result.Outcome.StopDrain || result.RecordProgressFailed()
+			result.StopDrain = result.Outcome.StopDrain || result.RecordProgressFailed() || result.HasResumePhasePlan
 		}
 	}
 	return result
@@ -690,11 +697,12 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 
 // PlanImportBatchRunSettlement derives the drain-loop branch after applying an
 // import-batch run plan. Decode-only drops and successful imports both keep the
-// local drain loop moving; canonical import failures and persisted progress
-// failures stop so the sticky pause or storage warning can be observed by the
-// session before another chunk advances.
+// local drain loop moving; canonical import failures, persisted progress
+// failures, and pending scheduler resume phases stop so the sticky pause,
+// storage warning, or phase scheduler can be observed before another chunk
+// advances.
 func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
-	if result.StopDrain {
+	if result.StopDrain || result.HasResumePhasePlan {
 		return ImportBatchRunSettlementPlan{
 			Action:    ImportBatchRunSettlementStopDrain,
 			StopDrain: true,

@@ -333,6 +333,13 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 				StopDrain: true,
 			},
 		},
+		"pending resume phase stops": {
+			result: ImportBatchRunResult{HasResumePhasePlan: true},
+			want: ImportBatchRunSettlementPlan{
+				Action:    ImportBatchRunSettlementStopDrain,
+				StopDrain: true,
+			},
+		},
 	}
 	for name, test := range tests {
 		if got := PlanImportBatchRunSettlement(test.result); !reflect.DeepEqual(got, test.want) {
@@ -1132,6 +1139,20 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 		t.Fatalf("success run drain loop apply = %+v, want continue", success.DrainLoopApply)
 	}
 
+	resumePending := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{observedStages: []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution}})
+	if !resumePending.Run.HasResumePhasePlan ||
+		resumePending.Run.ResumePhasePlan.Phase != ImportStagePhaseCommitment ||
+		len(resumePending.Run.ResumePhasePlan.Tasks) != 2 ||
+		!reflect.DeepEqual(resumePending.Run.ResumePhasePlan.Tasks[0], ImportCommitmentStageTask(block1.Number(), block1.Hash())) ||
+		!reflect.DeepEqual(resumePending.Run.ResumePhasePlan.Tasks[1], ImportCommitmentStageTask(block2.Number(), block2.Hash())) ||
+		!resumePending.Run.StopDrain ||
+		resumePending.Settlement.Action != ImportBatchRunSettlementStopDrain ||
+		!resumePending.DrainLoop.StopLoop ||
+		resumePending.DrainLoopApply.Action != ImportBatchDrainLoopStop {
+		t.Fatalf("resume-pending run=%+v settlement=%+v drain=%+v apply=%+v, want scheduler-yield stop",
+			resumePending.Run, resumePending.Settlement, resumePending.DrainLoop, resumePending.DrainLoopApply)
+	}
+
 	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
 	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
 	if !failure.Run.Outcome.Pause || !failure.Run.StopDrain ||
@@ -1231,8 +1252,8 @@ func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *test
 
 	result := ApplyImportBatchRunPlan(NewImportBatchRunPlan(testImportRunBatch(t, block)), applier)
 
-	if result.ContinueDrain || result.StopDrain || result.Outcome.Applied != 1 || !result.Outcome.RecordApplied {
-		t.Fatalf("result = %+v, want successful one-block import", result)
+	if result.ContinueDrain || !result.StopDrain || result.Outcome.Applied != 1 || !result.Outcome.RecordApplied {
+		t.Fatalf("result = %+v, want successful one-block import that yields to resume scheduler", result)
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || !applier.recordPlan.OK {
 		t.Fatalf("progress result=%+v record=%+v, want recorded one-block progress", result.Progress, applier.recordPlan)
@@ -1268,6 +1289,10 @@ func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *test
 		resume.Tasks[0] != ImportCommitmentStageTask(block.Number(), block.Hash()) {
 		t.Fatalf("result resume phase = %+v ok=%v stored=%+v, want commitment block1 suffix",
 			resume, ok, result.Progress.ResumePhasePlan)
+	}
+	if !result.HasResumePhasePlan || !reflect.DeepEqual(result.ResumePhasePlan, resume) {
+		t.Fatalf("run resume phase = %+v has=%v, want progress resume %+v",
+			result.ResumePhasePlan, result.HasResumePhasePlan, resume)
 	}
 	if recordResume, ok := applier.recordPlan.RemainingCurrentPhasePlan(); !ok || !reflect.DeepEqual(recordResume, resume) {
 		t.Fatalf("record resume phase = %+v ok=%v, want result resume %+v", recordResume, ok, resume)
