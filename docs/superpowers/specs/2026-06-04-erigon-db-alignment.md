@@ -1739,6 +1739,10 @@ Status:
   audited exceptions. The matching wrapper audit also requires each
   `/walletsolidity` and `/walletpbft` wrapper to forward exactly once to its
   expected shared handler with the solid or PBFT bound.
+- WalletSolidity gRPC now has the same source-audit boundary: every direct
+  `SolidityServer` backend call is enumerated, state/query methods must use the
+  solid-bound `At` backend APIs with `s.solidNum()`, and block/transaction
+  lookups stay listed as explicit boundary-gate exceptions.
 - JSON-RPC source-audit coverage now checks both the reflection `EthAPI` and the
   legacy dispatch handlers: state/execution methods with historical block tags
   must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
