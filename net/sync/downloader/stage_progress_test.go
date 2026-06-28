@@ -2342,9 +2342,65 @@ func TestApplyImportResumePhasePublishPlan(t *testing.T) {
 	}
 }
 
+func TestApplyImportResumePhasePublishRun(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+		{
+			Phase:          ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []ImportStageTask{ImportFinishStageTask(7, hash)},
+		},
+	}
+	applier := &recordingImportResumePhasePublishApplier{
+		stageRows: map[rawdb.StageID]rawdb.StageProgress{
+			rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		},
+	}
+	got := ApplyImportResumePhasePublishRun(phases, applier)
+	if !got.Publish.Applied || got.Publish.Rows != 2 || got.Publish.WriteError != nil || !got.PublishPlan.OK {
+		t.Fatalf("run result = %+v, want two published rows", got)
+	}
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(applier.rows, wantRows) {
+		t.Fatalf("published rows = %+v, want %+v", applier.rows, wantRows)
+	}
+	got.Plan.Phases[0].Tasks[0].BlockNum = 99
+	if phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("ApplyImportResumePhasePublishRun returned aliased phase tasks")
+	}
+
+	blocked := ApplyImportResumePhasePublishRun(phases, &recordingImportResumePhasePublishApplier{})
+	if blocked.Publish.Applied || blocked.PublishPlan.OK ||
+		len(blocked.PublishPlan.Decisions) != 1 ||
+		blocked.PublishPlan.Decisions[0].Status != ImportResumePhasePublishCanonicalMissing {
+		t.Fatalf("blocked run = %+v, want canonical-missing without write", blocked)
+	}
+}
+
 type recordingImportResumePhasePublishApplier struct {
-	rows []rawdb.StageProgress
-	err  error
+	rows      []rawdb.StageProgress
+	stageRows map[rawdb.StageID]rawdb.StageProgress
+	readErr   error
+	err       error
+}
+
+func (a *recordingImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	if a.readErr != nil {
+		return rawdb.StageProgress{}, false, a.readErr
+	}
+	row, ok := a.stageRows[stage]
+	return row, ok, nil
 }
 
 func (a *recordingImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {

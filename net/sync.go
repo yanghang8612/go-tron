@@ -1507,18 +1507,9 @@ func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePla
 }
 
 func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportStagePhasePlan) syncdl.ImportResumePhasePublishApplyResult {
-	var dbRead func(rawdb.StageID) (rawdb.StageProgress, bool, error)
-	if ss != nil && ss.chain != nil {
-		if db := ss.chain.DB(); db != nil {
-			dbRead = func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
-				return rawdb.ReadStageProgressRow(db, stage)
-			}
-		}
-	}
-	plan := syncdl.PlanImportResumePhasePublish(phases, dbRead)
-	result := syncdl.ApplyImportResumePhasePublishPlan(plan, syncImportResumePhasePublishApplier{service: ss})
-	ss.logImportResumePhasePublishResult(result)
-	return result
+	run := syncdl.ApplyImportResumePhasePublishRun(phases, syncImportResumePhasePublishApplier{service: ss})
+	ss.logImportResumePhasePublishResult(run.Publish)
+	return run.Publish
 }
 
 func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportResumePhasePublishApplyResult) {
@@ -2176,6 +2167,17 @@ func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []ra
 
 func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() syncdl.StagedBodyReadyProgressRefresh {
 	return a.service.writeSyncBodiesReadyProgress()
+}
+
+func (a syncImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	if a.service == nil || a.service.chain == nil {
+		return rawdb.StageProgress{}, false, fmt.Errorf("sync: cannot read resume phase progress without service or chain")
+	}
+	db := a.service.chain.DB()
+	if db == nil {
+		return rawdb.StageProgress{}, false, fmt.Errorf("sync: cannot read resume phase progress without database")
+	}
+	return rawdb.ReadStageProgressRow(db, stage)
 }
 
 func (a syncImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {

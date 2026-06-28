@@ -927,6 +927,13 @@ type ImportResumePhasePublishPlanApplier interface {
 	WriteResumePhaseProgress(rows []rawdb.StageProgress) error
 }
 
+// ImportResumePhasePublishRunApplier performs the read/validate/write runtime
+// operations for a scheduler-yielded phase suffix.
+type ImportResumePhasePublishRunApplier interface {
+	ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error)
+	WriteResumePhaseProgress(rows []rawdb.StageProgress) error
+}
+
 // ImportResumePhasePublishApplyResult records the write outcome for a
 // scheduler-yielded phase suffix.
 type ImportResumePhasePublishApplyResult struct {
@@ -934,6 +941,21 @@ type ImportResumePhasePublishApplyResult struct {
 	Applied    bool
 	Rows       int
 	WriteError error
+}
+
+// ImportResumePhasePublishRunPlan is the downloader-owned schedule for
+// publishing a scheduler-yielded phase suffix after the caller's commit
+// barrier has completed.
+type ImportResumePhasePublishRunPlan struct {
+	Phases []ImportStagePhasePlan
+}
+
+// ImportResumePhasePublishRunApplyResult groups the read/plan/write phases for
+// one resume-phase publish run.
+type ImportResumePhasePublishRunApplyResult struct {
+	Plan        ImportResumePhasePublishRunPlan
+	PublishPlan ImportResumePhasePublishPlan
+	Publish     ImportResumePhasePublishApplyResult
 }
 
 // ImportedBatchProgressPlanApplier performs the persistence/runtime operations
@@ -1320,6 +1342,31 @@ func ApplyImportResumePhasePublishPlan(plan ImportResumePhasePublishPlan, applie
 	result.Rows = len(plan.Progress)
 	result.WriteError = applier.WriteResumePhaseProgress(plan.Progress)
 	result.Applied = result.WriteError == nil
+	return result
+}
+
+// NewImportResumePhasePublishRunPlan returns the downloader-owned publish
+// schedule for a yielded phase suffix.
+func NewImportResumePhasePublishRunPlan(phases []ImportStagePhasePlan) ImportResumePhasePublishRunPlan {
+	return ImportResumePhasePublishRunPlan{Phases: cloneImportStagePhasePlanList(phases)}
+}
+
+// ApplyImportResumePhasePublishRun creates and applies the full downloader
+// publish run for a scheduler-yielded phase suffix.
+func ApplyImportResumePhasePublishRun(phases []ImportStagePhasePlan, applier ImportResumePhasePublishRunApplier) ImportResumePhasePublishRunApplyResult {
+	return ApplyImportResumePhasePublishRunPlan(NewImportResumePhasePublishRunPlan(phases), applier)
+}
+
+// ApplyImportResumePhasePublishRunPlan verifies and writes a yielded phase
+// suffix through the supplied runtime applier.
+func ApplyImportResumePhasePublishRunPlan(plan ImportResumePhasePublishRunPlan, applier ImportResumePhasePublishRunApplier) ImportResumePhasePublishRunApplyResult {
+	result := ImportResumePhasePublishRunApplyResult{Plan: plan}
+	var read StageProgressReader
+	if applier != nil {
+		read = applier.ReadStageProgress
+	}
+	result.PublishPlan = PlanImportResumePhasePublish(plan.Phases, read)
+	result.Publish = ApplyImportResumePhasePublishPlan(result.PublishPlan, applier)
 	return result
 }
 

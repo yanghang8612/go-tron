@@ -744,7 +744,9 @@ Status:
   commitment/finish hooks could complete after the initial import record had
   already deleted staged-body proof rows; `net` package tests cover both the
   successful barrier publish and the canonical-mismatch / sync-ahead rejection
-  paths through the `SyncService` entry point.
+  paths through the `SyncService` entry point. The same read/verify/write
+  sequence is now a downloader-owned resume-phase publish run, leaving
+  `SyncService` to provide only stage-progress read/write side effects.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can
