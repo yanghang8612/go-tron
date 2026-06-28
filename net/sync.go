@@ -1450,11 +1450,11 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
-		if n := len(batch.Buffered); n > 0 {
-			lastPeer = batch.Buffered[n-1].Peer
-		}
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss, session: sess})
 		importLoop := syncdl.PlanImportBatchDrainLoopFinalization(importRun)
+		if importLoop.HasLastPeer {
+			lastPeer = importLoop.LastPeer
+		}
 		if importLoop.Pause {
 			paused = true
 		}

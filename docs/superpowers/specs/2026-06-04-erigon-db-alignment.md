@@ -547,9 +547,9 @@ Status:
   planned before the same downloader-owned run applies the verified read/write
   publish path.
 - Import-batch drain-loop finalization now also lives in downloader: the
-  post-import pause flag, resume-phase suffix, and stop/continue branch are
-  derived from the import run before `SyncService` applies the concrete loop
-  mechanics.
+  post-import last-peer update, pause flag, resume-phase suffix, and
+  stop/continue branch are derived from the import run before `SyncService`
+  applies the concrete loop mechanics.
 - Local staged-body drain startup uses the same rule when repairing an invalid
   `SyncBodiesReady` row before import: if the repair refresh fails, the drain
   does not restore or pop buffered bodies against a stale or unverified ready

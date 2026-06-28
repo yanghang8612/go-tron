@@ -503,6 +503,7 @@ func TestApplyImportBatchDrainLoopPlan(t *testing.T) {
 func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
 	hash1 := tcommon.Hash{0x01}
 	hash2 := tcommon.Hash{0x02}
+	peer := &p2p.Peer{}
 	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
 		NewImportStageSchedule(1, hash1),
 		NewImportStageSchedule(2, hash2),
@@ -515,6 +516,14 @@ func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
 		Tasks:          []ImportStageTask{ImportCommitmentStageTask(2, hash2)},
 	}
 	result := ImportBatchRunApplyResult{
+		Plan: ImportBatchRunPlan{
+			Batch: BufferedBatch{
+				Buffered: []BufferedBlock{
+					{Num: 1, Hash: hash1},
+					{Num: 2, Hash: hash2, Peer: peer},
+				},
+			},
+		},
 		Run: ImportBatchRunResult{
 			StagePhaseSchedule: stagePhases,
 			Outcome:            ImportOutcome{Pause: true},
@@ -528,7 +537,8 @@ func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
 	}
 
 	got := PlanImportBatchDrainLoopFinalization(result)
-	if !got.Pause || !got.StopLoop || got.ContinueLoop || !got.YieldResumePhase ||
+	if !got.HasLastPeer || got.LastPeer != peer ||
+		!got.Pause || !got.StopLoop || got.ContinueLoop || !got.YieldResumePhase ||
 		got.Action != ImportBatchDrainLoopYieldResumePhase ||
 		!reflect.DeepEqual(got.ResumePhasePlan, resume) ||
 		len(got.ResumePhases) != 2 ||
@@ -542,6 +552,21 @@ func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
 	got.ResumePhases[0].Tasks[0].BlockNum = 88
 	if resume.Tasks[0].BlockNum != 2 {
 		t.Fatal("PlanImportBatchDrainLoopFinalization returned aliased resume tasks")
+	}
+
+	nilPeer := PlanImportBatchDrainLoopFinalization(ImportBatchRunApplyResult{
+		Plan: ImportBatchRunPlan{
+			Batch: BufferedBatch{
+				Buffered: []BufferedBlock{{Num: 3, Hash: tcommon.Hash{0x03}}},
+			},
+		},
+		DrainLoopApply: ImportBatchDrainLoopApplyResult{
+			Action:       ImportBatchDrainLoopContinue,
+			ContinueLoop: true,
+		},
+	})
+	if !nilPeer.HasLastPeer || nilPeer.LastPeer != nil {
+		t.Fatalf("nil-peer finalization = %+v, want explicit nil last peer update", nilPeer)
 	}
 
 	continued := PlanImportBatchDrainLoopFinalization(ImportBatchRunApplyResult{

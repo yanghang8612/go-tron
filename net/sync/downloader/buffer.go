@@ -493,6 +493,8 @@ type ImportBatchRunApplyResult struct {
 // logging; downloader owns the pause/resume suffix semantics.
 type ImportBatchDrainLoopFinalization struct {
 	Action           ImportBatchDrainLoopStepAction
+	LastPeer         *p2p.Peer
+	HasLastPeer      bool
 	Pause            bool
 	ContinueLoop     bool
 	StopLoop         bool
@@ -620,6 +622,10 @@ func PlanImportBatchDrainLoopFinalization(result ImportBatchRunApplyResult) Impo
 		ContinueLoop:     loop.ContinueLoop,
 		StopLoop:         loop.StopLoop,
 		YieldResumePhase: loop.YieldResumePhase,
+	}
+	if n := len(result.Plan.Batch.Buffered); n > 0 {
+		out.LastPeer = result.Plan.Batch.Buffered[n-1].Peer
+		out.HasLastPeer = true
 	}
 	if loop.YieldResumePhase {
 		out.ResumePhasePlan = cloneImportStagePhasePlan(loop.ResumePhasePlan)
