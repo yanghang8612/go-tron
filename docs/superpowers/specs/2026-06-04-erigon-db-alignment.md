@@ -1733,6 +1733,12 @@ Status:
   each one to pass through `archiveStateAt` or an audited archive-aware helper.
   This keeps new solidity/PBFT/JSON-RPC historical APIs from accidentally
   serving live-head state while the broader archive surface grows.
+- JSON-RPC source-audit coverage now checks both the reflection `EthAPI` and the
+  legacy dispatch handlers: state/execution methods with historical block tags
+  must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
+  `Call`/`CallAt`, `EstimateGas`/`EstimateGasAt`, etc.), while explicit
+  constants such as TRON's nonce-less `eth_getTransactionCount` stay listed as
+  audited exceptions.
 - JSON-RPC `debug_traceCall` and `debug_traceTransaction` now use the same
   archive execution-state setup as `eth_call`: historical traces can run from
   cold state-domain/code snapshots after hot block state roots, latest rows, and
