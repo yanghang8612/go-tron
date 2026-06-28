@@ -1470,15 +1470,25 @@ drainLoop:
 		}
 		continue drainLoop
 	}
-	finishOK := true
+	commitBarrier := syncdl.PlanImportDrainCommitBarrier(syncdl.ImportDrainCommitBarrierInput{Paused: paused})
 	if sess != nil {
-		if ferr := sess.Finish(); ferr != nil && !paused {
-			ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
-			paused = true
-			finishOK = false
+		ferr := sess.Finish()
+		pauseBlock := uint64(0)
+		if ferr != nil && !paused {
+			pauseBlock = ss.chain.CurrentBlock().Number() + 1
 		}
+		commitBarrier = syncdl.PlanImportDrainCommitBarrier(syncdl.ImportDrainCommitBarrierInput{
+			FinishErr:  ferr,
+			Paused:     paused,
+			LastPeer:   lastPeer,
+			PauseBlock: pauseBlock,
+		})
+		if commitBarrier.Pause {
+			ss.pauseSync(commitBarrier.PausePeer, commitBarrier.PauseBlock, commitBarrier.Err)
+		}
+		paused = commitBarrier.Paused
 	}
-	ss.publishImportResumePhaseProgress(resumePhases, finishOK, paused)
+	ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
 }
 
 func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePlan) {

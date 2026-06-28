@@ -503,6 +503,26 @@ type ImportBatchDrainLoopFinalization struct {
 	ResumePhases     []ImportStagePhasePlan
 }
 
+// ImportDrainCommitBarrierInput captures the result of finishing the optional
+// pipelined insert session at a local drain boundary.
+type ImportDrainCommitBarrierInput struct {
+	FinishErr  error
+	Paused     bool
+	LastPeer   *p2p.Peer
+	PauseBlock uint64
+}
+
+// ImportDrainCommitBarrierPlan is the downloader-owned state transition after
+// the insert-session commit barrier completes.
+type ImportDrainCommitBarrierPlan struct {
+	FinishOK   bool
+	Paused     bool
+	Pause      bool
+	PausePeer  *p2p.Peer
+	PauseBlock uint64
+	Err        error
+}
+
 // RecordWriteFailed reports whether the accepted prefix reached canonical
 // insertion but failed to persist the corresponding sync-stage boundary.
 func (r ImportBatchRunResult) RecordWriteFailed() bool {
@@ -632,6 +652,26 @@ func PlanImportBatchDrainLoopFinalization(result ImportBatchRunApplyResult) Impo
 		out.ResumePhases = PlanImportResumePhaseSuffix(result.Run.StagePhaseSchedule, loop.ResumePhasePlan)
 	}
 	return out
+}
+
+// PlanImportDrainCommitBarrier derives the caller-visible state after the
+// pipelined insert-session finish barrier. A finish error pauses only when the
+// drain has not already paused for an earlier canonical/import failure.
+func PlanImportDrainCommitBarrier(input ImportDrainCommitBarrierInput) ImportDrainCommitBarrierPlan {
+	plan := ImportDrainCommitBarrierPlan{
+		FinishOK: true,
+		Paused:   input.Paused,
+		Err:      input.FinishErr,
+	}
+	if input.FinishErr == nil || input.Paused {
+		return plan
+	}
+	plan.FinishOK = false
+	plan.Paused = true
+	plan.Pause = true
+	plan.PausePeer = input.LastPeer
+	plan.PauseBlock = input.PauseBlock
+	return plan
 }
 
 // ApplyImportBatchRunPlan executes the downloader-owned local import schedule.

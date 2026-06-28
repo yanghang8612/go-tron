@@ -581,6 +581,35 @@ func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
 	}
 }
 
+func TestPlanImportDrainCommitBarrier(t *testing.T) {
+	peer := &p2p.Peer{}
+	finishErr := errors.New("finish failed")
+
+	ok := PlanImportDrainCommitBarrier(ImportDrainCommitBarrierInput{})
+	if !ok.FinishOK || ok.Paused || ok.Pause || ok.Err != nil {
+		t.Fatalf("ok barrier = %+v, want finishOK without pause", ok)
+	}
+
+	failed := PlanImportDrainCommitBarrier(ImportDrainCommitBarrierInput{
+		FinishErr:  finishErr,
+		LastPeer:   peer,
+		PauseBlock: 9,
+	})
+	if failed.FinishOK || !failed.Paused || !failed.Pause || failed.PausePeer != peer || failed.PauseBlock != 9 || !errors.Is(failed.Err, finishErr) {
+		t.Fatalf("failed barrier = %+v, want pause at block9 with finish error", failed)
+	}
+
+	alreadyPaused := PlanImportDrainCommitBarrier(ImportDrainCommitBarrierInput{
+		FinishErr:  finishErr,
+		Paused:     true,
+		LastPeer:   peer,
+		PauseBlock: 9,
+	})
+	if !alreadyPaused.FinishOK || !alreadyPaused.Paused || alreadyPaused.Pause || alreadyPaused.PausePeer != nil || alreadyPaused.PauseBlock != 0 || !errors.Is(alreadyPaused.Err, finishErr) {
+		t.Fatalf("already-paused barrier = %+v, want no duplicate pause with finishOK preserved", alreadyPaused)
+	}
+}
+
 func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
