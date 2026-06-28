@@ -315,6 +315,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-api-evidence \
   --require-event-log-index-evidence \
   --require-minimal-tail-prune \
+  --require-size-reduction minimal:full:chaindataBytes=0.40 \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
 
@@ -362,6 +363,12 @@ must report active `eventLogIndexSegments` plus internally consistent
 address/topic key, posting, average-fanout, max-fanout, singleton, and
 multi-posting counters; add `--min eventLogIndexAddressPostings=1` when the
 sample is expected to include logs and should prove non-empty index fanout.
+Use `--require-size-reduction MODE:BASE_MODE:FIELD=RATIO` on comparable
+multi-mode runs to require the latest selected `MODE` row to reduce a byte
+counter by at least `RATIO` versus `BASE_MODE`; for example,
+`minimal:full:chaindataBytes=0.40` requires minimal mode to use at least 40%
+less hot chaindata than full mode in the same selected role. Keep ratio gates
+off short smoke samples where fixed overhead dominates the measured bytes.
 It also applies any project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:

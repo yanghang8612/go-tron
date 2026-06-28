@@ -481,6 +481,140 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
             self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
 
+    def test_accepts_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000,
+                    "datadirBytes": 2000,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": 550,
+                    "datadirBytes": 1500,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "full,minimal",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": 850,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "minimal chaindataBytes reduction=15.00%, want >= 40.00% versus full",
+                proc.stderr,
+            )
+
+    def test_rejects_malformed_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "mode": "full",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-size-reduction",
+                    "minimal:full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("must use MODE:BASE_MODE:FIELD=RATIO", proc.stderr)
+
     def test_accepts_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

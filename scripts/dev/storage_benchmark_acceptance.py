@@ -213,6 +213,63 @@ def check_thresholds(rows, raws, op_name, predicate):
     return issues
 
 
+def parse_size_reduction(raw):
+    if "=" not in raw:
+        raise ValueError(f"{raw!r} must use MODE:BASE_MODE:FIELD=RATIO")
+    scope, raw_ratio = raw.split("=", 1)
+    parts = [part.strip() for part in scope.split(":")]
+    if len(parts) != 3 or any(not part for part in parts):
+        raise ValueError(f"{raw!r} must use MODE:BASE_MODE:FIELD=RATIO")
+    try:
+        ratio = float(raw_ratio)
+    except ValueError as exc:
+        raise ValueError(f"{raw!r} has a non-numeric ratio") from exc
+    if ratio < 0 or ratio > 1:
+        raise ValueError(f"{raw!r} ratio must be between 0 and 1")
+    return parts[0], parts[1], parts[2], ratio
+
+
+def check_size_reductions(rows, raws, role):
+    issues = []
+    role_suffix = "" if role is None else f" for role {role!r}"
+    for raw in raws:
+        try:
+            mode, base_mode, field, want_ratio = parse_size_reduction(raw)
+        except ValueError as exc:
+            issues.append(str(exc))
+            continue
+
+        row = latest_for(rows, mode=mode, role=role)
+        if row is None:
+            issues.append(f"{raw}: no latest row for candidate mode {mode!r}{role_suffix}")
+            continue
+        base = latest_for(rows, mode=base_mode, role=role)
+        if base is None:
+            issues.append(f"{raw}: no latest row for baseline mode {base_mode!r}{role_suffix}")
+            continue
+
+        got = as_number(row, field)
+        if got is None:
+            issues.append(f"{raw}: {line_label(row)} {field} is missing or non-numeric")
+            continue
+        baseline = as_number(base, field)
+        if baseline is None:
+            issues.append(f"{raw}: {line_label(base)} {field} is missing or non-numeric")
+            continue
+        if baseline <= 0:
+            issues.append(f"{raw}: {line_label(base)} {field}={baseline:g} must be > 0")
+            continue
+
+        reduction = (baseline - got) / baseline
+        if reduction + 1e-12 < want_ratio:
+            issues.append(
+                f"{raw}: {mode} {field} reduction={reduction:.2%}, "
+                f"want >= {want_ratio:.2%} versus {base_mode} "
+                f"(candidate {line_label(row)}={got:g}, baseline {line_label(base)}={baseline:g})"
+            )
+    return issues
+
+
 def resolve_artifact(result_path, raw_path):
     path = Path(str(raw_path))
     if path.is_absolute():
@@ -919,6 +976,14 @@ def build_parser():
         metavar="FIELD=VALUE",
         help="numeric upper bound for FIELD, MODE.FIELD, or MODE.ROLE.FIELD",
     )
+    parser.add_argument(
+        "--require-size-reduction",
+        dest="size_reductions",
+        action="append",
+        default=[],
+        metavar="MODE:BASE_MODE:FIELD=RATIO",
+        help="require latest MODE row FIELD to be smaller than BASE_MODE by at least RATIO; repeatable",
+    )
     return parser
 
 
@@ -952,6 +1017,7 @@ def main(argv=None):
         issues.extend(check_event_log_index_evidence(rows))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
+    issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
 
     if issues:
         print("storage benchmark acceptance: failed", file=sys.stderr)
@@ -961,7 +1027,13 @@ def main(argv=None):
 
     latest = list(latest_rows(rows).values())
     modes = ",".join(sorted({str(row.get("mode", "")) for row in latest if row.get("mode")}))
-    checks = 1 + len(required_modes) + len(args.minimums) + len(args.maximums)
+    checks = (
+        1
+        + len(required_modes)
+        + len(args.minimums)
+        + len(args.maximums)
+        + len(args.size_reductions)
+    )
     if args.require_prometheus_artifacts:
         checks += len(latest)
     if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:
