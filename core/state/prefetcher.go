@@ -27,6 +27,7 @@ const (
 	PrefetchAccountLatest PrefetchKind = iota + 1
 	PrefetchAccountKVLatest
 	PrefetchContractStorage
+	PrefetchContractCode
 )
 
 // PrefetchKey describes one read-only latest-domain warmup. It intentionally
@@ -65,6 +66,10 @@ func AccountKVGenerationPrefetchKey(owner tcommon.Address, generation uint64, do
 
 func ContractMetadataPrefetchKey(owner tcommon.Address) PrefetchKey {
 	return AccountKVPrefetchKey(owner, kvdomains.ContractMetadata, contractMetaKVKey)
+}
+
+func ContractCodePrefetchKey(owner tcommon.Address) PrefetchKey {
+	return PrefetchKey{Kind: PrefetchContractCode, Owner: owner}
 }
 
 func ContractStoragePrefetchKey(owner tcommon.Address, slot tcommon.Hash) PrefetchKey {
@@ -262,6 +267,8 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		rowKey := javaStorageRowKey(key.Owner, key.Slot, meta)
 		_, ok, err = rawdb.ReadStateKVLatest(db, key.Owner, generation, kvdomains.ContractStorage, rowKey.Bytes())
 		return ok, err
+	case PrefetchContractCode:
+		return prefetchContractCode(db, key.Owner)
 	default:
 		return false, fmt.Errorf("state prefetch: unknown kind %d", key.Kind)
 	}
@@ -288,4 +295,17 @@ func prefetchContractMetadata(db ethdb.KeyValueReader, owner tcommon.Address, ge
 		return nil, nil
 	}
 	return &meta, nil
+}
+
+func prefetchContractCode(db ethdb.KeyValueReader, owner tcommon.Address) (bool, error) {
+	data, ok, err := rawdb.ReadStateAccountLatest(db, owner)
+	if err != nil || !ok || len(data) == 0 {
+		return false, err
+	}
+	account, err := DecodeStateAccountV2(data)
+	if err != nil || account.CodeHash == (tcommon.Hash{}) {
+		return false, nil
+	}
+	_, ok, err = rawdb.ReadStateCodeStrict(db, account.CodeHash)
+	return ok, err
 }

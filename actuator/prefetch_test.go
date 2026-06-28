@@ -43,6 +43,7 @@ func TestPrefetchKeysForTriggerSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
 	assertPrefetchHas(t, keys, state.AccountPrefetchKey(contract))
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.ContractCodePrefetchKey(contract))
 }
 
 func TestPrefetchKeysForTransferAssetSystemAssetRows(t *testing.T) {

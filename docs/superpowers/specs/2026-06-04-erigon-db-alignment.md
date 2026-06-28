@@ -1369,18 +1369,19 @@ execution has stronger java-tron ordering constraints, so this must be staged:
 Status:
 
 - `core/state/prefetcher.go` now provides the first race-safe prefetch driver:
-  worker goroutines warm raw latest-domain account, account-KV, and contract
-  storage reads through `ethdb.KeyValueReader`, with bounded non-blocking
-  enqueue and hit/miss/drop/error stats. It deliberately avoids mutating
-  `StateDB` object caches because those maps do not yet have a concurrent
-  access model.
+  worker goroutines warm raw latest-domain account, account-KV, contract code,
+  and contract storage reads through `ethdb.KeyValueReader`, with bounded
+  non-blocking enqueue and hit/miss/drop/error stats. It deliberately avoids
+  mutating `StateDB` object caches because those maps do not yet have a
+  concurrent access model.
 - `actuator.PrefetchKeysFor(tx)` now extracts deterministic envelope-derived
-  hints for account latest rows, contract metadata rows, system delegation
-  rows, TRC10 `SystemAsset` metadata/index rows, and envelope-addressable
-  `SystemMarket`/`SystemExchange` rows. It covers transfer, TRC10
-  transfer/issue/participate, TVM create/trigger, contract settings, vote
-  witness, Stake 1.0/2.0, shielded transparent endpoints, market sell/cancel,
-  exchange token operations, owner-only actuators, and account-create families.
+  hints for account latest rows, contract metadata and trigger-contract code
+  rows, system delegation rows, TRC10 `SystemAsset` metadata/index rows, and
+  envelope-addressable `SystemMarket`/`SystemExchange` rows. It covers
+  transfer, TRC10 transfer/issue/participate, TVM create/trigger, contract
+  settings, vote witness, Stake 1.0/2.0, shielded transparent endpoints,
+  market sell/cancel, exchange token operations, owner-only actuators, and
+  account-create families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when

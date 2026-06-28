@@ -73,7 +73,9 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addOwnerAndContract(&m)
+		if contract, ok := b.addOwnerAndContract(&m); ok {
+			b.add(state.ContractCodePrefetchKey(contract))
+		}
 
 	case corepb.Transaction_Contract_CreateSmartContract:
 		var m contractpb.CreateSmartContract
@@ -314,12 +316,13 @@ func (b *prefetchKeyBuilder) addOwnerTo(msg ownerToAddressMessage, toContractMet
 	}
 }
 
-func (b *prefetchKeyBuilder) addOwnerAndContract(msg ownerContractAddressMessage) {
+func (b *prefetchKeyBuilder) addOwnerAndContract(msg ownerContractAddressMessage) (tcommon.Address, bool) {
 	b.addAccountBytes(msg.GetOwnerAddress())
 	contract, ok := b.addAccountBytes(msg.GetContractAddress())
 	if ok {
 		b.add(state.ContractMetadataPrefetchKey(contract))
 	}
+	return contract, ok
 }
 
 func (b *prefetchKeyBuilder) addAccountBytes(raw []byte) (tcommon.Address, bool) {

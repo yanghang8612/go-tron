@@ -3,6 +3,7 @@ package state
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -56,6 +57,103 @@ func TestStatePrefetcherWarmsRawLatestRows(t *testing.T) {
 	stats := p.Stats()
 	if stats.Enqueued != 3 || stats.Processed != 3 || stats.Hits != 3 || stats.Misses != 0 || stats.Errors != 0 || stats.Dropped != 0 {
 		t.Fatalf("stats = %+v, want 3 hits and no misses/errors/drops", stats)
+	}
+}
+
+func TestStatePrefetcherWarmsContractCodeFromAccountEnvelope(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := testAddr(0x49)
+	code := []byte{0x60, 0x00, 0x56}
+	codeHash := tcommon.Keccak256(code)
+	account := &StateAccountV2{
+		Version:  StateAccountVersion,
+		CodeHash: codeHash,
+	}
+	accountBytes, err := account.Encode()
+	if err != nil {
+		t.Fatalf("Encode account: %v", err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, owner, accountBytes); err != nil {
+		t.Fatalf("WriteStateAccountLatest: %v", err)
+	}
+	if err := rawdb.WriteStateCode(db, codeHash, code); err != nil {
+		t.Fatalf("WriteStateCode: %v", err)
+	}
+
+	hit, err := prefetchLatest(db, ContractCodePrefetchKey(owner))
+	if err != nil {
+		t.Fatalf("prefetch contract code: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch contract code hit = false, want true")
+	}
+}
+
+func TestStatePrefetcherContractCodeMissesWithoutChangingSemantics(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, ethdb.KeyValueWriter, tcommon.Address)
+	}{
+		{
+			name: "missing account envelope",
+		},
+		{
+			name: "malformed account envelope",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, owner tcommon.Address) {
+				t.Helper()
+				if err := rawdb.WriteStateAccountLatest(db, owner, []byte("not-state-account-v2")); err != nil {
+					t.Fatalf("WriteStateAccountLatest malformed: %v", err)
+				}
+			},
+		},
+		{
+			name: "zero code hash",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, owner tcommon.Address) {
+				t.Helper()
+				account := &StateAccountV2{Version: StateAccountVersion}
+				accountBytes, err := account.Encode()
+				if err != nil {
+					t.Fatalf("Encode account: %v", err)
+				}
+				if err := rawdb.WriteStateAccountLatest(db, owner, accountBytes); err != nil {
+					t.Fatalf("WriteStateAccountLatest zero code hash: %v", err)
+				}
+			},
+		},
+		{
+			name: "missing code row",
+			setup: func(t *testing.T, db ethdb.KeyValueWriter, owner tcommon.Address) {
+				t.Helper()
+				account := &StateAccountV2{
+					Version:  StateAccountVersion,
+					CodeHash: tcommon.Keccak256([]byte{0x60, 0x01}),
+				}
+				accountBytes, err := account.Encode()
+				if err != nil {
+					t.Fatalf("Encode account: %v", err)
+				}
+				if err := rawdb.WriteStateAccountLatest(db, owner, accountBytes); err != nil {
+					t.Fatalf("WriteStateAccountLatest missing code row: %v", err)
+				}
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := rawdb.NewMemoryDatabase()
+			owner := testAddr(byte(0x50 + i))
+			if tt.setup != nil {
+				tt.setup(t, db, owner)
+			}
+			hit, err := prefetchLatest(db, ContractCodePrefetchKey(owner))
+			if err != nil {
+				t.Fatalf("prefetch contract code: %v", err)
+			}
+			if hit {
+				t.Fatal("prefetch contract code hit = true, want false")
+			}
+		})
 	}
 }
 
