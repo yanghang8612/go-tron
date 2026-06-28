@@ -488,6 +488,19 @@ type ImportBatchRunApplyResult struct {
 	DrainLoopApply ImportBatchDrainLoopApplyResult
 }
 
+// ImportBatchDrainLoopFinalization maps the applied import-batch run into the
+// caller's loop state changes. SyncService still owns the loop mechanics and
+// logging; downloader owns the pause/resume suffix semantics.
+type ImportBatchDrainLoopFinalization struct {
+	Action           ImportBatchDrainLoopStepAction
+	Pause            bool
+	ContinueLoop     bool
+	StopLoop         bool
+	YieldResumePhase bool
+	ResumePhasePlan  ImportStagePhasePlan
+	ResumePhases     []ImportStagePhasePlan
+}
+
 // RecordWriteFailed reports whether the accepted prefix reached canonical
 // insertion but failed to persist the corresponding sync-stage boundary.
 func (r ImportBatchRunResult) RecordWriteFailed() bool {
@@ -593,6 +606,26 @@ func ApplyImportBatchRun(batch BufferedBatch, applier ImportBatchRunPlanApplier)
 		DrainLoop:      drainLoop,
 		DrainLoopApply: ApplyImportBatchDrainLoopPlan(drainLoop),
 	}
+}
+
+// PlanImportBatchDrainLoopFinalization derives the caller-visible loop state
+// update from a completed import-batch run. When a resume phase is yielded, the
+// returned suffix includes the yielded current phase plus following phases from
+// the original execution schedule.
+func PlanImportBatchDrainLoopFinalization(result ImportBatchRunApplyResult) ImportBatchDrainLoopFinalization {
+	loop := result.DrainLoopApply
+	out := ImportBatchDrainLoopFinalization{
+		Action:           loop.Action,
+		Pause:            result.Run.Outcome.Pause,
+		ContinueLoop:     loop.ContinueLoop,
+		StopLoop:         loop.StopLoop,
+		YieldResumePhase: loop.YieldResumePhase,
+	}
+	if loop.YieldResumePhase {
+		out.ResumePhasePlan = cloneImportStagePhasePlan(loop.ResumePhasePlan)
+		out.ResumePhases = PlanImportResumePhaseSuffix(result.Run.StagePhaseSchedule, loop.ResumePhasePlan)
+	}
+	return out
 }
 
 // ApplyImportBatchRunPlan executes the downloader-owned local import schedule.

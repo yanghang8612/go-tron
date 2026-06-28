@@ -1454,18 +1454,18 @@ drainLoop:
 			lastPeer = batch.Buffered[n-1].Peer
 		}
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss, session: sess})
-		if importRun.Run.Outcome.Pause {
+		importLoop := syncdl.PlanImportBatchDrainLoopFinalization(importRun)
+		if importLoop.Pause {
 			paused = true
 		}
-		loop := importRun.DrainLoopApply
-		if loop.YieldResumePhase {
-			resumePhases = syncdl.PlanImportResumePhaseSuffix(importRun.Run.StagePhaseSchedule, loop.ResumePhasePlan)
-			ss.logImportResumePhaseYield(loop.ResumePhasePlan)
+		if importLoop.YieldResumePhase {
+			resumePhases = importLoop.ResumePhases
+			ss.logImportResumePhaseYield(importLoop.ResumePhasePlan)
 		}
-		if loop.StopLoop {
+		if importLoop.StopLoop {
 			break drainLoop
 		}
-		if loop.ContinueLoop {
+		if importLoop.ContinueLoop {
 			continue drainLoop
 		}
 		continue drainLoop

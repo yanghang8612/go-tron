@@ -500,6 +500,62 @@ func TestApplyImportBatchDrainLoopPlan(t *testing.T) {
 	}
 }
 
+func TestPlanImportBatchDrainLoopFinalization(t *testing.T) {
+	hash1 := tcommon.Hash{0x01}
+	hash2 := tcommon.Hash{0x02}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+	stagePhases := NewImportBatchStagePhaseSchedule(stagePlan)
+	resume := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(2, hash2)},
+	}
+	result := ImportBatchRunApplyResult{
+		Run: ImportBatchRunResult{
+			StagePhaseSchedule: stagePhases,
+			Outcome:            ImportOutcome{Pause: true},
+		},
+		DrainLoopApply: ImportBatchDrainLoopApplyResult{
+			Action:           ImportBatchDrainLoopYieldResumePhase,
+			StopLoop:         true,
+			YieldResumePhase: true,
+			ResumePhasePlan:  resume,
+		},
+	}
+
+	got := PlanImportBatchDrainLoopFinalization(result)
+	if !got.Pause || !got.StopLoop || got.ContinueLoop || !got.YieldResumePhase ||
+		got.Action != ImportBatchDrainLoopYieldResumePhase ||
+		!reflect.DeepEqual(got.ResumePhasePlan, resume) ||
+		len(got.ResumePhases) != 2 ||
+		!reflect.DeepEqual(got.ResumePhases[0], resume) ||
+		got.ResumePhases[1].Phase != ImportStagePhaseFinish ||
+		len(got.ResumePhases[1].Tasks) != 2 ||
+		!reflect.DeepEqual(got.ResumePhases[1].Tasks[1], ImportFinishStageTask(2, hash2)) {
+		t.Fatalf("finalization = %+v, want paused yield with commitment suffix plus finish phase", got)
+	}
+	got.ResumePhasePlan.Tasks[0].BlockNum = 99
+	got.ResumePhases[0].Tasks[0].BlockNum = 88
+	if resume.Tasks[0].BlockNum != 2 {
+		t.Fatal("PlanImportBatchDrainLoopFinalization returned aliased resume tasks")
+	}
+
+	continued := PlanImportBatchDrainLoopFinalization(ImportBatchRunApplyResult{
+		DrainLoopApply: ImportBatchDrainLoopApplyResult{
+			Action:       ImportBatchDrainLoopContinue,
+			ContinueLoop: true,
+		},
+	})
+	if continued.Pause || !continued.ContinueLoop || continued.StopLoop || continued.YieldResumePhase ||
+		continued.Action != ImportBatchDrainLoopContinue || len(continued.ResumePhases) != 0 {
+		t.Fatalf("continue finalization = %+v, want plain continue", continued)
+	}
+}
+
 func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
