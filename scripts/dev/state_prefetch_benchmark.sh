@@ -9,7 +9,7 @@ set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PACKAGE="./core"
-BENCH='BenchmarkProcessBlock_HeavyTRX_(HeavyState|ColdState)'
+BENCH='BenchmarkProcessBlock_(LightTRX|HeavyTRX)_(HeavyState|ColdState)'
 RUN='^$'
 BENCHTIME="10x"
 COUNT=5
@@ -24,7 +24,7 @@ Usage: scripts/dev/state_prefetch_benchmark.sh [options]
 
 Options:
   --package PKG       Go package to benchmark (default: ./core)
-  --bench REGEX       Benchmark regex (default: ProcessBlock HeavyTRX prefetch benches)
+  --bench REGEX       Benchmark regex (default: ProcessBlock LightTRX/HeavyTRX prefetch benches)
   --run REGEX         Test run regex passed to go test (default: ^$)
   --benchtime VALUE   Go benchmark benchtime (default: 10x)
   --count N           Go benchmark count (default: 5)

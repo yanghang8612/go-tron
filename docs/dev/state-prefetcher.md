@@ -49,7 +49,7 @@ The underlying focused benchmark command is:
 
 ```bash
 go test ./core -run '^$' \
-  -bench 'BenchmarkProcessBlock_HeavyTRX_(HeavyState|ColdState)' \
+  -bench 'BenchmarkProcessBlock_(LightTRX|HeavyTRX)_(HeavyState|ColdState)' \
   -benchtime=10x -count=5 -benchmem
 ```
 
@@ -60,10 +60,13 @@ The benchmark variants are:
 - `prefetch=on_workers=4_lookahead=8`
 - `prefetch=on_workers=8_lookahead=8`
 
-`HeavyState` measures the normal in-memory test DB path. `ColdState` wraps the
-same DB with a deterministic first-read latency and shared warm-key map so the
-benchmark can expose prefetch overlap without requiring a slow physical disk.
-Treat it as a tuning signal, not as a replacement for Nile/mainnet replay.
+`LightTRX` is a one-transaction block, covering the skip path where enabling
+prefetch config must not start workers. `HeavyTRX` is a 512-transaction transfer
+block. `HeavyState` measures the normal in-memory test DB path. `ColdState`
+wraps the same DB with a deterministic first-read latency and shared warm-key
+map so the benchmark can expose prefetch overlap without requiring a slow
+physical disk. Treat it as a tuning signal, not as a replacement for
+Nile/mainnet replay.
 
 ## Rollout Gate
 

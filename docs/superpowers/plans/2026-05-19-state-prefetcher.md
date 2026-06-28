@@ -44,6 +44,9 @@
 ## Slice 4 — Benchmarks + tuning
 
 - [x] `core/state_processor_prefetch_bench_test.go`:
+  - [x] `BenchmarkProcessBlock_LightTRX_HeavyState`
+  - [x] `BenchmarkProcessBlock_LightTRX_ColdState` (prefetch skip-path
+        overhead on a one-transaction block)
   - [x] `BenchmarkProcessBlock_HeavyTRX_HeavyState`
   - [x] `BenchmarkProcessBlock_HeavyTRX_ColdState` (deterministic first-read
         latency wrapper)

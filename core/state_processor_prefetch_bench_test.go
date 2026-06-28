@@ -20,18 +20,27 @@ import (
 
 const (
 	benchPrefetchAccounts = 2048
-	benchPrefetchTxs      = 512
+	benchPrefetchHeavyTxs = 512
+	benchPrefetchLightTxs = 1
 )
 
+func BenchmarkProcessBlock_LightTRX_HeavyState(b *testing.B) {
+	benchProcessBlockPrefetchVariants(b, benchPrefetchLightTxs, 0)
+}
+
+func BenchmarkProcessBlock_LightTRX_ColdState(b *testing.B) {
+	benchProcessBlockPrefetchVariants(b, benchPrefetchLightTxs, 25*time.Microsecond)
+}
+
 func BenchmarkProcessBlock_HeavyTRX_HeavyState(b *testing.B) {
-	benchProcessBlockPrefetchVariants(b, 0)
+	benchProcessBlockPrefetchVariants(b, benchPrefetchHeavyTxs, 0)
 }
 
 func BenchmarkProcessBlock_HeavyTRX_ColdState(b *testing.B) {
-	benchProcessBlockPrefetchVariants(b, 25*time.Microsecond)
+	benchProcessBlockPrefetchVariants(b, benchPrefetchHeavyTxs, 25*time.Microsecond)
 }
 
-func benchProcessBlockPrefetchVariants(b *testing.B, coldReadLatency time.Duration) {
+func benchProcessBlockPrefetchVariants(b *testing.B, txCount int, coldReadLatency time.Duration) {
 	variants := []struct {
 		name     string
 		prefetch processBlockPrefetchConfig
@@ -43,15 +52,15 @@ func benchProcessBlockPrefetchVariants(b *testing.B, coldReadLatency time.Durati
 	}
 	for _, variant := range variants {
 		b.Run(variant.name, func(b *testing.B) {
-			benchProcessBlockPrefetchVariant(b, coldReadLatency, variant.prefetch)
+			benchProcessBlockPrefetchVariant(b, txCount, coldReadLatency, variant.prefetch)
 		})
 	}
 }
 
-func benchProcessBlockPrefetchVariant(b *testing.B, coldReadLatency time.Duration, prefetch processBlockPrefetchConfig) {
-	fixture := newProcessBlockPrefetchBenchFixture(b, coldReadLatency)
+func benchProcessBlockPrefetchVariant(b *testing.B, txCount int, coldReadLatency time.Duration, prefetch processBlockPrefetchConfig) {
+	fixture := newProcessBlockPrefetchBenchFixture(b, txCount, coldReadLatency)
 	b.ReportAllocs()
-	b.ReportMetric(benchPrefetchTxs, "tx/block")
+	b.ReportMetric(float64(txCount), "tx/block")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -93,7 +102,7 @@ type processBlockPrefetchBenchFixture struct {
 	block   *types.Block
 }
 
-func newProcessBlockPrefetchBenchFixture(b *testing.B, coldReadLatency time.Duration) *processBlockPrefetchBenchFixture {
+func newProcessBlockPrefetchBenchFixture(b *testing.B, txCount int, coldReadLatency time.Duration) *processBlockPrefetchBenchFixture {
 	b.Helper()
 	base := ethrawdb.NewMemoryDatabase()
 	db := newBenchColdReadDB(base, coldReadLatency)
@@ -111,7 +120,7 @@ func newProcessBlockPrefetchBenchFixture(b *testing.B, coldReadLatency time.Dura
 	if err != nil {
 		b.Fatal(err)
 	}
-	block := benchPrefetchBlock()
+	block := benchPrefetchBlock(txCount)
 	db.EnableColdReads()
 	return &processBlockPrefetchBenchFixture{
 		db:      db,
@@ -128,11 +137,11 @@ func benchPrefetchAddr(i int) tcommon.Address {
 	return addr
 }
 
-func benchPrefetchBlock() *types.Block {
-	txs := make([]*corepb.Transaction, 0, benchPrefetchTxs)
-	for i := 0; i < benchPrefetchTxs; i++ {
+func benchPrefetchBlock(txCount int) *types.Block {
+	txs := make([]*corepb.Transaction, 0, txCount)
+	for i := 0; i < txCount; i++ {
 		from := benchPrefetchAddr(i)
-		to := benchPrefetchAddr(benchPrefetchTxs + i)
+		to := benchPrefetchAddr(txCount + i)
 		param, _ := anypb.New(&contractpb.TransferContract{
 			OwnerAddress: from.Bytes(),
 			ToAddress:    to.Bytes(),
