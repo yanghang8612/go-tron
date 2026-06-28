@@ -107,6 +107,71 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 	}
 }
 
+func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
+	const sourceFile = "tron_backend.go"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+
+	expected := map[string][]string{
+		"CallAt":                               {"TriggerConstantContractAt"},
+		"CanDelegateResourceAt":                {"archiveStateAt"},
+		"EstimateEnergyAt":                     {"TriggerConstantContractAt"},
+		"EstimateGasAt":                        {"TriggerConstantContractAt", "archiveStateAt"},
+		"GetAccountAt":                         {"archiveStateAt"},
+		"GetAccountByIdAt":                     {"archiveStateAt"},
+		"GetAccountNetAt":                      {"archiveStateAt"},
+		"GetAccountResourceAt":                 {"archiveStateAt"},
+		"GetAssetIssueByIDAt":                  {"archiveStateAt"},
+		"GetAssetIssueByNameAt":                {"archiveStateAt"},
+		"GetAssetIssueListAt":                  {"listAssetsAt"},
+		"GetAssetIssueListPaginatedAt":         {"listAssetsAt"},
+		"GetAvailableUnfreezeCountAt":          {"accountAtOrNil"},
+		"GetBalanceAt":                         {"archiveStateAt"},
+		"GetBandwidthPricesAt":                 {"archiveStateAt"},
+		"GetBrokerageInfoAt":                   {"archiveStateAt"},
+		"GetBurnTrxAt":                         {"archiveStateAt"},
+		"GetCanWithdrawUnfreezeAmountAt":       {"accountAtOrNil"},
+		"GetChainParametersAt":                 {"archiveStateAt"},
+		"GetCodeAt":                            {"archiveStateAt"},
+		"GetContractAt":                        {"archiveStateAt"},
+		"GetDelegatedResourceAccountIndexV2At": {"archiveStateAt"},
+		"GetDelegatedResourceV2At":             {"archiveStateAt"},
+		"GetEnergyPricesAt":                    {"archiveStateAt"},
+		"GetMarketOrderByIDAt":                 {"archiveStateAt"},
+		"GetMarketOrdersByAccountAt":           {"archiveStateAt"},
+		"GetMarketPriceByPairAt":               {"archiveStateAt"},
+		"GetProposalByIDAt":                    {"archiveStateAt"},
+		"GetRewardAt":                          {"archiveStateAt"},
+		"GetStorageAtBlock":                    {"archiveStateAt"},
+		"ListExchangesAt":                      {"archiveStateAt"},
+		"ListProposalsAt":                      {"archiveStateAt"},
+		"ListProposalsPaginatedAt":             {"ListProposalsAt"},
+		"ListWitnessesAt":                      {"archiveStateAt"},
+		"NextMaintenanceTimeAt":                {"archiveStateAt"},
+		"TriggerConstantContractAt":            {"archiveStateAt"},
+	}
+
+	actual := make(map[string][]string)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || !isTronBackendMethod(fn) {
+			continue
+		}
+		if !isPublicBlockBoundArchiveAPI(fn) {
+			continue
+		}
+		actual[fn.Name.Name] = archiveBoundaryCallNames(fn.Body)
+	}
+
+	if diff := compareArchiveBoundaryAPIs(expected, actual); diff != "" {
+		t.Fatalf("public block-bound archive API set changed; audit the archive/as-of boundary and update this test:\n%s", diff)
+	}
+}
+
 func archiveStateAtCallLines(fset *token.FileSet, body *ast.BlockStmt) []int {
 	var lines []int
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -248,4 +313,124 @@ func compareArchiveStateAtCallers(expected, actual map[string]int) string {
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+func isTronBackendMethod(fn *ast.FuncDecl) bool {
+	if fn == nil || fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return false
+	}
+	return exprTypeName(fn.Recv.List[0].Type) == "*TronBackend"
+}
+
+func isPublicBlockBoundArchiveAPI(fn *ast.FuncDecl) bool {
+	if fn == nil || !ast.IsExported(fn.Name.Name) {
+		return false
+	}
+	if !strings.HasSuffix(fn.Name.Name, "At") && !strings.HasSuffix(fn.Name.Name, "AtBlock") {
+		return false
+	}
+	return hasUint64ParamNamed(fn.Type.Params, "blockNum")
+}
+
+func hasUint64ParamNamed(fields *ast.FieldList, name string) bool {
+	if fields == nil {
+		return false
+	}
+	for _, field := range fields.List {
+		if exprTypeName(field.Type) != "uint64" {
+			continue
+		}
+		for _, fieldName := range field.Names {
+			if fieldName.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprTypeName(expr ast.Expr) string {
+	switch typ := expr.(type) {
+	case *ast.Ident:
+		return typ.Name
+	case *ast.StarExpr:
+		return "*" + exprTypeName(typ.X)
+	default:
+		return ""
+	}
+}
+
+func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
+	boundaries := map[string]struct{}{
+		"ListProposalsAt":           {},
+		"TriggerConstantContractAt": {},
+		"accountAtOrNil":            {},
+		"archiveStateAt":            {},
+		"listAssetsAt":              {},
+	}
+	seen := make(map[string]struct{})
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := callName(call)
+		if _, ok := boundaries[name]; ok {
+			seen[name] = struct{}{}
+		}
+		return true
+	})
+	return sortedArchiveBoundaryKeys(seen)
+}
+
+func callName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		return fun.Sel.Name
+	default:
+		return ""
+	}
+}
+
+func compareArchiveBoundaryAPIs(expected, actual map[string][]string) string {
+	var lines []string
+	for name, want := range expected {
+		got, ok := actual[name]
+		if !ok {
+			lines = append(lines, fmt.Sprintf("%s: missing audited public archive method", name))
+			continue
+		}
+		want = sortedStringSlice(want)
+		got = sortedStringSlice(got)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			lines = append(lines, fmt.Sprintf("%s: archive boundaries got [%s], want [%s]",
+				name, strings.Join(got, ","), strings.Join(want, ",")))
+		}
+	}
+	for name, got := range actual {
+		if _, ok := expected[name]; ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: unexpected public block-bound archive method with boundaries [%s]",
+			name, strings.Join(got, ",")))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+func sortedArchiveBoundaryKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedStringSlice(values []string) []string {
+	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
 }

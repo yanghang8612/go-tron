@@ -1728,6 +1728,11 @@ Status:
   before any API-specific reconstruction starts. Regression coverage proves the
   lock is held for successful sessions and released when the gate rejects a
   query.
+- Source-audit coverage now also enumerates every public block-bound
+  `TronBackend` archive/as-of API (`*At` plus `GetStorageAtBlock`) and requires
+  each one to pass through `archiveStateAt` or an audited archive-aware helper.
+  This keeps new solidity/PBFT/JSON-RPC historical APIs from accidentally
+  serving live-head state while the broader archive surface grows.
 - JSON-RPC `debug_traceCall` and `debug_traceTransaction` now use the same
   archive execution-state setup as `eth_call`: historical traces can run from
   cold state-domain/code snapshots after hot block state roots, latest rows, and
