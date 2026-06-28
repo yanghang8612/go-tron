@@ -742,7 +742,9 @@ Status:
   canonical stage row is hash-bound to the expected block/hash and the matching
   Sync* diagnostic row would not regress. This closes the async-commit gap where
   commitment/finish hooks could complete after the initial import record had
-  already deleted staged-body proof rows.
+  already deleted staged-body proof rows; `net` package tests cover both the
+  successful barrier publish and the canonical-mismatch / sync-ahead rejection
+  paths through the `SyncService` entry point.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

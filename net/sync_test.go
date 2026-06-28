@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -776,6 +777,100 @@ func TestSyncServiceRestartsHalfCommittedPipelineWithNextStagedBody(t *testing.T
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
 		t.Fatalf("SyncBodiesReady after half-commitment drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
+func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	for _, stage := range []rawdb.StageID{rawdb.StageCommitment, rawdb.StageFinish} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block.Number(), block.Hash()); err != nil {
+			t.Fatalf("write canonical %s progress: %v", stage, err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncExecution, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write sync execution progress: %v", err)
+	}
+	phases := []syncdl.ImportStagePhasePlan{
+		{
+			Phase:          syncdl.ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
+		},
+		{
+			Phase:          syncdl.ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportFinishStageTask(block.Number(), block.Hash())},
+		},
+	}
+
+	result := ss.publishImportResumePhaseProgress(phases)
+	if !result.Applied || result.Rows != 2 || result.WriteError != nil || !result.Plan.OK {
+		t.Fatalf("resume publish result = %+v, want two rows applied", result)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != block.Hash() || !row.HasBlockHash {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block1 hash-bound", stage, row, ok, err)
+		}
+	}
+}
+
+func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
+	tests := map[string]struct {
+		setup      func(t *testing.T, db ethdb.KeyValueStore, block *types.Block)
+		wantStatus syncdl.ImportResumePhasePublishStatus
+	}{
+		"canonical mismatch": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), tcommon.Hash{0xee}); err != nil {
+					t.Fatalf("write mismatched canonical commitment: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishCanonicalMismatch,
+		},
+		"sync ahead": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write canonical commitment: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncCommitment, block.Number()+1, tcommon.Hash{0x02}); err != nil {
+					t.Fatalf("write ahead sync commitment: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishSyncAhead,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			bc := makeTestChain(t)
+			ss := NewSyncService(bc, nil)
+			block := stubBlock(1, bc.CurrentBlock().Hash())
+			test.setup(t, bc.DB(), block)
+			phase := syncdl.ImportStagePhasePlan{
+				Phase:          syncdl.ImportStagePhaseCommitment,
+				CanonicalStage: rawdb.StageCommitment,
+				SyncStage:      rawdb.StageSyncCommitment,
+				Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
+			}
+
+			result := ss.publishImportResumePhaseProgress([]syncdl.ImportStagePhasePlan{phase})
+			if result.Applied || result.Rows != 0 || result.WriteError != nil || result.Plan.OK ||
+				len(result.Plan.Decisions) != 1 || result.Plan.Decisions[0].Status != test.wantStatus {
+				t.Fatalf("resume publish result = %+v, want blocked with status %s", result, test.wantStatus)
+			}
+			if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncCommitment); err != nil {
+				t.Fatalf("read sync commitment after rejected publish: %v", err)
+			} else if name == "canonical mismatch" && ok {
+				t.Fatalf("sync commitment after canonical mismatch = %+v, want absent", row)
+			} else if name == "sync ahead" && (!ok || row.BlockNum != block.Number()+1 || row.BlockHash != (tcommon.Hash{0x02})) {
+				t.Fatalf("sync commitment after sync-ahead rejection = %+v ok=%v, want existing ahead row retained", row, ok)
+			}
+		})
 	}
 }
 
