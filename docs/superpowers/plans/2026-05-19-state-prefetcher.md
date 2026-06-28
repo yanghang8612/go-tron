@@ -25,7 +25,7 @@
 - [x] Tests:
   - [x] `prefetcher_test.go` — enqueue/start/stop, raw latest-domain
         hit/miss/error/drop statistics
-  - [ ] `prefetcher_race_test.go` — `go test -race -count=3` with
+  - [x] `prefetcher_race_test.go` — `go test -race -count=3` with
         concurrent main reads + mutations. The current driver avoids
         `StateDB` object-cache mutation from workers; direct cache warming
         must not land without this.
