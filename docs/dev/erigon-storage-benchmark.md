@@ -313,6 +313,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-prometheus-artifacts \
   --require-prune-mode-semantics \
   --require-archive-api-evidence \
+  --require-event-log-index-evidence \
   --require-minimal-tail-prune \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
@@ -355,8 +356,13 @@ the samples also pass `--archive-api-call-data` against a known historical
 contract. If the row also
 reports `tailPrunedThroughBlock`, the
 archive API block must be at or below that prune boundary so the row proves
-post-prune archive reads rather than a latest-state fallback. It also applies
-any project-specific numeric `--min`/`--max` thresholds.
+post-prune archive reads rather than a latest-state fallback. With
+`--require-event-log-index-evidence`, at least one latest derived-index row
+must report active `eventLogIndexSegments` plus internally consistent
+address/topic key, posting, average-fanout, max-fanout, singleton, and
+multi-posting counters; add `--min eventLogIndexAddressPostings=1` when the
+sample is expected to include logs and should prove non-empty index fanout.
+It also applies any project-specific numeric `--min`/`--max` thresholds.
 
 Recorded samples:
 

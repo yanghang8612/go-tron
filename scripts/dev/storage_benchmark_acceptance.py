@@ -723,6 +723,121 @@ def check_archive_api_evidence(rows, required_methods):
     return issues
 
 
+def as_non_negative_int(row, field):
+    value = row.get(field)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if value.is_integer() and value >= 0:
+            return int(value)
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = int(value, 10)
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
+    return None
+
+
+def event_log_index_evidence_row(row):
+    derived_to = as_number(row, "derivedIndexToBlock")
+    segments = as_number(row, "eventLogIndexSegments")
+    return (
+        (derived_to is not None and derived_to >= 0)
+        or (segments is not None and segments > 0)
+    )
+
+
+def rounded_milli(postings, keys):
+    if keys == 0:
+        return 0
+    return (postings * 1000 + keys // 2) // keys
+
+
+def check_event_log_index_lookup_stats(row, label, prefix):
+    issues = []
+    fields = {
+        "keys": f"eventLogIndex{prefix}Keys",
+        "postings": f"eventLogIndex{prefix}Postings",
+        "avg": f"eventLogIndex{prefix}AvgPostingsMilli",
+        "max": f"eventLogIndex{prefix}MaxPostings",
+        "singleton": f"eventLogIndex{prefix}SingletonKeys",
+        "multi": f"eventLogIndex{prefix}MultiPostingKeys",
+    }
+    values = {}
+    for name, field in fields.items():
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(
+                f"{line_label(row)} {field}={row.get(field)!r}, want non-negative integer"
+            )
+        values[name] = value
+    if issues:
+        return issues
+
+    keys = values["keys"]
+    postings = values["postings"]
+    avg = values["avg"]
+    max_postings = values["max"]
+    singleton = values["singleton"]
+    multi = values["multi"]
+    if singleton + multi != keys:
+        issues.append(
+            f"{line_label(row)} {label} singleton+multi={singleton + multi} "
+            f"must equal keys={keys}"
+        )
+    if keys == 0:
+        if postings != 0:
+            issues.append(f"{line_label(row)} {label} postings={postings} must be 0 when keys=0")
+        if avg != 0:
+            issues.append(f"{line_label(row)} {label} avgPostingsMilli={avg} must be 0 when keys=0")
+        if max_postings != 0:
+            issues.append(
+                f"{line_label(row)} {label} maxPostings={max_postings} must be 0 when keys=0"
+            )
+        return issues
+    if postings < keys:
+        issues.append(f"{line_label(row)} {label} postings={postings} must be >= keys={keys}")
+    if max_postings == 0:
+        issues.append(f"{line_label(row)} {label} maxPostings must be > 0 when keys={keys}")
+    if max_postings > postings:
+        issues.append(
+            f"{line_label(row)} {label} maxPostings={max_postings} must be <= postings={postings}"
+        )
+    want_avg = rounded_milli(postings, keys)
+    if avg != want_avg:
+        issues.append(
+            f"{line_label(row)} {label} avgPostingsMilli={avg}, want {want_avg} "
+            f"for postings={postings} keys={keys}"
+        )
+    return issues
+
+
+def check_event_log_index_evidence(rows):
+    issues = []
+    evidence_rows = [
+        row for row in latest_rows(rows).values() if event_log_index_evidence_row(row)
+    ]
+    if not evidence_rows:
+        return ["required event-log index evidence has no selected latest derived-index row"]
+
+    for row in evidence_rows:
+        derived_to = as_number(row, "derivedIndexToBlock")
+        if derived_to is None or derived_to < 0:
+            issues.append(f"{line_label(row)} derivedIndexToBlock={derived_to}, want >= 0")
+        segments = as_non_negative_int(row, "eventLogIndexSegments")
+        if segments is None or segments <= 0:
+            issues.append(
+                f"{line_label(row)} eventLogIndexSegments={row.get('eventLogIndexSegments')!r}, want > 0"
+            )
+        issues.extend(check_event_log_index_lookup_stats(row, "address", "Address"))
+        issues.extend(check_event_log_index_lookup_stats(row, "topic", "Topic"))
+    return issues
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate storage_benchmark.sh JSONL output against soak acceptance gates.",
@@ -770,6 +885,11 @@ def build_parser():
         "--require-archive-api-evidence",
         action="store_true",
         help="require latest rows to include successful historical archive API evidence",
+    )
+    parser.add_argument(
+        "--require-event-log-index-evidence",
+        action="store_true",
+        help="require latest derived-index rows to include event-log-index fanout/selectivity counters",
     )
     parser.add_argument(
         "--archive-api-method",
@@ -828,6 +948,8 @@ def main(argv=None):
             archive_api_methods_required.append(method)
     if args.require_archive_api_evidence:
         issues.extend(check_archive_api_evidence(rows, archive_api_methods_required))
+    if args.require_event_log_index_evidence:
+        issues.extend(check_event_log_index_evidence(rows))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
 
@@ -849,6 +971,8 @@ def main(argv=None):
     if args.require_prune_mode_semantics:
         checks += len(latest)
     if args.require_archive_api_evidence:
+        checks += 1
+    if args.require_event_log_index_evidence:
         checks += 1
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "

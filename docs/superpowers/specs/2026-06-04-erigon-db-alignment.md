@@ -1781,8 +1781,9 @@ Status:
   balance-trace sidecar builders. The storage benchmark records the same
   event-log-index key/posting/fanout counters after derived-index builds,
   including average postings per key and single- versus multi-segment key
-  counts, giving larger soaks a concrete selectivity signal before revisiting
-  recsplit-style accessors.
+  counts, and the acceptance checker can require that evidence through
+  `--require-event-log-index-evidence`, giving larger soaks a concrete
+  selectivity signal before revisiting recsplit-style accessors.
 - Event-log segment verification now also proves the segment-local address and
   positional-topic lookup maps are exact, not merely internally well-formed:
   every payload/index row must be reachable from the corresponding lookup key,

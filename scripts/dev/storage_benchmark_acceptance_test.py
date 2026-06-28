@@ -681,6 +681,134 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_accepts_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "snap",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexSegments": 2,
+                        "eventLogIndexAddressKeys": 3,
+                        "eventLogIndexAddressPostings": 6,
+                        "eventLogIndexAddressAvgPostingsMilli": 2000,
+                        "eventLogIndexAddressMaxPostings": 3,
+                        "eventLogIndexAddressSingletonKeys": 1,
+                        "eventLogIndexAddressMultiPostingKeys": 2,
+                        "eventLogIndexTopicKeys": 2,
+                        "eventLogIndexTopicPostings": 3,
+                        "eventLogIndexTopicAvgPostingsMilli": 1500,
+                        "eventLogIndexTopicMaxPostings": 2,
+                        "eventLogIndexTopicSingletonKeys": 1,
+                        "eventLogIndexTopicMultiPostingKeys": 1,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_or_invalid_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "snap",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            write_result(result, [{**base, "derivedIndexToBlock": -1, "eventLogIndexSegments": 0}])
+
+            missing = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(missing.returncode, 0, missing.stdout + missing.stderr)
+            self.assertIn("required event-log index evidence has no selected latest derived-index row", missing.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexSegments": 0,
+                        "eventLogIndexAddressKeys": 2,
+                        "eventLogIndexAddressPostings": 1,
+                        "eventLogIndexAddressAvgPostingsMilli": 500,
+                        "eventLogIndexAddressMaxPostings": 2,
+                        "eventLogIndexAddressSingletonKeys": 2,
+                        "eventLogIndexAddressMultiPostingKeys": 1,
+                        "eventLogIndexTopicKeys": 0,
+                        "eventLogIndexTopicPostings": 1,
+                        "eventLogIndexTopicAvgPostingsMilli": 0,
+                        "eventLogIndexTopicMaxPostings": 0,
+                        "eventLogIndexTopicSingletonKeys": 0,
+                        "eventLogIndexTopicMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            invalid = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(invalid.returncode, 0, invalid.stdout + invalid.stderr)
+            self.assertIn("eventLogIndexSegments=0, want > 0", invalid.stderr)
+            self.assertIn("address singleton+multi=3 must equal keys=2", invalid.stderr)
+            self.assertIn("address postings=1 must be >= keys=2", invalid.stderr)
+            self.assertIn("topic postings=1 must be 0 when keys=0", invalid.stderr)
+
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
