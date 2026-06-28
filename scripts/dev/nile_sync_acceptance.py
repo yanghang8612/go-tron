@@ -76,6 +76,10 @@ HOT_BYTES_PER_BLOCK_FIELDS = (
     "chaindataBytesPerBlock",
 )
 
+HOT_GROWTH_SHARE_FIELDS = (
+    "intervalChaindataGrowthShare",
+)
+
 COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS = (
     "soakEfficiencyColdArchiveBytesPerBlock",
     "intervalColdArchiveBytesPerBlock",
@@ -278,6 +282,41 @@ def check_max_hot_bytes_per_block(row, maximum):
         ]
     if value > maximum:
         return [f"{field}={value:g} failed <= max hot bytes per block {maximum:g}"]
+    return []
+
+
+def hot_growth_share_evidence(row):
+    for field in HOT_GROWTH_SHARE_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_max_hot_growth_share(row, maximum):
+    if maximum is None:
+        return []
+    window = str(row.get("soakEfficiencyWindow", ""))
+    if window != "interval":
+        return [
+            "hot growth share evidence requires soakEfficiencyWindow='interval', "
+            f"got {window!r}"
+        ]
+    positive_growth = as_number(row, "intervalPositiveDiskGrowthBytes")
+    if positive_growth is None or positive_growth <= 0:
+        return [
+            "hot growth share evidence requires intervalPositiveDiskGrowthBytes > 0, "
+            f"got {positive_growth}"
+        ]
+    field, value = hot_growth_share_evidence(row)
+    if field is None:
+        return [
+            "hot growth share evidence missing: none of "
+            + ",".join(HOT_GROWTH_SHARE_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value > maximum:
+        return [f"{field}={value:g} failed <= max hot growth share {maximum:g}"]
     return []
 
 
@@ -1096,6 +1135,7 @@ def check_row(row, args):
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
     issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
+    issues.extend(check_max_hot_growth_share(row, args.max_hot_growth_share))
     issues.extend(
         check_max_cold_archive_bytes_per_block(row, args.max_cold_archive_bytes_per_block)
     )
@@ -1203,6 +1243,15 @@ def build_parser():
         help=(
             "require selected rows to prove total datadir growth is no greater "
             "than this many bytes per imported block"
+        ),
+    )
+    parser.add_argument(
+        "--max-hot-growth-share",
+        type=float,
+        metavar="FRACTION",
+        help=(
+            "require selected interval rows to prove hot Pebble growth is no "
+            "more than this fraction of positive disk growth"
         ),
     )
     parser.add_argument(

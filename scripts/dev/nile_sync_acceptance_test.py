@@ -465,6 +465,127 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("hot bytes-per-block evidence missing", proc.stderr)
 
+    def test_accepts_max_hot_growth_share_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["intervalPositiveDiskGrowthBytes"] = 1000000
+            row["intervalChaindataGrowthShare"] = 0.35
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-hot-growth-share",
+                    "0.4",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_hot_growth_share_above_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["intervalPositiveDiskGrowthBytes"] = 1000000
+            row["intervalChaindataGrowthShare"] = 0.55
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-hot-growth-share",
+                    "0.4",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "intervalChaindataGrowthShare=0.55 failed <= max hot growth share 0.4",
+                proc.stderr,
+            )
+
+    def test_rejects_hot_growth_share_without_interval_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "cumulative"
+            row["intervalPositiveDiskGrowthBytes"] = 0
+            row["intervalChaindataGrowthShare"] = 0
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-hot-growth-share",
+                    "0.4",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "hot growth share evidence requires soakEfficiencyWindow='interval'",
+                proc.stderr,
+            )
+
+    def test_rejects_hot_growth_share_without_share_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["intervalPositiveDiskGrowthBytes"] = 1000000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-hot-growth-share",
+                    "0.4",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("hot growth share evidence missing", proc.stderr)
+
     def test_accepts_max_cold_archive_bytes_per_block_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

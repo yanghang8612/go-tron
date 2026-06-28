@@ -388,6 +388,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --min-sync-rate 1.0 \
   --max-datadir-bytes-per-block 500000 \
   --max-hot-bytes-per-block 120000 \
+  --max-hot-growth-share 0.40 \
   --max-cold-archive-bytes-per-block 250000 \
   --max-derived-index-bytes-per-block 40000
 ```
@@ -429,6 +430,14 @@ samples prefer interval efficiency while first samples can still use cumulative
 evidence. Tune the byte threshold to the selected mode and expected transaction
 mix; lower values are appropriate for `minimal`/`snap` runs after cold coverage
 is active.
+Use `--max-hot-growth-share` to require a real interval sample where hot Pebble
+growth is no more than the configured fraction of positive disk growth. It
+requires `soakEfficiencyWindow=interval`,
+`intervalPositiveDiskGrowthBytes > 0`, and then checks
+`intervalChaindataGrowthShare`. This is the hot/cold separation gate: the total
+and per-bucket byte gates cap size, while this gate proves catch-up growth is
+not still dominated by the hot store. Run it after at least two JSONL samples so
+the interval evidence is meaningful.
 Use `--max-cold-archive-bytes-per-block` to keep archive/snapshot sidecar
 growth bounded while proving historical data remains available. It checks
 `soakEfficiencyColdArchiveBytesPerBlock`, then
