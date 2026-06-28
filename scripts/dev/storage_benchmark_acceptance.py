@@ -811,6 +811,73 @@ def as_non_negative_int(row, field):
     return None
 
 
+RETIRED_PRUNE_FIELDS = (
+    "retiredPruneSegments",
+    "retiredPruneDeleted",
+    "retiredPruneMissing",
+    "retiredPruneSkippedActive",
+    "retiredPruneBytesDeleted",
+)
+
+SNAPSHOT_RETIRED_ZERO_FIELDS = (
+    "snapshotRetiredSegments",
+    "snapshotRetiredFiles",
+    "snapshotRetiredMissing",
+    "snapshotRetiredSkippedActive",
+    "snapshotRetiredBytes",
+)
+
+
+def retired_prune_evidence_row(row):
+    return any(field in row for field in RETIRED_PRUNE_FIELDS + SNAPSHOT_RETIRED_ZERO_FIELDS)
+
+
+def check_retired_prune_row(row):
+    issues = []
+    for field in RETIRED_PRUNE_FIELDS:
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{line_label(row)} {field}={row.get(field)!r}, want non-negative integer")
+
+    for field in ("retiredPruneMissing", "retiredPruneSkippedActive"):
+        value = as_non_negative_int(row, field)
+        if value is not None and value != 0:
+            issues.append(f"{line_label(row)} {field}={value}, want 0")
+
+    for field in SNAPSHOT_RETIRED_ZERO_FIELDS:
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{line_label(row)} {field}={row.get(field)!r}, want non-negative integer")
+        elif value != 0:
+            issues.append(f"{line_label(row)} {field}={value}, want 0 after prune-retired")
+    return issues
+
+
+def check_retired_prune_evidence(rows, required_modes=()):
+    issues = []
+    rows_to_check = []
+    if required_modes:
+        for mode in required_modes:
+            row = latest_for(rows, mode=mode)
+            if row is None:
+                issues.append(f"required retired-prune evidence has no selected latest row for mode {mode!r}")
+                continue
+            if not retired_prune_evidence_row(row):
+                issues.append(f"{line_label(row)} missing retired-prune evidence for required mode {mode!r}")
+                continue
+            rows_to_check.append(row)
+    else:
+        rows_to_check = [
+            row for row in latest_rows(rows).values() if retired_prune_evidence_row(row)
+        ]
+        if not rows_to_check:
+            return ["required retired-prune evidence has no selected latest row"]
+
+    for row in rows_to_check:
+        issues.extend(check_retired_prune_row(row))
+    return issues
+
+
 def event_log_index_evidence_row(row):
     derived_to = as_number(row, "derivedIndexToBlock")
     segments = as_number(row, "eventLogIndexSegments")
@@ -993,6 +1060,23 @@ def build_parser():
         help="comma-separated modes whose latest selected rows must include event-log-index fanout/selectivity counters",
     )
     parser.add_argument(
+        "--require-retired-prune-evidence",
+        action="store_true",
+        help="require latest rows to include clean retired snapshot prune evidence",
+    )
+    parser.add_argument(
+        "--require-retired-prune-mode",
+        action="append",
+        default=[],
+        help="mode whose latest selected row must include clean retired snapshot prune evidence; repeatable",
+    )
+    parser.add_argument(
+        "--require-retired-prune-modes",
+        action="append",
+        default=[],
+        help="comma-separated modes whose latest selected rows must include clean retired snapshot prune evidence",
+    )
+    parser.add_argument(
         "--archive-api-method",
         action="append",
         default=[],
@@ -1071,6 +1155,11 @@ def main(argv=None):
     )
     if args.require_event_log_index_evidence or required_event_log_index_modes:
         issues.extend(check_event_log_index_evidence(rows, required_event_log_index_modes))
+    required_retired_prune_modes = split_modes(
+        args.require_retired_prune_mode + args.require_retired_prune_modes
+    )
+    if args.require_retired_prune_evidence or required_retired_prune_modes:
+        issues.extend(check_retired_prune_evidence(rows, required_retired_prune_modes))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
     issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
@@ -1104,6 +1193,9 @@ def main(argv=None):
     if args.require_event_log_index_evidence:
         checks += 1
     checks += len(required_event_log_index_modes)
+    if args.require_retired_prune_evidence:
+        checks += 1
+    checks += len(required_retired_prune_modes)
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"

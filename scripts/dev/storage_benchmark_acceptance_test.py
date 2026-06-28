@@ -615,6 +615,144 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("must use MODE:BASE_MODE:FIELD=RATIO", proc.stderr)
 
+    def test_accepts_retired_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "retiredPruneSegments": 1,
+                    "retiredPruneDeleted": 2,
+                    "retiredPruneMissing": 0,
+                    "retiredPruneSkippedActive": 0,
+                    "retiredPruneBytesDeleted": 4096,
+                    "snapshotRetiredSegments": 0,
+                    "snapshotRetiredFiles": 0,
+                    "snapshotRetiredMissing": 0,
+                    "snapshotRetiredSkippedActive": 0,
+                    "snapshotRetiredBytes": 0,
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-evidence",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_invalid_retired_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "retiredPruneSegments": 1,
+                    "retiredPruneDeleted": 0,
+                    "retiredPruneMissing": 1,
+                    "retiredPruneSkippedActive": 1,
+                    "retiredPruneBytesDeleted": 0,
+                    "snapshotRetiredSegments": 1,
+                    "snapshotRetiredFiles": 2,
+                    "snapshotRetiredMissing": 1,
+                    "snapshotRetiredSkippedActive": 1,
+                    "snapshotRetiredBytes": 1024,
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-evidence",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("retiredPruneMissing=1, want 0", proc.stderr)
+            self.assertIn("retiredPruneSkippedActive=1, want 0", proc.stderr)
+            self.assertIn("snapshotRetiredBytes=1024, want 0 after prune-retired", proc.stderr)
+
+    def test_rejects_retired_prune_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing retired-prune evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
     def test_accepts_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

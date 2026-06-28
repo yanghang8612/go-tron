@@ -316,6 +316,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-api-mode minimal \
   --require-event-log-index-evidence \
   --require-event-log-index-mode minimal \
+  --require-retired-prune-mode minimal \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
   --min minimal.producer.tailPrunedThroughBlock=100000
@@ -346,6 +347,11 @@ freezer-tail file deletion outside `minimal`, and positive `tailPrunedFiles`
 in `minimal` must be paired with a valid `tailPrunedThroughBlock`. With
 `--require-minimal-physical-tail-prune`, it also requires the latest minimal
 row to prove physical freezer-tail file deletion through `tailPrunedFiles`.
+Use `--require-retired-prune-mode minimal` to require the latest minimal row to
+prove `snapshot prune-retired` ran cleanly: retired-prune missing/skipped-active
+counts must be zero and the post-check `snapshotRetired*` bytes/files counters
+must be zero, so immutable snapshot rotation does not leave reclaimable files
+behind.
 With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
