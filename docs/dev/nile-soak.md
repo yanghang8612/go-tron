@@ -387,7 +387,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max-lag-blocks 5000 \
   --min-sync-rate 1.0 \
   --max-hot-bytes-per-block 120000 \
-  --max-cold-archive-bytes-per-block 250000
+  --max-cold-archive-bytes-per-block 250000 \
+  --max-derived-index-bytes-per-block 40000
 ```
 
 By default the checker validates the latest selected row, requires a captured
@@ -428,6 +429,14 @@ archive/full samples prefer interval efficiency while first samples can still
 use cumulative evidence. Tune this threshold per history mode and retained
 archive window; archive mode can be higher than minimal/snap because it keeps
 more historical sidecar data.
+Use `--max-derived-index-bytes-per-block` to keep Erigon-style lookup/index
+sidecars from growing faster than the sync/storage budget allows. It checks
+`soakEfficiencyDerivedIndexBytesPerBlock`, then
+`intervalDerivedIndexBytesPerBlock`, then `derivedIndexBytesPerBlock`, so long
+soaks prefer interval efficiency while early samples can still pass with
+cumulative evidence. Tune this separately from cold archive growth because
+event-log, chain-lookup, bloom, and balance-trace indexes trade disk for query
+and catch-up speed.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production

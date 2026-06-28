@@ -76,6 +76,12 @@ COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS = (
     "coldArchiveBytesPerBlock",
 )
 
+DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS = (
+    "soakEfficiencyDerivedIndexBytesPerBlock",
+    "intervalDerivedIndexBytesPerBlock",
+    "derivedIndexBytesPerBlock",
+)
+
 
 def load_rows(path):
     rows = []
@@ -267,6 +273,31 @@ def check_max_cold_archive_bytes_per_block(row, maximum):
     if value > maximum:
         return [
             f"{field}={value:g} failed <= max cold archive bytes per block {maximum:g}"
+        ]
+    return []
+
+
+def derived_index_bytes_per_block_evidence(row):
+    for field in DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_max_derived_index_bytes_per_block(row, maximum):
+    if maximum is None:
+        return []
+    field, value = derived_index_bytes_per_block_evidence(row)
+    if field is None:
+        return [
+            "derived index bytes-per-block evidence missing: none of "
+            + ",".join(DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value > maximum:
+        return [
+            f"{field}={value:g} failed <= max derived index bytes per block {maximum:g}"
         ]
     return []
 
@@ -1038,6 +1069,9 @@ def check_row(row, args):
     issues.extend(
         check_max_cold_archive_bytes_per_block(row, args.max_cold_archive_bytes_per_block)
     )
+    issues.extend(
+        check_max_derived_index_bytes_per_block(row, args.max_derived_index_bytes_per_block)
+    )
     issues.extend(check_thresholds(row, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(row, args.maximums, "<=", lambda got, want: got <= want))
     return issues
@@ -1139,6 +1173,15 @@ def build_parser():
         help=(
             "require selected rows to prove cold archive/snapshot growth is no "
             "greater than this many bytes per imported block"
+        ),
+    )
+    parser.add_argument(
+        "--max-derived-index-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help=(
+            "require selected rows to prove derived index growth is no greater "
+            "than this many bytes per imported block"
         ),
     )
     parser.add_argument(
