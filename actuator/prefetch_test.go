@@ -251,6 +251,7 @@ func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 	assertPrefetchHas(t, marketKeys, state.MarketPairPriceCountPrefetchKey(sellToken, []byte("_")))
 	assertPrefetchHas(t, marketKeys, state.MarketOrderBookPrefetchKey(sellToken, []byte("_"), rawdb.PriceKey(1, 1)))
 	assertPrefetchHas(t, marketKeys, state.MarketPriceListPrefetchKey([]byte("_"), sellToken))
+	assertPrefetchHas(t, marketKeys, state.MarketMatchOrdersPrefetchKey(sellToken, []byte("_"), 1, 1))
 	assertPrefetchMissing(t, marketKeys, state.AssetIssueByNamePrefetchKey([]byte("_")))
 	assertPrefetchMissing(t, marketKeys, state.AssetNameIndexPrefetchKey([]byte("_")))
 

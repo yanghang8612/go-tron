@@ -281,6 +281,87 @@ func TestStatePrefetcherExchangeTokenAssetsSkipsMalformedExchange(t *testing.T) 
 	}
 }
 
+func TestStatePrefetcherWarmsMarketMatchOrders(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	sellToken := []byte("1000009")
+	buyToken := []byte("_")
+	priceList := &corepb.MarketPriceList{
+		SellTokenId: buyToken,
+		BuyTokenId:  sellToken,
+		Prices: []*corepb.MarketPrice{
+			{SellTokenQuantity: 3, BuyTokenQuantity: 1},
+			{SellTokenQuantity: 1, BuyTokenQuantity: 100},
+		},
+	}
+	priceListBytes, err := proto.Marshal(priceList)
+	if err != nil {
+		t.Fatalf("marshal price list: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemMarket, marketPriceListKVKey(buyToken, sellToken), priceListBytes); err != nil {
+		t.Fatalf("WriteStateKVLatest price list: %v", err)
+	}
+
+	order1ID := []byte("maker-1")
+	order2ID := []byte("maker-2")
+	orderBook := &corepb.MarketOrderIdList{Head: order1ID, Tail: order2ID}
+	orderBookBytes, err := proto.Marshal(orderBook)
+	if err != nil {
+		t.Fatalf("marshal order book: %v", err)
+	}
+	compatiblePK := rawdb.PriceKey(3, 1)
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemMarket, marketOrderBookKVKey(buyToken, sellToken, compatiblePK), orderBookBytes); err != nil {
+		t.Fatalf("WriteStateKVLatest order book: %v", err)
+	}
+
+	order1 := &corepb.MarketOrder{OrderId: order1ID, Next: order2ID}
+	order1Bytes, err := proto.Marshal(order1)
+	if err != nil {
+		t.Fatalf("marshal order1: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemMarket, marketOrderKVKey(order1ID), order1Bytes); err != nil {
+		t.Fatalf("WriteStateKVLatest order1: %v", err)
+	}
+	order2 := &corepb.MarketOrder{OrderId: order2ID}
+	order2Bytes, err := proto.Marshal(order2)
+	if err != nil {
+		t.Fatalf("marshal order2: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemMarket, marketOrderKVKey(order2ID), order2Bytes); err != nil {
+		t.Fatalf("WriteStateKVLatest order2: %v", err)
+	}
+
+	recorder := &recordingKeyValueReader{KeyValueReader: db}
+	hit, err := prefetchLatest(recorder, MarketMatchOrdersPrefetchKey(sellToken, buyToken, 10, 5))
+	if err != nil {
+		t.Fatalf("prefetch market match orders: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch market match orders hit = false, want true")
+	}
+	for _, value := range [][]byte{priceListBytes, orderBookBytes, order1Bytes, order2Bytes} {
+		if !recorder.gotValue(rawdb.EncodeStateKVLatestValue(value)) {
+			t.Fatalf("prefetch did not read market value %x; got values %#v", value, recorder.getValues)
+		}
+	}
+}
+
+func TestStatePrefetcherMarketMatchOrdersSkipsMalformedPriceList(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	sellToken := []byte("1000010")
+	buyToken := []byte("_")
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemMarket, marketPriceListKVKey(buyToken, sellToken), []byte{0xff}); err != nil {
+		t.Fatalf("WriteStateKVLatest malformed price list: %v", err)
+	}
+
+	hit, err := prefetchLatest(db, MarketMatchOrdersPrefetchKey(sellToken, buyToken, 10, 5))
+	if err != nil {
+		t.Fatalf("prefetch malformed market match orders: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch malformed market match orders hit = false, want true")
+	}
+}
+
 func TestStatePrefetcherContractOriginAccountMissesWithoutChangingSemantics(t *testing.T) {
 	tests := []struct {
 		name  string

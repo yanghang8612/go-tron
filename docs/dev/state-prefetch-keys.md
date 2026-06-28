@@ -26,6 +26,7 @@ hints and never change actuator validation behaviour.
 | `state.AccountKVPrefetchKey(SystemAccount, SystemMarket, key)` | market order/account/price-list/price-count/order-book rows derivable from the envelope |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemExchange, key)` | V1/V2 exchange rows keyed by exchange id |
 | `state.ExchangeTokenAssetsPrefetchKey(id)` | V1/V2 exchange rows keyed by exchange id, then TRC10 asset rows for both exchange token legs |
+| `state.MarketMatchOrdersPrefetchKey(sellToken, buyToken, sellQty, buyQty)` | reverse pair price-list row, compatible price-level order-book rows, then maker market-order rows behind `Head`/`Next` up to bounded market match caps |
 
 The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 `StateDB` object caches from worker goroutines.
@@ -45,7 +46,7 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
 | Shielded transfer | transparent from/to accounts when present and valid |
 | Asset issue | owner account, owner-index row, legacy name metadata, name index |
-| Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, and reverse pair price-list; `_` TRX token legs are skipped for TRC10 metadata |
+| Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, reverse pair price-list, compatible reverse price-level order-book rows, and maker order rows reachable from those levels; `_` TRX token legs are skipped for TRC10 metadata |
 | Exchange token operations | owner account, TRC10 token metadata/name-index hints derivable from the envelope, both V1/V2 exchange rows when an exchange id is present, and metadata-derived TRC10 asset rows for both exchange token legs |
 | Owner-only actuators | owner account for witness, account, proposal, brokerage, freeze-v2, unfreeze-v2, withdraw, update-asset, and unfreeze-asset contracts |
 | Account create and participate asset issue | owner account plus the explicitly referenced counterparty account; participate also warms TRC10 metadata/name-index rows |
@@ -57,8 +58,10 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
   asset-balance KV hint to enqueue yet.
 - Reward-cycle witness VI and cycle-brokerage rows. Those require maintenance
   cycle context and are not directly encoded in transaction envelopes.
-- Second-stage market rows that require first reading an order or price list,
-  such as maker order ids behind a matched price level.
+- Deep market linked-list rows beyond the current match prefetch caps. The
+  executor itself caps successful matching at 20 maker orders; the prefetch
+  hint mirrors that order cap and also caps compatible price-level probes to
+  keep background warmups bounded.
 - Additional TVM runtime CALL/DELEGATECALL target code rows and storage slots.
   Those become known only during VM execution and need a VM hook, not
   tx-envelope extraction.

@@ -3,7 +3,9 @@ package state
 import (
 	"encoding/binary"
 	"fmt"
+	"math/big"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -33,6 +35,12 @@ const (
 	PrefetchContractCode
 	PrefetchContractOriginAccount
 	PrefetchExchangeTokenAssets
+	PrefetchMarketMatchOrders
+)
+
+const (
+	marketMatchPriceLevelPrefetchLimit = 20
+	marketMatchOrderPrefetchLimit      = 20
 )
 
 // PrefetchKey describes one read-only latest-domain warmup. It intentionally
@@ -127,6 +135,26 @@ func ExchangeTokenAssetsPrefetchKey(exchangeID int64) PrefetchKey {
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, uint64(exchangeID))
 	return PrefetchKey{Kind: PrefetchExchangeTokenAssets, Owner: tcommon.SystemAccountAddress, Key: key}
+}
+
+func MarketMatchOrdersPrefetchKey(sellTokenID, buyTokenID []byte, sellQty, buyQty int64) PrefetchKey {
+	if len(sellTokenID) == 0 || len(buyTokenID) == 0 || sellQty <= 0 || buyQty <= 0 {
+		return PrefetchKey{}
+	}
+	key := make([]byte, 0, 24+len(sellTokenID)+len(buyTokenID))
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(sellQty))
+	key = append(key, buf[:]...)
+	binary.BigEndian.PutUint64(buf[:], uint64(buyQty))
+	key = append(key, buf[:]...)
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(sellTokenID)))
+	key = append(key, lenBuf[:]...)
+	key = append(key, sellTokenID...)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(buyTokenID)))
+	key = append(key, lenBuf[:]...)
+	key = append(key, buyTokenID...)
+	return PrefetchKey{Kind: PrefetchMarketMatchOrders, Owner: tcommon.SystemAccountAddress, Key: key}
 }
 
 type StatePrefetcherConfig struct {
@@ -319,6 +347,8 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		return prefetchContractOriginAccount(db, key)
 	case PrefetchExchangeTokenAssets:
 		return prefetchExchangeTokenAssets(db, key)
+	case PrefetchMarketMatchOrders:
+		return prefetchMarketMatchOrders(db, key)
 	default:
 		return false, fmt.Errorf("state prefetch: unknown kind %d", key.Kind)
 	}
@@ -441,6 +471,142 @@ func prefetchTRC10AssetRows(db ethdb.KeyValueReader, generation uint64, token []
 		}
 	}
 	return nil
+}
+
+func prefetchMarketMatchOrders(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
+	sellToken, buyToken, sellQty, buyQty, ok := decodeMarketMatchOrdersPrefetchKey(key.Key)
+	if !ok {
+		return false, nil
+	}
+	generation, ok, err := prefetchGeneration(db, PrefetchKey{Owner: tcommon.SystemAccountAddress})
+	if err != nil || !ok {
+		return false, err
+	}
+
+	priceListData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketPriceListKVKey(buyToken, sellToken))
+	if err != nil || !ok || len(priceListData) == 0 {
+		return false, err
+	}
+	hit := true
+	var priceList corepb.MarketPriceList
+	if err := proto.Unmarshal(priceListData, &priceList); err != nil {
+		return hit, nil
+	}
+
+	compatible := marketCompatiblePrices(priceList.GetPrices(), sellQty, buyQty)
+	if len(compatible) == 0 {
+		return hit, nil
+	}
+	seenOrders := make(map[string]struct{})
+	prefetchedOrders := 0
+	for priceIndex, price := range compatible {
+		if prefetchedOrders >= marketMatchOrderPrefetchLimit {
+			break
+		}
+		if priceIndex >= marketMatchPriceLevelPrefetchLimit {
+			break
+		}
+		pk := rawdb.PriceKey(price.GetSellTokenQuantity(), price.GetBuyTokenQuantity())
+		orderBookData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderBookKVKey(buyToken, sellToken, pk))
+		if err != nil {
+			return hit, err
+		}
+		if !ok || len(orderBookData) == 0 {
+			continue
+		}
+		var orderBook corepb.MarketOrderIdList
+		if err := proto.Unmarshal(orderBookData, &orderBook); err != nil {
+			continue
+		}
+		orderID := append([]byte(nil), orderBook.GetHead()...)
+		for len(orderID) > 0 && prefetchedOrders < marketMatchOrderPrefetchLimit {
+			orderKey := string(orderID)
+			if _, ok := seenOrders[orderKey]; ok {
+				break
+			}
+			seenOrders[orderKey] = struct{}{}
+			orderData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderKVKey(orderID))
+			if err != nil {
+				return hit, err
+			}
+			if !ok || len(orderData) == 0 {
+				break
+			}
+			prefetchedOrders++
+			var order corepb.MarketOrder
+			if err := proto.Unmarshal(orderData, &order); err != nil {
+				break
+			}
+			orderID = append([]byte(nil), order.GetNext()...)
+		}
+	}
+	return hit, nil
+}
+
+func decodeMarketMatchOrdersPrefetchKey(key []byte) (sellTokenID, buyTokenID []byte, sellQty, buyQty int64, ok bool) {
+	if len(key) < 24 {
+		return nil, nil, 0, 0, false
+	}
+	sellQty = int64(binary.BigEndian.Uint64(key[:8]))
+	buyQty = int64(binary.BigEndian.Uint64(key[8:16]))
+	if sellQty <= 0 || buyQty <= 0 {
+		return nil, nil, 0, 0, false
+	}
+	pos := 16
+	sellLen := int(binary.BigEndian.Uint32(key[pos : pos+4]))
+	pos += 4
+	if sellLen == 0 || len(key) < pos+sellLen+4 {
+		return nil, nil, 0, 0, false
+	}
+	sellTokenID = key[pos : pos+sellLen]
+	pos += sellLen
+	buyLen := int(binary.BigEndian.Uint32(key[pos : pos+4]))
+	pos += 4
+	if buyLen == 0 || len(key) != pos+buyLen {
+		return nil, nil, 0, 0, false
+	}
+	buyTokenID = key[pos : pos+buyLen]
+	return sellTokenID, buyTokenID, sellQty, buyQty, true
+}
+
+func marketCompatiblePrices(prices []*corepb.MarketPrice, sellQty, buyQty int64) []*corepb.MarketPrice {
+	if sellQty <= 0 || buyQty <= 0 || len(prices) == 0 {
+		return nil
+	}
+	inSell := big.NewInt(sellQty)
+	inBuy := big.NewInt(buyQty)
+	type compatiblePrice struct {
+		price    *corepb.MarketPrice
+		ratioNum *big.Int
+		ratioDen *big.Int
+	}
+	compatible := make([]compatiblePrice, 0, len(prices))
+	for _, price := range prices {
+		if price == nil || price.GetSellTokenQuantity() <= 0 || price.GetBuyTokenQuantity() <= 0 {
+			continue
+		}
+		oppSell := big.NewInt(price.GetSellTokenQuantity())
+		oppBuy := big.NewInt(price.GetBuyTokenQuantity())
+		lhs := new(big.Int).Mul(oppSell, inSell)
+		rhs := new(big.Int).Mul(inBuy, oppBuy)
+		if lhs.Cmp(rhs) >= 0 {
+			compatible = append(compatible, compatiblePrice{
+				price:    price,
+				ratioNum: oppSell,
+				ratioDen: oppBuy,
+			})
+		}
+	}
+	sort.Slice(compatible, func(i, j int) bool {
+		lhs := new(big.Int).Mul(compatible[i].ratioNum, compatible[j].ratioDen)
+		rhs := new(big.Int).Mul(compatible[j].ratioNum, compatible[i].ratioDen)
+		return lhs.Cmp(rhs) > 0
+	})
+	out := make([]*corepb.MarketPrice, 0, len(compatible))
+	for _, price := range compatible {
+		out = append(out, price.price)
+	}
+	return out
 }
 
 func prefetchTRONAddress(raw []byte) (tcommon.Address, bool) {

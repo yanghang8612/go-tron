@@ -278,6 +278,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.addTRC10AssetKeys(m.GetBuyTokenId())
 		b.addMarketPairKeys(m.GetSellTokenId(), m.GetBuyTokenId(), m.GetSellTokenQuantity(), m.GetBuyTokenQuantity())
 		b.add(state.MarketPriceListPrefetchKey(m.GetBuyTokenId(), m.GetSellTokenId()))
+		b.add(state.MarketMatchOrdersPrefetchKey(m.GetSellTokenId(), m.GetBuyTokenId(), m.GetSellTokenQuantity(), m.GetBuyTokenQuantity()))
 	case corepb.Transaction_Contract_MarketCancelOrderContract:
 		var m contractpb.MarketCancelOrderContract
 		if !prefetchDecode(c, &m) {
