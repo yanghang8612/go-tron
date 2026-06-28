@@ -313,6 +313,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-prometheus-artifacts \
   --require-prune-mode-semantics \
   --require-archive-api-evidence \
+  --require-archive-api-mode minimal \
   --require-event-log-index-evidence \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
@@ -349,7 +350,11 @@ prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
 method set (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
-`eth_getStorageAt`, and `eth_getLogs`). Add
+`eth_getStorageAt`, and `eth_getLogs`). Add `--require-archive-api-mode
+minimal` so the latest pruned minimal row must prove its own archive reads
+instead of letting an unpruned `archive` row satisfy the run. Repeat
+`--require-archive-api-mode` or use `--require-archive-api-modes` when a run
+must prove mode-local archive reads for more modes. Add
 `--archive-api-method eth_getTransactionByHash` and
 `--archive-api-method eth_getTransactionReceipt` when the selected probe block
 is known to contain a transaction; add `--archive-api-method eth_call` when

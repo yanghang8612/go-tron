@@ -702,24 +702,36 @@ def archive_api_method_count(row):
     return len(raw)
 
 
-def check_archive_api_evidence(rows, required_methods):
+ARCHIVE_API_EVIDENCE_FIELDS = (
+    "archiveApiStatus",
+    "archiveApiChecks",
+    "archiveApiMethods",
+    "archiveApiBlock",
+)
+
+
+def has_archive_api_evidence(row):
+    return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
+
+
+def check_archive_api_evidence(rows, required_methods, required_modes=()):
     issues = []
     latest = list(latest_rows(rows).values())
     evidence_rows = [
         row
         for row in latest
-        if any(
-            field in row
-            for field in (
-                "archiveApiStatus",
-                "archiveApiChecks",
-                "archiveApiMethods",
-                "archiveApiBlock",
-            )
-        )
+        if has_archive_api_evidence(row)
     ]
-    if not evidence_rows:
+    if not evidence_rows and not required_modes:
         return ["required archive API evidence has no selected latest row"]
+
+    for mode in required_modes:
+        row = latest_for(rows, mode=mode)
+        if row is None:
+            issues.append(f"required archive API evidence has no selected latest row for mode {mode!r}")
+            continue
+        if not has_archive_api_evidence(row):
+            issues.append(f"{line_label(row)} missing archive API evidence for required mode {mode!r}")
 
     for row in evidence_rows:
         status = str(row.get("archiveApiStatus", "")).lower()
@@ -944,6 +956,18 @@ def build_parser():
         help="require latest rows to include successful historical archive API evidence",
     )
     parser.add_argument(
+        "--require-archive-api-mode",
+        action="append",
+        default=[],
+        help="mode whose latest selected row must include successful archive API evidence; repeatable",
+    )
+    parser.add_argument(
+        "--require-archive-api-modes",
+        action="append",
+        default=[],
+        help="comma-separated modes whose latest selected rows must include successful archive API evidence",
+    )
+    parser.add_argument(
         "--require-event-log-index-evidence",
         action="store_true",
         help="require latest derived-index rows to include event-log-index fanout/selectivity counters",
@@ -1011,8 +1035,17 @@ def main(argv=None):
     for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
         if method not in archive_api_methods_required:
             archive_api_methods_required.append(method)
-    if args.require_archive_api_evidence:
-        issues.extend(check_archive_api_evidence(rows, archive_api_methods_required))
+    required_archive_api_modes = split_modes(
+        args.require_archive_api_mode + args.require_archive_api_modes
+    )
+    if args.require_archive_api_evidence or required_archive_api_modes:
+        issues.extend(
+            check_archive_api_evidence(
+                rows,
+                archive_api_methods_required,
+                required_archive_api_modes,
+            )
+        )
     if args.require_event_log_index_evidence:
         issues.extend(check_event_log_index_evidence(rows))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
@@ -1044,6 +1077,7 @@ def main(argv=None):
         checks += len(latest)
     if args.require_archive_api_evidence:
         checks += 1
+    checks += len(required_archive_api_modes)
     if args.require_event_log_index_evidence:
         checks += 1
     print(

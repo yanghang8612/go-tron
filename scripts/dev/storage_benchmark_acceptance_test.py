@@ -655,6 +655,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--role",
                     "producer",
                     "--require-archive-api-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -722,6 +724,70 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("required archive API evidence has no selected latest row", proc.stderr)
+
+    def test_rejects_archive_api_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                },
+                {
+                    "unix": 20,
+                    "profile": "producer",
+                    "mode": "archive",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing archive API evidence for required mode 'minimal'",
+                proc.stderr,
+            )
 
     def test_rejects_invalid_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
