@@ -66,7 +66,7 @@ not complete.
 | Latest state domains | `state-account-latest-v1`, `state-kv-latest-v2`, `state-kv-generation-v2`, `state-code-v1`, `state-commitment-*`. | Strong. Domain shape is Erigon-style and TRON-adapted. |
 | Domain registry | `core/state/snapshots/domain_registry.go` registers account, account-KV, generation, code, commitment root/checkpoint/branch, and history. | Strong. Lifecycle is config-driven. |
 | Temporal history | `StateDomainChange`, `StateTxRange`, inverse indexes, hot as-of readers. | Strong for consensus state covered by the flat domains. |
-| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`. | Strong functionally, different file names from Erigon. |
+| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`; new history builds and compactions emit block-compressed `.seg`/`.kv` by default. | Strong functionally, different file names from Erigon. Source-audit coverage now pins low-level record readers behind compressed-aware openers. |
 | Latest files | Binary `.seg` plus `.lidx` and `.bt`. | Strong for point lookup and prefix iteration. Not recsplit, intentionally. |
 | Commitment domain | Staged hex-patricia branch rows, checkpoints, cold branch restore, java root adapter. | Strong. Internal root is decoupled from java-tron header root. |
 | Code retention | Content-addressed CodeDomain latest snapshots selected by account-envelope history. | Strong, with a deliberate no-temporal-code policy. |

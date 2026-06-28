@@ -65,7 +65,8 @@ func buildHistoryStructs(blocks, perBlock int) []*rawdb.StateDomainChange {
 // the codec's ReadAt — and asserts byte-identical results vs reading the raw,
 // uncompressed segment. This proves the offset-addressed read path needs no
 // change beyond swapping in the codec-backed io.ReaderAt; the on-disk segment is
-// smaller. (The remaining work is routing each read site through that swap.)
+// smaller. Source-audit coverage keeps production record readers behind the
+// compressed-aware openers that provide that codec-backed ReaderAt.
 func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 	changes := buildHistoryStructs(300, 50)
 	fromTx, toTx := uint64(9_000_000), uint64(9_000_000+300-1)
