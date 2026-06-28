@@ -724,6 +724,10 @@ Status:
   `pipeline.issues` for Nile soak sampling. This makes storage-maintenance
   backlog observable before the runtime loop is fully promoted into a stage
   scheduler.
+- The sync-import phase cursor now exposes the runnable suffix of its current
+  bodies/execution/commitment/finish phase. This gives a future staged scheduler
+  a typed current-phase plan to resume from instead of scraping log fields or
+  re-deriving the batch graph from raw diagnostic counters.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

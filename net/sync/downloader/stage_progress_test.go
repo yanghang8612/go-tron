@@ -1248,6 +1248,21 @@ func TestPlanImportStagePhaseCursor(t *testing.T) {
 		cursor.BlockedStatus != ImportStageProgressMismatch {
 		t.Fatalf("cursor = %+v, want current execution phase at block2", cursor)
 	}
+	remaining, ok := cursor.RemainingCurrentPhasePlan()
+	if !ok ||
+		remaining.Phase != ImportStagePhaseExecution ||
+		remaining.CanonicalStage != rawdb.StageExecution ||
+		remaining.SyncStage != rawdb.StageSyncExecution ||
+		len(remaining.Tasks) != 1 ||
+		remaining.Tasks[0] != ImportExecutionStageTask(2, hash2) ||
+		cursor.CurrentTaskRemaining() != 1 {
+		t.Fatalf("remaining phase = %+v ok=%v remaining=%d, want execution block2 suffix",
+			remaining, ok, cursor.CurrentTaskRemaining())
+	}
+	remaining.Tasks[0].BlockNum = 100
+	if cursor.CurrentTasks[1].BlockNum == 100 {
+		t.Fatal("remaining current phase plan aliases cursor tasks")
+	}
 	cursor.CurrentTasks[1].BlockNum = 99
 	if schedule.Execution.Tasks[1].BlockNum == 99 {
 		t.Fatal("phase cursor returned aliased current task slice")
@@ -1265,6 +1280,10 @@ func TestPlanImportStagePhaseCursor(t *testing.T) {
 		complete.HasNextTask ||
 		complete.HasBlocked {
 		t.Fatalf("complete cursor = %+v, want complete without current phase", complete)
+	}
+	if remaining, ok := complete.RemainingCurrentPhasePlan(); ok || complete.CurrentTaskRemaining() != 0 {
+		t.Fatalf("complete remaining phase = %+v ok=%v remaining=%d, want none",
+			remaining, ok, complete.CurrentTaskRemaining())
 	}
 }
 

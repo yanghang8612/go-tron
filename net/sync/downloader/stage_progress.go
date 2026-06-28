@@ -600,6 +600,32 @@ func PlanImportStagePhaseCursor(schedule ImportBatchStagePhaseSchedule, stagePla
 	return cursor
 }
 
+// CurrentTaskRemaining returns the number of tasks left in the cursor's
+// current phase. It is zero for complete cursors and for malformed cursors
+// whose current task index does not point inside the current phase.
+func (c ImportStagePhaseCursor) CurrentTaskRemaining() int {
+	if !c.HasCurrent || c.CurrentTaskIndex < 0 || c.CurrentTaskIndex >= len(c.CurrentTasks) {
+		return 0
+	}
+	return len(c.CurrentTasks) - c.CurrentTaskIndex
+}
+
+// RemainingCurrentPhasePlan returns the runnable suffix of the current phase.
+// This is the scheduler-facing form of the restart cursor: a future staged
+// import loop can resume at the first incomplete execution/commitment/finish
+// task without re-deriving the batch phase graph from log diagnostics.
+func (c ImportStagePhaseCursor) RemainingCurrentPhasePlan() (ImportStagePhasePlan, bool) {
+	if c.CurrentTaskRemaining() == 0 {
+		return ImportStagePhasePlan{}, false
+	}
+	return ImportStagePhasePlan{
+		Phase:          c.CurrentPhase,
+		CanonicalStage: c.CurrentCanonicalStage,
+		SyncStage:      c.CurrentSyncStage,
+		Tasks:          append([]ImportStageTask(nil), c.CurrentTasks[c.CurrentTaskIndex:]...),
+	}, true
+}
+
 // PhasePlans returns a defensive copy of the batch-level stage phase plan.
 func (p ImportBatchStagePlan) PhasePlans() []ImportStagePhasePlan {
 	if len(p.Phases) == 0 {
