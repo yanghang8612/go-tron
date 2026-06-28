@@ -1109,9 +1109,12 @@ Status:
   limited by source audit to the `blockbuffer` compatibility method and the
   actuator legacy genesis-hash fallback. A rawdb
   source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
-  separately pins the raw freezer copy helpers to the explicit
-  `cmd/gtron/freezer_adapter.go` boundary. Actuator historical compatibility
-  gates now resolve chain identity through `Context.EffectiveGenesisHash`, and
+  separately pins the raw freezer copy helpers, including the strict raw block
+  and transaction-info readers, to explicit audited boundaries: live freezer
+  append through `cmd/gtron/freezer_adapter.go`, plus the blockbuffer's strict
+  buffered-block hash fallback before it consults its cold reader. Actuator
+  historical compatibility gates now resolve chain identity through
+  `Context.EffectiveGenesisHash`, and
   the same audit suite prevents actuator code from reintroducing scattered
   direct `rawdb.ReadBlockHashByNumber(ctx.DB, ...)` calls that would depend on
   hot genesis block rows after freezer/prune. The audit suite also pins all

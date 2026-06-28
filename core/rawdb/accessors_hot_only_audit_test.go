@@ -45,16 +45,23 @@ func query(db any) {
 func TestNoUnexpectedProductionRawFreezerReadReferences(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
-		"ReadBlockRaw":                {},
-		"ReadTransactionInfosRaw":     {},
-		"ReadBlockStateRootRaw":       {},
-		"ReadBlockStateRootRawStrict": {},
+		"ReadBlockRaw":                  {},
+		"ReadBlockRawStrict":            {},
+		"ReadTransactionInfosRaw":       {},
+		"ReadTransactionInfosRawStrict": {},
+		"ReadBlockStateRootRaw":         {},
+		"ReadBlockStateRootRawStrict":   {},
 	}, map[string]map[string]struct{}{
 		"cmd/gtron/freezer_adapter.go": {
-			"ReadBlockRaw":                {},
-			"ReadTransactionInfosRaw":     {},
-			"ReadBlockStateRootRaw":       {},
-			"ReadBlockStateRootRawStrict": {},
+			"ReadBlockRaw":                  {},
+			"ReadBlockRawStrict":            {},
+			"ReadTransactionInfosRaw":       {},
+			"ReadTransactionInfosRawStrict": {},
+			"ReadBlockStateRootRaw":         {},
+			"ReadBlockStateRootRawStrict":   {},
+		},
+		"core/blockbuffer/buffer.go": {
+			"ReadBlockRawStrict": {},
 		},
 	})
 	if len(offenders) > 0 {
@@ -79,6 +86,34 @@ func query(db any) {
 	}, nil)
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadBlockRaw") {
 		t.Fatalf("offenders = %+v, want raw freezer reader function value rejected", offenders)
+	}
+}
+
+func TestRawFreezerReadAuditRejectsStrictReaderReferences(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readRawInfosStrict = rawdb.ReadTransactionInfosRawStrict
+
+func query(db any) {
+	_, _, _ = rawdb.ReadBlockRawStrict(db, 7)
+	_, _, _ = readRawInfosStrict(db, 7)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
+		"ReadBlockRawStrict":            {},
+		"ReadTransactionInfosRawStrict": {},
+	}, nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want strict raw freezer reader references rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.ReadBlockRawStrict", "rawdb.ReadTransactionInfosRawStrict"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
 	}
 }
 
