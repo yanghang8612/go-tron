@@ -697,8 +697,11 @@ Status:
   The sampler also parses captured `gtron db stage-status --json` files for the
   live-stage fields and staged-body issue details, with a legacy text fallback
   for older diagnostics. It can also run a live JSON-RPC archive-read probe and
-  emit `archiveApi*` evidence for `eth_getBalance`, `eth_getCode`,
-  `eth_getStorageAt`, `eth_getLogs`, and optional contract `eth_call` samples.
+  emit `archiveApi*` evidence for `eth_getBlockByNumber`, `eth_getBalance`,
+  `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and optional contract
+  `eth_call` samples. When the selected historical block contains a
+  transaction, the same probe now adds `eth_getTransactionByHash` and
+  `eth_getTransactionReceipt` evidence.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating

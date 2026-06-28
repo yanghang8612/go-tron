@@ -24,6 +24,14 @@ class StorageBenchmarkTest(unittest.TestCase):
                     """\
                     #!/usr/bin/env bash
                     url="${@: -1}"
+                    payload=""
+                    prev=""
+                    for arg in "$@"; do
+                      if [ "$prev" = "--data-binary" ]; then
+                        payload="$arg"
+                      fi
+                      prev="$arg"
+                    done
                     case "$url" in
                       */wallet/getnowblock)
                         printf '%s\\n' '{"blockID":"0000000200000000000000000000000000000000000000000000000000000000","block_header":{"raw_data":{"number":2}}}'
@@ -32,7 +40,20 @@ class StorageBenchmarkTest(unittest.TestCase):
                         printf '%s\\n' '{"currentBlock":2}'
                         ;;
                       http://127.0.0.1:*)
-                        printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":"0x0"}'
+                        case "$payload" in
+                          *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getLogs*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
+                            ;;
+                          *eth_getTransactionByHash*|*eth_getTransactionReceipt*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"hash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1"}}'
+                            ;;
+                          *)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":"0x0"}'
+                            ;;
+                        esac
                         ;;
                       *)
                         printf '%s\\n' '{}'
@@ -108,12 +129,20 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 4)
+            self.assertEqual(row["archiveApiChecks"], 7)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(
                 row["archiveApiMethods"],
-                ["eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_getLogs"],
+                [
+                    "eth_getBlockByNumber",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                ],
             )
 
     def test_emits_storage_alert_failure_row_with_details(self):

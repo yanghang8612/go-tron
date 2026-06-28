@@ -499,10 +499,11 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "height": 200,
                     "tailPrunedThroughBlock": 90,
                     "archiveApiStatus": "ok",
-                    "archiveApiChecks": 4,
+                    "archiveApiChecks": 5,
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiMethods": [
+                        "eth_getBlockByNumber",
                         "eth_getBalance",
                         "eth_getCode",
                         "eth_getStorageAt",

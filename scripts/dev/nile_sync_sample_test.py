@@ -57,7 +57,12 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         except Exception:
             request = {}
         method = request.get("method")
-        if method == "eth_getLogs":
+        tx_hash = "0x" + "12" * 32
+        if method == "eth_getBlockByNumber":
+            result = {"number": request.get("params", ["0x0"])[0], "transactions": [tx_hash]}
+        elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+            result = {"hash": tx_hash, "blockNumber": "0x63"}
+        elif method == "eth_getLogs":
             result = []
         else:
             result = "0x0"
@@ -112,12 +117,20 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiEndpoint"], endpoint)
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 4)
+            self.assertEqual(row["archiveApiChecks"], 7)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 99)
             self.assertEqual(
                 row["archiveApiMethods"],
-                ["eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_getLogs"],
+                [
+                    "eth_getBlockByNumber",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                ],
             )
 
     def test_sample_includes_sync_health_and_disk_ratios(self):

@@ -336,20 +336,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     row["archiveApiBlock"] = probe_block
     block_tag = hex(probe_block)
 
-    calls = [
-        ("eth_getBalance", [address, block_tag]),
-        ("eth_getCode", [address, block_tag]),
-        ("eth_getStorageAt", [address, slot, block_tag]),
-        ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
-    ]
-    if call_data:
-        calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
-
-    failures = 0
-    methods = []
-    for idx, (method, params) in enumerate(calls, 1):
+    def rpc_call(request_id, method, params):
         payload = json.dumps(
-            {"jsonrpc": "2.0", "id": idx, "method": method, "params": params},
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
             separators=(",", ":"),
         )
         try:
@@ -370,20 +359,63 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 check=False,
             )
         except OSError:
-            failures += 1
-            continue
+            return None, False
         if result.returncode != 0:
-            failures += 1
-            continue
+            return None, False
         try:
             response = json.loads(result.stdout)
         except Exception:
-            failures += 1
-            continue
+            return None, False
         if response.get("error") is not None or "result" not in response:
+            return None, False
+        return response.get("result"), True
+
+    def first_tx_hash(block_result):
+        if not isinstance(block_result, dict):
+            return ""
+        txs = block_result.get("transactions")
+        if not isinstance(txs, list) or not txs:
+            return ""
+        tx = txs[0]
+        if isinstance(tx, str):
+            tx_hash = tx
+        elif isinstance(tx, dict):
+            tx_hash = tx.get("hash") or tx.get("transactionHash") or ""
+        else:
+            return ""
+        if not isinstance(tx_hash, str) or not tx_hash:
+            return ""
+        if not tx_hash.startswith("0x"):
+            tx_hash = "0x" + tx_hash
+        return tx_hash
+
+    calls = [
+        ("eth_getBlockByNumber", [block_tag, False]),
+        ("eth_getBalance", [address, block_tag]),
+        ("eth_getCode", [address, block_tag]),
+        ("eth_getStorageAt", [address, slot, block_tag]),
+        ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
+    ]
+    if call_data:
+        calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
+
+    failures = 0
+    methods = []
+    idx = 0
+    while idx < len(calls):
+        method, params = calls[idx]
+        result, ok = rpc_call(idx + 1, method, params)
+        if not ok:
             failures += 1
+            idx += 1
             continue
         methods.append(method)
+        if method == "eth_getBlockByNumber":
+            tx_hash = first_tx_hash(result)
+            if tx_hash:
+                calls.append(("eth_getTransactionByHash", [tx_hash]))
+                calls.append(("eth_getTransactionReceipt", [tx_hash]))
+        idx += 1
 
     row["archiveApiChecks"] = len(calls)
     row["archiveApiFailures"] = failures

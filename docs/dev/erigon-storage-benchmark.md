@@ -140,11 +140,14 @@ restarts once so the tail-prune lifecycle can run. Use a small
 the intended retention window.
 
 With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
-surface (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and
-`eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields. Pass
-`--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
-when a run needs to target a known historical contract/account. Pass
-`--archive-api-call-data` as well to include `eth_call` against that address.
+surface (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
+`eth_getStorageAt`, and `eth_getLogs`) at `height-1` by default and emits
+`archiveApi*` fields. When the probed historical block contains a transaction,
+the probe also adds `eth_getTransactionByHash` and
+`eth_getTransactionReceipt`. Pass `--archive-api-block`,
+`--archive-api-address`, or `--archive-api-storage-slot` when a run needs to
+target a known historical contract/account. Pass `--archive-api-call-data` as
+well to include `eth_call` against that address.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -336,9 +339,13 @@ With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
-method set (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and
-`eth_getLogs`). Add `--archive-api-method eth_call` when the samples also pass
-`--archive-api-call-data` against a known historical contract. If the row also
+method set (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
+`eth_getStorageAt`, and `eth_getLogs`). Add
+`--archive-api-method eth_getTransactionByHash` and
+`--archive-api-method eth_getTransactionReceipt` when the selected probe block
+is known to contain a transaction; add `--archive-api-method eth_call` when
+the samples also pass `--archive-api-call-data` against a known historical
+contract. If the row also
 reports `tailPrunedThroughBlock`, the
 archive API block must be at or below that prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. It also applies

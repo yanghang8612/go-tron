@@ -40,6 +40,7 @@ FULL_STAGED_SYNC_REQUIRED_STAGES = (
 )
 
 DEFAULT_ARCHIVE_API_METHODS = (
+    "eth_getBlockByNumber",
     "eth_getBalance",
     "eth_getCode",
     "eth_getStorageAt",
