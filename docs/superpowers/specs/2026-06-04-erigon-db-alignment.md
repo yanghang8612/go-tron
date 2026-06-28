@@ -542,6 +542,9 @@ Status:
   failures too: the record scheduler suppresses stats/report output and the
   local drain loop stops before attempting another chunk, preserving the same
   stage-before-downstream-view ordering for ready-frontier writes.
+- The post-drain resume-phase publish gate is now downloader-owned too:
+  no-phase, commit-barrier failure, paused-loop, and publish decisions are
+  planned before `SyncService` applies the verified read/write run.
 - Local staged-body drain startup uses the same rule when repairing an invalid
   `SyncBodiesReady` row before import: if the repair refresh fails, the drain
   does not restore or pop buffered bodies against a stale or unverified ready

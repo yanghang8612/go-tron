@@ -2254,6 +2254,70 @@ func TestPlanImportResumePhaseSuffix(t *testing.T) {
 	}
 }
 
+func TestPlanImportResumePhasePublishFinalization(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+	}
+
+	got := PlanImportResumePhasePublishFinalization(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+	})
+	if !got.Publish || got.SkipReason != ImportResumePhasePublishFinalizationNone || !reflect.DeepEqual(got.Phases, phases) {
+		t.Fatalf("publish finalization = %+v, want publish with copied phases", got)
+	}
+	got.Phases[0].Tasks[0].BlockNum = 99
+	if phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("PlanImportResumePhasePublishFinalization returned aliased phase tasks")
+	}
+
+	for _, tt := range []struct {
+		name   string
+		input  ImportResumePhasePublishFinalizationInput
+		reason ImportResumePhasePublishFinalizationSkipReason
+	}{
+		{
+			name:   "no phases",
+			input:  ImportResumePhasePublishFinalizationInput{FinishOK: true},
+			reason: ImportResumePhasePublishFinalizationNoPhases,
+		},
+		{
+			name: "commit barrier failed",
+			input: ImportResumePhasePublishFinalizationInput{
+				Phases:   phases,
+				FinishOK: false,
+			},
+			reason: ImportResumePhasePublishFinalizationCommitBarrierFailed,
+		},
+		{
+			name: "paused",
+			input: ImportResumePhasePublishFinalizationInput{
+				Phases:   phases,
+				FinishOK: true,
+				Paused:   true,
+			},
+			reason: ImportResumePhasePublishFinalizationPaused,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PlanImportResumePhasePublishFinalization(tt.input)
+			if got.Publish || got.SkipReason != tt.reason {
+				t.Fatalf("finalization = %+v, want skip reason %s", got, tt.reason)
+			}
+		})
+	}
+
+	if got := ImportResumePhasePublishFinalizationSkipReason(255).String(); got != "unknown" {
+		t.Fatalf("unknown finalization reason string = %q", got)
+	}
+}
+
 func TestPlanImportResumePhasePublish(t *testing.T) {
 	hash := tcommon.Hash{0x07}
 	phases := []ImportStagePhasePlan{

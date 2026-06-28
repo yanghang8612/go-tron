@@ -893,6 +893,32 @@ func (s ImportResumePhasePublishStatus) String() string {
 	}
 }
 
+// ImportResumePhasePublishFinalizationSkipReason explains why the post-drain
+// resume-phase publish gate did not run.
+type ImportResumePhasePublishFinalizationSkipReason uint8
+
+const (
+	ImportResumePhasePublishFinalizationNone ImportResumePhasePublishFinalizationSkipReason = iota
+	ImportResumePhasePublishFinalizationNoPhases
+	ImportResumePhasePublishFinalizationCommitBarrierFailed
+	ImportResumePhasePublishFinalizationPaused
+)
+
+func (r ImportResumePhasePublishFinalizationSkipReason) String() string {
+	switch r {
+	case ImportResumePhasePublishFinalizationNone:
+		return "none"
+	case ImportResumePhasePublishFinalizationNoPhases:
+		return "no-phases"
+	case ImportResumePhasePublishFinalizationCommitBarrierFailed:
+		return "commit-barrier-failed"
+	case ImportResumePhasePublishFinalizationPaused:
+		return "paused"
+	default:
+		return "unknown"
+	}
+}
+
 // ImportResumePhasePublishDecision records one phase-level publish decision.
 type ImportResumePhasePublishDecision struct {
 	Phase           ImportStagePhase
@@ -948,6 +974,23 @@ type ImportResumePhasePublishApplyResult struct {
 // barrier has completed.
 type ImportResumePhasePublishRunPlan struct {
 	Phases []ImportStagePhasePlan
+}
+
+// ImportResumePhasePublishFinalizationInput is the post-drain gate for a
+// scheduler-yielded phase suffix. The caller supplies commit-barrier state;
+// downloader owns the publish/no-op decision.
+type ImportResumePhasePublishFinalizationInput struct {
+	Phases   []ImportStagePhasePlan
+	FinishOK bool
+	Paused   bool
+}
+
+// ImportResumePhasePublishFinalizationPlan is the downloader-owned decision
+// for whether the yielded phase suffix should be read/verified/written.
+type ImportResumePhasePublishFinalizationPlan struct {
+	Phases     []ImportStagePhasePlan
+	Publish    bool
+	SkipReason ImportResumePhasePublishFinalizationSkipReason
 }
 
 // ImportResumePhasePublishRunApplyResult groups the read/plan/write phases for
@@ -1237,6 +1280,30 @@ func PlanImportResumePhaseSuffix(schedule ImportBatchStagePhaseSchedule, resume 
 		return out
 	}
 	return []ImportStagePhasePlan{resume}
+}
+
+// PlanImportResumePhasePublishFinalization gates a yielded phase suffix after
+// the caller's commit barrier. Resume-phase progress may be published only
+// when there is real work, the commit barrier completed, and the sync loop has
+// not already paused.
+func PlanImportResumePhasePublishFinalization(input ImportResumePhasePublishFinalizationInput) ImportResumePhasePublishFinalizationPlan {
+	plan := ImportResumePhasePublishFinalizationPlan{
+		Phases: cloneImportStagePhasePlanList(input.Phases),
+	}
+	if len(input.Phases) == 0 {
+		plan.SkipReason = ImportResumePhasePublishFinalizationNoPhases
+		return plan
+	}
+	if !input.FinishOK {
+		plan.SkipReason = ImportResumePhasePublishFinalizationCommitBarrierFailed
+		return plan
+	}
+	if input.Paused {
+		plan.SkipReason = ImportResumePhasePublishFinalizationPaused
+		return plan
+	}
+	plan.Publish = true
+	return plan
 }
 
 // PlanImportResumePhasePublish verifies a yielded phase suffix against

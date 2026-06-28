@@ -1478,8 +1478,13 @@ drainLoop:
 			finishOK = false
 		}
 	}
-	if len(resumePhases) > 0 && finishOK && !paused {
-		ss.publishImportResumePhaseProgress(resumePhases)
+	resumePublish := syncdl.PlanImportResumePhasePublishFinalization(syncdl.ImportResumePhasePublishFinalizationInput{
+		Phases:   resumePhases,
+		FinishOK: finishOK,
+		Paused:   paused,
+	})
+	if resumePublish.Publish {
+		ss.publishImportResumePhaseProgress(resumePublish.Phases)
 	}
 }
 
