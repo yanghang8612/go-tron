@@ -506,15 +506,18 @@ type ImportBatchRunSettlementAction uint8
 
 const (
 	ImportBatchRunSettlementContinueDrain ImportBatchRunSettlementAction = iota + 1
+	ImportBatchRunSettlementYieldResumePhase
 	ImportBatchRunSettlementStopDrain
 )
 
 // ImportBatchRunSettlementPlan maps a completed import-batch run back to the
 // caller's local drain loop.
 type ImportBatchRunSettlementPlan struct {
-	Action        ImportBatchRunSettlementAction
-	ContinueDrain bool
-	StopDrain     bool
+	Action           ImportBatchRunSettlementAction
+	ContinueDrain    bool
+	StopDrain        bool
+	YieldResumePhase bool
+	ResumePhasePlan  ImportStagePhasePlan
 }
 
 // ImportBatchDrainLoopStepAction names the caller's next drain-loop branch
@@ -524,31 +527,37 @@ type ImportBatchDrainLoopStepAction uint8
 const (
 	ImportBatchDrainLoopContinue ImportBatchDrainLoopStepAction = iota
 	ImportBatchDrainLoopStop
+	ImportBatchDrainLoopYieldResumePhase
 )
 
 // ImportBatchDrainLoopStep is one downloader-owned drain-loop operation after
 // a local import batch settles.
 type ImportBatchDrainLoopStep struct {
-	Action ImportBatchDrainLoopStepAction
+	Action          ImportBatchDrainLoopStepAction
+	ResumePhasePlan ImportStagePhasePlan
 }
 
 // ImportBatchDrainLoopPlan maps an import-batch settlement into the local
 // drain loop's next action. SyncService owns the loop mechanics; downloader
 // owns the settlement semantics.
 type ImportBatchDrainLoopPlan struct {
-	ContinueLoop bool
-	StopLoop     bool
-	Steps        []ImportBatchDrainLoopStep
+	ContinueLoop     bool
+	StopLoop         bool
+	YieldResumePhase bool
+	ResumePhasePlan  ImportStagePhasePlan
+	Steps            []ImportBatchDrainLoopStep
 }
 
 // ImportBatchDrainLoopApplyResult records the local drain-loop branch selected
 // from the downloader-owned step list.
 type ImportBatchDrainLoopApplyResult struct {
-	Action       ImportBatchDrainLoopStepAction
-	ContinueLoop bool
-	StopLoop     bool
-	AppliedSteps []ImportBatchDrainLoopStepAction
-	UnknownSteps []ImportBatchDrainLoopStepAction
+	Action           ImportBatchDrainLoopStepAction
+	ContinueLoop     bool
+	StopLoop         bool
+	YieldResumePhase bool
+	ResumePhasePlan  ImportStagePhasePlan
+	AppliedSteps     []ImportBatchDrainLoopStepAction
+	UnknownSteps     []ImportBatchDrainLoopStepAction
 }
 
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
@@ -698,11 +707,19 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 // PlanImportBatchRunSettlement derives the drain-loop branch after applying an
 // import-batch run plan. Decode-only drops and successful imports both keep the
 // local drain loop moving; canonical import failures, persisted progress
-// failures, and pending scheduler resume phases stop so the sticky pause,
-// storage warning, or phase scheduler can be observed before another chunk
-// advances.
+// failures, and pending scheduler resume phases stop. Resume phases use a
+// distinct yield action so the staged scheduler can distinguish intentional
+// handoff from sticky pause/storage failure stops before another chunk advances.
 func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
-	if result.StopDrain || result.HasResumePhasePlan {
+	if result.HasResumePhasePlan {
+		return ImportBatchRunSettlementPlan{
+			Action:           ImportBatchRunSettlementYieldResumePhase,
+			StopDrain:        true,
+			YieldResumePhase: true,
+			ResumePhasePlan:  cloneImportStagePhasePlan(result.ResumePhasePlan),
+		}
+	}
+	if result.StopDrain {
 		return ImportBatchRunSettlementPlan{
 			Action:    ImportBatchRunSettlementStopDrain,
 			StopDrain: true,
@@ -717,6 +734,13 @@ func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSet
 // PlanImportBatchDrainLoop derives the caller's next local drain-loop branch
 // from the downloader-owned import settlement.
 func PlanImportBatchDrainLoop(settlement ImportBatchRunSettlementPlan) ImportBatchDrainLoopPlan {
+	if settlement.Action == ImportBatchRunSettlementYieldResumePhase || settlement.YieldResumePhase {
+		return ImportBatchDrainLoopPlan{
+			StopLoop:         true,
+			YieldResumePhase: true,
+			ResumePhasePlan:  cloneImportStagePhasePlan(settlement.ResumePhasePlan),
+		}.withSteps()
+	}
 	if settlement.Action == ImportBatchRunSettlementStopDrain || settlement.StopDrain {
 		return ImportBatchDrainLoopPlan{StopLoop: true}.withSteps()
 	}
@@ -741,6 +765,12 @@ func ApplyImportBatchDrainLoopPlan(plan ImportBatchDrainLoopPlan) ImportBatchDra
 			result.Action = step.Action
 			result.StopLoop = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case ImportBatchDrainLoopYieldResumePhase:
+			result.Action = step.Action
+			result.StopLoop = true
+			result.YieldResumePhase = true
+			result.ResumePhasePlan = cloneImportStagePhasePlan(step.ResumePhasePlan)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		default:
 			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
@@ -749,7 +779,13 @@ func ApplyImportBatchDrainLoopPlan(plan ImportBatchDrainLoopPlan) ImportBatchDra
 }
 
 func (p ImportBatchDrainLoopPlan) withSteps() ImportBatchDrainLoopPlan {
-	if p.StopLoop {
+	if p.YieldResumePhase {
+		p.StopLoop = true
+		p.Steps = []ImportBatchDrainLoopStep{{
+			Action:          ImportBatchDrainLoopYieldResumePhase,
+			ResumePhasePlan: cloneImportStagePhasePlan(p.ResumePhasePlan),
+		}}
+	} else if p.StopLoop {
 		p.Steps = []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}}
 	} else if p.ContinueLoop {
 		p.Steps = []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopContinue}}

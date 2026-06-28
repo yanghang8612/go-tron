@@ -308,6 +308,12 @@ func TestPlanImportOutcome(t *testing.T) {
 }
 
 func TestPlanImportBatchRunSettlement(t *testing.T) {
+	resume := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, tcommon.Hash{0x07})},
+	}
 	tests := map[string]struct {
 		result ImportBatchRunResult
 		want   ImportBatchRunSettlementPlan
@@ -333,11 +339,13 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 				StopDrain: true,
 			},
 		},
-		"pending resume phase stops": {
-			result: ImportBatchRunResult{HasResumePhasePlan: true},
+		"pending resume phase yields": {
+			result: ImportBatchRunResult{HasResumePhasePlan: true, ResumePhasePlan: resume},
 			want: ImportBatchRunSettlementPlan{
-				Action:    ImportBatchRunSettlementStopDrain,
-				StopDrain: true,
+				Action:           ImportBatchRunSettlementYieldResumePhase,
+				StopDrain:        true,
+				YieldResumePhase: true,
+				ResumePhasePlan:  resume,
 			},
 		},
 	}
@@ -349,6 +357,12 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 }
 
 func TestPlanImportBatchDrainLoop(t *testing.T) {
+	resume := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, tcommon.Hash{0x07})},
+	}
 	tests := map[string]struct {
 		settlement ImportBatchRunSettlementPlan
 		want       ImportBatchDrainLoopPlan
@@ -365,6 +379,18 @@ func TestPlanImportBatchDrainLoop(t *testing.T) {
 			want: ImportBatchDrainLoopPlan{
 				StopLoop: true,
 				Steps:    []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}},
+			},
+		},
+		"yield resume phase action": {
+			settlement: ImportBatchRunSettlementPlan{Action: ImportBatchRunSettlementYieldResumePhase, StopDrain: true, YieldResumePhase: true, ResumePhasePlan: resume},
+			want: ImportBatchDrainLoopPlan{
+				StopLoop:         true,
+				YieldResumePhase: true,
+				ResumePhasePlan:  resume,
+				Steps: []ImportBatchDrainLoopStep{{
+					Action:          ImportBatchDrainLoopYieldResumePhase,
+					ResumePhasePlan: resume,
+				}},
 			},
 		},
 		"legacy stop bool": {
@@ -390,6 +416,12 @@ func TestPlanImportBatchDrainLoop(t *testing.T) {
 }
 
 func TestApplyImportBatchDrainLoopPlan(t *testing.T) {
+	resume := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, tcommon.Hash{0x07})},
+	}
 	tests := map[string]struct {
 		plan ImportBatchDrainLoopPlan
 		want ImportBatchDrainLoopApplyResult
@@ -408,6 +440,16 @@ func TestApplyImportBatchDrainLoopPlan(t *testing.T) {
 				Action:       ImportBatchDrainLoopStop,
 				StopLoop:     true,
 				AppliedSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopStop},
+			},
+		},
+		"yield resume phase step": {
+			plan: ImportBatchDrainLoopPlan{Steps: []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopYieldResumePhase, ResumePhasePlan: resume}}},
+			want: ImportBatchDrainLoopApplyResult{
+				Action:           ImportBatchDrainLoopYieldResumePhase,
+				StopLoop:         true,
+				YieldResumePhase: true,
+				ResumePhasePlan:  resume,
+				AppliedSteps:     []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopYieldResumePhase},
 			},
 		},
 		"legacy continue bool": {
@@ -1146,9 +1188,15 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 		!reflect.DeepEqual(resumePending.Run.ResumePhasePlan.Tasks[0], ImportCommitmentStageTask(block1.Number(), block1.Hash())) ||
 		!reflect.DeepEqual(resumePending.Run.ResumePhasePlan.Tasks[1], ImportCommitmentStageTask(block2.Number(), block2.Hash())) ||
 		!resumePending.Run.StopDrain ||
-		resumePending.Settlement.Action != ImportBatchRunSettlementStopDrain ||
+		resumePending.Settlement.Action != ImportBatchRunSettlementYieldResumePhase ||
+		!resumePending.Settlement.YieldResumePhase ||
+		!reflect.DeepEqual(resumePending.Settlement.ResumePhasePlan, resumePending.Run.ResumePhasePlan) ||
 		!resumePending.DrainLoop.StopLoop ||
-		resumePending.DrainLoopApply.Action != ImportBatchDrainLoopStop {
+		!resumePending.DrainLoop.YieldResumePhase ||
+		!reflect.DeepEqual(resumePending.DrainLoop.ResumePhasePlan, resumePending.Run.ResumePhasePlan) ||
+		resumePending.DrainLoopApply.Action != ImportBatchDrainLoopYieldResumePhase ||
+		!resumePending.DrainLoopApply.YieldResumePhase ||
+		!reflect.DeepEqual(resumePending.DrainLoopApply.ResumePhasePlan, resumePending.Run.ResumePhasePlan) {
 		t.Fatalf("resume-pending run=%+v settlement=%+v drain=%+v apply=%+v, want scheduler-yield stop",
 			resumePending.Run, resumePending.Settlement, resumePending.DrainLoop, resumePending.DrainLoopApply)
 	}

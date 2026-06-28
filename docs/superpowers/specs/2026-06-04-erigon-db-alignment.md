@@ -733,8 +733,10 @@ Status:
   suffix is now retained on the imported-batch progress plan as a defensive-copy
   `ResumePhasePlan`, so the next scheduler step can consume the typed
   execution/commitment/finish task list directly after a partial import. Import
-  settlement now stops the local drain loop when that resume plan is present,
-  yielding before another body chunk can advance past the scheduler-owned phase.
+  settlement now emits a distinct `YieldResumePhase` drain-loop action when
+  that resume plan is present, stopping the local drain loop before another body
+  chunk can advance past the scheduler-owned phase while keeping the handoff
+  distinguishable from canonical failures and storage progress failures.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

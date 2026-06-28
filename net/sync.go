@@ -1457,6 +1457,9 @@ drainLoop:
 			paused = true
 		}
 		loop := importRun.DrainLoopApply
+		if loop.YieldResumePhase {
+			ss.logImportResumePhaseYield(loop.ResumePhasePlan)
+		}
 		if loop.StopLoop {
 			break drainLoop
 		}
@@ -1470,6 +1473,29 @@ drainLoop:
 			ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
 		}
 	}
+}
+
+func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePlan) {
+	taskCount := len(plan.Tasks)
+	if taskCount == 0 {
+		syncLog.Debug("Yielding sync import drain to staged scheduler",
+			"syncPhase", plan.Phase,
+			"syncPhaseCanonicalStage", plan.CanonicalStage,
+			"syncPhaseStage", plan.SyncStage,
+			"syncPhaseTasks", taskCount)
+		return
+	}
+	first := plan.Tasks[0]
+	last := plan.Tasks[taskCount-1]
+	syncLog.Debug("Yielding sync import drain to staged scheduler",
+		"syncPhase", plan.Phase,
+		"syncPhaseCanonicalStage", plan.CanonicalStage,
+		"syncPhaseStage", plan.SyncStage,
+		"syncPhaseTasks", taskCount,
+		"syncPhaseFromBlock", first.BlockNum,
+		"syncPhaseFromHash", first.BlockHash,
+		"syncPhaseToBlock", last.BlockNum,
+		"syncPhaseToHash", last.BlockHash)
 }
 
 type syncLocalDrainSessionRunApplier struct {
