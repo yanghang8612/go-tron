@@ -711,6 +711,12 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 // distinct yield action so the staged scheduler can distinguish intentional
 // handoff from sticky pause/storage failure stops before another chunk advances.
 func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
+	if result.Outcome.StopDrain || result.RecordProgressFailed() {
+		return ImportBatchRunSettlementPlan{
+			Action:    ImportBatchRunSettlementStopDrain,
+			StopDrain: true,
+		}
+	}
 	if result.HasResumePhasePlan {
 		return ImportBatchRunSettlementPlan{
 			Action:           ImportBatchRunSettlementYieldResumePhase,

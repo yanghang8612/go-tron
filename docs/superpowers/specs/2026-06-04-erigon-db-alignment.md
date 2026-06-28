@@ -736,7 +736,13 @@ Status:
   settlement now emits a distinct `YieldResumePhase` drain-loop action when
   that resume plan is present, stopping the local drain loop before another body
   chunk can advance past the scheduler-owned phase while keeping the handoff
-  distinguishable from canonical failures and storage progress failures.
+  distinguishable from canonical failures and storage progress failures. When
+  the drain exits on that handoff, `SyncService` now crosses the insert-session
+  commit barrier and publishes the resume phase suffix only after each phase's
+  canonical stage row is hash-bound to the expected block/hash and the matching
+  Sync* diagnostic row would not regress. This closes the async-commit gap where
+  commitment/finish hooks could complete after the initial import record had
+  already deleted staged-body proof rows.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

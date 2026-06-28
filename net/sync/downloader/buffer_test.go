@@ -348,6 +348,24 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 				ResumePhasePlan:  resume,
 			},
 		},
+		"progress failure wins over resume phase": {
+			result: ImportBatchRunResult{
+				HasResumePhasePlan: true,
+				ResumePhasePlan:    resume,
+				HasRecord:          true,
+				RecordApply: ImportedBatchRecordApplyResult{
+					HasProgress: true,
+					ProgressApply: ImportedBatchProgressApplyResult{
+						HasWriteResult: true,
+						WriteResult:    rawdb.SyncImportProgressWriteResult{ProgressError: errors.New("write failed")},
+					},
+				},
+			},
+			want: ImportBatchRunSettlementPlan{
+				Action:    ImportBatchRunSettlementStopDrain,
+				StopDrain: true,
+			},
+		},
 	}
 	for name, test := range tests {
 		if got := PlanImportBatchRunSettlement(test.result); !reflect.DeepEqual(got, test.want) {

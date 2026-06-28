@@ -20,6 +20,9 @@ type StageProgressRow struct {
 // StageProgressWriter persists hash-bound sync pipeline progress.
 type StageProgressWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash)
 
+// StageProgressReader reads one hash-bound or legacy stage progress row.
+type StageProgressReader func(stage rawdb.StageID) (rawdb.StageProgress, bool, error)
+
 // StageProgressErrorWriter persists hash-bound sync pipeline progress and
 // reports write failures to the planner apply result.
 type StageProgressErrorWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error
@@ -851,6 +854,88 @@ type ImportedBatchProgressStep struct {
 	Progress []rawdb.StageProgress
 }
 
+// ImportResumePhasePublishStatus describes whether a scheduler-yielded import
+// phase can be safely published after the caller has crossed its commit
+// barrier.
+type ImportResumePhasePublishStatus uint8
+
+const (
+	ImportResumePhasePublishReady ImportResumePhasePublishStatus = iota + 1
+	ImportResumePhasePublishEmpty
+	ImportResumePhasePublishReadError
+	ImportResumePhasePublishCanonicalMissing
+	ImportResumePhasePublishCanonicalUnbound
+	ImportResumePhasePublishCanonicalMismatch
+	ImportResumePhasePublishSyncAhead
+	ImportResumePhasePublishSyncHashMismatch
+)
+
+func (s ImportResumePhasePublishStatus) String() string {
+	switch s {
+	case ImportResumePhasePublishReady:
+		return "ready"
+	case ImportResumePhasePublishEmpty:
+		return "empty"
+	case ImportResumePhasePublishReadError:
+		return "read-error"
+	case ImportResumePhasePublishCanonicalMissing:
+		return "canonical-missing"
+	case ImportResumePhasePublishCanonicalUnbound:
+		return "canonical-unbound"
+	case ImportResumePhasePublishCanonicalMismatch:
+		return "canonical-mismatch"
+	case ImportResumePhasePublishSyncAhead:
+		return "sync-ahead"
+	case ImportResumePhasePublishSyncHashMismatch:
+		return "sync-hash-mismatch"
+	default:
+		return "unknown"
+	}
+}
+
+// ImportResumePhasePublishDecision records one phase-level publish decision.
+type ImportResumePhasePublishDecision struct {
+	Phase           ImportStagePhase
+	CanonicalStage  rawdb.StageID
+	SyncStage       rawdb.StageID
+	TargetBlock     uint64
+	TargetHash      tcommon.Hash
+	CanonicalRow    rawdb.StageProgress
+	HasCanonicalRow bool
+	SyncRow         rawdb.StageProgress
+	HasSyncRow      bool
+	Status          ImportResumePhasePublishStatus
+	Err             error
+}
+
+// ImportResumePhasePublishPlan is the storage plan for a scheduler-yielded
+// import phase suffix after the caller has crossed the canonical commit
+// barrier. It publishes only when every phase in the suffix has an exact
+// hash-bound canonical stage row, preventing diagnostic sync rows from moving
+// past canonical execution.
+type ImportResumePhasePublishPlan struct {
+	Phases    []ImportStagePhasePlan
+	Progress  []rawdb.StageProgress
+	Decisions []ImportResumePhasePublishDecision
+	Complete  bool
+	OK        bool
+}
+
+// ImportResumePhasePublishPlanApplier performs the storage write selected by a
+// resume-phase publish plan.
+type ImportResumePhasePublishPlanApplier interface {
+	WriteResumePhaseProgress(rows []rawdb.StageProgress) error
+}
+
+// ImportResumePhasePublishApplyResult records the write outcome for a
+// scheduler-yielded phase suffix.
+type ImportResumePhasePublishApplyResult struct {
+	Plan       ImportResumePhasePublishPlan
+	Applied    bool
+	Rows       int
+	WriteError error
+}
+
 // ImportedBatchProgressPlanApplier performs the persistence/runtime operations
 // named by an imported-batch progress plan. SyncService owns DB handles and
 // logging; downloader owns the ordered stage side effects.
@@ -1105,6 +1190,141 @@ func (p ImportedBatchProgressPlan) RemainingCurrentPhasePlan() (ImportStagePhase
 		return ImportStagePhasePlan{}, false
 	}
 	return cloneImportStagePhasePlan(p.ResumePhasePlan), true
+}
+
+// PlanImportResumePhaseSuffix returns the phase suffix that can be revisited
+// after a local import yields at resume. The current phase uses the runnable
+// suffix retained by the import result; following phases use the original
+// execution schedule.
+func PlanImportResumePhaseSuffix(schedule ImportBatchStagePhaseSchedule, resume ImportStagePhasePlan) []ImportStagePhasePlan {
+	if len(resume.Tasks) == 0 {
+		return nil
+	}
+	resume = cloneImportStagePhasePlan(resume)
+	if len(schedule.Phases) == 0 {
+		return []ImportStagePhasePlan{resume}
+	}
+	for i, phase := range schedule.Phases {
+		if !sameImportStagePhase(phase, resume) {
+			continue
+		}
+		out := []ImportStagePhasePlan{resume}
+		for _, following := range schedule.Phases[i+1:] {
+			out = append(out, cloneImportStagePhasePlan(following))
+		}
+		return out
+	}
+	return []ImportStagePhasePlan{resume}
+}
+
+// PlanImportResumePhasePublish verifies a yielded phase suffix against
+// canonical stage progress and builds the sync-stage rows that can be safely
+// published after the caller's commit barrier. The returned plan is all-or-none:
+// a missing or mismatched phase leaves Progress empty so callers do not publish
+// a partial suffix that could hide an async commit failure.
+func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgressReader) ImportResumePhasePublishPlan {
+	plan := ImportResumePhasePublishPlan{
+		Phases: cloneImportStagePhasePlanList(phases),
+	}
+	if len(phases) == 0 {
+		return plan
+	}
+	progress := make([]rawdb.StageProgress, 0, len(phases))
+	for _, phase := range phases {
+		decision, row, ok := planImportResumePhasePublishDecision(phase, read)
+		plan.Decisions = append(plan.Decisions, decision)
+		if !ok {
+			return plan
+		}
+		progress = append(progress, row)
+	}
+	plan.Progress = progress
+	plan.Complete = true
+	plan.OK = len(progress) > 0
+	return plan
+}
+
+func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
+	decision := ImportResumePhasePublishDecision{
+		Phase:          phase.Phase,
+		CanonicalStage: phase.CanonicalStage,
+		SyncStage:      phase.SyncStage,
+	}
+	if len(phase.Tasks) == 0 {
+		decision.Status = ImportResumePhasePublishEmpty
+		return decision, rawdb.StageProgress{}, false
+	}
+	target := phase.Tasks[len(phase.Tasks)-1]
+	decision.TargetBlock = target.BlockNum
+	decision.TargetHash = target.BlockHash
+	if read == nil {
+		decision.Status = ImportResumePhasePublishReadError
+		decision.Err = fmt.Errorf("downloader: nil stage progress reader")
+		return decision, rawdb.StageProgress{}, false
+	}
+	canonical, ok, err := read(phase.CanonicalStage)
+	if err != nil {
+		decision.Status = ImportResumePhasePublishReadError
+		decision.Err = err
+		return decision, rawdb.StageProgress{}, false
+	}
+	decision.CanonicalRow = canonical
+	decision.HasCanonicalRow = ok
+	if !ok {
+		decision.Status = ImportResumePhasePublishCanonicalMissing
+		return decision, rawdb.StageProgress{}, false
+	}
+	if !canonical.HasBlockHash {
+		decision.Status = ImportResumePhasePublishCanonicalUnbound
+		return decision, rawdb.StageProgress{}, false
+	}
+	if canonical.BlockNum != target.BlockNum || canonical.BlockHash != target.BlockHash {
+		decision.Status = ImportResumePhasePublishCanonicalMismatch
+		return decision, rawdb.StageProgress{}, false
+	}
+	syncRow, syncOK, err := read(phase.SyncStage)
+	if err != nil {
+		decision.Status = ImportResumePhasePublishReadError
+		decision.Err = err
+		return decision, rawdb.StageProgress{}, false
+	}
+	decision.SyncRow = syncRow
+	decision.HasSyncRow = syncOK
+	if syncOK {
+		if syncRow.BlockNum > target.BlockNum {
+			decision.Status = ImportResumePhasePublishSyncAhead
+			return decision, rawdb.StageProgress{}, false
+		}
+		if syncRow.BlockNum == target.BlockNum && syncRow.HasBlockHash && syncRow.BlockHash != target.BlockHash {
+			decision.Status = ImportResumePhasePublishSyncHashMismatch
+			return decision, rawdb.StageProgress{}, false
+		}
+	}
+	row := rawdb.StageProgress{
+		Stage:        phase.SyncStage,
+		BlockNum:     target.BlockNum,
+		BlockHash:    target.BlockHash,
+		HasBlockHash: true,
+	}
+	decision.Status = ImportResumePhasePublishReady
+	return decision, row, true
+}
+
+// ApplyImportResumePhasePublishPlan writes the verified sync-stage suffix for
+// a scheduler-yielded import phase.
+func ApplyImportResumePhasePublishPlan(plan ImportResumePhasePublishPlan, applier ImportResumePhasePublishPlanApplier) ImportResumePhasePublishApplyResult {
+	result := ImportResumePhasePublishApplyResult{Plan: plan}
+	if !plan.OK || applier == nil {
+		return result
+	}
+	result.Rows = len(plan.Progress)
+	result.WriteError = applier.WriteResumePhaseProgress(plan.Progress)
+	result.Applied = result.WriteError == nil
+	return result
+}
+
+func sameImportStagePhase(a, b ImportStagePhasePlan) bool {
+	return a.Phase == b.Phase && a.CanonicalStage == b.CanonicalStage && a.SyncStage == b.SyncStage
 }
 
 func cloneTxKindCounts(source map[string]int) map[string]int {

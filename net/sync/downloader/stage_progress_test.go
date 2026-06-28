@@ -2225,6 +2225,133 @@ func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T
 	}
 }
 
+func TestPlanImportResumePhaseSuffix(t *testing.T) {
+	hash1 := tcommon.Hash{0x01}
+	hash2 := tcommon.Hash{0x02}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+	schedule := NewImportBatchStagePhaseSchedule(stagePlan)
+	resume := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(2, hash2)},
+	}
+
+	got := PlanImportResumePhaseSuffix(schedule, resume)
+	if len(got) != 2 ||
+		!reflect.DeepEqual(got[0], resume) ||
+		got[1].Phase != ImportStagePhaseFinish ||
+		len(got[1].Tasks) != 2 ||
+		!reflect.DeepEqual(got[1].Tasks[1], ImportFinishStageTask(2, hash2)) {
+		t.Fatalf("resume suffix = %+v, want commitment suffix plus full finish phase", got)
+	}
+	got[0].Tasks[0].BlockNum = 99
+	if resume.Tasks[0].BlockNum == 99 {
+		t.Fatal("PlanImportResumePhaseSuffix returned aliased resume tasks")
+	}
+}
+
+func TestPlanImportResumePhasePublish(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+		{
+			Phase:          ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []ImportStageTask{ImportFinishStageTask(7, hash)},
+		},
+	}
+	rows := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageCommitment:     {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageFinish:         {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageSyncExecution:  {Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageSyncCommitment: {Stage: rawdb.StageSyncCommitment, BlockNum: 6, BlockHash: tcommon.Hash{0x06}, HasBlockHash: true},
+	}
+	read := func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+		row, ok := rows[stage]
+		return row, ok, nil
+	}
+
+	got := PlanImportResumePhasePublish(phases, read)
+	wantProgress := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !got.OK || !got.Complete || !reflect.DeepEqual(got.Progress, wantProgress) ||
+		len(got.Decisions) != 2 ||
+		got.Decisions[0].Status != ImportResumePhasePublishReady ||
+		got.Decisions[1].Status != ImportResumePhasePublishReady {
+		t.Fatalf("publish plan = %+v, want complete verified suffix %+v", got, wantProgress)
+	}
+	got.Phases[0].Tasks[0].BlockNum = 99
+	if phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("PlanImportResumePhasePublish returned aliased phase tasks")
+	}
+
+	rows[rawdb.StageCommitment] = rawdb.StageProgress{Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: tcommon.Hash{0xee}, HasBlockHash: true}
+	mismatch := PlanImportResumePhasePublish(phases, read)
+	if mismatch.OK || mismatch.Complete || len(mismatch.Progress) != 0 ||
+		len(mismatch.Decisions) != 1 ||
+		mismatch.Decisions[0].Status != ImportResumePhasePublishCanonicalMismatch {
+		t.Fatalf("canonical mismatch plan = %+v, want blocked before writes", mismatch)
+	}
+	rows[rawdb.StageCommitment] = rawdb.StageProgress{Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true}
+	rows[rawdb.StageSyncCommitment] = rawdb.StageProgress{Stage: rawdb.StageSyncCommitment, BlockNum: 8, BlockHash: tcommon.Hash{0x08}, HasBlockHash: true}
+	ahead := PlanImportResumePhasePublish(phases, read)
+	if ahead.OK || ahead.Complete || len(ahead.Progress) != 0 ||
+		len(ahead.Decisions) != 1 ||
+		ahead.Decisions[0].Status != ImportResumePhasePublishSyncAhead {
+		t.Fatalf("sync-ahead plan = %+v, want blocked before regression", ahead)
+	}
+}
+
+func TestApplyImportResumePhasePublishPlan(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	plan := ImportResumePhasePublishPlan{
+		OK:       true,
+		Complete: true,
+		Progress: []rawdb.StageProgress{
+			{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		},
+	}
+	applier := &recordingImportResumePhasePublishApplier{}
+	got := ApplyImportResumePhasePublishPlan(plan, applier)
+	if !got.Applied || got.Rows != 2 || got.WriteError != nil || !reflect.DeepEqual(applier.rows, plan.Progress) {
+		t.Fatalf("apply result = %+v rows=%+v, want two persisted rows", got, applier.rows)
+	}
+
+	writeErr := errors.New("write failed")
+	failing := ApplyImportResumePhasePublishPlan(plan, &recordingImportResumePhasePublishApplier{err: writeErr})
+	if failing.Applied || failing.Rows != 2 || !errors.Is(failing.WriteError, writeErr) {
+		t.Fatalf("failing apply result = %+v, want write error", failing)
+	}
+
+	skipped := ApplyImportResumePhasePublishPlan(ImportResumePhasePublishPlan{}, applier)
+	if skipped.Applied || skipped.Rows != 0 || skipped.WriteError != nil {
+		t.Fatalf("skipped apply result = %+v, want no-op", skipped)
+	}
+}
+
+type recordingImportResumePhasePublishApplier struct {
+	rows []rawdb.StageProgress
+	err  error
+}
+
+func (a *recordingImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {
+	a.rows = append([]rawdb.StageProgress(nil), rows...)
+	return a.err
+}
+
 func corruptOnlyStageProgressRow(db ethdb.KeyValueStore) error {
 	it := db.NewIterator(nil, nil)
 	defer it.Release()

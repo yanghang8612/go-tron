@@ -1405,6 +1405,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		sess = ss.chain.BeginInsertSession()
 	}
 	var lastPeer *p2p.Peer
+	var resumePhases []syncdl.ImportStagePhasePlan
 	paused := false
 drainLoop:
 	for {
@@ -1458,6 +1459,7 @@ drainLoop:
 		}
 		loop := importRun.DrainLoopApply
 		if loop.YieldResumePhase {
+			resumePhases = syncdl.PlanImportResumePhaseSuffix(importRun.Run.StagePhaseSchedule, loop.ResumePhasePlan)
 			ss.logImportResumePhaseYield(loop.ResumePhasePlan)
 		}
 		if loop.StopLoop {
@@ -1468,10 +1470,16 @@ drainLoop:
 		}
 		continue drainLoop
 	}
+	finishOK := true
 	if sess != nil {
 		if ferr := sess.Finish(); ferr != nil && !paused {
 			ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
+			paused = true
+			finishOK = false
 		}
+	}
+	if len(resumePhases) > 0 && finishOK && !paused {
+		ss.publishImportResumePhaseProgress(resumePhases)
 	}
 }
 
@@ -1496,6 +1504,55 @@ func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePla
 		"syncPhaseFromHash", first.BlockHash,
 		"syncPhaseToBlock", last.BlockNum,
 		"syncPhaseToHash", last.BlockHash)
+}
+
+func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportStagePhasePlan) syncdl.ImportResumePhasePublishApplyResult {
+	var dbRead func(rawdb.StageID) (rawdb.StageProgress, bool, error)
+	if ss != nil && ss.chain != nil {
+		if db := ss.chain.DB(); db != nil {
+			dbRead = func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+				return rawdb.ReadStageProgressRow(db, stage)
+			}
+		}
+	}
+	plan := syncdl.PlanImportResumePhasePublish(phases, dbRead)
+	result := syncdl.ApplyImportResumePhasePublishPlan(plan, syncImportResumePhasePublishApplier{service: ss})
+	ss.logImportResumePhasePublishResult(result)
+	return result
+}
+
+func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportResumePhasePublishApplyResult) {
+	if len(result.Plan.Phases) == 0 {
+		return
+	}
+	if !result.Plan.OK {
+		for _, decision := range result.Plan.Decisions {
+			if decision.Status == syncdl.ImportResumePhasePublishReady {
+				continue
+			}
+			syncLog.Warn("Sync import resume phase not publishable",
+				"syncPhase", decision.Phase,
+				"syncPhaseCanonicalStage", decision.CanonicalStage,
+				"syncPhaseStage", decision.SyncStage,
+				"syncPhaseBlock", decision.TargetBlock,
+				"syncPhaseHash", decision.TargetHash,
+				"syncPhaseStatus", decision.Status.String(),
+				"canonicalBlock", decision.CanonicalRow.BlockNum,
+				"canonicalHash", decision.CanonicalRow.BlockHash,
+				"canonicalHasHash", decision.CanonicalRow.HasBlockHash,
+				"syncStageBlock", decision.SyncRow.BlockNum,
+				"syncStageHash", decision.SyncRow.BlockHash,
+				"syncStageHasHash", decision.SyncRow.HasBlockHash,
+				"err", decision.Err)
+			return
+		}
+		return
+	}
+	if result.WriteError != nil {
+		syncLog.Warn("Persist sync import resume phase failed", "rows", result.Rows, "err", result.WriteError)
+		return
+	}
+	syncLog.Debug("Published sync import resume phase", "rows", result.Rows)
 }
 
 type syncLocalDrainSessionRunApplier struct {
@@ -2109,12 +2166,27 @@ type syncImportedBatchProgressApplier struct {
 	service *SyncService
 }
 
+type syncImportResumePhasePublishApplier struct {
+	service *SyncService
+}
+
 func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult {
 	return a.service.writeImportedSyncProgress(deletes, rows)
 }
 
 func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() syncdl.StagedBodyReadyProgressRefresh {
 	return a.service.writeSyncBodiesReadyProgress()
+}
+
+func (a syncImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {
+	if a.service == nil || a.service.chain == nil {
+		return fmt.Errorf("sync: cannot publish resume phase progress without service or chain")
+	}
+	db := a.service.chain.DB()
+	if db == nil {
+		return fmt.Errorf("sync: cannot publish resume phase progress without database")
+	}
+	return rawdb.WriteStageProgressRows(db, rows)
 }
 
 func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash, hasHash bool) {
