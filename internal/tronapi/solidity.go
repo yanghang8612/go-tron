@@ -313,15 +313,11 @@ func (api *API) estimatePbftEnergy(w http.ResponseWriter, r *http.Request) {
 func (api *API) getSolidNowBlock(w http.ResponseWriter, r *http.Request) {
 	block, err := api.backend.GetBlockByNumber(api.solidBoundNum())
 	if err != nil {
-		if blockLookupNotFound(err) {
-			http.Error(w, "solid block not found", http.StatusNotFound)
-			return
-		}
 		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		http.Error(w, "solid block not found", http.StatusNotFound)
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -348,15 +344,11 @@ func (api *API) getSolidBlockByNum(w http.ResponseWriter, r *http.Request) {
 	}
 	block, err := api.backend.GetBlockByNumber(num)
 	if err != nil {
-		if blockLookupNotFound(err) {
-			http.Error(w, "block not found", http.StatusNotFound)
-			return
-		}
 		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		http.Error(w, "block not found", http.StatusNotFound)
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -406,15 +398,11 @@ func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request)
 func (api *API) getPbftNowBlock(w http.ResponseWriter, r *http.Request) {
 	block, err := api.backend.GetBlockByNumber(api.pbftBoundNum())
 	if err != nil {
-		if blockLookupNotFound(err) {
-			http.Error(w, "pbft block not found", http.StatusNotFound)
-			return
-		}
 		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		http.Error(w, "pbft block not found", http.StatusNotFound)
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -441,15 +429,11 @@ func (api *API) getPbftBlockByNum(w http.ResponseWriter, r *http.Request) {
 	}
 	block, err := api.backend.GetBlockByNumber(num)
 	if err != nil {
-		if blockLookupNotFound(err) {
-			http.Error(w, "block not found", http.StatusNotFound)
-			return
-		}
 		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		http.Error(w, "block not found", http.StatusNotFound)
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())

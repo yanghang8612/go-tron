@@ -108,9 +108,7 @@ func newSolidTestServer(t *testing.T, stub tronapi.Backend) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// TestSolidityGetNowBlock_routeExists verifies /walletsolidity/getnowblock is registered
-// and returns 404 when the solid block (num=0) is not in the chain (stub returns nil).
-func TestSolidityGetNowBlock_routeExists(t *testing.T) {
+func TestSolidityGetNowBlockNotFoundReturnsEmpty(t *testing.T) {
 	stub := &solidStubBackend{solidNum: 0, pbftNum: -1}
 	srv := newSolidTestServer(t, stub)
 	defer srv.Close()
@@ -119,10 +117,8 @@ func TestSolidityGetNowBlock_routeExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	// stubBackend.GetBlockByNumber returns nil → 404
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
 }
 
 // TestSolidityGetBlockByNum_rejectsAboveSolid checks that requesting block #5
@@ -211,21 +207,20 @@ func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestPbftGetNowBlock_fallsBackToSolid checks that /walletpbft/getnowblock falls back to
-// the solid block when LatestPbftBlockNum returns -1.
-func TestPbftGetNowBlock_fallsBackToSolid(t *testing.T) {
+// TestPbftGetNowBlockNotFoundReturnsEmpty checks that /walletpbft/getnowblock
+// falls back to the solid block number and returns java-compatible empty JSON
+// when the backend has no block for that number.
+func TestPbftGetNowBlockNotFoundReturnsEmpty(t *testing.T) {
 	stub := &solidStubBackend{solidNum: 2, pbftNum: -1}
 	srv := newSolidTestServer(t, stub)
 	defer srv.Close()
 
-	// Both solid and pbft getnowblock call GetBlockByNumber(2) → stub returns nil → 404
 	resp, err := http.Get(srv.URL + "/walletpbft/getnowblock")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 (fallback to solid, stub nil), got %d", resp.StatusCode)
-	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
 }
 
 // TestPbftGetBlockByNum_rejectsAbovePbft checks that requesting block #10

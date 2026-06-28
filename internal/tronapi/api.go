@@ -182,15 +182,11 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 	}
 	block, err := api.backend.GetBlockByNumber(num)
 	if err != nil {
-		if blockLookupNotFound(err) {
-			http.Error(w, "block not found", http.StatusNotFound)
-			return
-		}
 		writeEmptyJSON(w)
 		return
 	}
 	if block == nil {
-		http.Error(w, "block not found", http.StatusNotFound)
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -822,14 +818,6 @@ func transactionLookupNotFound(err error) bool {
 	}
 	msg := strings.TrimSpace(err.Error())
 	return msg == "transaction not found" || msg == "transaction info not found"
-}
-
-func blockLookupNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.TrimSpace(err.Error())
-	return msg == "block not found" || (strings.HasPrefix(msg, "block ") && strings.HasSuffix(msg, " not found"))
 }
 
 func accountLookupNotFound(err error) bool {

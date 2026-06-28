@@ -575,6 +575,18 @@ func TestGetBlockByNumBackendErrorReturnsEmpty(t *testing.T) {
 	assertHTTPEmptyObject(t, resp)
 }
 
+func TestGetBlockByNumNotFoundReturnsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbynum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST getblockbynum: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
+}
+
 func TestGetBlockByIdBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("rawdb: cold block index corrupt")
 	srv := newTestServer(t, &stubBackend{hashErr: backendErr})
