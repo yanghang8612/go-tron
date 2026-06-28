@@ -54,6 +54,9 @@
 - [x] `scripts/dev/state_prefetch_benchmark.sh` repeatable sweep harness:
       records commit/env metadata, raw benchmark output, and optional
       `benchstat` summaries for comparing samples across machines and commits
+- [x] `scripts/dev/state_prefetch_benchmark_acceptance.py` gate for raw
+      benchmark output: validates heavy cold-state improvement and light-block
+      overhead before choosing a worker/lookahead candidate
 - [ ] Pick default `workers / lookahead` from benchmark sweep, document
       in the audit doc
 - [ ] Long-running soak: replay 100K Nile blocks with prefetch on/off,

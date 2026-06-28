@@ -45,6 +45,22 @@ The harness writes:
 - `benchmark.txt` — raw `go test` benchmark output
 - `benchstat.txt` — optional summary when `benchstat` is installed
 
+After collecting a real multi-count sample, run the acceptance checker on the
+raw benchmark output:
+
+```bash
+scripts/dev/state_prefetch_benchmark_acceptance.py \
+  build/state-prefetch-bench/<run>/benchmark.txt \
+  --min-heavy-improvement 0.10 \
+  --max-light-overhead 0.01
+```
+
+Without `--variant`, the checker selects the `prefetch=on_*` variant that meets
+the gates and has the best heavy cold-state improvement. Use `--variant` when
+validating one proposed default worker/lookahead pair. The checker is a
+benchmark gate only; keep the Nile/mainnet replay soak as the final default-on
+gate.
+
 The underlying focused benchmark command is:
 
 ```bash
