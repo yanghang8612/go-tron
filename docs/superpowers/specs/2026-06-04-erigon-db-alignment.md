@@ -550,9 +550,9 @@ Status:
   post-import last-peer update, pause flag, resume-phase suffix, and
   stop/continue branch are derived from the import run before `SyncService`
   applies the concrete loop mechanics.
-- The drain-end insert-session commit barrier now uses a downloader plan for
-  `finishOK`, paused state, and one-shot pause publication before resume-phase
-  progress can be published.
+- Empty-drain and drain-end insert-session commit barriers now use a downloader
+  plan for `finishOK`, paused state, and one-shot pause publication before
+  resume-phase progress can be published.
 - Local staged-body drain startup uses the same rule when repairing an invalid
   `SyncBodiesReady` row before import: if the repair refresh fails, the drain
   does not restore or pop buffered bodies against a stale or unverified ready

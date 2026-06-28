@@ -1423,15 +1423,13 @@ drainLoop:
 		case drainSession.EmptyDrain:
 			if sess != nil {
 				ss.mu.Unlock()
-				if ferr := sess.Finish(); ferr != nil {
-					if !paused {
-						ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
-						paused = true
-					}
-					sess = nil
+				ferr := sess.Finish()
+				commitBarrier := ss.applyImportDrainCommitBarrier(ferr, paused, lastPeer)
+				paused = commitBarrier.Paused
+				sess = nil
+				if ferr != nil {
 					break drainLoop
 				}
-				sess = nil
 				ss.mu.Lock()
 			}
 			prepareApplier := &syncEmptyDrainPreparationApplier{service: ss, now: now}
@@ -1472,23 +1470,27 @@ drainLoop:
 	}
 	commitBarrier := syncdl.PlanImportDrainCommitBarrier(syncdl.ImportDrainCommitBarrierInput{Paused: paused})
 	if sess != nil {
-		ferr := sess.Finish()
-		pauseBlock := uint64(0)
-		if ferr != nil && !paused {
-			pauseBlock = ss.chain.CurrentBlock().Number() + 1
-		}
-		commitBarrier = syncdl.PlanImportDrainCommitBarrier(syncdl.ImportDrainCommitBarrierInput{
-			FinishErr:  ferr,
-			Paused:     paused,
-			LastPeer:   lastPeer,
-			PauseBlock: pauseBlock,
-		})
-		if commitBarrier.Pause {
-			ss.pauseSync(commitBarrier.PausePeer, commitBarrier.PauseBlock, commitBarrier.Err)
-		}
+		commitBarrier = ss.applyImportDrainCommitBarrier(sess.Finish(), paused, lastPeer)
 		paused = commitBarrier.Paused
 	}
 	ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
+}
+
+func (ss *SyncService) applyImportDrainCommitBarrier(finishErr error, paused bool, lastPeer *p2p.Peer) syncdl.ImportDrainCommitBarrierPlan {
+	pauseBlock := uint64(0)
+	if finishErr != nil && !paused {
+		pauseBlock = ss.chain.CurrentBlock().Number() + 1
+	}
+	commitBarrier := syncdl.PlanImportDrainCommitBarrier(syncdl.ImportDrainCommitBarrierInput{
+		FinishErr:  finishErr,
+		Paused:     paused,
+		LastPeer:   lastPeer,
+		PauseBlock: pauseBlock,
+	})
+	if commitBarrier.Pause {
+		ss.pauseSync(commitBarrier.PausePeer, commitBarrier.PauseBlock, commitBarrier.Err)
+	}
+	return commitBarrier
 }
 
 func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePlan) {
