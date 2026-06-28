@@ -64,6 +64,12 @@ SYNC_RATE_FIELDS = (
     "blocksPerSecond",
 )
 
+HOT_BYTES_PER_BLOCK_FIELDS = (
+    "soakEfficiencyHotBytesPerBlock",
+    "intervalChaindataBytesPerBlock",
+    "chaindataBytesPerBlock",
+)
+
 
 def load_rows(path):
     rows = []
@@ -208,6 +214,29 @@ def check_min_sync_rate(row, minimum):
         ]
     if value < minimum:
         return [f"{field}={value:g} failed >= min sync rate {minimum:g} blocks/s"]
+    return []
+
+
+def hot_bytes_per_block_evidence(row):
+    for field in HOT_BYTES_PER_BLOCK_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_max_hot_bytes_per_block(row, maximum):
+    if maximum is None:
+        return []
+    field, value = hot_bytes_per_block_evidence(row)
+    if field is None:
+        return [
+            "hot bytes-per-block evidence missing: none of "
+            + ",".join(HOT_BYTES_PER_BLOCK_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value > maximum:
+        return [f"{field}={value:g} failed <= max hot bytes per block {maximum:g}"]
     return []
 
 
@@ -974,6 +1003,7 @@ def check_row(row, args):
             issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
 
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
+    issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
     issues.extend(check_thresholds(row, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(row, args.maximums, "<=", lambda got, want: got <= want))
     return issues
@@ -1057,6 +1087,15 @@ def build_parser():
         help=(
             "require selected rows to prove at least this sync rate using the "
             "best available interval/stage/log throughput field"
+        ),
+    )
+    parser.add_argument(
+        "--max-hot-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help=(
+            "require selected rows to prove hot Pebble storage growth is no "
+            "greater than this many bytes per imported block"
         ),
     )
     parser.add_argument(

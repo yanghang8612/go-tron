@@ -385,7 +385,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000 \
-  --min-sync-rate 1.0
+  --min-sync-rate 1.0 \
+  --max-hot-bytes-per-block 120000
 ```
 
 By default the checker validates the latest selected row, requires a captured
@@ -411,6 +412,13 @@ the best available blocks-per-second field in this order:
 `soakEfficiencyBlocksPerSecond`, `syncLogBlocksPerSecond`, then
 `blocksPerSecond`. Tune the threshold to the host/network baseline; keep it low
 for early smoke runs and raise it for dedicated Nile soak hardware.
+Use `--max-hot-bytes-per-block` to gate hot Pebble growth during catch-up. It
+checks `soakEfficiencyHotBytesPerBlock`, then
+`intervalChaindataBytesPerBlock`, then `chaindataBytesPerBlock`, so long-run
+samples prefer interval efficiency while first samples can still use cumulative
+evidence. Tune the byte threshold to the selected mode and expected transaction
+mix; lower values are appropriate for `minimal`/`snap` runs after cold coverage
+is active.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production
