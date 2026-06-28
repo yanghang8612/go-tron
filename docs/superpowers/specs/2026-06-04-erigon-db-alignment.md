@@ -1733,6 +1733,12 @@ Status:
   each one to pass through `archiveStateAt` or an audited archive-aware helper.
   This keeps new solidity/PBFT/JSON-RPC historical APIs from accidentally
   serving live-head state while the broader archive surface grows.
+- TRON HTTP solidity/PBFT source-audit coverage now checks the shared
+  `boundFn` handlers directly: state/query handlers must keep paired live and
+  `At` backend calls, while block/transaction boundary gates remain explicit
+  audited exceptions. The matching wrapper audit also requires each
+  `/walletsolidity` and `/walletpbft` wrapper to forward exactly once to its
+  expected shared handler with the solid or PBFT bound.
 - JSON-RPC source-audit coverage now checks both the reflection `EthAPI` and the
   legacy dispatch handlers: state/execution methods with historical block tags
   must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
