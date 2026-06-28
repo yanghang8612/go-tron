@@ -423,6 +423,7 @@ func (b *prefetchKeyBuilder) addExchangeKeys(exchangeID int64) {
 	}
 	b.add(state.ExchangePrefetchKey(exchangeID))
 	b.add(state.ExchangeV2PrefetchKey(exchangeID))
+	b.add(state.ExchangeTokenAssetsPrefetchKey(exchangeID))
 }
 
 func (b *prefetchKeyBuilder) add(key state.PrefetchKey) {

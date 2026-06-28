@@ -1382,8 +1382,9 @@ Status:
   rows. It covers transfer, TRC10 transfer/issue/participate, TVM
   create/trigger, contract settings, vote witness, witness operations,
   governance proposals, Stake 1.0/2.0, shielded transparent endpoints, market
-  sell/cancel, exchange token operations, owner-only actuators, and
-  account-create families.
+  sell/cancel, exchange token operations including metadata-derived TRC10 asset
+  rows for both exchange token legs, owner-only actuators, and account-create
+  families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when

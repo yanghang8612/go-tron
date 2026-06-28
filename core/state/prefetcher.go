@@ -1,8 +1,10 @@
 package state
 
 import (
+	"encoding/binary"
 	"fmt"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -10,6 +12,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,6 +32,7 @@ const (
 	PrefetchContractStorage
 	PrefetchContractCode
 	PrefetchContractOriginAccount
+	PrefetchExchangeTokenAssets
 )
 
 // PrefetchKey describes one read-only latest-domain warmup. It intentionally
@@ -114,6 +118,15 @@ func PendingVotesPrefetchKey(voter tcommon.Address) PrefetchKey {
 
 func PendingVotesIndexPrefetchKey() PrefetchKey {
 	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, votesStoreIndexKey)
+}
+
+func ExchangeTokenAssetsPrefetchKey(exchangeID int64) PrefetchKey {
+	if exchangeID <= 0 {
+		return PrefetchKey{}
+	}
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, uint64(exchangeID))
+	return PrefetchKey{Kind: PrefetchExchangeTokenAssets, Owner: tcommon.SystemAccountAddress, Key: key}
 }
 
 type StatePrefetcherConfig struct {
@@ -304,6 +317,8 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		return prefetchContractCode(db, key.Owner)
 	case PrefetchContractOriginAccount:
 		return prefetchContractOriginAccount(db, key)
+	case PrefetchExchangeTokenAssets:
+		return prefetchExchangeTokenAssets(db, key)
 	default:
 		return false, fmt.Errorf("state prefetch: unknown kind %d", key.Kind)
 	}
@@ -360,6 +375,72 @@ func prefetchContractOriginAccount(db ethdb.KeyValueReader, key PrefetchKey) (bo
 	}
 	_, ok, err = rawdb.ReadStateAccountLatest(db, origin)
 	return ok, err
+}
+
+func prefetchExchangeTokenAssets(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
+	if len(key.Key) != 8 {
+		return false, nil
+	}
+	exchangeID := int64(binary.BigEndian.Uint64(key.Key))
+	if exchangeID <= 0 {
+		return false, nil
+	}
+	generation, ok, err := prefetchGeneration(db, PrefetchKey{Owner: tcommon.SystemAccountAddress})
+	if err != nil || !ok {
+		return false, err
+	}
+	seenAssets := make(map[string]struct{})
+	hit := false
+	for _, rowKey := range [][]byte{
+		exchangeKVKey(exchangeKVDiscriminatorV2, exchangeID),
+		exchangeKVKey(exchangeKVDiscriminatorV1, exchangeID),
+	} {
+		data, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemExchange, rowKey)
+		if err != nil {
+			return hit, err
+		}
+		if !ok || len(data) == 0 {
+			continue
+		}
+		hit = true
+		var ex corepb.Exchange
+		if err := proto.Unmarshal(data, &ex); err != nil {
+			continue
+		}
+		if err := prefetchTRC10AssetRows(db, generation, ex.GetFirstTokenId(), seenAssets); err != nil {
+			return hit, err
+		}
+		if err := prefetchTRC10AssetRows(db, generation, ex.GetSecondTokenId(), seenAssets); err != nil {
+			return hit, err
+		}
+	}
+	return hit, nil
+}
+
+func prefetchTRC10AssetRows(db ethdb.KeyValueReader, generation uint64, token []byte, seen map[string]struct{}) error {
+	if len(token) == 0 || (len(token) == 1 && token[0] == '_') {
+		return nil
+	}
+	rows := [][]byte{
+		assetBytesKey(assetLegacyTag, token),
+		assetBytesKey(assetNameIndexTag, token),
+	}
+	if tokenID, err := strconv.ParseInt(string(token), 10, 64); err == nil {
+		rows = append(rows, assetIDKey(assetV2Tag, tokenID))
+	}
+	for _, row := range rows {
+		if seen != nil {
+			id := string(row)
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+		if _, _, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemAsset, row); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prefetchTRONAddress(raw []byte) (tcommon.Address, bool) {

@@ -1,12 +1,14 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -209,6 +211,76 @@ func TestStatePrefetcherWarmsGovernanceWitnessRows(t *testing.T) {
 	}
 }
 
+func TestStatePrefetcherWarmsExchangeTokenAssets(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	firstToken := []byte("1000008")
+	secondToken := []byte("ALT")
+	exchange := &corepb.Exchange{
+		ExchangeId:    7,
+		FirstTokenId:  firstToken,
+		SecondTokenId: secondToken,
+	}
+	exchangeBytes, err := proto.Marshal(exchange)
+	if err != nil {
+		t.Fatalf("marshal exchange: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, 7), exchangeBytes); err != nil {
+		t.Fatalf("WriteStateKVLatest exchange: %v", err)
+	}
+
+	assetValues := [][]byte{
+		[]byte("first-legacy"),
+		[]byte("first-name-index"),
+		[]byte("first-v2"),
+		[]byte("second-legacy"),
+		[]byte("second-name-index"),
+	}
+	assetRows := []struct {
+		key   []byte
+		value []byte
+	}{
+		{assetBytesKey(assetLegacyTag, firstToken), assetValues[0]},
+		{assetBytesKey(assetNameIndexTag, firstToken), assetValues[1]},
+		{assetIDKey(assetV2Tag, 1_000_008), assetValues[2]},
+		{assetBytesKey(assetLegacyTag, secondToken), assetValues[3]},
+		{assetBytesKey(assetNameIndexTag, secondToken), assetValues[4]},
+	}
+	for i, row := range assetRows {
+		if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemAsset, row.key, row.value); err != nil {
+			t.Fatalf("WriteStateKVLatest asset row %d: %v", i, err)
+		}
+	}
+
+	recorder := &recordingKeyValueReader{KeyValueReader: db}
+	hit, err := prefetchLatest(recorder, ExchangeTokenAssetsPrefetchKey(7))
+	if err != nil {
+		t.Fatalf("prefetch exchange token assets: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch exchange token assets hit = false, want true")
+	}
+	for _, value := range assetValues {
+		if !recorder.gotValue(rawdb.EncodeStateKVLatestValue(value)) {
+			t.Fatalf("prefetch did not read asset value %q; got values %#v", value, recorder.getValues)
+		}
+	}
+}
+
+func TestStatePrefetcherExchangeTokenAssetsSkipsMalformedExchange(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, 8), []byte{0xff}); err != nil {
+		t.Fatalf("WriteStateKVLatest malformed exchange: %v", err)
+	}
+
+	hit, err := prefetchLatest(db, ExchangeTokenAssetsPrefetchKey(8))
+	if err != nil {
+		t.Fatalf("prefetch malformed exchange token assets: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch malformed exchange token assets hit = false, want true")
+	}
+}
+
 func TestStatePrefetcherContractOriginAccountMissesWithoutChangingSemantics(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -325,4 +397,26 @@ func mustMarshalPrefetchContractMetadata(t *testing.T, meta *contractpb.SmartCon
 		t.Fatalf("marshal contract metadata: %v", err)
 	}
 	return data
+}
+
+type recordingKeyValueReader struct {
+	ethdb.KeyValueReader
+	getValues [][]byte
+}
+
+func (r *recordingKeyValueReader) Get(key []byte) ([]byte, error) {
+	value, err := r.KeyValueReader.Get(key)
+	if err == nil {
+		r.getValues = append(r.getValues, append([]byte(nil), value...))
+	}
+	return value, err
+}
+
+func (r *recordingKeyValueReader) gotValue(want []byte) bool {
+	for _, got := range r.getValues {
+		if bytes.Equal(got, want) {
+			return true
+		}
+	}
+	return false
 }

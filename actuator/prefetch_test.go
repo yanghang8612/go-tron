@@ -283,6 +283,7 @@ func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 	assertPrefetchHas(t, injectKeys, state.AccountPrefetchKey(owner))
 	assertPrefetchHas(t, injectKeys, state.ExchangePrefetchKey(7))
 	assertPrefetchHas(t, injectKeys, state.ExchangeV2PrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.ExchangeTokenAssetsPrefetchKey(7))
 	assertPrefetchHas(t, injectKeys, state.AssetIssueByNamePrefetchKey(secondToken))
 	assertPrefetchHas(t, injectKeys, state.AssetNameIndexPrefetchKey(secondToken))
 	assertPrefetchHas(t, injectKeys, state.AssetIssuePrefetchKey(1_000_003))
