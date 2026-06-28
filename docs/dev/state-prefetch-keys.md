@@ -17,6 +17,10 @@ hints and never change actuator validation behaviour.
 | `state.ContractMetadataPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row |
 | `state.ContractCodePrefetchKey(addr)` | `ReadStateAccountLatest(addr)` envelope, then `ReadStateCode(CodeHash)` when present |
 | `state.ContractOriginAccountPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row, then `ReadStateAccountLatest(origin_address)` when present |
+| `state.AccountKVPrefetchKey(addr, WitnessCapsule, key)` | witness capsule and current brokerage rows keyed by witness address |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemWitnessSchedule, key)` | witness index row |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemProposal, key)` | proposal record/index rows keyed by proposal id |
+| `state.AccountKVPrefetchKey(SystemAccount, WitnessVoteState, key)` | pending VotesStore record/index rows keyed by voter |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemMarket, key)` | market order/account/price-list/price-count/order-book rows derivable from the envelope |
@@ -33,7 +37,9 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | TVM trigger | owner account, contract account, contract metadata, contract code row, contract origin account from metadata |
 | TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata |
 | Contract settings | owner account, target contract account, target contract metadata, target contract origin account from metadata |
-| Vote witness | voter account, each voted witness account |
+| Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index |
+| Witness operations | owner account, owner witness capsule, witness index for creation, current brokerage row for brokerage updates |
+| Proposal operations | owner account, owner witness capsule where validation requires it, proposal record by id, proposal index for creation |
 | Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows |
 | Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
 | Shielded transfer | transparent from/to accounts when present and valid |
@@ -48,8 +54,8 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 - Per-account TRC10 balances beyond the owner/recipient account rows already
   warmed above. Balances live inside the account proto, so there is no separate
   asset-balance KV hint to enqueue yet.
-- Witness, proposal, and brokerage rawdb rows outside account latest. Some are
-  still not state-domain rows.
+- Reward-cycle witness VI and cycle-brokerage rows. Those require maintenance
+  cycle context and are not directly encoded in transaction envelopes.
 - Second-stage market/exchange rows that require first reading an order,
   exchange, or price list, such as maker order ids behind a matched price level
   and the opposite exchange token id.

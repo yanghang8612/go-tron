@@ -180,6 +180,35 @@ func TestStatePrefetcherWarmsContractOriginAccountFromMetadata(t *testing.T) {
 	}
 }
 
+func TestStatePrefetcherWarmsGovernanceWitnessRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	witness := testAddr(0x62)
+	voter := testAddr(0x63)
+	keys := []PrefetchKey{
+		WitnessCapsulePrefetchKey(witness),
+		WitnessBrokeragePrefetchKey(witness),
+		WitnessIndexPrefetchKey(),
+		ProposalPrefetchKey(7),
+		ProposalIndexPrefetchKey(),
+		PendingVotesPrefetchKey(voter),
+		PendingVotesIndexPrefetchKey(),
+	}
+	for i, key := range keys {
+		if err := rawdb.WriteStateKVLatest(db, key.Owner, 0, key.Domain, key.Key, []byte{byte(i + 1)}); err != nil {
+			t.Fatalf("WriteStateKVLatest key %d: %v", i, err)
+		}
+	}
+	for _, key := range keys {
+		hit, err := prefetchLatest(db, key)
+		if err != nil {
+			t.Fatalf("prefetch governance/witness key %#v: %v", key, err)
+		}
+		if !hit {
+			t.Fatalf("prefetch governance/witness key %#v hit = false, want true", key)
+		}
+	}
+}
+
 func TestStatePrefetcherContractOriginAccountMissesWithoutChangingSemantics(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -1377,11 +1377,13 @@ Status:
 - `actuator.PrefetchKeysFor(tx)` now extracts deterministic envelope-derived
   hints for account latest rows, contract metadata and trigger-contract code
   rows, metadata-derived contract-origin account rows, system delegation rows,
-  TRC10 `SystemAsset` metadata/index rows, and envelope-addressable
-  `SystemMarket`/`SystemExchange` rows. It covers transfer, TRC10
-  transfer/issue/participate, TVM create/trigger, contract settings, vote
-  witness, Stake 1.0/2.0, shielded transparent endpoints, market sell/cancel,
-  exchange token operations, owner-only actuators, and account-create families.
+  witness/proposal/brokerage rows, pending vote rows, TRC10 `SystemAsset`
+  metadata/index rows, and envelope-addressable `SystemMarket`/`SystemExchange`
+  rows. It covers transfer, TRC10 transfer/issue/participate, TVM
+  create/trigger, contract settings, vote witness, witness operations,
+  governance proposals, Stake 1.0/2.0, shielded transparent endpoints, market
+  sell/cancel, exchange token operations, owner-only actuators, and
+  account-create families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when

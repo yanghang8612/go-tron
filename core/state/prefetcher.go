@@ -88,6 +88,34 @@ func ContractStorageGenerationPrefetchKey(owner tcommon.Address, generation uint
 	return k
 }
 
+func WitnessCapsulePrefetchKey(addr tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr))
+}
+
+func WitnessBrokeragePrefetchKey(addr tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr))
+}
+
+func WitnessIndexPrefetchKey() PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemWitnessSchedule, witnessScheduleIndexKey)
+}
+
+func ProposalPrefetchKey(id int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreKey(id))
+}
+
+func ProposalIndexPrefetchKey() PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreIndexKey)
+}
+
+func PendingVotesPrefetchKey(voter tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, votesStoreKey(voter))
+}
+
+func PendingVotesIndexPrefetchKey() PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, votesStoreIndexKey)
+}
+
 type StatePrefetcherConfig struct {
 	Workers int
 	Queue   int

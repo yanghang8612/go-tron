@@ -147,6 +147,73 @@ func TestPrefetchKeysForAssetIssueSystemAssetRows(t *testing.T) {
 	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(name))
 }
 
+func TestPrefetchKeysForWitnessGovernanceRows(t *testing.T) {
+	owner := makeTestAddr(0x32)
+	witness := makeTestAddr(0x33)
+
+	voteTx := newPrefetchTestTx(t, corepb.Transaction_Contract_VoteWitnessContract, &contractpb.VoteWitnessContract{
+		OwnerAddress: owner.Bytes(),
+		Votes: []*contractpb.VoteWitnessContract_Vote{{
+			VoteAddress: witness.Bytes(),
+			VoteCount:   1,
+		}},
+	})
+	voteKeys := PrefetchKeysFor(voteTx)
+	assertPrefetchHas(t, voteKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.AccountPrefetchKey(witness))
+	assertPrefetchHas(t, voteKeys, state.WitnessCapsulePrefetchKey(witness))
+	assertPrefetchHas(t, voteKeys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.PendingVotesIndexPrefetchKey())
+
+	createTx := newPrefetchTestTx(t, corepb.Transaction_Contract_WitnessCreateContract, &contractpb.WitnessCreateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	createKeys := PrefetchKeysFor(createTx)
+	assertPrefetchHas(t, createKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, createKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, createKeys, state.WitnessIndexPrefetchKey())
+
+	updateTx := newPrefetchTestTx(t, corepb.Transaction_Contract_WitnessUpdateContract, &contractpb.WitnessUpdateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	updateKeys := PrefetchKeysFor(updateTx)
+	assertPrefetchHas(t, updateKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, updateKeys, state.WitnessCapsulePrefetchKey(owner))
+
+	brokerageTx := newPrefetchTestTx(t, corepb.Transaction_Contract_UpdateBrokerageContract, &contractpb.UpdateBrokerageContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	brokerageKeys := PrefetchKeysFor(brokerageTx)
+	assertPrefetchHas(t, brokerageKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, brokerageKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, brokerageKeys, state.WitnessBrokeragePrefetchKey(owner))
+
+	proposalCreateTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalCreateContract, &contractpb.ProposalCreateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	proposalCreateKeys := PrefetchKeysFor(proposalCreateTx)
+	assertPrefetchHas(t, proposalCreateKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalCreateKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, proposalCreateKeys, state.ProposalIndexPrefetchKey())
+
+	proposalApproveTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalApproveContract, &contractpb.ProposalApproveContract{
+		OwnerAddress: owner.Bytes(),
+		ProposalId:   7,
+	})
+	proposalApproveKeys := PrefetchKeysFor(proposalApproveTx)
+	assertPrefetchHas(t, proposalApproveKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalApproveKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, proposalApproveKeys, state.ProposalPrefetchKey(7))
+
+	proposalDeleteTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalDeleteContract, &contractpb.ProposalDeleteContract{
+		OwnerAddress: owner.Bytes(),
+		ProposalId:   7,
+	})
+	proposalDeleteKeys := PrefetchKeysFor(proposalDeleteTx)
+	assertPrefetchHas(t, proposalDeleteKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalDeleteKeys, state.ProposalPrefetchKey(7))
+}
+
 func TestPrefetchKeysForDelegateResourceSystemRows(t *testing.T) {
 	owner := makeTestAddr(0x06)
 	receiver := makeTestAddr(0x07)

@@ -126,10 +126,16 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addAccountBytes(m.GetOwnerAddress())
+		owner, ownerOK := b.addAccountBytes(m.GetOwnerAddress())
+		if ownerOK {
+			b.add(state.PendingVotesPrefetchKey(owner))
+			b.add(state.PendingVotesIndexPrefetchKey())
+		}
 		for _, vote := range m.GetVotes() {
 			if vote != nil {
-				b.addAccountBytes(vote.GetVoteAddress())
+				if target, ok := b.addAccountBytes(vote.GetVoteAddress()); ok {
+					b.add(state.WitnessCapsulePrefetchKey(target))
+				}
 			}
 		}
 
@@ -205,9 +211,14 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.add(state.AssetIssueByNamePrefetchKey(m.GetName()))
 		b.add(state.AssetNameIndexPrefetchKey(m.GetName()))
 	case corepb.Transaction_Contract_WitnessCreateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.WitnessCreateContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WitnessCreateContract{}); ok {
+			b.add(state.WitnessCapsulePrefetchKey(owner))
+			b.add(state.WitnessIndexPrefetchKey())
+		}
 	case corepb.Transaction_Contract_WitnessUpdateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.WitnessUpdateContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WitnessUpdateContract{}); ok {
+			b.add(state.WitnessCapsulePrefetchKey(owner))
+		}
 	case corepb.Transaction_Contract_AccountUpdateContract:
 		prefetchOwnerOnly(c, &b, &contractpb.AccountUpdateContract{})
 	case corepb.Transaction_Contract_SetAccountIdContract:
@@ -215,13 +226,31 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
 		prefetchOwnerOnly(c, &b, &contractpb.AccountPermissionUpdateContract{})
 	case corepb.Transaction_Contract_UpdateBrokerageContract:
-		prefetchOwnerOnly(c, &b, &contractpb.UpdateBrokerageContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UpdateBrokerageContract{}); ok {
+			b.add(state.WitnessCapsulePrefetchKey(owner))
+			b.add(state.WitnessBrokeragePrefetchKey(owner))
+		}
 	case corepb.Transaction_Contract_ProposalCreateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ProposalCreateContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.ProposalCreateContract{}); ok {
+			b.add(state.WitnessCapsulePrefetchKey(owner))
+			b.add(state.ProposalIndexPrefetchKey())
+		}
 	case corepb.Transaction_Contract_ProposalApproveContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ProposalApproveContract{})
+		var m contractpb.ProposalApproveContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		if owner, ok := b.addAccountBytes(m.GetOwnerAddress()); ok {
+			b.add(state.WitnessCapsulePrefetchKey(owner))
+		}
+		b.addProposal(m.GetProposalId())
 	case corepb.Transaction_Contract_ProposalDeleteContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ProposalDeleteContract{})
+		var m contractpb.ProposalDeleteContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addProposal(m.GetProposalId())
 	case corepb.Transaction_Contract_FreezeBalanceV2Contract:
 		prefetchOwnerOnly(c, &b, &contractpb.FreezeBalanceV2Contract{})
 	case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
@@ -308,11 +337,11 @@ func prefetchDecode(c *corepb.Transaction_Contract, msg proto.Message) bool {
 	return c.Parameter.UnmarshalTo(msg) == nil
 }
 
-func prefetchOwnerOnly(c *corepb.Transaction_Contract, b *prefetchKeyBuilder, msg ownerAddressMessage) {
+func prefetchOwnerOnly(c *corepb.Transaction_Contract, b *prefetchKeyBuilder, msg ownerAddressMessage) (tcommon.Address, bool) {
 	if !prefetchDecode(c, msg) {
-		return
+		return tcommon.Address{}, false
 	}
-	b.addAccountBytes(msg.GetOwnerAddress())
+	return b.addAccountBytes(msg.GetOwnerAddress())
 }
 
 func (b *prefetchKeyBuilder) addOwnerTo(msg ownerToAddressMessage, toContractMetadata bool) {
@@ -357,6 +386,13 @@ func (b *prefetchKeyBuilder) addV2DelegationKeys(owner, receiver tcommon.Address
 
 func (b *prefetchKeyBuilder) addSystemDelegationKey(key []byte) {
 	b.add(state.AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key))
+}
+
+func (b *prefetchKeyBuilder) addProposal(id int64) {
+	if id <= 0 {
+		return
+	}
+	b.add(state.ProposalPrefetchKey(id))
 }
 
 func (b *prefetchKeyBuilder) addTRC10AssetKeys(token []byte) {
