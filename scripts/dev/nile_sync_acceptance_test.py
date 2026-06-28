@@ -1223,6 +1223,59 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("archiveApiBlock=100 must be below height=100", proc.stderr)
             self.assertIn("archiveApiMethods missing required methods", proc.stderr)
 
+    def test_rejects_archive_api_check_count_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 2,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 99,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiChecks=2 must equal successful archiveApiMethods=5 when archiveApiFailures=0",
+                proc.stderr,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

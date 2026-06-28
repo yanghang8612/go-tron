@@ -629,6 +629,29 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "archiveApiBlock": 45,
                     "archiveApiMethods": "eth_getBalance",
                 },
+                {
+                    "unix": 30,
+                    "profile": "producer",
+                    "mode": "archive",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 2,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                },
             ]
             write_result(result, rows)
 
@@ -653,6 +676,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("archiveApiMethods missing required methods", proc.stderr)
             self.assertIn("archiveApiBlock=45 must be <= tailPrunedThroughBlock=40", proc.stderr)
             self.assertIn("archiveApiMethods must be a non-empty list", proc.stderr)
+            self.assertIn(
+                "archiveApiChecks=2 must equal successful archiveApiMethods=5 when archiveApiFailures=0",
+                proc.stderr,
+            )
 
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:

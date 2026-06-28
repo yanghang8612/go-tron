@@ -638,6 +638,13 @@ def archive_api_methods(row):
     return {str(method) for method in raw}
 
 
+def archive_api_method_count(row):
+    raw = row.get("archiveApiMethods")
+    if not isinstance(raw, list):
+        return None
+    return len(raw)
+
+
 def check_archive_api_evidence(rows, required_methods):
     issues = []
     latest = list(latest_rows(rows).values())
@@ -694,6 +701,18 @@ def check_archive_api_evidence(rows, required_methods):
         elif not methods:
             issues.append(f"{line_label(row)} archiveApiMethods must be a non-empty list")
         else:
+            method_count = archive_api_method_count(row)
+            if (
+                failures == 0
+                and checks is not None
+                and checks > 0
+                and method_count is not None
+                and checks != method_count
+            ):
+                issues.append(
+                    f"{line_label(row)} archiveApiChecks={checks:g} must equal "
+                    f"successful archiveApiMethods={method_count} when archiveApiFailures=0"
+                )
             missing = sorted(set(required_methods) - methods)
             if missing:
                 issues.append(
