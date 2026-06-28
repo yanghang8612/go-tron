@@ -579,16 +579,18 @@ def check_full_staged_sync_evidence(row):
     return issues
 
 
+STAGE_STALL_EVIDENCE_FIELDS = (
+    "stageStalled",
+    "stageStalledCount",
+    "stageStalledStage",
+    "stageStalledSeconds",
+    "stageStalledLagBlocks",
+    "stageStalls",
+)
+
+
 def check_stage_stall_evidence(row):
-    fields = (
-        "stageStalled",
-        "stageStalledCount",
-        "stageStalledStage",
-        "stageStalledSeconds",
-        "stageStalledLagBlocks",
-        "stageStalls",
-    )
-    if not any(field in row for field in fields):
+    if not any(field in row for field in STAGE_STALL_EVIDENCE_FIELDS):
         return []
 
     issues = []
@@ -665,6 +667,15 @@ def check_stage_stall_evidence(row):
         if lag is not None and primary_lag is not None and lag != primary_lag:
             issues.append(f"stageStalledLagBlocks={lag:g}, want primary stalled lag {primary_lag:g}")
 
+    return issues
+
+
+def check_required_stage_stall_evidence(row):
+    issues = []
+    missing = [field for field in STAGE_STALL_EVIDENCE_FIELDS if field not in row]
+    if missing:
+        issues.append("stage stall evidence missing fields: " + ",".join(missing))
+    issues.extend(check_stage_stall_evidence(row))
     return issues
 
 
@@ -776,7 +787,10 @@ def check_row(row, args):
 
     if row.get("stageSyncPipelineMonotonic") is not None and not as_bool(row, "stageSyncPipelineMonotonic"):
         issues.append("stageSyncPipelineMonotonic=false")
-    issues.extend(check_stage_stall_evidence(row))
+    if args.require_stage_stall_evidence:
+        issues.extend(check_required_stage_stall_evidence(row))
+    else:
+        issues.extend(check_stage_stall_evidence(row))
     if args.require_archive_api_evidence:
         issues.extend(check_archive_api_evidence(row, args.archive_api_methods_required))
 
@@ -846,6 +860,11 @@ def build_parser():
         "--require-offline-db-check",
         action="store_true",
         help="require offline db check fields to report ok",
+    )
+    parser.add_argument(
+        "--require-stage-stall-evidence",
+        action="store_true",
+        help="require selected rows to include stageStalled* diagnostics from the sampler",
     )
     parser.add_argument(
         "--require-archive-api-evidence",

@@ -120,6 +120,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "--label",
                     "candidate",
                     "--require-offline-db-check",
+                    "--require-stage-stall-evidence",
                     "--min-height",
                     "1000",
                     "--max-lag-blocks",
@@ -574,6 +575,51 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
             self.assertIn("stageStalledSeconds=10, want primary stalled seconds 20", proc.stderr)
             self.assertIn("stageStalledLagBlocks=5, want primary stalled lag 7", proc.stderr)
+
+    def test_requires_stage_stall_evidence_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "full",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--no-require-stage-status",
+                    "--require-stage-stall-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "stage stall evidence missing fields: "
+                "stageStalled,stageStalledCount,stageStalledStage,"
+                "stageStalledSeconds,stageStalledLagBlocks,stageStalls",
+                proc.stderr,
+            )
 
     def test_rejects_ready_row_without_full_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

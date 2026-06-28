@@ -800,8 +800,9 @@ Status:
   stage-status availability, staged-sync readiness or caught-up status, stage
   monotonicity, complete six-stage presence plus hash-verification evidence,
   hash/staged-body/order/regression counters, optional stopped offline DB
-  checks, storage-alert Prometheus artifact shape, and
-  project-specific numeric thresholds.
+  checks, optional required `stageStalled*`/`stageStalls` diagnostics,
+  storage-alert Prometheus artifact shape, and project-specific numeric
+  thresholds.
 
 Needed:
 
@@ -1202,8 +1203,8 @@ Status:
   structured `kind`/`severity`, the same checkers now require a matching
   `gtron_storage_alert_issue{component,kind,severity}` series in the captured
   artifact. Nile sync acceptance can also require the latest selected sample to
-  carry successful historical JSON-RPC archive-read evidence through
-  `archiveApi*` fields.
+  carry stage-stall diagnostics and successful historical JSON-RPC archive-read
+  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields.
 
 Needed:
 

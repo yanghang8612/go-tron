@@ -378,6 +378,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --network nile \
   --mode full \
   --require-offline-db-check \
+  --require-stage-stall-evidence \
   --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000
@@ -399,6 +400,9 @@ critical soak health, stage regressions, stage hash/staged-body/order issues,
 and non-monotonic sync-stage progress. When `--allow-warning-health` is used,
 stage-stall warning rows can pass only if `stageStalled*`, `stageStalls`, and
 `soakHealthIssues` describe the same primary stalled stage. Add
+`--require-stage-stall-evidence` for production soak gates so older sampler
+rows cannot pass without the `stageStalled*` and `stageStalls` diagnostics
+that identify which full staged-sync edge stopped moving. Add
 `--require-caught-up` for final catch-up proof or `--all` to validate every
 selected row in a candidate window. When `--require-offline-db-check` is used
 and the JSONL row carries `stageAlertPipeline*` fields, the checker also
