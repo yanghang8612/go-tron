@@ -232,11 +232,24 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		if !prefetchDecode(c, &m) {
 			return nil
 		}
-		b.addAccountBytes(m.GetOwnerAddress())
+		owner, ok := b.addAccountBytes(m.GetOwnerAddress())
+		if ok {
+			b.add(state.MarketAccountOrderPrefetchKey(owner.Bytes()))
+		}
 		b.addTRC10AssetKeys(m.GetSellTokenId())
 		b.addTRC10AssetKeys(m.GetBuyTokenId())
+		b.addMarketPairKeys(m.GetSellTokenId(), m.GetBuyTokenId(), m.GetSellTokenQuantity(), m.GetBuyTokenQuantity())
+		b.add(state.MarketPriceListPrefetchKey(m.GetBuyTokenId(), m.GetSellTokenId()))
 	case corepb.Transaction_Contract_MarketCancelOrderContract:
-		prefetchOwnerOnly(c, &b, &contractpb.MarketCancelOrderContract{})
+		var m contractpb.MarketCancelOrderContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		owner, ok := b.addAccountBytes(m.GetOwnerAddress())
+		if ok {
+			b.add(state.MarketAccountOrderPrefetchKey(owner.Bytes()))
+		}
+		b.add(state.MarketOrderPrefetchKey(m.GetOrderId()))
 	case corepb.Transaction_Contract_ExchangeCreateContract:
 		var m contractpb.ExchangeCreateContract
 		if !prefetchDecode(c, &m) {
@@ -251,6 +264,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		b.addAccountBytes(m.GetOwnerAddress())
+		b.addExchangeKeys(m.GetExchangeId())
 		b.addTRC10AssetKeys(m.GetTokenId())
 	case corepb.Transaction_Contract_ExchangeWithdrawContract:
 		var m contractpb.ExchangeWithdrawContract
@@ -258,6 +272,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		b.addAccountBytes(m.GetOwnerAddress())
+		b.addExchangeKeys(m.GetExchangeId())
 		b.addTRC10AssetKeys(m.GetTokenId())
 	case corepb.Transaction_Contract_ExchangeTransactionContract:
 		var m contractpb.ExchangeTransactionContract
@@ -265,6 +280,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		b.addAccountBytes(m.GetOwnerAddress())
+		b.addExchangeKeys(m.GetExchangeId())
 		b.addTRC10AssetKeys(m.GetTokenId())
 	}
 
@@ -344,6 +360,23 @@ func (b *prefetchKeyBuilder) addTRC10AssetKeys(token []byte) {
 			b.add(state.AssetIssuePrefetchKey(tokenID))
 		}
 	}
+}
+
+func (b *prefetchKeyBuilder) addMarketPairKeys(sellToken, buyToken []byte, sellQty, buyQty int64) {
+	b.add(state.MarketPriceListPrefetchKey(sellToken, buyToken))
+	b.add(state.MarketPairPriceCountPrefetchKey(sellToken, buyToken))
+	if sellQty <= 0 || buyQty <= 0 {
+		return
+	}
+	b.add(state.MarketOrderBookPrefetchKey(sellToken, buyToken, rawdb.PriceKey(sellQty, buyQty)))
+}
+
+func (b *prefetchKeyBuilder) addExchangeKeys(exchangeID int64) {
+	if exchangeID <= 0 {
+		return
+	}
+	b.add(state.ExchangePrefetchKey(exchangeID))
+	b.add(state.ExchangeV2PrefetchKey(exchangeID))
 }
 
 func (b *prefetchKeyBuilder) add(key state.PrefetchKey) {

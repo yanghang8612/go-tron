@@ -17,6 +17,8 @@ hints and never change actuator validation behaviour.
 | `state.ContractMetadataPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemMarket, key)` | market order/account/price-list/price-count/order-book rows derivable from the envelope |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemExchange, key)` | V1/V2 exchange rows keyed by exchange id |
 
 The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 `StateDB` object caches from worker goroutines.
@@ -34,8 +36,9 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
 | Shielded transfer | transparent from/to accounts when present and valid |
 | Asset issue | owner account, owner-index row, legacy name metadata, name index |
-| Market and exchange token operations | owner account plus TRC10 token metadata/name-index hints derivable from the envelope; `_` TRX token legs are skipped |
-| Owner-only actuators | owner account for witness, account, proposal, brokerage, freeze-v2, unfreeze-v2, withdraw, update-asset, unfreeze-asset, and market-cancel contracts |
+| Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, and reverse pair price-list; `_` TRX token legs are skipped for TRC10 metadata |
+| Exchange token operations | owner account, TRC10 token metadata/name-index hints derivable from the envelope, and both V1/V2 exchange rows when an exchange id is present |
+| Owner-only actuators | owner account for witness, account, proposal, brokerage, freeze-v2, unfreeze-v2, withdraw, update-asset, and unfreeze-asset contracts |
 | Account create and participate asset issue | owner account plus the explicitly referenced counterparty account; participate also warms TRC10 metadata/name-index rows |
 
 ## Not Yet Covered
@@ -43,8 +46,11 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 - Per-account TRC10 balances beyond the owner/recipient account rows already
   warmed above. Balances live inside the account proto, so there is no separate
   asset-balance KV hint to enqueue yet.
-- Witness, proposal, exchange, market, and brokerage rawdb rows outside
-  account latest. Some are still not state-domain rows.
+- Witness, proposal, and brokerage rawdb rows outside account latest. Some are
+  still not state-domain rows.
+- Second-stage market/exchange rows that require first reading an order,
+  exchange, or price list, such as maker order ids behind a matched price level
+  and the opposite exchange token id.
 - Contract origin account for update-setting/update-energy-limit/clear-ABI.
   It is read from contract metadata first, so it needs chained prefetch or a
   metadata-aware second pass.

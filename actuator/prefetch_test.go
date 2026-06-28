@@ -128,9 +128,14 @@ func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 
 	marketKeys := PrefetchKeysFor(marketTx)
 	assertPrefetchHas(t, marketKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, marketKeys, state.MarketAccountOrderPrefetchKey(owner.Bytes()))
 	assertPrefetchHas(t, marketKeys, state.AssetIssueByNamePrefetchKey(sellToken))
 	assertPrefetchHas(t, marketKeys, state.AssetNameIndexPrefetchKey(sellToken))
 	assertPrefetchHas(t, marketKeys, state.AssetIssuePrefetchKey(1_000_002))
+	assertPrefetchHas(t, marketKeys, state.MarketPriceListPrefetchKey(sellToken, []byte("_")))
+	assertPrefetchHas(t, marketKeys, state.MarketPairPriceCountPrefetchKey(sellToken, []byte("_")))
+	assertPrefetchHas(t, marketKeys, state.MarketOrderBookPrefetchKey(sellToken, []byte("_"), rawdb.PriceKey(1, 1)))
+	assertPrefetchHas(t, marketKeys, state.MarketPriceListPrefetchKey([]byte("_"), sellToken))
 	assertPrefetchMissing(t, marketKeys, state.AssetIssueByNamePrefetchKey([]byte("_")))
 	assertPrefetchMissing(t, marketKeys, state.AssetNameIndexPrefetchKey([]byte("_")))
 
@@ -151,6 +156,52 @@ func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 	assertPrefetchHas(t, exchangeKeys, state.AssetIssueByNamePrefetchKey(secondToken))
 	assertPrefetchHas(t, exchangeKeys, state.AssetNameIndexPrefetchKey(secondToken))
 	assertPrefetchHas(t, exchangeKeys, state.AssetIssuePrefetchKey(1_000_003))
+
+	injectTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ExchangeInjectContract, &contractpb.ExchangeInjectContract{
+		OwnerAddress: owner.Bytes(),
+		ExchangeId:   7,
+		TokenId:      secondToken,
+		Quant:        1,
+	})
+
+	injectKeys := PrefetchKeysFor(injectTx)
+	assertPrefetchHas(t, injectKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, injectKeys, state.ExchangePrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.ExchangeV2PrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.AssetIssueByNamePrefetchKey(secondToken))
+	assertPrefetchHas(t, injectKeys, state.AssetNameIndexPrefetchKey(secondToken))
+	assertPrefetchHas(t, injectKeys, state.AssetIssuePrefetchKey(1_000_003))
+
+	orderID := []byte("order-1")
+	cancelTx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketCancelOrderContract, &contractpb.MarketCancelOrderContract{
+		OwnerAddress: owner.Bytes(),
+		OrderId:      orderID,
+	})
+
+	cancelKeys := PrefetchKeysFor(cancelTx)
+	assertPrefetchHas(t, cancelKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, cancelKeys, state.MarketAccountOrderPrefetchKey(owner.Bytes()))
+	assertPrefetchHas(t, cancelKeys, state.MarketOrderPrefetchKey(orderID))
+}
+
+func TestPrefetchKeysForMarketRowsSkipsInvalidPriceKey(t *testing.T) {
+	owner := makeTestAddr(0x25)
+	sellToken := []byte("1000004")
+	buyToken := []byte("1000005")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketSellAssetContract, &contractpb.MarketSellAssetContract{
+		OwnerAddress:      owner.Bytes(),
+		SellTokenId:       sellToken,
+		SellTokenQuantity: 0,
+		BuyTokenId:        buyToken,
+		BuyTokenQuantity:  0,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.MarketPriceListPrefetchKey(sellToken, buyToken))
+	assertPrefetchHas(t, keys, state.MarketPairPriceCountPrefetchKey(sellToken, buyToken))
+	assertPrefetchHas(t, keys, state.MarketPriceListPrefetchKey(buyToken, sellToken))
+	assertPrefetchMissing(t, keys, state.MarketOrderBookPrefetchKey(sellToken, buyToken, rawdb.PriceKey(1, 1)))
 }
 
 func TestPrefetchKeysForMalformedOrInvalidInputs(t *testing.T) {

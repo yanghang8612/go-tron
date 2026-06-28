@@ -53,6 +53,16 @@ func exchangeKVKey(discriminator byte, id int64) []byte {
 	return k
 }
 
+// ExchangePrefetchKey returns the latest V1 exchange row for id.
+func ExchangePrefetchKey(id int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV1, id))
+}
+
+// ExchangeV2PrefetchKey returns the latest V2 exchange row for id.
+func ExchangeV2PrefetchKey(id int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, id))
+}
+
 // readExchange resolves one exchange leg, swallowing a KV error to nil to match
 // the prior rawdb reader's defensive behavior (read sites treat nil as absent).
 func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
