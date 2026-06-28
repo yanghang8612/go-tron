@@ -2884,9 +2884,8 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		if bloomMatcher != nil {
 			mayContain, err := bloomMatcher.mayContain(num)
 			if err != nil {
-				return nil, err
-			}
-			if !mayContain {
+				bloomMatcher = nil
+			} else if !mayContain {
 				continue
 			}
 		}

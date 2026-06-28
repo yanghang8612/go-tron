@@ -1930,6 +1930,10 @@ Status:
   `HeadStateRoot()`'s legacy zero-on-error fallback. Cold head state-root
   lookup failures surface as backend errors instead of misleading not-found,
   empty-resource, or zero-value results.
+- `eth_getLogs` treats section-bloom read failures as optimization misses and
+  falls back to canonical block/TransactionInfo scanning for the bounded query
+  range. Strict section-bloom errors still surface through rebuild, prune, and
+  verification paths where the index itself is the artifact being audited.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

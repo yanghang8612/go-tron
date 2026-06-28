@@ -1260,6 +1260,51 @@ func TestTronBackend_GetLogsFallsBackWhenSectionBloomMissing(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsFallsBackWhenSectionBloomErrors(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x15)
+	topic := tcommon.Hash{0x15}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x15, 0x16},
+	})
+	block2, info2 := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 2, []*corepb.TransactionInfo{info2}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block2: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+	bc.ChainDB().SetSectionBloomReader(testSectionBloomColdReader{err: fmt.Errorf("cold section bloom unavailable")})
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs with section bloom error: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs with section bloom error returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x1516" {
+		t.Fatalf("GetLogs with section bloom error log = %+v, want data 0x1516", logs[0])
+	}
+}
+
 func TestTronBackend_GetLogsSkipsMissingTransactionInfoCoverage(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
