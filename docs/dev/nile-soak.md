@@ -386,6 +386,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --min-height 100000 \
   --max-lag-blocks 5000 \
   --min-sync-rate 1.0 \
+  --max-datadir-bytes-per-block 500000 \
   --max-hot-bytes-per-block 120000 \
   --max-cold-archive-bytes-per-block 250000 \
   --max-derived-index-bytes-per-block 40000
@@ -414,6 +415,13 @@ the best available blocks-per-second field in this order:
 `soakEfficiencyBlocksPerSecond`, `syncLogBlocksPerSecond`, then
 `blocksPerSecond`. Tune the threshold to the host/network baseline; keep it low
 for early smoke runs and raise it for dedicated Nile soak hardware.
+Use `--max-datadir-bytes-per-block` to cap total disk growth across hot Pebble,
+ancients, snapshots, replay, and derived sidecars. It checks
+`soakEfficiencyDatadirBytesPerBlock`, then `intervalDatadirBytesPerBlock`, then
+`datadirBytesPerBlock`, so long-run samples prefer interval efficiency while
+first samples can still use cumulative evidence when present. Keep this as the
+outer storage budget, then use the hot/cold/index gates below to identify which
+bucket is responsible when the total budget fails.
 Use `--max-hot-bytes-per-block` to gate hot Pebble growth during catch-up. It
 checks `soakEfficiencyHotBytesPerBlock`, then
 `intervalChaindataBytesPerBlock`, then `chaindataBytesPerBlock`, so long-run

@@ -64,6 +64,12 @@ SYNC_RATE_FIELDS = (
     "blocksPerSecond",
 )
 
+DATADIR_BYTES_PER_BLOCK_FIELDS = (
+    "soakEfficiencyDatadirBytesPerBlock",
+    "intervalDatadirBytesPerBlock",
+    "datadirBytesPerBlock",
+)
+
 HOT_BYTES_PER_BLOCK_FIELDS = (
     "soakEfficiencyHotBytesPerBlock",
     "intervalChaindataBytesPerBlock",
@@ -226,6 +232,29 @@ def check_min_sync_rate(row, minimum):
         ]
     if value < minimum:
         return [f"{field}={value:g} failed >= min sync rate {minimum:g} blocks/s"]
+    return []
+
+
+def datadir_bytes_per_block_evidence(row):
+    for field in DATADIR_BYTES_PER_BLOCK_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_max_datadir_bytes_per_block(row, maximum):
+    if maximum is None:
+        return []
+    field, value = datadir_bytes_per_block_evidence(row)
+    if field is None:
+        return [
+            "datadir bytes-per-block evidence missing: none of "
+            + ",".join(DATADIR_BYTES_PER_BLOCK_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value > maximum:
+        return [f"{field}={value:g} failed <= max datadir bytes per block {maximum:g}"]
     return []
 
 
@@ -1065,6 +1094,7 @@ def check_row(row, args):
             issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
 
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
+    issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
     issues.extend(
         check_max_cold_archive_bytes_per_block(row, args.max_cold_archive_bytes_per_block)
@@ -1164,6 +1194,15 @@ def build_parser():
         help=(
             "require selected rows to prove hot Pebble storage growth is no "
             "greater than this many bytes per imported block"
+        ),
+    )
+    parser.add_argument(
+        "--max-datadir-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help=(
+            "require selected rows to prove total datadir growth is no greater "
+            "than this many bytes per imported block"
         ),
     )
     parser.add_argument(
