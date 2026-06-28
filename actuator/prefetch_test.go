@@ -45,6 +45,26 @@ func TestPrefetchKeysForTriggerSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
 }
 
+func TestPrefetchKeysForTransferAssetSystemAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x21)
+	to := makeTestAddr(0x22)
+	assetName := []byte("1000001")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferAssetContract, &contractpb.TransferAssetContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    to.Bytes(),
+		AssetName:    assetName,
+		Amount:       1,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.AssetIssueByNamePrefetchKey(assetName))
+	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(assetName))
+	assertPrefetchHas(t, keys, state.AssetIssuePrefetchKey(1_000_001))
+}
+
 func TestPrefetchKeysForCreateSmartContract(t *testing.T) {
 	owner := makeTestAddr(0x04)
 	origin := makeTestAddr(0x05)
@@ -63,6 +83,22 @@ func TestPrefetchKeysForCreateSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(created))
 }
 
+func TestPrefetchKeysForAssetIssueSystemAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x23)
+	name := []byte("MYTOKEN")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_AssetIssueContract, &contractpb.AssetIssueContract{
+		OwnerAddress: owner.Bytes(),
+		Name:         name,
+		TotalSupply:  1,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AssetOwnerIndexPrefetchKey(owner.Bytes()))
+	assertPrefetchHas(t, keys, state.AssetIssueByNamePrefetchKey(name))
+	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(name))
+}
+
 func TestPrefetchKeysForDelegateResourceSystemRows(t *testing.T) {
 	owner := makeTestAddr(0x06)
 	receiver := makeTestAddr(0x07)
@@ -77,6 +113,44 @@ func TestPrefetchKeysForDelegateResourceSystemRows(t *testing.T) {
 	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegatedResourceV2StateKey(owner, receiver, false)))
 	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegatedResourceV2StateKey(owner, receiver, true)))
 	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegationIndexStateKey(owner)))
+}
+
+func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x24)
+	sellToken := []byte("1000002")
+	marketTx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketSellAssetContract, &contractpb.MarketSellAssetContract{
+		OwnerAddress:      owner.Bytes(),
+		SellTokenId:       sellToken,
+		SellTokenQuantity: 1,
+		BuyTokenId:        []byte("_"),
+		BuyTokenQuantity:  1,
+	})
+
+	marketKeys := PrefetchKeysFor(marketTx)
+	assertPrefetchHas(t, marketKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, marketKeys, state.AssetIssueByNamePrefetchKey(sellToken))
+	assertPrefetchHas(t, marketKeys, state.AssetNameIndexPrefetchKey(sellToken))
+	assertPrefetchHas(t, marketKeys, state.AssetIssuePrefetchKey(1_000_002))
+	assertPrefetchMissing(t, marketKeys, state.AssetIssueByNamePrefetchKey([]byte("_")))
+	assertPrefetchMissing(t, marketKeys, state.AssetNameIndexPrefetchKey([]byte("_")))
+
+	firstToken := []byte("MYTOKEN")
+	secondToken := []byte("1000003")
+	exchangeTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ExchangeCreateContract, &contractpb.ExchangeCreateContract{
+		OwnerAddress:       owner.Bytes(),
+		FirstTokenId:       firstToken,
+		FirstTokenBalance:  1,
+		SecondTokenId:      secondToken,
+		SecondTokenBalance: 1,
+	})
+
+	exchangeKeys := PrefetchKeysFor(exchangeTx)
+	assertPrefetchHas(t, exchangeKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssueByNamePrefetchKey(firstToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetNameIndexPrefetchKey(firstToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssueByNamePrefetchKey(secondToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetNameIndexPrefetchKey(secondToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssuePrefetchKey(1_000_003))
 }
 
 func TestPrefetchKeysForMalformedOrInvalidInputs(t *testing.T) {

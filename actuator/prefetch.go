@@ -1,7 +1,9 @@
 package actuator
 
 import (
+	"bytes"
 	"fmt"
+	"strconv"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -56,6 +58,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		b.addOwnerTo(&m, true)
+		b.addTRC10AssetKeys(m.GetAssetName())
 
 	case corepb.Transaction_Contract_ParticipateAssetIssueContract:
 		var m contractpb.ParticipateAssetIssueContract
@@ -63,6 +66,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		b.addOwnerTo(&m, false)
+		b.addTRC10AssetKeys(m.GetAssetName())
 
 	case corepb.Transaction_Contract_TriggerSmartContract:
 		var m contractpb.TriggerSmartContract
@@ -181,7 +185,16 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.addAccountBytes(m.GetAccountAddress())
 
 	case corepb.Transaction_Contract_AssetIssueContract:
-		prefetchOwnerOnly(c, &b, &contractpb.AssetIssueContract{})
+		var m contractpb.AssetIssueContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		owner, ok := b.addAccountBytes(m.GetOwnerAddress())
+		if ok {
+			b.add(state.AssetOwnerIndexPrefetchKey(owner.Bytes()))
+		}
+		b.add(state.AssetIssueByNamePrefetchKey(m.GetName()))
+		b.add(state.AssetNameIndexPrefetchKey(m.GetName()))
 	case corepb.Transaction_Contract_WitnessCreateContract:
 		prefetchOwnerOnly(c, &b, &contractpb.WitnessCreateContract{})
 	case corepb.Transaction_Contract_WitnessUpdateContract:
@@ -215,17 +228,44 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 	case corepb.Transaction_Contract_UnfreezeAssetContract:
 		prefetchOwnerOnly(c, &b, &contractpb.UnfreezeAssetContract{})
 	case corepb.Transaction_Contract_MarketSellAssetContract:
-		prefetchOwnerOnly(c, &b, &contractpb.MarketSellAssetContract{})
+		var m contractpb.MarketSellAssetContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addTRC10AssetKeys(m.GetSellTokenId())
+		b.addTRC10AssetKeys(m.GetBuyTokenId())
 	case corepb.Transaction_Contract_MarketCancelOrderContract:
 		prefetchOwnerOnly(c, &b, &contractpb.MarketCancelOrderContract{})
 	case corepb.Transaction_Contract_ExchangeCreateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ExchangeCreateContract{})
+		var m contractpb.ExchangeCreateContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addTRC10AssetKeys(m.GetFirstTokenId())
+		b.addTRC10AssetKeys(m.GetSecondTokenId())
 	case corepb.Transaction_Contract_ExchangeInjectContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ExchangeInjectContract{})
+		var m contractpb.ExchangeInjectContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addTRC10AssetKeys(m.GetTokenId())
 	case corepb.Transaction_Contract_ExchangeWithdrawContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ExchangeWithdrawContract{})
+		var m contractpb.ExchangeWithdrawContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addTRC10AssetKeys(m.GetTokenId())
 	case corepb.Transaction_Contract_ExchangeTransactionContract:
-		prefetchOwnerOnly(c, &b, &contractpb.ExchangeTransactionContract{})
+		var m contractpb.ExchangeTransactionContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.addTRC10AssetKeys(m.GetTokenId())
 	}
 
 	return b.keys
@@ -291,6 +331,19 @@ func (b *prefetchKeyBuilder) addV2DelegationKeys(owner, receiver tcommon.Address
 
 func (b *prefetchKeyBuilder) addSystemDelegationKey(key []byte) {
 	b.add(state.AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key))
+}
+
+func (b *prefetchKeyBuilder) addTRC10AssetKeys(token []byte) {
+	if len(token) == 0 || bytes.Equal(token, []byte("_")) {
+		return
+	}
+	b.add(state.AssetIssueByNamePrefetchKey(token))
+	b.add(state.AssetNameIndexPrefetchKey(token))
+	if isNumericBytes(token) {
+		if tokenID, err := strconv.ParseInt(string(token), 10, 64); err == nil {
+			b.add(state.AssetIssuePrefetchKey(tokenID))
+		}
+	}
 }
 
 func (b *prefetchKeyBuilder) add(key state.PrefetchKey) {

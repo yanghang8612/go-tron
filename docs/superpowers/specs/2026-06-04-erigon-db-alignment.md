@@ -1374,12 +1374,13 @@ Status:
   enqueue and hit/miss/drop/error stats. It deliberately avoids mutating
   `StateDB` object caches because those maps do not yet have a concurrent
   access model.
-- `actuator.PrefetchKeysFor(tx)` now extracts the first deterministic
-  envelope-derived hints for account latest rows, contract metadata rows, and
-  system delegation rows. It covers transfer, TVM create/trigger, contract
-  settings, vote witness, Stake 1.0/2.0, shielded transparent endpoints,
-  owner-only actuators, account-create, and participate-asset-issue families.
-  The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
+- `actuator.PrefetchKeysFor(tx)` now extracts deterministic envelope-derived
+  hints for account latest rows, contract metadata rows, system delegation
+  rows, and TRC10 `SystemAsset` metadata/index rows. It covers transfer, TRC10
+  transfer/issue/participate, TVM create/trigger, contract settings, vote
+  witness, Stake 1.0/2.0, shielded transparent endpoints, market/exchange
+  token legs, owner-only actuators, and account-create families. The detailed
+  audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when
   `params.ChainConfig.StatePrefetchEnabled` is true, while the public

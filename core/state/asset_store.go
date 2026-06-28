@@ -67,6 +67,26 @@ func assetBytesKey(tag byte, raw []byte) []byte {
 	return k
 }
 
+// AssetIssuePrefetchKey returns the latest V2 metadata row for tokenID.
+func AssetIssuePrefetchKey(tokenID int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetIDKey(assetV2Tag, tokenID))
+}
+
+// AssetIssueByNamePrefetchKey returns the latest legacy metadata row for name.
+func AssetIssueByNamePrefetchKey(name []byte) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetLegacyTag, name))
+}
+
+// AssetNameIndexPrefetchKey returns the latest legacy name -> token-id row.
+func AssetNameIndexPrefetchKey(name []byte) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name))
+}
+
+// AssetOwnerIndexPrefetchKey returns the latest issuer -> token-id row.
+func AssetOwnerIndexPrefetchKey(ownerAddr []byte) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr))
+}
+
 // readAssetMeta resolves one AssetIssueContract leg, swallowing a KV error to
 // nil to match the prior rawdb reader's defensive behavior (read sites treat
 // nil as absent).
