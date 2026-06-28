@@ -869,6 +869,8 @@ type ImportedBatchProgressPlan struct {
 	AppliedStagePhases   ImportBatchStagePhaseSchedule
 	AppliedPhases        []ImportStagePhasePlan
 	StagePhaseCursor     ImportStagePhaseCursor
+	ResumePhasePlan      ImportStagePhasePlan
+	HasResumePhasePlan   bool
 	StagePlan            ImportStagePlan
 	Stages               []ImportStageTask
 	Deletes              []rawdb.SyncStagedBlockDelete
@@ -1041,6 +1043,10 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 			plan.StageDiagnostics = plan.StagePlan.Diagnostics()
 			if cursor, ok := execution.AppliedPhaseCursor(applied, plan.StagePlan); ok {
 				plan.StagePhaseCursor = cursor
+				if resume, ok := cursor.RemainingCurrentPhasePlan(); ok {
+					plan.ResumePhasePlan = resume
+					plan.HasResumePhasePlan = true
+				}
 			}
 			plan = plan.withSteps()
 		}
@@ -1090,6 +1096,15 @@ func (p ImportedBatchProgressPlan) withSteps() ImportedBatchProgressPlan {
 		p.Steps = append(p.Steps, ImportedBatchProgressStep{Action: ImportedBatchRefreshBodiesReady})
 	}
 	return p
+}
+
+// RemainingCurrentPhasePlan returns the runnable suffix of the current import
+// phase for a future staged scheduler. The returned plan owns its task slice.
+func (p ImportedBatchProgressPlan) RemainingCurrentPhasePlan() (ImportStagePhasePlan, bool) {
+	if !p.HasResumePhasePlan || len(p.ResumePhasePlan.Tasks) == 0 {
+		return ImportStagePhasePlan{}, false
+	}
+	return cloneImportStagePhasePlan(p.ResumePhasePlan), true
 }
 
 func cloneTxKindCounts(source map[string]int) map[string]int {

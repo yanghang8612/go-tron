@@ -729,7 +729,10 @@ Status:
   a typed current-phase plan to resume from instead of scraping log fields or
   re-deriving the batch graph from raw diagnostic counters. Runtime logs and
   the Nile sampler now preserve that suffix's block range as
-  `syncPhaseCursorCurrentFromBlock`/`syncPhaseCursorCurrentToBlock`.
+  `syncPhaseCursorCurrentFromBlock`/`syncPhaseCursorCurrentToBlock`. The same
+  suffix is now retained on the imported-batch progress plan as a defensive-copy
+  `ResumePhasePlan`, so the next scheduler step can consume the typed
+  execution/commitment/finish task list directly after a partial import.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

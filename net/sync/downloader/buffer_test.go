@@ -997,6 +997,10 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if !result.Progress.OK || result.Progress.Summary.Applied != 2 || !result.Progress.StagePlan.Complete {
 		t.Fatalf("result progress plan = %+v, want complete applied block2 plan", result.Progress)
 	}
+	if resume, ok := result.Progress.RemainingCurrentPhasePlan(); result.Progress.HasResumePhasePlan || ok {
+		t.Fatalf("complete progress resume phase = %+v ok=%v stored=%v, want none",
+			resume, ok, result.Progress.HasResumePhasePlan)
+	}
 	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 8 || result.StageDiagnostics.Scheduled != 8 {
 		t.Fatalf("result stage diagnostics = %+v, want complete 8/8", result.StageDiagnostics)
 	}
@@ -1253,6 +1257,20 @@ func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *test
 	}
 	if !reflect.DeepEqual(applier.recordPlan.StageDiagnostics, result.StageDiagnostics) {
 		t.Fatalf("recorded stage diagnostics = %+v, want result diagnostics %+v", applier.recordPlan.StageDiagnostics, result.StageDiagnostics)
+	}
+	resume, ok := result.Progress.RemainingCurrentPhasePlan()
+	if !result.Progress.HasResumePhasePlan ||
+		!ok ||
+		resume.Phase != ImportStagePhaseCommitment ||
+		resume.CanonicalStage != rawdb.StageCommitment ||
+		resume.SyncStage != rawdb.StageSyncCommitment ||
+		len(resume.Tasks) != 1 ||
+		resume.Tasks[0] != ImportCommitmentStageTask(block.Number(), block.Hash()) {
+		t.Fatalf("result resume phase = %+v ok=%v stored=%+v, want commitment block1 suffix",
+			resume, ok, result.Progress.ResumePhasePlan)
+	}
+	if recordResume, ok := applier.recordPlan.RemainingCurrentPhasePlan(); !ok || !reflect.DeepEqual(recordResume, resume) {
+		t.Fatalf("record resume phase = %+v ok=%v, want result resume %+v", recordResume, ok, resume)
 	}
 	if result.Progress.AppliedDiagnostics.PlannedBlocks != 1 ||
 		result.Progress.AppliedDiagnostics.PlannedStages != 4 ||

@@ -374,6 +374,21 @@ func TestPlanImportedBatchProgressForExecutionUsesBatchPhasePrefix(t *testing.T)
 		cursor.BlockedStatus != ImportStageProgressMismatch {
 		t.Fatalf("stage phase cursor = %+v, want execution phase cursor at block2 mismatch", cursor)
 	}
+	resume, ok := got.RemainingCurrentPhasePlan()
+	if !got.HasResumePhasePlan ||
+		!ok ||
+		resume.Phase != ImportStagePhaseExecution ||
+		resume.CanonicalStage != rawdb.StageExecution ||
+		resume.SyncStage != rawdb.StageSyncExecution ||
+		len(resume.Tasks) != 1 ||
+		resume.Tasks[0] != ImportExecutionStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("resume phase plan = %+v ok=%v stored=%+v, want execution block2 suffix",
+			resume, ok, got.ResumePhasePlan)
+	}
+	resume.Tasks[0].BlockNum = 99
+	if got.ResumePhasePlan.Tasks[0].BlockNum == 99 {
+		t.Fatal("RemainingCurrentPhasePlan returned aliased task slice")
+	}
 	if got.AppliedStagePhases.Empty() ||
 		len(got.AppliedPhases) != 4 ||
 		got.AppliedStagePhases.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
