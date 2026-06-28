@@ -386,7 +386,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --min-height 100000 \
   --max-lag-blocks 5000 \
   --min-sync-rate 1.0 \
-  --max-hot-bytes-per-block 120000
+  --max-hot-bytes-per-block 120000 \
+  --max-cold-archive-bytes-per-block 250000
 ```
 
 By default the checker validates the latest selected row, requires a captured
@@ -419,6 +420,14 @@ samples prefer interval efficiency while first samples can still use cumulative
 evidence. Tune the byte threshold to the selected mode and expected transaction
 mix; lower values are appropriate for `minimal`/`snap` runs after cold coverage
 is active.
+Use `--max-cold-archive-bytes-per-block` to keep archive/snapshot sidecar
+growth bounded while proving historical data remains available. It checks
+`soakEfficiencyColdArchiveBytesPerBlock`, then
+`intervalColdArchiveBytesPerBlock`, then `coldArchiveBytesPerBlock`, so long-run
+archive/full samples prefer interval efficiency while first samples can still
+use cumulative evidence. Tune this threshold per history mode and retained
+archive window; archive mode can be higher than minimal/snap because it keeps
+more historical sidecar data.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production

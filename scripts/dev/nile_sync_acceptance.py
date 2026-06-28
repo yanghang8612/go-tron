@@ -70,6 +70,12 @@ HOT_BYTES_PER_BLOCK_FIELDS = (
     "chaindataBytesPerBlock",
 )
 
+COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS = (
+    "soakEfficiencyColdArchiveBytesPerBlock",
+    "intervalColdArchiveBytesPerBlock",
+    "coldArchiveBytesPerBlock",
+)
+
 
 def load_rows(path):
     rows = []
@@ -237,6 +243,31 @@ def check_max_hot_bytes_per_block(row, maximum):
         ]
     if value > maximum:
         return [f"{field}={value:g} failed <= max hot bytes per block {maximum:g}"]
+    return []
+
+
+def cold_archive_bytes_per_block_evidence(row):
+    for field in COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_max_cold_archive_bytes_per_block(row, maximum):
+    if maximum is None:
+        return []
+    field, value = cold_archive_bytes_per_block_evidence(row)
+    if field is None:
+        return [
+            "cold archive bytes-per-block evidence missing: none of "
+            + ",".join(COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS)
+            + " is present and non-negative"
+        ]
+    if value > maximum:
+        return [
+            f"{field}={value:g} failed <= max cold archive bytes per block {maximum:g}"
+        ]
     return []
 
 
@@ -1004,6 +1035,9 @@ def check_row(row, args):
 
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
+    issues.extend(
+        check_max_cold_archive_bytes_per_block(row, args.max_cold_archive_bytes_per_block)
+    )
     issues.extend(check_thresholds(row, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(row, args.maximums, "<=", lambda got, want: got <= want))
     return issues
@@ -1095,6 +1129,15 @@ def build_parser():
         metavar="BYTES",
         help=(
             "require selected rows to prove hot Pebble storage growth is no "
+            "greater than this many bytes per imported block"
+        ),
+    )
+    parser.add_argument(
+        "--max-cold-archive-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help=(
+            "require selected rows to prove cold archive/snapshot growth is no "
             "greater than this many bytes per imported block"
         ),
     )

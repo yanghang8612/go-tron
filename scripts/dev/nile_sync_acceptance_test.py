@@ -382,6 +382,89 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("hot bytes-per-block evidence missing", proc.stderr)
 
+    def test_accepts_max_cold_archive_bytes_per_block_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyColdArchiveBytesPerBlock"] = 20000
+            row["intervalColdArchiveBytesPerBlock"] = 30000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-archive-bytes-per-block",
+                    "25000",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_cold_archive_bytes_per_block_above_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyColdArchiveBytesPerBlock"] = 26000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-archive-bytes-per-block",
+                    "25000",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "soakEfficiencyColdArchiveBytesPerBlock=26000 failed <= max cold archive bytes per block 25000",
+                proc.stderr,
+            )
+
+    def test_rejects_cold_archive_bytes_per_block_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-archive-bytes-per-block",
+                    "25000",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("cold archive bytes-per-block evidence missing", proc.stderr)
+
     def test_rejects_full_staged_sync_lag_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
