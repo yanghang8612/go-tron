@@ -61,6 +61,8 @@ type Diagnostics struct {
 	ImportPhaseCursorCurrentTaskIndex      int
 	ImportPhaseCursorCurrentTaskCount      int
 	ImportPhaseCursorCurrentTaskRemaining  int
+	ImportPhaseCursorCurrentFromBlock      uint64
+	ImportPhaseCursorCurrentToBlock        uint64
 	ImportPhaseCursorNextBlock             uint64
 	ImportPhaseCursorNextPhase             string
 	ImportPhaseCursorNextCanonical         string
@@ -187,6 +189,8 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 				"syncPhaseCursorCurrentTaskIndex", d.ImportPhaseCursorCurrentTaskIndex,
 				"syncPhaseCursorCurrentTaskCount", d.ImportPhaseCursorCurrentTaskCount,
 				"syncPhaseCursorCurrentTaskRemaining", d.ImportPhaseCursorCurrentTaskRemaining,
+				"syncPhaseCursorCurrentFromBlock", d.ImportPhaseCursorCurrentFromBlock,
+				"syncPhaseCursorCurrentToBlock", d.ImportPhaseCursorCurrentToBlock,
 			)
 		}
 		if d.ImportPhaseCursorNextBlock != 0 || d.ImportPhaseCursorNextPhase != "" || d.ImportPhaseCursorBlockedStatus != "" {
@@ -333,9 +337,10 @@ func (d Diagnostics) WithImportStagePhaseCursor(cursor ImportStagePhaseCursor) D
 		d.ImportPhaseCursorCurrentSync = string(cursor.CurrentSyncStage)
 		d.ImportPhaseCursorCurrentTaskIndex = cursor.CurrentTaskIndex
 		d.ImportPhaseCursorCurrentTaskCount = len(cursor.CurrentTasks)
-		d.ImportPhaseCursorCurrentTaskRemaining = d.ImportPhaseCursorCurrentTaskCount - cursor.CurrentTaskIndex
-		if d.ImportPhaseCursorCurrentTaskRemaining < 0 {
-			d.ImportPhaseCursorCurrentTaskRemaining = 0
+		d.ImportPhaseCursorCurrentTaskRemaining = cursor.CurrentTaskRemaining()
+		if remaining, ok := cursor.RemainingCurrentPhasePlan(); ok && len(remaining.Tasks) > 0 {
+			d.ImportPhaseCursorCurrentFromBlock = remaining.Tasks[0].BlockNum
+			d.ImportPhaseCursorCurrentToBlock = remaining.Tasks[len(remaining.Tasks)-1].BlockNum
 		}
 	}
 	if cursor.HasNextTask {

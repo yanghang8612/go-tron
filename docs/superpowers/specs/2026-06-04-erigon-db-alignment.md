@@ -727,7 +727,9 @@ Status:
 - The sync-import phase cursor now exposes the runnable suffix of its current
   bodies/execution/commitment/finish phase. This gives a future staged scheduler
   a typed current-phase plan to resume from instead of scraping log fields or
-  re-deriving the batch graph from raw diagnostic counters.
+  re-deriving the batch graph from raw diagnostic counters. Runtime logs and
+  the Nile sampler now preserve that suffix's block range as
+  `syncPhaseCursorCurrentFromBlock`/`syncPhaseCursorCurrentToBlock`.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can

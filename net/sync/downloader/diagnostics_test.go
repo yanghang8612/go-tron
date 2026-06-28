@@ -243,6 +243,8 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 		diag.ImportPhaseCursorCurrentTaskIndex != 1 ||
 		diag.ImportPhaseCursorCurrentTaskCount != 2 ||
 		diag.ImportPhaseCursorCurrentTaskRemaining != 1 ||
+		diag.ImportPhaseCursorCurrentFromBlock != 2 ||
+		diag.ImportPhaseCursorCurrentToBlock != 2 ||
 		diag.ImportPhaseCursorNextBlock != 2 ||
 		diag.ImportPhaseCursorNextPhase != string(ImportStagePhaseExecution) ||
 		diag.ImportPhaseCursorNextCanonical != string(rawdb.StageExecution) ||
@@ -310,6 +312,8 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		ImportPhaseCursorCurrentTaskIndex:     1,
 		ImportPhaseCursorCurrentTaskCount:     2,
 		ImportPhaseCursorCurrentTaskRemaining: 1,
+		ImportPhaseCursorCurrentFromBlock:     2,
+		ImportPhaseCursorCurrentToBlock:       2,
 		ImportPhaseCursorNextBlock:            2,
 		ImportPhaseCursorNextPhase:            string(ImportStagePhaseExecution),
 		ImportPhaseCursorNextCanonical:        string(rawdb.StageExecution),
@@ -347,6 +351,8 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncPhaseCursorCurrentTaskIndex", 1,
 		"syncPhaseCursorCurrentTaskCount", 2,
 		"syncPhaseCursorCurrentTaskRemaining", 1,
+		"syncPhaseCursorCurrentFromBlock", uint64(2),
+		"syncPhaseCursorCurrentToBlock", uint64(2),
 		"syncPhaseCursorNextBlock", uint64(2),
 		"syncPhaseCursorNextPhase", string(ImportStagePhaseExecution),
 		"syncPhaseCursorNextCanonical", string(rawdb.StageExecution),
