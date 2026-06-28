@@ -253,6 +253,7 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"ReadBlockBalanceTrace":             {},
 		"ReadBlockBalanceTraceStrict":       {},
 		"ReadBlockHashByNumber":             {},
+		"ReadBlockHashByNumberStrict":       {},
 		"ReadBlockNumber":                   {},
 		"ReadBlockNumberStrict":             {},
 		"ReadBlockStateRoot":                {},
@@ -273,7 +274,8 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 			"ReadBlockHashByNumber": {},
 		},
 		"cmd/gtron/db_cmd.go": {
-			"ReadBlockHashByNumber": {},
+			"ReadBlockHashByNumber":       {},
+			"ReadBlockHashByNumberStrict": {},
 		},
 		"core/balance_trace_backfill.go": {
 			"ReadAccountTrace":            {},
@@ -285,13 +287,19 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 			"ReadBlockHashByNumber": {},
 		},
 		"core/state/pruning/pruner.go": {
-			"ReadBlockHashByNumber": {},
+			"ReadBlockHashByNumber":       {},
+			"ReadBlockHashByNumberStrict": {},
 		},
 		"core/state/snapshots/cold_builder.go": {
-			"ReadBlockHashByNumber": {},
+			"ReadBlockHashByNumber":       {},
+			"ReadBlockHashByNumberStrict": {},
+		},
+		"core/state/snapshots/stage_hash.go": {
+			"ReadBlockHashByNumberStrict": {},
 		},
 		"vm/instructions.go": {
-			"ReadBlockHashByNumber": {},
+			"ReadBlockHashByNumber":       {},
+			"ReadBlockHashByNumberStrict": {},
 		},
 	})
 	if len(offenders) > 0 {
@@ -466,6 +474,24 @@ func query(db any) {
 	})
 	if len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want state package boundary accepted", offenders)
+	}
+}
+
+func TestColdArchiveAuditRejectsStrictBlockHashReadOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db any) {
+	_, _, _ = rawdb.ReadBlockHashByNumberStrict(db, 7)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadBlockHashByNumberStrict": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadBlockHashByNumberStrict") {
+		t.Fatalf("offenders = %+v, want strict block-hash read on hot store rejected", offenders)
 	}
 }
 

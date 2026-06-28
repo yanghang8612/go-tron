@@ -1121,7 +1121,8 @@ Status:
   remaining production `ReadBlockHashByNumber` calls to explicit freezer/cold
   index boundaries (`blockbuffer`, TVM `BLOCKHASH`, pruner stage verification,
   snapshot builder canonical-hash readers, freezer adapter, and db diagnostics),
-  so new block-number hash lookups cannot silently bypass cold chain coverage.
+  and the cold-boundary audit now covers the strict block-hash reader too, so
+  new block-number hash lookups cannot silently bypass cold chain coverage.
   The same source-audit file now also rejects new production
   `rawdb.NewChainDB(..., rawdb.NoopAncient{})` constructors outside audited
   isolated replay/diagnostic boundaries, preventing new call sites from

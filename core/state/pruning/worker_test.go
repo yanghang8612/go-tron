@@ -1054,6 +1054,26 @@ func TestSnapshotChainSourceCanonicalHashUsesChainDBFallback(t *testing.T) {
 	}
 }
 
+func TestSnapshotChainSourceCanonicalHashStrictPropagatesLookupError(t *testing.T) {
+	wantErr := errors.New("canonical snapshot boundary corrupt")
+	source := snapshotChainSource{chain: &fakePruneChain{
+		db:            rawdb.NewMemoryDatabase(),
+		solidified:    10,
+		canonicalErrs: map[uint64]error{7: wantErr},
+	}}
+	hash, ok, err := source.CanonicalBlockHashStrict(7)
+	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("CanonicalBlockHashStrict err = %v, want %q", err, wantErr)
+	}
+	if ok || hash != (common.Hash{}) {
+		t.Fatalf("CanonicalBlockHashStrict = %x/%v, want zero/false on error", hash, ok)
+	}
+	hash, ok = source.CanonicalBlockHash(7)
+	if ok || hash != (common.Hash{}) {
+		t.Fatalf("CanonicalBlockHash = %x/%v, want legacy non-strict error collapse", hash, ok)
+	}
+}
+
 func TestPrunerRejectsUnboundFinishStageProgress(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	for blockNum := uint64(1); blockNum <= 10; blockNum++ {

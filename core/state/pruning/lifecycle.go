@@ -229,4 +229,8 @@ func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, b
 	return canonicalBlockHashFromChainSource(s.chain, blockNum)
 }
 
+func (s snapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	return canonicalBlockHashLookupFromChainSource(s.chain, blockNum)
+}
+
 var _ snapshots.ChainSource = snapshotChainSource{}
