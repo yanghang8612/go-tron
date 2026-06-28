@@ -421,6 +421,59 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertAlmostEqual(row["fullStagedSyncBottleneckLagShare"], 20 / 39)
             self.assertEqual(row["fullStagedSyncStageCoverageRatio"], 1.0)
             self.assertEqual(row["fullStagedSyncVerificationRatio"], 1.0)
+            self.assertEqual(
+                row["fullStagedSyncStageDetails"],
+                [
+                    {
+                        "stage": "SyncBodies",
+                        "field": "stageSyncBodies",
+                        "present": True,
+                        "block": 100,
+                        "verified": "canonical",
+                        "hash": "aa",
+                    },
+                    {
+                        "stage": "SyncBodiesReady",
+                        "field": "stageSyncBodiesReady",
+                        "present": True,
+                        "block": 96,
+                        "verified": "canonical",
+                        "hash": "bb",
+                    },
+                    {
+                        "stage": "SyncImport",
+                        "field": "stageSyncImport",
+                        "present": True,
+                        "block": 95,
+                        "verified": "canonical",
+                        "hash": "cc",
+                    },
+                    {
+                        "stage": "SyncExecution",
+                        "field": "stageSyncExecution",
+                        "present": True,
+                        "block": 90,
+                        "verified": "canonical",
+                        "hash": "dd",
+                    },
+                    {
+                        "stage": "SyncCommitment",
+                        "field": "stageSyncCommitment",
+                        "present": True,
+                        "block": 89,
+                        "verified": "canonical",
+                        "hash": "ee",
+                    },
+                    {
+                        "stage": "SyncFinish",
+                        "field": "stageSyncFinish",
+                        "present": True,
+                        "block": 80,
+                        "verified": "canonical",
+                        "hash": "ff",
+                    },
+                ],
+            )
             self.assertEqual(row["restartRecoveryStatus"], "no-previous")
             self.assertEqual(row["heightRegressionBlocks"], 0)
             self.assertEqual(row["stageProgressRegressionCount"], 0)

@@ -289,7 +289,9 @@ full staged sync summary: `fullStagedSyncStatus`,
 `fullStagedSyncBottleneck`, and
 `fullStagedSyncBottleneckLagBlocks`,
 `fullStagedSyncBottleneckLagShare`, `fullStagedSyncStageCoverageRatio`, and
-`fullStagedSyncVerificationRatio`. `fullStagedSyncReady` means the six
+`fullStagedSyncVerificationRatio`, plus
+`fullStagedSyncStageDetails` for per-stage field/block/hash/verification
+evidence. `fullStagedSyncReady` means the six
 sync stages (`SyncBodies`, `SyncBodiesReady`, `SyncImport`, `SyncExecution`,
 `SyncCommitment`, `SyncFinish`) are present, hash/verification checks did not
 flag them, and the pipeline is monotonic; `fullStagedSyncCompleteAtHead` is the
@@ -379,6 +381,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --mode full \
   --require-offline-db-check \
   --require-stage-stall-evidence \
+  --require-stage-detail-evidence \
   --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000
@@ -395,14 +398,18 @@ It cross-checks the derived staged-sync metrics too:
 `fullStagedSyncCompletionRatio` must match complete/head, pipeline lag must
 cover the finish-head lag and match `stageSyncPipelineLagBlocks`, and the
 reported bottleneck, bottleneck lag, and lag share must agree with the
-corresponding `stageSync*` fields. It also rejects HTTP/sample failures,
-critical soak health, stage regressions, stage hash/staged-body/order issues,
-and non-monotonic sync-stage progress. When `--allow-warning-health` is used,
-stage-stall warning rows can pass only if `stageStalled*`, `stageStalls`, and
-`soakHealthIssues` describe the same primary stalled stage. Add
-`--require-stage-stall-evidence` for production soak gates so older sampler
-rows cannot pass without the `stageStalled*` and `stageStalls` diagnostics
-that identify which full staged-sync edge stopped moving. Add
+corresponding `stageSync*` fields. When `fullStagedSyncStageDetails` is
+present, the checker also cross-checks each stage detail against the aggregate
+`fullStagedSync*` fields; add `--require-stage-detail-evidence` for production
+soak gates so older sampler rows cannot pass without that per-stage evidence.
+It also rejects HTTP/sample failures, critical soak health, stage regressions,
+stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
+When `--allow-warning-health` is used, stage-stall warning rows can pass only
+if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
+primary stalled stage. Add `--require-stage-stall-evidence` for production
+soak gates so older sampler rows cannot pass without the `stageStalled*` and
+`stageStalls` diagnostics that identify which full staged-sync edge stopped
+moving. Add
 `--require-caught-up` for final catch-up proof or `--all` to validate every
 selected row in a candidate window. When `--require-offline-db-check` is used
 and the JSONL row carries `stageAlertPipeline*` fields, the checker also

@@ -1598,6 +1598,7 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         "fullStagedSyncMissingStages": [],
         "fullStagedSyncHashIssues": [],
         "fullStagedSyncUnverifiedStages": [],
+        "fullStagedSyncStageDetails": [],
         "fullStagedSyncCompleteBlock": -1,
         "fullStagedSyncHeadBlock": head,
         "fullStagedSyncMinStage": "",
@@ -1621,12 +1622,23 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         value = number(stages, field, -1)
         entry = progress.get(name, {})
         present = bool(entry.get("present")) and value >= 0
+        verified = str(entry.get("verified", ""))
+        detail = {
+            "stage": name,
+            "field": field,
+            "present": present,
+            "block": value,
+            "verified": verified,
+        }
+        for key in ("hash", "canonicalHash", "stagedBlock", "stagedHash", "status"):
+            if entry.get(key):
+                detail[key] = entry.get(key)
+        row["fullStagedSyncStageDetails"].append(detail)
         if not present:
             row["fullStagedSyncMissingStages"].append(name)
             continue
         row["fullStagedSyncPresentStageCount"] += 1
         present_values.append((name, value))
-        verified = str(entry.get("verified", ""))
         if (name in body_stages and verified in {"staged", "canonical"}) or (name not in body_stages and verified == "canonical"):
             row["fullStagedSyncVerifiedStageCount"] += 1
         elif verified:

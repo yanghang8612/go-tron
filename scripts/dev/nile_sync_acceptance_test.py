@@ -10,11 +10,91 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "nile_sync_acceptance.py"
 
+REQUIRED_SYNC_STAGES = [
+    "SyncBodies",
+    "SyncBodiesReady",
+    "SyncImport",
+    "SyncExecution",
+    "SyncCommitment",
+    "SyncFinish",
+]
+
+SYNC_STAGE_FIELDS = {
+    "SyncBodies": "stageSyncBodies",
+    "SyncBodiesReady": "stageSyncBodiesReady",
+    "SyncImport": "stageSyncImport",
+    "SyncExecution": "stageSyncExecution",
+    "SyncCommitment": "stageSyncCommitment",
+    "SyncFinish": "stageSyncFinish",
+}
+
 
 def write_result(path, rows):
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def full_stage_details(blocks=None, verified=None):
+    blocks = blocks or {}
+    verified = verified or {}
+    return [
+        {
+            "stage": stage,
+            "field": SYNC_STAGE_FIELDS[stage],
+            "present": True,
+            "block": blocks.get(stage, 1000),
+            "verified": verified.get(stage, "canonical"),
+        }
+        for stage in REQUIRED_SYNC_STAGES
+    ]
+
+
+def clean_full_staged_sync_row():
+    row = {
+        "unix": 10,
+        "network": "nile",
+        "mode": "full",
+        "sampleStatus": "ok",
+        "soakHealthStatus": "ok",
+        "stageStatusFileStatus": "ok",
+        "fullStagedSyncStatus": "caught-up",
+        "fullStagedSyncReady": True,
+        "fullStagedSyncCompleteAtHead": True,
+        "stageSyncPipelineMonotonic": True,
+        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+        "fullStagedSyncStageCount": 6,
+        "fullStagedSyncPresentStageCount": 6,
+        "fullStagedSyncVerifiedStageCount": 6,
+        "fullStagedSyncMissingStages": [],
+        "fullStagedSyncHashIssues": [],
+        "fullStagedSyncUnverifiedStages": [],
+        "fullStagedSyncStageCoverageRatio": 1.0,
+        "fullStagedSyncVerificationRatio": 1.0,
+        "fullStagedSyncCompleteBlock": 1000,
+        "fullStagedSyncHeadBlock": 1000,
+        "fullStagedSyncHeadLagBlocks": 0,
+        "fullStagedSyncCompletionRatio": 1.0,
+        "fullStagedSyncPipelineLagBlocks": 0,
+        "fullStagedSyncBottleneck": "none",
+        "fullStagedSyncBottleneckLagBlocks": 0,
+        "fullStagedSyncBottleneckLagShare": -1.0,
+        "stageSyncPipelineLagBlocks": 0,
+        "stageSyncBottleneck": "none",
+        "stageSyncBottleneckLagBlocks": 0,
+        "heightRegressionBlocks": 0,
+        "stageProgressRegressionCount": 0,
+        "stageMismatchRows": 0,
+        "stageMissingCanonicalRows": 0,
+        "stageStagedBodyIssueRows": 0,
+        "stageIssueRows": 0,
+        "stageOrderIssueRows": 0,
+        "stageSyncPipelineViolationCount": 0,
+        "height": 1000,
+    }
+    for field in SYNC_STAGE_FIELDS.values():
+        row[field] = 1000
+    return row
 
 
 class NileSyncAcceptanceTest(unittest.TestCase):
@@ -669,6 +749,69 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("fullStagedSyncRequiredStages=None", proc.stderr)
             self.assertIn("fullStagedSyncStageCount=None, want 6", proc.stderr)
             self.assertIn("fullStagedSyncMissingStages=None, want []", proc.stderr)
+
+    def test_requires_stage_detail_evidence_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("fullStagedSyncStageDetails is missing", proc.stderr)
+
+    def test_rejects_mismatched_stage_detail_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["fullStagedSyncStageDetails"] = full_stage_details(
+                blocks={"SyncFinish": 900},
+                verified={"SyncExecution": "mismatch"},
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("fullStagedSyncVerifiedStageCount=6, want detail-derived 5", proc.stderr)
+            self.assertIn(
+                "fullStagedSyncHashIssues=[], want detail-derived "
+                "[{'stage': 'SyncExecution', 'verified': 'mismatch'}]",
+                proc.stderr,
+            )
+            self.assertIn("SyncFinish detail block=900, want stageSyncFinish=1000", proc.stderr)
+            self.assertIn(
+                "fullStagedSyncCompleteBlock=1000, want SyncFinish detail block=900",
+                proc.stderr,
+            )
 
     def test_rejects_stage_order_and_offline_failures(self):
         with tempfile.TemporaryDirectory() as tmp:

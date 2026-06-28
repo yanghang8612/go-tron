@@ -39,6 +39,15 @@ FULL_STAGED_SYNC_REQUIRED_STAGES = (
     "SyncFinish",
 )
 
+FULL_STAGED_SYNC_STAGE_FIELDS = {
+    "SyncBodies": "stageSyncBodies",
+    "SyncBodiesReady": "stageSyncBodiesReady",
+    "SyncImport": "stageSyncImport",
+    "SyncExecution": "stageSyncExecution",
+    "SyncCommitment": "stageSyncCommitment",
+    "SyncFinish": "stageSyncFinish",
+}
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -426,7 +435,7 @@ def check_prometheus_stage_pipeline(path, text, row):
     return issues
 
 
-def check_full_staged_sync_evidence(row):
+def check_full_staged_sync_evidence(row, require_stage_details=False):
     issues = []
     required = row.get("fullStagedSyncRequiredStages")
     expected = list(FULL_STAGED_SYNC_REQUIRED_STAGES)
@@ -576,6 +585,111 @@ def check_full_staged_sync_evidence(row):
             "full staged sync catching-up row is inconsistent: "
             f"lag={lag} completeAtHead={row.get('fullStagedSyncCompleteAtHead')!r}"
         )
+    issues.extend(check_full_staged_sync_stage_details(row, require=require_stage_details))
+    return issues
+
+
+def stage_detail_is_verified(stage, verified):
+    if stage in {"SyncBodies", "SyncBodiesReady"}:
+        return verified in {"staged", "canonical"}
+    return verified == "canonical"
+
+
+def check_full_staged_sync_stage_details(row, require=False):
+    details = row.get("fullStagedSyncStageDetails")
+    if details is None:
+        return ["fullStagedSyncStageDetails is missing"] if require else []
+    if not isinstance(details, list):
+        return [f"fullStagedSyncStageDetails={details!r}, want list"]
+
+    issues = []
+    expected = list(FULL_STAGED_SYNC_REQUIRED_STAGES)
+    if len(details) != len(expected):
+        issues.append(f"fullStagedSyncStageDetails length={len(details)}, want {len(expected)}")
+
+    missing = []
+    hash_issues = []
+    unverified = []
+    present_values = []
+    present_count = 0
+    verified_count = 0
+
+    for idx, stage in enumerate(expected):
+        if idx >= len(details):
+            missing.append(stage)
+            continue
+        detail = details[idx]
+        if not isinstance(detail, dict):
+            issues.append(f"fullStagedSyncStageDetails[{idx}]={detail!r}, want object")
+            missing.append(stage)
+            continue
+
+        got_stage = str(detail.get("stage", ""))
+        if got_stage != stage:
+            issues.append(f"fullStagedSyncStageDetails[{idx}].stage={got_stage!r}, want {stage!r}")
+
+        field = str(detail.get("field", ""))
+        want_field = FULL_STAGED_SYNC_STAGE_FIELDS[stage]
+        if field != want_field:
+            issues.append(f"{stage} detail field={field!r}, want {want_field!r}")
+
+        present = as_bool(detail, "present")
+        block = as_number(detail, "block")
+        verified = str(detail.get("verified", ""))
+        row_stage_value = as_number(row, want_field)
+        if not present:
+            missing.append(stage)
+            if block is not None and block >= 0:
+                issues.append(f"{stage} detail present=false but block={block:g}")
+            continue
+
+        present_count += 1
+        if block is None or block < 0:
+            issues.append(f"{stage} detail block={block}, want >= 0")
+        else:
+            present_values.append((stage, block))
+            if row_stage_value is not None and block != row_stage_value:
+                issues.append(f"{stage} detail block={block:g}, want {want_field}={row_stage_value:g}")
+
+        if stage_detail_is_verified(stage, verified):
+            verified_count += 1
+        elif verified:
+            hash_issues.append({"stage": stage, "verified": verified})
+        else:
+            unverified.append(stage)
+
+    for field, got, want in (
+        ("fullStagedSyncPresentStageCount", as_number(row, "fullStagedSyncPresentStageCount"), present_count),
+        ("fullStagedSyncVerifiedStageCount", as_number(row, "fullStagedSyncVerifiedStageCount"), verified_count),
+    ):
+        if got is not None and got != want:
+            issues.append(f"{field}={got:g}, want detail-derived {want}")
+
+    expected_missing = row.get("fullStagedSyncMissingStages")
+    if isinstance(expected_missing, list) and expected_missing != missing:
+        issues.append(f"fullStagedSyncMissingStages={expected_missing!r}, want detail-derived {missing!r}")
+    expected_hash_issues = row.get("fullStagedSyncHashIssues")
+    if isinstance(expected_hash_issues, list) and expected_hash_issues != hash_issues:
+        issues.append(f"fullStagedSyncHashIssues={expected_hash_issues!r}, want detail-derived {hash_issues!r}")
+    expected_unverified = row.get("fullStagedSyncUnverifiedStages")
+    if isinstance(expected_unverified, list) and expected_unverified != unverified:
+        issues.append(f"fullStagedSyncUnverifiedStages={expected_unverified!r}, want detail-derived {unverified!r}")
+
+    finish_detail = next((item for item in details if isinstance(item, dict) and item.get("stage") == "SyncFinish"), None)
+    finish_block = as_number(finish_detail, "block") if finish_detail else None
+    complete = as_number(row, "fullStagedSyncCompleteBlock")
+    if finish_block is not None and finish_block >= 0 and complete is not None and finish_block != complete:
+        issues.append(f"fullStagedSyncCompleteBlock={complete:g}, want SyncFinish detail block={finish_block:g}")
+
+    if present_values:
+        min_stage, min_value = min(present_values, key=lambda item: item[1])
+        row_min_stage = str(row.get("fullStagedSyncMinStage", ""))
+        row_min_value = as_number(row, "fullStagedSyncMinStageBlock")
+        if row_min_stage and row_min_stage != min_stage:
+            issues.append(f"fullStagedSyncMinStage={row_min_stage!r}, want detail-derived {min_stage!r}")
+        if row_min_value is not None and row_min_value != min_value:
+            issues.append(f"fullStagedSyncMinStageBlock={row_min_value:g}, want detail-derived {min_value:g}")
+
     return issues
 
 
@@ -765,7 +879,14 @@ def check_row(row, args):
     if args.require_stage_status and row.get("stageStatusFileStatus") != "ok":
         issues.append(f"stageStatusFileStatus={row.get('stageStatusFileStatus')!r}, want 'ok'")
     if args.require_stage_status:
-        issues.extend(check_full_staged_sync_evidence(row))
+        issues.extend(
+            check_full_staged_sync_evidence(
+                row,
+                require_stage_details=args.require_stage_detail_evidence,
+            )
+        )
+    elif args.require_stage_detail_evidence:
+        issues.extend(check_full_staged_sync_stage_details(row, require=True))
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
     if args.require_caught_up:
@@ -865,6 +986,14 @@ def build_parser():
         "--require-stage-stall-evidence",
         action="store_true",
         help="require selected rows to include stageStalled* diagnostics from the sampler",
+    )
+    parser.add_argument(
+        "--require-stage-detail-evidence",
+        action="store_true",
+        help=(
+            "require per-stage fullStagedSyncStageDetails evidence and cross-check it "
+            "against aggregate staged-sync fields"
+        ),
     )
     parser.add_argument(
         "--require-archive-api-evidence",
