@@ -39,6 +39,13 @@ FULL_STAGED_SYNC_REQUIRED_STAGES = (
     "SyncFinish",
 )
 
+DEFAULT_ARCHIVE_API_METHODS = (
+    "eth_getBalance",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_getLogs",
+)
+
 
 def load_rows(path):
     rows = []
@@ -101,6 +108,16 @@ def as_bool(row, field):
     if isinstance(value, (int, float)):
         return value != 0
     return False
+
+
+def split_csv_values(values):
+    out = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if item:
+                out.append(item)
+    return out
 
 
 def approx_equal(got, want, tolerance=1e-9):
@@ -650,6 +667,58 @@ def check_stage_stall_evidence(row):
     return issues
 
 
+def archive_api_methods(row):
+    raw = row.get("archiveApiMethods")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return set()
+    return {str(method) for method in raw}
+
+
+def check_archive_api_evidence(row, required_methods):
+    issues = []
+    status = str(row.get("archiveApiStatus", "")).lower()
+    if status != "ok":
+        issues.append(f"archiveApiStatus={row.get('archiveApiStatus')!r}, want 'ok'")
+
+    checks = as_number(row, "archiveApiChecks")
+    if checks is None or checks <= 0:
+        issues.append(f"archiveApiChecks={checks}, want > 0")
+
+    failures = as_number(row, "archiveApiFailures")
+    if failures is None:
+        issues.append(f"archiveApiFailures={failures}, want 0")
+    elif failures != 0:
+        issues.append(f"archiveApiFailures={failures:g}, want 0")
+
+    block = as_number(row, "archiveApiBlock")
+    if block is None or block < 0:
+        issues.append(f"archiveApiBlock={block}, want >= 0 historical block")
+    else:
+        height = as_number(row, "height")
+        if height is not None and block >= height:
+            issues.append(f"archiveApiBlock={block:g} must be below height={height:g}")
+        tail_pruned = as_number(row, "tailPrunedThroughBlock")
+        if tail_pruned is not None and tail_pruned >= 0 and block > tail_pruned:
+            issues.append(
+                f"archiveApiBlock={block:g} must be <= tailPrunedThroughBlock={tail_pruned:g} "
+                "to prove post-prune archive reads"
+            )
+
+    methods = archive_api_methods(row)
+    if methods is None:
+        issues.append("archiveApiMethods is missing")
+    elif not methods:
+        issues.append("archiveApiMethods must be a non-empty list")
+    else:
+        missing = sorted(set(required_methods) - methods)
+        if missing:
+            issues.append("archiveApiMethods missing required methods: " + ",".join(missing))
+
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -688,6 +757,8 @@ def check_row(row, args):
     if row.get("stageSyncPipelineMonotonic") is not None and not as_bool(row, "stageSyncPipelineMonotonic"):
         issues.append("stageSyncPipelineMonotonic=false")
     issues.extend(check_stage_stall_evidence(row))
+    if args.require_archive_api_evidence:
+        issues.extend(check_archive_api_evidence(row, args.archive_api_methods_required))
 
     for field in ZERO_ISSUE_FIELDS:
         value = as_number(row, field)
@@ -756,6 +827,23 @@ def build_parser():
         action="store_true",
         help="require offline db check fields to report ok",
     )
+    parser.add_argument(
+        "--require-archive-api-evidence",
+        action="store_true",
+        help="require selected rows to include successful historical archive API evidence",
+    )
+    parser.add_argument(
+        "--archive-api-method",
+        action="append",
+        default=[],
+        help="additional archive API method that must appear in archiveApiMethods; repeatable",
+    )
+    parser.add_argument(
+        "--archive-api-methods",
+        action="append",
+        default=[],
+        help="comma-separated additional archive API methods that must appear in archiveApiMethods",
+    )
     parser.add_argument("--min-height", type=float, help="require latest height to be at least this value")
     parser.add_argument(
         "--max-lag-blocks",
@@ -784,6 +872,10 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
+    for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
+        if method not in args.archive_api_methods_required:
+            args.archive_api_methods_required.append(method)
     rows, issues = load_rows(args.result)
     selected = filter_rows(rows, args)
     if not selected:

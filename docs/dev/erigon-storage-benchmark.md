@@ -266,6 +266,12 @@ Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics, including
 `stageVerifyDetails` entries such as `SyncBodies`/`SyncBodiesReady`
 staged-body mismatches.
+Use `--archive-api-probe` on the Nile sampler when the same production JSONL
+must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
+`archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`, and
+`archiveApiMethods` from historical JSON-RPC reads; add
+`--archive-api-call-data` plus `--archive-api-method eth_call` only when the
+sample targets a known historical contract.
 
 ## Interpreting Results
 

@@ -65,6 +65,7 @@ HTTP height, peer count, sync elapsed time, and datadir size split:
 scripts/dev/nile_sync_sample.sh \
   --datadir /Users/asuka/gtron-soak/datadir \
   --http http://127.0.0.1:8090 \
+  --jsonrpc http://127.0.0.1:8545 \
   --mode full \
   --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
   --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
@@ -72,6 +73,14 @@ scripts/dev/nile_sync_sample.sh \
   --debug-metrics-url 'http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/' \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
+
+For archive-read evidence, add `--archive-api-probe`. The sampler probes
+`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and `eth_getLogs` at
+`height-1` by default and emits `archiveApi*` fields. Use
+`--archive-api-block`, `--archive-api-address`, and
+`--archive-api-storage-slot` to pin the historical target. Add
+`--archive-api-call-data` when the target is a known historical contract and
+the sample should also prove `eth_call`.
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
@@ -135,7 +144,11 @@ fall back to cumulative sync and current disk distribution. Rows also include
 `--pid-file` is provided, rows also include `processPid`, `processStatus`,
 `processRssBytes`, `processCpuPercent`, `processUptimeSeconds`, and
 `processOpenFiles` so catch-up throughput can be correlated with local resource
-pressure. Derived index bytes are the chain-index/accessor, balance-trace,
+pressure. Rows produced with `--archive-api-probe` also include
+`archiveApiStatus`, `archiveApiChecks`, `archiveApiFailures`,
+`archiveApiBlock`, `archiveApiMethods`, and `archiveApiEndpoint` for
+historical JSON-RPC read validation. Derived index bytes are the
+chain-index/accessor, balance-trace,
 section-bloom, and event-log/index sidecars inside `state-snapshots`;
 `snapshotCommitmentBytes` tracks commitment root/checkpoint/branch snapshot
 files separately from `snapshotOtherBytes`, while `snapshotBytes` remains the
@@ -365,6 +378,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --network nile \
   --mode full \
   --require-offline-db-check \
+  --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000
 ```
@@ -394,7 +408,11 @@ requires the referenced Prometheus artifact to include a matching
 stage/status/upstream labels from the same offline DB check. When the row
 contains `datadir`, those Prometheus samples must carry the same `datadir`
 label, so aggregated artifacts cannot satisfy a Nile row with metrics from
-another node.
+another node. When `--require-archive-api-evidence` is used, the latest
+selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
+historical `archiveApiBlock` below `height`, and the default archive method set.
+Add `--archive-api-method eth_call` to the acceptance command only for samples
+that were collected with `--archive-api-call-data`.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.

@@ -46,11 +46,80 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length)
+        try:
+            request = json.loads(raw.decode("utf-8"))
+        except Exception:
+            request = {}
+        method = request.get("method")
+        if method == "eth_getLogs":
+            result = []
+        else:
+            result = "0x0"
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": request.get("id", 1),
+                "result": result,
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *_):
         return
 
 
 class NileSyncSampleTest(unittest.TestCase):
+    def test_sample_includes_archive_api_probe_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiEndpoint"], endpoint)
+            self.assertEqual(row["archiveApiStatus"], "ok")
+            self.assertEqual(row["archiveApiChecks"], 4)
+            self.assertEqual(row["archiveApiFailures"], 0)
+            self.assertEqual(row["archiveApiBlock"], 99)
+            self.assertEqual(
+                row["archiveApiMethods"],
+                ["eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_getLogs"],
+            )
+
     def test_sample_includes_sync_health_and_disk_ratios(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -12,6 +12,7 @@ BASEDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 GTRON="${GTRON:-$BASEDIR/build/bin/gtron}"
 DATADIR="${DATADIR:-}"
 HTTP="http://127.0.0.1:8090"
+JSONRPC="http://127.0.0.1:8545"
 OUTPUT=""
 NETWORK="nile"
 MODE="unknown"
@@ -24,6 +25,11 @@ DEBUG_METRICS_URL=""
 STORAGE_ALERT_PROMETHEUS_FILE=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
+ARCHIVE_API_PROBE=0
+ARCHIVE_API_BLOCK=-1
+ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
+ARCHIVE_API_STORAGE_SLOT="0x0"
+ARCHIVE_API_CALL_DATA=""
 
 usage() {
   cat <<'EOF'
@@ -32,6 +38,8 @@ Usage: scripts/dev/nile_sync_sample.sh --datadir DIR [options]
 Options:
   --datadir DIR              gtron datadir to size and optionally inspect
   --http URL                 gtron HTTP base URL (default: http://127.0.0.1:8090)
+  --jsonrpc URL              gtron JSON-RPC URL for optional archive API probes
+                              (default: http://127.0.0.1:8545)
   --output FILE              Append JSONL row to FILE; stdout is always printed
   --gtron PATH               gtron binary for optional offline db checks
   --network NAME             Network label (default: nile)
@@ -46,6 +54,13 @@ Options:
   --storage-alert-prometheus-file FILE
                               Write storage-alerts Prometheus metrics when offline DB check runs
   --strict-offline-db-check  Fail when offline db check reports critical issues
+  --archive-api-probe        Probe historical JSON-RPC archive APIs and emit archiveApi* fields
+  --archive-api-block N      Historical block for archive API probe (default: height-1)
+  --archive-api-address HEX  0x41-prefixed TRON address for account/contract probes
+  --archive-api-storage-slot HEX
+                              Storage slot for eth_getStorageAt probe (default: 0x0)
+  --archive-api-call-data HEX
+                              Include eth_call with this calldata against archive-api-address
   -h, --help                 Show this help
 
 Examples:
@@ -68,6 +83,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --datadir) DATADIR="${2:?}"; shift 2 ;;
     --http) HTTP="${2:?}"; shift 2 ;;
+    --jsonrpc) JSONRPC="${2:?}"; shift 2 ;;
     --output) OUTPUT="${2:?}"; shift 2 ;;
     --gtron) GTRON="${2:?}"; shift 2 ;;
     --network) NETWORK="${2:?}"; shift 2 ;;
@@ -81,6 +97,11 @@ while [ "$#" -gt 0 ]; do
     --storage-alert-prometheus-file) STORAGE_ALERT_PROMETHEUS_FILE="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
+    --archive-api-probe) ARCHIVE_API_PROBE=1; shift ;;
+    --archive-api-block) ARCHIVE_API_BLOCK="${2:?}"; shift 2 ;;
+    --archive-api-address) ARCHIVE_API_ADDRESS="${2:?}"; shift 2 ;;
+    --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
+    --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -222,13 +243,15 @@ replay_bytes="$(size_bytes "$DATADIR/gtron/balance-trace-replay")"
 ancient_files="$(file_count "$DATADIR/gtron/ancient")"
 snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
-python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
+python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
   "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
+  "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
+  "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -245,6 +268,7 @@ from pathlib import Path
     mode,
     label,
     http,
+    jsonrpc,
     datadir,
     nowblock_path,
     nodeinfo_path,
@@ -265,6 +289,11 @@ from pathlib import Path
     strict_offline,
     offline_prometheus_status,
     storage_alerts_prometheus_path,
+    archive_api_probe,
+    archive_api_block,
+    archive_api_address,
+    archive_api_storage_slot,
+    archive_api_call_data,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -285,6 +314,82 @@ def load_json(path):
         return json.loads(data)
     except Exception:
         return {}
+
+def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data):
+    row = {
+        "archiveApiStatus": "not-run",
+        "archiveApiEndpoint": endpoint,
+        "archiveApiChecks": 0,
+        "archiveApiFailures": 0,
+        "archiveApiBlock": -1,
+        "archiveApiMethods": [],
+    }
+    if str(enabled) != "1":
+        return row
+
+    try:
+        probe_block = int(raw_block)
+    except Exception:
+        probe_block = -1
+    if probe_block < 0:
+        probe_block = height - 1 if height > 0 else 0
+    row["archiveApiBlock"] = probe_block
+    block_tag = hex(probe_block)
+
+    calls = [
+        ("eth_getBalance", [address, block_tag]),
+        ("eth_getCode", [address, block_tag]),
+        ("eth_getStorageAt", [address, slot, block_tag]),
+        ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
+    ]
+    if call_data:
+        calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
+
+    failures = 0
+    methods = []
+    for idx, (method, params) in enumerate(calls, 1):
+        payload = json.dumps(
+            {"jsonrpc": "2.0", "id": idx, "method": method, "params": params},
+            separators=(",", ":"),
+        )
+        try:
+            result = subprocess.run(
+                [
+                    "curl",
+                    "-sf",
+                    "--max-time",
+                    "5",
+                    "-H",
+                    "Content-Type: application/json",
+                    "--data-binary",
+                    payload,
+                    endpoint,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            failures += 1
+            continue
+        if result.returncode != 0:
+            failures += 1
+            continue
+        try:
+            response = json.loads(result.stdout)
+        except Exception:
+            failures += 1
+            continue
+        if response.get("error") is not None or "result" not in response:
+            failures += 1
+            continue
+        methods.append(method)
+
+    row["archiveApiChecks"] = len(calls)
+    row["archiveApiFailures"] = failures
+    row["archiveApiMethods"] = methods
+    row["archiveApiStatus"] = "ok" if failures == 0 else "failed"
+    return row
 
 def parse_alerts(text):
     row = {
@@ -1912,6 +2017,15 @@ height = int(raw.get("number", 0) or 0)
 block_id = str(nowblock.get("blockID", ""))
 nodeinfo_current = int(nodeinfo.get("currentBlock", 0) or 0)
 peers = len(nodes.get("nodes", []) or [])
+archive_api = archive_api_probe_values(
+    archive_api_probe,
+    jsonrpc,
+    height,
+    archive_api_block,
+    archive_api_address,
+    archive_api_storage_slot,
+    archive_api_call_data,
+)
 now = int(time.time())
 start = int(start_unix)
 elapsed = now - start if start > 0 and now >= start else -1
@@ -2538,6 +2652,7 @@ row.update(stages)
 row.update(sync_log)
 row.update(process)
 row.update(debug_metrics)
+row.update(archive_api)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 

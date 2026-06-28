@@ -696,7 +696,9 @@ Status:
   visible in the JSONL row itself.
   The sampler also parses captured `gtron db stage-status --json` files for the
   live-stage fields and staged-body issue details, with a legacy text fallback
-  for older diagnostics.
+  for older diagnostics. It can also run a live JSON-RPC archive-read probe and
+  emit `archiveApi*` evidence for `eth_getBalance`, `eth_getCode`,
+  `eth_getStorageAt`, `eth_getLogs`, and optional contract `eth_call` samples.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating
@@ -1158,7 +1160,9 @@ Status:
   stage, mode, and snapshot issue kinds. When JSONL alert details include a
   structured `kind`/`severity`, the same checkers now require a matching
   `gtron_storage_alert_issue{component,kind,severity}` series in the captured
-  artifact.
+  artifact. Nile sync acceptance can also require the latest selected sample to
+  carry successful historical JSON-RPC archive-read evidence through
+  `archiveApi*` fields.
 
 Needed:
 

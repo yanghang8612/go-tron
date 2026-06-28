@@ -1123,6 +1123,105 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("value=999, want 1000", proc.stderr)
             self.assertIn("value=998, want 990", proc.stderr)
 
+    def test_accepts_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 4,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 99,
+                        "archiveApiMethods": [
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_invalid_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "failed",
+                        "archiveApiChecks": 0,
+                        "archiveApiFailures": 1,
+                        "archiveApiBlock": 100,
+                        "archiveApiMethods": ["eth_getBalance"],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-api-evidence",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiStatus='failed', want 'ok'", proc.stderr)
+            self.assertIn("archiveApiChecks=0.0, want > 0", proc.stderr)
+            self.assertIn("archiveApiFailures=1, want 0", proc.stderr)
+            self.assertIn("archiveApiBlock=100 must be below height=100", proc.stderr)
+            self.assertIn("archiveApiMethods missing required methods", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
