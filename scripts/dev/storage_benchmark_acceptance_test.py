@@ -924,6 +924,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--role",
                     "producer",
                     "--require-event-log-index-evidence",
+                    "--require-event-log-index-mode",
+                    "snap",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -1008,6 +1010,71 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("address singleton+multi=3 must equal keys=2", invalid.stderr)
             self.assertIn("address postings=1 must be >= keys=2", invalid.stderr)
             self.assertIn("topic postings=1 must be 0 when keys=0", invalid.stderr)
+
+    def test_rejects_event_log_index_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "minimal",
+                    "derivedIndexToBlock": -1,
+                    "eventLogIndexSegments": 0,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "snap",
+                    "derivedIndexToBlock": 80,
+                    "eventLogIndexSegments": 1,
+                    "eventLogIndexAddressKeys": 1,
+                    "eventLogIndexAddressPostings": 1,
+                    "eventLogIndexAddressAvgPostingsMilli": 1000,
+                    "eventLogIndexAddressMaxPostings": 1,
+                    "eventLogIndexAddressSingletonKeys": 1,
+                    "eventLogIndexAddressMultiPostingKeys": 0,
+                    "eventLogIndexTopicKeys": 1,
+                    "eventLogIndexTopicPostings": 1,
+                    "eventLogIndexTopicAvgPostingsMilli": 1000,
+                    "eventLogIndexTopicMaxPostings": 1,
+                    "eventLogIndexTopicSingletonKeys": 1,
+                    "eventLogIndexTopicMultiPostingKeys": 0,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing event-log index evidence for required mode 'minimal'",
+                proc.stderr,
+            )
 
     def test_rejects_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:

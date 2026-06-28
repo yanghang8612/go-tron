@@ -885,13 +885,21 @@ def check_event_log_index_lookup_stats(row, label, prefix):
     return issues
 
 
-def check_event_log_index_evidence(rows):
+def check_event_log_index_evidence(rows, required_modes=()):
     issues = []
     evidence_rows = [
         row for row in latest_rows(rows).values() if event_log_index_evidence_row(row)
     ]
-    if not evidence_rows:
+    if not evidence_rows and not required_modes:
         return ["required event-log index evidence has no selected latest derived-index row"]
+
+    for mode in required_modes:
+        row = latest_for(rows, mode=mode)
+        if row is None:
+            issues.append(f"required event-log index evidence has no selected latest row for mode {mode!r}")
+            continue
+        if not event_log_index_evidence_row(row):
+            issues.append(f"{line_label(row)} missing event-log index evidence for required mode {mode!r}")
 
     for row in evidence_rows:
         derived_to = as_number(row, "derivedIndexToBlock")
@@ -973,6 +981,18 @@ def build_parser():
         help="require latest derived-index rows to include event-log-index fanout/selectivity counters",
     )
     parser.add_argument(
+        "--require-event-log-index-mode",
+        action="append",
+        default=[],
+        help="mode whose latest selected row must include event-log-index fanout/selectivity counters; repeatable",
+    )
+    parser.add_argument(
+        "--require-event-log-index-modes",
+        action="append",
+        default=[],
+        help="comma-separated modes whose latest selected rows must include event-log-index fanout/selectivity counters",
+    )
+    parser.add_argument(
         "--archive-api-method",
         action="append",
         default=[],
@@ -1046,8 +1066,11 @@ def main(argv=None):
                 required_archive_api_modes,
             )
         )
-    if args.require_event_log_index_evidence:
-        issues.extend(check_event_log_index_evidence(rows))
+    required_event_log_index_modes = split_modes(
+        args.require_event_log_index_mode + args.require_event_log_index_modes
+    )
+    if args.require_event_log_index_evidence or required_event_log_index_modes:
+        issues.extend(check_event_log_index_evidence(rows, required_event_log_index_modes))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
     issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
@@ -1080,6 +1103,7 @@ def main(argv=None):
     checks += len(required_archive_api_modes)
     if args.require_event_log_index_evidence:
         checks += 1
+    checks += len(required_event_log_index_modes)
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"

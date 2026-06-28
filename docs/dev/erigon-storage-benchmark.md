@@ -315,6 +315,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-api-evidence \
   --require-archive-api-mode minimal \
   --require-event-log-index-evidence \
+  --require-event-log-index-mode minimal \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
   --min minimal.producer.tailPrunedThroughBlock=100000
@@ -366,8 +367,13 @@ post-prune archive reads rather than a latest-state fallback. With
 `--require-event-log-index-evidence`, at least one latest derived-index row
 must report active `eventLogIndexSegments` plus internally consistent
 address/topic key, posting, average-fanout, max-fanout, singleton, and
-multi-posting counters; add `--min eventLogIndexAddressPostings=1` when the
-sample is expected to include logs and should prove non-empty index fanout.
+multi-posting counters. Add `--require-event-log-index-mode minimal` so the
+latest pruned minimal row must prove its own event-log index coverage instead
+of letting another mode's sidecar satisfy the run. Repeat
+`--require-event-log-index-mode` or use `--require-event-log-index-modes` for
+additional mode-local log-index proofs. Add `--min
+eventLogIndexAddressPostings=1` when the sample is expected to include logs and
+should prove non-empty index fanout.
 Use `--require-size-reduction MODE:BASE_MODE:FIELD=RATIO` on comparable
 multi-mode runs to require the latest selected `MODE` row to reduce a byte
 counter by at least `RATIO` versus `BASE_MODE`; for example,
