@@ -993,6 +993,13 @@ type ImportResumePhasePublishFinalizationPlan struct {
 	SkipReason ImportResumePhasePublishFinalizationSkipReason
 }
 
+// ImportResumePhasePublishFinalizationRunApplyResult groups the final
+// post-drain gate and the optional read/verify/write publish run.
+type ImportResumePhasePublishFinalizationRunApplyResult struct {
+	Finalization ImportResumePhasePublishFinalizationPlan
+	Publish      ImportResumePhasePublishRunApplyResult
+}
+
 // ImportResumePhasePublishRunApplyResult groups the read/plan/write phases for
 // one resume-phase publish run.
 type ImportResumePhasePublishRunApplyResult struct {
@@ -1304,6 +1311,20 @@ func PlanImportResumePhasePublishFinalization(input ImportResumePhasePublishFina
 	}
 	plan.Publish = true
 	return plan
+}
+
+// ApplyImportResumePhasePublishFinalizationRun applies the full post-drain
+// finalization path. If the gate does not publish, no stage rows are read or
+// written.
+func ApplyImportResumePhasePublishFinalizationRun(input ImportResumePhasePublishFinalizationInput, applier ImportResumePhasePublishRunApplier) ImportResumePhasePublishFinalizationRunApplyResult {
+	result := ImportResumePhasePublishFinalizationRunApplyResult{
+		Finalization: PlanImportResumePhasePublishFinalization(input),
+	}
+	if !result.Finalization.Publish {
+		return result
+	}
+	result.Publish = ApplyImportResumePhasePublishRunPlan(NewImportResumePhasePublishRunPlan(result.Finalization.Phases), applier)
+	return result
 }
 
 // PlanImportResumePhasePublish verifies a yielded phase suffix against

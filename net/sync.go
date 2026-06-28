@@ -1478,14 +1478,7 @@ drainLoop:
 			finishOK = false
 		}
 	}
-	resumePublish := syncdl.PlanImportResumePhasePublishFinalization(syncdl.ImportResumePhasePublishFinalizationInput{
-		Phases:   resumePhases,
-		FinishOK: finishOK,
-		Paused:   paused,
-	})
-	if resumePublish.Publish {
-		ss.publishImportResumePhaseProgress(resumePublish.Phases)
-	}
+	ss.publishImportResumePhaseProgress(resumePhases, finishOK, paused)
 }
 
 func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePlan) {
@@ -1511,10 +1504,14 @@ func (ss *SyncService) logImportResumePhaseYield(plan syncdl.ImportStagePhasePla
 		"syncPhaseToHash", last.BlockHash)
 }
 
-func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportStagePhasePlan) syncdl.ImportResumePhasePublishApplyResult {
-	run := syncdl.ApplyImportResumePhasePublishRun(phases, syncImportResumePhasePublishApplier{service: ss})
-	ss.logImportResumePhasePublishResult(run.Publish)
-	return run.Publish
+func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportStagePhasePlan, finishOK bool, paused bool) syncdl.ImportResumePhasePublishFinalizationRunApplyResult {
+	run := syncdl.ApplyImportResumePhasePublishFinalizationRun(syncdl.ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: finishOK,
+		Paused:   paused,
+	}, syncImportResumePhasePublishApplier{service: ss})
+	ss.logImportResumePhasePublishResult(run.Publish.Publish)
+	return run
 }
 
 func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportResumePhasePublishApplyResult) {

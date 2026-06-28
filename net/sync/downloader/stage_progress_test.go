@@ -2318,6 +2318,64 @@ func TestPlanImportResumePhasePublishFinalization(t *testing.T) {
 	}
 }
 
+func TestApplyImportResumePhasePublishFinalizationRun(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+		{
+			Phase:          ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []ImportStageTask{ImportFinishStageTask(7, hash)},
+		},
+	}
+	applier := &recordingImportResumePhasePublishApplier{
+		stageRows: map[rawdb.StageID]rawdb.StageProgress{
+			rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		},
+	}
+
+	got := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+	}, applier)
+	if !got.Finalization.Publish || !got.Publish.Publish.Applied || got.Publish.Publish.Rows != 2 || got.Publish.Publish.WriteError != nil {
+		t.Fatalf("finalization run = %+v, want published rows", got)
+	}
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(applier.rows, wantRows) {
+		t.Fatalf("published rows = %+v, want %+v", applier.rows, wantRows)
+	}
+	if len(applier.readStages) == 0 || applier.writeCalls != 1 {
+		t.Fatalf("applier calls = reads %+v writes %d, want read/write publish path", applier.readStages, applier.writeCalls)
+	}
+	got.Finalization.Phases[0].Tasks[0].BlockNum = 99
+	if phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("ApplyImportResumePhasePublishFinalizationRun returned aliased phase tasks")
+	}
+
+	skippedApplier := &recordingImportResumePhasePublishApplier{readErr: errors.New("must not read")}
+	skipped := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+		Paused:   true,
+	}, skippedApplier)
+	if skipped.Finalization.Publish || skipped.Finalization.SkipReason != ImportResumePhasePublishFinalizationPaused ||
+		skipped.Publish.Publish.Applied || len(skippedApplier.readStages) != 0 || skippedApplier.writeCalls != 0 {
+		t.Fatalf("skipped finalization run = %+v reads=%+v writes=%d, want no read/write",
+			skipped, skippedApplier.readStages, skippedApplier.writeCalls)
+	}
+}
+
 func TestPlanImportResumePhasePublish(t *testing.T) {
 	hash := tcommon.Hash{0x07}
 	phases := []ImportStagePhasePlan{
@@ -2453,13 +2511,16 @@ func TestApplyImportResumePhasePublishRun(t *testing.T) {
 }
 
 type recordingImportResumePhasePublishApplier struct {
-	rows      []rawdb.StageProgress
-	stageRows map[rawdb.StageID]rawdb.StageProgress
-	readErr   error
-	err       error
+	rows       []rawdb.StageProgress
+	stageRows  map[rawdb.StageID]rawdb.StageProgress
+	readStages []rawdb.StageID
+	writeCalls int
+	readErr    error
+	err        error
 }
 
 func (a *recordingImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	a.readStages = append(a.readStages, stage)
 	if a.readErr != nil {
 		return rawdb.StageProgress{}, false, a.readErr
 	}
@@ -2468,6 +2529,7 @@ func (a *recordingImportResumePhasePublishApplier) ReadStageProgress(stage rawdb
 }
 
 func (a *recordingImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {
+	a.writeCalls++
 	a.rows = append([]rawdb.StageProgress(nil), rows...)
 	return a.err
 }

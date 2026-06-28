@@ -807,8 +807,9 @@ func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {
 		},
 	}
 
-	result := ss.publishImportResumePhaseProgress(phases)
-	if !result.Applied || result.Rows != 2 || result.WriteError != nil || !result.Plan.OK {
+	result := ss.publishImportResumePhaseProgress(phases, true, false)
+	publish := result.Publish.Publish
+	if !result.Finalization.Publish || !publish.Applied || publish.Rows != 2 || publish.WriteError != nil || !publish.Plan.OK {
 		t.Fatalf("resume publish result = %+v, want two rows applied", result)
 	}
 	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
@@ -858,9 +859,10 @@ func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 				Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
 			}
 
-			result := ss.publishImportResumePhaseProgress([]syncdl.ImportStagePhasePlan{phase})
-			if result.Applied || result.Rows != 0 || result.WriteError != nil || result.Plan.OK ||
-				len(result.Plan.Decisions) != 1 || result.Plan.Decisions[0].Status != test.wantStatus {
+			result := ss.publishImportResumePhaseProgress([]syncdl.ImportStagePhasePlan{phase}, true, false)
+			publish := result.Publish.Publish
+			if !result.Finalization.Publish || publish.Applied || publish.Rows != 0 || publish.WriteError != nil || publish.Plan.OK ||
+				len(publish.Plan.Decisions) != 1 || publish.Plan.Decisions[0].Status != test.wantStatus {
 				t.Fatalf("resume publish result = %+v, want blocked with status %s", result, test.wantStatus)
 			}
 			if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncCommitment); err != nil {
@@ -871,6 +873,31 @@ func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 				t.Fatalf("sync commitment after sync-ahead rejection = %+v ok=%v, want existing ahead row retained", row, ok)
 			}
 		})
+	}
+}
+
+func TestSyncServiceResumePhasePublishFinalizationSkipsWhenPaused(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write canonical commitment: %v", err)
+	}
+	phase := syncdl.ImportStagePhasePlan{
+		Phase:          syncdl.ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
+	}
+
+	result := ss.publishImportResumePhaseProgress([]syncdl.ImportStagePhasePlan{phase}, true, true)
+	if result.Finalization.Publish ||
+		result.Finalization.SkipReason != syncdl.ImportResumePhasePublishFinalizationPaused ||
+		result.Publish.Publish.Applied {
+		t.Fatalf("paused finalization result = %+v, want no publish", result)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncCommitment); err != nil || ok {
+		t.Fatalf("sync commitment after paused finalization = %+v ok=%v err=%v, want absent", row, ok, err)
 	}
 }
 
