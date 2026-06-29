@@ -1041,15 +1041,17 @@ Status:
   disappear, retained in-shard rows remain readable, all-hidden head shards are
   truncated, and the rewritten index survives reopen.
 - `gtron snapshot restore` now has CLI-level regression coverage for the cold
-  chain path: a signed catalog restores chain-freezer + `chain-index` sidecars,
-  installs the canonical boundary, and a restarted `BlockChain`/`TronBackend`
-  resolves historical block, transaction, transaction-info, and state-root reads
-  with the historical hot lookup rows absent. The same test now also drives real
-  `/wallet`, `/walletsolidity`, `/walletpbft`, and JSON-RPC HTTP handlers
+  chain path: a signed catalog restores chain-freezer + `chain-index` sidecars
+  plus `event-log`/`event-log-index` sidecars, installs the canonical and
+  event-log build boundaries, and a restarted `BlockChain`/`TronBackend`
+  resolves historical block, transaction, transaction-info, state-root, and log
+  reads with the historical hot lookup rows absent. The same test now also
+  drives real `/wallet`, `/walletsolidity`, `/walletpbft`, and JSON-RPC HTTP
+  handlers
   (`getblockbyid`, `getblockbynum`, `gettransactionbyid`,
   `gettransactioninfobyid`, `gettransactioninfobyblocknum`,
-  `eth_getBlockByHash`, and `eth_getTransactionReceipt`) against that restored
-  cold backend, including solidity/PBFT bound-block paths.
+  `eth_getBlockByHash`, `eth_getTransactionReceipt`, and `eth_getLogs`) against
+  that restored cold backend, including solidity/PBFT bound-block paths.
 - The same restore regression now seeds minimal latest-account, code, and
   contract-storage snapshots plus state-domain history, restores them through
   the signed catalog path, deletes the restored hot StateDomainChange/StateTxRange

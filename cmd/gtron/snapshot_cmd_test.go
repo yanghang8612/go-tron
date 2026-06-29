@@ -1424,6 +1424,24 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	block1, txHash, txInfoRaw := snapshotCmdBlockWithTx(t, 1)
 	block2 := snapshotCmdBlock(2)
+	logTopic := common.Hash{0x5a}
+	logAddress := append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5b}, common.AccountIDLength)...)
+	txInfo := &corepb.TransactionRet{}
+	if err := proto.Unmarshal(txInfoRaw, txInfo); err != nil {
+		t.Fatalf("unmarshal block1 tx info: %v", err)
+	}
+	if len(txInfo.Transactioninfo) != 1 {
+		t.Fatalf("block1 tx info count = %d, want 1", len(txInfo.Transactioninfo))
+	}
+	txInfo.Transactioninfo[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: logAddress,
+		Topics:  [][]byte{logTopic[:]},
+		Data:    []byte{0x5c, 0x5d},
+	}}
+	txInfoRaw, err = proto.Marshal(txInfo)
+	if err != nil {
+		t.Fatalf("marshal block1 tx info with log: %v", err)
+	}
 	stateRoot1 := common.HexToHash("3131313131313131313131313131313131313131313131313131313131313131")
 	stateRoot2 := common.HexToHash("3232323232323232323232323232323232323232323232323232323232323232")
 	archiveAddr := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x42}, common.AccountIDLength)...))
@@ -1479,6 +1497,15 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
 	if err != nil {
 		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	sourceChain := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), rawdb.NewFreezerReader(src))
+	eventLogRef, err := statesnapshots.BuildEventLogSegmentFromChain(sourceChain, snapshotDir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	eventLogIndexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{eventLogRef}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
 	}
 
 	stateSnapshotDB := rawdb.NewMemoryDatabase()
@@ -1730,7 +1757,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		delegationRef, delegationAccessorRef, delegationBTreeRef,
 	}
 	segments = append(segments, historyRefs...)
-	segments = append(segments, freezerRef, indexRef)
+	segments = append(segments, freezerRef, indexRef, eventLogRef, eventLogIndexRef)
 	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 2, segments, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
@@ -1784,6 +1811,9 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer); err != nil || !ok || got != block2.Number() {
 		t.Fatalf("ChainFreezer stage = %d ok=%v err=%v, want block2", got, ok, err)
 	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != block1.Number() {
+		t.Fatalf("SnapshotEventLogBuild stage = %d ok=%v err=%v, want block1", got, ok, err)
+	}
 
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
@@ -1800,6 +1830,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	bc.SetStateCodeColdHistory(mgr)
 	bc.SetStateCommitmentColdHistory(mgr)
 	bc.ChainDB().SetChainIndexReader(mgr)
+	bc.ChainDB().SetEventLogReader(mgr)
 	backend := corepkg.NewTronBackend(bc, txpool.New())
 	backend.SetStateColdHistory(mgr)
 	if err := rawdb.DeleteStateDomainChanges(db, block2.Number()); err != nil {
@@ -2062,6 +2093,29 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	storageRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(archiveAddr.Bytes()), "0x" + hex.EncodeToString(archiveSlot.Bytes()), "0x1"})
 	if got := storageRPC["result"]; got != "0x"+hex.EncodeToString(archiveStorage1.Bytes()) {
 		t.Fatalf("eth_getStorageAt archive result = %v, want 0x%s", got, hex.EncodeToString(archiveStorage1.Bytes()))
+	}
+	logsRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getLogs", []any{map[string]any{
+		"fromBlock": "0x1",
+		"toBlock":   "0x1",
+		"address":   "0x" + hex.EncodeToString(logAddress),
+		"topics":    []any{"0x" + hex.EncodeToString(logTopic.Bytes())},
+	}})
+	logsResult, ok := logsRPC["result"].([]any)
+	if !ok || len(logsResult) != 1 {
+		t.Fatalf("eth_getLogs restored cold result = %v, want one log", logsRPC["result"])
+	}
+	logObj, ok := logsResult[0].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getLogs restored cold log = %T %v, want object", logsResult[0], logsResult[0])
+	}
+	if logObj["data"] != "0x5c5d" ||
+		logObj["blockHash"] != fmt.Sprintf("0x%x", block1.Hash()) ||
+		logObj["transactionHash"] != fmt.Sprintf("0x%x", txHash) {
+		t.Fatalf("eth_getLogs restored cold log = %v, want block1 tx log", logObj)
+	}
+	wantLogAddress := "0x" + hex.EncodeToString(logAddress[len(logAddress)-common.AccountIDLength:])
+	if logObj["address"] != wantLogAddress {
+		t.Fatalf("eth_getLogs restored cold address = %v, want %s", logObj["address"], wantLogAddress)
 	}
 	deletedBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(deletedAddr.Bytes()), "0x1"})
 	if got := deletedBalanceRPC["result"]; got != snapshotTestSunToWeiHex(deletedBalance1) {
