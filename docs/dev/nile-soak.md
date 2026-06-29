@@ -128,9 +128,10 @@ plus interval growth attribution fields:
 `intervalDerivedIndexGrowthShare`. When `--prometheus-output` is set, each
 sample also writes a low-cardinality Prometheus text artifact and records
 `samplePrometheus` plus `samplePrometheusStatus` in the JSONL row. The artifact
-exposes sync height, target/stage lag, throughput, hot/cold/index byte gauges,
-snapshot sidecar share, archive probe failures, and sample/soak health status
-for external scrape jobs.
+exposes sync height, target/stage lag, full-staged-sync status/ready/coverage
+and bottleneck gauges, throughput, hot/cold/index byte gauges, snapshot sidecar
+share, archive probe failures, and sample/soak health status for external
+scrape jobs.
 Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -446,7 +447,12 @@ Use `--require-sample-prometheus-artifact` when rows were collected with
 `--prometheus-output`. The checker requires `samplePrometheusStatus=ok`, reads
 the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 `gtron_nile_sync_target_lag_blocks`,
-`gtron_nile_sync_full_staged_sync_head_lag_blocks`, hot/cold/index byte gauges,
+`gtron_nile_sync_full_staged_sync_status`,
+`gtron_nile_sync_full_staged_sync_ready`,
+`gtron_nile_sync_full_staged_sync_head_lag_blocks`,
+`gtron_nile_sync_full_staged_sync_stage_coverage_ratio`,
+`gtron_nile_sync_full_staged_sync_verification_ratio`, the labelled
+`gtron_nile_sync_full_staged_sync_bottleneck`, hot/cold/index byte gauges,
 `gtron_nile_sync_snapshot_sidecar_share_milli`, and archive probe failures
 against the same JSONL row. If the row carries `datadir`, those gauges must
 have the matching `datadir` label so an aggregate scrape file cannot satisfy

@@ -42,6 +42,19 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_height", "height"),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks"),
+    ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady"),
+    ("gtron_nile_sync_full_staged_sync_complete_at_head", "fullStagedSyncCompleteAtHead"),
+    ("gtron_nile_sync_full_staged_sync_complete_block", "fullStagedSyncCompleteBlock"),
+    ("gtron_nile_sync_full_staged_sync_head_block", "fullStagedSyncHeadBlock"),
+    ("gtron_nile_sync_full_staged_sync_completion_ratio", "fullStagedSyncCompletionRatio"),
+    ("gtron_nile_sync_full_staged_sync_pipeline_lag_blocks", "fullStagedSyncPipelineLagBlocks"),
+    ("gtron_nile_sync_full_staged_sync_bottleneck_lag_blocks", "fullStagedSyncBottleneckLagBlocks"),
+    ("gtron_nile_sync_full_staged_sync_bottleneck_lag_share", "fullStagedSyncBottleneckLagShare"),
+    ("gtron_nile_sync_full_staged_sync_stage_count", "fullStagedSyncStageCount"),
+    ("gtron_nile_sync_full_staged_sync_present_stage_count", "fullStagedSyncPresentStageCount"),
+    ("gtron_nile_sync_full_staged_sync_verified_stage_count", "fullStagedSyncVerifiedStageCount"),
+    ("gtron_nile_sync_full_staged_sync_stage_coverage_ratio", "fullStagedSyncStageCoverageRatio"),
+    ("gtron_nile_sync_full_staged_sync_verification_ratio", "fullStagedSyncVerificationRatio"),
     ("gtron_nile_sync_datadir_bytes", "datadirBytes"),
     ("gtron_nile_sync_chaindata_bytes", "chaindataBytes"),
     ("gtron_nile_sync_cold_archive_bytes", "coldArchiveBytes"),
@@ -62,6 +75,16 @@ PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
     "critical": 2,
+}
+
+FULL_STAGED_SYNC_STATUS_VALUES = {
+    "caught-up": 0,
+    "catching-up": 1,
+    "missing-stage": 2,
+    "hash-issue": 3,
+    "unverified-stage": 4,
+    "pipeline-violation": 5,
+    "unknown": 6,
 }
 
 FULL_STAGED_SYNC_REQUIRED_STAGES = (
@@ -690,7 +713,55 @@ def check_sample_prometheus_artifact(result_path, row):
             issues.append(f"samplePrometheus artifact {path} missing gtron_nile_sync_stage_stalled")
         elif got != want:
             issues.append(f"samplePrometheus artifact {path} gtron_nile_sync_stage_stalled={got:g}, want {want:g}")
+    issues.extend(check_sample_prometheus_full_staged_sync(path, text, row))
     issues.extend(check_sample_prometheus_archive_api_methods(path, text, row))
+    return issues
+
+
+def check_sample_prometheus_full_staged_sync(path, text, row):
+    issues = []
+    if "fullStagedSyncStatus" in row:
+        status = str(row.get("fullStagedSyncStatus", "unknown")).lower()
+        want = FULL_STAGED_SYNC_STATUS_VALUES.get(
+            status, FULL_STAGED_SYNC_STATUS_VALUES["unknown"]
+        )
+        got = sample_prometheus_metric_value(
+            text,
+            "gtron_nile_sync_full_staged_sync_status",
+            row,
+            {"status": status},
+        )
+        if got is None:
+            issues.append(
+                f"samplePrometheus artifact {path} missing "
+                f"gtron_nile_sync_full_staged_sync_status{{status={status!r}}}"
+            )
+        elif got != want:
+            issues.append(
+                f"samplePrometheus artifact {path} "
+                f"gtron_nile_sync_full_staged_sync_status{{status={status!r}}}="
+                f"{got:g}, want {want:g}"
+            )
+    bottleneck = row.get("fullStagedSyncBottleneck")
+    if bottleneck is not None:
+        got = sample_prometheus_metric_value(
+            text,
+            "gtron_nile_sync_full_staged_sync_bottleneck",
+            row,
+            {"bottleneck": str(bottleneck)},
+        )
+        if got is None:
+            issues.append(
+                f"samplePrometheus artifact {path} missing "
+                f"gtron_nile_sync_full_staged_sync_bottleneck"
+                f"{{bottleneck={str(bottleneck)!r}}}"
+            )
+        elif got != 1:
+            issues.append(
+                f"samplePrometheus artifact {path} "
+                f"gtron_nile_sync_full_staged_sync_bottleneck"
+                f"{{bottleneck={str(bottleneck)!r}}}={got:g}, want 1"
+            )
     return issues
 
 

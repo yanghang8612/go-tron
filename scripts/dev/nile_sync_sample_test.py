@@ -528,6 +528,11 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn("# TYPE gtron_nile_sync_sample_status gauge", metrics)
             self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
             self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_status{{{labels},status="unknown"}} 6', metrics)
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} 0', metrics)
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} 0', metrics)
+            bottleneck_labels = f'bottleneck="unknown",datadir="{datadir}",label="candidate",mode="full",network="nile"'
+            self.assertIn(f"gtron_nile_sync_full_staged_sync_bottleneck{{{bottleneck_labels}}} 1", metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes{{{labels}}} ', metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes_per_block{{{labels}}} ', metrics)
             self.assertIn(f'gtron_nile_sync_soak_efficiency_datadir_bytes_per_block{{{labels}}} ', metrics)

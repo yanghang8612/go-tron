@@ -310,10 +310,10 @@ the current sync-stage bottleneck.
 Set `--prometheus-output <file>` on the Nile sampler when a scrape job should
 consume the current sync sample directly. The sampler writes
 `gtron_nile_sync_*` gauges for height, target/stage lag, throughput,
-hot/cold/index bytes, bytes-per-block efficiency, snapshot sidecar share,
-archive probe failures, and sample/soak health status, and records
-`samplePrometheus*` fields in the JSONL row. Gate that artifact with
-`nile_sync_acceptance.py
+full-staged-sync status/ready/coverage/bottleneck, hot/cold/index bytes,
+bytes-per-block efficiency, snapshot sidecar share, archive probe failures, and
+sample/soak health status, and records `samplePrometheus*` fields in the JSONL
+row. Gate that artifact with `nile_sync_acceptance.py
 --require-sample-prometheus-artifact` so the scrape payload cannot drift from
 the accepted JSONL sample. Use
 `scripts/dev/prometheus_artifact_export.py results.jsonl --output gtron.prom`

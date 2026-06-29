@@ -227,6 +227,36 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_target_lag_blocks{{{labels}}} {row["syncTargetLagBlocks"]}',
                 "# TYPE gtron_nile_sync_full_staged_sync_head_lag_blocks gauge",
                 f'gtron_nile_sync_full_staged_sync_head_lag_blocks{{{labels}}} {row["fullStagedSyncHeadLagBlocks"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_ready gauge",
+                f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} {1 if row["fullStagedSyncReady"] else 0}',
+                "# TYPE gtron_nile_sync_full_staged_sync_complete_at_head gauge",
+                f'gtron_nile_sync_full_staged_sync_complete_at_head{{{labels}}} {1 if row["fullStagedSyncCompleteAtHead"] else 0}',
+                "# TYPE gtron_nile_sync_full_staged_sync_complete_block gauge",
+                f'gtron_nile_sync_full_staged_sync_complete_block{{{labels}}} {row["fullStagedSyncCompleteBlock"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_head_block gauge",
+                f'gtron_nile_sync_full_staged_sync_head_block{{{labels}}} {row["fullStagedSyncHeadBlock"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_completion_ratio gauge",
+                f'gtron_nile_sync_full_staged_sync_completion_ratio{{{labels}}} {row["fullStagedSyncCompletionRatio"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_pipeline_lag_blocks gauge",
+                f'gtron_nile_sync_full_staged_sync_pipeline_lag_blocks{{{labels}}} {row["fullStagedSyncPipelineLagBlocks"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_bottleneck_lag_blocks gauge",
+                f'gtron_nile_sync_full_staged_sync_bottleneck_lag_blocks{{{labels}}} {row["fullStagedSyncBottleneckLagBlocks"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_bottleneck_lag_share gauge",
+                f'gtron_nile_sync_full_staged_sync_bottleneck_lag_share{{{labels}}} {row["fullStagedSyncBottleneckLagShare"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_stage_count gauge",
+                f'gtron_nile_sync_full_staged_sync_stage_count{{{labels}}} {row["fullStagedSyncStageCount"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_present_stage_count gauge",
+                f'gtron_nile_sync_full_staged_sync_present_stage_count{{{labels}}} {row["fullStagedSyncPresentStageCount"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_verified_stage_count gauge",
+                f'gtron_nile_sync_full_staged_sync_verified_stage_count{{{labels}}} {row["fullStagedSyncVerifiedStageCount"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_stage_coverage_ratio gauge",
+                f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} {row["fullStagedSyncStageCoverageRatio"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_verification_ratio gauge",
+                f'gtron_nile_sync_full_staged_sync_verification_ratio{{{labels}}} {row["fullStagedSyncVerificationRatio"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_status gauge",
+                f'gtron_nile_sync_full_staged_sync_status{{{labels},status="{row["fullStagedSyncStatus"]}"}} 0',
+                "# TYPE gtron_nile_sync_full_staged_sync_bottleneck gauge",
+                f'gtron_nile_sync_full_staged_sync_bottleneck{{{labels},bottleneck="{row["fullStagedSyncBottleneck"]}"}} 1',
                 "# TYPE gtron_nile_sync_datadir_bytes gauge",
                 f'gtron_nile_sync_datadir_bytes{{{labels}}} {row["datadirBytes"]}',
                 "# TYPE gtron_nile_sync_chaindata_bytes gauge",
@@ -427,6 +457,38 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("gtron_nile_sync_height=999, want 1000", proc.stderr)
+
+    def test_rejects_sample_prometheus_full_staged_sync_status_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_full_staged_sync_status{datadir="/tmp/nile",label="",mode="full",network="nile",status="caught-up"} 0',
+                'gtron_nile_sync_full_staged_sync_status{datadir="/tmp/nile",label="",mode="full",network="nile",status="caught-up"} 1',
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_full_staged_sync_status{status='caught-up'}=1, want 0",
+                proc.stderr,
+            )
 
     def test_accepts_snapshot_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

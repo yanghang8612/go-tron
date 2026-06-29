@@ -2246,11 +2246,34 @@ SOAK_HEALTH_STATUS_VALUES = {
     "unknown": 3,
 }
 
+FULL_STAGED_SYNC_STATUS_VALUES = {
+    "caught-up": 0,
+    "catching-up": 1,
+    "missing-stage": 2,
+    "hash-issue": 3,
+    "unverified-stage": 4,
+    "pipeline-violation": 5,
+    "unknown": 6,
+}
+
 SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_height", "height", "Current sampled block height."),
     ("gtron_nile_sync_node_info_current_block", "nodeInfoCurrentBlock", "Current block reported by node info."),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks", "Lag from the sampled block to the best known sync target."),
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks", "Lag between full staged-sync completion and sampled head."),
+    ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady", "Whether full staged-sync evidence is present, verified, and monotonic."),
+    ("gtron_nile_sync_full_staged_sync_complete_at_head", "fullStagedSyncCompleteAtHead", "Whether full staged-sync completion has caught up to the sampled head."),
+    ("gtron_nile_sync_full_staged_sync_complete_block", "fullStagedSyncCompleteBlock", "Block reached by the full staged-sync finish stage."),
+    ("gtron_nile_sync_full_staged_sync_head_block", "fullStagedSyncHeadBlock", "Head block used for full staged-sync lag calculations."),
+    ("gtron_nile_sync_full_staged_sync_completion_ratio", "fullStagedSyncCompletionRatio", "Full staged-sync complete block divided by sampled head block."),
+    ("gtron_nile_sync_full_staged_sync_pipeline_lag_blocks", "fullStagedSyncPipelineLagBlocks", "Total lag across the full staged-sync pipeline."),
+    ("gtron_nile_sync_full_staged_sync_bottleneck_lag_blocks", "fullStagedSyncBottleneckLagBlocks", "Lag blocks for the current full staged-sync bottleneck."),
+    ("gtron_nile_sync_full_staged_sync_bottleneck_lag_share", "fullStagedSyncBottleneckLagShare", "Share of full staged-sync pipeline lag owned by the current bottleneck."),
+    ("gtron_nile_sync_full_staged_sync_stage_count", "fullStagedSyncStageCount", "Required full staged-sync stage count."),
+    ("gtron_nile_sync_full_staged_sync_present_stage_count", "fullStagedSyncPresentStageCount", "Present full staged-sync stage count."),
+    ("gtron_nile_sync_full_staged_sync_verified_stage_count", "fullStagedSyncVerifiedStageCount", "Hash-verified full staged-sync stage count."),
+    ("gtron_nile_sync_full_staged_sync_stage_coverage_ratio", "fullStagedSyncStageCoverageRatio", "Present full staged-sync stages divided by required stages."),
+    ("gtron_nile_sync_full_staged_sync_verification_ratio", "fullStagedSyncVerificationRatio", "Hash-verified full staged-sync stages divided by required stages."),
     ("gtron_nile_sync_blocks_per_second", "blocksPerSecond", "Cumulative sync throughput in blocks per second."),
     ("gtron_nile_sync_interval_blocks_per_second", "intervalBlocksPerSecond", "Interval sync throughput in blocks per second."),
     ("gtron_nile_sync_datadir_bytes", "datadirBytes", "Total datadir bytes."),
@@ -2320,6 +2343,25 @@ def append_prometheus_gauge(lines, name, help_text, labels, value):
     lines.append(f"# TYPE {name} gauge")
     lines.append(f"{name}{labels} {value:g}")
 
+def append_full_staged_sync_prometheus(lines, row):
+    status = str(row.get("fullStagedSyncStatus", "unknown")).lower()
+    append_prometheus_gauge(
+        lines,
+        "gtron_nile_sync_full_staged_sync_status",
+        "Full staged-sync status: 0=caught-up, 1=catching-up, 2=missing-stage, 3=hash-issue, 4=unverified-stage, 5=pipeline-violation, 6=unknown/other.",
+        prometheus_labels(row, {"status": status}),
+        FULL_STAGED_SYNC_STATUS_VALUES.get(status, FULL_STAGED_SYNC_STATUS_VALUES["unknown"]),
+    )
+    bottleneck = str(row.get("fullStagedSyncBottleneck", ""))
+    if bottleneck:
+        append_prometheus_gauge(
+            lines,
+            "gtron_nile_sync_full_staged_sync_bottleneck",
+            "Current full staged-sync bottleneck, exposed as a labelled gauge.",
+            prometheus_labels(row, {"bottleneck": bottleneck}),
+            1,
+        )
+
 def archive_api_method_set(row, field):
     values = row.get(field)
     if not isinstance(values, list):
@@ -2383,6 +2425,7 @@ def write_sample_prometheus(path, row):
         if value is None:
             continue
         append_prometheus_gauge(lines, metric, help_text, prometheus_labels(row), value)
+    append_full_staged_sync_prometheus(lines, row)
     append_archive_api_prometheus(lines, row)
     if "stageStalled" in row:
         append_prometheus_gauge(
