@@ -452,7 +452,9 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 `gtron_nile_sync_full_staged_sync_head_lag_blocks`,
 `gtron_nile_sync_full_staged_sync_stage_coverage_ratio`,
 `gtron_nile_sync_full_staged_sync_verification_ratio`, the labelled
-`gtron_nile_sync_full_staged_sync_bottleneck`, hot/cold/index byte gauges,
+`gtron_nile_sync_full_staged_sync_bottleneck`, per-stage
+`gtron_nile_sync_full_staged_sync_stage_{block,present,verified}` evidence
+when `fullStagedSyncStageDetails` is present, hot/cold/index byte gauges,
 `gtron_nile_sync_snapshot_sidecar_share_milli`, and archive probe failures
 against the same JSONL row. If the row carries `datadir`, those gauges must
 have the matching `datadir` label so an aggregate scrape file cannot satisfy

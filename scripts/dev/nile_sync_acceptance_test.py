@@ -188,6 +188,24 @@ def add_snapshot_profile_evidence(row):
     return row
 
 
+def sample_prometheus_labels(extra=None):
+    labels = {
+        "datadir": "/tmp/nile",
+        "label": "",
+        "mode": "full",
+        "network": "nile",
+    }
+    if extra:
+        labels.update(extra)
+    return ",".join(f'{key}="{labels[key]}"' for key in sorted(labels))
+
+
+def stage_detail_verified(stage, verification):
+    if stage in {"SyncBodies", "SyncBodiesReady"}:
+        return verification in {"staged", "canonical"}
+    return verification == "canonical"
+
+
 def add_sample_prometheus_evidence(row, path, *, height=None):
     row.update(
         {
@@ -292,6 +310,37 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
         + "\n",
         encoding="utf-8",
     )
+    details = row.get("fullStagedSyncStageDetails")
+    if isinstance(details, list) and details:
+        lines = [
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_block gauge",
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_present gauge",
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_verified gauge",
+        ]
+        for detail in details:
+            labels = sample_prometheus_labels(
+                {"stage": detail["stage"], "field": detail["field"]}
+            )
+            lines.extend(
+                [
+                    f'gtron_nile_sync_full_staged_sync_stage_block{{{labels}}} {detail["block"]}',
+                    f'gtron_nile_sync_full_staged_sync_stage_present{{{labels}}} {1 if detail["present"] else 0}',
+                ]
+            )
+            verification = str(detail.get("verified", ""))
+            verified_labels = sample_prometheus_labels(
+                {
+                    "stage": detail["stage"],
+                    "field": detail["field"],
+                    "verification": verification,
+                }
+            )
+            lines.append(
+                f"gtron_nile_sync_full_staged_sync_stage_verified{{{verified_labels}}} "
+                f"{1 if stage_detail_verified(detail['stage'], verification) else 0}"
+            )
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
     return row
 
 
@@ -487,6 +536,73 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "gtron_nile_sync_full_staged_sync_status{status='caught-up'}=1, want 0",
+                proc.stderr,
+            )
+
+    def test_accepts_sample_prometheus_stage_detail_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["fullStagedSyncStageDetails"] = full_stage_details(
+                verified={"SyncBodies": "staged"}
+            )
+            row = add_sample_prometheus_evidence(row, prom)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_sample_prometheus_stage_detail_metric_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["fullStagedSyncStageDetails"] = full_stage_details()
+            row = add_sample_prometheus_evidence(row, prom)
+            labels = sample_prometheus_labels(
+                {"stage": "SyncExecution", "field": "stageSyncExecution"}
+            )
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                f"gtron_nile_sync_full_staged_sync_stage_block{{{labels}}} 1000",
+                f"gtron_nile_sync_full_staged_sync_stage_block{{{labels}}} 999",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_full_staged_sync_stage_block"
+                "{stage='SyncExecution',field='stageSyncExecution'}=999, want 1000",
                 proc.stderr,
             )
 

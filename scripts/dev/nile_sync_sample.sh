@@ -2343,6 +2343,11 @@ def append_prometheus_gauge(lines, name, help_text, labels, value):
     lines.append(f"# TYPE {name} gauge")
     lines.append(f"{name}{labels} {value:g}")
 
+def full_staged_sync_stage_verified(stage, verification):
+    if stage in {"SyncBodies", "SyncBodiesReady"}:
+        return verification in {"staged", "canonical"}
+    return verification == "canonical"
+
 def append_full_staged_sync_prometheus(lines, row):
     status = str(row.get("fullStagedSyncStatus", "unknown")).lower()
     append_prometheus_gauge(
@@ -2361,6 +2366,39 @@ def append_full_staged_sync_prometheus(lines, row):
             prometheus_labels(row, {"bottleneck": bottleneck}),
             1,
         )
+    details = row.get("fullStagedSyncStageDetails")
+    if not isinstance(details, list) or not details:
+        return
+    lines.extend(
+        [
+            "# HELP gtron_nile_sync_full_staged_sync_stage_block Full staged-sync stage block from stage-status evidence.",
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_block gauge",
+            "# HELP gtron_nile_sync_full_staged_sync_stage_present Whether a required full staged-sync stage is present.",
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_present gauge",
+            "# HELP gtron_nile_sync_full_staged_sync_stage_verified Whether a required full staged-sync stage has acceptable hash verification evidence.",
+            "# TYPE gtron_nile_sync_full_staged_sync_stage_verified gauge",
+        ]
+    )
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        stage = str(detail.get("stage", ""))
+        field = str(detail.get("field", ""))
+        if not stage or not field:
+            continue
+        labels = prometheus_labels(row, {"stage": stage, "field": field})
+        block = prometheus_number(detail, "block")
+        if block is not None:
+            lines.append(f"gtron_nile_sync_full_staged_sync_stage_block{labels} {block:g}")
+        present = 1 if bool(detail.get("present")) else 0
+        lines.append(f"gtron_nile_sync_full_staged_sync_stage_present{labels} {present:g}")
+        verification = str(detail.get("verified", ""))
+        verified_labels = prometheus_labels(
+            row,
+            {"stage": stage, "field": field, "verification": verification},
+        )
+        verified = 1 if full_staged_sync_stage_verified(stage, verification) else 0
+        lines.append(f"gtron_nile_sync_full_staged_sync_stage_verified{verified_labels} {verified:g}")
 
 def archive_api_method_set(row, field):
     values = row.get(field)

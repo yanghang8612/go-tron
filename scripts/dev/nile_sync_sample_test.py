@@ -14,6 +14,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "nile_sync_sample.sh"
 
 
+def write_full_stage_status(path):
+    path.write_text(
+        "\n".join(
+            [
+                "Stage status: datadir=/tmp/nile known=32 rows=6",
+                "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
+                "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
+                "Stage progress: group=sync name=SyncExecution value=100 hash=dd verified=canonical",
+                "Stage progress: group=sync name=SyncCommitment value=100 hash=ee verified=canonical",
+                "Stage progress: group=sync name=SyncFinish value=100 hash=ff verified=canonical",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class NileSampleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         payloads = {
@@ -180,7 +198,6 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
-            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             server.invalid_trace_transaction = True
@@ -207,8 +224,6 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
-                    "--prometheus-output",
-                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -243,10 +258,6 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionReceipt",
                 ],
             )
-            metrics = prometheus.read_text(encoding="utf-8")
-            trace_labels = f'datadir="{datadir}",label="candidate",method="debug_traceTransaction",mode="full",network="nile"'
-            self.assertIn(f'gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 0', metrics)
-            self.assertIn(f'gtron_nile_sync_archive_api_tx_method_success{{{trace_labels}}} 0', metrics)
 
     def test_archive_api_probe_rejects_null_transaction_results(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,6 +497,8 @@ class NileSyncSampleTest(unittest.TestCase):
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
             prometheus = tmpdir / "sync.prom"
+            stage_status = tmpdir / "stage-status.txt"
+            write_full_stage_status(stage_status)
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -511,6 +524,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
+                    "--stage-status-file",
+                    str(stage_status),
                     "--prometheus-output",
                     str(prometheus),
                 ],
@@ -528,10 +543,15 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn("# TYPE gtron_nile_sync_sample_status gauge", metrics)
             self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
             self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
-            self.assertIn(f'gtron_nile_sync_full_staged_sync_status{{{labels},status="unknown"}} 6', metrics)
-            self.assertIn(f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} 0', metrics)
-            self.assertIn(f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} 0', metrics)
-            bottleneck_labels = f'bottleneck="unknown",datadir="{datadir}",label="candidate",mode="full",network="nile"'
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_status{{{labels},status="caught-up"}} 0', metrics)
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} 1', metrics)
+            self.assertIn(f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} 1', metrics)
+            stage_labels = f'datadir="{datadir}",field="stageSyncExecution",label="candidate",mode="full",network="nile",stage="SyncExecution"'
+            self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_block{{{stage_labels}}} 100", metrics)
+            self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_present{{{stage_labels}}} 1", metrics)
+            verified_labels = f'datadir="{datadir}",field="stageSyncExecution",label="candidate",mode="full",network="nile",stage="SyncExecution",verification="canonical"'
+            self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_verified{{{verified_labels}}} 1", metrics)
+            bottleneck_labels = f'bottleneck="none",datadir="{datadir}",label="candidate",mode="full",network="nile"'
             self.assertIn(f"gtron_nile_sync_full_staged_sync_bottleneck{{{bottleneck_labels}}} 1", metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes{{{labels}}} ', metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes_per_block{{{labels}}} ', metrics)

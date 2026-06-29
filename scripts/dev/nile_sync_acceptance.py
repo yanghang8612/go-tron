@@ -762,6 +762,97 @@ def check_sample_prometheus_full_staged_sync(path, text, row):
                 f"gtron_nile_sync_full_staged_sync_bottleneck"
                 f"{{bottleneck={str(bottleneck)!r}}}={got:g}, want 1"
             )
+    details = row.get("fullStagedSyncStageDetails")
+    if isinstance(details, list):
+        for index, detail in enumerate(details):
+            issues.extend(
+                check_sample_prometheus_full_staged_sync_stage_detail(
+                    path, text, row, index, detail
+                )
+            )
+    return issues
+
+
+def check_sample_prometheus_full_staged_sync_stage_detail(path, text, row, index, detail):
+    if not isinstance(detail, dict):
+        return [
+            f"samplePrometheus artifact {path} cannot check "
+            f"fullStagedSyncStageDetails[{index}]={detail!r}: want object"
+        ]
+    stage = str(detail.get("stage", ""))
+    field = str(detail.get("field", ""))
+    if not stage or not field:
+        return [
+            f"samplePrometheus artifact {path} cannot check "
+            f"fullStagedSyncStageDetails[{index}]: missing stage/field"
+        ]
+
+    issues = []
+    labels = {"stage": stage, "field": field}
+    present_want = 1.0 if bool(detail.get("present")) else 0.0
+    present_got = sample_prometheus_metric_value(
+        text,
+        "gtron_nile_sync_full_staged_sync_stage_present",
+        row,
+        labels,
+    )
+    if present_got is None:
+        issues.append(
+            f"samplePrometheus artifact {path} missing "
+            f"gtron_nile_sync_full_staged_sync_stage_present"
+            f"{{stage={stage!r},field={field!r}}}"
+        )
+    elif present_got != present_want:
+        issues.append(
+            f"samplePrometheus artifact {path} "
+            f"gtron_nile_sync_full_staged_sync_stage_present"
+            f"{{stage={stage!r},field={field!r}}}={present_got:g}, "
+            f"want {present_want:g}"
+        )
+
+    block_want = as_number(detail, "block")
+    if block_want is not None:
+        block_got = sample_prometheus_metric_value(
+            text,
+            "gtron_nile_sync_full_staged_sync_stage_block",
+            row,
+            labels,
+        )
+        if block_got is None:
+            issues.append(
+                f"samplePrometheus artifact {path} missing "
+                f"gtron_nile_sync_full_staged_sync_stage_block"
+                f"{{stage={stage!r},field={field!r}}}"
+            )
+        elif block_got != block_want:
+            issues.append(
+                f"samplePrometheus artifact {path} "
+                f"gtron_nile_sync_full_staged_sync_stage_block"
+                f"{{stage={stage!r},field={field!r}}}={block_got:g}, "
+                f"want {block_want:g}"
+            )
+
+    verification = str(detail.get("verified", ""))
+    verified_want = 1.0 if stage_detail_is_verified(stage, verification) else 0.0
+    verified_got = sample_prometheus_metric_value(
+        text,
+        "gtron_nile_sync_full_staged_sync_stage_verified",
+        row,
+        {"stage": stage, "field": field, "verification": verification},
+    )
+    if verified_got is None:
+        issues.append(
+            f"samplePrometheus artifact {path} missing "
+            f"gtron_nile_sync_full_staged_sync_stage_verified"
+            f"{{stage={stage!r},field={field!r},verification={verification!r}}}"
+        )
+    elif verified_got != verified_want:
+        issues.append(
+            f"samplePrometheus artifact {path} "
+            f"gtron_nile_sync_full_staged_sync_stage_verified"
+            f"{{stage={stage!r},field={field!r},verification={verification!r}}}="
+            f"{verified_got:g}, want {verified_want:g}"
+        )
     return issues
 
 
