@@ -14,10 +14,17 @@ def write_benchmark(path, rows):
     with path.open("w", encoding="utf-8") as fh:
         fh.write("goos: darwin\n")
         fh.write("goarch: arm64\n")
-        for case, variant, ns in rows:
+        for row in rows:
+            if len(row) == 3:
+                case, variant, ns = row
+                bytes_op = 100
+                allocs_op = 10
+            else:
+                case, variant, ns, bytes_op, allocs_op = row
             fh.write(
                 f"BenchmarkProcessBlock_{case}/{variant}-10          "
-                f"       5       {ns:.0f} ns/op       100 B/op       10 allocs/op\n"
+                f"       5       {ns:.0f} ns/op       "
+                f"{bytes_op:.0f} B/op       {allocs_op:.0f} allocs/op\n"
             )
         fh.write("PASS\n")
 
@@ -142,6 +149,68 @@ class StatePrefetchBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "prefetch=on_workers=4_lookahead=8 LightTRX_HeavyState overhead=3.00%",
+                proc.stderr,
+            )
+
+    def test_accepts_optional_resource_overhead_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            write_benchmark(benchmark, complete_rows())
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(benchmark),
+                    "--max-bytes-overhead",
+                    "0",
+                    "--max-allocs-overhead",
+                    "0",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("bytesMaxOverhead=0.00%", proc.stdout)
+            self.assertIn("allocsMaxOverhead=0.00%", proc.stdout)
+
+    def test_rejects_optional_resource_overhead_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            rows = []
+            for case, variant, ns in complete_rows():
+                if case == "LightTRX_HeavyState" and variant == "prefetch=on_workers=2_lookahead=8":
+                    rows.append((case, variant, ns, 130, 12))
+                else:
+                    rows.append((case, variant, ns, 100, 10))
+            write_benchmark(benchmark, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(benchmark),
+                    "--max-bytes-overhead",
+                    "0.10",
+                    "--max-allocs-overhead",
+                    "0.10",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "prefetch=on_workers=2_lookahead=8 LightTRX_HeavyState "
+                "B/op overhead=30.00%, want <= 10.00%",
+                proc.stderr,
+            )
+            self.assertIn(
+                "prefetch=on_workers=2_lookahead=8 LightTRX_HeavyState "
+                "allocs/op overhead=20.00%, want <= 10.00%",
                 proc.stderr,
             )
 

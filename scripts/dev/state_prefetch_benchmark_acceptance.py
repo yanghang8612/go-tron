@@ -59,16 +59,23 @@ def load_benchmarks(path):
             continue
         case = match.group("case")
         variant = match.group("variant")
-        ns = float(match.group("ns"))
-        samples.setdefault(case, {}).setdefault(variant, []).append(ns)
+        sample = samples.setdefault(case, {}).setdefault(
+            variant,
+            {"ns": [], "bytes": [], "allocs": []},
+        )
+        sample["ns"].append(float(match.group("ns")))
+        if match.group("bytes") is not None:
+            sample["bytes"].append(float(match.group("bytes")))
+        if match.group("allocs") is not None:
+            sample["allocs"].append(float(match.group("allocs")))
 
     if not samples and not issues:
         issues.append(f"{path}: no ProcessBlock prefetch benchmark rows found")
     return samples, issues
 
 
-def median_ns(samples, case, variant):
-    values = samples.get(case, {}).get(variant)
+def median_metric(samples, case, variant, metric):
+    values = samples.get(case, {}).get(variant, {}).get(metric)
     if not values:
         return None
     return statistics.median(values)
@@ -77,6 +84,14 @@ def median_ns(samples, case, variant):
 def ratio(got, base):
     if base is None or base <= 0 or got is None:
         return None
+    return (got - base) / base
+
+
+def overhead_ratio(got, base):
+    if base is None or got is None:
+        return None
+    if base == 0:
+        return 0.0 if got == 0 else float("inf")
     return (got - base) / base
 
 
@@ -108,19 +123,32 @@ def check_required(samples, required_cases):
     return issues
 
 
-def evaluate_variant(samples, variant, required_cases, heavy_cases, light_cases, min_heavy, max_light, max_heavy_hot):
+def evaluate_variant(
+    samples,
+    variant,
+    required_cases,
+    heavy_cases,
+    light_cases,
+    min_heavy,
+    max_light,
+    max_heavy_hot,
+    max_bytes_overhead,
+    max_allocs_overhead,
+):
     issues = []
     heavy_improvements = []
     light_overheads = []
     heavy_hot_overhead = None
+    bytes_overheads = []
+    allocs_overheads = []
 
     for case in required_cases:
-        if median_ns(samples, case, variant) is None:
+        if median_metric(samples, case, variant, "ns") is None:
             issues.append(f"{variant} missing benchmark case {case}")
 
     for case in heavy_cases:
-        base = median_ns(samples, case, OFF_VARIANT)
-        got = median_ns(samples, case, variant)
+        base = median_metric(samples, case, OFF_VARIANT, "ns")
+        got = median_metric(samples, case, variant, "ns")
         if got is None:
             issues.append(f"{variant} missing benchmark case {case}")
             continue
@@ -133,8 +161,8 @@ def evaluate_variant(samples, variant, required_cases, heavy_cases, light_cases,
             )
 
     for case in light_cases:
-        base = median_ns(samples, case, OFF_VARIANT)
-        got = median_ns(samples, case, variant)
+        base = median_metric(samples, case, OFF_VARIANT, "ns")
+        got = median_metric(samples, case, variant, "ns")
         if got is None:
             issues.append(f"{variant} missing benchmark case {case}")
             continue
@@ -147,8 +175,8 @@ def evaluate_variant(samples, variant, required_cases, heavy_cases, light_cases,
             )
 
     if max_heavy_hot is not None:
-        base = median_ns(samples, "HeavyTRX_HeavyState", OFF_VARIANT)
-        got = median_ns(samples, "HeavyTRX_HeavyState", variant)
+        base = median_metric(samples, "HeavyTRX_HeavyState", OFF_VARIANT, "ns")
+        got = median_metric(samples, "HeavyTRX_HeavyState", variant, "ns")
         if got is None:
             issues.append(f"{variant} missing benchmark case HeavyTRX_HeavyState")
         else:
@@ -157,6 +185,29 @@ def evaluate_variant(samples, variant, required_cases, heavy_cases, light_cases,
                 issues.append(
                     f"{variant} HeavyTRX_HeavyState overhead={percent(heavy_hot_overhead)}, "
                     f"want <= {percent(max_heavy_hot)}"
+                )
+
+    for metric, label, max_allowed, out in (
+        ("bytes", "B/op", max_bytes_overhead, bytes_overheads),
+        ("allocs", "allocs/op", max_allocs_overhead, allocs_overheads),
+    ):
+        if max_allowed is None:
+            continue
+        for case in required_cases:
+            base = median_metric(samples, case, OFF_VARIANT, metric)
+            got = median_metric(samples, case, variant, metric)
+            if base is None:
+                issues.append(f"missing {label} baseline for {case}")
+                continue
+            if got is None:
+                issues.append(f"{variant} missing {label} sample for {case}")
+                continue
+            overhead = overhead_ratio(got, base)
+            out.append(overhead)
+            if overhead is None or overhead > max_allowed:
+                issues.append(
+                    f"{variant} {case} {label} overhead={percent(overhead)}, "
+                    f"want <= {percent(max_allowed)}"
                 )
 
     score_values = [value for value in heavy_improvements if value is not None]
@@ -168,6 +219,8 @@ def evaluate_variant(samples, variant, required_cases, heavy_cases, light_cases,
         "heavyMinImprovement": min((v for v in heavy_improvements if v is not None), default=None),
         "lightMaxOverhead": max((v for v in light_overheads if v is not None), default=None),
         "heavyHotOverhead": heavy_hot_overhead,
+        "bytesMaxOverhead": max((v for v in bytes_overheads if v is not None), default=None),
+        "allocsMaxOverhead": max((v for v in allocs_overheads if v is not None), default=None),
     }
 
 
@@ -194,6 +247,8 @@ def check_benchmarks(samples, args):
             args.min_heavy_improvement,
             args.max_light_overhead,
             args.max_heavy_hot_overhead,
+            args.max_bytes_overhead,
+            args.max_allocs_overhead,
         )
         for variant in variants
     ]
@@ -254,6 +309,18 @@ def build_parser():
         default=None,
         help="optional maximum HeavyTRX_HeavyState slowdown ratio",
     )
+    parser.add_argument(
+        "--max-bytes-overhead",
+        type=float,
+        default=None,
+        help="optional maximum B/op overhead ratio across all required cases",
+    )
+    parser.add_argument(
+        "--max-allocs-overhead",
+        type=float,
+        default=None,
+        help="optional maximum allocs/op overhead ratio across all required cases",
+    )
     return parser
 
 
@@ -290,6 +357,10 @@ def main(argv=None):
     )
     if selected["heavyHotOverhead"] is not None:
         print(f"heavyHotOverhead={percent(selected['heavyHotOverhead'])}")
+    if selected["bytesMaxOverhead"] is not None:
+        print(f"bytesMaxOverhead={percent(selected['bytesMaxOverhead'])}")
+    if selected["allocsMaxOverhead"] is not None:
+        print(f"allocsMaxOverhead={percent(selected['allocsMaxOverhead'])}")
     return 0
 
 
