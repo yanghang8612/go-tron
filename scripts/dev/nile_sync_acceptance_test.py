@@ -251,6 +251,7 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "balanceTracePruneToBlock": -1,
             "sectionBloomPruneToSection": -1,
             "archiveApiFailures": 0,
+            "archiveApiDepthBlocks": 1,
             "stageStalled": False,
         }
     )
@@ -374,6 +375,8 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 "# TYPE gtron_nile_sync_section_bloom_prune_to_section gauge",
                 f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} {row["sectionBloomPruneToSection"]}',
                 "# TYPE gtron_nile_sync_archive_api_failures gauge",
+                "# TYPE gtron_nile_sync_archive_api_depth_blocks gauge",
+                f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} {row["archiveApiDepthBlocks"]}',
                 f'gtron_nile_sync_archive_api_failures{{{labels}}} {row["archiveApiFailures"]}',
                 "# TYPE gtron_nile_sync_stage_stalled gauge",
                 f"gtron_nile_sync_stage_stalled{{{labels}}} 0",
@@ -423,6 +426,7 @@ def add_archive_trace_evidence(row):
             "archiveApiChecks": 10,
             "archiveApiFailures": 0,
             "archiveApiBlock": 999,
+            "archiveApiDepthBlocks": 1,
             "archiveApiCallProbe": True,
             "archiveApiTraceTransactionProbe": True,
             "archiveApiMethods": [
@@ -456,6 +460,8 @@ def append_archive_trace_prometheus_metrics(path, row, *, include_trace=True):
         f'gtron_nile_sync_archive_api_checks{{{labels}}} {row["archiveApiChecks"]}',
         "# TYPE gtron_nile_sync_archive_api_block gauge",
         f'gtron_nile_sync_archive_api_block{{{labels}}} {row["archiveApiBlock"]}',
+        "# TYPE gtron_nile_sync_archive_api_depth_blocks gauge",
+        f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} {row["archiveApiDepthBlocks"]}',
         "# TYPE gtron_nile_sync_archive_api_method_success gauge",
     ]
     for method in row["archiveApiMethods"]:
@@ -568,7 +574,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             row = add_archive_trace_evidence(
                 add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
             )
-            append_archive_trace_prometheus_metrics(prom, {**row, "archiveApiBlock": 998})
+            append_archive_trace_prometheus_metrics(
+                prom,
+                {**row, "archiveApiBlock": 998, "archiveApiDepthBlocks": 2},
+            )
             write_result(result, [row])
 
             proc = subprocess.run(
@@ -587,6 +596,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "gtron_nile_sync_archive_api_block=998, want 999",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_nile_sync_archive_api_depth_blocks=2, want 1",
                 proc.stderr,
             )
 

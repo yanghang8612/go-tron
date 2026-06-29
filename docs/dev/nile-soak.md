@@ -167,7 +167,7 @@ fall back to cumulative sync and current disk distribution. Rows also include
 `processOpenFiles` so catch-up throughput can be correlated with local resource
 pressure. Rows produced with `--archive-api-probe` also include
 `archiveApiStatus`, `archiveApiChecks`, `archiveApiFailures`,
-`archiveApiBlock`, `archiveApiMethods`, `archiveApiEndpoint`,
+`archiveApiBlock`, `archiveApiDepthBlocks`, `archiveApiMethods`, `archiveApiEndpoint`,
 `archiveApiTxProbe`, `archiveApiTxHash`, and `archiveApiTxMethods` for
 historical JSON-RPC read validation. Derived index bytes are the
 chain-index/accessor, balance-trace,
@@ -461,8 +461,8 @@ when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
 stage-throughput gauges, hot/cold/index byte gauges,
 `gtron_nile_sync_snapshot_sidecar_share_milli`,
-`gtron_nile_sync_archive_api_{checks,block,failures}` against the same JSONL
-row. If the row carries `datadir`, those gauges must have the matching
+`gtron_nile_sync_archive_api_{checks,block,depth_blocks,failures}` against the
+same JSONL row. If the row carries `datadir`, those gauges must have the matching
 `datadir` label so an aggregate scrape file cannot satisfy the wrong sample.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.

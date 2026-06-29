@@ -94,6 +94,7 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_section_bloom_prune_to_section", "sectionBloomPruneToSection"),
     ("gtron_nile_sync_archive_api_checks", "archiveApiChecks"),
     ("gtron_nile_sync_archive_api_block", "archiveApiBlock"),
+    ("gtron_nile_sync_archive_api_depth_blocks", "archiveApiDepthBlocks"),
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures"),
 )
 

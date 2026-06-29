@@ -335,6 +335,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         "archiveApiChecks": 0,
         "archiveApiFailures": 0,
         "archiveApiBlock": -1,
+        "archiveApiDepthBlocks": -1,
         "archiveApiCallProbe": bool(call_data),
         "archiveApiTraceTransactionProbe": str(trace_transaction) == "1",
         "archiveApiMethods": [],
@@ -352,6 +353,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     if probe_block < 0:
         probe_block = height - 1 if height > 0 else 0
     row["archiveApiBlock"] = probe_block
+    row["archiveApiDepthBlocks"] = height - probe_block if height >= probe_block else -1
     block_tag = hex(probe_block)
 
     def rpc_call(request_id, method, params):
@@ -2319,6 +2321,7 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_section_bloom_prune_to_section", "sectionBloomPruneToSection", "Highest section whose hot bloom rows were pruned."),
     ("gtron_nile_sync_archive_api_checks", "archiveApiChecks", "Historical archive API probe check count."),
     ("gtron_nile_sync_archive_api_block", "archiveApiBlock", "Historical archive API probe block number."),
+    ("gtron_nile_sync_archive_api_depth_blocks", "archiveApiDepthBlocks", "Historical archive API probe depth below sampled head."),
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures", "Historical archive API probe failures."),
     ("gtron_nile_sync_offline_db_check_exit", "offlineDbCheckExit", "Offline DB check process exit code."),
 )

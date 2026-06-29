@@ -167,6 +167,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["archiveApiChecks"], 10)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 99)
+            self.assertEqual(row["archiveApiDepthBlocks"], 1)
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
@@ -570,6 +571,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} -1', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_checks{{{labels}}} 10', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_block{{{labels}}} 99', metrics)
+            self.assertIn(f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} 1', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_failures{{{labels}}} 0', metrics)
             trace_labels = f'datadir="{datadir}",label="candidate",method="debug_traceTransaction",mode="full",network="nile"'
             self.assertIn(f'gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 1', metrics)
