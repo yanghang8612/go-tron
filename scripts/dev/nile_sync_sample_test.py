@@ -546,6 +546,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_full_staged_sync_status{{{labels},status="caught-up"}} 0', metrics)
             self.assertIn(f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} 1', metrics)
             self.assertIn(f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} 1', metrics)
+            self.assertIn(f"gtron_nile_sync_stage_sync_finish_head_lag_blocks{{{labels}}} 0", metrics)
+            self.assertIn(f"gtron_nile_sync_stage_sync_pipeline_lag_blocks{{{labels}}} 0", metrics)
+            self.assertIn(f"gtron_nile_sync_stage_chain_freezer_head_lag_blocks{{{labels}}} -1", metrics)
+            self.assertIn(f"gtron_nile_sync_interval_stage_sync_finish_blocks_per_second{{{labels}}} 0", metrics)
             stage_labels = f'datadir="{datadir}",field="stageSyncExecution",label="candidate",mode="full",network="nile",stage="SyncExecution"'
             self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_block{{{stage_labels}}} 100", metrics)
             self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_present{{{stage_labels}}} 1", metrics)

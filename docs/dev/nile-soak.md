@@ -129,9 +129,10 @@ plus interval growth attribution fields:
 sample also writes a low-cardinality Prometheus text artifact and records
 `samplePrometheus` plus `samplePrometheusStatus` in the JSONL row. The artifact
 exposes sync height, target/stage lag, full-staged-sync status/ready/coverage
-and bottleneck gauges, throughput, hot/cold/index byte gauges, snapshot sidecar
-share, archive probe failures, and sample/soak health status for external
-scrape jobs.
+and bottleneck gauges, adjacent sync-stage lag gauges, cold-builder head lag
+gauges, interval stage-throughput gauges, throughput, hot/cold/index byte
+gauges, snapshot sidecar share, archive probe failures, and sample/soak health
+status for external scrape jobs.
 Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -454,7 +455,11 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 `gtron_nile_sync_full_staged_sync_verification_ratio`, the labelled
 `gtron_nile_sync_full_staged_sync_bottleneck`, per-stage
 `gtron_nile_sync_full_staged_sync_stage_{block,present,verified}` evidence
-when `fullStagedSyncStageDetails` is present, hot/cold/index byte gauges,
+when `fullStagedSyncStageDetails` is present,
+`gtron_nile_sync_stage_sync_*_lag_blocks`,
+`gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,
+`gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
+stage-throughput gauges, hot/cold/index byte gauges,
 `gtron_nile_sync_snapshot_sidecar_share_milli`, and archive probe failures
 against the same JSONL row. If the row carries `datadir`, those gauges must
 have the matching `datadir` label so an aggregate scrape file cannot satisfy

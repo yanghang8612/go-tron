@@ -312,6 +312,7 @@ consume the current sync sample directly. The sampler writes
 `gtron_nile_sync_*` gauges for height, target/stage lag, throughput,
 full-staged-sync status/ready/coverage/bottleneck, hot/cold/index bytes,
 per-stage full-staged-sync block/present/verified evidence when available,
+adjacent sync-stage lag, cold-builder head lag, interval stage throughput,
 bytes-per-block efficiency, snapshot sidecar share, archive probe failures, and
 sample/soak health status, and records `samplePrometheus*` fields in the JSONL
 row. Gate that artifact with `nile_sync_acceptance.py
