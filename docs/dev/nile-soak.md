@@ -386,6 +386,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --min-height 100000 \
   --max-lag-blocks 5000 \
   --max-cold-stage-lag-blocks 5000 \
+  --min-chain-freezer-blocks 1 \
+  --min-chain-freezer-passes 1 \
   --min-sync-rate 1.0 \
   --max-datadir-bytes-per-block 500000 \
   --max-hot-bytes-per-block 120000 \
@@ -417,6 +419,11 @@ head for hot pruning and archive reads to remain useful. It requires
 `stageSnapshotEventLogBuildHeadLagBlocks` to be present, non-negative, and no
 greater than the configured lag. This is separate from
 `--max-lag-blocks`, which only checks full staged-sync completion.
+Use `--min-chain-freezer-blocks` and `--min-chain-freezer-passes` with
+`--debug-metrics-url` to prove the chain freezer has actually run, not only
+that stage rows exist. These gates require `debugMetricsStatus=ok` and check
+`debugMetricChainFreezerBlocks` / `debugMetricChainFreezerPasses`; keep the
+thresholds low for smoke soaks and raise them for long archive/full runs.
 Use `--min-sync-rate` to turn sync-speed evidence into a hard gate; it checks
 the best available blocks-per-second field in this order:
 `intervalBlocksPerSecond`, `intervalStageSyncFinishBlocksPerSecond`,

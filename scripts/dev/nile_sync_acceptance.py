@@ -53,6 +53,11 @@ COLD_STAGE_LAG_FIELDS = (
     "stageSnapshotEventLogBuildHeadLagBlocks",
 )
 
+CHAIN_FREEZER_MINIMUM_FIELDS = (
+    ("debugMetricChainFreezerBlocks", "min chain freezer blocks"),
+    ("debugMetricChainFreezerPasses", "min chain freezer passes"),
+)
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -340,6 +345,26 @@ def check_max_cold_stage_lag_blocks(row, maximum):
             issues.append(f"{field}={value:g}, want >= 0")
         elif value > maximum:
             issues.append(f"{field}={value:g} failed <= max cold stage lag {maximum:g}")
+    return issues
+
+
+def check_min_chain_freezer_metrics(row, min_blocks, min_passes):
+    if min_blocks is None and min_passes is None:
+        return []
+    issues = []
+    status = row.get("debugMetricsStatus")
+    if status != "ok":
+        issues.append(
+            f"debugMetricsStatus={status!r}, want 'ok' for chain freezer metric evidence"
+        )
+    for minimum, (field, label) in zip((min_blocks, min_passes), CHAIN_FREEZER_MINIMUM_FIELDS):
+        if minimum is None:
+            continue
+        value = as_number(row, field)
+        if value is None:
+            issues.append(f"{field}={value}, want >= {minimum:g} ({label})")
+        elif value < minimum:
+            issues.append(f"{field}={value:g} failed >= {label} {minimum:g}")
     return issues
 
 
@@ -1156,6 +1181,13 @@ def check_row(row, args):
             issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
 
     issues.extend(check_max_cold_stage_lag_blocks(row, args.max_cold_stage_lag_blocks))
+    issues.extend(
+        check_min_chain_freezer_metrics(
+            row,
+            args.min_chain_freezer_blocks,
+            args.min_chain_freezer_passes,
+        )
+    )
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
     issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
@@ -1250,6 +1282,18 @@ def build_parser():
             "require cold/archive builder stage head lag fields to be no "
             "greater than this value"
         ),
+    )
+    parser.add_argument(
+        "--min-chain-freezer-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help="require debug metrics to prove at least this many frozen chain blocks",
+    )
+    parser.add_argument(
+        "--min-chain-freezer-passes",
+        type=float,
+        metavar="PASSES",
+        help="require debug metrics to prove at least this many chain-freezer passes",
     )
     parser.add_argument(
         "--min-sync-rate",

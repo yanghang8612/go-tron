@@ -307,6 +307,108 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_accepts_chain_freezer_metric_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["debugMetricsStatus"] = "ok"
+            row["debugMetricChainFreezerBlocks"] = 12000
+            row["debugMetricChainFreezerPasses"] = 3
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-chain-freezer-blocks",
+                    "10000",
+                    "--min-chain-freezer-passes",
+                    "2",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_chain_freezer_metric_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["debugMetricsStatus"] = "ok"
+            row["debugMetricChainFreezerBlocks"] = 9000
+            row["debugMetricChainFreezerPasses"] = 1
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-chain-freezer-blocks",
+                    "10000",
+                    "--min-chain-freezer-passes",
+                    "2",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "debugMetricChainFreezerBlocks=9000 failed >= min chain freezer blocks 10000",
+                proc.stderr,
+            )
+            self.assertIn(
+                "debugMetricChainFreezerPasses=1 failed >= min chain freezer passes 2",
+                proc.stderr,
+            )
+
+    def test_rejects_chain_freezer_metric_without_debug_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["debugMetricChainFreezerBlocks"] = 12000
+            row["debugMetricChainFreezerPasses"] = 3
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-chain-freezer-blocks",
+                    "10000",
+                    "--min-chain-freezer-passes",
+                    "2",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "debugMetricsStatus=None, want 'ok' for chain freezer metric evidence",
+                proc.stderr,
+            )
+
     def test_accepts_min_sync_rate_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
