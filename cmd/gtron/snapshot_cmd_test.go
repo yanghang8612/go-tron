@@ -2085,6 +2085,15 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if !ok || blockTx["hash"] != "0x"+txHashHex || blockTx["blockHash"] != "0x"+blockHashHex || blockTx["blockNumber"] != "0x1" {
 		t.Fatalf("eth_getBlockByNumber tx = %v, want tx/block1 hashes", blockTxs[0])
 	}
+	blockHashesOnlyRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBlockByNumber", []any{"0x1", false})
+	blockHashesOnly, ok := blockHashesOnlyRPC["result"].(map[string]any)
+	if !ok || blockHashesOnly["hash"] != "0x"+blockHashHex || blockHashesOnly["number"] != "0x1" {
+		t.Fatalf("eth_getBlockByNumber hashes-only result = %v, want block1", blockHashesOnlyRPC["result"])
+	}
+	blockTxHashes, ok := blockHashesOnly["transactions"].([]any)
+	if !ok || len(blockTxHashes) != 1 || blockTxHashes[0] != "0x"+txHashHex {
+		t.Fatalf("eth_getBlockByNumber hashes-only transactions = %v, want tx hash", blockHashesOnly["transactions"])
+	}
 	txRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getTransactionByHash", []any{"0x" + txHashHex})
 	txResult, ok := txRPC["result"].(map[string]any)
 	if !ok || txResult["hash"] != "0x"+txHashHex || txResult["blockHash"] != "0x"+blockHashHex || txResult["blockNumber"] != "0x1" {
