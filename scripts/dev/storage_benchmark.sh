@@ -107,6 +107,9 @@ RUN_ARCHIVE_API_CHECKS=0
 RUN_ARCHIVE_API_FAILURES=0
 RUN_ARCHIVE_API_BLOCK=-1
 RUN_ARCHIVE_API_METHODS="[]"
+RUN_ARCHIVE_API_TX_PROBE="false"
+RUN_ARCHIVE_API_TX_HASH=""
+RUN_ARCHIVE_API_TX_METHODS="[]"
 
 usage() {
   cat <<'EOF'
@@ -313,6 +316,9 @@ reset_run_metrics() {
   RUN_ARCHIVE_API_FAILURES=0
   RUN_ARCHIVE_API_BLOCK=-1
   RUN_ARCHIVE_API_METHODS="[]"
+  RUN_ARCHIVE_API_TX_PROBE="false"
+  RUN_ARCHIVE_API_TX_HASH=""
+  RUN_ARCHIVE_API_TX_METHODS="[]"
 }
 
 block_num() {
@@ -651,6 +657,9 @@ if call_data:
     calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
 
 methods = []
+tx_methods = []
+tx_probe = False
+tx_hash_value = ""
 failures = 0
 idx = 0
 while idx < len(calls):
@@ -664,8 +673,12 @@ while idx < len(calls):
     if method == "eth_getBlockByNumber":
         tx_hash = first_tx_hash(result)
         if tx_hash:
+            tx_probe = True
+            tx_hash_value = tx_hash
             calls.append(("eth_getTransactionByHash", [tx_hash]))
             calls.append(("eth_getTransactionReceipt", [tx_hash]))
+    elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+        tx_methods.append(method)
     idx += 1
 
 print("ok" if failures == 0 else "failed")
@@ -673,6 +686,9 @@ print(len(calls))
 print(failures)
 print(block)
 print(json.dumps(methods, separators=(",", ":")))
+print("true" if tx_probe else "false")
+print(tx_hash_value)
+print(json.dumps(tx_methods, separators=(",", ":")))
 PY
 }
 
@@ -699,7 +715,10 @@ run_archive_api_probe() {
   RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"
   RUN_ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '4p')"
   RUN_ARCHIVE_API_METHODS="$(printf '%s\n' "$values" | sed -n '5p')"
-  echo "archive API probe status=$RUN_ARCHIVE_API_STATUS checks=$RUN_ARCHIVE_API_CHECKS failures=$RUN_ARCHIVE_API_FAILURES block=$RUN_ARCHIVE_API_BLOCK methods=$RUN_ARCHIVE_API_METHODS" >>"$log_path"
+  RUN_ARCHIVE_API_TX_PROBE="$(printf '%s\n' "$values" | sed -n '6p')"
+  RUN_ARCHIVE_API_TX_HASH="$(printf '%s\n' "$values" | sed -n '7p')"
+  RUN_ARCHIVE_API_TX_METHODS="$(printf '%s\n' "$values" | sed -n '8p')"
+  echo "archive API probe status=$RUN_ARCHIVE_API_STATUS checks=$RUN_ARCHIVE_API_CHECKS failures=$RUN_ARCHIVE_API_FAILURES block=$RUN_ARCHIVE_API_BLOCK methods=$RUN_ARCHIVE_API_METHODS txProbe=$RUN_ARCHIVE_API_TX_PROBE txMethods=$RUN_ARCHIVE_API_TX_METHODS" >>"$log_path"
 }
 
 run_logged() {
@@ -1179,6 +1198,7 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
     "$RUN_ARCHIVE_API_STATUS" "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_METHODS" \
+    "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -1212,7 +1232,8 @@ keys = [
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
-    "archiveApiBlock", "archiveApiMethods", "storageAlertPrometheus",
+    "archiveApiBlock", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
+    "archiveApiTxMethods", "storageAlertPrometheus",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -1242,7 +1263,12 @@ ints = {
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
     "archiveApiChecks", "archiveApiFailures", "archiveApiBlock",
 }
-bools = {"pruneModePersisted", "retiredPruneRan", "stageAlertPipelineComplete"}
+bools = {
+    "pruneModePersisted",
+    "retiredPruneRan",
+    "stageAlertPipelineComplete",
+    "archiveApiTxProbe",
+}
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
     if key in ints:
@@ -1258,6 +1284,7 @@ for key in (
     "modeAlertDetails",
     "snapshotAlertDetails",
     "archiveApiMethods",
+    "archiveApiTxMethods",
 ):
     try:
         parsed = json.loads(row.get(key, "[]"))

@@ -144,6 +144,18 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getTransactionReceipt",
                 ],
             )
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(
+                row["archiveApiTxHash"],
+                "0x1212121212121212121212121212121212121212121212121212121212121212",
+            )
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                ],
+            )
 
     def test_emits_storage_alert_failure_row_with_details(self):
         with tempfile.TemporaryDirectory() as tmp:
