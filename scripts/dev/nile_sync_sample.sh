@@ -527,6 +527,7 @@ def parse_alerts(text):
         "coldFreezerToBlock": -1,
         "chainLookupPruneToBlock": -1,
         "tailPrunedThroughBlock": -1,
+        "tailPrunedFiles": 0,
         "balanceTracePruneToBlock": -1,
         "sectionBloomPruneToSection": -1,
         "snapshotAlertStatus": "unknown",
@@ -561,6 +562,7 @@ def parse_alerts(text):
             "coldFreezerToBlock": "coldFreezerToBlock",
             "chainLookupPruneToBlock": "chainLookupPruneToBlock",
             "tailPrunedThroughBlock": "tailPrunedThroughBlock",
+            "tailPrunedFiles": "tailPrunedFiles",
             "balanceTracePruneToBlock": "balanceTracePruneToBlock",
             "sectionBloomPruneToSection": "sectionBloomPruneToSection",
             "snapshotAlertStatus": "snapshotStatus",
@@ -631,6 +633,7 @@ def parse_alerts(text):
         "coldFreezerToBlock": r"coldFreezerToBlock=(-?[0-9]+)",
         "chainLookupPruneToBlock": r"chainLookupPruneToBlock=(-?[0-9]+)",
         "tailPrunedThroughBlock": r"tailPrunedThroughBlock=(-?[0-9]+)",
+        "tailPrunedFiles": r"(?:tailPrunedFiles|prunedTailFiles)[= ]([0-9]+)",
         "balanceTracePruneToBlock": r"balanceTracePruneToBlock=(-?[0-9]+)",
         "sectionBloomPruneToSection": r"sectionBloomPruneToSection=(-?[0-9]+)",
         "snapshotAlertStatus": r"snapshotStatus=([^ ]+)",
@@ -645,6 +648,7 @@ def parse_alerts(text):
         if (
             key.endswith("Issues")
             or key.endswith("Bytes")
+            or key.endswith("Files")
             or key.endswith("Target")
             or key.endswith("Current")
             or key.endswith("ToBlock")
@@ -2306,6 +2310,13 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock", "Selected soak-efficiency cold archive bytes per block."),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock", "Selected soak-efficiency derived index bytes per block."),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
+    ("gtron_nile_sync_signed_cold_prune", "signedColdPrune", "Whether signed cold-prune evidence is present."),
+    ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock", "Highest block covered by cold freezer segments."),
+    ("gtron_nile_sync_chain_lookup_prune_to_block", "chainLookupPruneToBlock", "Highest block whose hot chain lookup rows were pruned."),
+    ("gtron_nile_sync_tail_pruned_through_block", "tailPrunedThroughBlock", "Highest active ancient block physically tail-pruned."),
+    ("gtron_nile_sync_tail_pruned_files", "tailPrunedFiles", "Active ancient tail files physically pruned."),
+    ("gtron_nile_sync_balance_trace_prune_to_block", "balanceTracePruneToBlock", "Highest block whose hot balance trace rows were pruned."),
+    ("gtron_nile_sync_section_bloom_prune_to_section", "sectionBloomPruneToSection", "Highest section whose hot bloom rows were pruned."),
     ("gtron_nile_sync_archive_api_checks", "archiveApiChecks", "Historical archive API probe check count."),
     ("gtron_nile_sync_archive_api_block", "archiveApiBlock", "Historical archive API probe block number."),
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures", "Historical archive API probe failures."),

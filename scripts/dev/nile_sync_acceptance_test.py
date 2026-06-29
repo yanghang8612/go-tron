@@ -243,6 +243,13 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "intervalStageChainFreezerBlocksPerSecond": 0.0,
             "intervalStageSnapshotEventLogBuildBlocksPerSecond": 0.0,
             "snapshotSidecarShareMilli": 188,
+            "signedColdPrune": 0,
+            "coldFreezerToBlock": -1,
+            "chainLookupPruneToBlock": -1,
+            "tailPrunedThroughBlock": -1,
+            "tailPrunedFiles": 0,
+            "balanceTracePruneToBlock": -1,
+            "sectionBloomPruneToSection": -1,
             "archiveApiFailures": 0,
             "stageStalled": False,
         }
@@ -352,6 +359,20 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block{{{labels}}} {row["soakEfficiencyDerivedIndexBytesPerBlock"]}',
                 "# TYPE gtron_nile_sync_snapshot_sidecar_share_milli gauge",
                 f'gtron_nile_sync_snapshot_sidecar_share_milli{{{labels}}} {row["snapshotSidecarShareMilli"]}',
+                "# TYPE gtron_nile_sync_signed_cold_prune gauge",
+                f'gtron_nile_sync_signed_cold_prune{{{labels}}} {row["signedColdPrune"]}',
+                "# TYPE gtron_nile_sync_cold_freezer_to_block gauge",
+                f'gtron_nile_sync_cold_freezer_to_block{{{labels}}} {row["coldFreezerToBlock"]}',
+                "# TYPE gtron_nile_sync_chain_lookup_prune_to_block gauge",
+                f'gtron_nile_sync_chain_lookup_prune_to_block{{{labels}}} {row["chainLookupPruneToBlock"]}',
+                "# TYPE gtron_nile_sync_tail_pruned_through_block gauge",
+                f'gtron_nile_sync_tail_pruned_through_block{{{labels}}} {row["tailPrunedThroughBlock"]}',
+                "# TYPE gtron_nile_sync_tail_pruned_files gauge",
+                f'gtron_nile_sync_tail_pruned_files{{{labels}}} {row["tailPrunedFiles"]}',
+                "# TYPE gtron_nile_sync_balance_trace_prune_to_block gauge",
+                f'gtron_nile_sync_balance_trace_prune_to_block{{{labels}}} {row["balanceTracePruneToBlock"]}',
+                "# TYPE gtron_nile_sync_section_bloom_prune_to_section gauge",
+                f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} {row["sectionBloomPruneToSection"]}',
                 "# TYPE gtron_nile_sync_archive_api_failures gauge",
                 f'gtron_nile_sync_archive_api_failures{{{labels}}} {row["archiveApiFailures"]}',
                 "# TYPE gtron_nile_sync_stage_stalled gauge",
@@ -591,6 +612,39 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("gtron_nile_sync_height=999, want 1000", proc.stderr)
+
+    def test_rejects_sample_prometheus_prune_boundary_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            row["chainLookupPruneToBlock"] = 80
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_chain_lookup_prune_to_block{datadir="/tmp/nile",label="",mode="full",network="nile"} -1',
+                'gtron_nile_sync_chain_lookup_prune_to_block{datadir="/tmp/nile",label="",mode="full",network="nile"} 79',
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_chain_lookup_prune_to_block=79, want 80",
+                proc.stderr,
+            )
 
     def test_rejects_sample_prometheus_full_staged_sync_status_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
