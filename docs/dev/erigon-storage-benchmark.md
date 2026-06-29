@@ -112,6 +112,17 @@ The output path is printed at startup. Each JSON row contains:
 - `snapshotRetiredMissing`
 - `snapshotRetiredSkippedActive`
 - `snapshotRetiredBytes`
+- `archiveApiStatus`
+- `archiveApiChecks`
+- `archiveApiFailures`
+- `archiveApiBlock`
+- `archiveApiDepthBlocks`
+- `archiveApiCallProbe`
+- `archiveApiTraceTransactionProbe`
+- `archiveApiMethods`
+- `archiveApiTxProbe`
+- `archiveApiTxHash`
+- `archiveApiTxMethods`
 - `storageBenchmarkPrometheus`
 - `storageAlertPrometheus`
 
@@ -377,6 +388,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-prune-mode-semantics \
   --require-archive-api-evidence \
   --require-archive-api-mode minimal \
+  --min-archive-api-depth-blocks 100 \
   --require-archive-tx-evidence \
   --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
