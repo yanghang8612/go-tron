@@ -266,6 +266,63 @@ func TestStatePrefetcherWarmsExchangeTokenAssets(t *testing.T) {
 	}
 }
 
+func TestStatePrefetcherWarmsOwnerIssuedAssetRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := testAddr(0x64)
+	tokenID := []byte("1000011")
+	tokenName := []byte("OWNERASSET")
+	accountBytes, err := proto.Marshal(&corepb.Account{
+		AssetIssued_ID:  tokenID,
+		AssetIssuedName: tokenName,
+	})
+	if err != nil {
+		t.Fatalf("marshal account: %v", err)
+	}
+	envelopeBytes, err := (&StateAccountV2{
+		Version:      StateAccountVersion,
+		AccountProto: accountBytes,
+	}).Encode()
+	if err != nil {
+		t.Fatalf("encode account envelope: %v", err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, owner, envelopeBytes); err != nil {
+		t.Fatalf("WriteStateAccountLatest owner: %v", err)
+	}
+
+	assetValues := [][]byte{
+		[]byte("id-v2"),
+		[]byte("name-legacy"),
+		[]byte("name-index"),
+	}
+	assetRows := []struct {
+		key   []byte
+		value []byte
+	}{
+		{assetIDKey(assetV2Tag, 1_000_011), assetValues[0]},
+		{assetBytesKey(assetLegacyTag, tokenName), assetValues[1]},
+		{assetBytesKey(assetNameIndexTag, tokenName), assetValues[2]},
+	}
+	for i, row := range assetRows {
+		if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemAsset, row.key, row.value); err != nil {
+			t.Fatalf("WriteStateKVLatest asset row %d: %v", i, err)
+		}
+	}
+
+	recorder := &recordingKeyValueReader{KeyValueReader: db}
+	hit, err := prefetchLatest(recorder, OwnerIssuedAssetRowsPrefetchKey(owner))
+	if err != nil {
+		t.Fatalf("prefetch owner issued asset rows: %v", err)
+	}
+	if !hit {
+		t.Fatal("prefetch owner issued asset rows hit = false, want true")
+	}
+	for _, value := range assetValues {
+		if !recorder.gotValue(rawdb.EncodeStateKVLatestValue(value)) {
+			t.Fatalf("prefetch did not read asset value %q; got values %#v", value, recorder.getValues)
+		}
+	}
+}
+
 func TestStatePrefetcherExchangeTokenAssetsSkipsMalformedExchange(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, 8), []byte{0xff}); err != nil {

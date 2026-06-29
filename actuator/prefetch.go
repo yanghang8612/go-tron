@@ -262,9 +262,13 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 	case corepb.Transaction_Contract_CancelAllUnfreezeV2Contract:
 		prefetchOwnerOnly(c, &b, &contractpb.CancelAllUnfreezeV2Contract{})
 	case corepb.Transaction_Contract_UpdateAssetContract:
-		prefetchOwnerOnly(c, &b, &contractpb.UpdateAssetContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UpdateAssetContract{}); ok {
+			b.add(state.OwnerIssuedAssetRowsPrefetchKey(owner))
+		}
 	case corepb.Transaction_Contract_UnfreezeAssetContract:
-		prefetchOwnerOnly(c, &b, &contractpb.UnfreezeAssetContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UnfreezeAssetContract{}); ok {
+			b.add(state.OwnerIssuedAssetRowsPrefetchKey(owner))
+		}
 	case corepb.Transaction_Contract_MarketSellAssetContract:
 		var m contractpb.MarketSellAssetContract
 		if !prefetchDecode(c, &m) {

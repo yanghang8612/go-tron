@@ -36,6 +36,7 @@ const (
 	PrefetchContractOriginAccount
 	PrefetchExchangeTokenAssets
 	PrefetchMarketMatchOrders
+	PrefetchOwnerIssuedAssetRows
 )
 
 const (
@@ -155,6 +156,10 @@ func MarketMatchOrdersPrefetchKey(sellTokenID, buyTokenID []byte, sellQty, buyQt
 	key = append(key, lenBuf[:]...)
 	key = append(key, buyTokenID...)
 	return PrefetchKey{Kind: PrefetchMarketMatchOrders, Owner: tcommon.SystemAccountAddress, Key: key}
+}
+
+func OwnerIssuedAssetRowsPrefetchKey(owner tcommon.Address) PrefetchKey {
+	return PrefetchKey{Kind: PrefetchOwnerIssuedAssetRows, Owner: owner}
 }
 
 type StatePrefetcherConfig struct {
@@ -349,6 +354,8 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		return prefetchExchangeTokenAssets(db, key)
 	case PrefetchMarketMatchOrders:
 		return prefetchMarketMatchOrders(db, key)
+	case PrefetchOwnerIssuedAssetRows:
+		return prefetchOwnerIssuedAssetRows(db, key.Owner)
 	default:
 		return false, fmt.Errorf("state prefetch: unknown kind %d", key.Kind)
 	}
@@ -471,6 +478,33 @@ func prefetchTRC10AssetRows(db ethdb.KeyValueReader, generation uint64, token []
 		}
 	}
 	return nil
+}
+
+func prefetchOwnerIssuedAssetRows(db ethdb.KeyValueReader, owner tcommon.Address) (bool, error) {
+	data, ok, err := rawdb.ReadStateAccountLatest(db, owner)
+	if err != nil || !ok || len(data) == 0 {
+		return false, err
+	}
+	envelope, err := DecodeStateAccountV2(data)
+	if err != nil || len(envelope.AccountProto) == 0 {
+		return false, nil
+	}
+	var account corepb.Account
+	if err := proto.Unmarshal(envelope.AccountProto, &account); err != nil {
+		return false, nil
+	}
+	generation, ok, err := prefetchGeneration(db, PrefetchKey{Owner: tcommon.SystemAccountAddress})
+	if err != nil || !ok {
+		return true, err
+	}
+	seen := make(map[string]struct{})
+	if err := prefetchTRC10AssetRows(db, generation, account.GetAssetIssued_ID(), seen); err != nil {
+		return true, err
+	}
+	if err := prefetchTRC10AssetRows(db, generation, account.GetAssetIssuedName(), seen); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func prefetchMarketMatchOrders(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {

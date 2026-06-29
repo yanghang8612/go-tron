@@ -321,6 +321,38 @@ func TestPrefetchKeysForMarketRowsSkipsInvalidPriceKey(t *testing.T) {
 	assertPrefetchMissing(t, keys, state.MarketOrderBookPrefetchKey(sellToken, buyToken, rawdb.PriceKey(1, 1)))
 }
 
+func TestPrefetchKeysForOwnerIssuedAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x26)
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "update asset",
+			typ:  corepb.Transaction_Contract_UpdateAssetContract,
+			msg: &contractpb.UpdateAssetContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "unfreeze asset",
+			typ:  corepb.Transaction_Contract_UnfreezeAssetContract,
+			msg: &contractpb.UnfreezeAssetContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := PrefetchKeysFor(newPrefetchTestTx(t, tt.typ, tt.msg))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, state.OwnerIssuedAssetRowsPrefetchKey(owner))
+		})
+	}
+}
+
 func TestPrefetchKeysForMalformedOrInvalidInputs(t *testing.T) {
 	if keys := PrefetchKeysFor(nil); len(keys) != 0 {
 		t.Fatalf("nil tx keys = %#v, want none", keys)
