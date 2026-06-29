@@ -497,7 +497,10 @@ state.
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --json --datadir <dir>` and include
 the overall `storageAlertStatus` plus freezer/stage/mode/snapshot alert fields
-in the row. The row keeps both aggregate counts and detail arrays:
+in the row. With `--require-offline-db-check`, acceptance requires those
+overall and component statuses to be `ok` and their issue counts to be zero, so
+storage-alert warnings cannot pass just because the command exited cleanly. The
+row keeps both aggregate counts and detail arrays:
 `freezerAlertDetails`, `stageVerifyDetails`, `modeAlertDetails`, and
 `snapshotAlertDetails`. `modeAlertDetails` flags persisted prune-mode conflicts
 such as `archive` datadirs with hot-prune or tail-prune progress. Do not

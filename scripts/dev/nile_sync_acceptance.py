@@ -58,6 +58,22 @@ CHAIN_FREEZER_MINIMUM_FIELDS = (
     ("debugMetricChainFreezerPasses", "min chain freezer passes"),
 )
 
+STORAGE_ALERT_STATUS_FIELDS = (
+    "storageAlertStatus",
+    "freezerAlertStatus",
+    "stageVerifyStatus",
+    "modeAlertStatus",
+    "snapshotAlertStatus",
+)
+
+STORAGE_ALERT_ZERO_ISSUE_FIELDS = (
+    "freezerAlertIssues",
+    "stageVerifyIssues",
+    "stageAlertPipelineIssues",
+    "modeAlertIssues",
+    "snapshotAlertIssues",
+)
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -365,6 +381,21 @@ def check_min_chain_freezer_metrics(row, min_blocks, min_passes):
             issues.append(f"{field}={value}, want >= {minimum:g} ({label})")
         elif value < minimum:
             issues.append(f"{field}={value:g} failed >= {label} {minimum:g}")
+    return issues
+
+
+def check_storage_alert_evidence(row):
+    issues = []
+    for field in STORAGE_ALERT_STATUS_FIELDS:
+        value = row.get(field)
+        if str(value).lower() != "ok":
+            issues.append(f"{field}={value!r}, want 'ok'")
+    for field in STORAGE_ALERT_ZERO_ISSUE_FIELDS:
+        value = as_number(row, field)
+        if value is None:
+            issues.append(f"{field}={value}, want 0")
+        elif value != 0:
+            issues.append(f"{field}={value:g}, want 0")
     return issues
 
 
@@ -1163,6 +1194,7 @@ def check_row(row, args):
             issues.append("offlineDbCheck is not true")
         if row.get("offlineDbCheckStatus") != "ok":
             issues.append(f"offlineDbCheckStatus={row.get('offlineDbCheckStatus')!r}, want 'ok'")
+        issues.extend(check_storage_alert_evidence(row))
         if row.get("offlineDbCheckPrometheusStatus") not in {None, "", "ok", "skipped"}:
             issues.append(
                 "offlineDbCheckPrometheusStatus="

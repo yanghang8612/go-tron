@@ -97,6 +97,24 @@ def clean_full_staged_sync_row():
     return row
 
 
+def add_clean_storage_alerts(row):
+    row.update(
+        {
+            "storageAlertStatus": "ok",
+            "freezerAlertStatus": "ok",
+            "freezerAlertIssues": 0,
+            "stageVerifyStatus": "ok",
+            "stageVerifyIssues": 0,
+            "stageAlertPipelineIssues": 0,
+            "modeAlertStatus": "ok",
+            "modeAlertIssues": 0,
+            "snapshotAlertStatus": "ok",
+            "snapshotAlertIssues": 0,
+        }
+    )
+    return row
+
+
 class NileSyncAcceptanceTest(unittest.TestCase):
     def test_accepts_clean_latest_staged_sync_row(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +192,15 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "offlineDbCheckStatus": "ok",
                         "offlineDbCheckPrometheusStatus": "ok",
                         "offlineDbCheckPrometheus": str(prom),
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "freezerAlertIssues": 0,
+                        "stageVerifyStatus": "ok",
+                        "stageVerifyIssues": 0,
+                        "modeAlertStatus": "ok",
+                        "modeAlertIssues": 0,
+                        "snapshotAlertStatus": "ok",
+                        "snapshotAlertIssues": 0,
                         "stageAlertPipelineComplete": False,
                         "stageAlertPipelinePending": 2,
                         "stageAlertPipelineIssues": 0,
@@ -408,6 +435,65 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "debugMetricsStatus=None, want 'ok' for chain freezer metric evidence",
                 proc.stderr,
             )
+
+    def test_accepts_offline_storage_alert_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_storage_alerts(clean_full_staged_sync_row())
+            row["offlineDbCheck"] = True
+            row["offlineDbCheckStatus"] = "ok"
+            row["offlineDbCheckPrometheusStatus"] = "skipped"
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_offline_storage_alert_status_issue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_storage_alerts(clean_full_staged_sync_row())
+            row["offlineDbCheck"] = True
+            row["offlineDbCheckStatus"] = "ok"
+            row["offlineDbCheckPrometheusStatus"] = "skipped"
+            row["freezerAlertStatus"] = "critical"
+            row["freezerAlertIssues"] = 2
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("freezerAlertStatus='critical', want 'ok'", proc.stderr)
+            self.assertIn("freezerAlertIssues=2, want 0", proc.stderr)
 
     def test_accepts_min_sync_rate_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
