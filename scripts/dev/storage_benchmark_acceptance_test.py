@@ -22,12 +22,22 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             for name in ("full.prom", "blocks.prom", "minimal.prom"):
-                (tmpdir / name).write_text(
-                    '# TYPE gtron_storage_alert_status gauge\n'
-                    '# TYPE gtron_storage_alert_issue gauge\n'
-                    'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
-                    encoding="utf-8",
-                )
+                lines = [
+                    "# TYPE gtron_storage_alert_status gauge",
+                    "# TYPE gtron_storage_alert_issue gauge",
+                    'gtron_storage_alert_status{datadir="/tmp/gtron"} 0',
+                ]
+                if name == "minimal.prom":
+                    lines.extend(
+                        [
+                            "# TYPE gtron_storage_signed_cold_prune gauge",
+                            'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1',
+                            "# TYPE gtron_storage_prune_boundary_block gauge",
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50',
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45',
+                        ]
+                    )
+                (tmpdir / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
             result = tmpdir / "results.jsonl"
             base = {
@@ -1743,6 +1753,66 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("gtron_storage_alert_status=2, want 0", proc.stderr)
+
+    def test_rejects_prometheus_prune_boundary_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_signed_cold_prune gauge\n'
+                '# TYPE gtron_storage_prune_boundary_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 40\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "signedColdPrune": 1,
+                        "chainLookupPruneToBlock": 50,
+                        "tailPrunedThroughBlock": 45,
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_prune_boundary_block field='chainLookupPruneToBlock'=40, want 50",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='tailPrunedThroughBlock'",
+                proc.stderr,
+            )
 
     def test_rejects_prometheus_artifact_missing_structured_issue_kind(self):
         with tempfile.TemporaryDirectory() as tmp:

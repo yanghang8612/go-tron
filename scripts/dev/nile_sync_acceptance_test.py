@@ -2455,6 +2455,58 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("gtron_storage_alert_status=0, want 2", proc.stderr)
 
+    def test_rejects_offline_prometheus_prune_boundary_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "storage-alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_signed_cold_prune gauge\n'
+                '# TYPE gtron_storage_prune_boundary_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n'
+                'gtron_storage_signed_cold_prune{datadir="/tmp/nile"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="chainLookupPruneToBlock"} 40\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "samples.jsonl"
+            row = add_clean_storage_alerts(clean_full_staged_sync_row())
+            row.update(
+                {
+                    "offlineDbCheck": True,
+                    "offlineDbCheckStatus": "ok",
+                    "offlineDbCheckPrometheusStatus": "ok",
+                    "offlineDbCheckPrometheus": str(prom),
+                    "datadir": "/tmp/nile",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "tailPrunedThroughBlock": 45,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_prune_boundary_block field='chainLookupPruneToBlock'=40, want 50",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='tailPrunedThroughBlock'",
+                proc.stderr,
+            )
+
     def test_rejects_offline_prometheus_artifact_missing_structured_issue_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -21,6 +21,14 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
 
+PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
+    "coldFreezerToBlock",
+    "chainLookupPruneToBlock",
+    "tailPrunedThroughBlock",
+    "balanceTracePruneToBlock",
+    "sectionBloomPruneToSection",
+)
+
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
@@ -367,6 +375,51 @@ def check_prometheus_metric_present(label, path, text, metric, row):
     return []
 
 
+def prometheus_prune_boundary_value(text, field, row):
+    matched = [
+        value
+        for labels, value in prometheus_metric_samples(
+            text, "gtron_storage_prune_boundary_block"
+        )
+        if prometheus_label_matches(row, labels) and labels.get("field") == field
+    ]
+    if not matched:
+        return None
+    return matched[-1]
+
+
+def check_prometheus_prune_boundaries(label, path, text, row):
+    issues = []
+    if "signedColdPrune" in row:
+        want = 1 if as_bool(row, "signedColdPrune") else 0
+        issues.extend(
+            check_prometheus_metric_value(
+                label,
+                path,
+                text,
+                "gtron_storage_signed_cold_prune",
+                want,
+                row,
+            )
+        )
+    for field in PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
+        want = as_number(row, field)
+        if want is None:
+            continue
+        got = prometheus_prune_boundary_value(text, field, row)
+        if got is None:
+            issues.append(
+                f"{label} prometheus artifact {path} missing "
+                f"gtron_storage_prune_boundary_block field={field!r}"
+            )
+        elif got != want:
+            issues.append(
+                f"{label} prometheus artifact {path} "
+                f"gtron_storage_prune_boundary_block field={field!r}={got:g}, want {want:g}"
+            )
+    return issues
+
+
 def check_prometheus_alert_status_value(label, path, text, row):
     status = str(row.get("storageAlertStatus", "")).lower()
     if status not in PROMETHEUS_STATUS_VALUES:
@@ -538,6 +591,9 @@ def check_prometheus_artifacts(result_path, rows):
         issues.extend(check_prometheus_text(line_label(row), path, text, row))
         issues.extend(check_prometheus_issue_kinds(line_label(row), path, text, row))
         issues.extend(check_prometheus_stage_pipeline(line_label(row), path, text, row))
+        issues.extend(
+            check_prometheus_prune_boundaries(line_label(row), path, text, row)
+        )
     return issues
 
 

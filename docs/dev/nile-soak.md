@@ -529,10 +529,13 @@ and the JSONL row carries `stageAlertPipeline*` fields, the checker also
 requires the referenced Prometheus artifact to include a matching
 `gtron_storage_alert_status` sample and, when present, matching
 `gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
-stage/status/upstream labels from the same offline DB check. When the row
-contains `datadir`, those Prometheus samples must carry the same `datadir`
-label, so aggregated artifacts cannot satisfy a Nile row with metrics from
-another node. When `--require-archive-api-evidence` is used, the latest
+stage/status/upstream labels from the same offline DB check. If the row carries
+prune-boundary evidence, the same artifact must also match
+`gtron_storage_signed_cold_prune` and
+`gtron_storage_prune_boundary_block{field=...}` for those JSONL fields. When
+the row contains `datadir`, those Prometheus samples must carry the same
+`datadir` label, so aggregated artifacts cannot satisfy a Nile row with metrics
+from another node. When `--require-archive-api-evidence` is used, the latest
 selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
 historical `archiveApiBlock` below `height`, and the default archive method set.
 When `--require-prune-mode-semantics` is used, the latest selected row must

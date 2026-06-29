@@ -24,6 +24,14 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
 
+PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
+    "coldFreezerToBlock",
+    "chainLookupPruneToBlock",
+    "tailPrunedThroughBlock",
+    "balanceTracePruneToBlock",
+    "sectionBloomPruneToSection",
+)
+
 SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_nile_sync_sample_status{", "gtron_nile_sync_sample_status"),
     ("gtron_nile_sync_soak_health_status{", "gtron_nile_sync_soak_health_status"),
@@ -619,6 +627,7 @@ def check_prometheus_artifact(result_path, row):
         issues.extend(check_prometheus_alert_status_value(path, text, row))
     issues.extend(check_prometheus_issue_kinds(path, text, row))
     issues.extend(check_prometheus_stage_pipeline(path, text, row))
+    issues.extend(check_prometheus_prune_boundaries(path, text, row))
     return issues
 
 
@@ -736,6 +745,50 @@ def check_prometheus_metric_present(path, text, metric, row):
     if prometheus_metric_value(text, metric, row) is None:
         return [f"offlineDbCheckPrometheus artifact {path} missing {metric}"]
     return []
+
+
+def prometheus_prune_boundary_value(text, field, row):
+    matched = [
+        value
+        for labels, value in prometheus_metric_samples(
+            text, "gtron_storage_prune_boundary_block"
+        )
+        if prometheus_label_matches(row, labels) and labels.get("field") == field
+    ]
+    if not matched:
+        return None
+    return matched[-1]
+
+
+def check_prometheus_prune_boundaries(path, text, row):
+    issues = []
+    if "signedColdPrune" in row:
+        want = 1 if as_bool(row, "signedColdPrune") else 0
+        issues.extend(
+            check_prometheus_metric_value(
+                path,
+                text,
+                "gtron_storage_signed_cold_prune",
+                want,
+                row,
+            )
+        )
+    for field in PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
+        want = as_number(row, field)
+        if want is None:
+            continue
+        got = prometheus_prune_boundary_value(text, field, row)
+        if got is None:
+            issues.append(
+                f"offlineDbCheckPrometheus artifact {path} missing "
+                f"gtron_storage_prune_boundary_block field={field!r}"
+            )
+        elif got != want:
+            issues.append(
+                f"offlineDbCheckPrometheus artifact {path} "
+                f"gtron_storage_prune_boundary_block field={field!r}={got:g}, want {want:g}"
+            )
+    return issues
 
 
 def check_prometheus_alert_status_value(path, text, row):

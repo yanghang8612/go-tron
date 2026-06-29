@@ -775,12 +775,18 @@ Status:
 - `scripts/dev/storage_benchmark.sh` now preserves the same
   `stageAlertPipeline*` fields in benchmark JSONL rows, and the storage
   benchmark acceptance checker verifies matching Prometheus pipeline metrics
-  when a row includes the pipeline cursor.
+  when a row includes the pipeline cursor. The same artifact check now also
+  verifies `gtron_storage_signed_cold_prune` and
+  `gtron_storage_prune_boundary_block{field=...}` against JSONL prune-boundary
+  fields when those fields are present.
 - `scripts/dev/nile_sync_acceptance.py` applies the same check for stopped-node
   Nile samples: if an offline DB-check row carries `stageAlertPipeline*`, the
   referenced storage-alert Prometheus artifact must include the matching
   `gtron_storage_stage_pipeline_*` metric values, next-target/current values,
-  and stage/status/upstream labels.
+  and stage/status/upstream labels. It also compares
+  `gtron_storage_signed_cold_prune` and
+  `gtron_storage_prune_boundary_block{field=...}` with the offline DB-check
+  prune-boundary fields.
 - The cold snapshot builder now writes `SnapshotBuild` and
   `SnapshotLatestBuild` as hash-bound canonical block stages. It resolves the
   boundary hash before publishing the new stage row, and
@@ -1245,6 +1251,9 @@ Status:
   stage, mode, and snapshot issue kinds. When JSONL alert details include a
   structured `kind`/`severity`, the same checkers now require a matching
   `gtron_storage_alert_issue{component,kind,severity}` series in the captured
+  artifact. When JSONL rows carry signed cold-prune or prune-boundary fields,
+  the checkers also require matching `gtron_storage_signed_cold_prune` and
+  `gtron_storage_prune_boundary_block{field=...}` samples in the same captured
   artifact. Nile sync acceptance can also require the latest selected sample to
   carry stage-stall diagnostics and successful historical JSON-RPC archive-read
   evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields. It

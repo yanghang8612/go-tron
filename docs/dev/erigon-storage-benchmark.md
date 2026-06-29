@@ -239,10 +239,11 @@ retired snapshot bytes that still await physical pruning. Each row also records
 `storageAlertPrometheus`, the Prometheus text artifact produced from the same
 storage-alert gate for archive/soak monitor ingestion.
 The acceptance checker binds `gtron_storage_alert_status`,
-`gtron_storage_alert_issue`, and `gtron_storage_stage_pipeline_*` samples to
-the row's `datadir` label when present, so an aggregated metrics file cannot
-satisfy one datadir's storage row with another datadir's stage or alert
-metrics.
+`gtron_storage_alert_issue`, `gtron_storage_stage_pipeline_*`,
+`gtron_storage_signed_cold_prune`, and
+`gtron_storage_prune_boundary_block{field=...}` samples to the row's `datadir`
+label when present, so an aggregated metrics file cannot satisfy one datadir's
+storage row with another datadir's stage, alert, or prune-boundary metrics.
 For external monitors that scrape command output instead of JSONL harness rows,
 run `gtron db storage-alerts --prometheus --datadir <dir>`. The Prometheus text
 output exposes overall/component status gauges (`0=ok`, `1=warning`,
@@ -382,11 +383,14 @@ Prometheus artifact with `gtron_storage_alert_status` and
 (`0=ok`, `1=warning`, `2=critical`) when the field is present, and when the row
 carries a stage-pipeline cursor it also verifies the Prometheus
 `gtron_storage_stage_pipeline_*` values, next-target/current cursors, and
-stage/status/upstream labels match that same row. It confirms minimal-mode
-signed cold lookup pruning plus tail-prune evidence, rejects mode-semantics
-regressions such as `archive` rows with prune progress or `blocks` rows with
-freezer-tail pruning, requires signed cold prune rows in every non-`archive`
-mode to carry a valid chain-lookup prune boundary covered by
+stage/status/upstream labels match that same row. When the row carries
+`signedColdPrune` or prune-boundary fields, it also checks that the Prometheus
+`gtron_storage_signed_cold_prune` and
+`gtron_storage_prune_boundary_block{field=...}` samples match. It confirms
+minimal-mode signed cold lookup pruning plus tail-prune evidence, rejects
+mode-semantics regressions such as `archive` rows with prune progress or
+`blocks` rows with freezer-tail pruning, requires signed cold prune rows in
+every non-`archive` mode to carry a valid chain-lookup prune boundary covered by
 `coldFreezerToBlock`, and
 rejects `minimal` tail-prune boundaries that exceed the matching lookup-prune,
 cold-freezer, or derived-index coverage boundary. It also rejects physical
