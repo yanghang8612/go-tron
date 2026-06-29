@@ -97,7 +97,10 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `chaindataWALBytes`, `chaindataLogBytes`, `chaindataManifestBytes`,
 `chaindataOptionsBytes`, snapshot buckets such as `snapshotLatestBytes`,
 `snapshotHistoryBytes`, `snapshotCommitmentBytes`,
-`snapshotRetiredDirectoryBytes`, and `snapshotOtherBytes`, plus matching
+`snapshotRetiredDirectoryBytes`, and `snapshotOtherBytes`, snapshot manifest
+profile counters such as `snapshotManifestProfileStatus`,
+`snapshotPayloadBytes`, `snapshotSidecarBytes`, `snapshotSidecarShareMilli`,
+and per-family `snapshot*Sidecar*` bytes/share fields, plus matching
 `*Files` / `*BytesDelta` fields, total
 per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
@@ -399,7 +402,9 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max-hot-bytes-per-block 120000 \
   --max-hot-growth-share 0.40 \
   --max-cold-archive-bytes-per-block 250000 \
-  --max-derived-index-bytes-per-block 40000
+  --max-derived-index-bytes-per-block 40000 \
+  --require-snapshot-profile-evidence \
+  --max snapshotSidecarShareMilli=350
 ```
 
 By default the checker validates the latest selected row, requires a captured
@@ -479,6 +484,15 @@ soaks prefer interval efficiency while early samples can still pass with
 cumulative evidence. Tune this separately from cold archive growth because
 event-log, chain-lookup, bloom, and balance-trace indexes trade disk for query
 and catch-up speed.
+Use `--require-snapshot-profile-evidence` once the snapshot manifest exists to
+prove the sampler profiled active payload bytes versus lookup sidecar bytes.
+The gate requires `snapshotManifestProfileStatus=ok`, positive active segment
+and total-byte counters, matching `snapshotPayloadBytes + snapshotSidecarBytes`
+totals, a recomputable `snapshotSidecarShareMilli`, and sane per-family
+`snapshot*SidecarShareMilli` fields. Pair it with `--max
+snapshotSidecarShareMilli=...` or family gates such as `--max
+snapshotEventLogSidecarShareMilli=...` to keep sidecar overhead within the
+Nile/mainnet storage budget.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production

@@ -128,6 +128,24 @@ DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS = (
     "derivedIndexBytesPerBlock",
 )
 
+SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
+    "snapshotManifestProfileStatus",
+    "snapshotProfileSegments",
+    "snapshotProfileTotalBytes",
+    "snapshotPayloadBytes",
+    "snapshotSidecarBytes",
+    "snapshotSidecarShareMilli",
+)
+
+SNAPSHOT_PROFILE_FAMILY_FIELDS = (
+    "snapshotLatestSidecar",
+    "snapshotStateHistorySidecar",
+    "snapshotChainFreezerSidecar",
+    "snapshotEventLogSidecar",
+    "snapshotBalanceTraceSidecar",
+    "snapshotSectionBloomSidecar",
+)
+
 
 def load_rows(path):
     rows = []
@@ -179,6 +197,26 @@ def as_number(row, field):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def as_non_negative_int(row, field):
+    value = row.get(field)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            return None
+        parsed = int(value)
+    else:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+    if parsed < 0:
+        return None
+    return parsed
 
 
 def as_bool(row, field):
@@ -1240,6 +1278,76 @@ def check_archive_tx_evidence(row):
     return issues
 
 
+def snapshot_profile_evidence_row(row):
+    return any(field in row for field in SNAPSHOT_PROFILE_EVIDENCE_FIELDS)
+
+
+def sidecar_share_milli(sidecar_bytes, total_bytes):
+    if sidecar_bytes <= 0 or total_bytes <= 0:
+        return 0
+    return (sidecar_bytes * 1000 + total_bytes - 1) // total_bytes
+
+
+def check_snapshot_profile_row(row):
+    issues = []
+    status = str(row.get("snapshotManifestProfileStatus", "")).lower()
+    if status != "ok":
+        issues.append(f"snapshotManifestProfileStatus={row.get('snapshotManifestProfileStatus')!r}, want 'ok'")
+
+    segments = as_non_negative_int(row, "snapshotProfileSegments")
+    if segments is None or segments <= 0:
+        issues.append(f"snapshotProfileSegments={row.get('snapshotProfileSegments')!r}, want > 0")
+
+    total_bytes = as_non_negative_int(row, "snapshotProfileTotalBytes")
+    payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")
+    sidecar_bytes = as_non_negative_int(row, "snapshotSidecarBytes")
+    share = as_non_negative_int(row, "snapshotSidecarShareMilli")
+    if total_bytes is None or total_bytes <= 0:
+        issues.append(f"snapshotProfileTotalBytes={row.get('snapshotProfileTotalBytes')!r}, want > 0")
+    if payload_bytes is None:
+        issues.append(f"snapshotPayloadBytes={row.get('snapshotPayloadBytes')!r}, want non-negative integer")
+    if sidecar_bytes is None:
+        issues.append(f"snapshotSidecarBytes={row.get('snapshotSidecarBytes')!r}, want non-negative integer")
+    if share is None:
+        issues.append(f"snapshotSidecarShareMilli={row.get('snapshotSidecarShareMilli')!r}, want non-negative integer")
+
+    if (
+        total_bytes is not None
+        and payload_bytes is not None
+        and sidecar_bytes is not None
+        and total_bytes != payload_bytes + sidecar_bytes
+    ):
+        issues.append(
+            f"snapshot payload+sidecar={payload_bytes + sidecar_bytes} must equal total={total_bytes}"
+        )
+    if total_bytes is not None and sidecar_bytes is not None and share is not None:
+        want_share = sidecar_share_milli(sidecar_bytes, total_bytes)
+        if share != want_share:
+            issues.append(
+                f"snapshotSidecarShareMilli={share}, want {want_share} "
+                f"for sidecarBytes={sidecar_bytes} totalBytes={total_bytes}"
+            )
+        if share > 1000:
+            issues.append(f"snapshotSidecarShareMilli={share}, want <= 1000")
+
+    for prefix in SNAPSHOT_PROFILE_FAMILY_FIELDS:
+        bytes_field = f"{prefix}Bytes"
+        share_field = f"{prefix}ShareMilli"
+        family_bytes = as_non_negative_int(row, bytes_field)
+        family_share = as_number(row, share_field)
+        if family_bytes is None:
+            issues.append(f"{bytes_field}={row.get(bytes_field)!r}, want non-negative integer")
+        if family_share is None:
+            issues.append(f"{share_field}={row.get(share_field)!r}, want numeric value")
+        elif family_share < -1 or family_share > 1000:
+            issues.append(f"{share_field}={family_share:g}, want -1..1000")
+        elif family_bytes is not None and family_bytes > 0 and family_share < 0:
+            issues.append(
+                f"{share_field}={family_share:g}, want >= 0 when {bytes_field}={family_bytes}"
+            )
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -1299,6 +1407,12 @@ def check_row(row, args):
         issues.extend(check_archive_tx_evidence(row))
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
+
+    if args.require_snapshot_profile_evidence:
+        if not snapshot_profile_evidence_row(row):
+            issues.append("snapshot manifest profile evidence is missing")
+        else:
+            issues.extend(check_snapshot_profile_row(row))
 
     for field in ZERO_ISSUE_FIELDS:
         value = as_number(row, field)
@@ -1416,6 +1530,11 @@ def build_parser():
         "--require-startup-recovery-evidence",
         action="store_true",
         help="require selected rows to include healthy staged-sync startup recovery evidence",
+    )
+    parser.add_argument(
+        "--require-snapshot-profile-evidence",
+        action="store_true",
+        help="require selected rows to include valid snapshot manifest payload/sidecar profile counters",
     )
     parser.add_argument(
         "--archive-api-method",

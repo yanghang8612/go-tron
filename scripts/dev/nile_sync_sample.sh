@@ -10,6 +10,7 @@ set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 GTRON="${GTRON:-$BASEDIR/build/bin/gtron}"
+SNAPSHOT_PROFILE_SCRIPT="$BASEDIR/scripts/dev/snapshot_manifest_profile.py"
 DATADIR="${DATADIR:-}"
 HTTP="http://127.0.0.1:8090"
 JSONRPC="http://127.0.0.1:8545"
@@ -244,6 +245,7 @@ ancient_files="$(file_count "$DATADIR/gtron/ancient")"
 snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
+  "$SNAPSHOT_PROFILE_SCRIPT" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
   "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
@@ -270,6 +272,7 @@ from pathlib import Path
     http,
     jsonrpc,
     datadir,
+    snapshot_profile_script,
     nowblock_path,
     nodeinfo_path,
     nodes_path,
@@ -2066,6 +2069,81 @@ def snapshot_derived_index_stats(datadir_path):
         return 0, 0
     return total_bytes, files
 
+SNAPSHOT_PROFILE_FAMILIES = (
+    ("latest", "snapshotLatestSidecar"),
+    ("state-history", "snapshotStateHistorySidecar"),
+    ("chain-freezer", "snapshotChainFreezerSidecar"),
+    ("event-log", "snapshotEventLogSidecar"),
+    ("balance-trace", "snapshotBalanceTraceSidecar"),
+    ("section-bloom", "snapshotSectionBloomSidecar"),
+)
+
+def snapshot_manifest_profile_defaults(status):
+    row = {
+        "snapshotManifestProfileStatus": status,
+        "snapshotProfileSegments": 0,
+        "snapshotProfileTotalBytes": 0,
+        "snapshotPayloadBytes": 0,
+        "snapshotSidecarBytes": 0,
+        "snapshotSidecarShareMilli": -1,
+    }
+    for _, prefix in SNAPSHOT_PROFILE_FAMILIES:
+        row[f"{prefix}Bytes"] = 0
+        row[f"{prefix}ShareMilli"] = -1
+    return row
+
+def int_field(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+def snapshot_manifest_profile_stats(datadir_path, profile_script):
+    snapshot_dir = Path(datadir_path) / "gtron" / "state-snapshots"
+    if not (snapshot_dir / "manifest.json").is_file():
+        return snapshot_manifest_profile_defaults("missing")
+    script = Path(profile_script)
+    if not script.is_file():
+        return snapshot_manifest_profile_defaults("error")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), str(snapshot_dir), "--json"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except Exception:
+        return snapshot_manifest_profile_defaults("error")
+    if proc.returncode != 0:
+        return snapshot_manifest_profile_defaults("error")
+    try:
+        profile = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return snapshot_manifest_profile_defaults("error")
+    if not isinstance(profile, dict):
+        return snapshot_manifest_profile_defaults("error")
+
+    row = snapshot_manifest_profile_defaults("ok")
+    row.update(
+        {
+            "snapshotProfileSegments": int_field(profile.get("activeSegments")),
+            "snapshotProfileTotalBytes": int_field(profile.get("totalBytes")),
+            "snapshotPayloadBytes": int_field(profile.get("payloadBytes")),
+            "snapshotSidecarBytes": int_field(profile.get("sidecarBytes")),
+            "snapshotSidecarShareMilli": int_field(profile.get("sidecarShareMilli")),
+        }
+    )
+    families = profile.get("byFamily", {})
+    if not isinstance(families, dict):
+        families = {}
+    for family, prefix in SNAPSHOT_PROFILE_FAMILIES:
+        stats = families.get(family, {})
+        if not isinstance(stats, dict):
+            stats = {}
+        row[f"{prefix}Bytes"] = int_field(stats.get("sidecarBytes"))
+        row[f"{prefix}ShareMilli"] = int_field(stats.get("sidecarShareMilli"), -1)
+    return row
+
 nowblock = load_json(nowblock_path)
 nodeinfo = load_json(nodeinfo_path)
 nodes = load_json(nodes_path)
@@ -2106,6 +2184,7 @@ chaindata_files = chaindata_file_stats(datadir)
 ancient_tables = ancient_table_stats(datadir)
 snapshot_buckets = snapshot_bucket_stats(datadir)
 derived_index, derived_index_files = snapshot_derived_index_stats(datadir)
+snapshot_profile = snapshot_manifest_profile_stats(datadir, snapshot_profile_script)
 cold_archive = ancient + snapshot
 datadir_other = total - chaindata - ancient - snapshot - replay
 bytes_per_block = float(total) / height if height > 0 else 0.0
@@ -2710,6 +2789,7 @@ row.update(sync_log)
 row.update(process)
 row.update(debug_metrics)
 row.update(archive_api)
+row.update(snapshot_profile)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 

@@ -279,6 +279,11 @@ per-interval byte deltas without opening the live Pebble store. The Nile sampler
 also breaks out `derivedIndexBytes`/`derivedIndexFiles` for chain-index,
 balance-trace, section-bloom, and event-log/index sidecars, and reports
 Pebble hot-store SST/WAL ratios plus interval SST/WAL bytes per block. It also
+profiles `state-snapshots/manifest.json` when present and emits the same
+`snapshotManifestProfileStatus`, `snapshotPayloadBytes`,
+`snapshotSidecarBytes`, `snapshotSidecarShareMilli`, and per-family
+`snapshot*Sidecar*` counters as the benchmark harness, so Nile samples can gate
+lookup-sidecar overhead with the same thresholds used by dev profiles. It also
 reports `intervalDiskGrowthPrimaryDetailed*` across Pebble file buckets,
 ancient tables, snapshot subdirectories, replay, and datadir-other bytes so
 archive/full/minimal sync runs can be compared by the actual interval growth
@@ -406,15 +411,17 @@ of letting another mode's sidecar satisfy the run. Repeat
 additional mode-local log-index proofs. Add `--min
 eventLogIndexAddressPostings=1` when the sample is expected to include logs and
 should prove non-empty index fanout.
-The harness automatically runs
+The benchmark harness and Nile sampler automatically run
 `scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` when a
 manifest exists and records the active payload/sidecar split in the
 `snapshot*Sidecar*` fields. Add `--require-snapshot-profile-mode minimal` (or
-the plural mode list) so the latest selected row must carry a valid manifest
-profile with `snapshotManifestProfileStatus=ok`, consistent
-payload+sidecar totals, and a recomputable `snapshotSidecarShareMilli`. Then
-use ordinary `--max` thresholds such as
-`--max minimal.producer.snapshotSidecarShareMilli=350` or family-specific
+the plural mode list) to the storage benchmark checker, or
+`--require-snapshot-profile-evidence` to `nile_sync_acceptance.py`, so the
+latest selected row must carry a valid manifest profile with
+`snapshotManifestProfileStatus=ok`, consistent payload+sidecar totals, and a
+recomputable `snapshotSidecarShareMilli`. Then use ordinary `--max` thresholds
+such as `--max minimal.producer.snapshotSidecarShareMilli=350` for benchmark
+rows, `--max snapshotSidecarShareMilli=350` for Nile rows, or family-specific
 fields such as `snapshotEventLogSidecarShareMilli` to gate sidecar overhead in
 long runs. Run the profiler directly on saved artifacts when a standalone gate
 is useful; it reports `sidecarShareMilli` overall and per family (`latest`,

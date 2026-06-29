@@ -1235,11 +1235,13 @@ Needed:
   chain-data prune defaults.
 - `scripts/dev/snapshot_manifest_profile.py` now profiles active snapshot
   manifest bytes by payload versus lookup sidecar family, and the storage
-  benchmark records the same payload/sidecar totals plus per-family sidecar
-  shares in its JSONL rows. The acceptance checker can now require that
-  profile with `--require-snapshot-profile-mode` and gate the emitted overall
-  or family-specific share fields through ordinary `--max` thresholds. The
-  standalone profiler can also gate saved artifacts with
+  benchmark plus Nile sampler record the same payload/sidecar totals plus
+  per-family sidecar shares in their JSONL rows. The benchmark acceptance
+  checker can now require that profile with `--require-snapshot-profile-mode`;
+  Nile sync acceptance can require the same evidence on the latest selected
+  production sample with `--require-snapshot-profile-evidence`. Both paths gate
+  the emitted overall or family-specific share fields through ordinary `--max`
+  thresholds. The standalone profiler can also gate saved artifacts with
   `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`; use that
   evidence to evaluate compact/merged cold index formats for block hash by
   number, tx lookup, per-tx info, and state-root lookup only if sidecar

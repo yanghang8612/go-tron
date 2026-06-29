@@ -142,6 +142,94 @@ class NileSyncSampleTest(unittest.TestCase):
                 ],
             )
 
+    def test_sample_includes_snapshot_manifest_profile_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            snapshot_dir = datadir / "gtron" / "state-snapshots"
+            snapshot_dir.mkdir(parents=True)
+            (snapshot_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "generation": 1,
+                        "publishedUnix": 1,
+                        "visibleTxStart": 1,
+                        "visibleTxEnd": 2,
+                        "segments": [
+                            {
+                                "dataset": "chain-freezer",
+                                "kind": "chain-freezer",
+                                "fromTxNum": 1,
+                                "toTxNum": 2,
+                                "path": "chain/freezer.seg",
+                                "size": 1000,
+                            },
+                            {
+                                "dataset": "chain-freezer",
+                                "kind": "chain-index",
+                                "fromTxNum": 1,
+                                "toTxNum": 2,
+                                "path": "chain/index.idx",
+                                "size": 100,
+                            },
+                            {
+                                "dataset": "event-log",
+                                "kind": "event-log",
+                                "fromTxNum": 1,
+                                "toTxNum": 2,
+                                "path": "log/event.seg",
+                                "size": 300,
+                            },
+                            {
+                                "dataset": "event-log",
+                                "kind": "event-log-index",
+                                "fromTxNum": 1,
+                                "toTxNum": 2,
+                                "path": "log/event.idx",
+                                "size": 200,
+                            },
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["snapshotManifestProfileStatus"], "ok")
+            self.assertEqual(row["snapshotProfileSegments"], 4)
+            self.assertEqual(row["snapshotProfileTotalBytes"], 1600)
+            self.assertEqual(row["snapshotPayloadBytes"], 1300)
+            self.assertEqual(row["snapshotSidecarBytes"], 300)
+            self.assertEqual(row["snapshotSidecarShareMilli"], 188)
+            self.assertEqual(row["snapshotChainFreezerSidecarBytes"], 100)
+            self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
+            self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
+            self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
+            self.assertEqual(row["snapshotLatestSidecarBytes"], 0)
+            self.assertEqual(row["snapshotLatestSidecarShareMilli"], -1)
+
     def test_sample_includes_sync_health_and_disk_ratios(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

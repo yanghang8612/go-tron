@@ -145,7 +145,132 @@ def add_clean_startup_recovery(row):
     return row
 
 
+def add_snapshot_profile_evidence(row):
+    row.update(
+        {
+            "snapshotManifestProfileStatus": "ok",
+            "snapshotProfileSegments": 4,
+            "snapshotProfileTotalBytes": 1600,
+            "snapshotPayloadBytes": 1300,
+            "snapshotSidecarBytes": 300,
+            "snapshotSidecarShareMilli": 188,
+            "snapshotLatestSidecarBytes": 0,
+            "snapshotLatestSidecarShareMilli": -1,
+            "snapshotStateHistorySidecarBytes": 0,
+            "snapshotStateHistorySidecarShareMilli": -1,
+            "snapshotChainFreezerSidecarBytes": 100,
+            "snapshotChainFreezerSidecarShareMilli": 91,
+            "snapshotEventLogSidecarBytes": 200,
+            "snapshotEventLogSidecarShareMilli": 400,
+            "snapshotBalanceTraceSidecarBytes": 0,
+            "snapshotBalanceTraceSidecarShareMilli": -1,
+            "snapshotSectionBloomSidecarBytes": 0,
+            "snapshotSectionBloomSidecarShareMilli": -1,
+        }
+    )
+    return row
+
+
 class NileSyncAcceptanceTest(unittest.TestCase):
+    def test_accepts_snapshot_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [add_snapshot_profile_evidence(clean_full_staged_sync_row())])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-snapshot-profile-evidence",
+                    "--max",
+                    "snapshotSidecarShareMilli=200",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_snapshot_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-snapshot-profile-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshot manifest profile evidence is missing", proc.stderr)
+
+    def test_rejects_invalid_snapshot_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "snapshotManifestProfileStatus": "missing",
+                    "snapshotProfileSegments": 0,
+                    "snapshotProfileTotalBytes": 1600,
+                    "snapshotPayloadBytes": 1200,
+                    "snapshotSidecarBytes": 300,
+                    "snapshotSidecarShareMilli": 111,
+                    "snapshotLatestSidecarBytes": 1,
+                    "snapshotLatestSidecarShareMilli": -1,
+                    "snapshotStateHistorySidecarBytes": 0,
+                    "snapshotStateHistorySidecarShareMilli": -1,
+                    "snapshotChainFreezerSidecarBytes": 100,
+                    "snapshotChainFreezerSidecarShareMilli": 1001,
+                    "snapshotEventLogSidecarBytes": 200,
+                    "snapshotEventLogSidecarShareMilli": 400,
+                    "snapshotBalanceTraceSidecarBytes": 0,
+                    "snapshotBalanceTraceSidecarShareMilli": -1,
+                    "snapshotSectionBloomSidecarBytes": 0,
+                    "snapshotSectionBloomSidecarShareMilli": -1,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-snapshot-profile-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotManifestProfileStatus='missing', want 'ok'", proc.stderr)
+            self.assertIn("snapshotProfileSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshot payload+sidecar=1500 must equal total=1600", proc.stderr)
+            self.assertIn(
+                "snapshotSidecarShareMilli=111, want 188 for sidecarBytes=300 totalBytes=1600",
+                proc.stderr,
+            )
+            self.assertIn(
+                "snapshotLatestSidecarShareMilli=-1, want >= 0 when snapshotLatestSidecarBytes=1",
+                proc.stderr,
+            )
+            self.assertIn("snapshotChainFreezerSidecarShareMilli=1001, want -1..1000", proc.stderr)
+
     def test_accepts_clean_latest_staged_sync_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
