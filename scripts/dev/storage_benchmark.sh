@@ -681,6 +681,17 @@ def rpc_call(request_id, method, params):
         return None, False
     return response.get("result"), True
 
+def archive_result_ok(method, result):
+    if method == "eth_getBlockByNumber":
+        return isinstance(result, dict)
+    if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
+        return isinstance(result, str)
+    if method == "eth_getLogs":
+        return isinstance(result, list)
+    if method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+        return isinstance(result, dict)
+    return result is not None
+
 def first_tx_hash(block_result):
     if not isinstance(block_result, dict):
         return ""
@@ -719,7 +730,7 @@ idx = 0
 while idx < len(calls):
     method, params = calls[idx]
     result, ok = rpc_call(idx + 1, method, params)
-    if not ok:
+    if not ok or not archive_result_ok(method, result):
         failures += 1
         idx += 1
         continue

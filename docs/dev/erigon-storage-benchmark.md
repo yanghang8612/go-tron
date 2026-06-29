@@ -319,7 +319,10 @@ must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
 transaction, it also emits `archiveApiTxProbe`, `archiveApiTxHash`, and
 `archiveApiTxMethods`; add `--archive-api-call-data` plus
 `--archive-api-method eth_call` only when the sample targets a known historical
-contract.
+contract. The probe counts only shape-valid JSON-RPC results as successful:
+block reads must return an object, account/code/storage/call reads must return
+hex strings, logs must return a list, and transaction/receipt reads must return
+objects rather than `null`.
 
 ## Interpreting Results
 

@@ -85,6 +85,10 @@ the probed block contains a transaction, it also probes
 at least one transaction when the acceptance gate uses
 `--require-archive-tx-evidence`. Add `--archive-api-call-data` when the target
 is a known historical contract and the sample should also prove `eth_call`.
+The sampler counts only shape-valid JSON-RPC results as successful: block reads
+must return an object, account/code/storage/call reads must return hex strings,
+logs must return a list, and transaction/receipt reads must return objects
+rather than `null`.
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
