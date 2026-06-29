@@ -35,6 +35,15 @@ PROMETHEUS_STATUS_VALUES = {
     "critical": 2,
 }
 
+BENCHMARK_STATUS_VALUES = {
+    "ok": 0,
+    "warning": 1,
+    "storage-alerts-critical": 2,
+    "unknown": 3,
+}
+
+BENCHMARK_PROMETHEUS_STATUS_METRIC = "gtron_storage_benchmark_status"
+
 BENCHMARK_PROMETHEUS_SUM_FIELDS = (
     ("gtron_storage_benchmark_height", ("height",)),
     ("gtron_storage_benchmark_elapsed_seconds", ("elapsedSeconds",)),
@@ -713,6 +722,11 @@ def benchmark_prometheus_label_matches(row, labels, extra=None):
     return True
 
 
+def benchmark_status_value(row):
+    status = str(row.get("status", "unknown")).lower()
+    return BENCHMARK_STATUS_VALUES.get(status, BENCHMARK_STATUS_VALUES["unknown"])
+
+
 def expected_archive_api_method_metrics(row, successful_methods):
     expected = set(successful_methods)
     expected.update(DEFAULT_ARCHIVE_API_METHODS)
@@ -804,6 +818,21 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
         except OSError as exc:
             issues.append(f"{line_label(row)} benchmark prometheus artifact {path}: {exc}")
             continue
+        got_status = benchmark_prometheus_metric_value(
+            text, BENCHMARK_PROMETHEUS_STATUS_METRIC, row
+        )
+        want_status = benchmark_status_value(row)
+        if got_status is None:
+            issues.append(
+                f"{line_label(row)} benchmark prometheus artifact {path} "
+                f"missing {BENCHMARK_PROMETHEUS_STATUS_METRIC}"
+            )
+        elif got_status != want_status:
+            issues.append(
+                f"{line_label(row)} benchmark prometheus artifact {path} "
+                f"{BENCHMARK_PROMETHEUS_STATUS_METRIC}={got_status:g}, "
+                f"want {want_status:g}"
+            )
         for metric, fields in BENCHMARK_PROMETHEUS_SUM_FIELDS:
             want, missing = benchmark_prometheus_expected(row, fields)
             if missing:

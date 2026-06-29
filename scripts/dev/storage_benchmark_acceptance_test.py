@@ -20,6 +20,8 @@ def write_result(path, rows):
 def write_benchmark_prometheus(path, datadir, values):
     labels = f'{{datadir="{datadir}",mode="minimal",profile="producer",role="producer",status="ok"}}'
     lines = []
+    if "gtron_storage_benchmark_status" not in values:
+        values = {"gtron_storage_benchmark_status": 0, **values}
     for metric, value in values.items():
         lines.append(f"# TYPE {metric} gauge")
         lines.append(f"{metric}{labels} {value}")
@@ -947,6 +949,79 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("missing gtron_storage_benchmark_height", proc.stderr)
+
+    def test_rejects_benchmark_prometheus_status_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_status": 1,
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "archiveApiChecks": 5,
+                        "archiveApiBlock": 80,
+                        "archiveApiFailures": 0,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_storage_benchmark_status=1, want 0", proc.stderr)
 
     def test_accepts_benchmark_prometheus_archive_method_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -535,6 +535,12 @@ ARCHIVE_API_BASE_METHODS = (
 ARCHIVE_API_CALL_METHODS = ("eth_call", "debug_traceCall")
 ARCHIVE_API_TX_METHODS = ("eth_getTransactionByHash", "eth_getTransactionReceipt")
 ARCHIVE_API_TRACE_TRANSACTION_METHODS = ("debug_traceTransaction",)
+BENCHMARK_STATUS_VALUES = {
+    "ok": 0,
+    "warning": 1,
+    "storage-alerts-critical": 2,
+    "unknown": 3,
+}
 
 def method_set(raw):
     try:
@@ -572,6 +578,11 @@ def labels_with(extra):
     return "{" + ",".join(f'{key}="{esc(labels_map[key])}"' for key in sorted(labels_map)) + "}"
 
 metrics = (
+    (
+        "gtron_storage_benchmark_status",
+        "Benchmark status: 0=ok, 1=warning, 2=critical, 3=unknown/other.",
+        BENCHMARK_STATUS_VALUES.get(status.lower(), BENCHMARK_STATUS_VALUES["unknown"]),
+    ),
     ("gtron_storage_benchmark_height", "Benchmark run block height.", height),
     ("gtron_storage_benchmark_elapsed_seconds", "Benchmark run elapsed seconds.", elapsed),
     ("gtron_storage_benchmark_datadir_bytes", "Total benchmark datadir bytes.", total),
