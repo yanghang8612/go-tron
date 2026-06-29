@@ -241,6 +241,61 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
     return row
 
 
+def add_archive_trace_evidence(row):
+    row.update(
+        {
+            "archiveApiStatus": "ok",
+            "archiveApiChecks": 10,
+            "archiveApiFailures": 0,
+            "archiveApiBlock": 999,
+            "archiveApiCallProbe": True,
+            "archiveApiTraceTransactionProbe": True,
+            "archiveApiMethods": [
+                "eth_getBlockByNumber",
+                "eth_getBalance",
+                "eth_getCode",
+                "eth_call",
+                "debug_traceCall",
+                "eth_getStorageAt",
+                "eth_getLogs",
+                "eth_getTransactionByHash",
+                "eth_getTransactionReceipt",
+                "debug_traceTransaction",
+            ],
+            "archiveApiTxProbe": True,
+            "archiveApiTxHash": "0x" + "ab" * 32,
+            "archiveApiTxMethods": [
+                "eth_getTransactionByHash",
+                "eth_getTransactionReceipt",
+                "debug_traceTransaction",
+            ],
+        }
+    )
+    return row
+
+
+def append_archive_trace_prometheus_metrics(path, row, *, include_trace=True):
+    labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
+    lines = [
+        "# TYPE gtron_nile_sync_archive_api_method_success gauge",
+    ]
+    for method in row["archiveApiMethods"]:
+        if method == "debug_traceTransaction" and not include_trace:
+            continue
+        lines.append(
+            f'gtron_nile_sync_archive_api_method_success{{{labels},method="{method}"}} 1'
+        )
+    lines.append("# TYPE gtron_nile_sync_archive_api_tx_method_success gauge")
+    for method in row["archiveApiTxMethods"]:
+        if method == "debug_traceTransaction" and not include_trace:
+            continue
+        lines.append(
+            f'gtron_nile_sync_archive_api_tx_method_success{{{labels},method="{method}"}} 1'
+        )
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
 class NileSyncAcceptanceTest(unittest.TestCase):
     def test_accepts_sample_prometheus_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,6 +319,67 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_accepts_sample_prometheus_archive_method_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_archive_trace_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            append_archive_trace_prometheus_metrics(prom, row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_sample_prometheus_missing_archive_method_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_archive_trace_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            append_archive_trace_prometheus_metrics(prom, row, include_trace=False)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_archive_api_method_success{method='debug_traceTransaction'}",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_nile_sync_archive_api_tx_method_success{method='debug_traceTransaction'}",
+                proc.stderr,
+            )
 
     def test_rejects_mismatched_sample_prometheus_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

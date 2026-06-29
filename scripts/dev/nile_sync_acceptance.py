@@ -118,7 +118,15 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionReceipt",
 )
 
+ARCHIVE_API_CALL_METHODS = (
+    "eth_call",
+    "debug_traceCall",
+)
+
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+
+ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_method_success"
+ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_tx_method_success"
 
 ARCHIVE_API_EVIDENCE_FIELDS = (
     "archiveApiStatus",
@@ -674,6 +682,72 @@ def check_sample_prometheus_artifact(result_path, row):
             issues.append(f"samplePrometheus artifact {path} missing gtron_nile_sync_stage_stalled")
         elif got != want:
             issues.append(f"samplePrometheus artifact {path} gtron_nile_sync_stage_stalled={got:g}, want {want:g}")
+    issues.extend(check_sample_prometheus_archive_api_methods(path, text, row))
+    return issues
+
+
+def expected_archive_api_method_metrics(row, successful_methods):
+    expected = set(successful_methods)
+    if as_bool(row, "archiveApiCallProbe"):
+        expected.update(ARCHIVE_API_CALL_METHODS)
+    if as_bool(row, "archiveApiTxProbe"):
+        expected.update(ARCHIVE_API_TX_METHODS)
+    if as_bool(row, "archiveApiTraceTransactionProbe"):
+        expected.add(ARCHIVE_API_TRACE_TX_METHOD)
+    return sorted(expected)
+
+
+def check_sample_prometheus_method_metric(path, text, row, metric, method, want):
+    got = sample_prometheus_metric_value(text, metric, row, {"method": method})
+    if got is None:
+        return [f"samplePrometheus artifact {path} missing {metric}{{method={method!r}}}"]
+    if got != want:
+        return [
+            f"samplePrometheus artifact {path} {metric}{{method={method!r}}}={got:g}, want {want:g}"
+        ]
+    return []
+
+
+def check_sample_prometheus_archive_api_methods(path, text, row):
+    issues = []
+    methods = archive_api_methods(row)
+    if methods is None:
+        return issues
+    for method in expected_archive_api_method_metrics(row, methods):
+        want = 1.0 if method in methods else 0.0
+        issues.extend(
+            check_sample_prometheus_method_metric(
+                path,
+                text,
+                row,
+                ARCHIVE_API_METHOD_SUCCESS_METRIC,
+                method,
+                want,
+            )
+        )
+
+    tx_methods = string_set_field(row, "archiveApiTxMethods")
+    if tx_methods is None and not as_bool(row, "archiveApiTxProbe"):
+        return issues
+    if tx_methods is None:
+        tx_methods = set()
+    expected_tx_methods = set(tx_methods)
+    if as_bool(row, "archiveApiTxProbe"):
+        expected_tx_methods.update(ARCHIVE_API_TX_METHODS)
+    if as_bool(row, "archiveApiTraceTransactionProbe"):
+        expected_tx_methods.add(ARCHIVE_API_TRACE_TX_METHOD)
+    for method in sorted(expected_tx_methods):
+        want = 1.0 if method in tx_methods else 0.0
+        issues.extend(
+            check_sample_prometheus_method_metric(
+                path,
+                text,
+                row,
+                ARCHIVE_API_TX_METHOD_SUCCESS_METRIC,
+                method,
+                want,
+            )
+        )
     return issues
 
 
@@ -729,6 +803,30 @@ def prometheus_metric_value(text, metric, row=None):
     samples = prometheus_metric_samples(text, metric)
     if row is not None:
         samples = [(labels, value) for labels, value in samples if prometheus_label_matches(row, labels)]
+    if not samples:
+        return None
+    return samples[-1][1]
+
+
+def sample_prometheus_label_matches(row, labels, extra=None):
+    if not prometheus_label_matches(row, labels):
+        return False
+    for field in ("network", "mode", "label"):
+        if field in row and row.get(field) is not None and labels.get(field) != str(row.get(field)):
+            return False
+    if extra:
+        for key, value in extra.items():
+            if labels.get(key) != str(value):
+                return False
+    return True
+
+
+def sample_prometheus_metric_value(text, metric, row, extra=None):
+    samples = [
+        (labels, value)
+        for labels, value in prometheus_metric_samples(text, metric)
+        if sample_prometheus_label_matches(row, labels, extra)
+    ]
     if not samples:
         return None
     return samples[-1][1]
