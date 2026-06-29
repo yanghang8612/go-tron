@@ -419,6 +419,50 @@ file_count() {
   find "$path" -type f | wc -l | tr -d ' '
 }
 
+derived_index_stats() {
+  local path="$1"
+  if [ ! -e "$path" ]; then
+    printf '0\n0\n'
+    return
+  fi
+  python3 - "$path" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+markers = (
+    "chain-freezer-accessor",
+    "chain-index",
+    "balance-trace",
+    "section-bloom",
+    "event-log",
+)
+total = 0
+files = 0
+try:
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            path = os.path.join(dirpath, name)
+            if not os.path.isfile(path):
+                continue
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            if not any(marker in rel for marker in markers):
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            blocks = getattr(st, "st_blocks", 0)
+            total += blocks * 512 if blocks else st.st_size
+            files += 1
+except Exception:
+    total = 0
+    files = 0
+print(total)
+print(files)
+PY
+}
+
 history_config_arg() {
   local datadir="$1"
   if [ "$HISTORY_WINDOW" -le 0 ]; then
@@ -1281,12 +1325,16 @@ emit_result() {
   local datadir="$8"
   local log_path="$9"
   local total chain ancient snapshots ancient_files snapshot_files
+  local derived_index_values derived_index_bytes derived_index_files
   total="$(size_bytes "$datadir")"
   chain="$(size_bytes "$datadir/gtron/chaindata")"
   ancient="$(size_bytes "$datadir/gtron/ancient")"
   snapshots="$(size_bytes "$datadir/gtron/state-snapshots")"
   ancient_files="$(file_count "$datadir/gtron/ancient")"
   snapshot_files="$(file_count "$datadir/gtron/state-snapshots")"
+  derived_index_values="$(derived_index_stats "$datadir/gtron/state-snapshots")"
+  derived_index_bytes="$(printf '%s\n' "$derived_index_values" | sed -n '1p')"
+  derived_index_files="$(printf '%s\n' "$derived_index_values" | sed -n '2p')"
   local profile_values
   profile_values="$(snapshot_manifest_profile_values "$datadir/gtron/state-snapshots" "$log_path")"
   local snapshot_profile_status snapshot_profile_segments snapshot_profile_total_bytes snapshot_payload_bytes snapshot_sidecar_bytes snapshot_sidecar_share_milli
@@ -1316,6 +1364,7 @@ emit_result() {
   snapshot_section_bloom_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '18p')"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
+    "$derived_index_bytes" "$derived_index_files" \
     "$snapshot_profile_status" "$snapshot_profile_segments" "$snapshot_profile_total_bytes" \
     "$snapshot_payload_bytes" "$snapshot_sidecar_bytes" "$snapshot_sidecar_share_milli" \
     "$snapshot_latest_sidecar_bytes" "$snapshot_latest_sidecar_share_milli" \
@@ -1366,7 +1415,7 @@ out = sys.argv[1]
 keys = [
     "profile", "mode", "role", "status", "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
-    "ancientFiles", "snapshotFiles",
+    "ancientFiles", "snapshotFiles", "derivedIndexBytes", "derivedIndexFiles",
     "snapshotManifestProfileStatus", "snapshotProfileSegments", "snapshotProfileTotalBytes",
     "snapshotPayloadBytes", "snapshotSidecarBytes", "snapshotSidecarShareMilli",
     "snapshotLatestSidecarBytes", "snapshotLatestSidecarShareMilli",
@@ -1412,7 +1461,8 @@ if len(values) != len(keys):
 ints = {
     "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
-    "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
+    "ancientFiles", "snapshotFiles", "derivedIndexBytes", "derivedIndexFiles",
+    "coldFreezerToBlock", "derivedIndexToBlock",
     "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
     "snapshotProfileSegments", "snapshotProfileTotalBytes", "snapshotPayloadBytes",
     "snapshotSidecarBytes", "snapshotSidecarShareMilli", "snapshotLatestSidecarBytes",

@@ -646,6 +646,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "chaindataBytes": 2000,
                         "ancientBytes": 3000,
                         "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
                     }
                 ],
             )
@@ -663,6 +664,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "25",
                     "--max-cold-archive-bytes-per-block",
                     "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -693,6 +696,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "chaindataBytes": 3000,
                         "ancientBytes": 3000,
                         "snapshotBytes": 2000,
+                        "derivedIndexBytes": 700,
                     }
                 ],
             )
@@ -710,6 +714,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "25",
                     "--max-cold-archive-bytes-per-block",
                     "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -721,6 +727,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("hotBytesPerBlock=30 failed <= max hot bytes per block 25", proc.stderr)
             self.assertIn(
                 "coldArchiveBytesPerBlock=50 failed <= max cold archive bytes per block 45",
+                proc.stderr,
+            )
+            self.assertIn(
+                "derivedIndexBytesPerBlock=7 failed <= max derived index bytes per block 6",
                 proc.stderr,
             )
 

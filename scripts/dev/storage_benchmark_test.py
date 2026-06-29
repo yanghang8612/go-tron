@@ -767,15 +767,19 @@ class StorageBenchmarkTest(unittest.TestCase):
                         "visibleTxEnd": 2,
                         "segments": [
                             {"dataset": "chain-freezer", "kind": "chain-freezer", "fromTxNum": 1, "toTxNum": 2, "path": "chain/freezer.seg", "size": 1000},
-                            {"dataset": "chain-freezer", "kind": "chain-index", "fromTxNum": 1, "toTxNum": 2, "path": "chain/index.idx", "size": 100},
+                            {"dataset": "chain-freezer", "kind": "chain-index", "fromTxNum": 1, "toTxNum": 2, "path": "chain/chain-index.idx", "size": 100},
                             {"dataset": "event-log", "kind": "event-log", "fromTxNum": 1, "toTxNum": 2, "path": "log/event.seg", "size": 300},
-                            {"dataset": "event-log", "kind": "event-log-index", "fromTxNum": 1, "toTxNum": 2, "path": "log/event.idx", "size": 200},
+                            {"dataset": "event-log", "kind": "event-log-index", "fromTxNum": 1, "toTxNum": 2, "path": "log/event-log.idx", "size": 200},
                         ],
                     },
                     sort_keys=True,
                 ),
                 encoding="utf-8",
             )
+            (snapshot_dir / "chain").mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "log").mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "chain" / "chain-index.idx").write_bytes(b"chain-index")
+            (snapshot_dir / "log" / "event-log.idx").write_bytes(b"event-log")
             output = tmpdir / "results.jsonl"
             env = dict(os.environ)
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
@@ -818,6 +822,8 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
             self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
             self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
+            self.assertEqual(row["derivedIndexFiles"], 2)
+            self.assertGreater(row["derivedIndexBytes"], 0)
 
     def test_emits_storage_alert_failure_row_with_details(self):
         with tempfile.TemporaryDirectory() as tmp:

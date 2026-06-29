@@ -1485,6 +1485,12 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--max-derived-index-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help="require each latest selected row derivedIndexBytes/height to be no greater than BYTES",
+    )
+    parser.add_argument(
         "--require-size-reduction",
         dest="size_reductions",
         action="append",
@@ -1597,6 +1603,15 @@ def main(argv=None):
             "coldArchiveBytesPerBlock",
         )
     )
+    issues.extend(
+        check_max_bytes_per_block(
+            rows,
+            args.max_derived_index_bytes_per_block,
+            "derived index",
+            ("derivedIndexBytes",),
+            "derivedIndexBytesPerBlock",
+        )
+    )
     issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
 
     if issues:
@@ -1618,6 +1633,7 @@ def main(argv=None):
         args.max_datadir_bytes_per_block,
         args.max_hot_bytes_per_block,
         args.max_cold_archive_bytes_per_block,
+        args.max_derived_index_bytes_per_block,
     ):
         if value is not None:
             checks += len(latest)
