@@ -39,8 +39,8 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Contract family | Prefetch hints |
 | --- | --- |
 | TRX and TRC10 transfer | owner account, recipient account; transfer-style recipient contract metadata where a contract-address check may follow; TRC10 legacy metadata, name index, and numeric-id V2 metadata |
-| TVM trigger | owner account, contract account, contract metadata, contract code row, contract origin account from metadata |
-| TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata |
+| TVM trigger | owner account, contract account, contract metadata, contract code row, contract origin account from metadata, Blackhole account-name index |
+| TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata, Blackhole account-name index |
 | Contract settings | owner account, target contract account, target contract metadata, target contract origin account from metadata |
 | Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index |
 | Witness operations | owner account, owner witness capsule, witness index for creation, current brokerage row for brokerage updates |

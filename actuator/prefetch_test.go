@@ -45,6 +45,7 @@ func TestPrefetchKeysForTriggerSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
 	assertPrefetchHas(t, keys, state.ContractCodePrefetchKey(contract))
 	assertPrefetchHas(t, keys, state.ContractOriginAccountPrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.AccountNameIndexPrefetchKey([]byte("Blackhole")))
 }
 
 func TestPrefetchKeysForContractSettingsWarmOriginAccount(t *testing.T) {
@@ -129,6 +130,7 @@ func TestPrefetchKeysForCreateSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.AccountPrefetchKey(origin))
 	assertPrefetchHas(t, keys, state.AccountPrefetchKey(created))
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(created))
+	assertPrefetchHas(t, keys, state.AccountNameIndexPrefetchKey([]byte("Blackhole")))
 }
 
 func TestPrefetchKeysForShieldedTransferSystemRows(t *testing.T) {

@@ -1458,7 +1458,8 @@ Status:
   witness/proposal/brokerage rows, pending vote rows, TRC10 `SystemAsset`
   metadata/index rows, and envelope-addressable `SystemMarket`/`SystemExchange`
   rows. It covers transfer, TRC10 transfer/issue/participate, TVM
-  create/trigger, contract settings, vote witness, witness operations,
+  create/trigger including the static Blackhole account-name index lookup,
+  contract settings, vote witness, witness operations,
   governance proposals, Stake 1.0/2.0, shielded transparent endpoints plus
   shielded proof-cache/anchor/nullifier/note-count rows, market sell/cancel
   including metadata-derived maker order rows behind compatible price levels,

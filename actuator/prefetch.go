@@ -30,6 +30,8 @@ type ownerContractAddressMessage interface {
 	GetContractAddress() []byte
 }
 
+const vmBlackholeAccountName = "Blackhole"
+
 // PrefetchKeysFor returns deterministic raw latest-domain reads that can be
 // warmed before tx validation/execution reaches the serial hot path. It is a
 // best-effort performance hint: malformed payloads or invalid addresses simply
@@ -77,6 +79,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			b.add(state.ContractCodePrefetchKey(contract))
 			b.add(state.ContractOriginAccountPrefetchKey(contract))
 		}
+		b.addVMBlackholeAccountName()
 
 	case corepb.Transaction_Contract_CreateSmartContract:
 		var m contractpb.CreateSmartContract
@@ -93,6 +96,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		created := generateContractAddress(tx, owner)
 		b.add(state.AccountPrefetchKey(created))
 		b.add(state.ContractMetadataPrefetchKey(created))
+		b.addVMBlackholeAccountName()
 
 	case corepb.Transaction_Contract_UpdateSettingContract:
 		var m contractpb.UpdateSettingContract
@@ -439,6 +443,10 @@ func (b *prefetchKeyBuilder) addTRC10AssetKeys(token []byte) {
 			b.add(state.AssetIssuePrefetchKey(tokenID))
 		}
 	}
+}
+
+func (b *prefetchKeyBuilder) addVMBlackholeAccountName() {
+	b.add(state.AccountNameIndexPrefetchKey([]byte(vmBlackholeAccountName)))
 }
 
 func (b *prefetchKeyBuilder) addMarketPairKeys(sellToken, buyToken []byte, sellQty, buyQty int64) {
