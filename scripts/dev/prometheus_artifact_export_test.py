@@ -25,12 +25,14 @@ class PrometheusArtifactExportTest(unittest.TestCase):
             storage = tmpdir / "storage.jsonl"
             sample_prom = tmpdir / "sample.prom"
             offline_prom = tmpdir / "offline.prom"
+            benchmark_prom = tmpdir / "benchmark.prom"
             storage_prom = tmpdir / "storage.prom"
             old_prom = tmpdir / "old.prom"
             output = tmpdir / "collector" / "gtron.prom"
 
             sample_prom.write_text("gtron_nile_sync_height{datadir=\"/tmp/nile\"} 100\n", encoding="utf-8")
             offline_prom.write_text("gtron_storage_alert_status{datadir=\"/tmp/nile\"} 0\n", encoding="utf-8")
+            benchmark_prom.write_text("gtron_storage_benchmark_derived_index_bytes{datadir=\"/tmp/storage\"} 4096\n", encoding="utf-8")
             storage_prom.write_text("gtron_storage_alert_status{datadir=\"/tmp/storage\"} 0\n", encoding="utf-8")
             old_prom.write_text("gtron_nile_sync_height{datadir=\"/tmp/old\"} 1\n", encoding="utf-8")
             write_jsonl(
@@ -44,7 +46,16 @@ class PrometheusArtifactExportTest(unittest.TestCase):
                     },
                 ],
             )
-            write_jsonl(storage, [{"unix": 3, "storageAlertPrometheus": storage_prom.name}])
+            write_jsonl(
+                storage,
+                [
+                    {
+                        "unix": 3,
+                        "storageBenchmarkPrometheus": benchmark_prom.name,
+                        "storageAlertPrometheus": storage_prom.name,
+                    }
+                ],
+            )
 
             proc = subprocess.run(
                 [
@@ -67,9 +78,11 @@ class PrometheusArtifactExportTest(unittest.TestCase):
             text = output.read_text(encoding="utf-8")
             self.assertIn("gtron_nile_sync_height{datadir=\"/tmp/nile\"} 100", text)
             self.assertIn("gtron_storage_alert_status{datadir=\"/tmp/nile\"} 0", text)
+            self.assertIn("gtron_storage_benchmark_derived_index_bytes{datadir=\"/tmp/storage\"} 4096", text)
             self.assertIn("gtron_storage_alert_status{datadir=\"/tmp/storage\"} 0", text)
             self.assertNotIn("/tmp/old", text)
             self.assertIn("# BEGIN samplePrometheus", text)
+            self.assertIn("# BEGIN storageBenchmarkPrometheus", text)
             self.assertIn("# END storageAlertPrometheus", text)
 
     def test_all_rows_exports_older_artifacts_too(self):

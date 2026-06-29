@@ -824,6 +824,12 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
             self.assertEqual(row["derivedIndexFiles"], 2)
             self.assertGreater(row["derivedIndexBytes"], 0)
+            benchmark_prometheus = Path(row["storageBenchmarkPrometheus"])
+            self.assertTrue(benchmark_prometheus.is_file(), row["storageBenchmarkPrometheus"])
+            benchmark_metrics = benchmark_prometheus.read_text(encoding="utf-8")
+            self.assertIn("gtron_storage_benchmark_derived_index_bytes", benchmark_metrics)
+            self.assertIn('mode="full"', benchmark_metrics)
+            self.assertIn('role="producer"', benchmark_metrics)
 
     def test_emits_storage_alert_failure_row_with_details(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -983,7 +989,8 @@ class StorageBenchmarkTest(unittest.TestCase):
                 ],
             )
             metrics_path = Path(row["storageAlertPrometheus"])
-            self.assertEqual(metrics_path, workdir / "full-producer-storage-alerts.prom")
+            self.assertEqual(metrics_path, tmpdir / "full-producer-storage-alerts.prom")
+            self.assertTrue(metrics_path.is_file(), row["storageAlertPrometheus"])
             metrics = metrics_path.read_text(encoding="utf-8")
             self.assertIn('gtron_storage_alert_status{datadir="/tmp/gtron"} 2', metrics)
             self.assertIn(

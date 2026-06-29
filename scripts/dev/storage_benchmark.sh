@@ -215,6 +215,8 @@ fi
 if [ -z "$OUTPUT" ]; then
   OUTPUT="$WORKDIR/results.jsonl"
 fi
+mkdir -p "$(dirname "$OUTPUT")"
+ARTIFACT_DIR="$(cd "$(dirname "$OUTPUT")" && pwd)"
 if [ "$BASE_PORT" -eq 0 ]; then
   BASE_PORT=$((20000 + ($$ % 20000)))
 fi
@@ -460,6 +462,64 @@ except Exception:
     files = 0
 print(total)
 print(files)
+PY
+}
+
+write_storage_benchmark_prometheus() {
+  local path="$1"
+  local profile="$2"
+  local mode="$3"
+  local role="$4"
+  local status="$5"
+  local height="$6"
+  local elapsed="$7"
+  local datadir="$8"
+  local total="$9"
+  local chain="${10}"
+  local ancient="${11}"
+  local snapshots="${12}"
+  local derived_index_bytes="${13}"
+  local snapshot_sidecar_share_milli="${14}"
+  python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
+    "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
+    "$snapshot_sidecar_share_milli" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+profile, mode, role, status = sys.argv[2:6]
+height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
+datadir = sys.argv[8]
+total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
+snapshot_sidecar_share_milli = int(sys.argv[14])
+
+def esc(value):
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+labels = (
+    f'datadir="{esc(datadir)}",'
+    f'mode="{esc(mode)}",'
+    f'profile="{esc(profile)}",'
+    f'role="{esc(role)}",'
+    f'status="{esc(status)}"'
+)
+metrics = (
+    ("gtron_storage_benchmark_height", "Benchmark run block height.", height),
+    ("gtron_storage_benchmark_elapsed_seconds", "Benchmark run elapsed seconds.", elapsed),
+    ("gtron_storage_benchmark_datadir_bytes", "Total benchmark datadir bytes.", total),
+    ("gtron_storage_benchmark_chaindata_bytes", "Hot benchmark chaindata bytes.", chain),
+    ("gtron_storage_benchmark_ancient_bytes", "Benchmark ancient freezer bytes.", ancient),
+    ("gtron_storage_benchmark_snapshot_bytes", "Benchmark state snapshot bytes.", snapshots),
+    ("gtron_storage_benchmark_cold_archive_bytes", "Benchmark ancient plus snapshot bytes.", ancient + snapshots),
+    ("gtron_storage_benchmark_derived_index_bytes", "Benchmark derived cold index bytes.", derived_index),
+    ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
+)
+lines = []
+for name, help_text, value in metrics:
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} gauge")
+    lines.append(f"{name}{{{labels}}} {value}")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
 
@@ -1112,7 +1172,7 @@ run_storage_alert_gate() {
   local datadir="$3"
   local log_path="$4"
   local alert_out="$WORKDIR/$mode-$role-storage-alerts.out"
-  local alert_prometheus="$WORKDIR/$mode-$role-storage-alerts.prom"
+  local alert_prometheus="$ARTIFACT_DIR/$mode-$role-storage-alerts.prom"
   echo "checking persisted storage alert conditions" >>"$log_path"
   local ok=1
   if ! run_logged "$alert_out" "$GTRON" db storage-alerts --json --datadir "$datadir" >>"$log_path"; then
@@ -1362,6 +1422,10 @@ emit_result() {
   snapshot_balance_trace_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '16p')"
   snapshot_section_bloom_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '17p')"
   snapshot_section_bloom_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '18p')"
+  local benchmark_prometheus="$ARTIFACT_DIR/$mode-$role-storage-benchmark.prom"
+  write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
+    "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
+    "$derived_index_bytes" "$snapshot_sidecar_share_milli"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \
@@ -1409,7 +1473,7 @@ emit_result() {
     "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_CALL_PROBE" \
     "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
-    "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
+    "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
 keys = [
@@ -1452,7 +1516,7 @@ keys = [
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
     "archiveApiBlock", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
     "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
-    "archiveApiTxMethods", "storageAlertPrometheus",
+    "archiveApiTxMethods", "storageBenchmarkPrometheus", "storageAlertPrometheus",
     "datadir", "log",
 ]
 values = sys.argv[2:]

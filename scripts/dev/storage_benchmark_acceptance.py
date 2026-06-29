@@ -35,6 +35,18 @@ PROMETHEUS_STATUS_VALUES = {
     "critical": 2,
 }
 
+BENCHMARK_PROMETHEUS_FIELDS = (
+    ("gtron_storage_benchmark_height", ("height",)),
+    ("gtron_storage_benchmark_elapsed_seconds", ("elapsedSeconds",)),
+    ("gtron_storage_benchmark_datadir_bytes", ("datadirBytes",)),
+    ("gtron_storage_benchmark_chaindata_bytes", ("chaindataBytes",)),
+    ("gtron_storage_benchmark_ancient_bytes", ("ancientBytes",)),
+    ("gtron_storage_benchmark_snapshot_bytes", ("snapshotBytes",)),
+    ("gtron_storage_benchmark_cold_archive_bytes", ("ancientBytes", "snapshotBytes")),
+    ("gtron_storage_benchmark_derived_index_bytes", ("derivedIndexBytes",)),
+    ("gtron_storage_benchmark_snapshot_sidecar_share_milli", ("snapshotSidecarShareMilli",)),
+)
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -632,6 +644,52 @@ def check_prometheus_artifacts(result_path, rows):
         issues.extend(
             check_prometheus_prune_boundaries(line_label(row), path, text, row)
         )
+    return issues
+
+
+def benchmark_prometheus_expected(row, fields):
+    total = 0.0
+    missing = []
+    for field in fields:
+        value = as_number(row, field)
+        if value is None:
+            missing.append(field)
+            continue
+        total += value
+    if missing:
+        return None, missing
+    return total, []
+
+
+def check_benchmark_prometheus_artifacts(result_path, rows):
+    issues = []
+    for row in latest_rows(rows).values():
+        raw_path = row.get("storageBenchmarkPrometheus")
+        if not raw_path:
+            issues.append(f"{line_label(row)} missing storageBenchmarkPrometheus")
+            continue
+        path = resolve_artifact(result_path, raw_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            issues.append(f"{line_label(row)} benchmark prometheus artifact {path}: {exc}")
+            continue
+        for metric, fields in BENCHMARK_PROMETHEUS_FIELDS:
+            want, missing = benchmark_prometheus_expected(row, fields)
+            if missing:
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus evidence missing JSONL fields "
+                    f"for {metric}: " + ",".join(missing)
+                )
+                continue
+            got = prometheus_metric_value(text, metric, row)
+            if got is None:
+                issues.append(f"{line_label(row)} benchmark prometheus artifact {path} missing {metric}")
+            elif got != want:
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus artifact {path} "
+                    f"{metric}={got:g}, want {want:g}"
+                )
     return issues
 
 
@@ -1325,6 +1383,11 @@ def build_parser():
         help="require each latest selected row to reference a readable storage alert metrics file",
     )
     parser.add_argument(
+        "--require-benchmark-prometheus-artifacts",
+        action="store_true",
+        help="require each latest selected row to reference a storage benchmark metrics file whose gauges match JSONL bytes",
+    )
+    parser.add_argument(
         "--require-minimal-tail-prune",
         action="store_true",
         help="require latest minimal row to prove signed cold lookup prune plus tail prune",
@@ -1515,6 +1578,8 @@ def main(argv=None):
     issues.extend(check_statuses(rows, args.allow_warning))
     if args.require_prometheus_artifacts:
         issues.extend(check_prometheus_artifacts(args.result, rows))
+    if args.require_benchmark_prometheus_artifacts:
+        issues.extend(check_benchmark_prometheus_artifacts(args.result, rows))
     if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:
         issues.extend(check_minimal_tail_prune(rows, args.role))
     if args.require_minimal_physical_tail_prune:
@@ -1638,6 +1703,8 @@ def main(argv=None):
         if value is not None:
             checks += len(latest)
     if args.require_prometheus_artifacts:
+        checks += len(latest)
+    if args.require_benchmark_prometheus_artifacts:
         checks += len(latest)
     if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:
         checks += 1

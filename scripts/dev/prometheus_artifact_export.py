@@ -12,6 +12,7 @@ from pathlib import Path
 DEFAULT_FIELDS = (
     "samplePrometheus",
     "offlineDbCheckPrometheus",
+    "storageBenchmarkPrometheus",
     "storageAlertPrometheus",
 )
 

@@ -17,6 +17,15 @@ def write_result(path, rows):
             fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def write_benchmark_prometheus(path, datadir, values):
+    labels = f'{{datadir="{datadir}",mode="minimal",profile="producer",role="producer",status="ok"}}'
+    lines = []
+    for metric, value in values.items():
+        lines.append(f"# TYPE {metric} gauge")
+        lines.append(f"{metric}{labels} {value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 class StorageBenchmarkAcceptanceTest(unittest.TestCase):
     def test_accepts_clean_required_modes_artifacts_and_thresholds(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -772,6 +781,133 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("height=0, want > 0 for datadir bytes-per-block evidence", proc.stderr)
+
+    def test_accepts_benchmark_prometheus_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_benchmark_prometheus_artifact_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 499,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_benchmark_derived_index_bytes=499, want 500",
+                proc.stderr,
+            )
 
     def test_accepts_retired_prune_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

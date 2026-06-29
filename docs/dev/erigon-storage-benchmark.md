@@ -33,6 +33,8 @@ The output path is printed at startup. Each JSON row contains:
 - `snapshotBytes`
 - `ancientFiles`
 - `snapshotFiles`
+- `derivedIndexBytes`
+- `derivedIndexFiles`
 - `snapshotManifestProfileStatus`
 - `snapshotProfileSegments`
 - `snapshotProfileTotalBytes`
@@ -110,6 +112,8 @@ The output path is printed at startup. Each JSON row contains:
 - `snapshotRetiredMissing`
 - `snapshotRetiredSkippedActive`
 - `snapshotRetiredBytes`
+- `storageBenchmarkPrometheus`
+- `storageAlertPrometheus`
 
 `--build-cold-freezer` runs `gtron snapshot build-freezer` after stopping each
 producer so cold chain-freezer snapshot bytes are included in the size split.
@@ -238,6 +242,11 @@ compaction or replacement. The JSONL row includes
 retired snapshot bytes that still await physical pruning. Each row also records
 `storageAlertPrometheus`, the Prometheus text artifact produced from the same
 storage-alert gate for archive/soak monitor ingestion.
+The row also records `storageBenchmarkPrometheus`, a benchmark-owned
+Prometheus artifact with the row's height, elapsed seconds, hot/cold/snapshot
+bytes, cold-archive bytes, derived-index bytes, and snapshot sidecar share. The
+storage-alert and benchmark artifacts are written next to the JSONL output so
+they remain readable even when the harness removes its temporary workdir.
 The acceptance checker binds `gtron_storage_alert_status`,
 `gtron_storage_alert_issue`, `gtron_storage_stage_pipeline_*`,
 `gtron_storage_signed_cold_prune`, and
@@ -307,8 +316,9 @@ row. Gate that artifact with `nile_sync_acceptance.py
 the accepted JSONL sample. Use
 `scripts/dev/prometheus_artifact_export.py results.jsonl --output gtron.prom`
 to atomically combine the latest JSONL-referenced `samplePrometheus`,
-`offlineDbCheckPrometheus`, and `storageAlertPrometheus` artifacts into one
-node_exporter textfile-collector payload.
+`offlineDbCheckPrometheus`, `storageBenchmarkPrometheus`, and
+`storageAlertPrometheus` artifacts into one node_exporter textfile-collector
+payload.
 Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics, including
 `stageVerifyDetails` entries such as `SyncBodies`/`SyncBodiesReady`
@@ -355,6 +365,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --role producer \
   --require-modes full,blocks,minimal,snap,archive \
   --require-prometheus-artifacts \
+  --require-benchmark-prometheus-artifacts \
   --require-prune-mode-semantics \
   --require-archive-api-evidence \
   --require-archive-api-mode minimal \
