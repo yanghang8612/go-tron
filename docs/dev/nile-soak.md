@@ -482,7 +482,11 @@ the best available blocks-per-second field in this order:
 `intervalBlocksPerSecond`, `intervalStageSyncFinishBlocksPerSecond`,
 `soakEfficiencyBlocksPerSecond`, `syncLogBlocksPerSecond`, then
 `blocksPerSecond`. Tune the threshold to the host/network baseline; keep it low
-for early smoke runs and raise it for dedicated Nile soak hardware.
+for early smoke runs and raise it for dedicated Nile soak hardware. Add
+`--min-sync-rate-blocks` when the run should reject tiny or stale throughput
+windows; it cross-checks the selected rate against its matching block-count
+field such as `intervalBlocks`, `intervalStageSyncFinishBlocks`,
+`syncLogSegmentBlocks`, or cumulative `height`.
 Use `--max-datadir-bytes-per-block` to cap total disk growth across hot Pebble,
 ancients, snapshots, replay, and derived sidecars. It checks
 `soakEfficiencyDatadirBytesPerBlock`, then `intervalDatadirBytesPerBlock`, then

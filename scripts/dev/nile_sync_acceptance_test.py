@@ -1627,6 +1627,102 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("sync rate evidence missing", proc.stderr)
 
+    def test_accepts_min_sync_rate_sample_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["intervalBlocksPerSecond"] = 12.5
+            row["intervalBlocks"] = 120
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-sync-rate",
+                    "10",
+                    "--min-sync-rate-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_min_sync_rate_sample_blocks_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["intervalBlocksPerSecond"] = 12.5
+            row["intervalBlocks"] = 3
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-sync-rate",
+                    "10",
+                    "--min-sync-rate-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "intervalBlocks=3 failed >= min sync rate sample blocks 100 "
+                "for intervalBlocksPerSecond",
+                proc.stderr,
+            )
+
+    def test_rejects_min_sync_rate_sample_blocks_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["intervalBlocksPerSecond"] = 12.5
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-sync-rate",
+                    "10",
+                    "--min-sync-rate-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "sync rate sample size evidence missing for intervalBlocksPerSecond",
+                proc.stderr,
+            )
+
     def test_accepts_max_datadir_bytes_per_block_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

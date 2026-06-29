@@ -200,6 +200,13 @@ SYNC_RATE_FIELDS = (
     "blocksPerSecond",
 )
 
+SYNC_RATE_SAMPLE_BLOCK_FIELDS = {
+    "intervalBlocksPerSecond": ("intervalBlocks",),
+    "intervalStageSyncFinishBlocksPerSecond": ("intervalStageSyncFinishBlocks",),
+    "syncLogBlocksPerSecond": ("syncLogSegmentBlocks",),
+    "blocksPerSecond": ("height",),
+}
+
 DATADIR_BYTES_PER_BLOCK_FIELDS = (
     "soakEfficiencyDatadirBytesPerBlock",
     "intervalDatadirBytesPerBlock",
@@ -398,7 +405,24 @@ def sync_rate_evidence(row):
     return None, None
 
 
-def check_min_sync_rate(row, minimum):
+def sync_rate_sample_block_evidence(row, rate_field):
+    fields = SYNC_RATE_SAMPLE_BLOCK_FIELDS.get(rate_field, ())
+    if rate_field == "soakEfficiencyBlocksPerSecond":
+        window = str(row.get("soakEfficiencyWindow", ""))
+        if window == "interval":
+            fields = ("intervalBlocks",)
+        elif window == "cumulative":
+            fields = ("height",)
+        else:
+            fields = ("intervalBlocks", "height")
+    for field in fields:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_min_sync_rate(row, minimum, min_blocks=None):
     if minimum is None:
         return []
     field, value = sync_rate_evidence(row)
@@ -408,9 +432,19 @@ def check_min_sync_rate(row, minimum):
             + ",".join(SYNC_RATE_FIELDS)
             + " is present and non-negative"
         ]
+    issues = []
+    if min_blocks is not None:
+        block_field, blocks = sync_rate_sample_block_evidence(row, field)
+        if block_field is None:
+            issues.append(f"sync rate sample size evidence missing for {field}")
+        elif blocks < min_blocks:
+            issues.append(
+                f"{block_field}={blocks:g} failed >= min sync rate sample blocks "
+                f"{min_blocks:g} for {field}"
+            )
     if value < minimum:
-        return [f"{field}={value:g} failed >= min sync rate {minimum:g} blocks/s"]
-    return []
+        issues.append(f"{field}={value:g} failed >= min sync rate {minimum:g} blocks/s")
+    return issues
 
 
 def datadir_bytes_per_block_evidence(row):
@@ -2005,7 +2039,7 @@ def check_row(row, args):
             args.min_chain_freezer_passes,
         )
     )
-    issues.extend(check_min_sync_rate(row, args.min_sync_rate))
+    issues.extend(check_min_sync_rate(row, args.min_sync_rate, args.min_sync_rate_blocks))
     issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
     issues.extend(check_max_hot_growth_share(row, args.max_hot_growth_share))
@@ -2158,6 +2192,15 @@ def build_parser():
         help=(
             "require selected rows to prove at least this sync rate using the "
             "best available interval/stage/log throughput field"
+        ),
+    )
+    parser.add_argument(
+        "--min-sync-rate-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help=(
+            "when --min-sync-rate is set, require the selected sync-rate "
+            "evidence to come from at least this many imported blocks"
         ),
     )
     parser.add_argument(
