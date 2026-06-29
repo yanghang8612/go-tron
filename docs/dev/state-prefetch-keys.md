@@ -45,15 +45,15 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index |
 | Witness operations | owner account, owner witness capsule, witness index for creation, current brokerage row for brokerage updates |
 | Proposal operations | owner account, owner witness capsule where validation requires it, proposal record by id, proposal index for creation |
-| Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows |
-| Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
+| Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows; unfreeze also warms pending-vote record/index rows |
+| Stake 2.0 delegate/undelegate/unfreeze | owner account, receiver account for delegation, locked/unlocked delegated-resource rows, owner delegation-index row; unfreeze also warms pending-vote record/index rows |
 | Shielded transfer | transparent from/to accounts when present and valid, proof-result cache row, spend anchor/nullifier rows, note-commitment count row for receiving transfers |
 | Asset issue | owner account, owner-index row, legacy name metadata, name index |
 | Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, reverse pair price-list, compatible reverse price-level order-book rows, and maker order rows reachable from those levels; `_` TRX token legs are skipped for TRC10 metadata |
 | Exchange token operations | owner account, TRC10 token metadata/name-index hints derivable from the envelope, both V1/V2 exchange rows when an exchange id is present, and metadata-derived TRC10 asset rows for both exchange token legs |
 | Asset update/unfreeze | owner account plus metadata-derived TRC10 asset rows for the asset recorded on the owner account |
 | Account metadata | owner account plus account-name or account-ID uniqueness index rows |
-| Owner-only actuators | owner account for witness, proposal, brokerage, freeze-v2, unfreeze-v2, and withdraw contracts |
+| Owner-only actuators | owner account for witness, proposal, brokerage, freeze-v2, and withdraw contracts |
 | Account create and participate asset issue | owner account plus the explicitly referenced counterparty account; participate also warms TRC10 metadata/name-index rows |
 
 ## Not Yet Covered

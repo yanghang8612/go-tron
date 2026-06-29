@@ -279,6 +279,30 @@ func TestPrefetchKeysForDelegateResourceSystemRows(t *testing.T) {
 	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegationIndexStateKey(owner)))
 }
 
+func TestPrefetchKeysForUnfreezeVoteRows(t *testing.T) {
+	owner := makeTestAddr(0x0a)
+	receiver := makeTestAddr(0x0b)
+
+	unfreezeTx := newPrefetchTestTx(t, corepb.Transaction_Contract_UnfreezeBalanceContract, &contractpb.UnfreezeBalanceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: receiver.Bytes(),
+	})
+	unfreezeKeys := PrefetchKeysFor(unfreezeTx)
+	assertPrefetchHas(t, unfreezeKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.AccountPrefetchKey(receiver))
+	assertPrefetchHas(t, unfreezeKeys, systemDelegationPrefetchKey(rawdb.DelegatedResourceStateKey(owner, receiver)))
+	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesIndexPrefetchKey())
+
+	unfreezeV2Tx := newPrefetchTestTx(t, corepb.Transaction_Contract_UnfreezeBalanceV2Contract, &contractpb.UnfreezeBalanceV2Contract{
+		OwnerAddress: owner.Bytes(),
+	})
+	unfreezeV2Keys := PrefetchKeysFor(unfreezeV2Tx)
+	assertPrefetchHas(t, unfreezeV2Keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesIndexPrefetchKey())
+}
+
 func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 	owner := makeTestAddr(0x24)
 	sellToken := []byte("1000002")

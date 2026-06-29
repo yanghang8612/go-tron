@@ -132,8 +132,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		}
 		owner, ownerOK := b.addAccountBytes(m.GetOwnerAddress())
 		if ownerOK {
-			b.add(state.PendingVotesPrefetchKey(owner))
-			b.add(state.PendingVotesIndexPrefetchKey())
+			b.addPendingVotes(owner)
 		}
 		for _, vote := range m.GetVotes() {
 			if vote != nil {
@@ -160,6 +159,9 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			return nil
 		}
 		owner, ownerOK := b.addAccountBytes(m.GetOwnerAddress())
+		if ownerOK {
+			b.addPendingVotes(owner)
+		}
 		receiver, receiverOK := b.addAccountBytes(m.GetReceiverAddress())
 		if ownerOK && receiverOK {
 			b.addLegacyDelegationKeys(owner, receiver)
@@ -286,7 +288,9 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 	case corepb.Transaction_Contract_FreezeBalanceV2Contract:
 		prefetchOwnerOnly(c, &b, &contractpb.FreezeBalanceV2Contract{})
 	case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
-		prefetchOwnerOnly(c, &b, &contractpb.UnfreezeBalanceV2Contract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UnfreezeBalanceV2Contract{}); ok {
+			b.addPendingVotes(owner)
+		}
 	case corepb.Transaction_Contract_WithdrawBalanceContract:
 		prefetchOwnerOnly(c, &b, &contractpb.WithdrawBalanceContract{})
 	case corepb.Transaction_Contract_WithdrawExpireUnfreezeContract:
@@ -423,6 +427,11 @@ func (b *prefetchKeyBuilder) addV2DelegationKeys(owner, receiver tcommon.Address
 
 func (b *prefetchKeyBuilder) addSystemDelegationKey(key []byte) {
 	b.add(state.AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key))
+}
+
+func (b *prefetchKeyBuilder) addPendingVotes(owner tcommon.Address) {
+	b.add(state.PendingVotesPrefetchKey(owner))
+	b.add(state.PendingVotesIndexPrefetchKey())
 }
 
 func (b *prefetchKeyBuilder) addProposal(id int64) {
