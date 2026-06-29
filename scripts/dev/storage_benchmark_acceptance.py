@@ -67,6 +67,7 @@ BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS = (
 )
 
 BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
+    ("gtron_storage_benchmark_archive_api_depth_blocks", "archiveApiDepthBlocks"),
     ("gtron_storage_benchmark_cold_freezer_to_block", "coldFreezerToBlock"),
     ("gtron_storage_benchmark_derived_index_to_block", "derivedIndexToBlock"),
     ("gtron_storage_benchmark_chain_lookup_prune_to_block", "chainLookupPruneToBlock"),
@@ -255,6 +256,12 @@ def as_bool(row, field):
     if isinstance(value, (int, float)):
         return value != 0
     return False
+
+
+def approx_equal(got, want, tolerance=1e-9):
+    if got is None or want is None:
+        return False
+    return abs(got - want) <= tolerance
 
 
 def parse_threshold(raw):
@@ -1114,7 +1121,7 @@ def has_archive_api_evidence(row):
     return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
 
 
-def check_archive_api_evidence(rows, required_methods, required_modes=()):
+def check_archive_api_evidence(rows, required_methods, required_modes=(), min_depth_blocks=None):
     issues = []
     latest = list(latest_rows(rows).values())
     evidence_rows = [
@@ -1153,10 +1160,33 @@ def check_archive_api_evidence(rows, required_methods, required_modes=()):
             issues.append(f"{line_label(row)} archiveApiBlock={block}, want >= 0 historical block")
         else:
             height = as_number(row, "height")
+            depth = None
             if height is not None and block >= height:
                 issues.append(
                     f"{line_label(row)} archiveApiBlock={block:g} must be below height={height:g}"
                 )
+            if height is not None:
+                depth = height - block
+                if field_present(row, "archiveApiDepthBlocks"):
+                    reported_depth = as_number(row, "archiveApiDepthBlocks")
+                    if reported_depth is None:
+                        issues.append(
+                            f"{line_label(row)} archiveApiDepthBlocks="
+                            f"{row.get('archiveApiDepthBlocks')!r}, want numeric"
+                        )
+                    elif not approx_equal(reported_depth, depth):
+                        issues.append(
+                            f"{line_label(row)} archiveApiDepthBlocks={reported_depth:g}, "
+                            f"want height - archiveApiBlock = {depth:g}"
+                        )
+            if min_depth_blocks is not None:
+                if height is None:
+                    issues.append(f"{line_label(row)} archive API depth evidence requires numeric height")
+                elif depth is not None and depth < min_depth_blocks:
+                    issues.append(
+                        f"{line_label(row)} archiveApiBlock depth={depth:g} failed >= "
+                        f"min archive API depth {min_depth_blocks:g} blocks"
+                    )
             chain_lookup = as_number(row, "chainLookupPruneToBlock")
             if chain_lookup is not None and chain_lookup >= 0 and block > chain_lookup:
                 issues.append(
@@ -1757,6 +1787,15 @@ def build_parser():
         help="comma-separated archive API methods that must appear in archiveApiMethods",
     )
     parser.add_argument(
+        "--min-archive-api-depth-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help=(
+            "when archive API evidence is required, require archiveApiBlock "
+            "to be at least this many blocks below height"
+        ),
+    )
+    parser.add_argument(
         "--min",
         dest="minimums",
         action="append",
@@ -1854,12 +1893,14 @@ def main(argv=None):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or required_archive_tx_modes
+        or args.min_archive_api_depth_blocks is not None
     ):
         issues.extend(
             check_archive_api_evidence(
                 rows,
                 archive_api_methods_required,
                 archive_api_required_modes,
+                min_depth_blocks=args.min_archive_api_depth_blocks,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction or required_archive_tx_modes:

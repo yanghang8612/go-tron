@@ -107,6 +107,7 @@ RUN_ARCHIVE_API_STATUS="not-run"
 RUN_ARCHIVE_API_CHECKS=0
 RUN_ARCHIVE_API_FAILURES=0
 RUN_ARCHIVE_API_BLOCK=-1
+RUN_ARCHIVE_API_DEPTH_BLOCKS=-1
 RUN_ARCHIVE_API_CALL_PROBE="false"
 RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="false"
 RUN_ARCHIVE_API_METHODS="[]"
@@ -324,6 +325,7 @@ reset_run_metrics() {
   RUN_ARCHIVE_API_CHECKS=0
   RUN_ARCHIVE_API_FAILURES=0
   RUN_ARCHIVE_API_BLOCK=-1
+  RUN_ARCHIVE_API_DEPTH_BLOCKS=-1
   if [ -n "$ARCHIVE_API_CALL_DATA" ]; then
     RUN_ARCHIVE_API_CALL_PROBE="true"
   else
@@ -482,38 +484,39 @@ write_storage_benchmark_prometheus() {
   local snapshot_sidecar_share_milli="${14}"
   local archive_api_checks="${15}"
   local archive_api_block="${16}"
-  local archive_api_failures="${17}"
-  local archive_api_call_probe="${18}"
-  local archive_api_trace_transaction_probe="${19}"
-  local archive_api_methods="${20}"
-  local archive_api_tx_probe="${21}"
-  local archive_api_tx_methods="${22}"
-  local cold_freezer_to_block="${23}"
-  local derived_index_to_block="${24}"
-  local chain_lookup_prune_to_block="${25}"
-  local tail_pruned_through_block="${26}"
-  local balance_trace_prune_to_block="${27}"
-  local section_bloom_prune_to_section="${28}"
-  local signed_cold_prune="${29}"
-  local tail_pruned_files="${30}"
-  local history_window="${31}"
-  local event_log_index_segments="${32}"
-  local event_log_index_address_keys="${33}"
-  local event_log_index_address_postings="${34}"
-  local event_log_index_address_avg_postings_milli="${35}"
-  local event_log_index_address_max_postings="${36}"
-  local event_log_index_address_singleton_keys="${37}"
-  local event_log_index_address_multi_posting_keys="${38}"
-  local event_log_index_topic_keys="${39}"
-  local event_log_index_topic_postings="${40}"
-  local event_log_index_topic_avg_postings_milli="${41}"
-  local event_log_index_topic_max_postings="${42}"
-  local event_log_index_topic_singleton_keys="${43}"
-  local event_log_index_topic_multi_posting_keys="${44}"
+  local archive_api_depth_blocks="${17}"
+  local archive_api_failures="${18}"
+  local archive_api_call_probe="${19}"
+  local archive_api_trace_transaction_probe="${20}"
+  local archive_api_methods="${21}"
+  local archive_api_tx_probe="${22}"
+  local archive_api_tx_methods="${23}"
+  local cold_freezer_to_block="${24}"
+  local derived_index_to_block="${25}"
+  local chain_lookup_prune_to_block="${26}"
+  local tail_pruned_through_block="${27}"
+  local balance_trace_prune_to_block="${28}"
+  local section_bloom_prune_to_section="${29}"
+  local signed_cold_prune="${30}"
+  local tail_pruned_files="${31}"
+  local history_window="${32}"
+  local event_log_index_segments="${33}"
+  local event_log_index_address_keys="${34}"
+  local event_log_index_address_postings="${35}"
+  local event_log_index_address_avg_postings_milli="${36}"
+  local event_log_index_address_max_postings="${37}"
+  local event_log_index_address_singleton_keys="${38}"
+  local event_log_index_address_multi_posting_keys="${39}"
+  local event_log_index_topic_keys="${40}"
+  local event_log_index_topic_postings="${41}"
+  local event_log_index_topic_avg_postings_milli="${42}"
+  local event_log_index_topic_max_postings="${43}"
+  local event_log_index_topic_singleton_keys="${44}"
+  local event_log_index_topic_multi_posting_keys="${45}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
-    "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
+    "$archive_api_depth_blocks" "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
     "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
     "$cold_freezer_to_block" "$derived_index_to_block" "$chain_lookup_prune_to_block" \
     "$tail_pruned_through_block" "$balance_trace_prune_to_block" \
@@ -535,34 +538,34 @@ height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
 datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
-archive_api_checks, archive_api_block, archive_api_failures = map(int, sys.argv[15:18])
-archive_api_call_probe = sys.argv[18].lower() in {"1", "true", "yes"}
-archive_api_trace_transaction_probe = sys.argv[19].lower() in {"1", "true", "yes"}
-archive_api_methods_raw = sys.argv[20]
-archive_api_tx_probe = sys.argv[21].lower() in {"1", "true", "yes"}
-archive_api_tx_methods_raw = sys.argv[22]
-cold_freezer_to_block = int(sys.argv[23])
-derived_index_to_block = int(sys.argv[24])
-chain_lookup_prune_to_block = int(sys.argv[25])
-tail_pruned_through_block = int(sys.argv[26])
-balance_trace_prune_to_block = int(sys.argv[27])
-section_bloom_prune_to_section = int(sys.argv[28])
-signed_cold_prune = int(sys.argv[29])
-tail_pruned_files = int(sys.argv[30])
-history_window = int(sys.argv[31])
-event_log_index_segments = int(sys.argv[32])
-event_log_index_address_keys = int(sys.argv[33])
-event_log_index_address_postings = int(sys.argv[34])
-event_log_index_address_avg_postings_milli = int(sys.argv[35])
-event_log_index_address_max_postings = int(sys.argv[36])
-event_log_index_address_singleton_keys = int(sys.argv[37])
-event_log_index_address_multi_posting_keys = int(sys.argv[38])
-event_log_index_topic_keys = int(sys.argv[39])
-event_log_index_topic_postings = int(sys.argv[40])
-event_log_index_topic_avg_postings_milli = int(sys.argv[41])
-event_log_index_topic_max_postings = int(sys.argv[42])
-event_log_index_topic_singleton_keys = int(sys.argv[43])
-event_log_index_topic_multi_posting_keys = int(sys.argv[44])
+archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[15:19])
+archive_api_call_probe = sys.argv[19].lower() in {"1", "true", "yes"}
+archive_api_trace_transaction_probe = sys.argv[20].lower() in {"1", "true", "yes"}
+archive_api_methods_raw = sys.argv[21]
+archive_api_tx_probe = sys.argv[22].lower() in {"1", "true", "yes"}
+archive_api_tx_methods_raw = sys.argv[23]
+cold_freezer_to_block = int(sys.argv[24])
+derived_index_to_block = int(sys.argv[25])
+chain_lookup_prune_to_block = int(sys.argv[26])
+tail_pruned_through_block = int(sys.argv[27])
+balance_trace_prune_to_block = int(sys.argv[28])
+section_bloom_prune_to_section = int(sys.argv[29])
+signed_cold_prune = int(sys.argv[30])
+tail_pruned_files = int(sys.argv[31])
+history_window = int(sys.argv[32])
+event_log_index_segments = int(sys.argv[33])
+event_log_index_address_keys = int(sys.argv[34])
+event_log_index_address_postings = int(sys.argv[35])
+event_log_index_address_avg_postings_milli = int(sys.argv[36])
+event_log_index_address_max_postings = int(sys.argv[37])
+event_log_index_address_singleton_keys = int(sys.argv[38])
+event_log_index_address_multi_posting_keys = int(sys.argv[39])
+event_log_index_topic_keys = int(sys.argv[40])
+event_log_index_topic_postings = int(sys.argv[41])
+event_log_index_topic_avg_postings_milli = int(sys.argv[42])
+event_log_index_topic_max_postings = int(sys.argv[43])
+event_log_index_topic_singleton_keys = int(sys.argv[44])
+event_log_index_topic_multi_posting_keys = int(sys.argv[45])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -652,6 +655,7 @@ metrics = (
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
     ("gtron_storage_benchmark_archive_api_checks", "Benchmark historical archive API probe check count.", archive_api_checks),
     ("gtron_storage_benchmark_archive_api_block", "Benchmark historical archive API probe block number.", archive_api_block),
+    ("gtron_storage_benchmark_archive_api_depth_blocks", "Benchmark historical archive API probe depth below sampled head.", archive_api_depth_blocks),
     ("gtron_storage_benchmark_archive_api_failures", "Benchmark historical archive API probe failures.", archive_api_failures),
     ("gtron_storage_benchmark_cold_freezer_to_block", "Highest block covered by benchmark cold freezer segments.", cold_freezer_to_block),
     ("gtron_storage_benchmark_derived_index_to_block", "Highest block covered by benchmark derived indexes.", derived_index_to_block),
@@ -1131,11 +1135,16 @@ run_archive_api_probe() {
   RUN_ARCHIVE_API_CHECKS="$(printf '%s\n' "$values" | sed -n '2p')"
   RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"
   RUN_ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '4p')"
+  if [ "$height" -ge "$RUN_ARCHIVE_API_BLOCK" ] 2>/dev/null; then
+    RUN_ARCHIVE_API_DEPTH_BLOCKS=$((height - RUN_ARCHIVE_API_BLOCK))
+  else
+    RUN_ARCHIVE_API_DEPTH_BLOCKS=-1
+  fi
   RUN_ARCHIVE_API_METHODS="$(printf '%s\n' "$values" | sed -n '5p')"
   RUN_ARCHIVE_API_TX_PROBE="$(printf '%s\n' "$values" | sed -n '6p')"
   RUN_ARCHIVE_API_TX_HASH="$(printf '%s\n' "$values" | sed -n '7p')"
   RUN_ARCHIVE_API_TX_METHODS="$(printf '%s\n' "$values" | sed -n '8p')"
-  echo "archive API probe status=$RUN_ARCHIVE_API_STATUS checks=$RUN_ARCHIVE_API_CHECKS failures=$RUN_ARCHIVE_API_FAILURES block=$RUN_ARCHIVE_API_BLOCK methods=$RUN_ARCHIVE_API_METHODS txProbe=$RUN_ARCHIVE_API_TX_PROBE txMethods=$RUN_ARCHIVE_API_TX_METHODS" >>"$log_path"
+  echo "archive API probe status=$RUN_ARCHIVE_API_STATUS checks=$RUN_ARCHIVE_API_CHECKS failures=$RUN_ARCHIVE_API_FAILURES block=$RUN_ARCHIVE_API_BLOCK depth=$RUN_ARCHIVE_API_DEPTH_BLOCKS methods=$RUN_ARCHIVE_API_METHODS txProbe=$RUN_ARCHIVE_API_TX_PROBE txMethods=$RUN_ARCHIVE_API_TX_METHODS" >>"$log_path"
 }
 
 run_logged() {
@@ -1614,7 +1623,7 @@ emit_result() {
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
     "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
-    "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_FAILURES" \
+    "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
     "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" \
@@ -1672,7 +1681,7 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
     "$RUN_ARCHIVE_API_STATUS" "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_FAILURES" \
-    "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_CALL_PROBE" \
+    "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_CALL_PROBE" \
     "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
@@ -1716,7 +1725,7 @@ keys = [
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
-    "archiveApiBlock", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
+    "archiveApiBlock", "archiveApiDepthBlocks", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
     "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
     "archiveApiTxMethods", "storageBenchmarkPrometheus", "storageAlertPrometheus",
     "datadir", "log",
@@ -1755,7 +1764,7 @@ ints = {
     "stageAlertPipelineNextTarget", "stageAlertPipelineNextCurrent", "modeAlertIssues",
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
-    "archiveApiChecks", "archiveApiFailures", "archiveApiBlock",
+    "archiveApiChecks", "archiveApiFailures", "archiveApiBlock", "archiveApiDepthBlocks",
 }
 bools = {
     "pruneModePersisted",

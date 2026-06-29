@@ -246,9 +246,11 @@ The row also records `storageBenchmarkPrometheus`, a benchmark-owned
 Prometheus artifact with the row's height, elapsed seconds, hot/cold/snapshot
 bytes, cold-archive bytes, derived-index bytes, matching bytes-per-block
 gauges for the same storage families, snapshot sidecar share, and archive API
-probe checks/block/failures plus per-method success gauges. The storage-alert
-and benchmark artifacts are written next to the JSONL output so they remain
-readable even when the harness removes its temporary workdir.
+probe checks/block/depth/failures plus per-method success gauges. The
+`gtron_storage_benchmark_archive_api_depth_blocks` gauge matches
+`archiveApiDepthBlocks`, the sampled `height - archiveApiBlock` distance. The
+storage-alert and benchmark artifacts are written next to the JSONL output so
+they remain readable even when the harness removes its temporary workdir.
 The acceptance checker binds `gtron_storage_alert_status`,
 `gtron_storage_alert_issue`, `gtron_storage_stage_pipeline_*`,
 `gtron_storage_signed_cold_prune`, and
@@ -331,10 +333,10 @@ Run it with `--offline-db-check` only after the node is stopped to add
 staged-body mismatches.
 Use `--archive-api-probe` on the Nile sampler when the same production JSONL
 must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
-`archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`, and
-`archiveApiMethods` from historical JSON-RPC reads. When the probed block has a
-transaction, it also emits `archiveApiTxProbe`, `archiveApiTxHash`, and
-`archiveApiTxMethods`; add `--archive-api-call-data` plus
+`archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`,
+`archiveApiDepthBlocks`, and `archiveApiMethods` from historical JSON-RPC reads.
+When the probed block has a transaction, it also emits `archiveApiTxProbe`,
+`archiveApiTxHash`, and `archiveApiTxMethods`; add `--archive-api-call-data` plus
 `--archive-api-method eth_call` only when the sample targets a known historical
 contract. The probe counts only shape-valid JSON-RPC results as successful:
 block reads must return an object, account/code/storage/call reads must return
@@ -425,8 +427,11 @@ prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
 method set (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
-`eth_getStorageAt`, and `eth_getLogs`). Add `--require-archive-api-mode
-minimal` so the latest pruned minimal row must prove its own archive reads
+`eth_getStorageAt`, and `eth_getLogs`). If `archiveApiDepthBlocks` is present,
+the checker requires it to equal `height - archiveApiBlock`; add
+`--min-archive-api-depth-blocks BLOCKS` when the row must prove the archive
+probe reached at least that far below the sampled head. Add
+`--require-archive-api-mode minimal` so the latest pruned minimal row must prove its own archive reads
 instead of letting an unpruned `archive` row satisfy the run. Repeat
 `--require-archive-api-mode` or use `--require-archive-api-modes` when a run
 must prove mode-local archive reads for more modes. Add

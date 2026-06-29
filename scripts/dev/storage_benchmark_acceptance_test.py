@@ -828,6 +828,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
                 "gtron_storage_benchmark_archive_api_checks": 5,
                 "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 20,
                 "gtron_storage_benchmark_archive_api_failures": 0,
                 "gtron_storage_benchmark_cold_freezer_to_block": 90,
                 "gtron_storage_benchmark_derived_index_to_block": 90,
@@ -876,6 +877,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "snapshotSidecarShareMilli": 125,
                         "archiveApiChecks": 5,
                         "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 20,
                         "archiveApiFailures": 0,
                         "coldFreezerToBlock": 90,
                         "derivedIndexToBlock": 90,
@@ -1363,6 +1365,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
                 "gtron_storage_benchmark_archive_api_checks": 5,
                 "gtron_storage_benchmark_archive_api_block": 79,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 19,
                 "gtron_storage_benchmark_archive_api_failures": 0,
             }
             write_benchmark_prometheus(prom, datadir, values)
@@ -1389,6 +1392,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "snapshotSidecarShareMilli": 125,
                         "archiveApiChecks": 5,
                         "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 20,
                         "archiveApiFailures": 0,
                         "datadir": datadir,
                         "storageBenchmarkPrometheus": prom.name,
@@ -1413,6 +1417,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "gtron_storage_benchmark_archive_api_block=79, want 80",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_depth_blocks=19, want 20",
                 proc.stderr,
             )
 
@@ -1578,6 +1586,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "archiveApiChecks": 5,
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
+                    "archiveApiDepthBlocks": 120,
                     "archiveApiMethods": [
                         "eth_getBlockByNumber",
                         "eth_getBalance",
@@ -1599,6 +1608,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--require-archive-api-evidence",
                     "--require-archive-api-mode",
                     "minimal",
+                    "--min-archive-api-depth-blocks",
+                    "100",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -1630,6 +1641,116 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 require_call.stdout + require_call.stderr,
             )
             self.assertIn("archiveApiMethods missing required methods: eth_call", require_call.stderr)
+
+    def test_rejects_archive_api_depth_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 21,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiDepthBlocks=21, want height - archiveApiBlock = 20",
+                proc.stderr,
+            )
+
+    def test_rejects_archive_api_depth_below_minimum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 20,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                    "--min-archive-api-depth-blocks",
+                    "30",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiBlock depth=20 failed >= min archive API depth 30 blocks",
+                proc.stderr,
+            )
 
     def test_accepts_archive_tx_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
