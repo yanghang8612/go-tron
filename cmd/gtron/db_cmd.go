@@ -302,6 +302,12 @@ type dbStorageAlertsJSON struct {
 	ModeAlertDetails             []dbStorageAlertIssueJSON `json:"modeAlertDetails"`
 	PruneMode                    string                    `json:"pruneMode"`
 	PruneModePersisted           bool                      `json:"pruneModePersisted"`
+	SignedColdPrune              bool                      `json:"signedColdPrune"`
+	ColdFreezerToBlock           int64                     `json:"coldFreezerToBlock"`
+	ChainLookupPruneToBlock      int64                     `json:"chainLookupPruneToBlock"`
+	TailPrunedThroughBlock       int64                     `json:"tailPrunedThroughBlock"`
+	BalanceTracePruneToBlock     int64                     `json:"balanceTracePruneToBlock"`
+	SectionBloomPruneToSection   int64                     `json:"sectionBloomPruneToSection"`
 	SnapshotStatus               string                    `json:"snapshotStatus"`
 	SnapshotIssues               int                       `json:"snapshotIssues"`
 	SnapshotAlertDetails         []dbStorageAlertIssueJSON `json:"snapshotAlertDetails"`
@@ -310,6 +316,45 @@ type dbStorageAlertsJSON struct {
 	SnapshotRetiredMissing       int                       `json:"snapshotRetiredMissing"`
 	SnapshotRetiredSkippedActive int                       `json:"snapshotRetiredSkippedActive"`
 	SnapshotRetiredBytes         uint64                    `json:"snapshotRetiredBytes"`
+}
+
+type dbStoragePruneEvidence struct {
+	SignedColdPrune            bool
+	ColdFreezerToBlock         int64
+	ChainLookupPruneToBlock    int64
+	TailPrunedThroughBlock     int64
+	BalanceTracePruneToBlock   int64
+	SectionBloomPruneToSection int64
+}
+
+func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePruneEvidence {
+	evidence := dbStoragePruneEvidence{
+		ColdFreezerToBlock:         -1,
+		ChainLookupPruneToBlock:    -1,
+		TailPrunedThroughBlock:     -1,
+		BalanceTracePruneToBlock:   -1,
+		SectionBloomPruneToSection: -1,
+	}
+	for _, row := range rows {
+		if !row.present {
+			continue
+		}
+		value := int64(row.progress.BlockNum)
+		switch row.stage {
+		case rawdb.StageChainFreezer:
+			evidence.ColdFreezerToBlock = value
+		case rawdb.StageSnapshotChainLookupPrune:
+			evidence.ChainLookupPruneToBlock = value
+			evidence.SignedColdPrune = true
+		case rawdb.StageSnapshotChainFreezerTailPrune:
+			evidence.TailPrunedThroughBlock = value
+		case rawdb.StageSnapshotBalanceTracePrune:
+			evidence.BalanceTracePruneToBlock = value
+		case rawdb.StageSnapshotSectionBloomPrune:
+			evidence.SectionBloomPruneToSection = value
+		}
+	}
+	return evidence
 }
 
 func dbFreezerAlertsCmd(ctx *cli.Context) error {
@@ -416,6 +461,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	stagePipeline := dbStageStatusPipeline(stageRows)
 	pruneMode, pruneModePersisted, modeIssues := dbModeAlertIssues(db, stageRows)
 	modeStatus := dbModeAlertStatus(modeIssues)
+	pruneEvidence := dbStoragePruneEvidenceFromStageRows(stageRows)
 
 	snapshotInspection, snapshotIssues := dbSnapshotRetiredAlertIssues(stateSnapshotsDir(cfg.DataDir))
 	snapshotStatus := dbSnapshotAlertStatus(snapshotIssues)
@@ -442,6 +488,12 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		ModeAlertDetails:             dbModeAlertIssuesJSON(modeIssues),
 		PruneMode:                    pruneMode,
 		PruneModePersisted:           pruneModePersisted,
+		SignedColdPrune:              pruneEvidence.SignedColdPrune,
+		ColdFreezerToBlock:           pruneEvidence.ColdFreezerToBlock,
+		ChainLookupPruneToBlock:      pruneEvidence.ChainLookupPruneToBlock,
+		TailPrunedThroughBlock:       pruneEvidence.TailPrunedThroughBlock,
+		BalanceTracePruneToBlock:     pruneEvidence.BalanceTracePruneToBlock,
+		SectionBloomPruneToSection:   pruneEvidence.SectionBloomPruneToSection,
 		SnapshotStatus:               snapshotStatus,
 		SnapshotIssues:               len(snapshotIssues),
 		SnapshotAlertDetails:         dbSnapshotAlertIssuesJSON(snapshotIssues),
@@ -479,8 +531,10 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d stagePipelineNextUpstream=%s stagePipelineNextCurrent=%d",
 			next.Stage, next.Status, next.TargetBlock, next.Upstream, next.CurrentBlock)
 	}
-	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t signedColdPrune=%t coldFreezerToBlock=%d chainLookupPruneToBlock=%d tailPrunedThroughBlock=%d balanceTracePruneToBlock=%d sectionBloomPruneToSection=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,
+		pruneEvidence.SignedColdPrune, pruneEvidence.ColdFreezerToBlock, pruneEvidence.ChainLookupPruneToBlock,
+		pruneEvidence.TailPrunedThroughBlock, pruneEvidence.BalanceTracePruneToBlock, pruneEvidence.SectionBloomPruneToSection,
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
 		snapshotInspection.FilesMissing, snapshotInspection.FilesSkippedActive, snapshotInspection.BytesPresent,
 		dbFreezerHiddenSize(stats))
@@ -570,6 +624,32 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 	fmt.Fprintln(w, "# HELP gtron_storage_prune_mode_info Persisted Erigon-style prune mode selected for this datadir.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_prune_mode_info gauge")
 	fmt.Fprintf(w, "gtron_storage_prune_mode_info{%s} 1\n", modeLabels)
+
+	fmt.Fprintln(w, "# HELP gtron_storage_signed_cold_prune Whether this datadir has pruned hot chain lookups behind signed cold coverage.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_signed_cold_prune gauge")
+	signedColdPrune := 0
+	if report.SignedColdPrune {
+		signedColdPrune = 1
+	}
+	fmt.Fprintf(w, "gtron_storage_signed_cold_prune{%s} %d\n", labels, signedColdPrune)
+	fmt.Fprintln(w, "# HELP gtron_storage_prune_boundary_block Storage prune and cold-stage boundary fields exported by storage-alerts.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_prune_boundary_block gauge")
+	for _, boundary := range []struct {
+		field string
+		value int64
+	}{
+		{field: "coldFreezerToBlock", value: report.ColdFreezerToBlock},
+		{field: "chainLookupPruneToBlock", value: report.ChainLookupPruneToBlock},
+		{field: "tailPrunedThroughBlock", value: report.TailPrunedThroughBlock},
+		{field: "balanceTracePruneToBlock", value: report.BalanceTracePruneToBlock},
+		{field: "sectionBloomPruneToSection", value: report.SectionBloomPruneToSection},
+	} {
+		boundaryLabels := dbPrometheusLabels(map[string]string{
+			"datadir": report.Datadir,
+			"field":   boundary.field,
+		})
+		fmt.Fprintf(w, "gtron_storage_prune_boundary_block{%s} %d\n", boundaryLabels, boundary.value)
+	}
 }
 
 func dbWriteStorageStagePipelinePrometheus(w io.Writer, report dbStorageAlertsJSON) {

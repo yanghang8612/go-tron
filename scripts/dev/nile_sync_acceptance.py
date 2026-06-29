@@ -1303,6 +1303,20 @@ def check_prune_mode_semantics(row):
     if mode != "minimal":
         issues.extend(check_positive_forbidden(row, "tailPrunedFiles", f"{mode} mode"))
 
+    signed_cold_prune = as_number(row, "signedColdPrune") == 1.0
+    chain_lookup = as_number(row, "chainLookupPruneToBlock")
+    cold_freezer = as_number(row, "coldFreezerToBlock")
+    if mode != "archive" and signed_cold_prune:
+        if chain_lookup is None or chain_lookup < 0:
+            issues.append(
+                f"chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for {mode} mode"
+            )
+        elif cold_freezer is None or cold_freezer < chain_lookup:
+            issues.append(
+                f"coldFreezerToBlock={cold_freezer} must cover "
+                f"chainLookupPruneToBlock={chain_lookup:g}"
+            )
+
     tail_pruned_files = as_number(row, "tailPrunedFiles")
     tail_pruned = as_number(row, "tailPrunedThroughBlock")
     if mode == "minimal" and tail_pruned_files is not None and tail_pruned_files > 0:
@@ -1312,11 +1326,20 @@ def check_prune_mode_semantics(row):
                 "for minimal mode"
             )
     if mode == "minimal" and tail_pruned is not None and tail_pruned >= 0:
-        chain_lookup = as_number(row, "chainLookupPruneToBlock")
-        if chain_lookup is not None and tail_pruned > chain_lookup:
+        if chain_lookup is None or chain_lookup < 0:
+            issues.append(
+                "chainLookupPruneToBlock must be >= 0 when tailPrunedThroughBlock is set "
+                "for minimal mode"
+            )
+        elif tail_pruned > chain_lookup:
             issues.append(
                 f"tailPrunedThroughBlock={tail_pruned:g} exceeds "
                 f"chainLookupPruneToBlock={chain_lookup:g}"
+            )
+        if cold_freezer is None or cold_freezer < tail_pruned:
+            issues.append(
+                f"coldFreezerToBlock={cold_freezer} must cover "
+                f"tailPrunedThroughBlock={tail_pruned:g}"
             )
 
     return issues

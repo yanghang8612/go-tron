@@ -122,6 +122,9 @@ def add_clean_prune_mode(row, mode=None):
             "mode": prune_mode,
             "pruneMode": prune_mode,
             "pruneModePersisted": True,
+            "signedColdPrune": 0,
+            "coldFreezerToBlock": -1,
+            "chainLookupPruneToBlock": -1,
             "tailPrunedThroughBlock": -1,
             "tailPrunedFiles": 0,
         }
@@ -572,6 +575,38 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("tailPrunedThroughBlock=7 is not allowed for full mode", proc.stderr)
             self.assertIn("tailPrunedFiles=1 is not allowed for full mode", proc.stderr)
 
+    def test_rejects_signed_cold_prune_without_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row())
+            row.update(
+                {
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 49,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
+
     def test_rejects_archive_prune_mode_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
@@ -665,6 +700,39 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "for minimal mode",
                 proc.stderr,
             )
+
+    def test_rejects_minimal_tail_prune_without_chain_lookup_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row(), "minimal")
+            row.update(
+                {
+                    "signedColdPrune": 1,
+                    "coldFreezerToBlock": 50,
+                    "chainLookupPruneToBlock": 10,
+                    "tailPrunedThroughBlock": 12,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "minimal",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
 
     def test_accepts_max_cold_stage_lag_blocks_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

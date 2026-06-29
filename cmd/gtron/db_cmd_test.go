@@ -996,6 +996,12 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"modeIssues=0",
 		"pruneMode=unknown",
 		"pruneModePersisted=false",
+		"signedColdPrune=false",
+		"coldFreezerToBlock=4",
+		"chainLookupPruneToBlock=-1",
+		"tailPrunedThroughBlock=-1",
+		"balanceTracePruneToBlock=-1",
+		"sectionBloomPruneToSection=-1",
 		"snapshotStatus=ok",
 		"snapshotIssues=0",
 		"retiredSegments=0",
@@ -1004,6 +1010,72 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageChainFreezer,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 20,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 18,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 16,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 14,
+			},
+		},
+	}
+	got := dbStoragePruneEvidenceFromStageRows(rows)
+	if !got.SignedColdPrune {
+		t.Fatalf("SignedColdPrune = false, want true")
+	}
+	if got.ColdFreezerToBlock != 20 ||
+		got.ChainLookupPruneToBlock != 18 ||
+		got.TailPrunedThroughBlock != 12 ||
+		got.BalanceTracePruneToBlock != 16 ||
+		got.SectionBloomPruneToSection != 14 {
+		t.Fatalf("prune evidence = %+v, want exported stage boundaries", got)
+	}
+
+	got = dbStoragePruneEvidenceFromStageRows(nil)
+	if got.SignedColdPrune ||
+		got.ColdFreezerToBlock != -1 ||
+		got.ChainLookupPruneToBlock != -1 ||
+		got.TailPrunedThroughBlock != -1 ||
+		got.BalanceTracePruneToBlock != -1 ||
+		got.SectionBloomPruneToSection != -1 {
+		t.Fatalf("empty prune evidence = %+v, want absent sentinels", got)
 	}
 }
 
@@ -1031,6 +1103,10 @@ func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_alert_freezer_hidden_bytes{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_signed_cold_prune{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="coldFreezerToBlock"} 4`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="chainLookupPruneToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="tailPrunedThroughBlock"} -1`, dbPrometheusLabelValue(dataDir)),
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
@@ -1381,6 +1457,9 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	}
 	if report.ModeStatus != "ok" || report.ModeIssues != 0 || report.PruneMode != "unknown" || report.PruneModePersisted {
 		t.Fatalf("unexpected mode alert fields: %+v", report)
+	}
+	if report.SignedColdPrune || report.ColdFreezerToBlock != 4 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
+		t.Fatalf("unexpected prune evidence fields: %+v", report)
 	}
 	if len(report.StageVerifyDetails) != report.StageIssues {
 		t.Fatalf("unexpected stage verify details: %+v", report.StageVerifyDetails)

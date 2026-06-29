@@ -538,6 +538,10 @@ historical `archiveApiBlock` below `height`, and the default archive method set.
 When `--require-prune-mode-semantics` is used, the latest selected row must
 carry a persisted `pruneMode` matching the sampled `mode`; it also rejects
 archive/non-minimal rows that report incompatible prune or tail-prune progress.
+When storage-alerts exports prune boundary fields, the same gate also requires
+`signedColdPrune` rows to carry `chainLookupPruneToBlock >= 0` and
+`coldFreezerToBlock` covering that chain-lookup prune boundary; minimal tail
+prune rows must keep `tailPrunedThroughBlock` covered by both boundaries.
 Use `--require-archive-tx-evidence` for production archive proof after selecting
 an `--archive-api-block` with at least one transaction; it requires the sampler
 to report same-row archive API evidence, `archiveApiTxProbe=true`, a
@@ -559,10 +563,13 @@ overall and component statuses to be `ok` and their issue counts to be zero, so
 storage-alert warnings cannot pass just because the command exited cleanly. The
 row keeps both aggregate counts and detail arrays:
 `freezerAlertDetails`, `stageVerifyDetails`, `modeAlertDetails`, and
-`snapshotAlertDetails`. `modeAlertDetails` flags persisted prune-mode conflicts
-such as `archive` datadirs with hot-prune or tail-prune progress. Do not
-enable that flag against a live Pebble datadir unless the DB can be opened by
-the diagnostic command. Captured `stage-status` files also populate
+`snapshotAlertDetails`. It also carries prune-boundary evidence from stage rows:
+`signedColdPrune`, `coldFreezerToBlock`, `chainLookupPruneToBlock`,
+`tailPrunedThroughBlock`, `balanceTracePruneToBlock`, and
+`sectionBloomPruneToSection`. `modeAlertDetails` flags persisted prune-mode
+conflicts such as `archive` datadirs with hot-prune or tail-prune progress. Do
+not enable that flag against a live Pebble datadir unless the DB can be opened
+by the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
 body progress rows fail staged-body verification, including `stagedBlock` and
 `stagedHash` when the referenced staged row can be decoded. Structured
@@ -573,7 +580,9 @@ For monitor scrape jobs outside the JSONL sampler, use
 or the database can otherwise be opened exclusively. The text metrics expose
 overall/component status values (`0=ok`, `1=warning`, `2=critical`), issue
 counts, normalized issue-kind counts by component/severity/kind, hidden freezer
-bytes, retired snapshot counters, the persisted prune mode, and
+bytes, retired snapshot counters, the persisted prune mode,
+`gtron_storage_signed_cold_prune`,
+`gtron_storage_prune_boundary_block{field=...}`, and
 `gtron_storage_stage_pipeline_*` gauges for the same canonical/post-`Finish`
 pipeline cursor exposed by `stage-status`. Offline JSON rows carry the same
 cursor as `stageAlertPipeline*` fields, so the sampler can distinguish storage

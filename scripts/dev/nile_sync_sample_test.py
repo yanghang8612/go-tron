@@ -2130,13 +2130,17 @@ class NileSyncSampleTest(unittest.TestCase):
                         'gtron_storage_stage_pipeline_issues{datadir="/tmp/nile"} 1',
                         'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/nile",stage="ChainFreezer",status="behind",upstream="Finish"} 12',
                         'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/nile",stage="ChainFreezer",status="behind",upstream="Finish"} 9',
+                        'gtron_storage_signed_cold_prune{datadir="/tmp/nile"} 1',
+                        'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="coldFreezerToBlock"} 12',
+                        'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="chainLookupPruneToBlock"} 10',
+                        'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="tailPrunedThroughBlock"} 8',
                         "# TYPE gtron_storage_alert_issue gauge",
                         'gtron_storage_alert_issue{component="stage",datadir="/tmp/nile",kind="stage-verification",severity="critical"} 1',
                         "EOF",
                         "exit 1",
                         "fi",
                         "cat <<'EOF'",
-                        '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"stagePipeline":{"complete":false,"pending":2,"issues":1,"tasks":[{"stage":"ChainFreezer","upstream":"Finish","status":"behind","targetValue":12,"targetHash":"aa","currentValue":9,"currentHash":"bb"},{"stage":"SnapshotEventLogBuild","upstream":"Finish","status":"missing","targetValue":12,"targetHash":"aa"}]},"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
+                        '{"datadir":"/tmp/nile","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"stagePipeline":{"complete":false,"pending":2,"issues":1,"tasks":[{"stage":"ChainFreezer","upstream":"Finish","status":"behind","targetValue":12,"targetHash":"aa","currentValue":9,"currentHash":"bb"},{"stage":"SnapshotEventLogBuild","upstream":"Finish","status":"missing","targetValue":12,"targetHash":"aa"}]},"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"signedColdPrune":true,"coldFreezerToBlock":12,"chainLookupPruneToBlock":10,"tailPrunedThroughBlock":8,"balanceTracePruneToBlock":7,"sectionBloomPruneToSection":6,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}',
                         "EOF",
                         "exit 1",
                     ]
@@ -2197,6 +2201,11 @@ class NileSyncSampleTest(unittest.TestCase):
                 'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/nile",stage="ChainFreezer",status="behind",upstream="Finish"} 9',
                 metrics,
             )
+            self.assertIn('gtron_storage_signed_cold_prune{datadir="/tmp/nile"} 1', metrics)
+            self.assertIn(
+                'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="chainLookupPruneToBlock"} 10',
+                metrics,
+            )
             self.assertEqual(row["storageAlertStatus"], "critical")
             self.assertEqual(row["stageVerifyStatus"], "critical")
             self.assertEqual(row["stageVerifyIssues"], 1)
@@ -2234,6 +2243,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["modeAlertIssues"], 1)
             self.assertEqual(row["pruneMode"], "archive")
             self.assertTrue(row["pruneModePersisted"])
+            self.assertTrue(row["signedColdPrune"])
+            self.assertEqual(row["coldFreezerToBlock"], 12)
+            self.assertEqual(row["chainLookupPruneToBlock"], 10)
+            self.assertEqual(row["tailPrunedThroughBlock"], 8)
+            self.assertEqual(row["balanceTracePruneToBlock"], 7)
+            self.assertEqual(row["sectionBloomPruneToSection"], 6)
             self.assertEqual(
                 row["modeAlertDetails"],
                 [

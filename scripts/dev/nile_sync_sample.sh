@@ -506,6 +506,12 @@ def parse_alerts(text):
         "modeAlertDetails": [],
         "pruneMode": "unknown",
         "pruneModePersisted": False,
+        "signedColdPrune": 0,
+        "coldFreezerToBlock": -1,
+        "chainLookupPruneToBlock": -1,
+        "tailPrunedThroughBlock": -1,
+        "balanceTracePruneToBlock": -1,
+        "sectionBloomPruneToSection": -1,
         "snapshotAlertStatus": "unknown",
         "snapshotAlertIssues": -1,
         "snapshotAlertDetails": [],
@@ -534,6 +540,12 @@ def parse_alerts(text):
             "modeAlertIssues": "modeIssues",
             "pruneMode": "pruneMode",
             "pruneModePersisted": "pruneModePersisted",
+            "signedColdPrune": "signedColdPrune",
+            "coldFreezerToBlock": "coldFreezerToBlock",
+            "chainLookupPruneToBlock": "chainLookupPruneToBlock",
+            "tailPrunedThroughBlock": "tailPrunedThroughBlock",
+            "balanceTracePruneToBlock": "balanceTracePruneToBlock",
+            "sectionBloomPruneToSection": "sectionBloomPruneToSection",
             "snapshotAlertStatus": "snapshotStatus",
             "snapshotAlertIssues": "snapshotIssues",
             "snapshotRetiredBytes": "snapshotRetiredBytes",
@@ -598,6 +610,12 @@ def parse_alerts(text):
         "modeAlertIssues": r"modeIssues=([0-9]+)",
         "pruneMode": r"pruneMode=([^ ]+)",
         "pruneModePersisted": r"pruneModePersisted=([^ ]+)",
+        "signedColdPrune": r"signedColdPrune=([^ ]+)",
+        "coldFreezerToBlock": r"coldFreezerToBlock=(-?[0-9]+)",
+        "chainLookupPruneToBlock": r"chainLookupPruneToBlock=(-?[0-9]+)",
+        "tailPrunedThroughBlock": r"tailPrunedThroughBlock=(-?[0-9]+)",
+        "balanceTracePruneToBlock": r"balanceTracePruneToBlock=(-?[0-9]+)",
+        "sectionBloomPruneToSection": r"sectionBloomPruneToSection=(-?[0-9]+)",
         "snapshotAlertStatus": r"snapshotStatus=([^ ]+)",
         "snapshotAlertIssues": r"snapshotIssues=([0-9]+)",
         "snapshotRetiredBytes": r"retiredBytes=([0-9]+)",
@@ -612,10 +630,15 @@ def parse_alerts(text):
             or key.endswith("Bytes")
             or key.endswith("Target")
             or key.endswith("Current")
+            or key.endswith("ToBlock")
+            or key.endswith("ThroughBlock")
+            or key.endswith("ToSection")
         ):
             row[key] = int(value)
         elif key in {"pruneModePersisted", "stageAlertPipelineComplete"}:
             row[key] = str(value).lower() in {"1", "true", "yes"}
+        elif key == "signedColdPrune":
+            row[key] = 1 if str(value).lower() in {"1", "true", "yes"} else 0
         else:
             row[key] = value
     for line in text.splitlines():
