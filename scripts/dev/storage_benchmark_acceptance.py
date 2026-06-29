@@ -285,6 +285,42 @@ def check_size_reductions(rows, raws, role):
     return issues
 
 
+def check_max_bytes_per_block(rows, maximum, label, fields, metric_name):
+    if maximum is None:
+        return []
+    issues = []
+    for row in latest_rows(rows).values():
+        height = as_number(row, "height")
+        if height is None or height <= 0:
+            issues.append(
+                f"{line_label(row)} height={row.get('height')!r}, want > 0 "
+                f"for {label} bytes-per-block evidence"
+            )
+            continue
+        total = 0.0
+        missing = []
+        for field in fields:
+            value = as_number(row, field)
+            if value is None or value < 0:
+                missing.append(field)
+                continue
+            total += value
+        if missing:
+            issues.append(
+                f"{line_label(row)} {label} bytes-per-block evidence missing fields: "
+                + ",".join(missing)
+            )
+            continue
+        per_block = total / height
+        if per_block > maximum:
+            issues.append(
+                f"{line_label(row)} {metric_name}={per_block:g} failed <= "
+                f"max {label} bytes per block {maximum:g} "
+                f"(bytes={total:g} height={height:g})"
+            )
+    return issues
+
+
 def resolve_artifact(result_path, raw_path):
     path = Path(str(raw_path))
     if path.is_absolute():
@@ -1428,6 +1464,27 @@ def build_parser():
         help="numeric upper bound for FIELD, MODE.FIELD, or MODE.ROLE.FIELD",
     )
     parser.add_argument(
+        "--max-datadir-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help="require each latest selected row datadirBytes/height to be no greater than BYTES",
+    )
+    parser.add_argument(
+        "--max-hot-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help="require each latest selected row chaindataBytes/height to be no greater than BYTES",
+    )
+    parser.add_argument(
+        "--max-cold-archive-bytes-per-block",
+        type=float,
+        metavar="BYTES",
+        help=(
+            "require each latest selected row (ancientBytes+snapshotBytes)/height "
+            "to be no greater than BYTES"
+        ),
+    )
+    parser.add_argument(
         "--require-size-reduction",
         dest="size_reductions",
         action="append",
@@ -1513,6 +1570,33 @@ def main(argv=None):
         issues.extend(check_snapshot_profile_evidence(rows, required_snapshot_profile_modes))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
+    issues.extend(
+        check_max_bytes_per_block(
+            rows,
+            args.max_datadir_bytes_per_block,
+            "datadir",
+            ("datadirBytes",),
+            "datadirBytesPerBlock",
+        )
+    )
+    issues.extend(
+        check_max_bytes_per_block(
+            rows,
+            args.max_hot_bytes_per_block,
+            "hot",
+            ("chaindataBytes",),
+            "hotBytesPerBlock",
+        )
+    )
+    issues.extend(
+        check_max_bytes_per_block(
+            rows,
+            args.max_cold_archive_bytes_per_block,
+            "cold archive",
+            ("ancientBytes", "snapshotBytes"),
+            "coldArchiveBytesPerBlock",
+        )
+    )
     issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
 
     if issues:
@@ -1530,6 +1614,13 @@ def main(argv=None):
         + len(args.maximums)
         + len(args.size_reductions)
     )
+    for value in (
+        args.max_datadir_bytes_per_block,
+        args.max_hot_bytes_per_block,
+        args.max_cold_archive_bytes_per_block,
+    ):
+        if value is not None:
+            checks += len(latest)
     if args.require_prometheus_artifacts:
         checks += len(latest)
     if args.require_minimal_tail_prune or args.require_minimal_physical_tail_prune:

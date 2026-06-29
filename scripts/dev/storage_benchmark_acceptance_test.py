@@ -625,6 +625,144 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("must use MODE:BASE_MODE:FIELD=RATIO", proc.stderr)
 
+    def test_accepts_storage_bytes_per_block_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_storage_bytes_per_block_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 13000,
+                        "chaindataBytes": 3000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 2000,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("datadirBytesPerBlock=130 failed <= max datadir bytes per block 120", proc.stderr)
+            self.assertIn("hotBytesPerBlock=30 failed <= max hot bytes per block 25", proc.stderr)
+            self.assertIn(
+                "coldArchiveBytesPerBlock=50 failed <= max cold archive bytes per block 45",
+                proc.stderr,
+            )
+
+    def test_rejects_storage_bytes_per_block_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 0,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("height=0, want > 0 for datadir bytes-per-block evidence", proc.stderr)
+
     def test_accepts_retired_prune_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
