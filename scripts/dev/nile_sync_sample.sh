@@ -335,6 +335,8 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         "archiveApiChecks": 0,
         "archiveApiFailures": 0,
         "archiveApiBlock": -1,
+        "archiveApiCallProbe": bool(call_data),
+        "archiveApiTraceTransactionProbe": str(trace_transaction) == "1",
         "archiveApiMethods": [],
         "archiveApiTxProbe": False,
         "archiveApiTxHash": "",
@@ -2260,6 +2262,28 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_offline_db_check_exit", "offlineDbCheckExit", "Offline DB check process exit code."),
 )
 
+ARCHIVE_API_BASE_METHODS = (
+    "eth_getBlockByNumber",
+    "eth_getBalance",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_getLogs",
+)
+
+ARCHIVE_API_CALL_METHODS = (
+    "eth_call",
+    "debug_traceCall",
+)
+
+ARCHIVE_API_TX_METHODS = (
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+)
+
+ARCHIVE_API_TRACE_TRANSACTION_METHODS = (
+    "debug_traceTransaction",
+)
+
 def prometheus_escape(value):
     return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
@@ -2288,6 +2312,44 @@ def append_prometheus_gauge(lines, name, help_text, labels, value):
     lines.append(f"# TYPE {name} gauge")
     lines.append(f"{name}{labels} {value:g}")
 
+def archive_api_method_set(row, field):
+    values = row.get(field)
+    if not isinstance(values, list):
+        return set()
+    return {str(value) for value in values}
+
+def archive_api_expected_methods(row, successful_methods):
+    expected = list(ARCHIVE_API_BASE_METHODS)
+    if row.get("archiveApiCallProbe") or any(method in successful_methods for method in ARCHIVE_API_CALL_METHODS):
+        expected.extend(ARCHIVE_API_CALL_METHODS)
+    if row.get("archiveApiTxProbe") or any(method in successful_methods for method in ARCHIVE_API_TX_METHODS + ARCHIVE_API_TRACE_TRANSACTION_METHODS):
+        expected.extend(ARCHIVE_API_TX_METHODS)
+    if row.get("archiveApiTraceTransactionProbe") or any(method in successful_methods for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS):
+        expected.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+    return expected
+
+def append_archive_api_prometheus(lines, row):
+    if str(row.get("archiveApiStatus", "not-run")) == "not-run":
+        return
+    successful_methods = archive_api_method_set(row, "archiveApiMethods")
+    successful_tx_methods = archive_api_method_set(row, "archiveApiTxMethods")
+    method_metric = "gtron_nile_sync_archive_api_method_success"
+    lines.append(f"# HELP {method_metric} Whether an expected historical archive API method probe succeeded.")
+    lines.append(f"# TYPE {method_metric} gauge")
+    for method in archive_api_expected_methods(row, successful_methods):
+        value = 1 if method in successful_methods else 0
+        lines.append(f'{method_metric}{prometheus_labels(row, {"method": method})} {value:g}')
+    if row.get("archiveApiTxProbe"):
+        tx_metric = "gtron_nile_sync_archive_api_tx_method_success"
+        lines.append(f"# HELP {tx_metric} Whether an expected transaction-level historical archive API method probe succeeded.")
+        lines.append(f"# TYPE {tx_metric} gauge")
+        expected_tx_methods = list(ARCHIVE_API_TX_METHODS)
+        if row.get("archiveApiTraceTransactionProbe") or any(method in successful_tx_methods for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS):
+            expected_tx_methods.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+        for method in expected_tx_methods:
+            value = 1 if method in successful_tx_methods else 0
+            lines.append(f'{tx_metric}{prometheus_labels(row, {"method": method})} {value:g}')
+
 def write_sample_prometheus(path, row):
     if not path:
         return "skipped"
@@ -2313,6 +2375,7 @@ def write_sample_prometheus(path, row):
         if value is None:
             continue
         append_prometheus_gauge(lines, metric, help_text, prometheus_labels(row), value)
+    append_archive_api_prometheus(lines, row)
     if "stageStalled" in row:
         append_prometheus_gauge(
             lines,

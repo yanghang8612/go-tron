@@ -128,6 +128,10 @@ class NileSyncSampleTest(unittest.TestCase):
                     endpoint,
                     "--jsonrpc",
                     endpoint,
+                    "--mode",
+                    "full",
+                    "--label",
+                    "candidate",
                     "--archive-api-probe",
                     "--archive-api-call-data",
                     "0x70a08231",
@@ -176,6 +180,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             server.invalid_trace_transaction = True
@@ -194,10 +199,16 @@ class NileSyncSampleTest(unittest.TestCase):
                     endpoint,
                     "--jsonrpc",
                     endpoint,
+                    "--mode",
+                    "full",
+                    "--label",
+                    "candidate",
                     "--archive-api-probe",
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -232,6 +243,10 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionReceipt",
                 ],
             )
+            metrics = prometheus.read_text(encoding="utf-8")
+            trace_labels = f'datadir="{datadir}",label="candidate",method="debug_traceTransaction",mode="full",network="nile"'
+            self.assertIn(f'gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 0', metrics)
+            self.assertIn(f'gtron_nile_sync_archive_api_tx_method_success{{{trace_labels}}} 0', metrics)
 
     def test_archive_api_probe_rejects_null_transaction_results(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -477,6 +492,7 @@ class NileSyncSampleTest(unittest.TestCase):
             thread.start()
             self.addCleanup(server.shutdown)
             self.addCleanup(server.server_close)
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
 
             proc = subprocess.run(
                 [
@@ -484,11 +500,17 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--datadir",
                     str(datadir),
                     "--http",
-                    f"http://127.0.0.1:{server.server_address[1]}",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
                     "--mode",
                     "full",
                     "--label",
                     "candidate",
+                    "--archive-api-probe",
+                    "--archive-api-call-data",
+                    "0x70a08231",
+                    "--archive-api-trace-transaction",
                     "--prometheus-output",
                     str(prometheus),
                 ],
@@ -507,6 +529,9 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
             self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes{{{labels}}} ', metrics)
+            trace_labels = f'datadir="{datadir}",label="candidate",method="debug_traceTransaction",mode="full",network="nile"'
+            self.assertIn(f'gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 1', metrics)
+            self.assertIn(f'gtron_nile_sync_archive_api_tx_method_success{{{trace_labels}}} 1', metrics)
 
     def test_sample_includes_sync_health_and_disk_ratios(self):
         with tempfile.TemporaryDirectory() as tmp:
