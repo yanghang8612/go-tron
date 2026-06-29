@@ -435,8 +435,8 @@ same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
 `eth_getTransactionReceipt` probes. Add
 `--archive-api-method eth_call` when the samples also pass
 `--archive-api-call-data` against a known historical contract. If the row also
-reports `tailPrunedThroughBlock`, the
-archive API block must be at or below that prune boundary so the row proves
+reports `chainLookupPruneToBlock` or `tailPrunedThroughBlock`, the archive API
+block must be at or below the corresponding prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. With
 `--require-event-log-index-evidence`, at least one latest derived-index row
 must report active `eventLogIndexSegments` plus internally consistent

@@ -558,6 +558,10 @@ When storage-alerts exports prune boundary fields, the same gate also requires
 `signedColdPrune` rows to carry `chainLookupPruneToBlock >= 0` and
 `coldFreezerToBlock` covering that chain-lookup prune boundary; minimal tail
 prune rows must keep `tailPrunedThroughBlock` covered by both boundaries.
+Archive API evidence rows that carry `chainLookupPruneToBlock` or
+`tailPrunedThroughBlock` must probe a block at or below those prune boundaries,
+so the sample proves post-prune historical reads instead of only pre-prune
+history access.
 Use `--require-archive-tx-evidence` for production archive proof after selecting
 an `--archive-api-block` with at least one transaction; it requires the sampler
 to report same-row archive API evidence, `archiveApiTxProbe=true`, a
