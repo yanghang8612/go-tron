@@ -88,7 +88,9 @@ is a known historical contract and the sample should also prove `eth_call`.
 The sampler counts only shape-valid JSON-RPC results as successful: block reads
 must return an object, account/code/storage/call reads must return hex strings,
 logs must return a list, and transaction/receipt reads must return objects
-rather than `null`.
+rather than `null`. The block result must also carry the requested historical
+block number, and transaction/receipt results must carry the transaction hash
+selected from that block.
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,

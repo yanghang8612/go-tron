@@ -381,15 +381,40 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return None, False
         return response.get("result"), True
 
-    def archive_result_ok(method, result):
+    def normalize_hash(value):
+        if not isinstance(value, str) or not value:
+            return ""
+        if not value.startswith("0x"):
+            value = "0x" + value
+        return value.lower()
+
+    def hex_quantity(value):
+        try:
+            return int(str(value), 16)
+        except Exception:
+            return None
+
+    def archive_result_ok(method, result, params):
         if method == "eth_getBlockByNumber":
-            return isinstance(result, dict)
+            if not isinstance(result, dict):
+                return False
+            result_number = hex_quantity(result.get("number"))
+            requested_number = hex_quantity(params[0] if params else None)
+            return result_number is not None and result_number == requested_number
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
             return isinstance(result, str)
         if method == "eth_getLogs":
             return isinstance(result, list)
-        if method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
-            return isinstance(result, dict)
+        if method == "eth_getTransactionByHash":
+            return (
+                isinstance(result, dict)
+                and normalize_hash(result.get("hash") or result.get("transactionHash")) == normalize_hash(params[0])
+            )
+        if method == "eth_getTransactionReceipt":
+            return (
+                isinstance(result, dict)
+                and normalize_hash(result.get("transactionHash") or result.get("hash")) == normalize_hash(params[0])
+            )
         return result is not None
 
     def first_tx_hash(block_result):
@@ -428,7 +453,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     while idx < len(calls):
         method, params = calls[idx]
         result, ok = rpc_call(idx + 1, method, params)
-        if not ok or not archive_result_ok(method, result):
+        if not ok or not archive_result_ok(method, result, params):
             failures += 1
             idx += 1
             continue

@@ -322,7 +322,9 @@ transaction, it also emits `archiveApiTxProbe`, `archiveApiTxHash`, and
 contract. The probe counts only shape-valid JSON-RPC results as successful:
 block reads must return an object, account/code/storage/call reads must return
 hex strings, logs must return a list, and transaction/receipt reads must return
-objects rather than `null`.
+objects rather than `null`. The block result must also carry the requested
+historical block number, and transaction/receipt results must carry the
+transaction hash selected from that block.
 
 ## Interpreting Results
 

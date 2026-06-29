@@ -58,13 +58,23 @@ class NileSampleHandler(BaseHTTPRequestHandler):
             request = {}
         method = request.get("method")
         tx_hash = "0x" + "12" * 32
+        wrong_tx_hash = "0x" + "34" * 32
         if method == "eth_getBlockByNumber":
             result = {"number": request.get("params", ["0x0"])[0], "transactions": [tx_hash]}
-        elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+        elif method == "eth_getTransactionByHash":
             if getattr(self.server, "null_tx_results", False):
                 result = None
+            elif getattr(self.server, "mismatched_tx_results", False):
+                result = {"hash": wrong_tx_hash, "blockNumber": "0x63"}
             else:
                 result = {"hash": tx_hash, "blockNumber": "0x63"}
+        elif method == "eth_getTransactionReceipt":
+            if getattr(self.server, "null_tx_results", False):
+                result = None
+            elif getattr(self.server, "mismatched_tx_results", False):
+                result = {"transactionHash": wrong_tx_hash, "blockNumber": "0x63"}
+            else:
+                result = {"transactionHash": tx_hash, "blockNumber": "0x63"}
         elif method == "eth_getLogs":
             result = []
         else:
@@ -190,6 +200,45 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getLogs",
                 ],
             )
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
+            self.assertEqual(row["archiveApiTxMethods"], [])
+
+    def test_archive_api_probe_rejects_mismatched_transaction_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.mismatched_tx_results = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 7)
+            self.assertEqual(row["archiveApiFailures"], 2)
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
             self.assertEqual(row["archiveApiTxMethods"], [])
