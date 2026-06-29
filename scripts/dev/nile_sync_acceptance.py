@@ -1828,13 +1828,26 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None):
         issues.append(f"archiveApiBlock={block}, want >= 0 historical block")
     else:
         height = as_number(row, "height")
+        depth = None
         if height is not None and block >= height:
             issues.append(f"archiveApiBlock={block:g} must be below height={height:g}")
+        if height is not None:
+            depth = height - block
+            if field_present(row, "archiveApiDepthBlocks"):
+                reported_depth = as_number(row, "archiveApiDepthBlocks")
+                if reported_depth is None:
+                    issues.append(
+                        f"archiveApiDepthBlocks={row.get('archiveApiDepthBlocks')!r}, want numeric"
+                    )
+                elif not approx_equal(reported_depth, depth):
+                    issues.append(
+                        f"archiveApiDepthBlocks={reported_depth:g}, "
+                        f"want height - archiveApiBlock = {depth:g}"
+                    )
         if min_depth_blocks is not None:
             if height is None:
                 issues.append("archive API depth evidence requires numeric height")
             else:
-                depth = height - block
                 if depth < min_depth_blocks:
                     issues.append(
                         f"archiveApiBlock depth={depth:g} failed >= min archive API "
