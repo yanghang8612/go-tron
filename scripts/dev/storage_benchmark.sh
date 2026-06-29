@@ -110,6 +110,7 @@ RUN_ARCHIVE_API_METHODS="[]"
 RUN_ARCHIVE_API_TX_PROBE="false"
 RUN_ARCHIVE_API_TX_HASH=""
 RUN_ARCHIVE_API_TX_METHODS="[]"
+SNAPSHOT_PROFILE_SCRIPT="$BASEDIR/scripts/dev/snapshot_manifest_profile.py"
 
 usage() {
   cat <<'EOF'
@@ -573,6 +574,59 @@ collect_event_log_index_stats() {
   RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS="${topic_max:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS="${topic_singleton:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS="${topic_multi:-0}"
+}
+
+snapshot_manifest_profile_values() {
+  local snapshot_dir="$1"
+  local log_path="$2"
+  local missing_share=-1
+  if [ ! -f "$snapshot_dir/manifest.json" ]; then
+    printf '%s\n' "missing" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    return
+  fi
+  if [ ! -x "$SNAPSHOT_PROFILE_SCRIPT" ]; then
+    echo "warning: snapshot manifest profiler not executable: $SNAPSHOT_PROFILE_SCRIPT" >>"$log_path"
+    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    return
+  fi
+  local profile_out="$WORKDIR/snapshot-profile-$(basename "$(dirname "$(dirname "$snapshot_dir")")").json"
+  if ! "$SNAPSHOT_PROFILE_SCRIPT" "$snapshot_dir" --json >"$profile_out" 2>>"$log_path"; then
+    echo "warning: snapshot manifest profile failed for $snapshot_dir; see $log_path" >>"$log_path"
+    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    return
+  fi
+  python3 - "$profile_out" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+families = profile.get("byFamily", {})
+
+def family_value(name, key, default=0):
+    value = families.get(name, {}).get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+print("ok")
+print(int(profile.get("activeSegments", 0)))
+print(int(profile.get("totalBytes", 0)))
+print(int(profile.get("payloadBytes", 0)))
+print(int(profile.get("sidecarBytes", 0)))
+print(int(profile.get("sidecarShareMilli", 0)))
+for family in (
+    "latest",
+    "state-history",
+    "chain-freezer",
+    "event-log",
+    "balance-trace",
+    "section-bloom",
+):
+    print(family_value(family, "sidecarBytes"))
+    print(family_value(family, "sidecarShareMilli", -1))
+PY
 }
 
 archive_api_probe_values() {
@@ -1162,8 +1216,43 @@ emit_result() {
   snapshots="$(size_bytes "$datadir/gtron/state-snapshots")"
   ancient_files="$(file_count "$datadir/gtron/ancient")"
   snapshot_files="$(file_count "$datadir/gtron/state-snapshots")"
+  local profile_values
+  profile_values="$(snapshot_manifest_profile_values "$datadir/gtron/state-snapshots" "$log_path")"
+  local snapshot_profile_status snapshot_profile_segments snapshot_profile_total_bytes snapshot_payload_bytes snapshot_sidecar_bytes snapshot_sidecar_share_milli
+  local snapshot_latest_sidecar_bytes snapshot_latest_sidecar_share_milli
+  local snapshot_state_history_sidecar_bytes snapshot_state_history_sidecar_share_milli
+  local snapshot_chain_freezer_sidecar_bytes snapshot_chain_freezer_sidecar_share_milli
+  local snapshot_event_log_sidecar_bytes snapshot_event_log_sidecar_share_milli
+  local snapshot_balance_trace_sidecar_bytes snapshot_balance_trace_sidecar_share_milli
+  local snapshot_section_bloom_sidecar_bytes snapshot_section_bloom_sidecar_share_milli
+  snapshot_profile_status="$(printf '%s\n' "$profile_values" | sed -n '1p')"
+  snapshot_profile_segments="$(printf '%s\n' "$profile_values" | sed -n '2p')"
+  snapshot_profile_total_bytes="$(printf '%s\n' "$profile_values" | sed -n '3p')"
+  snapshot_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '4p')"
+  snapshot_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '5p')"
+  snapshot_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '6p')"
+  snapshot_latest_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '7p')"
+  snapshot_latest_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '8p')"
+  snapshot_state_history_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '9p')"
+  snapshot_state_history_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '10p')"
+  snapshot_chain_freezer_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '11p')"
+  snapshot_chain_freezer_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '12p')"
+  snapshot_event_log_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '13p')"
+  snapshot_event_log_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '14p')"
+  snapshot_balance_trace_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '15p')"
+  snapshot_balance_trace_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '16p')"
+  snapshot_section_bloom_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '17p')"
+  snapshot_section_bloom_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '18p')"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
+    "$snapshot_profile_status" "$snapshot_profile_segments" "$snapshot_profile_total_bytes" \
+    "$snapshot_payload_bytes" "$snapshot_sidecar_bytes" "$snapshot_sidecar_share_milli" \
+    "$snapshot_latest_sidecar_bytes" "$snapshot_latest_sidecar_share_milli" \
+    "$snapshot_state_history_sidecar_bytes" "$snapshot_state_history_sidecar_share_milli" \
+    "$snapshot_chain_freezer_sidecar_bytes" "$snapshot_chain_freezer_sidecar_share_milli" \
+    "$snapshot_event_log_sidecar_bytes" "$snapshot_event_log_sidecar_share_milli" \
+    "$snapshot_balance_trace_sidecar_bytes" "$snapshot_balance_trace_sidecar_share_milli" \
+    "$snapshot_section_bloom_sidecar_bytes" "$snapshot_section_bloom_sidecar_share_milli" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
     "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_EVENT_LOG_INDEX_SEGMENTS" \
     "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" \
@@ -1206,6 +1295,14 @@ keys = [
     "profile", "mode", "role", "status", "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles",
+    "snapshotManifestProfileStatus", "snapshotProfileSegments", "snapshotProfileTotalBytes",
+    "snapshotPayloadBytes", "snapshotSidecarBytes", "snapshotSidecarShareMilli",
+    "snapshotLatestSidecarBytes", "snapshotLatestSidecarShareMilli",
+    "snapshotStateHistorySidecarBytes", "snapshotStateHistorySidecarShareMilli",
+    "snapshotChainFreezerSidecarBytes", "snapshotChainFreezerSidecarShareMilli",
+    "snapshotEventLogSidecarBytes", "snapshotEventLogSidecarShareMilli",
+    "snapshotBalanceTraceSidecarBytes", "snapshotBalanceTraceSidecarShareMilli",
+    "snapshotSectionBloomSidecarBytes", "snapshotSectionBloomSidecarShareMilli",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
     "derivedIndexBuildSeconds", "eventLogIndexSegments", "eventLogIndexAddressKeys",
     "eventLogIndexAddressPostings", "eventLogIndexAddressAvgPostingsMilli",
@@ -1244,6 +1341,14 @@ ints = {
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
     "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
+    "snapshotProfileSegments", "snapshotProfileTotalBytes", "snapshotPayloadBytes",
+    "snapshotSidecarBytes", "snapshotSidecarShareMilli", "snapshotLatestSidecarBytes",
+    "snapshotLatestSidecarShareMilli", "snapshotStateHistorySidecarBytes",
+    "snapshotStateHistorySidecarShareMilli", "snapshotChainFreezerSidecarBytes",
+    "snapshotChainFreezerSidecarShareMilli", "snapshotEventLogSidecarBytes",
+    "snapshotEventLogSidecarShareMilli", "snapshotBalanceTraceSidecarBytes",
+    "snapshotBalanceTraceSidecarShareMilli", "snapshotSectionBloomSidecarBytes",
+    "snapshotSectionBloomSidecarShareMilli",
     "eventLogIndexSegments", "eventLogIndexAddressKeys", "eventLogIndexAddressPostings",
     "eventLogIndexAddressAvgPostingsMilli", "eventLogIndexAddressMaxPostings",
     "eventLogIndexAddressSingletonKeys", "eventLogIndexAddressMultiPostingKeys",

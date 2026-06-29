@@ -1234,7 +1234,9 @@ Needed:
   raw block-hash fallback call sites before enabling more aggressive
   chain-data prune defaults.
 - `scripts/dev/snapshot_manifest_profile.py` now profiles active snapshot
-  manifest bytes by payload versus lookup sidecar family and can gate runs with
+  manifest bytes by payload versus lookup sidecar family, and the storage
+  benchmark records the same payload/sidecar totals plus per-family sidecar
+  shares in its JSONL rows. The standalone profiler can gate runs with
   `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`; use that
   evidence to evaluate compact/merged cold index formats for block hash by
   number, tx lookup, per-tx info, and state-root lookup only if sidecar

@@ -33,6 +33,24 @@ The output path is printed at startup. Each JSON row contains:
 - `snapshotBytes`
 - `ancientFiles`
 - `snapshotFiles`
+- `snapshotManifestProfileStatus`
+- `snapshotProfileSegments`
+- `snapshotProfileTotalBytes`
+- `snapshotPayloadBytes`
+- `snapshotSidecarBytes`
+- `snapshotSidecarShareMilli`
+- `snapshotLatestSidecarBytes`
+- `snapshotLatestSidecarShareMilli`
+- `snapshotStateHistorySidecarBytes`
+- `snapshotStateHistorySidecarShareMilli`
+- `snapshotChainFreezerSidecarBytes`
+- `snapshotChainFreezerSidecarShareMilli`
+- `snapshotEventLogSidecarBytes`
+- `snapshotEventLogSidecarShareMilli`
+- `snapshotBalanceTraceSidecarBytes`
+- `snapshotBalanceTraceSidecarShareMilli`
+- `snapshotSectionBloomSidecarBytes`
+- `snapshotSectionBloomSidecarShareMilli`
 - `coldFreezerToBlock`
 - `derivedIndexToBlock`
 - `derivedIndexSegments`
@@ -386,9 +404,11 @@ of letting another mode's sidecar satisfy the run. Repeat
 additional mode-local log-index proofs. Add `--min
 eventLogIndexAddressPostings=1` when the sample is expected to include logs and
 should prove non-empty index fanout.
-Use `scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` on the
-same artifacts to split active snapshot bytes by payload versus lookup
-sidecar family. The profiler reports `sidecarShareMilli` overall and per
+The harness automatically runs
+`scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` when a
+manifest exists and records the active payload/sidecar split in the
+`snapshot*Sidecar*` fields. Run the profiler directly on saved artifacts when a
+standalone gate is useful; it reports `sidecarShareMilli` overall and per
 family (`latest`, `state-history`, `chain-freezer`, `event-log`,
 `balance-trace`, `section-bloom`, and `other`) and can fail a run with
 `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Keep the
