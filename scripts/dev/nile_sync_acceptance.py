@@ -1593,6 +1593,11 @@ def check_archive_tx_evidence(row, require_trace_transaction=False):
         issues.append(
             "archiveApiTxProbe is not true; choose an archive-api-block with at least one transaction"
         )
+    if require_trace_transaction and not as_bool(row, "archiveApiTraceTransactionProbe"):
+        issues.append(
+            "archiveApiTraceTransactionProbe is not true; "
+            "run nile_sync_sample.sh with --archive-api-trace-transaction"
+        )
     tx_hash = row.get("archiveApiTxHash")
     if not isinstance(tx_hash, str) or not tx_hash:
         issues.append("archiveApiTxHash is missing")

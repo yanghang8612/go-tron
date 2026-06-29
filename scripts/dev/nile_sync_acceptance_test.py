@@ -3012,6 +3012,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "archiveApiChecks": 8,
                 "archiveApiFailures": 0,
                 "archiveApiBlock": 99,
+                "archiveApiTraceTransactionProbe": True,
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBalance",
@@ -3083,6 +3084,27 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "archiveApiTxMethods missing required methods: debug_traceTransaction",
                 proc.stderr,
             )
+
+            trace_not_requested = dict(base_row)
+            trace_not_requested["archiveApiTraceTransactionProbe"] = False
+            write_result(result, [trace_not_requested])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTraceTransactionProbe is not true", proc.stderr)
 
     def test_rejects_archive_tx_evidence_without_transaction_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
