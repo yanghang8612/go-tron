@@ -80,7 +80,10 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         elif method == "eth_getLogs":
             result = []
         elif method == "debug_traceTransaction":
-            result = {"failed": False, "returnValue": "", "structLogs": []}
+            if getattr(self.server, "invalid_trace_transaction", False):
+                result = "0x0"
+            else:
+                result = {"failed": False, "returnValue": "", "structLogs": []}
         elif method == "debug_traceCall":
             result = {"failed": False, "returnValue": "", "structLogs": []}
         else:
@@ -165,6 +168,68 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
                     "debug_traceTransaction",
+                ],
+            )
+
+    def test_archive_api_probe_rejects_invalid_trace_transaction_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.invalid_trace_transaction = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                    "--archive-api-call-data",
+                    "0x70a08231",
+                    "--archive-api-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 10)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertEqual(
+                row["archiveApiMethods"],
+                [
+                    "eth_getBlockByNumber",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                ],
+            )
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
                 ],
             )
 
