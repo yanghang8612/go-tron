@@ -87,6 +87,11 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getLogs",
 )
 
+ARCHIVE_API_TX_METHODS = (
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+)
+
 SYNC_RATE_FIELDS = (
     "intervalBlocksPerSecond",
     "intervalStageSyncFinishBlocksPerSecond",
@@ -1137,13 +1142,17 @@ def check_required_stage_stall_evidence(row):
     return issues
 
 
-def archive_api_methods(row):
-    raw = row.get("archiveApiMethods")
+def string_set_field(row, field):
+    raw = row.get(field)
     if raw is None:
         return None
     if not isinstance(raw, list):
         return set()
-    return {str(method) for method in raw}
+    return {str(value) for value in raw}
+
+
+def archive_api_methods(row):
+    return string_set_field(row, "archiveApiMethods")
 
 
 def archive_api_method_count(row):
@@ -1208,6 +1217,29 @@ def check_archive_api_evidence(row, required_methods):
     return issues
 
 
+def check_archive_tx_evidence(row):
+    issues = []
+    if not as_bool(row, "archiveApiTxProbe"):
+        issues.append(
+            "archiveApiTxProbe is not true; choose an archive-api-block with at least one transaction"
+        )
+    tx_hash = row.get("archiveApiTxHash")
+    if not isinstance(tx_hash, str) or not tx_hash:
+        issues.append("archiveApiTxHash is missing")
+
+    tx_methods = string_set_field(row, "archiveApiTxMethods")
+    if tx_methods is None:
+        issues.append("archiveApiTxMethods is missing")
+    elif not tx_methods:
+        issues.append("archiveApiTxMethods must be a non-empty list")
+    else:
+        missing = sorted(set(ARCHIVE_API_TX_METHODS) - tx_methods)
+        if missing:
+            issues.append("archiveApiTxMethods missing required methods: " + ",".join(missing))
+
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -1256,8 +1288,15 @@ def check_row(row, args):
         issues.extend(check_required_stage_stall_evidence(row))
     else:
         issues.extend(check_stage_stall_evidence(row))
-    if args.require_archive_api_evidence:
-        issues.extend(check_archive_api_evidence(row, args.archive_api_methods_required))
+    if args.require_archive_api_evidence or args.require_archive_tx_evidence:
+        required_archive_methods = list(args.archive_api_methods_required)
+        if args.require_archive_tx_evidence:
+            for method in ARCHIVE_API_TX_METHODS:
+                if method not in required_archive_methods:
+                    required_archive_methods.append(method)
+        issues.extend(check_archive_api_evidence(row, required_archive_methods))
+    if args.require_archive_tx_evidence:
+        issues.extend(check_archive_tx_evidence(row))
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
 
@@ -1364,6 +1403,14 @@ def build_parser():
         "--require-archive-api-evidence",
         action="store_true",
         help="require selected rows to include successful historical archive API evidence",
+    )
+    parser.add_argument(
+        "--require-archive-tx-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence for a historical block with at least one "
+            "transaction plus successful tx and receipt lookups"
+        ),
     )
     parser.add_argument(
         "--require-startup-recovery-evidence",

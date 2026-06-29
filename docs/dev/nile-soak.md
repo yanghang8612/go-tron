@@ -75,12 +75,15 @@ scripts/dev/nile_sync_sample.sh \
 ```
 
 For archive-read evidence, add `--archive-api-probe`. The sampler probes
-`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and `eth_getLogs` at
-`height-1` by default and emits `archiveApi*` fields. Use
-`--archive-api-block`, `--archive-api-address`, and
-`--archive-api-storage-slot` to pin the historical target. Add
-`--archive-api-call-data` when the target is a known historical contract and
-the sample should also prove `eth_call`.
+`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+and `eth_getLogs` at `height-1` by default and emits `archiveApi*` fields. If
+the probed block contains a transaction, it also probes
+`eth_getTransactionByHash` and `eth_getTransactionReceipt` and emits
+`archiveApiTx*` fields. Use `--archive-api-block`, `--archive-api-address`, and
+`--archive-api-storage-slot` to pin the historical target; choose a block with
+at least one transaction when the acceptance gate uses
+`--require-archive-tx-evidence`. Add `--archive-api-call-data` when the target
+is a known historical contract and the sample should also prove `eth_call`.
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
@@ -384,6 +387,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
   --require-archive-api-evidence \
+  --require-archive-tx-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000 \
   --max-cold-stage-lag-blocks 5000 \
@@ -492,6 +496,10 @@ label, so aggregated artifacts cannot satisfy a Nile row with metrics from
 another node. When `--require-archive-api-evidence` is used, the latest
 selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
 historical `archiveApiBlock` below `height`, and the default archive method set.
+Use `--require-archive-tx-evidence` for production archive proof after selecting
+an `--archive-api-block` with at least one transaction; it requires the sampler
+to report `archiveApiTxProbe=true`, a concrete `archiveApiTxHash`, and
+successful `eth_getTransactionByHash` plus `eth_getTransactionReceipt` probes.
 Add `--archive-api-method eth_call` to the acceptance command only for samples
 that were collected with `--archive-api-call-data`.
 

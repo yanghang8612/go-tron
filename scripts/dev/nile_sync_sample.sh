@@ -323,6 +323,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         "archiveApiFailures": 0,
         "archiveApiBlock": -1,
         "archiveApiMethods": [],
+        "archiveApiTxProbe": False,
+        "archiveApiTxHash": "",
+        "archiveApiTxMethods": [],
     }
     if str(enabled) != "1":
         return row
@@ -401,6 +404,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
 
     failures = 0
     methods = []
+    tx_methods = []
     idx = 0
     while idx < len(calls):
         method, params = calls[idx]
@@ -413,13 +417,18 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         if method == "eth_getBlockByNumber":
             tx_hash = first_tx_hash(result)
             if tx_hash:
+                row["archiveApiTxProbe"] = True
+                row["archiveApiTxHash"] = tx_hash
                 calls.append(("eth_getTransactionByHash", [tx_hash]))
                 calls.append(("eth_getTransactionReceipt", [tx_hash]))
+        elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+            tx_methods.append(method)
         idx += 1
 
     row["archiveApiChecks"] = len(calls)
     row["archiveApiFailures"] = failures
     row["archiveApiMethods"] = methods
+    row["archiveApiTxMethods"] = tx_methods
     row["archiveApiStatus"] = "ok" if failures == 0 else "failed"
     return row
 

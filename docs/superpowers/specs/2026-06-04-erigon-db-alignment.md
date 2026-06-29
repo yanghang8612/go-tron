@@ -712,7 +712,9 @@ Status:
   `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and optional contract
   `eth_call` samples. When the selected historical block contains a
   transaction, the same probe now adds `eth_getTransactionByHash` and
-  `eth_getTransactionReceipt` evidence.
+  `eth_getTransactionReceipt` evidence plus `archiveApiTx*` fields, and the
+  Nile acceptance gate can require that tx/receipt archive proof with
+  `--require-archive-tx-evidence`.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating
