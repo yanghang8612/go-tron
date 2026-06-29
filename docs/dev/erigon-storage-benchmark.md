@@ -245,9 +245,10 @@ storage-alert gate for archive/soak monitor ingestion.
 The row also records `storageBenchmarkPrometheus`, a benchmark-owned
 Prometheus artifact with the row's height, elapsed seconds, hot/cold/snapshot
 bytes, cold-archive bytes, derived-index bytes, matching bytes-per-block
-gauges for the same storage families, and snapshot sidecar share. The
-storage-alert and benchmark artifacts are written next to the JSONL output so
-they remain readable even when the harness removes its temporary workdir.
+gauges for the same storage families, snapshot sidecar share, and archive API
+probe checks/block/failures. The storage-alert and benchmark artifacts are
+written next to the JSONL output so they remain readable even when the harness
+removes its temporary workdir.
 The acceptance checker binds `gtron_storage_alert_status`,
 `gtron_storage_alert_issue`, `gtron_storage_stage_pipeline_*`,
 `gtron_storage_signed_cold_prune`, and

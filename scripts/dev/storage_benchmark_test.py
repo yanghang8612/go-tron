@@ -829,6 +829,9 @@ class StorageBenchmarkTest(unittest.TestCase):
             benchmark_metrics = benchmark_prometheus.read_text(encoding="utf-8")
             self.assertIn("gtron_storage_benchmark_derived_index_bytes", benchmark_metrics)
             self.assertIn("gtron_storage_benchmark_derived_index_bytes_per_block", benchmark_metrics)
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_checks\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_block\{[^}]*\} -1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_failures\{[^}]*\} 0\n")
             self.assertIn('mode="full"', benchmark_metrics)
             self.assertIn('role="producer"', benchmark_metrics)
 

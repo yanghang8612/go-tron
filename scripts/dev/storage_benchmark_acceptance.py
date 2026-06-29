@@ -45,6 +45,9 @@ BENCHMARK_PROMETHEUS_SUM_FIELDS = (
     ("gtron_storage_benchmark_cold_archive_bytes", ("ancientBytes", "snapshotBytes")),
     ("gtron_storage_benchmark_derived_index_bytes", ("derivedIndexBytes",)),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", ("snapshotSidecarShareMilli",)),
+    ("gtron_storage_benchmark_archive_api_checks", ("archiveApiChecks",)),
+    ("gtron_storage_benchmark_archive_api_block", ("archiveApiBlock",)),
+    ("gtron_storage_benchmark_archive_api_failures", ("archiveApiFailures",)),
 )
 
 BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS = (

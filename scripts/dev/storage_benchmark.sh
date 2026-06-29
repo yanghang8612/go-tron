@@ -480,9 +480,13 @@ write_storage_benchmark_prometheus() {
   local snapshots="${12}"
   local derived_index_bytes="${13}"
   local snapshot_sidecar_share_milli="${14}"
+  local archive_api_checks="${15}"
+  local archive_api_block="${16}"
+  local archive_api_failures="${17}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
-    "$snapshot_sidecar_share_milli" <<'PY'
+    "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
+    "$archive_api_failures" <<'PY'
 import sys
 from pathlib import Path
 
@@ -492,6 +496,7 @@ height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
 datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
+archive_api_checks, archive_api_block, archive_api_failures = map(int, sys.argv[15:18])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -521,6 +526,9 @@ metrics = (
     ("gtron_storage_benchmark_cold_archive_bytes_per_block", "Benchmark cold archive bytes per imported block.", cold_archive_per_block),
     ("gtron_storage_benchmark_derived_index_bytes_per_block", "Benchmark derived cold index bytes per imported block.", derived_index_per_block),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
+    ("gtron_storage_benchmark_archive_api_checks", "Benchmark historical archive API probe check count.", archive_api_checks),
+    ("gtron_storage_benchmark_archive_api_block", "Benchmark historical archive API probe block number.", archive_api_block),
+    ("gtron_storage_benchmark_archive_api_failures", "Benchmark historical archive API probe failures.", archive_api_failures),
 )
 lines = []
 for name, help_text, value in metrics:
@@ -1433,7 +1441,8 @@ emit_result() {
   local benchmark_prometheus="$ARTIFACT_DIR/$mode-$role-storage-benchmark.prom"
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
-    "$derived_index_bytes" "$snapshot_sidecar_share_milli"
+    "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
+    "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_FAILURES"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \
