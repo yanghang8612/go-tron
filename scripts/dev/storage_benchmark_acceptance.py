@@ -949,6 +949,13 @@ def check_archive_api_evidence(rows, required_methods, required_modes=()):
                 issues.append(
                     f"{line_label(row)} archiveApiBlock={block:g} must be below height={height:g}"
                 )
+            chain_lookup = as_number(row, "chainLookupPruneToBlock")
+            if chain_lookup is not None and chain_lookup >= 0 and block > chain_lookup:
+                issues.append(
+                    f"{line_label(row)} archiveApiBlock={block:g} must be <= "
+                    f"chainLookupPruneToBlock={chain_lookup:g} "
+                    "to prove post-chain-lookup-prune archive reads"
+                )
             tail_pruned = as_number(row, "tailPrunedThroughBlock")
             if tail_pruned is not None and tail_pruned >= 0 and block > tail_pruned:
                 issues.append(
