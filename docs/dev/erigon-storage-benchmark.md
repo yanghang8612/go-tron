@@ -339,9 +339,11 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
   --require-event-log-index-mode minimal \
+  --require-snapshot-profile-mode minimal \
   --require-retired-prune-mode minimal \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
+  --max minimal.producer.snapshotSidecarShareMilli=350 \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
 
@@ -407,10 +409,17 @@ should prove non-empty index fanout.
 The harness automatically runs
 `scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` when a
 manifest exists and records the active payload/sidecar split in the
-`snapshot*Sidecar*` fields. Run the profiler directly on saved artifacts when a
-standalone gate is useful; it reports `sidecarShareMilli` overall and per
-family (`latest`, `state-history`, `chain-freezer`, `event-log`,
-`balance-trace`, `section-bloom`, and `other`) and can fail a run with
+`snapshot*Sidecar*` fields. Add `--require-snapshot-profile-mode minimal` (or
+the plural mode list) so the latest selected row must carry a valid manifest
+profile with `snapshotManifestProfileStatus=ok`, consistent
+payload+sidecar totals, and a recomputable `snapshotSidecarShareMilli`. Then
+use ordinary `--max` thresholds such as
+`--max minimal.producer.snapshotSidecarShareMilli=350` or family-specific
+fields such as `snapshotEventLogSidecarShareMilli` to gate sidecar overhead in
+long runs. Run the profiler directly on saved artifacts when a standalone gate
+is useful; it reports `sidecarShareMilli` overall and per family (`latest`,
+`state-history`, `chain-freezer`, `event-log`, `balance-trace`,
+`section-bloom`, and `other`) and can fail a run with
 `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Keep the
 compact/merged index-format decision evidence-driven: only consider replacing
 sorted `chain-index`, `event-log-index`, accessor, or btree sidecars after the

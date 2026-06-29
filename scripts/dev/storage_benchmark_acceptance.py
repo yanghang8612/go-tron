@@ -1067,6 +1067,126 @@ def check_event_log_index_evidence(rows, required_modes=()):
     return issues
 
 
+SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
+    "snapshotManifestProfileStatus",
+    "snapshotProfileSegments",
+    "snapshotProfileTotalBytes",
+    "snapshotPayloadBytes",
+    "snapshotSidecarBytes",
+    "snapshotSidecarShareMilli",
+)
+
+SNAPSHOT_PROFILE_FAMILY_FIELDS = (
+    "snapshotLatestSidecar",
+    "snapshotStateHistorySidecar",
+    "snapshotChainFreezerSidecar",
+    "snapshotEventLogSidecar",
+    "snapshotBalanceTraceSidecar",
+    "snapshotSectionBloomSidecar",
+)
+
+
+def snapshot_profile_evidence_row(row):
+    return any(field in row for field in SNAPSHOT_PROFILE_EVIDENCE_FIELDS)
+
+
+def sidecar_share_milli(sidecar_bytes, total_bytes):
+    if sidecar_bytes <= 0 or total_bytes <= 0:
+        return 0
+    return (sidecar_bytes * 1000 + total_bytes - 1) // total_bytes
+
+
+def check_snapshot_profile_row(row):
+    issues = []
+    status = str(row.get("snapshotManifestProfileStatus", "")).lower()
+    if status != "ok":
+        issues.append(
+            f"{line_label(row)} snapshotManifestProfileStatus={row.get('snapshotManifestProfileStatus')!r}, want 'ok'"
+        )
+    segments = as_non_negative_int(row, "snapshotProfileSegments")
+    if segments is None or segments <= 0:
+        issues.append(
+            f"{line_label(row)} snapshotProfileSegments={row.get('snapshotProfileSegments')!r}, want > 0"
+        )
+    total_bytes = as_non_negative_int(row, "snapshotProfileTotalBytes")
+    payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")
+    sidecar_bytes = as_non_negative_int(row, "snapshotSidecarBytes")
+    share = as_non_negative_int(row, "snapshotSidecarShareMilli")
+    if total_bytes is None or total_bytes <= 0:
+        issues.append(
+            f"{line_label(row)} snapshotProfileTotalBytes={row.get('snapshotProfileTotalBytes')!r}, want > 0"
+        )
+    if payload_bytes is None:
+        issues.append(f"{line_label(row)} snapshotPayloadBytes={row.get('snapshotPayloadBytes')!r}, want non-negative integer")
+    if sidecar_bytes is None:
+        issues.append(f"{line_label(row)} snapshotSidecarBytes={row.get('snapshotSidecarBytes')!r}, want non-negative integer")
+    if share is None:
+        issues.append(f"{line_label(row)} snapshotSidecarShareMilli={row.get('snapshotSidecarShareMilli')!r}, want non-negative integer")
+    if (
+        total_bytes is not None
+        and payload_bytes is not None
+        and sidecar_bytes is not None
+        and total_bytes != payload_bytes + sidecar_bytes
+    ):
+        issues.append(
+            f"{line_label(row)} snapshot payload+sidecar={payload_bytes + sidecar_bytes} "
+            f"must equal total={total_bytes}"
+        )
+    if total_bytes is not None and sidecar_bytes is not None and share is not None:
+        want_share = sidecar_share_milli(sidecar_bytes, total_bytes)
+        if share != want_share:
+            issues.append(
+                f"{line_label(row)} snapshotSidecarShareMilli={share}, want {want_share} "
+                f"for sidecarBytes={sidecar_bytes} totalBytes={total_bytes}"
+            )
+        if share > 1000:
+            issues.append(f"{line_label(row)} snapshotSidecarShareMilli={share}, want <= 1000")
+
+    for prefix in SNAPSHOT_PROFILE_FAMILY_FIELDS:
+        bytes_field = f"{prefix}Bytes"
+        share_field = f"{prefix}ShareMilli"
+        family_bytes = as_non_negative_int(row, bytes_field)
+        family_share = as_number(row, share_field)
+        if family_bytes is None:
+            issues.append(f"{line_label(row)} {bytes_field}={row.get(bytes_field)!r}, want non-negative integer")
+        if family_share is None:
+            issues.append(f"{line_label(row)} {share_field}={row.get(share_field)!r}, want numeric value")
+        elif family_share < -1 or family_share > 1000:
+            issues.append(f"{line_label(row)} {share_field}={family_share:g}, want -1..1000")
+        elif family_bytes is not None and family_bytes > 0 and family_share < 0:
+            issues.append(
+                f"{line_label(row)} {share_field}={family_share:g}, want >= 0 "
+                f"when {bytes_field}={family_bytes}"
+            )
+    return issues
+
+
+def check_snapshot_profile_evidence(rows, required_modes=()):
+    issues = []
+    evidence_rows = [
+        row for row in latest_rows(rows).values() if snapshot_profile_evidence_row(row)
+    ]
+    if not evidence_rows and not required_modes:
+        return ["required snapshot manifest profile evidence has no selected latest row"]
+
+    for mode in required_modes:
+        row = latest_for(rows, mode=mode)
+        if row is None:
+            issues.append(f"required snapshot manifest profile evidence has no selected latest row for mode {mode!r}")
+            continue
+        if not snapshot_profile_evidence_row(row):
+            issues.append(
+                f"{line_label(row)} missing snapshot manifest profile evidence for required mode {mode!r}"
+            )
+            continue
+        if row not in evidence_rows:
+            evidence_rows.append(row)
+
+    for row in evidence_rows:
+        issues.extend(check_snapshot_profile_row(row))
+    return issues
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate storage_benchmark.sh JSONL output against soak acceptance gates.",
@@ -1182,6 +1302,23 @@ def build_parser():
         help="comma-separated modes whose latest selected rows must include clean retired snapshot prune evidence",
     )
     parser.add_argument(
+        "--require-snapshot-profile-evidence",
+        action="store_true",
+        help="require latest rows to include valid snapshot manifest payload/sidecar profile counters",
+    )
+    parser.add_argument(
+        "--require-snapshot-profile-mode",
+        action="append",
+        default=[],
+        help="mode whose latest selected row must include valid snapshot manifest profile counters; repeatable",
+    )
+    parser.add_argument(
+        "--require-snapshot-profile-modes",
+        action="append",
+        default=[],
+        help="comma-separated modes whose latest selected rows must include valid snapshot manifest profile counters",
+    )
+    parser.add_argument(
         "--archive-api-method",
         action="append",
         default=[],
@@ -1279,6 +1416,11 @@ def main(argv=None):
     )
     if args.require_retired_prune_evidence or required_retired_prune_modes:
         issues.extend(check_retired_prune_evidence(rows, required_retired_prune_modes))
+    required_snapshot_profile_modes = split_modes(
+        args.require_snapshot_profile_mode + args.require_snapshot_profile_modes
+    )
+    if args.require_snapshot_profile_evidence or required_snapshot_profile_modes:
+        issues.extend(check_snapshot_profile_evidence(rows, required_snapshot_profile_modes))
     issues.extend(check_thresholds(rows, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(rows, args.maximums, "<=", lambda got, want: got <= want))
     issues.extend(check_size_reductions(rows, args.size_reductions, args.role))
@@ -1318,6 +1460,9 @@ def main(argv=None):
     if args.require_retired_prune_evidence:
         checks += 1
     checks += len(required_retired_prune_modes)
+    if args.require_snapshot_profile_evidence:
+        checks += 1
+    checks += len(required_snapshot_profile_modes)
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"
