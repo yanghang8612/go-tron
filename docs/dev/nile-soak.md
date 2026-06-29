@@ -385,6 +385,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000 \
+  --max-cold-stage-lag-blocks 5000 \
   --min-sync-rate 1.0 \
   --max-datadir-bytes-per-block 500000 \
   --max-hot-bytes-per-block 120000 \
@@ -410,6 +411,12 @@ present, the checker also cross-checks each stage detail against the aggregate
 soak gates so older sampler rows cannot pass without that per-stage evidence.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
+Use `--max-cold-stage-lag-blocks` to keep cold/archive builders close enough to
+head for hot pruning and archive reads to remain useful. It requires
+`stageChainFreezerHeadLagBlocks` and
+`stageSnapshotEventLogBuildHeadLagBlocks` to be present, non-negative, and no
+greater than the configured lag. This is separate from
+`--max-lag-blocks`, which only checks full staged-sync completion.
 Use `--min-sync-rate` to turn sync-speed evidence into a hard gate; it checks
 the best available blocks-per-second field in this order:
 `intervalBlocksPerSecond`, `intervalStageSyncFinishBlocksPerSecond`,

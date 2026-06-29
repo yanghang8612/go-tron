@@ -48,6 +48,11 @@ FULL_STAGED_SYNC_STAGE_FIELDS = {
     "SyncFinish": "stageSyncFinish",
 }
 
+COLD_STAGE_LAG_FIELDS = (
+    "stageChainFreezerHeadLagBlocks",
+    "stageSnapshotEventLogBuildHeadLagBlocks",
+)
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -318,6 +323,24 @@ def check_max_hot_growth_share(row, maximum):
     if value > maximum:
         return [f"{field}={value:g} failed <= max hot growth share {maximum:g}"]
     return []
+
+
+def check_max_cold_stage_lag_blocks(row, maximum):
+    if maximum is None:
+        return []
+    issues = []
+    for field in COLD_STAGE_LAG_FIELDS:
+        value = as_number(row, field)
+        if value is None:
+            issues.append(
+                f"cold stage lag evidence missing: {field} is missing or non-numeric"
+            )
+            continue
+        if value < 0:
+            issues.append(f"{field}={value:g}, want >= 0")
+        elif value > maximum:
+            issues.append(f"{field}={value:g} failed <= max cold stage lag {maximum:g}")
+    return issues
 
 
 def cold_archive_bytes_per_block_evidence(row):
@@ -1132,6 +1155,7 @@ def check_row(row, args):
         if lag is None or lag > args.max_lag_blocks:
             issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
 
+    issues.extend(check_max_cold_stage_lag_blocks(row, args.max_cold_stage_lag_blocks))
     issues.extend(check_min_sync_rate(row, args.min_sync_rate))
     issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
     issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
@@ -1217,6 +1241,15 @@ def build_parser():
         "--max-lag-blocks",
         type=float,
         help="require fullStagedSyncHeadLagBlocks to be no greater than this value",
+    )
+    parser.add_argument(
+        "--max-cold-stage-lag-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help=(
+            "require cold/archive builder stage head lag fields to be no "
+            "greater than this value"
+        ),
     )
     parser.add_argument(
         "--min-sync-rate",

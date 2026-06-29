@@ -217,6 +217,96 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("nile sync acceptance: ok", proc.stdout)
             self.assertIn("status=catching-up", proc.stdout)
 
+    def test_accepts_max_cold_stage_lag_blocks_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["stageChainFreezerHeadLagBlocks"] = 120
+            row["stageSnapshotEventLogBuildHeadLagBlocks"] = 200
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-stage-lag-blocks",
+                    "500",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_cold_stage_lag_above_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["stageChainFreezerHeadLagBlocks"] = 120
+            row["stageSnapshotEventLogBuildHeadLagBlocks"] = 600
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-stage-lag-blocks",
+                    "500",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "stageSnapshotEventLogBuildHeadLagBlocks=600 failed <= max cold stage lag 500",
+                proc.stderr,
+            )
+
+    def test_rejects_cold_stage_lag_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["stageChainFreezerHeadLagBlocks"] = 120
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-stage-lag-blocks",
+                    "500",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "cold stage lag evidence missing: "
+                "stageSnapshotEventLogBuildHeadLagBlocks is missing or non-numeric",
+                proc.stderr,
+            )
+
     def test_accepts_min_sync_rate_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
