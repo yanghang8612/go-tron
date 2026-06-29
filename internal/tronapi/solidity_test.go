@@ -207,6 +207,23 @@ func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestSolidityGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{txInfoByBlockErr: errors.New("rawdb: transaction info block 2 decode: corrupt")},
+		solidNum:    3,
+		pbftNum:     -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/gettransactioninfobyblocknum", "application/json", strings.NewReader(`{"num":2}`))
+	if err != nil {
+		t.Fatalf("POST walletsolidity/gettransactioninfobyblocknum: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyArray(t, resp)
+}
+
 // TestPbftGetNowBlockNotFoundReturnsEmpty checks that /walletpbft/getnowblock
 // falls back to the solid block number and returns java-compatible empty JSON
 // when the backend has no block for that number.

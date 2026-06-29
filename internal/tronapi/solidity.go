@@ -390,7 +390,7 @@ func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte("[]"))
 		return
 	}
-	api.getTransactionInfoByBlockNum(w, r)
+	api.writeTransactionInfoByBlockNum(w, num)
 }
 
 // --- PBFT-block variants ---
@@ -475,7 +475,7 @@ func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) 
 		w.Write([]byte("[]"))
 		return
 	}
-	api.getTransactionInfoByBlockNum(w, r)
+	api.writeTransactionInfoByBlockNum(w, num)
 }
 
 func (api *API) handleGetBlockByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {

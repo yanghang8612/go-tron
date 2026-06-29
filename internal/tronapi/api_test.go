@@ -56,6 +56,7 @@ type stubBackend struct {
 	hashErr                 error
 	txErr                   error
 	txInfoErr               error
+	txInfoByBlockErr        error
 	rangeErr                error
 	rangeCalls              int
 	lastRangeStart          uint64
@@ -131,6 +132,9 @@ func (s *stubBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, e
 	return 0, false, nil
 }
 func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
+	if s.txInfoByBlockErr != nil {
+		return nil, s.txInfoByBlockErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
@@ -748,6 +752,20 @@ func assertHTTPEmptyObject(t *testing.T, resp *http.Response) {
 	}
 	if strings.TrimSpace(string(body)) != "{}" {
 		t.Fatalf("body = %q, want {}", string(body))
+	}
+}
+
+func assertHTTPEmptyArray(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("body = %q, want []", string(body))
 	}
 }
 
@@ -1648,6 +1666,19 @@ func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("gettransactionreceiptbyid status = %d, want 500", resp.StatusCode)
 	}
+}
+
+func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) {
+	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{txInfoByBlockErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactioninfobyblocknum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST gettransactioninfobyblocknum: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyArray(t, resp)
 }
 
 // --- Tests: M9.7 broadcastTransaction synchronous actuator.Validate ---

@@ -367,6 +367,11 @@ func writeEmptyJSON(w http.ResponseWriter) {
 	w.Write([]byte("{}"))
 }
 
+func writeEmptyJSONArray(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("[]"))
+}
+
 func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
 	api.handleGetContract(w, r, nil)
 }
@@ -851,9 +856,13 @@ func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
+	api.writeTransactionInfoByBlockNum(w, num)
+}
+
+func (api *API) writeTransactionInfoByBlockNum(w http.ResponseWriter, num uint64) {
 	infos, err := api.backend.GetTransactionInfoByBlockNum(num)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSONArray(w)
 		return
 	}
 	var result []map[string]interface{}

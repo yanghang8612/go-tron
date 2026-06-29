@@ -215,7 +215,7 @@ func (s *SolidityServer) GetTransactionInfoByBlockNum(_ context.Context, in *api
 	}
 	infos, err := s.backend.GetTransactionInfoByBlockNum(uint64(in.Num))
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.TransactionInfoList{}, nil
 	}
 	return &apipb.TransactionInfoList{TransactionInfo: infos}, nil
 }

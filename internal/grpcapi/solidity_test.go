@@ -536,6 +536,23 @@ func TestSolidity_GetBlockByNumBackendErrorReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestSolidity_GetTransactionInfoByBlockNumBackendErrorReturnsEmpty(t *testing.T) {
+	backendErr := errors.New("rawdb: transaction info block 4 decode: corrupt")
+	backend := &solidTestBackend{
+		testBackend: testBackend{txInfoByBlockErr: backendErr},
+		solidNum:    5,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetTransactionInfoByBlockNum(context.Background(), &apipb.NumberMessage{Num: 4})
+	if err != nil {
+		t.Fatalf("GetTransactionInfoByBlockNum backend error: %v", err)
+	}
+	if resp == nil || len(resp.GetTransactionInfo()) != 0 {
+		t.Fatalf("GetTransactionInfoByBlockNum backend error = %+v, want empty list", resp)
+	}
+}
+
 func TestSolidity_GetBlockLatestUsesSolidBound(t *testing.T) {
 	solidBlock := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{

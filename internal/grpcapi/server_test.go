@@ -46,6 +46,7 @@ type testBackend struct {
 	tx                      *corepb.Transaction
 	txErr                   error
 	txInfoErr               error
+	txInfoByBlockErr        error
 	params                  []tronapi.ChainParameter
 	contract                *contractpb.SmartContract
 	contractErr             error
@@ -114,6 +115,9 @@ func (b *testBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, e
 	return 0, false, nil
 }
 func (b *testBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
+	if b.txInfoByBlockErr != nil {
+		return nil, b.txInfoByBlockErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
@@ -1174,6 +1178,18 @@ func TestGetTransactionInfoByBlockNum_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmpty(t *testing.T) {
+	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{txInfoByBlockErr: backendErr})
+	resp, err := client.GetTransactionInfoByBlockNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if err != nil {
+		t.Fatalf("GetTransactionInfoByBlockNum backend error: %v", err)
+	}
+	if resp == nil || len(resp.GetTransactionInfo()) != 0 {
+		t.Fatalf("GetTransactionInfoByBlockNum backend error = %+v, want empty list", resp)
 	}
 }
 
