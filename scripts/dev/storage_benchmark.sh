@@ -492,6 +492,10 @@ height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
 datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
+datadir_per_block = float(total) / height if height > 0 else 0.0
+hot_per_block = float(chain) / height if height > 0 else 0.0
+cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
+derived_index_per_block = float(derived_index) / height if height > 0 else 0.0
 
 def esc(value):
     return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
@@ -512,6 +516,10 @@ metrics = (
     ("gtron_storage_benchmark_snapshot_bytes", "Benchmark state snapshot bytes.", snapshots),
     ("gtron_storage_benchmark_cold_archive_bytes", "Benchmark ancient plus snapshot bytes.", ancient + snapshots),
     ("gtron_storage_benchmark_derived_index_bytes", "Benchmark derived cold index bytes.", derived_index),
+    ("gtron_storage_benchmark_datadir_bytes_per_block", "Benchmark total datadir bytes per imported block.", datadir_per_block),
+    ("gtron_storage_benchmark_hot_bytes_per_block", "Benchmark hot chaindata bytes per imported block.", hot_per_block),
+    ("gtron_storage_benchmark_cold_archive_bytes_per_block", "Benchmark cold archive bytes per imported block.", cold_archive_per_block),
+    ("gtron_storage_benchmark_derived_index_bytes_per_block", "Benchmark derived cold index bytes per imported block.", derived_index_per_block),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
 )
 lines = []

@@ -529,6 +529,9 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
             self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
             self.assertIn(f'gtron_nile_sync_datadir_bytes{{{labels}}} ', metrics)
+            self.assertIn(f'gtron_nile_sync_datadir_bytes_per_block{{{labels}}} ', metrics)
+            self.assertIn(f'gtron_nile_sync_soak_efficiency_datadir_bytes_per_block{{{labels}}} ', metrics)
+            self.assertIn(f'gtron_nile_sync_derived_index_bytes_per_block{{{labels}}} ', metrics)
             trace_labels = f'datadir="{datadir}",label="candidate",method="debug_traceTransaction",mode="full",network="nile"'
             self.assertIn(f'gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 1', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_tx_method_success{{{trace_labels}}} 1', metrics)

@@ -797,6 +797,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_snapshot_bytes": 1000,
                 "gtron_storage_benchmark_cold_archive_bytes": 4000,
                 "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
             }
             write_benchmark_prometheus(prom, datadir, values)
@@ -859,6 +863,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_snapshot_bytes": 1000,
                 "gtron_storage_benchmark_cold_archive_bytes": 4000,
                 "gtron_storage_benchmark_derived_index_bytes": 499,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 4.99,
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
             }
             write_benchmark_prometheus(prom, datadir, values)

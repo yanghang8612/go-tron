@@ -244,7 +244,8 @@ retired snapshot bytes that still await physical pruning. Each row also records
 storage-alert gate for archive/soak monitor ingestion.
 The row also records `storageBenchmarkPrometheus`, a benchmark-owned
 Prometheus artifact with the row's height, elapsed seconds, hot/cold/snapshot
-bytes, cold-archive bytes, derived-index bytes, and snapshot sidecar share. The
+bytes, cold-archive bytes, derived-index bytes, matching bytes-per-block
+gauges for the same storage families, and snapshot sidecar share. The
 storage-alert and benchmark artifacts are written next to the JSONL output so
 they remain readable even when the harness removes its temporary workdir.
 The acceptance checker binds `gtron_storage_alert_status`,
@@ -309,9 +310,10 @@ the current sync-stage bottleneck.
 Set `--prometheus-output <file>` on the Nile sampler when a scrape job should
 consume the current sync sample directly. The sampler writes
 `gtron_nile_sync_*` gauges for height, target/stage lag, throughput,
-hot/cold/index bytes, snapshot sidecar share, archive probe failures, and
-sample/soak health status, and records `samplePrometheus*` fields in the JSONL
-row. Gate that artifact with `nile_sync_acceptance.py
+hot/cold/index bytes, bytes-per-block efficiency, snapshot sidecar share,
+archive probe failures, and sample/soak health status, and records
+`samplePrometheus*` fields in the JSONL row. Gate that artifact with
+`nile_sync_acceptance.py
 --require-sample-prometheus-artifact` so the scrape payload cannot drift from
 the accepted JSONL sample. Use
 `scripts/dev/prometheus_artifact_export.py results.jsonl --output gtron.prom`

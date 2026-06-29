@@ -828,6 +828,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertTrue(benchmark_prometheus.is_file(), row["storageBenchmarkPrometheus"])
             benchmark_metrics = benchmark_prometheus.read_text(encoding="utf-8")
             self.assertIn("gtron_storage_benchmark_derived_index_bytes", benchmark_metrics)
+            self.assertIn("gtron_storage_benchmark_derived_index_bytes_per_block", benchmark_metrics)
             self.assertIn('mode="full"', benchmark_metrics)
             self.assertIn('role="producer"', benchmark_metrics)
 

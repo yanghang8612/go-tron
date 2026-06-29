@@ -35,7 +35,7 @@ PROMETHEUS_STATUS_VALUES = {
     "critical": 2,
 }
 
-BENCHMARK_PROMETHEUS_FIELDS = (
+BENCHMARK_PROMETHEUS_SUM_FIELDS = (
     ("gtron_storage_benchmark_height", ("height",)),
     ("gtron_storage_benchmark_elapsed_seconds", ("elapsedSeconds",)),
     ("gtron_storage_benchmark_datadir_bytes", ("datadirBytes",)),
@@ -45,6 +45,13 @@ BENCHMARK_PROMETHEUS_FIELDS = (
     ("gtron_storage_benchmark_cold_archive_bytes", ("ancientBytes", "snapshotBytes")),
     ("gtron_storage_benchmark_derived_index_bytes", ("derivedIndexBytes",)),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", ("snapshotSidecarShareMilli",)),
+)
+
+BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS = (
+    ("gtron_storage_benchmark_datadir_bytes_per_block", ("datadirBytes",)),
+    ("gtron_storage_benchmark_hot_bytes_per_block", ("chaindataBytes",)),
+    ("gtron_storage_benchmark_cold_archive_bytes_per_block", ("ancientBytes", "snapshotBytes")),
+    ("gtron_storage_benchmark_derived_index_bytes_per_block", ("derivedIndexBytes",)),
 )
 
 DEFAULT_ARCHIVE_API_METHODS = (
@@ -647,7 +654,7 @@ def check_prometheus_artifacts(result_path, rows):
     return issues
 
 
-def benchmark_prometheus_expected(row, fields):
+def benchmark_prometheus_expected(row, fields, divisor_field=None):
     total = 0.0
     missing = []
     for field in fields:
@@ -658,6 +665,11 @@ def benchmark_prometheus_expected(row, fields):
         total += value
     if missing:
         return None, missing
+    if divisor_field:
+        divisor = as_number(row, divisor_field)
+        if divisor is None or divisor <= 0:
+            return None, [divisor_field]
+        total /= divisor
     return total, []
 
 
@@ -674,8 +686,24 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
         except OSError as exc:
             issues.append(f"{line_label(row)} benchmark prometheus artifact {path}: {exc}")
             continue
-        for metric, fields in BENCHMARK_PROMETHEUS_FIELDS:
+        for metric, fields in BENCHMARK_PROMETHEUS_SUM_FIELDS:
             want, missing = benchmark_prometheus_expected(row, fields)
+            if missing:
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus evidence missing JSONL fields "
+                    f"for {metric}: " + ",".join(missing)
+                )
+                continue
+            got = prometheus_metric_value(text, metric, row)
+            if got is None:
+                issues.append(f"{line_label(row)} benchmark prometheus artifact {path} missing {metric}")
+            elif got != want:
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus artifact {path} "
+                    f"{metric}={got:g}, want {want:g}"
+                )
+        for metric, fields in BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS:
+            want, missing = benchmark_prometheus_expected(row, fields, divisor_field="height")
             if missing:
                 issues.append(
                     f"{line_label(row)} benchmark prometheus evidence missing JSONL fields "
