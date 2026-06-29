@@ -690,14 +690,27 @@ def benchmark_prometheus_metric_value(text, metric, row, extra=None):
         extra = {}
     matches = []
     for labels, value in samples:
-        if not prometheus_label_matches(row, labels):
-            continue
-        if any(labels.get(key) != str(want) for key, want in extra.items()):
+        if not benchmark_prometheus_label_matches(row, labels, extra):
             continue
         matches.append((labels, value))
     if not matches:
         return None
     return matches[-1][1]
+
+
+def benchmark_prometheus_label_matches(row, labels, extra=None):
+    if not prometheus_label_matches(row, labels):
+        return False
+    for field in ("profile", "mode", "role", "status"):
+        if field in row:
+            value = row.get(field)
+            if value is not None and str(value) != "" and labels.get(field) != str(value):
+                return False
+    if extra:
+        for key, want in extra.items():
+            if labels.get(key) != str(want):
+                return False
+    return True
 
 
 def expected_archive_api_method_metrics(row, successful_methods):
@@ -799,7 +812,7 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
                     f"for {metric}: " + ",".join(missing)
                 )
                 continue
-            got = prometheus_metric_value(text, metric, row)
+            got = benchmark_prometheus_metric_value(text, metric, row)
             if got is None:
                 issues.append(f"{line_label(row)} benchmark prometheus artifact {path} missing {metric}")
             elif got != want:
@@ -815,7 +828,7 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
                     f"for {metric}: " + ",".join(missing)
                 )
                 continue
-            got = prometheus_metric_value(text, metric, row)
+            got = benchmark_prometheus_metric_value(text, metric, row)
             if got is None:
                 issues.append(f"{line_label(row)} benchmark prometheus artifact {path} missing {metric}")
             elif got != want:
