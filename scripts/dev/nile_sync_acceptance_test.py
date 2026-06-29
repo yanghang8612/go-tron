@@ -2878,6 +2878,96 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
 
+    def test_requires_archive_trace_transaction_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            base_row = {
+                "unix": 10,
+                "network": "nile",
+                "mode": "minimal",
+                "sampleStatus": "ok",
+                "soakHealthStatus": "ok",
+                "fullStagedSyncStatus": "caught-up",
+                "fullStagedSyncReady": True,
+                "fullStagedSyncCompleteAtHead": True,
+                "height": 100,
+                "archiveApiStatus": "ok",
+                "archiveApiChecks": 8,
+                "archiveApiFailures": 0,
+                "archiveApiBlock": 99,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
+                ],
+            }
+            write_result(result, [base_row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+            missing_trace = dict(base_row)
+            missing_trace["archiveApiChecks"] = 7
+            missing_trace["archiveApiMethods"] = [
+                method for method in base_row["archiveApiMethods"] if method != "debug_traceTransaction"
+            ]
+            missing_trace["archiveApiTxMethods"] = [
+                method for method in base_row["archiveApiTxMethods"] if method != "debug_traceTransaction"
+            ]
+            write_result(result, [missing_trace])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods missing required methods: debug_traceTransaction",
+                proc.stderr,
+            )
+            self.assertIn(
+                "archiveApiTxMethods missing required methods: debug_traceTransaction",
+                proc.stderr,
+            )
+
     def test_rejects_archive_tx_evidence_without_transaction_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

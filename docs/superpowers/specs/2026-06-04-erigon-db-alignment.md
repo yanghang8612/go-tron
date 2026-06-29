@@ -714,9 +714,10 @@ Status:
   `debug_traceTransaction` checks when a transaction hash is available. When
   the selected historical block contains a transaction, the same probe now adds
   `eth_getTransactionByHash` and `eth_getTransactionReceipt` evidence plus
-  `archiveApiTx*` fields, and the Nile acceptance gate can require that
-  tx/receipt archive proof with
-  `--require-archive-tx-evidence`. The probe now validates JSON-RPC result
+  `archiveApiTx*` fields, and the Nile/storage acceptance gates can require
+  tx/receipt archive proof with `--require-archive-tx-evidence` or add
+  transaction trace proof with `--require-archive-trace-transaction`. The probe
+  now validates JSON-RPC result
   shapes and target bindings before counting a method as successful: scalar
   account/code/storage/call results must be `0x` hex strings, the block result
   must match the requested historical block number, and transaction or receipt

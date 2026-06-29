@@ -118,6 +118,8 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionReceipt",
 )
 
+ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+
 ARCHIVE_API_EVIDENCE_FIELDS = (
     "archiveApiStatus",
     "archiveApiChecks",
@@ -1477,8 +1479,16 @@ def check_archive_api_evidence(row, required_methods):
     return issues
 
 
-def check_archive_tx_evidence(row):
+def archive_api_tx_required_methods(require_trace_transaction=False):
+    methods = list(ARCHIVE_API_TX_METHODS)
+    if require_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in methods:
+        methods.append(ARCHIVE_API_TRACE_TX_METHOD)
+    return methods
+
+
+def check_archive_tx_evidence(row, require_trace_transaction=False):
     issues = []
+    required_methods = archive_api_tx_required_methods(require_trace_transaction)
     if not has_archive_api_evidence(row):
         issues.append("archive API evidence is missing for archive tx evidence")
     if not as_bool(row, "archiveApiTxProbe"):
@@ -1497,7 +1507,7 @@ def check_archive_tx_evidence(row):
     elif not tx_methods:
         issues.append("archiveApiTxMethods must be a non-empty list")
     else:
-        missing = sorted(set(ARCHIVE_API_TX_METHODS) - tx_methods)
+        missing = sorted(set(required_methods) - tx_methods)
         if missing:
             issues.append("archiveApiTxMethods missing required methods: " + ",".join(missing))
 
@@ -1624,15 +1634,24 @@ def check_row(row, args):
         issues.extend(check_stage_stall_evidence(row))
     if args.require_prune_mode_semantics:
         issues.extend(check_prune_mode_semantics(row))
-    if args.require_archive_api_evidence or args.require_archive_tx_evidence:
+    if (
+        args.require_archive_api_evidence
+        or args.require_archive_tx_evidence
+        or args.require_archive_trace_transaction
+    ):
         required_archive_methods = list(args.archive_api_methods_required)
-        if args.require_archive_tx_evidence:
-            for method in ARCHIVE_API_TX_METHODS:
+        if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
+            for method in archive_api_tx_required_methods(args.require_archive_trace_transaction):
                 if method not in required_archive_methods:
                     required_archive_methods.append(method)
         issues.extend(check_archive_api_evidence(row, required_archive_methods))
-    if args.require_archive_tx_evidence:
-        issues.extend(check_archive_tx_evidence(row))
+    if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
+        issues.extend(
+            check_archive_tx_evidence(
+                row,
+                require_trace_transaction=args.require_archive_trace_transaction,
+            )
+        )
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
 
@@ -1763,6 +1782,14 @@ def build_parser():
         help=(
             "require archive API evidence for a historical block with at least one "
             "transaction plus successful tx and receipt lookups"
+        ),
+    )
+    parser.add_argument(
+        "--require-archive-trace-transaction",
+        action="store_true",
+        help=(
+            "require archive tx evidence to include a successful "
+            "debug_traceTransaction probe for the selected transaction"
         ),
     )
     parser.add_argument(

@@ -48,6 +48,8 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionReceipt",
 )
 
+ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+
 
 def row_sort_key(row):
     unix = row.get("unix")
@@ -868,8 +870,16 @@ def has_archive_tx_evidence(row):
     return any(field in row for field in ARCHIVE_API_TX_EVIDENCE_FIELDS)
 
 
-def check_archive_tx_evidence(rows, required_modes=()):
+def archive_api_tx_required_methods(require_trace_transaction=False):
+    methods = list(ARCHIVE_API_TX_METHODS)
+    if require_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in methods:
+        methods.append(ARCHIVE_API_TRACE_TX_METHOD)
+    return methods
+
+
+def check_archive_tx_evidence(rows, required_modes=(), require_trace_transaction=False):
     issues = []
+    required_methods = archive_api_tx_required_methods(require_trace_transaction)
     latest = list(latest_rows(rows).values())
     evidence_rows = [
         row
@@ -906,7 +916,7 @@ def check_archive_tx_evidence(rows, required_modes=()):
 
         methods = archive_api_methods(row)
         if methods is not None:
-            missing = sorted(set(ARCHIVE_API_TX_METHODS) - methods)
+            missing = sorted(set(required_methods) - methods)
             if missing:
                 issues.append(
                     f"{line_label(row)} archiveApiMethods missing required tx methods: "
@@ -919,7 +929,7 @@ def check_archive_tx_evidence(rows, required_modes=()):
         elif not tx_methods:
             issues.append(f"{line_label(row)} archiveApiTxMethods must be a non-empty list")
         else:
-            missing = sorted(set(ARCHIVE_API_TX_METHODS) - tx_methods)
+            missing = sorted(set(required_methods) - tx_methods)
             if missing:
                 issues.append(
                     f"{line_label(row)} archiveApiTxMethods missing required methods: "
@@ -1314,6 +1324,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-archive-trace-transaction",
+        action="store_true",
+        help=(
+            "require archive tx evidence to include a successful "
+            "debug_traceTransaction probe for the selected transaction"
+        ),
+    )
+    parser.add_argument(
         "--require-archive-tx-mode",
         action="append",
         default=[],
@@ -1439,6 +1457,8 @@ def main(argv=None):
     for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
         if method not in archive_api_methods_required:
             archive_api_methods_required.append(method)
+    if args.require_archive_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in archive_api_methods_required:
+        archive_api_methods_required.append(ARCHIVE_API_TRACE_TX_METHOD)
     required_archive_api_modes = split_modes(
         args.require_archive_api_mode + args.require_archive_api_modes
     )
@@ -1453,6 +1473,7 @@ def main(argv=None):
         args.require_archive_api_evidence
         or archive_api_required_modes
         or args.require_archive_tx_evidence
+        or args.require_archive_trace_transaction
         or required_archive_tx_modes
     ):
         issues.extend(
@@ -1462,8 +1483,14 @@ def main(argv=None):
                 archive_api_required_modes,
             )
         )
-    if args.require_archive_tx_evidence or required_archive_tx_modes:
-        issues.extend(check_archive_tx_evidence(rows, required_archive_tx_modes))
+    if args.require_archive_tx_evidence or args.require_archive_trace_transaction or required_archive_tx_modes:
+        issues.extend(
+            check_archive_tx_evidence(
+                rows,
+                required_archive_tx_modes,
+                require_trace_transaction=args.require_archive_trace_transaction,
+            )
+        )
     required_event_log_index_modes = split_modes(
         args.require_event_log_index_mode + args.require_event_log_index_modes
     )
