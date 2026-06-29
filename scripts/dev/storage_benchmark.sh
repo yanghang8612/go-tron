@@ -107,6 +107,8 @@ RUN_ARCHIVE_API_STATUS="not-run"
 RUN_ARCHIVE_API_CHECKS=0
 RUN_ARCHIVE_API_FAILURES=0
 RUN_ARCHIVE_API_BLOCK=-1
+RUN_ARCHIVE_API_CALL_PROBE="false"
+RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="false"
 RUN_ARCHIVE_API_METHODS="[]"
 RUN_ARCHIVE_API_TX_PROBE="false"
 RUN_ARCHIVE_API_TX_HASH=""
@@ -320,6 +322,16 @@ reset_run_metrics() {
   RUN_ARCHIVE_API_CHECKS=0
   RUN_ARCHIVE_API_FAILURES=0
   RUN_ARCHIVE_API_BLOCK=-1
+  if [ -n "$ARCHIVE_API_CALL_DATA" ]; then
+    RUN_ARCHIVE_API_CALL_PROBE="true"
+  else
+    RUN_ARCHIVE_API_CALL_PROBE="false"
+  fi
+  if [ "$ARCHIVE_API_TRACE_TRANSACTION" -eq 1 ]; then
+    RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="true"
+  else
+    RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="false"
+  fi
   RUN_ARCHIVE_API_METHODS="[]"
   RUN_ARCHIVE_API_TX_PROBE="false"
   RUN_ARCHIVE_API_TX_HASH=""
@@ -1345,7 +1357,8 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
     "$RUN_ARCHIVE_API_STATUS" "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_FAILURES" \
-    "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_METHODS" \
+    "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_CALL_PROBE" \
+    "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
@@ -1388,7 +1401,8 @@ keys = [
     "snapshotAlertStatus", "snapshotAlertIssues", "snapshotAlertDetails", "snapshotRetiredSegments",
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
-    "archiveApiBlock", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
+    "archiveApiBlock", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
+    "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
     "archiveApiTxMethods", "storageAlertPrometheus",
     "datadir", "log",
 ]
@@ -1431,6 +1445,8 @@ bools = {
     "pruneModePersisted",
     "retiredPruneRan",
     "stageAlertPipelineComplete",
+    "archiveApiCallProbe",
+    "archiveApiTraceTransactionProbe",
     "archiveApiTxProbe",
 }
 row = {"unix": int(time.time())}

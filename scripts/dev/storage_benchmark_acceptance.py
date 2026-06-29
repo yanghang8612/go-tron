@@ -908,6 +908,11 @@ def check_archive_tx_evidence(rows, required_modes=(), require_trace_transaction
                 f"{line_label(row)} archiveApiTxProbe is not true; "
                 "choose an archive-api-block with at least one transaction"
             )
+        if require_trace_transaction and not as_bool(row, "archiveApiTraceTransactionProbe"):
+            issues.append(
+                f"{line_label(row)} archiveApiTraceTransactionProbe is not true; "
+                "run storage_benchmark.sh with --archive-api-trace-transaction"
+            )
         tx_hash = row.get("archiveApiTxHash")
         if not isinstance(tx_hash, str) or not tx_hash:
             issues.append(f"{line_label(row)} archiveApiTxHash is missing")

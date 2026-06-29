@@ -141,6 +141,8 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["archiveApiChecks"], 10)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
+            self.assertTrue(row["archiveApiCallProbe"])
+            self.assertTrue(row["archiveApiTraceTransactionProbe"])
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
@@ -287,6 +289,8 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["archiveApiStatus"], "failed")
             self.assertEqual(row["archiveApiChecks"], 10)
             self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertTrue(row["archiveApiCallProbe"])
+            self.assertTrue(row["archiveApiTraceTransactionProbe"])
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
