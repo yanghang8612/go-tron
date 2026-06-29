@@ -694,6 +694,13 @@ def hex_quantity(value):
     except Exception:
         return None
 
+def is_hex_string(value):
+    return (
+        isinstance(value, str)
+        and value.startswith("0x")
+        and all(ch in "0123456789abcdefABCDEF" for ch in value[2:])
+    )
+
 def archive_result_ok(method, result, params):
     if method == "eth_getBlockByNumber":
         if not isinstance(result, dict):
@@ -702,7 +709,7 @@ def archive_result_ok(method, result, params):
         requested_number = hex_quantity(params[0] if params else None)
         return result_number is not None and result_number == requested_number
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
-        return isinstance(result, str)
+        return is_hex_string(result)
     if method == "eth_getLogs":
         return isinstance(result, list)
     if method == "eth_getTransactionByHash":

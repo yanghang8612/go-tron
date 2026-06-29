@@ -715,11 +715,12 @@ Status:
   `eth_getTransactionReceipt` evidence plus `archiveApiTx*` fields, and the
   Nile acceptance gate can require that tx/receipt archive proof with
   `--require-archive-tx-evidence`. The probe now validates JSON-RPC result
-  shapes and target bindings before counting a method as successful: the block
-  result must match the requested historical block number, and transaction or
-  receipt results must match the transaction hash selected from that block, so
-  `null` or wrong-transaction results are archive-read failures instead of
-  false-positive proof.
+  shapes and target bindings before counting a method as successful: scalar
+  account/code/storage/call results must be `0x` hex strings, the block result
+  must match the requested historical block number, and transaction or receipt
+  results must match the transaction hash selected from that block, so invalid
+  scalars, `null`, or wrong-transaction results are archive-read failures
+  instead of false-positive proof.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating
