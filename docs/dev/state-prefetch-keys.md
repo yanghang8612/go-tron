@@ -41,6 +41,7 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | TRX and TRC10 transfer | owner account, recipient account; transfer-style recipient contract metadata where a contract-address check may follow; TRC10 legacy metadata, name index, and numeric-id V2 metadata |
 | TVM trigger | owner account, contract account, contract metadata, contract code row, contract origin account from metadata, Blackhole account-name index |
 | TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata, Blackhole account-name index |
+| TVM runtime | nested CALL/CALLTOKEN/STATICCALL/DELEGATECALL target code and contract metadata rows; EXTCODE* target code/metadata rows; SLOAD/SSTORE contract-storage rows once the slot is on the VM stack |
 | Contract settings | owner account, target contract account, target contract metadata, target contract origin account from metadata |
 | Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index |
 | Witness operations | owner account, owner witness capsule, witness index for creation, current brokerage row for brokerage updates |
@@ -67,9 +68,11 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
   executor itself caps successful matching at 20 maker orders; the prefetch
   hint mirrors that order cap and also caps compatible price-level probes to
   keep background warmups bounded.
-- Additional TVM runtime CALL/DELEGATECALL target code rows and storage slots.
-  Those become known only during VM execution and need a VM hook, not
-  tx-envelope extraction.
+- Deeper TVM runtime prefetch lead. The first VM hook now enqueues CALL-family,
+  EXTCODE*, and SLOAD/SSTORE rows once bytecode reveals the target address or
+  slot. It deliberately stays best-effort and non-blocking; future work can add
+  interpreter-level lookahead if profiling shows same-opcode storage hints do
+  not get enough overlap.
 - Dynamic-property reads. They are normally hot and not represented by the
   first raw latest-domain prefetch key set.
 

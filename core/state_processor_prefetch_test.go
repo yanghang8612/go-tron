@@ -94,6 +94,15 @@ func TestProcessBlockStatePrefetchNormalizesDefaults(t *testing.T) {
 	}
 }
 
+func TestProcessBlockStatePrefetcherSupportsRuntimeOnlyHints(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	p := newProcessBlockPrefetcher(db, processBlockPrefetchConfig{Enabled: true, Workers: 1, Lookahead: 0}, 1)
+	if p == nil {
+		t.Fatal("single-tx runtime prefetcher is nil")
+	}
+	p.Stop()
+}
+
 func prefetchParityTransactions() []*corepb.Transaction {
 	txs := make([]*corepb.Transaction, 0, 100)
 	for i := 0; i < 100; i++ {

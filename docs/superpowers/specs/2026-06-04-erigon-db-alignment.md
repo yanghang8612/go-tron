@@ -1470,6 +1470,13 @@ Status:
   uniqueness index rows, owner-only
   actuators, and account-create families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
+- The VM now has a matching runtime prefetch hook for rows that are not
+  derivable from the transaction envelope: nested CALL/CALLTOKEN/STATICCALL/
+  DELEGATECALL targets enqueue contract-code and metadata warmups, EXTCODE*
+  enqueues the probed account's code/metadata rows, and SLOAD/SSTORE enqueue
+  the concrete contract-storage row once the slot is on the stack. The hook
+  shares the same non-blocking `StatePrefetcher` worker and does not mutate
+  `StateDB` caches.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when
   `params.ChainConfig.StatePrefetchEnabled` is true, while the public
