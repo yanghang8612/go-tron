@@ -1215,6 +1215,13 @@ Status:
   `nile_sync_acceptance.py --require-sample-prometheus-artifact` verifies that
   the artifact is readable, has matching datadir labels, and agrees with the
   selected JSONL row on the key gauges before a production soak can pass.
+- `scripts/dev/prometheus_artifact_export.py` now provides the file-based
+  external monitor routing step: it reads the latest selected Nile/benchmark
+  JSONL rows, resolves `samplePrometheus`, `offlineDbCheckPrometheus`, and
+  `storageAlertPrometheus` relative to each JSONL file, and atomically writes
+  one combined Prometheus textfile-collector payload. Required fields can be
+  enforced with `--require-field`, so long Nile/mainnet scrape jobs fail closed
+  if the accepted sample row stops carrying its live-sync metrics artifact.
 - The storage benchmark and Nile acceptance checkers now require readable
   Prometheus artifacts to expose both `gtron_storage_alert_status` and the
   normalized `gtron_storage_alert_issue` metric family, so production soak
@@ -1256,9 +1263,8 @@ Needed:
   profiles show they dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Wire the storage benchmark storage-alert artifacts and Nile sampler
-  `gtron_nile_sync_*` artifacts into the external monitor/alert routing used
-  for long Nile/mainnet soaks.
+- Wire the exported Prometheus textfile payload into the deployment-specific
+  external monitor/alert rules used for long Nile/mainnet soaks.
   Catalog/freezer sidecar mismatch is now caught by signed/local manifest
   verification as well as tail-prune/stage-status coverage gates.
 

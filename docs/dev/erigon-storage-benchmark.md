@@ -303,7 +303,11 @@ hot/cold/index bytes, snapshot sidecar share, archive probe failures, and
 sample/soak health status, and records `samplePrometheus*` fields in the JSONL
 row. Gate that artifact with `nile_sync_acceptance.py
 --require-sample-prometheus-artifact` so the scrape payload cannot drift from
-the accepted JSONL sample.
+the accepted JSONL sample. Use
+`scripts/dev/prometheus_artifact_export.py results.jsonl --output gtron.prom`
+to atomically combine the latest JSONL-referenced `samplePrometheus`,
+`offlineDbCheckPrometheus`, and `storageAlertPrometheus` artifacts into one
+node_exporter textfile-collector payload.
 Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics, including
 `stageVerifyDetails` entries such as `SyncBodies`/`SyncBodiesReady`

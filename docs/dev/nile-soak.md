@@ -125,7 +125,7 @@ sample also writes a low-cardinality Prometheus text artifact and records
 exposes sync height, target/stage lag, throughput, hot/cold/index byte gauges,
 snapshot sidecar share, archive probe failures, and sample/soak health status
 for external scrape jobs.
-`intervalDerivedIndexGrowthShare`, plus hot/cold interval ratios
+Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
 `intervalDerivedIndexToHotGrowthRatio`. The top-level primary growth bucket is
@@ -572,6 +572,22 @@ maintenance backlog from actual storage-alert failures. When
 `offlineDbCheckPrometheus` plus `offlineDbCheckPrometheusStatus` in the JSONL
 row. Use `--storage-alert-prometheus-file <file>` to place that artifact at a
 stable path for external scrape jobs.
+To route the latest JSONL-referenced artifacts into a node_exporter textfile
+collector or another file-based scrape job, export them atomically into one
+combined file:
+
+```bash
+scripts/dev/prometheus_artifact_export.py \
+  /Users/asuka/gtron-soak/logs/sync-samples.jsonl \
+  --output /Users/asuka/gtron-soak/logs/gtron-nile.prom \
+  --require-field samplePrometheus
+```
+
+The exporter reads the latest selected row, resolves `samplePrometheus`,
+`offlineDbCheckPrometheus`, and `storageAlertPrometheus` relative to the JSONL
+file, then writes one combined Prometheus text artifact. Add `--all-rows` only
+for debugging; production scrape jobs should usually export the latest row per
+JSONL file.
 The acceptance checker compares `storageAlertStatus` with
 `gtron_storage_alert_status` (`0=ok`, `1=warning`, `2=critical`) when both are
 present, so a scrape artifact with the right labels but stale status value is
