@@ -35,6 +35,11 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getLogs",
 )
 
+ARCHIVE_API_TX_METHODS = (
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+)
+
 
 def row_sort_key(row):
     unix = row.get("unix")
@@ -686,13 +691,17 @@ def check_prune_mode_semantics(rows):
     return issues
 
 
-def archive_api_methods(row):
-    raw = row.get("archiveApiMethods")
+def string_set_field(row, field):
+    raw = row.get(field)
     if raw is None:
         return None
     if not isinstance(raw, list):
         return set()
-    return {str(method) for method in raw}
+    return {str(value) for value in raw}
+
+
+def archive_api_methods(row):
+    return string_set_field(row, "archiveApiMethods")
 
 
 def archive_api_method_count(row):
@@ -786,6 +795,76 @@ def check_archive_api_evidence(rows, required_methods, required_modes=()):
             if missing:
                 issues.append(
                     f"{line_label(row)} archiveApiMethods missing required methods: "
+                    + ",".join(missing)
+                )
+
+    return issues
+
+
+ARCHIVE_API_TX_EVIDENCE_FIELDS = (
+    "archiveApiTxProbe",
+    "archiveApiTxHash",
+    "archiveApiTxMethods",
+)
+
+
+def has_archive_tx_evidence(row):
+    return any(field in row for field in ARCHIVE_API_TX_EVIDENCE_FIELDS)
+
+
+def check_archive_tx_evidence(rows, required_modes=()):
+    issues = []
+    latest = list(latest_rows(rows).values())
+    evidence_rows = [
+        row
+        for row in latest
+        if has_archive_tx_evidence(row)
+    ]
+    if not evidence_rows and not required_modes:
+        return ["required archive tx evidence has no selected latest row"]
+
+    for mode in required_modes:
+        row = latest_for(rows, mode=mode)
+        if row is None:
+            issues.append(f"required archive tx evidence has no selected latest row for mode {mode!r}")
+            continue
+        if not has_archive_tx_evidence(row):
+            issues.append(f"{line_label(row)} missing archive tx evidence for required mode {mode!r}")
+            continue
+        if row not in evidence_rows:
+            evidence_rows.append(row)
+
+    for row in evidence_rows:
+        if not has_archive_api_evidence(row):
+            issues.append(f"{line_label(row)} archive API evidence is missing for archive tx evidence")
+        if not as_bool(row, "archiveApiTxProbe"):
+            issues.append(
+                f"{line_label(row)} archiveApiTxProbe is not true; "
+                "choose an archive-api-block with at least one transaction"
+            )
+        tx_hash = row.get("archiveApiTxHash")
+        if not isinstance(tx_hash, str) or not tx_hash:
+            issues.append(f"{line_label(row)} archiveApiTxHash is missing")
+
+        methods = archive_api_methods(row)
+        if methods is not None:
+            missing = sorted(set(ARCHIVE_API_TX_METHODS) - methods)
+            if missing:
+                issues.append(
+                    f"{line_label(row)} archiveApiMethods missing required tx methods: "
+                    + ",".join(missing)
+                )
+
+        tx_methods = string_set_field(row, "archiveApiTxMethods")
+        if tx_methods is None:
+            issues.append(f"{line_label(row)} archiveApiTxMethods is missing")
+        elif not tx_methods:
+            issues.append(f"{line_label(row)} archiveApiTxMethods must be a non-empty list")
+        else:
+            missing = sorted(set(ARCHIVE_API_TX_METHODS) - tx_methods)
+            if missing:
+                issues.append(
+                    f"{line_label(row)} archiveApiTxMethods missing required methods: "
                     + ",".join(missing)
                 )
 
@@ -1049,6 +1128,26 @@ def build_parser():
         help="comma-separated modes whose latest selected rows must include successful archive API evidence",
     )
     parser.add_argument(
+        "--require-archive-tx-evidence",
+        action="store_true",
+        help=(
+            "require latest rows to prove historical archive tx and receipt lookups "
+            "for a block with at least one transaction"
+        ),
+    )
+    parser.add_argument(
+        "--require-archive-tx-mode",
+        action="append",
+        default=[],
+        help="mode whose latest selected row must include archive tx and receipt evidence; repeatable",
+    )
+    parser.add_argument(
+        "--require-archive-tx-modes",
+        action="append",
+        default=[],
+        help="comma-separated modes whose latest selected rows must include archive tx and receipt evidence",
+    )
+    parser.add_argument(
         "--require-event-log-index-evidence",
         action="store_true",
         help="require latest derived-index rows to include event-log-index fanout/selectivity counters",
@@ -1148,14 +1247,28 @@ def main(argv=None):
     required_archive_api_modes = split_modes(
         args.require_archive_api_mode + args.require_archive_api_modes
     )
-    if args.require_archive_api_evidence or required_archive_api_modes:
+    required_archive_tx_modes = split_modes(
+        args.require_archive_tx_mode + args.require_archive_tx_modes
+    )
+    archive_api_required_modes = list(required_archive_api_modes)
+    for mode in required_archive_tx_modes:
+        if mode not in archive_api_required_modes:
+            archive_api_required_modes.append(mode)
+    if (
+        args.require_archive_api_evidence
+        or archive_api_required_modes
+        or args.require_archive_tx_evidence
+        or required_archive_tx_modes
+    ):
         issues.extend(
             check_archive_api_evidence(
                 rows,
                 archive_api_methods_required,
-                required_archive_api_modes,
+                archive_api_required_modes,
             )
         )
+    if args.require_archive_tx_evidence or required_archive_tx_modes:
+        issues.extend(check_archive_tx_evidence(rows, required_archive_tx_modes))
     required_event_log_index_modes = split_modes(
         args.require_event_log_index_mode + args.require_event_log_index_modes
     )
@@ -1193,9 +1306,12 @@ def main(argv=None):
         checks += 1
     if args.require_prune_mode_semantics:
         checks += len(latest)
-    if args.require_archive_api_evidence:
+    if args.require_archive_api_evidence or args.require_archive_tx_evidence:
         checks += 1
-    checks += len(required_archive_api_modes)
+    checks += len(archive_api_required_modes)
+    if args.require_archive_tx_evidence:
+        checks += 1
+    checks += len(required_archive_tx_modes)
     if args.require_event_log_index_evidence:
         checks += 1
     checks += len(required_event_log_index_modes)

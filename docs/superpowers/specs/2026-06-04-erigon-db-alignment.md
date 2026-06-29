@@ -1206,7 +1206,10 @@ Status:
   `gtron_storage_alert_issue{component,kind,severity}` series in the captured
   artifact. Nile sync acceptance can also require the latest selected sample to
   carry stage-stall diagnostics and successful historical JSON-RPC archive-read
-  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields.
+  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields. The
+  storage benchmark acceptance checker can now require the same historical
+  transaction and receipt archive proof with `archiveApiTx*` fields and
+  `--require-archive-tx-evidence`.
 
 Needed:
 

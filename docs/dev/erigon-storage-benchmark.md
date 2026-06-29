@@ -152,7 +152,7 @@ surface (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
 `eth_getStorageAt`, and `eth_getLogs`) at `height-1` by default and emits
 `archiveApi*` fields. When the probed historical block contains a transaction,
 the probe also adds `eth_getTransactionByHash` and
-`eth_getTransactionReceipt`. Pass `--archive-api-block`,
+`eth_getTransactionReceipt` plus `archiveApiTx*` fields. Pass `--archive-api-block`,
 `--archive-api-address`, or `--archive-api-storage-slot` when a run needs to
 target a known historical contract/account. Pass `--archive-api-call-data` as
 well to include `eth_call` against that address.
@@ -280,9 +280,11 @@ staged-body mismatches.
 Use `--archive-api-probe` on the Nile sampler when the same production JSONL
 must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
 `archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`, and
-`archiveApiMethods` from historical JSON-RPC reads; add
-`--archive-api-call-data` plus `--archive-api-method eth_call` only when the
-sample targets a known historical contract.
+`archiveApiMethods` from historical JSON-RPC reads. When the probed block has a
+transaction, it also emits `archiveApiTxProbe`, `archiveApiTxHash`, and
+`archiveApiTxMethods`; add `--archive-api-call-data` plus
+`--archive-api-method eth_call` only when the sample targets a known historical
+contract.
 
 ## Interpreting Results
 
@@ -315,6 +317,8 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-prune-mode-semantics \
   --require-archive-api-evidence \
   --require-archive-api-mode minimal \
+  --require-archive-tx-evidence \
+  --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
   --require-event-log-index-mode minimal \
   --require-retired-prune-mode minimal \
@@ -363,11 +367,12 @@ minimal` so the latest pruned minimal row must prove its own archive reads
 instead of letting an unpruned `archive` row satisfy the run. Repeat
 `--require-archive-api-mode` or use `--require-archive-api-modes` when a run
 must prove mode-local archive reads for more modes. Add
-`--archive-api-method eth_getTransactionByHash` and
-`--archive-api-method eth_getTransactionReceipt` when the selected probe block
-is known to contain a transaction; add `--archive-api-method eth_call` when
-the samples also pass `--archive-api-call-data` against a known historical
-contract. If the row also
+`--require-archive-tx-evidence` and `--require-archive-tx-mode minimal` when the
+selected probe block is known to contain a transaction; this requires
+`archiveApiTxProbe=true`, a concrete `archiveApiTxHash`, and successful
+`eth_getTransactionByHash` plus `eth_getTransactionReceipt` probes. Add
+`--archive-api-method eth_call` when the samples also pass
+`--archive-api-call-data` against a known historical contract. If the row also
 reports `tailPrunedThroughBlock`, the
 archive API block must be at or below that prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. With
