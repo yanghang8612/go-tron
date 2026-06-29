@@ -296,6 +296,14 @@ Each row also includes `soakHealthStatus`, `soakHealthIssues`, and
 `soakPrimaryBottleneck*` fields so long Nile runs can be filtered directly for
 HTTP/peer failures, stage regressions, pipeline violations, storage alerts, and
 the current sync-stage bottleneck.
+Set `--prometheus-output <file>` on the Nile sampler when a scrape job should
+consume the current sync sample directly. The sampler writes
+`gtron_nile_sync_*` gauges for height, target/stage lag, throughput,
+hot/cold/index bytes, snapshot sidecar share, archive probe failures, and
+sample/soak health status, and records `samplePrometheus*` fields in the JSONL
+row. Gate that artifact with `nile_sync_acceptance.py
+--require-sample-prometheus-artifact` so the scrape payload cannot drift from
+the accepted JSONL sample.
 Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics, including
 `stageVerifyDetails` entries such as `SyncBodies`/`SyncBodiesReady`

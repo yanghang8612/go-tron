@@ -1207,6 +1207,14 @@ Status:
   storage-alert Prometheus metric payload next to the JSONL output by default,
   records `offlineDbCheckPrometheus*` fields, and supports an explicit
   `--storage-alert-prometheus-file` path for long-running Nile scrape jobs.
+- `scripts/dev/nile_sync_sample.sh --prometheus-output` now writes a live
+  sync-sample Prometheus artifact with low-cardinality `gtron_nile_sync_*`
+  gauges for height, target/stage lag, throughput, hot/cold/index bytes,
+  snapshot sidecar share, archive probe failures, and sample/soak health
+  status. The sampler records `samplePrometheus*` fields in the JSONL row, and
+  `nile_sync_acceptance.py --require-sample-prometheus-artifact` verifies that
+  the artifact is readable, has matching datadir labels, and agrees with the
+  selected JSONL row on the key gauges before a production soak can pass.
 - The storage benchmark and Nile acceptance checkers now require readable
   Prometheus artifacts to expose both `gtron_storage_alert_status` and the
   normalized `gtron_storage_alert_issue` metric family, so production soak
@@ -1248,8 +1256,9 @@ Needed:
   profiles show they dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Wire the storage benchmark and Nile sampler Prometheus artifacts into the
-  external monitor/alert routing used for long Nile/mainnet soaks.
+- Wire the storage benchmark storage-alert artifacts and Nile sampler
+  `gtron_nile_sync_*` artifacts into the external monitor/alert routing used
+  for long Nile/mainnet soaks.
   Catalog/freezer sidecar mismatch is now caught by signed/local manifest
   verification as well as tail-prune/stage-status coverage gates.
 

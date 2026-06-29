@@ -230,6 +230,49 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["snapshotLatestSidecarBytes"], 0)
             self.assertEqual(row["snapshotLatestSidecarShareMilli"], -1)
 
+    def test_sample_writes_prometheus_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--mode",
+                    "full",
+                    "--label",
+                    "candidate",
+                    "--prometheus-output",
+                    str(prometheus),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["samplePrometheusStatus"], "ok")
+            self.assertEqual(row["samplePrometheus"], str(prometheus))
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="candidate",mode="full",network="nile"'
+            self.assertIn("# TYPE gtron_nile_sync_sample_status gauge", metrics)
+            self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
+            self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
+            self.assertIn(f'gtron_nile_sync_datadir_bytes{{{labels}}} ', metrics)
+
     def test_sample_includes_sync_health_and_disk_ratios(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -24,6 +24,24 @@ PROMETHEUS_REQUIRED_SNIPPETS = (
     ("# TYPE gtron_storage_alert_issue gauge", "gtron_storage_alert_issue"),
 )
 
+SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
+    ("gtron_nile_sync_sample_status{", "gtron_nile_sync_sample_status"),
+    ("gtron_nile_sync_soak_health_status{", "gtron_nile_sync_soak_health_status"),
+    ("gtron_nile_sync_height{", "gtron_nile_sync_height"),
+)
+
+SAMPLE_PROMETHEUS_FIELD_METRICS = (
+    ("gtron_nile_sync_height", "height"),
+    ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
+    ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks"),
+    ("gtron_nile_sync_datadir_bytes", "datadirBytes"),
+    ("gtron_nile_sync_chaindata_bytes", "chaindataBytes"),
+    ("gtron_nile_sync_cold_archive_bytes", "coldArchiveBytes"),
+    ("gtron_nile_sync_derived_index_bytes", "derivedIndexBytes"),
+    ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
+    ("gtron_nile_sync_archive_api_failures", "archiveApiFailures"),
+)
+
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
@@ -594,6 +612,50 @@ def check_prometheus_artifact(result_path, row):
         issues.extend(check_prometheus_alert_status_value(path, text, row))
     issues.extend(check_prometheus_issue_kinds(path, text, row))
     issues.extend(check_prometheus_stage_pipeline(path, text, row))
+    return issues
+
+
+def check_sample_prometheus_artifact(result_path, row):
+    issues = []
+    if row.get("samplePrometheusStatus") != "ok":
+        issues.append(f"samplePrometheusStatus={row.get('samplePrometheusStatus')!r}, want 'ok'")
+    raw_path = row.get("samplePrometheus")
+    if not raw_path:
+        issues.append("samplePrometheus is missing")
+        return issues
+    path = resolve_artifact(result_path, raw_path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [*issues, f"samplePrometheus artifact {path}: {exc}"]
+    for needle, name in SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS:
+        if needle not in text:
+            issues.append(f"samplePrometheus artifact {path} missing {name}")
+
+    status_metric = prometheus_metric_value(text, "gtron_nile_sync_sample_status", row)
+    if status_metric is None:
+        issues.append(f"samplePrometheus artifact {path} missing gtron_nile_sync_sample_status")
+    elif row.get("sampleStatus") == "ok" and status_metric != 0:
+        issues.append(
+            f"samplePrometheus artifact {path} gtron_nile_sync_sample_status={status_metric:g}, want 0"
+        )
+
+    for metric, field in SAMPLE_PROMETHEUS_FIELD_METRICS:
+        want = as_number(row, field)
+        if want is None:
+            continue
+        got = prometheus_metric_value(text, metric, row)
+        if got is None:
+            issues.append(f"samplePrometheus artifact {path} missing {metric}")
+        elif got != want:
+            issues.append(f"samplePrometheus artifact {path} {metric}={got:g}, want {want:g}")
+    if "stageStalled" in row:
+        got = prometheus_metric_value(text, "gtron_nile_sync_stage_stalled", row)
+        want = 1.0 if as_bool(row, "stageStalled") else 0.0
+        if got is None:
+            issues.append(f"samplePrometheus artifact {path} missing gtron_nile_sync_stage_stalled")
+        elif got != want:
+            issues.append(f"samplePrometheus artifact {path} gtron_nile_sync_stage_stalled={got:g}, want {want:g}")
     return issues
 
 
@@ -1408,6 +1470,9 @@ def check_row(row, args):
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
 
+    if args.require_sample_prometheus_artifact:
+        issues.extend(check_sample_prometheus_artifact(args.result, row))
+
     if args.require_snapshot_profile_evidence:
         if not snapshot_profile_evidence_row(row):
             issues.append("snapshot manifest profile evidence is missing")
@@ -1530,6 +1595,11 @@ def build_parser():
         "--require-startup-recovery-evidence",
         action="store_true",
         help="require selected rows to include healthy staged-sync startup recovery evidence",
+    )
+    parser.add_argument(
+        "--require-sample-prometheus-artifact",
+        action="store_true",
+        help="require selected rows to include a readable sync/sample Prometheus artifact matching key JSONL fields",
     )
     parser.add_argument(
         "--require-snapshot-profile-evidence",

@@ -71,6 +71,7 @@ scripts/dev/nile_sync_sample.sh \
   --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
   --pid-file /Users/asuka/gtron-soak/gtron.pid \
   --debug-metrics-url 'http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/' \
+  --prometheus-output /Users/asuka/gtron-soak/logs/sync-sample.prom \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
 
@@ -118,6 +119,12 @@ plus interval growth attribution fields:
 `intervalChaindataGrowthShare`, `intervalAncientGrowthShare`,
 `intervalSnapshotGrowthShare`, `intervalReplayGrowthShare`,
 `intervalDatadirOtherGrowthShare`, `intervalColdArchiveGrowthShare`, and
+`intervalDerivedIndexGrowthShare`. When `--prometheus-output` is set, each
+sample also writes a low-cardinality Prometheus text artifact and records
+`samplePrometheus` plus `samplePrometheusStatus` in the JSONL row. The artifact
+exposes sync height, target/stage lag, throughput, hot/cold/index byte gauges,
+snapshot sidecar share, archive probe failures, and sample/soak health status
+for external scrape jobs.
 `intervalDerivedIndexGrowthShare`, plus hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -392,6 +399,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-startup-recovery-evidence \
   --require-archive-api-evidence \
   --require-archive-tx-evidence \
+  --require-sample-prometheus-artifact \
   --min-height 100000 \
   --max-lag-blocks 5000 \
   --max-cold-stage-lag-blocks 5000 \
@@ -427,6 +435,15 @@ Use `--require-startup-recovery-evidence` when rows were collected with
 `ok`, at least one summary, completed sync-pipeline repair and current-head
 completion, no blocked/interrupted repair, zero pipeline order/read errors, and
 healthy optional order-repair/cursor checks when those subchecks ran.
+Use `--require-sample-prometheus-artifact` when rows were collected with
+`--prometheus-output`. The checker requires `samplePrometheusStatus=ok`, reads
+the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
+`gtron_nile_sync_target_lag_blocks`,
+`gtron_nile_sync_full_staged_sync_head_lag_blocks`, hot/cold/index byte gauges,
+`gtron_nile_sync_snapshot_sidecar_share_milli`, and archive probe failures
+against the same JSONL row. If the row carries `datadir`, those gauges must
+have the matching `datadir` label so an aggregate scrape file cannot satisfy
+the wrong sample.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
 Use `--max-cold-stage-lag-blocks` to keep cold/archive builders close enough to

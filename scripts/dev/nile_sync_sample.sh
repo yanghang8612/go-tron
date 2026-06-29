@@ -24,6 +24,7 @@ SYNC_LOG_FILE=""
 PID_FILE=""
 DEBUG_METRICS_URL=""
 STORAGE_ALERT_PROMETHEUS_FILE=""
+PROMETHEUS_OUTPUT=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 ARCHIVE_API_PROBE=0
@@ -54,6 +55,7 @@ Options:
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --storage-alert-prometheus-file FILE
                               Write storage-alerts Prometheus metrics when offline DB check runs
+  --prometheus-output FILE    Write current sync/sample Prometheus metrics for scrape jobs
   --strict-offline-db-check  Fail when offline db check reports critical issues
   --archive-api-probe        Probe historical JSON-RPC archive APIs and emit archiveApi* fields
   --archive-api-block N      Historical block for archive API probe (default: height-1)
@@ -96,6 +98,7 @@ while [ "$#" -gt 0 ]; do
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
     --storage-alert-prometheus-file) STORAGE_ALERT_PROMETHEUS_FILE="${2:?}"; shift 2 ;;
+    --prometheus-output) PROMETHEUS_OUTPUT="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
     --archive-api-probe) ARCHIVE_API_PROBE=1; shift ;;
@@ -245,6 +248,7 @@ ancient_files="$(file_count "$DATADIR/gtron/ancient")"
 snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
+  "$PROMETHEUS_OUTPUT" \
   "$SNAPSHOT_PROFILE_SCRIPT" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
   "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
@@ -272,6 +276,7 @@ from pathlib import Path
     http,
     jsonrpc,
     datadir,
+    prometheus_output,
     snapshot_profile_script,
     nowblock_path,
     nodeinfo_path,
@@ -2144,6 +2149,106 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
         row[f"{prefix}ShareMilli"] = int_field(stats.get("sidecarShareMilli"), -1)
     return row
 
+SAMPLE_STATUS_VALUES = {
+    "ok": 0,
+    "height-mismatch": 1,
+    "http-error": 2,
+    "unknown": 3,
+}
+
+SOAK_HEALTH_STATUS_VALUES = {
+    "ok": 0,
+    "warning": 1,
+    "critical": 2,
+    "unknown": 3,
+}
+
+SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
+    ("gtron_nile_sync_height", "height", "Current sampled block height."),
+    ("gtron_nile_sync_node_info_current_block", "nodeInfoCurrentBlock", "Current block reported by node info."),
+    ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks", "Lag from the sampled block to the best known sync target."),
+    ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks", "Lag between full staged-sync completion and sampled head."),
+    ("gtron_nile_sync_blocks_per_second", "blocksPerSecond", "Cumulative sync throughput in blocks per second."),
+    ("gtron_nile_sync_interval_blocks_per_second", "intervalBlocksPerSecond", "Interval sync throughput in blocks per second."),
+    ("gtron_nile_sync_datadir_bytes", "datadirBytes", "Total datadir bytes."),
+    ("gtron_nile_sync_chaindata_bytes", "chaindataBytes", "Hot chaindata bytes."),
+    ("gtron_nile_sync_cold_archive_bytes", "coldArchiveBytes", "Cold archive bytes across ancients and snapshots."),
+    ("gtron_nile_sync_derived_index_bytes", "derivedIndexBytes", "Derived cold index bytes."),
+    ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
+    ("gtron_nile_sync_archive_api_failures", "archiveApiFailures", "Historical archive API probe failures."),
+    ("gtron_nile_sync_offline_db_check_exit", "offlineDbCheckExit", "Offline DB check process exit code."),
+)
+
+def prometheus_escape(value):
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+def prometheus_labels(row, extra=None):
+    labels = {
+        "datadir": row.get("datadir", ""),
+        "network": row.get("network", ""),
+        "mode": row.get("mode", ""),
+        "label": row.get("label", ""),
+    }
+    if extra:
+        labels.update(extra)
+    return "{" + ",".join(f'{key}="{prometheus_escape(labels[key])}"' for key in sorted(labels)) + "}"
+
+def prometheus_number(row, field):
+    value = row.get(field)
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def append_prometheus_gauge(lines, name, help_text, labels, value):
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} gauge")
+    lines.append(f"{name}{labels} {value:g}")
+
+def write_sample_prometheus(path, row):
+    if not path:
+        return "skipped"
+    lines = []
+    sample_status = str(row.get("sampleStatus", "unknown")).lower()
+    append_prometheus_gauge(
+        lines,
+        "gtron_nile_sync_sample_status",
+        "Sample status: 0=ok, 1=height-mismatch, 2=http-error, 3=unknown/other.",
+        prometheus_labels(row, {"status": sample_status}),
+        SAMPLE_STATUS_VALUES.get(sample_status, SAMPLE_STATUS_VALUES["unknown"]),
+    )
+    health = str(row.get("soakHealthStatus", "unknown")).lower()
+    append_prometheus_gauge(
+        lines,
+        "gtron_nile_sync_soak_health_status",
+        "Soak health status: 0=ok, 1=warning, 2=critical, 3=unknown/other.",
+        prometheus_labels(row, {"status": health}),
+        SOAK_HEALTH_STATUS_VALUES.get(health, SOAK_HEALTH_STATUS_VALUES["unknown"]),
+    )
+    for metric, field, help_text in SAMPLE_PROMETHEUS_NUMERIC_FIELDS:
+        value = prometheus_number(row, field)
+        if value is None:
+            continue
+        append_prometheus_gauge(lines, metric, help_text, prometheus_labels(row), value)
+    if "stageStalled" in row:
+        append_prometheus_gauge(
+            lines,
+            "gtron_nile_sync_stage_stalled",
+            "Whether the sampler detected a stalled sync or storage stage.",
+            prometheus_labels(row),
+            1 if bool(row.get("stageStalled")) else 0,
+        )
+    try:
+        resolved = Path(path)
+        if resolved.parent:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        return "error"
+    return "ok"
+
 nowblock = load_json(nowblock_path)
 nodeinfo = load_json(nodeinfo_path)
 nodes = load_json(nodes_path)
@@ -2792,6 +2897,8 @@ row.update(archive_api)
 row.update(snapshot_profile)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
+row["samplePrometheus"] = prometheus_output
+row["samplePrometheusStatus"] = write_sample_prometheus(prometheus_output, row)
 
 line = json.dumps(row, sort_keys=True)
 if output:

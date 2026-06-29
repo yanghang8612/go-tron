@@ -171,7 +171,106 @@ def add_snapshot_profile_evidence(row):
     return row
 
 
+def add_sample_prometheus_evidence(row, path, *, height=None):
+    row.update(
+        {
+            "datadir": "/tmp/nile",
+            "samplePrometheusStatus": "ok",
+            "samplePrometheus": str(path),
+            "syncTargetLagBlocks": 0,
+            "datadirBytes": 4096,
+            "chaindataBytes": 1024,
+            "coldArchiveBytes": 2048,
+            "derivedIndexBytes": 512,
+            "snapshotSidecarShareMilli": 188,
+            "archiveApiFailures": 0,
+            "stageStalled": False,
+        }
+    )
+    metric_height = row["height"] if height is None else height
+    labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
+    path.write_text(
+        "\n".join(
+            [
+                "# TYPE gtron_nile_sync_sample_status gauge",
+                f'gtron_nile_sync_sample_status{{{labels},status="ok"}} 0',
+                "# TYPE gtron_nile_sync_soak_health_status gauge",
+                f'gtron_nile_sync_soak_health_status{{{labels},status="ok"}} 0',
+                "# TYPE gtron_nile_sync_height gauge",
+                f"gtron_nile_sync_height{{{labels}}} {metric_height}",
+                "# TYPE gtron_nile_sync_target_lag_blocks gauge",
+                f'gtron_nile_sync_target_lag_blocks{{{labels}}} {row["syncTargetLagBlocks"]}',
+                "# TYPE gtron_nile_sync_full_staged_sync_head_lag_blocks gauge",
+                f'gtron_nile_sync_full_staged_sync_head_lag_blocks{{{labels}}} {row["fullStagedSyncHeadLagBlocks"]}',
+                "# TYPE gtron_nile_sync_datadir_bytes gauge",
+                f'gtron_nile_sync_datadir_bytes{{{labels}}} {row["datadirBytes"]}',
+                "# TYPE gtron_nile_sync_chaindata_bytes gauge",
+                f'gtron_nile_sync_chaindata_bytes{{{labels}}} {row["chaindataBytes"]}',
+                "# TYPE gtron_nile_sync_cold_archive_bytes gauge",
+                f'gtron_nile_sync_cold_archive_bytes{{{labels}}} {row["coldArchiveBytes"]}',
+                "# TYPE gtron_nile_sync_derived_index_bytes gauge",
+                f'gtron_nile_sync_derived_index_bytes{{{labels}}} {row["derivedIndexBytes"]}',
+                "# TYPE gtron_nile_sync_snapshot_sidecar_share_milli gauge",
+                f'gtron_nile_sync_snapshot_sidecar_share_milli{{{labels}}} {row["snapshotSidecarShareMilli"]}',
+                "# TYPE gtron_nile_sync_archive_api_failures gauge",
+                f'gtron_nile_sync_archive_api_failures{{{labels}}} {row["archiveApiFailures"]}',
+                "# TYPE gtron_nile_sync_stage_stalled gauge",
+                f"gtron_nile_sync_stage_stalled{{{labels}}} 0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return row
+
+
 class NileSyncAcceptanceTest(unittest.TestCase):
+    def test_accepts_sample_prometheus_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_mismatched_sample_prometheus_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom, height=999)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_nile_sync_height=999, want 1000", proc.stderr)
+
     def test_accepts_snapshot_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
