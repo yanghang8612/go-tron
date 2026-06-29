@@ -431,6 +431,10 @@ def add_archive_trace_evidence(row):
 def append_archive_trace_prometheus_metrics(path, row, *, include_trace=True):
     labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
     lines = [
+        "# TYPE gtron_nile_sync_archive_api_checks gauge",
+        f'gtron_nile_sync_archive_api_checks{{{labels}}} {row["archiveApiChecks"]}',
+        "# TYPE gtron_nile_sync_archive_api_block gauge",
+        f'gtron_nile_sync_archive_api_block{{{labels}}} {row["archiveApiBlock"]}',
         "# TYPE gtron_nile_sync_archive_api_method_success gauge",
     ]
     for method in row["archiveApiMethods"]:
@@ -532,6 +536,36 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
             self.assertIn(
                 "missing gtron_nile_sync_archive_api_tx_method_success{method='debug_traceTransaction'}",
+                proc.stderr,
+            )
+
+    def test_rejects_sample_prometheus_archive_probe_metric_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_archive_trace_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            append_archive_trace_prometheus_metrics(prom, {**row, "archiveApiBlock": 998})
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_archive_api_block=998, want 999",
                 proc.stderr,
             )
 

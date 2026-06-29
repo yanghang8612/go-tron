@@ -313,9 +313,10 @@ consume the current sync sample directly. The sampler writes
 full-staged-sync status/ready/coverage/bottleneck, hot/cold/index bytes,
 per-stage full-staged-sync block/present/verified evidence when available,
 adjacent sync-stage lag, cold-builder head lag, interval stage throughput,
-bytes-per-block efficiency, snapshot sidecar share, archive probe failures, and
-sample/soak health status, and records `samplePrometheus*` fields in the JSONL
-row. Gate that artifact with `nile_sync_acceptance.py
+bytes-per-block efficiency, snapshot sidecar share, archive probe
+checks/block/failures, and sample/soak health status, and records
+`samplePrometheus*` fields in the JSONL row. Gate that artifact with
+`nile_sync_acceptance.py
 --require-sample-prometheus-artifact` so the scrape payload cannot drift from
 the accepted JSONL sample. Use
 `scripts/dev/prometheus_artifact_export.py results.jsonl --output gtron.prom`

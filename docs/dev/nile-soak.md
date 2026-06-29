@@ -131,8 +131,8 @@ sample also writes a low-cardinality Prometheus text artifact and records
 exposes sync height, target/stage lag, full-staged-sync status/ready/coverage
 and bottleneck gauges, adjacent sync-stage lag gauges, cold-builder head lag
 gauges, interval stage-throughput gauges, throughput, hot/cold/index byte
-gauges, snapshot sidecar share, archive probe failures, and sample/soak health
-status for external scrape jobs.
+gauges, snapshot sidecar share, archive probe checks/block/failures, and
+sample/soak health status for external scrape jobs.
 Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -460,10 +460,10 @@ when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,
 `gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
 stage-throughput gauges, hot/cold/index byte gauges,
-`gtron_nile_sync_snapshot_sidecar_share_milli`, and archive probe failures
-against the same JSONL row. If the row carries `datadir`, those gauges must
-have the matching `datadir` label so an aggregate scrape file cannot satisfy
-the wrong sample.
+`gtron_nile_sync_snapshot_sidecar_share_milli`,
+`gtron_nile_sync_archive_api_{checks,block,failures}` against the same JSONL
+row. If the row carries `datadir`, those gauges must have the matching
+`datadir` label so an aggregate scrape file cannot satisfy the wrong sample.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
 Use `--max-cold-stage-lag-blocks` to keep cold/archive builders close enough to

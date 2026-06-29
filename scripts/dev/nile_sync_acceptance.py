@@ -85,6 +85,8 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock"),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock"),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
+    ("gtron_nile_sync_archive_api_checks", "archiveApiChecks"),
+    ("gtron_nile_sync_archive_api_block", "archiveApiBlock"),
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures"),
 )
 

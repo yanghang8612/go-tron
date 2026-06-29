@@ -2306,6 +2306,8 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock", "Selected soak-efficiency cold archive bytes per block."),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock", "Selected soak-efficiency derived index bytes per block."),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
+    ("gtron_nile_sync_archive_api_checks", "archiveApiChecks", "Historical archive API probe check count."),
+    ("gtron_nile_sync_archive_api_block", "archiveApiBlock", "Historical archive API probe block number."),
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures", "Historical archive API probe failures."),
     ("gtron_nile_sync_offline_db_check_exit", "offlineDbCheckExit", "Offline DB check process exit code."),
 )
