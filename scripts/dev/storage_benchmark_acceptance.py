@@ -76,6 +76,37 @@ BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ("gtron_storage_benchmark_signed_cold_prune", "signedColdPrune"),
     ("gtron_storage_benchmark_tail_pruned_files", "tailPrunedFiles"),
     ("gtron_storage_benchmark_history_window", "historyWindow"),
+    ("gtron_storage_benchmark_event_log_index_segments", "eventLogIndexSegments"),
+    ("gtron_storage_benchmark_event_log_index_address_keys", "eventLogIndexAddressKeys"),
+    ("gtron_storage_benchmark_event_log_index_address_postings", "eventLogIndexAddressPostings"),
+    (
+        "gtron_storage_benchmark_event_log_index_address_avg_postings_milli",
+        "eventLogIndexAddressAvgPostingsMilli",
+    ),
+    ("gtron_storage_benchmark_event_log_index_address_max_postings", "eventLogIndexAddressMaxPostings"),
+    (
+        "gtron_storage_benchmark_event_log_index_address_singleton_keys",
+        "eventLogIndexAddressSingletonKeys",
+    ),
+    (
+        "gtron_storage_benchmark_event_log_index_address_multi_posting_keys",
+        "eventLogIndexAddressMultiPostingKeys",
+    ),
+    ("gtron_storage_benchmark_event_log_index_topic_keys", "eventLogIndexTopicKeys"),
+    ("gtron_storage_benchmark_event_log_index_topic_postings", "eventLogIndexTopicPostings"),
+    (
+        "gtron_storage_benchmark_event_log_index_topic_avg_postings_milli",
+        "eventLogIndexTopicAvgPostingsMilli",
+    ),
+    ("gtron_storage_benchmark_event_log_index_topic_max_postings", "eventLogIndexTopicMaxPostings"),
+    (
+        "gtron_storage_benchmark_event_log_index_topic_singleton_keys",
+        "eventLogIndexTopicSingletonKeys",
+    ),
+    (
+        "gtron_storage_benchmark_event_log_index_topic_multi_posting_keys",
+        "eventLogIndexTopicMultiPostingKeys",
+    ),
 )
 
 DEFAULT_ARCHIVE_API_METHODS = (

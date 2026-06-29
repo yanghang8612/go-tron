@@ -497,6 +497,19 @@ write_storage_benchmark_prometheus() {
   local signed_cold_prune="${29}"
   local tail_pruned_files="${30}"
   local history_window="${31}"
+  local event_log_index_segments="${32}"
+  local event_log_index_address_keys="${33}"
+  local event_log_index_address_postings="${34}"
+  local event_log_index_address_avg_postings_milli="${35}"
+  local event_log_index_address_max_postings="${36}"
+  local event_log_index_address_singleton_keys="${37}"
+  local event_log_index_address_multi_posting_keys="${38}"
+  local event_log_index_topic_keys="${39}"
+  local event_log_index_topic_postings="${40}"
+  local event_log_index_topic_avg_postings_milli="${41}"
+  local event_log_index_topic_max_postings="${42}"
+  local event_log_index_topic_singleton_keys="${43}"
+  local event_log_index_topic_multi_posting_keys="${44}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
@@ -505,7 +518,13 @@ write_storage_benchmark_prometheus() {
     "$cold_freezer_to_block" "$derived_index_to_block" "$chain_lookup_prune_to_block" \
     "$tail_pruned_through_block" "$balance_trace_prune_to_block" \
     "$section_bloom_prune_to_section" "$signed_cold_prune" "$tail_pruned_files" \
-    "$history_window" <<'PY'
+    "$history_window" "$event_log_index_segments" "$event_log_index_address_keys" \
+    "$event_log_index_address_postings" "$event_log_index_address_avg_postings_milli" \
+    "$event_log_index_address_max_postings" "$event_log_index_address_singleton_keys" \
+    "$event_log_index_address_multi_posting_keys" "$event_log_index_topic_keys" \
+    "$event_log_index_topic_postings" "$event_log_index_topic_avg_postings_milli" \
+    "$event_log_index_topic_max_postings" "$event_log_index_topic_singleton_keys" \
+    "$event_log_index_topic_multi_posting_keys" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -531,6 +550,19 @@ section_bloom_prune_to_section = int(sys.argv[28])
 signed_cold_prune = int(sys.argv[29])
 tail_pruned_files = int(sys.argv[30])
 history_window = int(sys.argv[31])
+event_log_index_segments = int(sys.argv[32])
+event_log_index_address_keys = int(sys.argv[33])
+event_log_index_address_postings = int(sys.argv[34])
+event_log_index_address_avg_postings_milli = int(sys.argv[35])
+event_log_index_address_max_postings = int(sys.argv[36])
+event_log_index_address_singleton_keys = int(sys.argv[37])
+event_log_index_address_multi_posting_keys = int(sys.argv[38])
+event_log_index_topic_keys = int(sys.argv[39])
+event_log_index_topic_postings = int(sys.argv[40])
+event_log_index_topic_avg_postings_milli = int(sys.argv[41])
+event_log_index_topic_max_postings = int(sys.argv[42])
+event_log_index_topic_singleton_keys = int(sys.argv[43])
+event_log_index_topic_multi_posting_keys = int(sys.argv[44])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -630,6 +662,19 @@ metrics = (
     ("gtron_storage_benchmark_signed_cold_prune", "Whether benchmark ran signed cold-prune operations.", signed_cold_prune),
     ("gtron_storage_benchmark_tail_pruned_files", "Benchmark active ancient tail files physically pruned.", tail_pruned_files),
     ("gtron_storage_benchmark_history_window", "Configured benchmark history prune window.", history_window),
+    ("gtron_storage_benchmark_event_log_index_segments", "Benchmark cold event-log index segment count.", event_log_index_segments),
+    ("gtron_storage_benchmark_event_log_index_address_keys", "Benchmark event-log address index key count.", event_log_index_address_keys),
+    ("gtron_storage_benchmark_event_log_index_address_postings", "Benchmark event-log address index posting count.", event_log_index_address_postings),
+    ("gtron_storage_benchmark_event_log_index_address_avg_postings_milli", "Benchmark event-log address index average postings per key in milli-units.", event_log_index_address_avg_postings_milli),
+    ("gtron_storage_benchmark_event_log_index_address_max_postings", "Benchmark event-log address index max postings for one key.", event_log_index_address_max_postings),
+    ("gtron_storage_benchmark_event_log_index_address_singleton_keys", "Benchmark event-log address index singleton-key count.", event_log_index_address_singleton_keys),
+    ("gtron_storage_benchmark_event_log_index_address_multi_posting_keys", "Benchmark event-log address index multi-posting key count.", event_log_index_address_multi_posting_keys),
+    ("gtron_storage_benchmark_event_log_index_topic_keys", "Benchmark event-log topic index key count.", event_log_index_topic_keys),
+    ("gtron_storage_benchmark_event_log_index_topic_postings", "Benchmark event-log topic index posting count.", event_log_index_topic_postings),
+    ("gtron_storage_benchmark_event_log_index_topic_avg_postings_milli", "Benchmark event-log topic index average postings per key in milli-units.", event_log_index_topic_avg_postings_milli),
+    ("gtron_storage_benchmark_event_log_index_topic_max_postings", "Benchmark event-log topic index max postings for one key.", event_log_index_topic_max_postings),
+    ("gtron_storage_benchmark_event_log_index_topic_singleton_keys", "Benchmark event-log topic index singleton-key count.", event_log_index_topic_singleton_keys),
+    ("gtron_storage_benchmark_event_log_index_topic_multi_posting_keys", "Benchmark event-log topic index multi-posting key count.", event_log_index_topic_multi_posting_keys),
 )
 lines = []
 for name, help_text, value in metrics:
@@ -1575,7 +1620,14 @@ emit_result() {
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" "$RUN_TAIL_PRUNED_THROUGH_BLOCK" \
     "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" \
-    "$RUN_SIGNED_COLD_PRUNE" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW"
+    "$RUN_SIGNED_COLD_PRUNE" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
+    "$RUN_EVENT_LOG_INDEX_SEGMENTS" "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" "$RUN_EVENT_LOG_INDEX_ADDRESS_AVG_POSTINGS_MILLI" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS" "$RUN_EVENT_LOG_INDEX_ADDRESS_SINGLETON_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_MULTI_POSTING_KEYS" "$RUN_EVENT_LOG_INDEX_TOPIC_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \

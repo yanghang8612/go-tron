@@ -838,6 +838,19 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_signed_cold_prune": 1,
                 "gtron_storage_benchmark_tail_pruned_files": 3,
                 "gtron_storage_benchmark_history_window": 256,
+                "gtron_storage_benchmark_event_log_index_segments": 2,
+                "gtron_storage_benchmark_event_log_index_address_keys": 3,
+                "gtron_storage_benchmark_event_log_index_address_postings": 6,
+                "gtron_storage_benchmark_event_log_index_address_avg_postings_milli": 2000,
+                "gtron_storage_benchmark_event_log_index_address_max_postings": 3,
+                "gtron_storage_benchmark_event_log_index_address_singleton_keys": 1,
+                "gtron_storage_benchmark_event_log_index_address_multi_posting_keys": 2,
+                "gtron_storage_benchmark_event_log_index_topic_keys": 2,
+                "gtron_storage_benchmark_event_log_index_topic_postings": 3,
+                "gtron_storage_benchmark_event_log_index_topic_avg_postings_milli": 1500,
+                "gtron_storage_benchmark_event_log_index_topic_max_postings": 2,
+                "gtron_storage_benchmark_event_log_index_topic_singleton_keys": 1,
+                "gtron_storage_benchmark_event_log_index_topic_multi_posting_keys": 1,
             }
             write_benchmark_prometheus(prom, datadir, values)
             write_result(
@@ -873,6 +886,19 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "signedColdPrune": 1,
                         "tailPrunedFiles": 3,
                         "historyWindow": 256,
+                        "eventLogIndexSegments": 2,
+                        "eventLogIndexAddressKeys": 3,
+                        "eventLogIndexAddressPostings": 6,
+                        "eventLogIndexAddressAvgPostingsMilli": 2000,
+                        "eventLogIndexAddressMaxPostings": 3,
+                        "eventLogIndexAddressSingletonKeys": 1,
+                        "eventLogIndexAddressMultiPostingKeys": 2,
+                        "eventLogIndexTopicKeys": 2,
+                        "eventLogIndexTopicPostings": 3,
+                        "eventLogIndexTopicAvgPostingsMilli": 1500,
+                        "eventLogIndexTopicMaxPostings": 2,
+                        "eventLogIndexTopicSingletonKeys": 1,
+                        "eventLogIndexTopicMultiPostingKeys": 1,
                         "datadir": datadir,
                         "storageBenchmarkPrometheus": prom.name,
                     }
@@ -1252,6 +1278,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_failures": 0,
                 "gtron_storage_benchmark_tail_pruned_through_block": 79,
+                "gtron_storage_benchmark_event_log_index_address_postings": 5,
             }
             write_benchmark_prometheus(prom, datadir, values)
             write_result(
@@ -1279,6 +1306,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "archiveApiBlock": 80,
                         "archiveApiFailures": 0,
                         "tailPrunedThroughBlock": 80,
+                        "eventLogIndexAddressPostings": 6,
                         "datadir": datadir,
                         "storageBenchmarkPrometheus": prom.name,
                     }
@@ -1306,6 +1334,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             )
             self.assertIn(
                 "gtron_storage_benchmark_tail_pruned_through_block=79, want 80",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_event_log_index_address_postings=5, want 6",
                 proc.stderr,
             )
 
