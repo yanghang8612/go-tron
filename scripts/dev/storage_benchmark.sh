@@ -141,7 +141,7 @@ Options:
                                   written to a temp key file before invoking gtron
   --sync-max-diff N              Sync profile success threshold (default: 2)
   --history-window N             Inject [history] prune_window for short prune drills
-  --archive-api-probe            Probe historical JSON-RPC archive APIs and emit archiveApi* fields
+  --archive-api-probe            Probe historical JSON-RPC archive APIs and emit archiveApi*/archiveApiTx* fields
   --archive-api-block N          Historical block for archive API probe (default: height-1)
   --archive-api-address HEX      0x41-prefixed TRON address for account/contract probes
   --archive-api-storage-slot HEX Storage slot for eth_getStorageAt probe (default: 0x0)

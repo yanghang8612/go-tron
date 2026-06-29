@@ -132,6 +132,15 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionReceipt",
                 ],
             )
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                ],
+            )
 
     def test_sample_includes_sync_health_and_disk_ratios(self):
         with tempfile.TemporaryDirectory() as tmp:

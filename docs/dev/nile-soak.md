@@ -149,7 +149,8 @@ fall back to cumulative sync and current disk distribution. Rows also include
 `processOpenFiles` so catch-up throughput can be correlated with local resource
 pressure. Rows produced with `--archive-api-probe` also include
 `archiveApiStatus`, `archiveApiChecks`, `archiveApiFailures`,
-`archiveApiBlock`, `archiveApiMethods`, and `archiveApiEndpoint` for
+`archiveApiBlock`, `archiveApiMethods`, `archiveApiEndpoint`,
+`archiveApiTxProbe`, `archiveApiTxHash`, and `archiveApiTxMethods` for
 historical JSON-RPC read validation. Derived index bytes are the
 chain-index/accessor, balance-trace,
 section-bloom, and event-log/index sidecars inside `state-snapshots`;
