@@ -38,10 +38,20 @@ two-step are zero-allocation on the KV-hit path.
 The production `rawdb.ReadBlockHashByNumber` call sites are now locked by
 `TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries`. New direct calls
 must either move behind a freezer/cold-index-aware interface or update the
-explicit audit whitelist with the reason. The current whitelist covers only the
-known boundary adapters: `blockbuffer`/TVM `BLOCKHASH`, pruning and snapshot
+explicit audit whitelist with the reason. The block-hash whitelist is scoped to
+the owning function, not just the file, so `actuator.go` only permits the
+`EffectiveGenesisHash` legacy identity fallback and `blockbuffer` only permits
+its `BlockHashByNumber` adapter. The current whitelist covers only the known
+boundary adapters: `blockbuffer`/TVM `BLOCKHASH`, pruning and snapshot
 canonical-hash verification, the chain-freezer adapter, actuator genesis
 identity, and `gtron db` diagnostics.
+
+Run `scripts/dev/audit_hot_only_reads.sh` before changing rawdb chain/state read
+paths or chain pruning defaults. It executes the focused source audits for
+hot-only block readers, raw freezer readers, block-hash-by-number fallbacks,
+hot-only `ChainDB` constructors, cold archive reader boundaries, state latest
+and as-of raw readers, event-log cold boundaries, and snapshot transaction-info
+publisher strictness.
 
 `TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries` also rejects
 new production `rawdb.NewChainDB(..., rawdb.NoopAncient{})` wrappers. Those

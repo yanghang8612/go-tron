@@ -1149,6 +1149,12 @@ Status:
   limited by source audit to the `blockbuffer` compatibility method and the
   actuator legacy genesis-hash fallback. A rawdb
   source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
+  the remaining `ReadBlockHashByNumber` allowlist is function-scoped rather
+  than file-scoped, so a new direct call in the same source file is still
+  rejected unless it becomes an explicit audited boundary. The focused
+  `scripts/dev/audit_hot_only_reads.sh` entrypoint runs these hot-only and
+  cold-boundary source audits without requiring developers to remember the
+  rawdb package test regex. The same audit suite
   separately pins the raw freezer copy helpers, including the strict raw block
   and transaction-info readers, to explicit audited boundaries: live freezer
   append through `cmd/gtron/freezer_adapter.go`, plus the blockbuffer's strict

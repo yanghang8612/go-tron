@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+pattern='Test(NoProductionHotBlockKVReadReferences|NoUnexpectedProductionRawFreezerReadReferences|NoActuatorDirectHotBlockHashReads|ProductionBlockHashByNumberReadsStayOnAuditedBoundaries|VMBlockHashReadsUseStrictBoundary|ProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries|ProductionColdArchiveReadersUseChainDBBoundary|ProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries|ProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries|ProductionStateLatestReadsStayBehindStateBoundaries|ProductionEventLogQueriesUseChainDBBoundary|ProductionEventLogIndexedCoverageChecksStayOnAuditedBoundaries|SnapshotPublishersUseStrictTransactionInfoReads)$'
+
+exec go test ./core/rawdb -run "$pattern" -count=1 "$@"
