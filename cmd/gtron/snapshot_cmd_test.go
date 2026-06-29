@@ -2117,6 +2117,25 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if logObj["address"] != wantLogAddress {
 		t.Fatalf("eth_getLogs restored cold address = %v, want %s", logObj["address"], wantLogAddress)
 	}
+	logsByHashRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getLogs", []any{map[string]any{
+		"blockHash": "0x" + blockHashHex,
+		"address":   "0x" + hex.EncodeToString(logAddress),
+		"topics":    []any{"0x" + hex.EncodeToString(logTopic.Bytes())},
+	}})
+	logsByHash, ok := logsByHashRPC["result"].([]any)
+	if !ok || len(logsByHash) != 1 {
+		t.Fatalf("eth_getLogs restored cold blockHash result = %v, want one log", logsByHashRPC["result"])
+	}
+	logByHash, ok := logsByHash[0].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getLogs restored cold blockHash log = %T %v, want object", logsByHash[0], logsByHash[0])
+	}
+	if logByHash["data"] != "0x5c5d" ||
+		logByHash["blockHash"] != fmt.Sprintf("0x%x", block1.Hash()) ||
+		logByHash["transactionHash"] != fmt.Sprintf("0x%x", txHash) ||
+		logByHash["address"] != wantLogAddress {
+		t.Fatalf("eth_getLogs restored cold blockHash log = %v, want block1 tx log", logByHash)
+	}
 	deletedBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(deletedAddr.Bytes()), "0x1"})
 	if got := deletedBalanceRPC["result"]; got != snapshotTestSunToWeiHex(deletedBalance1) {
 		t.Fatalf("eth_getBalance deleted-account block1 result = %v, want %s", got, snapshotTestSunToWeiHex(deletedBalance1))

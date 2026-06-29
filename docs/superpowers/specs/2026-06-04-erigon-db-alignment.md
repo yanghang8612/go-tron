@@ -1051,7 +1051,8 @@ Status:
   (`getblockbyid`, `getblockbynum`, `gettransactionbyid`,
   `gettransactioninfobyid`, `gettransactioninfobyblocknum`,
   `eth_getBlockByHash`, `eth_getTransactionReceipt`, and `eth_getLogs`) against
-  that restored cold backend, including solidity/PBFT bound-block paths.
+  that restored cold backend, including solidity/PBFT bound-block paths and
+  both range and `blockHash` log filters.
 - The same restore regression now seeds minimal latest-account, code, and
   contract-storage snapshots plus state-domain history, restores them through
   the signed catalog path, deletes the restored hot StateDomainChange/StateTxRange
