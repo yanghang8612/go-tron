@@ -1806,7 +1806,7 @@ def archive_api_method_count(row):
     return len(raw)
 
 
-def check_archive_api_evidence(row, required_methods):
+def check_archive_api_evidence(row, required_methods, min_depth_blocks=None):
     issues = []
     status = str(row.get("archiveApiStatus", "")).lower()
     if status != "ok":
@@ -1829,6 +1829,16 @@ def check_archive_api_evidence(row, required_methods):
         height = as_number(row, "height")
         if height is not None and block >= height:
             issues.append(f"archiveApiBlock={block:g} must be below height={height:g}")
+        if min_depth_blocks is not None:
+            if height is None:
+                issues.append("archive API depth evidence requires numeric height")
+            else:
+                depth = height - block
+                if depth < min_depth_blocks:
+                    issues.append(
+                        f"archiveApiBlock depth={depth:g} failed >= min archive API "
+                        f"depth {min_depth_blocks:g} blocks"
+                    )
         chain_lookup = as_number(row, "chainLookupPruneToBlock")
         if chain_lookup is not None and chain_lookup >= 0 and block > chain_lookup:
             issues.append(
@@ -2037,7 +2047,13 @@ def check_row(row, args):
             for method in archive_api_tx_required_methods(args.require_archive_trace_transaction):
                 if method not in required_archive_methods:
                     required_archive_methods.append(method)
-        issues.extend(check_archive_api_evidence(row, required_archive_methods))
+        issues.extend(
+            check_archive_api_evidence(
+                row,
+                required_archive_methods,
+                args.min_archive_api_depth_blocks,
+            )
+        )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
         issues.extend(
             check_archive_tx_evidence(
@@ -2231,6 +2247,15 @@ def build_parser():
         action="append",
         default=[],
         help="comma-separated additional archive API methods that must appear in archiveApiMethods",
+    )
+    parser.add_argument(
+        "--min-archive-api-depth-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help=(
+            "when archive API evidence is required, require archiveApiBlock "
+            "to be at least this many blocks below height"
+        ),
     )
     parser.add_argument("--min-height", type=float, help="require latest height to be at least this value")
     parser.add_argument(

@@ -559,6 +559,9 @@ the row contains `datadir`, those Prometheus samples must carry the same
 from another node. When `--require-archive-api-evidence` is used, the latest
 selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
 historical `archiveApiBlock` below `height`, and the default archive method set.
+Add `--min-archive-api-depth-blocks` for production archive checks so a
+near-tip probe such as `height-1` cannot satisfy archive support; it requires
+`height - archiveApiBlock` to meet the configured depth.
 When `--require-prune-mode-semantics` is used, the latest selected row must
 carry a persisted `pruneMode` matching the sampled `mode`; it also rejects
 archive/non-minimal rows that report incompatible prune or tail-prune progress.
