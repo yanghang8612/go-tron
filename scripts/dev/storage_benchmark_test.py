@@ -47,6 +47,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                           *eth_getLogs*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
                             ;;
+                          *debug_traceTransaction*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
+                            ;;
                           *debug_traceCall*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
                             ;;
@@ -122,6 +125,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "--archive-api-probe",
                     "--archive-api-call-data",
                     "0x70a08231",
+                    "--archive-api-trace-transaction",
                 ],
                 cwd=REPO_ROOT,
                 env=env,
@@ -134,7 +138,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 9)
+            self.assertEqual(row["archiveApiChecks"], 10)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(
@@ -149,6 +153,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getLogs",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -161,6 +166,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                 [
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
                 ],
             )
             self.assertEqual(row["snapshotManifestProfileStatus"], "missing")

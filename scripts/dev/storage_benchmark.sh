@@ -31,6 +31,7 @@ ARCHIVE_API_BLOCK=-1
 ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
 ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
+ARCHIVE_API_TRACE_TRANSACTION=0
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -147,6 +148,8 @@ Options:
   --archive-api-address HEX      0x41-prefixed TRON address for account/contract probes
   --archive-api-storage-slot HEX Storage slot for eth_getStorageAt probe (default: 0x0)
   --archive-api-call-data HEX    Include eth_call and debug_traceCall with this calldata against archive-api-address
+  --archive-api-trace-transaction
+                                  Include debug_traceTransaction when archive-api-block has a transaction
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -185,6 +188,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-address) ARCHIVE_API_ADDRESS="${2:?}"; shift 2 ;;
     --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
+    --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -635,7 +639,8 @@ archive_api_probe_values() {
   local address="$3"
   local slot="$4"
   local call_data="$5"
-  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" <<'PY'
+  local trace_transaction="$6"
+  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" "$trace_transaction" <<'PY'
 import json
 import subprocess
 import sys
@@ -645,6 +650,7 @@ block = int(sys.argv[2])
 address = sys.argv[3]
 slot = sys.argv[4]
 call_data = sys.argv[5]
+trace_transaction = sys.argv[6] == "1"
 block_tag = hex(block)
 
 def rpc_call(request_id, method, params):
@@ -710,7 +716,7 @@ def archive_result_ok(method, result, params):
         return result_number is not None and result_number == requested_number
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
         return is_hex_string(result)
-    if method == "debug_traceCall":
+    if method in {"debug_traceCall", "debug_traceTransaction"}:
         return (
             isinstance(result, dict)
             and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
@@ -782,7 +788,9 @@ while idx < len(calls):
             tx_hash_value = tx_hash
             calls.append(("eth_getTransactionByHash", [tx_hash]))
             calls.append(("eth_getTransactionReceipt", [tx_hash]))
-    elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+            if trace_transaction:
+                calls.append(("debug_traceTransaction", [tx_hash, {}]))
+    elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt", "debug_traceTransaction"}:
         tx_methods.append(method)
     idx += 1
 
@@ -814,7 +822,7 @@ run_archive_api_probe() {
   fi
   local values
   echo "probing archive JSON-RPC APIs at block $probe_block" >>"$log_path"
-  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA")"
+  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION")"
   RUN_ARCHIVE_API_STATUS="$(printf '%s\n' "$values" | sed -n '1p')"
   RUN_ARCHIVE_API_CHECKS="$(printf '%s\n' "$values" | sed -n '2p')"
   RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"

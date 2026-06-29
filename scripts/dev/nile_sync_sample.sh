@@ -32,6 +32,7 @@ ARCHIVE_API_BLOCK=-1
 ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
 ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
+ARCHIVE_API_TRACE_TRANSACTION=0
 
 usage() {
   cat <<'EOF'
@@ -64,6 +65,8 @@ Options:
                               Storage slot for eth_getStorageAt probe (default: 0x0)
   --archive-api-call-data HEX
                               Include eth_call and debug_traceCall with this calldata against archive-api-address
+  --archive-api-trace-transaction
+                              Include debug_traceTransaction when archive-api-block has a transaction
   -h, --help                 Show this help
 
 Examples:
@@ -106,6 +109,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-address) ARCHIVE_API_ADDRESS="${2:?}"; shift 2 ;;
     --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
+    --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -257,7 +261,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
   "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
-  "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" \
+  "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -302,6 +306,7 @@ from pathlib import Path
     archive_api_address,
     archive_api_storage_slot,
     archive_api_call_data,
+    archive_api_trace_transaction,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -323,7 +328,7 @@ def load_json(path):
     except Exception:
         return {}
 
-def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data):
+def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data, trace_transaction):
     row = {
         "archiveApiStatus": "not-run",
         "archiveApiEndpoint": endpoint,
@@ -410,7 +415,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return result_number is not None and result_number == requested_number
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
             return is_hex_string(result)
-        if method == "debug_traceCall":
+        if method in {"debug_traceCall", "debug_traceTransaction"}:
             return (
                 isinstance(result, dict)
                 and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
@@ -480,7 +485,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 row["archiveApiTxHash"] = tx_hash
                 calls.append(("eth_getTransactionByHash", [tx_hash]))
                 calls.append(("eth_getTransactionReceipt", [tx_hash]))
-        elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt"}:
+                if str(trace_transaction) == "1":
+                    calls.append(("debug_traceTransaction", [tx_hash, {}]))
+        elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt", "debug_traceTransaction"}:
             tx_methods.append(method)
         idx += 1
 
@@ -2339,6 +2346,7 @@ archive_api = archive_api_probe_values(
     archive_api_address,
     archive_api_storage_slot,
     archive_api_call_data,
+    archive_api_trace_transaction,
 )
 now = int(time.time())
 start = int(start_unix)

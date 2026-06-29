@@ -79,6 +79,8 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                 result = {"transactionHash": tx_hash, "blockNumber": "0x63"}
         elif method == "eth_getLogs":
             result = []
+        elif method == "debug_traceTransaction":
+            result = {"failed": False, "returnValue": "", "structLogs": []}
         elif method == "debug_traceCall":
             result = {"failed": False, "returnValue": "", "structLogs": []}
         else:
@@ -126,6 +128,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--archive-api-probe",
                     "--archive-api-call-data",
                     "0x70a08231",
+                    "--archive-api-trace-transaction",
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -136,7 +139,7 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiEndpoint"], endpoint)
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 9)
+            self.assertEqual(row["archiveApiChecks"], 10)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 99)
             self.assertEqual(
@@ -151,6 +154,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getLogs",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -160,6 +164,7 @@ class NileSyncSampleTest(unittest.TestCase):
                 [
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "debug_traceTransaction",
                 ],
             )
 
