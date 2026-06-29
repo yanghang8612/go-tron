@@ -400,6 +400,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --network nile \
   --mode full \
   --require-offline-db-check \
+  --require-prune-mode-semantics \
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
@@ -534,6 +535,9 @@ label, so aggregated artifacts cannot satisfy a Nile row with metrics from
 another node. When `--require-archive-api-evidence` is used, the latest
 selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
 historical `archiveApiBlock` below `height`, and the default archive method set.
+When `--require-prune-mode-semantics` is used, the latest selected row must
+carry a persisted `pruneMode` matching the sampled `mode`; it also rejects
+archive/non-minimal rows that report incompatible prune or tail-prune progress.
 Use `--require-archive-tx-evidence` for production archive proof after selecting
 an `--archive-api-block` with at least one transaction; it requires the sampler
 to report same-row archive API evidence, `archiveApiTxProbe=true`, a

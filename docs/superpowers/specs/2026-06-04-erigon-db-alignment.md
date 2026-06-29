@@ -1241,12 +1241,15 @@ Status:
   `gtron_storage_alert_issue{component,kind,severity}` series in the captured
   artifact. Nile sync acceptance can also require the latest selected sample to
   carry stage-stall diagnostics and successful historical JSON-RPC archive-read
-  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields. The
-  storage benchmark acceptance checker can now require the same historical
-  transaction and receipt archive proof with `archiveApiTx*` fields and
-  `--require-archive-tx-evidence`; the sampler/benchmark probes count `null`
-  or wrong-transaction JSON-RPC results as failures rather than successful
-  methods, and acceptance rejects detached tx-only rows or malformed tx hashes.
+  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields. It
+  can now also require `--require-prune-mode-semantics`, which binds the Nile
+  row's persisted `pruneMode` to the sampled `mode` and rejects incompatible
+  archive/non-minimal prune progress. The storage benchmark acceptance checker
+  can now require the same historical transaction and receipt archive proof with
+  `archiveApiTx*` fields and `--require-archive-tx-evidence`; the
+  sampler/benchmark probes count `null` or wrong-transaction JSON-RPC results
+  as failures rather than successful methods, and acceptance rejects detached
+  tx-only rows or malformed tx hashes.
 
 Needed:
 

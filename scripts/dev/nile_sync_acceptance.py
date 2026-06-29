@@ -1249,6 +1249,79 @@ def check_required_stage_stall_evidence(row):
     return issues
 
 
+def field_present(row, field):
+    return field in row and row.get(field) not in {None, ""}
+
+
+def check_non_negative_forbidden(row, field, reason):
+    if not field_present(row, field):
+        return []
+    value = as_number(row, field)
+    if value is not None and value >= 0:
+        return [f"{field}={value:g} is not allowed for {reason}"]
+    return []
+
+
+def check_positive_forbidden(row, field, reason):
+    if not field_present(row, field):
+        return []
+    value = as_number(row, field)
+    if value is not None and value > 0:
+        return [f"{field}={value:g} is not allowed for {reason}"]
+    return []
+
+
+def check_prune_mode_semantics(row):
+    issues = []
+    mode = str(row.get("mode", "")).lower()
+    if not mode:
+        issues.append("mode is missing")
+        return issues
+
+    persisted_mode = str(row.get("pruneMode", "")).lower()
+    if not persisted_mode or persisted_mode == "unknown":
+        issues.append("pruneMode is missing or unknown")
+    elif persisted_mode != mode:
+        issues.append(f"pruneMode={row.get('pruneMode')!r} does not match mode={mode!r}")
+
+    if not as_bool(row, "pruneModePersisted"):
+        issues.append("pruneModePersisted must be true")
+
+    if mode == "archive":
+        if as_number(row, "signedColdPrune") == 1.0:
+            issues.append("signedColdPrune must be false for archive")
+        for field in (
+            "chainLookupPruneToBlock",
+            "tailPrunedThroughBlock",
+            "balanceTracePruneToBlock",
+            "sectionBloomPruneToSection",
+        ):
+            issues.extend(check_non_negative_forbidden(row, field, "archive mode"))
+
+    if mode not in {"archive", "minimal"}:
+        issues.extend(check_non_negative_forbidden(row, "tailPrunedThroughBlock", f"{mode} mode"))
+    if mode != "minimal":
+        issues.extend(check_positive_forbidden(row, "tailPrunedFiles", f"{mode} mode"))
+
+    tail_pruned_files = as_number(row, "tailPrunedFiles")
+    tail_pruned = as_number(row, "tailPrunedThroughBlock")
+    if mode == "minimal" and tail_pruned_files is not None and tail_pruned_files > 0:
+        if tail_pruned is None or tail_pruned < 0:
+            issues.append(
+                "tailPrunedThroughBlock must be >= 0 when tailPrunedFiles is positive "
+                "for minimal mode"
+            )
+    if mode == "minimal" and tail_pruned is not None and tail_pruned >= 0:
+        chain_lookup = as_number(row, "chainLookupPruneToBlock")
+        if chain_lookup is not None and tail_pruned > chain_lookup:
+            issues.append(
+                f"tailPrunedThroughBlock={tail_pruned:g} exceeds "
+                f"chainLookupPruneToBlock={chain_lookup:g}"
+            )
+
+    return issues
+
+
 def string_set_field(row, field):
     raw = row.get(field)
     if raw is None:
@@ -1473,6 +1546,8 @@ def check_row(row, args):
         issues.extend(check_required_stage_stall_evidence(row))
     else:
         issues.extend(check_stage_stall_evidence(row))
+    if args.require_prune_mode_semantics:
+        issues.extend(check_prune_mode_semantics(row))
     if args.require_archive_api_evidence or args.require_archive_tx_evidence:
         required_archive_methods = list(args.archive_api_methods_required)
         if args.require_archive_tx_evidence:
@@ -1591,6 +1666,14 @@ def build_parser():
         help=(
             "require per-stage fullStagedSyncStageDetails evidence and cross-check it "
             "against aggregate staged-sync fields"
+        ),
+    )
+    parser.add_argument(
+        "--require-prune-mode-semantics",
+        action="store_true",
+        help=(
+            "require selected rows to carry persisted prune-mode evidence matching "
+            "the sampled mode and reject mode-incompatible prune progress"
         ),
     )
     parser.add_argument(

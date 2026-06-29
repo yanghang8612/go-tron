@@ -115,6 +115,20 @@ def add_clean_storage_alerts(row):
     return row
 
 
+def add_clean_prune_mode(row, mode=None):
+    prune_mode = mode or row.get("mode", "full")
+    row.update(
+        {
+            "mode": prune_mode,
+            "pruneMode": prune_mode,
+            "pruneModePersisted": True,
+            "tailPrunedThroughBlock": -1,
+            "tailPrunedFiles": 0,
+        }
+    )
+    return row
+
+
 def add_clean_startup_recovery(row):
     row.update(
         {
@@ -497,6 +511,160 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
             self.assertIn("status=catching-up", proc.stdout)
+
+    def test_accepts_prune_mode_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [add_clean_prune_mode(clean_full_staged_sync_row())])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_prune_mode_semantic_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row())
+            row.update(
+                {
+                    "pruneMode": "minimal",
+                    "pruneModePersisted": False,
+                    "tailPrunedThroughBlock": 7,
+                    "tailPrunedFiles": 1,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=7 is not allowed for full mode", proc.stderr)
+            self.assertIn("tailPrunedFiles=1 is not allowed for full mode", proc.stderr)
+
+    def test_rejects_archive_prune_mode_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row(), "archive")
+            row.update(
+                {
+                    "network": "nile",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 12,
+                    "tailPrunedThroughBlock": 9,
+                    "balanceTracePruneToBlock": 8,
+                    "sectionBloomPruneToSection": 2,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "archive",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("signedColdPrune must be false for archive", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=9 is not allowed for archive mode", proc.stderr)
+            self.assertIn("balanceTracePruneToBlock=8 is not allowed for archive mode", proc.stderr)
+            self.assertIn("sectionBloomPruneToSection=2 is not allowed for archive mode", proc.stderr)
+
+    def test_rejects_missing_prune_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("pruneMode is missing or unknown", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+
+    def test_rejects_minimal_tail_prune_without_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row(), "minimal")
+            row.update({"tailPrunedThroughBlock": -1, "tailPrunedFiles": 1})
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "minimal",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "tailPrunedThroughBlock must be >= 0 when tailPrunedFiles is positive "
+                "for minimal mode",
+                proc.stderr,
+            )
 
     def test_accepts_max_cold_stage_lag_blocks_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
