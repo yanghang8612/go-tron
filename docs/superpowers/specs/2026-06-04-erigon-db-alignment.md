@@ -1233,9 +1233,12 @@ Needed:
 - Keep auditing newly introduced direct hot-only `rawdb.Read*KV` and
   raw block-hash fallback call sites before enabling more aggressive
   chain-data prune defaults.
-- Evaluate compact/merged cold index formats for block hash by number, tx
-  lookup, per-tx info, and state-root lookup if sidecar profiles show they
-  dominate disk or lookup latency.
+- `scripts/dev/snapshot_manifest_profile.py` now profiles active snapshot
+  manifest bytes by payload versus lookup sidecar family and can gate runs with
+  `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`; use that
+  evidence to evaluate compact/merged cold index formats for block hash by
+  number, tx lookup, per-tx info, and state-root lookup only if sidecar
+  profiles show they dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
 - Wire the storage benchmark and Nile sampler Prometheus artifacts into the

@@ -386,6 +386,15 @@ of letting another mode's sidecar satisfy the run. Repeat
 additional mode-local log-index proofs. Add `--min
 eventLogIndexAddressPostings=1` when the sample is expected to include logs and
 should prove non-empty index fanout.
+Use `scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` on the
+same artifacts to split active snapshot bytes by payload versus lookup
+sidecar family. The profiler reports `sidecarShareMilli` overall and per
+family (`latest`, `state-history`, `chain-freezer`, `event-log`,
+`balance-trace`, `section-bloom`, and `other`) and can fail a run with
+`--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Keep the
+compact/merged index-format decision evidence-driven: only consider replacing
+sorted `chain-index`, `event-log-index`, accessor, or btree sidecars after the
+profile shows they dominate disk or lookup latency in long samples.
 Use `--require-size-reduction MODE:BASE_MODE:FIELD=RATIO` on comparable
 multi-mode runs to require the latest selected `MODE` row to reduce a byte
 counter by at least `RATIO` versus `BASE_MODE`; for example,
