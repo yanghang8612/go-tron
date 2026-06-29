@@ -115,6 +115,36 @@ def add_clean_storage_alerts(row):
     return row
 
 
+def add_clean_startup_recovery(row):
+    row.update(
+        {
+            "syncStartupRepairStatus": "ok",
+            "syncStartupRepairSummaries": 1,
+            "syncStartupRepairComplete": True,
+            "syncStartupRepairHasBlocked": False,
+            "syncStartupRepairFirstBlocked": "",
+            "syncStartupRepairInterrupted": False,
+            "syncStartupRepairErrorStage": "",
+            "syncStartupHeadCompletionChecked": True,
+            "syncStartupHeadCompletionComplete": True,
+            "syncStartupHeadCompletionErrorStage": "",
+            "syncStartupPipelineOrderChecked": True,
+            "syncStartupPipelineOrderIssues": 0,
+            "syncStartupPipelineOrderReadErrors": 0,
+            "syncStartupPipelineOrderRepairChecked": True,
+            "syncStartupPipelineOrderRepairComplete": True,
+            "syncStartupPipelineOrderRepairInterrupted": False,
+            "syncStartupPipelineOrderRepairErrorStage": "",
+            "syncStartupPipelineCursorChecked": True,
+            "syncStartupPipelineCursorComplete": True,
+            "syncStartupPipelineCursorBlocked": False,
+            "syncStartupPipelineCursorInterrupted": False,
+            "syncStartupPipelineCursorErrorStage": "",
+        }
+    )
+    return row
+
+
 class NileSyncAcceptanceTest(unittest.TestCase):
     def test_accepts_clean_latest_staged_sync_row(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,6 +524,109 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("freezerAlertStatus='critical', want 'ok'", proc.stderr)
             self.assertIn("freezerAlertIssues=2, want 0", proc.stderr)
+
+    def test_accepts_startup_recovery_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_startup_recovery(clean_full_staged_sync_row())
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-startup-recovery-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_startup_recovery_without_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-startup-recovery-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("syncStartupRepairStatus=None, want 'ok'", proc.stderr)
+            self.assertIn("syncStartupRepairSummaries=None, want > 0", proc.stderr)
+
+    def test_rejects_startup_recovery_blocked_or_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_startup_recovery(clean_full_staged_sync_row())
+            row["syncStartupRepairComplete"] = False
+            row["syncStartupRepairHasBlocked"] = True
+            row["syncStartupRepairFirstBlocked"] = "SyncCommitment"
+            row["syncStartupPipelineOrderIssues"] = 1
+            row["syncStartupPipelineOrderReadErrors"] = 1
+            row["syncStartupPipelineOrderRepairComplete"] = False
+            row["syncStartupPipelineOrderRepairInterrupted"] = True
+            row["syncStartupPipelineOrderRepairErrorStage"] = "SyncCommitment"
+            row["syncStartupPipelineCursorComplete"] = False
+            row["syncStartupPipelineCursorBlocked"] = True
+            row["syncStartupPipelineCursorNextStage"] = "SyncCommitment"
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-startup-recovery-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("syncStartupRepairComplete is not true", proc.stderr)
+            self.assertIn(
+                "syncStartupRepairHasBlocked=true: firstBlocked='SyncCommitment'",
+                proc.stderr,
+            )
+            self.assertIn("syncStartupPipelineOrderIssues=1, want 0", proc.stderr)
+            self.assertIn("syncStartupPipelineOrderReadErrors=1, want 0", proc.stderr)
+            self.assertIn("syncStartupPipelineOrderRepairComplete is not true", proc.stderr)
+            self.assertIn("syncStartupPipelineOrderRepairInterrupted=true", proc.stderr)
+            self.assertIn(
+                "syncStartupPipelineOrderRepairErrorStage='SyncCommitment', want ''",
+                proc.stderr,
+            )
+            self.assertIn("syncStartupPipelineCursorComplete is not true", proc.stderr)
+            self.assertIn(
+                "syncStartupPipelineCursorBlocked=true: nextStage='SyncCommitment'",
+                proc.stderr,
+            )
 
     def test_accepts_min_sync_rate_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

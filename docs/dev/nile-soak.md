@@ -382,6 +382,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-offline-db-check \
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
+  --require-startup-recovery-evidence \
   --require-archive-api-evidence \
   --min-height 100000 \
   --max-lag-blocks 5000 \
@@ -411,6 +412,11 @@ corresponding `stageSync*` fields. When `fullStagedSyncStageDetails` is
 present, the checker also cross-checks each stage detail against the aggregate
 `fullStagedSync*` fields; add `--require-stage-detail-evidence` for production
 soak gates so older sampler rows cannot pass without that per-stage evidence.
+Use `--require-startup-recovery-evidence` when rows were collected with
+`--sync-log-file`. It requires a healthy `Sync startup repair summary`: status
+`ok`, at least one summary, completed sync-pipeline repair and current-head
+completion, no blocked/interrupted repair, zero pipeline order/read errors, and
+healthy optional order-repair/cursor checks when those subchecks ran.
 It also rejects HTTP/sample failures, critical soak health, stage regressions,
 stage hash/staged-body/order issues, and non-monotonic sync-stage progress.
 Use `--max-cold-stage-lag-blocks` to keep cold/archive builders close enough to

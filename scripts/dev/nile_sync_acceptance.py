@@ -74,6 +74,11 @@ STORAGE_ALERT_ZERO_ISSUE_FIELDS = (
     "snapshotAlertIssues",
 )
 
+STARTUP_RECOVERY_ZERO_FIELDS = (
+    "syncStartupPipelineOrderIssues",
+    "syncStartupPipelineOrderReadErrors",
+)
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBalance",
@@ -396,6 +401,76 @@ def check_storage_alert_evidence(row):
             issues.append(f"{field}={value}, want 0")
         elif value != 0:
             issues.append(f"{field}={value:g}, want 0")
+    return issues
+
+
+def check_startup_recovery_evidence(row):
+    issues = []
+    status = row.get("syncStartupRepairStatus")
+    if status != "ok":
+        issues.append(f"syncStartupRepairStatus={status!r}, want 'ok'")
+    summaries = as_number(row, "syncStartupRepairSummaries")
+    if summaries is None or summaries <= 0:
+        issues.append(f"syncStartupRepairSummaries={summaries}, want > 0")
+    if not as_bool(row, "syncStartupRepairComplete"):
+        issues.append("syncStartupRepairComplete is not true")
+    if as_bool(row, "syncStartupRepairHasBlocked"):
+        issues.append(
+            "syncStartupRepairHasBlocked=true: "
+            f"firstBlocked={row.get('syncStartupRepairFirstBlocked')!r}"
+        )
+    if as_bool(row, "syncStartupRepairInterrupted"):
+        issues.append("syncStartupRepairInterrupted=true")
+    if row.get("syncStartupRepairErrorStage"):
+        issues.append(
+            f"syncStartupRepairErrorStage={row.get('syncStartupRepairErrorStage')!r}, want ''"
+        )
+
+    if not as_bool(row, "syncStartupHeadCompletionChecked"):
+        issues.append("syncStartupHeadCompletionChecked is not true")
+    if not as_bool(row, "syncStartupHeadCompletionComplete"):
+        issues.append("syncStartupHeadCompletionComplete is not true")
+    if row.get("syncStartupHeadCompletionErrorStage"):
+        issues.append(
+            "syncStartupHeadCompletionErrorStage="
+            f"{row.get('syncStartupHeadCompletionErrorStage')!r}, want ''"
+        )
+
+    if not as_bool(row, "syncStartupPipelineOrderChecked"):
+        issues.append("syncStartupPipelineOrderChecked is not true")
+    for field in STARTUP_RECOVERY_ZERO_FIELDS:
+        value = as_number(row, field)
+        if value is None:
+            issues.append(f"{field}={value}, want 0")
+        elif value != 0:
+            issues.append(f"{field}={value:g}, want 0")
+
+    if as_bool(row, "syncStartupPipelineOrderRepairChecked"):
+        if not as_bool(row, "syncStartupPipelineOrderRepairComplete"):
+            issues.append("syncStartupPipelineOrderRepairComplete is not true")
+        if as_bool(row, "syncStartupPipelineOrderRepairInterrupted"):
+            issues.append("syncStartupPipelineOrderRepairInterrupted=true")
+        if row.get("syncStartupPipelineOrderRepairErrorStage"):
+            issues.append(
+                "syncStartupPipelineOrderRepairErrorStage="
+                f"{row.get('syncStartupPipelineOrderRepairErrorStage')!r}, want ''"
+            )
+
+    if as_bool(row, "syncStartupPipelineCursorChecked"):
+        if not as_bool(row, "syncStartupPipelineCursorComplete"):
+            issues.append("syncStartupPipelineCursorComplete is not true")
+        if as_bool(row, "syncStartupPipelineCursorBlocked"):
+            issues.append(
+                "syncStartupPipelineCursorBlocked=true: "
+                f"nextStage={row.get('syncStartupPipelineCursorNextStage')!r}"
+            )
+        if as_bool(row, "syncStartupPipelineCursorInterrupted"):
+            issues.append("syncStartupPipelineCursorInterrupted=true")
+        if row.get("syncStartupPipelineCursorErrorStage"):
+            issues.append(
+                "syncStartupPipelineCursorErrorStage="
+                f"{row.get('syncStartupPipelineCursorErrorStage')!r}, want ''"
+            )
     return issues
 
 
@@ -1183,6 +1258,8 @@ def check_row(row, args):
         issues.extend(check_stage_stall_evidence(row))
     if args.require_archive_api_evidence:
         issues.extend(check_archive_api_evidence(row, args.archive_api_methods_required))
+    if args.require_startup_recovery_evidence:
+        issues.extend(check_startup_recovery_evidence(row))
 
     for field in ZERO_ISSUE_FIELDS:
         value = as_number(row, field)
@@ -1287,6 +1364,11 @@ def build_parser():
         "--require-archive-api-evidence",
         action="store_true",
         help="require selected rows to include successful historical archive API evidence",
+    )
+    parser.add_argument(
+        "--require-startup-recovery-evidence",
+        action="store_true",
+        help="require selected rows to include healthy staged-sync startup recovery evidence",
     )
     parser.add_argument(
         "--archive-api-method",
