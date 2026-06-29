@@ -1718,8 +1718,12 @@ Status:
   JSON-RPC
   `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
   segment files to prove filtered archive reads are served through the cold
-  index path. The API falls back to the hot scan on coverage gaps and surfaces
-  checker failures as archive data errors. `gtron snapshot
+  index path. The API falls back to the hot scan on coverage gaps, and when a
+  cold event-log index is missing or unreadable but complete `event-log`
+  segments still cover the requested range, it degrades to a cold segment scan
+  instead of surfacing the index-sidecar failure to `eth_getLogs`. Checker
+  failures for corrupted covered rows still surface as archive data errors.
+  `gtron snapshot
   event-log-index-stats` now gives operators a readonly profile of active
   event-log-index sidecars, including address/topic key counts, postings,
   average postings per key, single- versus multi-segment key counts, and

@@ -2162,6 +2162,67 @@ func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexMissing(t *testi
 	}
 }
 
+func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexCorrupt(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x43)
+	topic := tcommon.Hash{0xdf}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x43, 0x44},
+	})
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	dir := t.TempDir()
+	ref, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(dir, []statesnapshots.SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, indexRef.Path), []byte("not-an-event-log-index"), 0o644); err != nil {
+		t.Fatalf("corrupt event-log index: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs with corrupt cold event-log index: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs with corrupt cold event-log index returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x4344" || logs[0].Address != fmt.Sprintf("0x%x", logAddress) {
+		t.Fatalf("log = %+v, want cold fallback log", logs[0])
+	}
+}
+
 func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
