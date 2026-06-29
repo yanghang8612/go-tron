@@ -1056,9 +1056,13 @@ Status:
   the snapshot head: old-generation storage rows remain physically present in
   restored latest files, but backend and JSON-RPC archive reads prove block-1
   storage is recoverable while head/block-2 reads do not leak untouched old
-  slots into the recreated contract. SystemDelegation latest-domain rows are
-  also restored in that matrix: V2 delegation buckets plus the delegation index
-  are read back through backend calls and the `/wallet*`
+  slots into the recreated contract. Contract metadata uses the same
+  account-as-of generation path, so delete/recreate history no longer depends
+  on a live `KVGeneration` row: backend `GetContractAt` and `/wallet*`
+  `getcontract` now prove the restored block-1 contract metadata differs from
+  the head contract metadata for the same address. SystemDelegation
+  latest-domain rows are also restored in that matrix: V2 delegation buckets
+  plus the delegation index are read back through backend calls and the `/wallet*`
   `getdelegatedresourcev2`/`getdelegatedresourceaccountindexv2` HTTP routes.
   The same restored backend now also starts the real TRON HTTP and JSON-RPC
   server lifecycles on port `0`, discovers their bound addresses, and sends

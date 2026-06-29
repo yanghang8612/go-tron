@@ -1456,6 +1456,8 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	recreatedStorageKeyB := snapshotCmdStorageRowKey(recreatedAddr, recreatedSlotB)
 	recreatedAccount1 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance1, corepb.AccountType_Contract, archiveCodeHash1, 0)
 	recreatedAccount2 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance2, corepb.AccountType_Contract, archiveCodeHash2, 1)
+	recreatedMeta1 := snapshotCmdContractMetadata(t, recreatedAddr, "snapshot-old-contract", archiveCode1)
+	recreatedMeta2 := snapshotCmdContractMetadata(t, recreatedAddr, "snapshot-new-contract", archiveCode2)
 	delegationFrom := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x45}, common.AccountIDLength)...))
 	delegationTo := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x46}, common.AccountIDLength)...))
 	delegationBandwidth := int64(6_000)
@@ -1488,6 +1490,12 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	if err := rawdb.WriteStateKVGeneration(stateSnapshotDB, recreatedAddr, 1); err != nil {
 		t.Fatalf("WriteStateKVGeneration recreated: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 0, kvdomains.ContractMetadata, snapshotCmdContractMetaKey(), recreatedMeta1); err != nil {
+		t.Fatalf("WriteStateKVLatest recreated old metadata: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 1, kvdomains.ContractMetadata, snapshotCmdContractMetaKey(), recreatedMeta2); err != nil {
+		t.Fatalf("WriteStateKVLatest recreated new metadata: %v", err)
 	}
 	if err := rawdb.WriteStateCode(stateSnapshotDB, archiveCodeHash1, archiveCode1); err != nil {
 		t.Fatalf("WriteStateCode code1: %v", err)
@@ -1653,6 +1661,38 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange recreated new slotA: %v", err)
 	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        9,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      recreatedAddr,
+		Generation: 0,
+		Domain:     kvdomains.ContractMetadata,
+		Key:        snapshotCmdContractMetaKey(),
+		PrevExists: true,
+		Prev:       recreatedMeta1,
+		NextExists: false,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated old metadata: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        10,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      recreatedAddr,
+		Generation: 1,
+		Domain:     kvdomains.ContractMetadata,
+		Key:        snapshotCmdContractMetaKey(),
+		PrevExists: false,
+		NextExists: true,
+		Next:       recreatedMeta2,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated new metadata: %v", err)
+	}
 	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/accounts-1-2.seg")
 	if err != nil {
 		t.Fatalf("BuildAccountLatestSegmentFilesFromDB: %v", err)
@@ -1664,6 +1704,10 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.ContractStorage, 1, 2, "latest/contract-storage-1-2.seg")
 	if err != nil {
 		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(contract storage): %v", err)
+	}
+	metadataRef, metadataAccessorRef, metadataBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.ContractMetadata, 1, 2, "latest/contract-metadata-1-2.seg")
+	if err != nil {
+		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(contract metadata): %v", err)
 	}
 	delegationRef, delegationAccessorRef, delegationBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.SystemDelegation, 1, 2, "latest/system-delegation-1-2.seg")
 	if err != nil {
@@ -1682,6 +1726,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		accountRef, accountAccessorRef, accountBTreeRef,
 		codeRef, codeAccessorRef, codeBTreeRef,
 		storageRef, storageAccessorRef, storageBTreeRef,
+		metadataRef, metadataAccessorRef, metadataBTreeRef,
 		delegationRef, delegationAccessorRef, delegationBTreeRef,
 	}
 	segments = append(segments, historyRefs...)
@@ -1845,6 +1890,12 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotB, block2.Number()); err != nil || recreatedStorage != (common.Hash{}) {
 		t.Fatalf("GetStorageAtBlock(recreated slotB block2) = %x/%v, want zero", recreatedStorage, err)
 	}
+	if recreatedContract, err := backend.GetContractAt(recreatedAddr, block1.Number()); err != nil || recreatedContract == nil || recreatedContract.Name != "snapshot-old-contract" || !bytes.Equal(recreatedContract.Bytecode, archiveCode1) {
+		t.Fatalf("GetContractAt(recreated block1) = %+v/%v, want old contract metadata", recreatedContract, err)
+	}
+	if recreatedContract, err := backend.GetContractAt(recreatedAddr, block2.Number()); err != nil || recreatedContract == nil || recreatedContract.Name != "snapshot-new-contract" || !bytes.Equal(recreatedContract.Bytecode, archiveCode2) {
+		t.Fatalf("GetContractAt(recreated block2) = %+v/%v, want new contract metadata", recreatedContract, err)
+	}
 	delegated, err := backend.GetDelegatedResourceV2(delegationFrom, delegationTo)
 	if err != nil {
 		t.Fatalf("GetDelegatedResourceV2: %v", err)
@@ -1945,6 +1996,13 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		if got := asFloat64(recreatedAccountJSON["balance"]); got != float64(recreatedBalance1) {
 			t.Fatalf("%s/getaccount recreated-account balance = %v, want %d: %v", prefix, recreatedAccountJSON["balance"], recreatedBalance1, recreatedAccountJSON)
 		}
+		recreatedContractJSON := postSnapshotTestJSON(t, tronServer.URL+prefix+"/getcontract", fmt.Sprintf(`{"value":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+		if got := recreatedContractJSON["name"]; got != "snapshot-old-contract" {
+			t.Fatalf("%s/getcontract recreated-contract name = %v, want snapshot-old-contract: %v", prefix, got, recreatedContractJSON)
+		}
+		if got := recreatedContractJSON["bytecode"]; got != hex.EncodeToString(archiveCode1) {
+			t.Fatalf("%s/getcontract recreated-contract bytecode = %v, want %x: %v", prefix, got, archiveCode1, recreatedContractJSON)
+		}
 	}
 	deletedHeadAccountJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(deletedAddr.Bytes())))
 	if len(deletedHeadAccountJSON) != 0 {
@@ -1953,6 +2011,13 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	recreatedHeadAccountJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
 	if got := asFloat64(recreatedHeadAccountJSON["balance"]); got != float64(recreatedBalance2) {
 		t.Fatalf("/wallet/getaccount recreated head balance = %v, want %d: %v", recreatedHeadAccountJSON["balance"], recreatedBalance2, recreatedHeadAccountJSON)
+	}
+	recreatedHeadContractJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getcontract", fmt.Sprintf(`{"value":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+	if got := recreatedHeadContractJSON["name"]; got != "snapshot-new-contract" {
+		t.Fatalf("/wallet/getcontract recreated head name = %v, want snapshot-new-contract: %v", got, recreatedHeadContractJSON)
+	}
+	if got := recreatedHeadContractJSON["bytecode"]; got != hex.EncodeToString(archiveCode2) {
+		t.Fatalf("/wallet/getcontract recreated head bytecode = %v, want %x: %v", got, archiveCode2, recreatedHeadContractJSON)
 	}
 	tronLifecycleServer := tronapi.NewServer(backend, 0)
 	if err := tronLifecycleServer.Start(); err != nil {
@@ -1963,6 +2028,10 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	lifecycleAccountJSON := postSnapshotTestJSON(t, tronLifecycleURL+"/walletsolidity/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
 	if got := asFloat64(lifecycleAccountJSON["balance"]); got != float64(recreatedBalance1) {
 		t.Fatalf("lifecycle /walletsolidity/getaccount recreated balance = %v, want %d: %v", lifecycleAccountJSON["balance"], recreatedBalance1, lifecycleAccountJSON)
+	}
+	lifecycleContractJSON := postSnapshotTestJSON(t, tronLifecycleURL+"/walletsolidity/getcontract", fmt.Sprintf(`{"value":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+	if got := lifecycleContractJSON["name"]; got != "snapshot-old-contract" {
+		t.Fatalf("lifecycle /walletsolidity/getcontract recreated name = %v, want snapshot-old-contract: %v", got, lifecycleContractJSON)
 	}
 
 	rpcServer := httptest.NewServer(jsonrpcapi.NewAPI(backend))
@@ -2266,6 +2335,24 @@ func snapshotCmdStorageRowKey(addr common.Address, key common.Hash) common.Hash 
 	copy(rowKey[:16], addrHash[:16])
 	copy(rowKey[16:], key[16:])
 	return rowKey
+}
+
+func snapshotCmdContractMetaKey() []byte {
+	return []byte("meta")
+}
+
+func snapshotCmdContractMetadata(t *testing.T, addr common.Address, name string, bytecode []byte) []byte {
+	t.Helper()
+	raw, err := proto.Marshal(&contractpb.SmartContract{
+		ContractAddress: addr.Bytes(),
+		Name:            name,
+		Bytecode:        bytecode,
+		OriginAddress:   addr.Bytes(),
+	})
+	if err != nil {
+		t.Fatalf("marshal contract metadata: %v", err)
+	}
+	return raw
 }
 
 func snapshotTestSunToWeiHex(sun int64) string {
