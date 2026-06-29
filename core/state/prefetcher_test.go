@@ -211,6 +211,30 @@ func TestStatePrefetcherWarmsGovernanceWitnessRows(t *testing.T) {
 	}
 }
 
+func TestStatePrefetcherWarmsShieldedRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	keys := []PrefetchKey{
+		ShieldedZKProofResultPrefetchKey([]byte("tx-proof")),
+		ShieldedMerkleAnchorPrefetchKey(bytes.Repeat([]byte{0xaa}, 32)),
+		ShieldedNullifierPrefetchKey(bytes.Repeat([]byte{0xbb}, 32)),
+		ShieldedNoteCommitmentCountPrefetchKey(),
+	}
+	for i, key := range keys {
+		if err := rawdb.WriteStateKVLatest(db, key.Owner, 0, key.Domain, key.Key, []byte{byte(i + 1)}); err != nil {
+			t.Fatalf("WriteStateKVLatest key %d: %v", i, err)
+		}
+	}
+	for _, key := range keys {
+		hit, err := prefetchLatest(db, key)
+		if err != nil {
+			t.Fatalf("prefetch shielded key %#v: %v", key, err)
+		}
+		if !hit {
+			t.Fatalf("prefetch shielded key %#v hit = false, want true", key)
+		}
+	}
+}
+
 func TestStatePrefetcherWarmsExchangeTokenAssets(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	firstToken := []byte("1000008")

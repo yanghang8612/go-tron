@@ -131,6 +131,33 @@ func TestPrefetchKeysForCreateSmartContract(t *testing.T) {
 	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(created))
 }
 
+func TestPrefetchKeysForShieldedTransferSystemRows(t *testing.T) {
+	from := makeTestAddr(0x28)
+	to := makeTestAddr(0x29)
+	anchor := bytes.Repeat([]byte{0xaa}, 32)
+	nullifier := bytes.Repeat([]byte{0xbb}, 32)
+	commitment := bytes.Repeat([]byte{0xcc}, 32)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_ShieldedTransferContract, &contractpb.ShieldedTransferContract{
+		TransparentFromAddress: from.Bytes(),
+		TransparentToAddress:   to.Bytes(),
+		SpendDescription: []*contractpb.SpendDescription{{
+			Anchor:    anchor,
+			Nullifier: nullifier,
+		}},
+		ReceiveDescription: []*contractpb.ReceiveDescription{{
+			NoteCommitment: commitment,
+		}},
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(from))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.ShieldedZKProofResultPrefetchKey(tx.Hash().Bytes()))
+	assertPrefetchHas(t, keys, state.ShieldedMerkleAnchorPrefetchKey(anchor))
+	assertPrefetchHas(t, keys, state.ShieldedNullifierPrefetchKey(nullifier))
+	assertPrefetchHas(t, keys, state.ShieldedNoteCommitmentCountPrefetchKey())
+}
+
 func TestPrefetchKeysForAssetIssueSystemAssetRows(t *testing.T) {
 	owner := makeTestAddr(0x23)
 	name := []byte("MYTOKEN")

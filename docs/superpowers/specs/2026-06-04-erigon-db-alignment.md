@@ -1459,13 +1459,14 @@ Status:
   metadata/index rows, and envelope-addressable `SystemMarket`/`SystemExchange`
   rows. It covers transfer, TRC10 transfer/issue/participate, TVM
   create/trigger, contract settings, vote witness, witness operations,
-  governance proposals, Stake 1.0/2.0, shielded transparent endpoints, market
-  sell/cancel including metadata-derived maker order rows behind compatible
-  price levels, exchange token operations including metadata-derived TRC10
-  asset rows for both exchange token legs, update/unfreeze-asset operations
-  including owner-account-derived TRC10 asset metadata rows, account metadata
-  operations including account-name/account-ID uniqueness index rows,
-  owner-only actuators, and account-create families.
+  governance proposals, Stake 1.0/2.0, shielded transparent endpoints plus
+  shielded proof-cache/anchor/nullifier/note-count rows, market sell/cancel
+  including metadata-derived maker order rows behind compatible price levels,
+  exchange token operations including metadata-derived TRC10 asset rows for
+  both exchange token legs, update/unfreeze-asset operations including
+  owner-account-derived TRC10 asset metadata rows, account metadata operations
+  including account-name/account-ID uniqueness index rows, owner-only
+  actuators, and account-create families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when

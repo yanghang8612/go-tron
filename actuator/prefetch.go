@@ -190,6 +190,24 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		}
 		b.addAccountBytes(m.GetTransparentFromAddress())
 		b.addAccountBytes(m.GetTransparentToAddress())
+		b.add(state.ShieldedZKProofResultPrefetchKey(tx.Hash().Bytes()))
+		for _, spend := range m.GetSpendDescription() {
+			if spend == nil {
+				continue
+			}
+			if anchor := spend.GetAnchor(); len(anchor) > 0 {
+				b.add(state.ShieldedMerkleAnchorPrefetchKey(anchor))
+			}
+			if nullifier := spend.GetNullifier(); len(nullifier) > 0 {
+				b.add(state.ShieldedNullifierPrefetchKey(nullifier))
+			}
+		}
+		for _, recv := range m.GetReceiveDescription() {
+			if recv != nil && len(recv.GetNoteCommitment()) > 0 {
+				b.add(state.ShieldedNoteCommitmentCountPrefetchKey())
+				break
+			}
+		}
 
 	case corepb.Transaction_Contract_AccountCreateContract:
 		var m contractpb.AccountCreateContract

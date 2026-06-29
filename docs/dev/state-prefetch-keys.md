@@ -24,6 +24,7 @@ hints and never change actuator validation behaviour.
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAccountIndex, key)` | account name and account ID uniqueness index rows |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemShielded, key)` | shielded proof-cache, anchor, nullifier, and note-commitment counter rows |
 | `state.OwnerIssuedAssetRowsPrefetchKey(owner)` | owner account latest row, then V2 asset metadata plus legacy/name-index rows from `asset_issued_id` and `asset_issued_name` |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemMarket, key)` | market order/account/price-list/price-count/order-book rows derivable from the envelope |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemExchange, key)` | V1/V2 exchange rows keyed by exchange id |
@@ -46,7 +47,7 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Proposal operations | owner account, owner witness capsule where validation requires it, proposal record by id, proposal index for creation |
 | Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows |
 | Stake 2.0 delegate/undelegate | owner account, receiver account, locked/unlocked delegated-resource rows, owner delegation-index row |
-| Shielded transfer | transparent from/to accounts when present and valid |
+| Shielded transfer | transparent from/to accounts when present and valid, proof-result cache row, spend anchor/nullifier rows, note-commitment count row for receiving transfers |
 | Asset issue | owner account, owner-index row, legacy name metadata, name index |
 | Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, reverse pair price-list, compatible reverse price-level order-book rows, and maker order rows reachable from those levels; `_` TRX token legs are skipped for TRC10 metadata |
 | Exchange token operations | owner account, TRC10 token metadata/name-index hints derivable from the envelope, both V1/V2 exchange rows when an exchange id is present, and metadata-derived TRC10 asset rows for both exchange token legs |
