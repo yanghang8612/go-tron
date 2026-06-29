@@ -1173,11 +1173,13 @@ Status:
   snapshot builder canonical-hash readers, freezer adapter, and db diagnostics),
   and the cold-boundary audit now covers the strict block-hash reader too, so
   new block-number hash lookups cannot silently bypass cold chain coverage.
-  The same source-audit file now also rejects new production
-  `rawdb.NewChainDB(..., rawdb.NoopAncient{})` constructors outside audited
-  isolated replay/diagnostic boundaries, preventing new call sites from
-  creating hot-only chain readers that skip ancient freezer and cold index
-  sidecars by construction. The same cold-boundary audit now covers the
+  The same source-audit file now also rejects new production hot-only
+  `rawdb.NewChainDB` constructors outside audited isolated replay/diagnostic
+  boundaries. The audit covers explicit `rawdb.NoopAncient{}`, `nil` ancient
+  readers, zero-value `AncientReader` aliases, and all-hot
+  `NewFallbackAncientReader` compositions, preventing new call sites from
+  creating chain readers that skip ancient freezer and cold index sidecars by
+  construction. The same cold-boundary audit now covers the
   integrity-preserving strict readers for block numbers, transaction indexes,
   transaction infos, state roots, section blooms, balance traces, and account
   traces, so new production code cannot call those variants on a hot-only KV
