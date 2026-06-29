@@ -494,6 +494,10 @@ ancients, snapshots, replay, and derived sidecars. It checks
 first samples can still use cumulative evidence when present. Keep this as the
 outer storage budget, then use the hot/cold/index gates below to identify which
 bucket is responsible when the total budget fails.
+Add `--min-storage-sample-blocks` with any bytes-per-block storage gate when
+the run should reject tiny storage windows; it cross-checks the selected
+per-block value against `intervalBlocks` for interval evidence or `height` for
+cumulative evidence.
 Use `--max-hot-bytes-per-block` to gate hot Pebble growth during catch-up. It
 checks `soakEfficiencyHotBytesPerBlock`, then
 `intervalChaindataBytesPerBlock`, then `chaindataBytesPerBlock`, so long-run

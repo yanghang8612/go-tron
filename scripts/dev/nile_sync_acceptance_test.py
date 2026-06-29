@@ -1806,6 +1806,119 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("datadir bytes-per-block evidence missing", proc.stderr)
 
+    def test_accepts_storage_bytes_per_block_sample_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "soakEfficiencyWindow": "interval",
+                    "intervalBlocks": 250,
+                    "soakEfficiencyDatadirBytesPerBlock": 150000,
+                    "soakEfficiencyHotBytesPerBlock": 9000,
+                    "soakEfficiencyColdArchiveBytesPerBlock": 35000,
+                    "soakEfficiencyDerivedIndexBytesPerBlock": 12000,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-datadir-bytes-per-block",
+                    "160000",
+                    "--max-hot-bytes-per-block",
+                    "10000",
+                    "--max-cold-archive-bytes-per-block",
+                    "40000",
+                    "--max-derived-index-bytes-per-block",
+                    "15000",
+                    "--min-storage-sample-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_storage_bytes_per_block_sample_blocks_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["intervalBlocks"] = 3
+            row["soakEfficiencyDatadirBytesPerBlock"] = 150000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-datadir-bytes-per-block",
+                    "160000",
+                    "--min-storage-sample-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "intervalBlocks=3 failed >= min datadir bytes-per-block "
+                "sample blocks 100 for soakEfficiencyDatadirBytesPerBlock",
+                proc.stderr,
+            )
+
+    def test_rejects_storage_bytes_per_block_sample_blocks_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["soakEfficiencyDatadirBytesPerBlock"] = 150000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-datadir-bytes-per-block",
+                    "160000",
+                    "--min-storage-sample-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "datadir bytes-per-block sample size evidence missing for "
+                "soakEfficiencyDatadirBytesPerBlock",
+                proc.stderr,
+            )
+
     def test_accepts_max_hot_bytes_per_block_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

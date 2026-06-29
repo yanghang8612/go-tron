@@ -235,6 +235,17 @@ DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS = (
     "derivedIndexBytesPerBlock",
 )
 
+BYTES_PER_BLOCK_SAMPLE_BLOCK_FIELDS = {
+    "intervalDatadirBytesPerBlock": ("intervalBlocks",),
+    "intervalChaindataBytesPerBlock": ("intervalBlocks",),
+    "intervalColdArchiveBytesPerBlock": ("intervalBlocks",),
+    "intervalDerivedIndexBytesPerBlock": ("intervalBlocks",),
+    "datadirBytesPerBlock": ("height",),
+    "chaindataBytesPerBlock": ("height",),
+    "coldArchiveBytesPerBlock": ("height",),
+    "derivedIndexBytesPerBlock": ("height",),
+}
+
 SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotManifestProfileStatus",
     "snapshotProfileSegments",
@@ -455,7 +466,38 @@ def datadir_bytes_per_block_evidence(row):
     return None, None
 
 
-def check_max_datadir_bytes_per_block(row, maximum):
+def bytes_per_block_sample_block_evidence(row, bytes_field):
+    fields = BYTES_PER_BLOCK_SAMPLE_BLOCK_FIELDS.get(bytes_field, ())
+    if bytes_field.startswith("soakEfficiency"):
+        window = str(row.get("soakEfficiencyWindow", ""))
+        if window == "interval":
+            fields = ("intervalBlocks",)
+        elif window == "cumulative":
+            fields = ("height",)
+        else:
+            fields = ("intervalBlocks", "height")
+    for field in fields:
+        value = as_number(row, field)
+        if value is not None and value >= 0:
+            return field, value
+    return None, None
+
+
+def check_bytes_per_block_sample_blocks(row, bytes_field, min_blocks, label):
+    if min_blocks is None:
+        return []
+    block_field, blocks = bytes_per_block_sample_block_evidence(row, bytes_field)
+    if block_field is None:
+        return [f"{label} sample size evidence missing for {bytes_field}"]
+    if blocks < min_blocks:
+        return [
+            f"{block_field}={blocks:g} failed >= min {label} sample blocks "
+            f"{min_blocks:g} for {bytes_field}"
+        ]
+    return []
+
+
+def check_max_datadir_bytes_per_block(row, maximum, min_blocks=None):
     if maximum is None:
         return []
     field, value = datadir_bytes_per_block_evidence(row)
@@ -465,9 +507,12 @@ def check_max_datadir_bytes_per_block(row, maximum):
             + ",".join(DATADIR_BYTES_PER_BLOCK_FIELDS)
             + " is present and non-negative"
         ]
+    issues = check_bytes_per_block_sample_blocks(
+        row, field, min_blocks, "datadir bytes-per-block"
+    )
     if value > maximum:
-        return [f"{field}={value:g} failed <= max datadir bytes per block {maximum:g}"]
-    return []
+        issues.append(f"{field}={value:g} failed <= max datadir bytes per block {maximum:g}")
+    return issues
 
 
 def hot_bytes_per_block_evidence(row):
@@ -478,7 +523,7 @@ def hot_bytes_per_block_evidence(row):
     return None, None
 
 
-def check_max_hot_bytes_per_block(row, maximum):
+def check_max_hot_bytes_per_block(row, maximum, min_blocks=None):
     if maximum is None:
         return []
     field, value = hot_bytes_per_block_evidence(row)
@@ -488,9 +533,12 @@ def check_max_hot_bytes_per_block(row, maximum):
             + ",".join(HOT_BYTES_PER_BLOCK_FIELDS)
             + " is present and non-negative"
         ]
+    issues = check_bytes_per_block_sample_blocks(
+        row, field, min_blocks, "hot bytes-per-block"
+    )
     if value > maximum:
-        return [f"{field}={value:g} failed <= max hot bytes per block {maximum:g}"]
-    return []
+        issues.append(f"{field}={value:g} failed <= max hot bytes per block {maximum:g}")
+    return issues
 
 
 def hot_growth_share_evidence(row):
@@ -659,7 +707,7 @@ def cold_archive_bytes_per_block_evidence(row):
     return None, None
 
 
-def check_max_cold_archive_bytes_per_block(row, maximum):
+def check_max_cold_archive_bytes_per_block(row, maximum, min_blocks=None):
     if maximum is None:
         return []
     field, value = cold_archive_bytes_per_block_evidence(row)
@@ -669,11 +717,14 @@ def check_max_cold_archive_bytes_per_block(row, maximum):
             + ",".join(COLD_ARCHIVE_BYTES_PER_BLOCK_FIELDS)
             + " is present and non-negative"
         ]
+    issues = check_bytes_per_block_sample_blocks(
+        row, field, min_blocks, "cold archive bytes-per-block"
+    )
     if value > maximum:
-        return [
+        issues.append(
             f"{field}={value:g} failed <= max cold archive bytes per block {maximum:g}"
-        ]
-    return []
+        )
+    return issues
 
 
 def derived_index_bytes_per_block_evidence(row):
@@ -684,7 +735,7 @@ def derived_index_bytes_per_block_evidence(row):
     return None, None
 
 
-def check_max_derived_index_bytes_per_block(row, maximum):
+def check_max_derived_index_bytes_per_block(row, maximum, min_blocks=None):
     if maximum is None:
         return []
     field, value = derived_index_bytes_per_block_evidence(row)
@@ -694,11 +745,14 @@ def check_max_derived_index_bytes_per_block(row, maximum):
             + ",".join(DERIVED_INDEX_BYTES_PER_BLOCK_FIELDS)
             + " is present and non-negative"
         ]
+    issues = check_bytes_per_block_sample_blocks(
+        row, field, min_blocks, "derived index bytes-per-block"
+    )
     if value > maximum:
-        return [
+        issues.append(
             f"{field}={value:g} failed <= max derived index bytes per block {maximum:g}"
-        ]
-    return []
+        )
+    return issues
 
 
 def resolve_artifact(result_path, raw_path):
@@ -2040,14 +2094,34 @@ def check_row(row, args):
         )
     )
     issues.extend(check_min_sync_rate(row, args.min_sync_rate, args.min_sync_rate_blocks))
-    issues.extend(check_max_datadir_bytes_per_block(row, args.max_datadir_bytes_per_block))
-    issues.extend(check_max_hot_bytes_per_block(row, args.max_hot_bytes_per_block))
-    issues.extend(check_max_hot_growth_share(row, args.max_hot_growth_share))
     issues.extend(
-        check_max_cold_archive_bytes_per_block(row, args.max_cold_archive_bytes_per_block)
+        check_max_datadir_bytes_per_block(
+            row,
+            args.max_datadir_bytes_per_block,
+            args.min_storage_sample_blocks,
+        )
     )
     issues.extend(
-        check_max_derived_index_bytes_per_block(row, args.max_derived_index_bytes_per_block)
+        check_max_hot_bytes_per_block(
+            row,
+            args.max_hot_bytes_per_block,
+            args.min_storage_sample_blocks,
+        )
+    )
+    issues.extend(check_max_hot_growth_share(row, args.max_hot_growth_share))
+    issues.extend(
+        check_max_cold_archive_bytes_per_block(
+            row,
+            args.max_cold_archive_bytes_per_block,
+            args.min_storage_sample_blocks,
+        )
+    )
+    issues.extend(
+        check_max_derived_index_bytes_per_block(
+            row,
+            args.max_derived_index_bytes_per_block,
+            args.min_storage_sample_blocks,
+        )
     )
     issues.extend(check_thresholds(row, args.minimums, ">=", lambda got, want: got >= want))
     issues.extend(check_thresholds(row, args.maximums, "<=", lambda got, want: got <= want))
@@ -2228,6 +2302,15 @@ def build_parser():
         help=(
             "require selected interval rows to prove hot Pebble growth is no "
             "more than this fraction of positive disk growth"
+        ),
+    )
+    parser.add_argument(
+        "--min-storage-sample-blocks",
+        type=float,
+        metavar="BLOCKS",
+        help=(
+            "when bytes-per-block storage gates are set, require their selected "
+            "evidence to come from at least this many imported blocks"
         ),
     )
     parser.add_argument(
