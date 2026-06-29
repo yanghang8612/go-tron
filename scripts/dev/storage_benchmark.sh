@@ -483,10 +483,17 @@ write_storage_benchmark_prometheus() {
   local archive_api_checks="${15}"
   local archive_api_block="${16}"
   local archive_api_failures="${17}"
+  local archive_api_call_probe="${18}"
+  local archive_api_trace_transaction_probe="${19}"
+  local archive_api_methods="${20}"
+  local archive_api_tx_probe="${21}"
+  local archive_api_tx_methods="${22}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
-    "$archive_api_failures" <<'PY'
+    "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
+    "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" <<'PY'
+import json
 import sys
 from pathlib import Path
 
@@ -497,6 +504,11 @@ datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
 archive_api_checks, archive_api_block, archive_api_failures = map(int, sys.argv[15:18])
+archive_api_call_probe = sys.argv[18].lower() in {"1", "true", "yes"}
+archive_api_trace_transaction_probe = sys.argv[19].lower() in {"1", "true", "yes"}
+archive_api_methods_raw = sys.argv[20]
+archive_api_tx_probe = sys.argv[21].lower() in {"1", "true", "yes"}
+archive_api_tx_methods_raw = sys.argv[22]
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -512,6 +524,53 @@ labels = (
     f'role="{esc(role)}",'
     f'status="{esc(status)}"'
 )
+
+ARCHIVE_API_BASE_METHODS = (
+    "eth_getBlockByNumber",
+    "eth_getBalance",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_getLogs",
+)
+ARCHIVE_API_CALL_METHODS = ("eth_call", "debug_traceCall")
+ARCHIVE_API_TX_METHODS = ("eth_getTransactionByHash", "eth_getTransactionReceipt")
+ARCHIVE_API_TRACE_TRANSACTION_METHODS = ("debug_traceTransaction",)
+
+def method_set(raw):
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return set()
+    if not isinstance(parsed, list):
+        return set()
+    return {str(value) for value in parsed}
+
+def archive_api_expected_methods(successful_methods):
+    expected = list(ARCHIVE_API_BASE_METHODS)
+    if archive_api_call_probe or any(method in successful_methods for method in ARCHIVE_API_CALL_METHODS):
+        expected.extend(ARCHIVE_API_CALL_METHODS)
+    if archive_api_tx_probe or any(
+        method in successful_methods
+        for method in ARCHIVE_API_TX_METHODS + ARCHIVE_API_TRACE_TRANSACTION_METHODS
+    ):
+        expected.extend(ARCHIVE_API_TX_METHODS)
+    if archive_api_trace_transaction_probe or any(
+        method in successful_methods for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS
+    ):
+        expected.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+    return expected
+
+def labels_with(extra):
+    labels_map = {
+        "datadir": datadir,
+        "mode": mode,
+        "profile": profile,
+        "role": role,
+        "status": status,
+    }
+    labels_map.update(extra)
+    return "{" + ",".join(f'{key}="{esc(labels_map[key])}"' for key in sorted(labels_map)) + "}"
+
 metrics = (
     ("gtron_storage_benchmark_height", "Benchmark run block height.", height),
     ("gtron_storage_benchmark_elapsed_seconds", "Benchmark run elapsed seconds.", elapsed),
@@ -535,6 +594,32 @@ for name, help_text, value in metrics:
     lines.append(f"# HELP {name} {help_text}")
     lines.append(f"# TYPE {name} gauge")
     lines.append(f"{name}{{{labels}}} {value}")
+successful_archive_api_methods = method_set(archive_api_methods_raw)
+successful_archive_api_tx_methods = method_set(archive_api_tx_methods_raw)
+if archive_api_checks > 0 or successful_archive_api_methods:
+    method_metric = "gtron_storage_benchmark_archive_api_method_success"
+    lines.append(
+        f"# HELP {method_metric} Whether an expected benchmark historical archive API method probe succeeded."
+    )
+    lines.append(f"# TYPE {method_metric} gauge")
+    for method in archive_api_expected_methods(successful_archive_api_methods):
+        value = 1 if method in successful_archive_api_methods else 0
+        lines.append(f'{method_metric}{labels_with({"method": method})} {value:g}')
+if archive_api_tx_probe:
+    tx_metric = "gtron_storage_benchmark_archive_api_tx_method_success"
+    lines.append(
+        f"# HELP {tx_metric} Whether an expected benchmark transaction-level historical archive API method probe succeeded."
+    )
+    lines.append(f"# TYPE {tx_metric} gauge")
+    expected_tx_methods = list(ARCHIVE_API_TX_METHODS)
+    if archive_api_trace_transaction_probe or any(
+        method in successful_archive_api_tx_methods
+        for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS
+    ):
+        expected_tx_methods.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+    for method in expected_tx_methods:
+        value = 1 if method in successful_archive_api_tx_methods else 0
+        lines.append(f'{tx_metric}{labels_with({"method": method})} {value:g}')
 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
@@ -1442,7 +1527,9 @@ emit_result() {
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
     "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
-    "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_FAILURES"
+    "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_FAILURES" \
+    "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
+    "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \

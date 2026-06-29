@@ -173,6 +173,15 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertEqual(row["snapshotManifestProfileStatus"], "missing")
             self.assertEqual(row["snapshotSidecarShareMilli"], -1)
+            benchmark_metrics = Path(row["storageBenchmarkPrometheus"]).read_text(encoding="utf-8")
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 1\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_tx_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 1\n',
+            )
 
     def test_archive_api_probe_rejects_invalid_trace_transaction_result(self):
         with tempfile.TemporaryDirectory() as tmp:

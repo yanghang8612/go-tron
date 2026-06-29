@@ -65,12 +65,20 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getLogs",
 )
 
+ARCHIVE_API_CALL_METHODS = (
+    "eth_call",
+    "debug_traceCall",
+)
+
 ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionByHash",
     "eth_getTransactionReceipt",
 )
 
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+
+ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_method_success"
+ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_tx_method_success"
 
 
 def row_sort_key(row):
@@ -676,6 +684,100 @@ def benchmark_prometheus_expected(row, fields, divisor_field=None):
     return total, []
 
 
+def benchmark_prometheus_metric_value(text, metric, row, extra=None):
+    samples = prometheus_metric_samples(text, metric)
+    if extra is None:
+        extra = {}
+    matches = []
+    for labels, value in samples:
+        if not prometheus_label_matches(row, labels):
+            continue
+        if any(labels.get(key) != str(want) for key, want in extra.items()):
+            continue
+        matches.append((labels, value))
+    if not matches:
+        return None
+    return matches[-1][1]
+
+
+def expected_archive_api_method_metrics(row, successful_methods):
+    expected = set(successful_methods)
+    expected.update(DEFAULT_ARCHIVE_API_METHODS)
+    if as_bool(row, "archiveApiCallProbe"):
+        expected.update(ARCHIVE_API_CALL_METHODS)
+    if as_bool(row, "archiveApiTxProbe"):
+        expected.update(ARCHIVE_API_TX_METHODS)
+    if as_bool(row, "archiveApiTraceTransactionProbe"):
+        expected.add(ARCHIVE_API_TRACE_TX_METHOD)
+    return sorted(expected)
+
+
+def check_benchmark_prometheus_method_metric(label, path, text, row, metric, method, want):
+    got = benchmark_prometheus_metric_value(text, metric, row, {"method": method})
+    if got is None:
+        return [f"{label} benchmark prometheus artifact {path} missing {metric}{{method={method!r}}}"]
+    if got != want:
+        return [
+            f"{label} benchmark prometheus artifact {path} "
+            f"{metric}{{method={method!r}}}={got:g}, want {want:g}"
+        ]
+    return []
+
+
+def check_benchmark_prometheus_archive_api_methods(label, path, text, row):
+    issues = []
+    methods = archive_api_methods(row)
+    if methods is None:
+        return issues
+    checks = as_number(row, "archiveApiChecks")
+    if (
+        not methods
+        and not as_bool(row, "archiveApiCallProbe")
+        and not as_bool(row, "archiveApiTxProbe")
+        and not as_bool(row, "archiveApiTraceTransactionProbe")
+        and (checks is None or checks <= 0)
+    ):
+        return issues
+    for method in expected_archive_api_method_metrics(row, methods):
+        want = 1.0 if method in methods else 0.0
+        issues.extend(
+            check_benchmark_prometheus_method_metric(
+                label,
+                path,
+                text,
+                row,
+                ARCHIVE_API_METHOD_SUCCESS_METRIC,
+                method,
+                want,
+            )
+        )
+
+    tx_methods = string_set_field(row, "archiveApiTxMethods")
+    if tx_methods is None and not as_bool(row, "archiveApiTxProbe"):
+        return issues
+    if tx_methods is None:
+        tx_methods = set()
+    expected_tx_methods = set(tx_methods)
+    if as_bool(row, "archiveApiTxProbe"):
+        expected_tx_methods.update(ARCHIVE_API_TX_METHODS)
+    if as_bool(row, "archiveApiTraceTransactionProbe"):
+        expected_tx_methods.add(ARCHIVE_API_TRACE_TX_METHOD)
+    for method in sorted(expected_tx_methods):
+        want = 1.0 if method in tx_methods else 0.0
+        issues.extend(
+            check_benchmark_prometheus_method_metric(
+                label,
+                path,
+                text,
+                row,
+                ARCHIVE_API_TX_METHOD_SUCCESS_METRIC,
+                method,
+                want,
+            )
+        )
+    return issues
+
+
 def check_benchmark_prometheus_artifacts(result_path, rows):
     issues = []
     for row in latest_rows(rows).values():
@@ -721,6 +823,9 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
                     f"{line_label(row)} benchmark prometheus artifact {path} "
                     f"{metric}={got:g}, want {want:g}"
                 )
+        issues.extend(
+            check_benchmark_prometheus_archive_api_methods(line_label(row), path, text, row)
+        )
     return issues
 
 
