@@ -47,6 +47,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                           *eth_getLogs*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
                             ;;
+                          *debug_traceCall*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
+                            ;;
                           *eth_getTransactionByHash*|*eth_getTransactionReceipt*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"hash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1"}}'
                             ;;
@@ -117,6 +120,8 @@ class StorageBenchmarkTest(unittest.TestCase):
                     str(fake_gtron),
                     "--no-build",
                     "--archive-api-probe",
+                    "--archive-api-call-data",
+                    "0x70a08231",
                 ],
                 cwd=REPO_ROOT,
                 env=env,
@@ -129,7 +134,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 7)
+            self.assertEqual(row["archiveApiChecks"], 9)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(
@@ -138,6 +143,8 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getBlockByNumber",
                     "eth_getBalance",
                     "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
                     "eth_getStorageAt",
                     "eth_getLogs",
                     "eth_getTransactionByHash",

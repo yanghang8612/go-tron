@@ -146,7 +146,7 @@ Options:
   --archive-api-block N          Historical block for archive API probe (default: height-1)
   --archive-api-address HEX      0x41-prefixed TRON address for account/contract probes
   --archive-api-storage-slot HEX Storage slot for eth_getStorageAt probe (default: 0x0)
-  --archive-api-call-data HEX    Include eth_call with this calldata against archive-api-address
+  --archive-api-call-data HEX    Include eth_call and debug_traceCall with this calldata against archive-api-address
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -710,6 +710,11 @@ def archive_result_ok(method, result, params):
         return result_number is not None and result_number == requested_number
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
         return is_hex_string(result)
+    if method == "debug_traceCall":
+        return (
+            isinstance(result, dict)
+            and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
+        )
     if method == "eth_getLogs":
         return isinstance(result, list)
     if method == "eth_getTransactionByHash":
@@ -751,7 +756,10 @@ calls = [
     ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
 ]
 if call_data:
-    calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
+    calls[3:3] = [
+        ("eth_call", [{"to": address, "data": call_data}, block_tag]),
+        ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
+    ]
 
 methods = []
 tx_methods = []

@@ -33,11 +33,10 @@ func parseCallValue(s string) int64 {
 // internal/rpc framework. It is the migration target for the eth_* arms of
 // api.go's dispatch switch (jsonrpc-reflection).
 //
-// Covered so far: the no-parameter methods and the param-bearing account
-// readers, all of which migrate zero-diff against the frozen jsonrpc-corpus.
-// Still to land: eth_call/estimateGas, the block/tx/receipt readers (which
-// additionally FIX the legacy double-hex-hash bug, so their corpus entries get
-// regenerated at that point), eth_getLogs, and the filter methods.
+// Covered so far: the no-parameter methods, param-bearing account readers,
+// eth_call/estimateGas, block/tx/receipt readers, eth_getLogs, and filter
+// methods, all of which migrate zero-diff against the frozen jsonrpc-corpus
+// except where the legacy double-hex-hash bug was intentionally corrected.
 //
 // Method names map by the framework's reflection rule (first letter lowered):
 // ChainId -> eth_chainId, GetBalance -> eth_getBalance, etc. Param-bearing

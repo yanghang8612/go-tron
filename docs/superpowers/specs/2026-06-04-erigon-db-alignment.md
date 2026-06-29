@@ -710,8 +710,8 @@ Status:
   for older diagnostics. It can also run a live JSON-RPC archive-read probe and
   emit `archiveApi*` evidence for `eth_getBlockByNumber`, `eth_getBalance`,
   `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and optional contract
-  `eth_call` samples. When the selected historical block contains a
-  transaction, the same probe now adds `eth_getTransactionByHash` and
+  `eth_call` and `debug_traceCall` samples. When the selected historical block
+  contains a transaction, the same probe now adds `eth_getTransactionByHash` and
   `eth_getTransactionReceipt` evidence plus `archiveApiTx*` fields, and the
   Nile acceptance gate can require that tx/receipt archive proof with
   `--require-archive-tx-evidence`. The probe now validates JSON-RPC result

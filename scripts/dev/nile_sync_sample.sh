@@ -63,7 +63,7 @@ Options:
   --archive-api-storage-slot HEX
                               Storage slot for eth_getStorageAt probe (default: 0x0)
   --archive-api-call-data HEX
-                              Include eth_call with this calldata against archive-api-address
+                              Include eth_call and debug_traceCall with this calldata against archive-api-address
   -h, --help                 Show this help
 
 Examples:
@@ -410,6 +410,11 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return result_number is not None and result_number == requested_number
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
             return is_hex_string(result)
+        if method == "debug_traceCall":
+            return (
+                isinstance(result, dict)
+                and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
+            )
         if method == "eth_getLogs":
             return isinstance(result, list)
         if method == "eth_getTransactionByHash":
@@ -451,7 +456,10 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
     ]
     if call_data:
-        calls.insert(3, ("eth_call", [{"to": address, "data": call_data}, block_tag]))
+        calls[3:3] = [
+            ("eth_call", [{"to": address, "data": call_data}, block_tag]),
+            ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
+        ]
 
     failures = 0
     methods = []
