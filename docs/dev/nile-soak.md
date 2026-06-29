@@ -536,8 +536,9 @@ selected row must report `archiveApiStatus=ok`, zero archive probe failures, a
 historical `archiveApiBlock` below `height`, and the default archive method set.
 Use `--require-archive-tx-evidence` for production archive proof after selecting
 an `--archive-api-block` with at least one transaction; it requires the sampler
-to report `archiveApiTxProbe=true`, a concrete `archiveApiTxHash`, and
-successful `eth_getTransactionByHash` plus `eth_getTransactionReceipt` probes.
+to report same-row archive API evidence, `archiveApiTxProbe=true`, a
+`0x`-prefixed 32-byte `archiveApiTxHash`, and successful
+`eth_getTransactionByHash` plus `eth_getTransactionReceipt` probes.
 Add `--archive-api-method eth_call` to the acceptance command only for samples
 that were collected with `--archive-api-call-data`.
 

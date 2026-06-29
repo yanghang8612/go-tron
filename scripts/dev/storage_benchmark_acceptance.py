@@ -845,6 +845,8 @@ def check_archive_tx_evidence(rows, required_modes=()):
         tx_hash = row.get("archiveApiTxHash")
         if not isinstance(tx_hash, str) or not tx_hash:
             issues.append(f"{line_label(row)} archiveApiTxHash is missing")
+        elif re.fullmatch(r"0x[0-9a-fA-F]{64}", tx_hash) is None:
+            issues.append(f"{line_label(row)} archiveApiTxHash must be a 0x-prefixed 32-byte hash")
 
         methods = archive_api_methods(row)
         if methods is not None:

@@ -411,8 +411,9 @@ instead of letting an unpruned `archive` row satisfy the run. Repeat
 must prove mode-local archive reads for more modes. Add
 `--require-archive-tx-evidence` and `--require-archive-tx-mode minimal` when the
 selected probe block is known to contain a transaction; this requires
-`archiveApiTxProbe=true`, a concrete `archiveApiTxHash`, and successful
-`eth_getTransactionByHash` plus `eth_getTransactionReceipt` probes. Add
+same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
+32-byte `archiveApiTxHash`, and successful `eth_getTransactionByHash` plus
+`eth_getTransactionReceipt` probes. Add
 `--archive-api-method eth_call` when the samples also pass
 `--archive-api-call-data` against a known historical contract. If the row also
 reports `tailPrunedThroughBlock`, the

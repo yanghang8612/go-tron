@@ -861,7 +861,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "eth_getTransactionReceipt",
                     ],
                     "archiveApiTxProbe": True,
-                    "archiveApiTxHash": "0xabc",
+                    "archiveApiTxHash": "0x" + "ab" * 32,
                     "archiveApiTxMethods": [
                         "eth_getTransactionByHash",
                         "eth_getTransactionReceipt",
@@ -996,6 +996,63 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("archiveApiTxProbe is not true", proc.stderr)
             self.assertIn("archiveApiTxHash is missing", proc.stderr)
             self.assertIn("archiveApiTxMethods must be a non-empty list", proc.stderr)
+
+    def test_rejects_archive_tx_evidence_short_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 7,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0xabc",
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTxHash must be a 0x-prefixed 32-byte hash", proc.stderr)
 
     def test_rejects_missing_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

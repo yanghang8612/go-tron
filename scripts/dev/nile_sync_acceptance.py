@@ -110,6 +110,13 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionReceipt",
 )
 
+ARCHIVE_API_EVIDENCE_FIELDS = (
+    "archiveApiStatus",
+    "archiveApiChecks",
+    "archiveApiMethods",
+    "archiveApiBlock",
+)
+
 SYNC_RATE_FIELDS = (
     "intervalBlocksPerSecond",
     "intervalStageSyncFinishBlocksPerSecond",
@@ -1255,6 +1262,10 @@ def archive_api_methods(row):
     return string_set_field(row, "archiveApiMethods")
 
 
+def has_archive_api_evidence(row):
+    return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
+
+
 def archive_api_method_count(row):
     raw = row.get("archiveApiMethods")
     if not isinstance(raw, list):
@@ -1319,6 +1330,8 @@ def check_archive_api_evidence(row, required_methods):
 
 def check_archive_tx_evidence(row):
     issues = []
+    if not has_archive_api_evidence(row):
+        issues.append("archive API evidence is missing for archive tx evidence")
     if not as_bool(row, "archiveApiTxProbe"):
         issues.append(
             "archiveApiTxProbe is not true; choose an archive-api-block with at least one transaction"
@@ -1326,6 +1339,8 @@ def check_archive_tx_evidence(row):
     tx_hash = row.get("archiveApiTxHash")
     if not isinstance(tx_hash, str) or not tx_hash:
         issues.append("archiveApiTxHash is missing")
+    elif re.fullmatch(r"0x[0-9a-fA-F]{64}", tx_hash) is None:
+        issues.append("archiveApiTxHash must be a 0x-prefixed 32-byte hash")
 
     tx_methods = string_set_field(row, "archiveApiTxMethods")
     if tx_methods is None:

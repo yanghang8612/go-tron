@@ -2563,7 +2563,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getTransactionReceipt",
                         ],
                         "archiveApiTxProbe": True,
-                        "archiveApiTxHash": "0xabc",
+                        "archiveApiTxHash": "0x" + "ab" * 32,
                         "archiveApiTxMethods": [
                             "eth_getTransactionByHash",
                             "eth_getTransactionReceipt",
@@ -2646,6 +2646,109 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("archiveApiTxHash is missing", proc.stderr)
             self.assertIn("archiveApiTxMethods must be a non-empty list", proc.stderr)
 
+    def test_rejects_archive_tx_evidence_short_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 7,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 99,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                            "eth_getTransactionByHash",
+                            "eth_getTransactionReceipt",
+                        ],
+                        "archiveApiTxProbe": True,
+                        "archiveApiTxHash": "0xabc",
+                        "archiveApiTxMethods": [
+                            "eth_getTransactionByHash",
+                            "eth_getTransactionReceipt",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTxHash must be a 0x-prefixed 32-byte hash", proc.stderr)
+
+    def test_rejects_archive_tx_evidence_without_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiTxProbe": True,
+                        "archiveApiTxHash": "0x" + "ab" * 32,
+                        "archiveApiTxMethods": [
+                            "eth_getTransactionByHash",
+                            "eth_getTransactionReceipt",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archive API evidence is missing for archive tx evidence", proc.stderr)
+
     def test_rejects_archive_tx_evidence_missing_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -2676,7 +2779,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getTransactionByHash",
                         ],
                         "archiveApiTxProbe": True,
-                        "archiveApiTxHash": "0xabc",
+                        "archiveApiTxHash": "0x" + "ab" * 32,
                         "archiveApiTxMethods": ["eth_getTransactionByHash"],
                     }
                 ],
