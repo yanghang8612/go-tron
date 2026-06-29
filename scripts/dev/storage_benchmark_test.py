@@ -175,6 +175,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["snapshotSidecarShareMilli"], -1)
             benchmark_metrics = Path(row["storageBenchmarkPrometheus"]).read_text(encoding="utf-8")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_status\{[^}]*status=\"ok\"[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_cold_freezer_to_block\{[^}]*\} -1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_chain_lookup_prune_to_block\{[^}]*\} -1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_signed_cold_prune\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_tail_pruned_files\{[^}]*\} 0\n")
             self.assertRegex(
                 benchmark_metrics,
                 r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 1\n',
@@ -840,6 +844,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertIn("gtron_storage_benchmark_derived_index_bytes", benchmark_metrics)
             self.assertIn("gtron_storage_benchmark_derived_index_bytes_per_block", benchmark_metrics)
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_status\{[^}]*status=\"ok\"[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_cold_freezer_to_block\{[^}]*\} -1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_chain_lookup_prune_to_block\{[^}]*\} -1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_signed_cold_prune\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_tail_pruned_files\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_checks\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_block\{[^}]*\} -1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_failures\{[^}]*\} 0\n")

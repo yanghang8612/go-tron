@@ -829,6 +829,15 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_archive_api_checks": 5,
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_cold_freezer_to_block": 90,
+                "gtron_storage_benchmark_derived_index_to_block": 90,
+                "gtron_storage_benchmark_chain_lookup_prune_to_block": 80,
+                "gtron_storage_benchmark_tail_pruned_through_block": 75,
+                "gtron_storage_benchmark_balance_trace_prune_to_block": 80,
+                "gtron_storage_benchmark_section_bloom_prune_to_section": 2,
+                "gtron_storage_benchmark_signed_cold_prune": 1,
+                "gtron_storage_benchmark_tail_pruned_files": 3,
+                "gtron_storage_benchmark_history_window": 256,
             }
             write_benchmark_prometheus(prom, datadir, values)
             write_result(
@@ -855,6 +864,15 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "archiveApiChecks": 5,
                         "archiveApiBlock": 80,
                         "archiveApiFailures": 0,
+                        "coldFreezerToBlock": 90,
+                        "derivedIndexToBlock": 90,
+                        "chainLookupPruneToBlock": 80,
+                        "tailPrunedThroughBlock": 75,
+                        "balanceTracePruneToBlock": 80,
+                        "sectionBloomPruneToSection": 2,
+                        "signedColdPrune": 1,
+                        "tailPrunedFiles": 3,
+                        "historyWindow": 256,
                         "datadir": datadir,
                         "storageBenchmarkPrometheus": prom.name,
                     }
@@ -1233,6 +1251,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_archive_api_checks": 5,
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_tail_pruned_through_block": 79,
             }
             write_benchmark_prometheus(prom, datadir, values)
             write_result(
@@ -1259,6 +1278,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "archiveApiChecks": 5,
                         "archiveApiBlock": 80,
                         "archiveApiFailures": 0,
+                        "tailPrunedThroughBlock": 80,
                         "datadir": datadir,
                         "storageBenchmarkPrometheus": prom.name,
                     }
@@ -1282,6 +1302,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "gtron_storage_benchmark_derived_index_bytes=499, want 500",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_tail_pruned_through_block=79, want 80",
                 proc.stderr,
             )
 

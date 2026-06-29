@@ -488,11 +488,24 @@ write_storage_benchmark_prometheus() {
   local archive_api_methods="${20}"
   local archive_api_tx_probe="${21}"
   local archive_api_tx_methods="${22}"
+  local cold_freezer_to_block="${23}"
+  local derived_index_to_block="${24}"
+  local chain_lookup_prune_to_block="${25}"
+  local tail_pruned_through_block="${26}"
+  local balance_trace_prune_to_block="${27}"
+  local section_bloom_prune_to_section="${28}"
+  local signed_cold_prune="${29}"
+  local tail_pruned_files="${30}"
+  local history_window="${31}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
     "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
-    "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" <<'PY'
+    "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
+    "$cold_freezer_to_block" "$derived_index_to_block" "$chain_lookup_prune_to_block" \
+    "$tail_pruned_through_block" "$balance_trace_prune_to_block" \
+    "$section_bloom_prune_to_section" "$signed_cold_prune" "$tail_pruned_files" \
+    "$history_window" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -509,6 +522,15 @@ archive_api_trace_transaction_probe = sys.argv[19].lower() in {"1", "true", "yes
 archive_api_methods_raw = sys.argv[20]
 archive_api_tx_probe = sys.argv[21].lower() in {"1", "true", "yes"}
 archive_api_tx_methods_raw = sys.argv[22]
+cold_freezer_to_block = int(sys.argv[23])
+derived_index_to_block = int(sys.argv[24])
+chain_lookup_prune_to_block = int(sys.argv[25])
+tail_pruned_through_block = int(sys.argv[26])
+balance_trace_prune_to_block = int(sys.argv[27])
+section_bloom_prune_to_section = int(sys.argv[28])
+signed_cold_prune = int(sys.argv[29])
+tail_pruned_files = int(sys.argv[30])
+history_window = int(sys.argv[31])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -599,6 +621,15 @@ metrics = (
     ("gtron_storage_benchmark_archive_api_checks", "Benchmark historical archive API probe check count.", archive_api_checks),
     ("gtron_storage_benchmark_archive_api_block", "Benchmark historical archive API probe block number.", archive_api_block),
     ("gtron_storage_benchmark_archive_api_failures", "Benchmark historical archive API probe failures.", archive_api_failures),
+    ("gtron_storage_benchmark_cold_freezer_to_block", "Highest block covered by benchmark cold freezer segments.", cold_freezer_to_block),
+    ("gtron_storage_benchmark_derived_index_to_block", "Highest block covered by benchmark derived indexes.", derived_index_to_block),
+    ("gtron_storage_benchmark_chain_lookup_prune_to_block", "Highest block whose hot chain lookup rows were pruned.", chain_lookup_prune_to_block),
+    ("gtron_storage_benchmark_tail_pruned_through_block", "Highest active ancient block physically tail-pruned.", tail_pruned_through_block),
+    ("gtron_storage_benchmark_balance_trace_prune_to_block", "Highest block whose hot balance trace rows were pruned.", balance_trace_prune_to_block),
+    ("gtron_storage_benchmark_section_bloom_prune_to_section", "Highest section whose hot bloom rows were pruned.", section_bloom_prune_to_section),
+    ("gtron_storage_benchmark_signed_cold_prune", "Whether benchmark ran signed cold-prune operations.", signed_cold_prune),
+    ("gtron_storage_benchmark_tail_pruned_files", "Benchmark active ancient tail files physically pruned.", tail_pruned_files),
+    ("gtron_storage_benchmark_history_window", "Configured benchmark history prune window.", history_window),
 )
 lines = []
 for name, help_text, value in metrics:
@@ -1540,7 +1571,11 @@ emit_result() {
     "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
     "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
-    "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS"
+    "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS" \
+    "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" \
+    "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" "$RUN_TAIL_PRUNED_THROUGH_BLOCK" \
+    "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" \
+    "$RUN_SIGNED_COLD_PRUNE" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \
