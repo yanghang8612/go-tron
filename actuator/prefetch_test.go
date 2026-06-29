@@ -147,6 +147,26 @@ func TestPrefetchKeysForAssetIssueSystemAssetRows(t *testing.T) {
 	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(name))
 }
 
+func TestPrefetchKeysForAccountMetadataIndexes(t *testing.T) {
+	owner := makeTestAddr(0x27)
+
+	nameTx := newPrefetchTestTx(t, corepb.Transaction_Contract_AccountUpdateContract, &contractpb.AccountUpdateContract{
+		OwnerAddress: owner.Bytes(),
+		AccountName:  []byte("alice"),
+	})
+	nameKeys := PrefetchKeysFor(nameTx)
+	assertPrefetchHas(t, nameKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, nameKeys, state.AccountNameIndexPrefetchKey([]byte("alice")))
+
+	idTx := newPrefetchTestTx(t, corepb.Transaction_Contract_SetAccountIdContract, &contractpb.SetAccountIdContract{
+		OwnerAddress: owner.Bytes(),
+		AccountId:    []byte("USER1234"),
+	})
+	idKeys := PrefetchKeysFor(idTx)
+	assertPrefetchHas(t, idKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, idKeys, state.AccountIDIndexPrefetchKey([]byte("user1234")))
+}
+
 func TestPrefetchKeysForWitnessGovernanceRows(t *testing.T) {
 	owner := makeTestAddr(0x32)
 	witness := makeTestAddr(0x33)

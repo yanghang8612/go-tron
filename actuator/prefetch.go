@@ -220,9 +220,19 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			b.add(state.WitnessCapsulePrefetchKey(owner))
 		}
 	case corepb.Transaction_Contract_AccountUpdateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.AccountUpdateContract{})
+		var m contractpb.AccountUpdateContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.add(state.AccountNameIndexPrefetchKey(m.GetAccountName()))
 	case corepb.Transaction_Contract_SetAccountIdContract:
-		prefetchOwnerOnly(c, &b, &contractpb.SetAccountIdContract{})
+		var m contractpb.SetAccountIdContract
+		if !prefetchDecode(c, &m) {
+			return nil
+		}
+		b.addAccountBytes(m.GetOwnerAddress())
+		b.add(state.AccountIDIndexPrefetchKey(m.GetAccountId()))
 	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
 		prefetchOwnerOnly(c, &b, &contractpb.AccountPermissionUpdateContract{})
 	case corepb.Transaction_Contract_UpdateBrokerageContract:

@@ -53,6 +53,16 @@ func accountIdIndexKVKey(accountID []byte) []byte {
 	return out
 }
 
+// AccountNameIndexPrefetchKey returns the latest account name -> owner row.
+func AccountNameIndexPrefetchKey(accountName []byte) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
+}
+
+// AccountIDIndexPrefetchKey returns the latest lower-cased account id -> owner row.
+func AccountIDIndexPrefetchKey(accountID []byte) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
+}
+
 func validateAccountIndexAddress(label string, raw []byte) ([]byte, error) {
 	if len(raw) != tcommon.AddressLength {
 		return nil, fmt.Errorf("%s has malformed length %d, want %d", label, len(raw), tcommon.AddressLength)

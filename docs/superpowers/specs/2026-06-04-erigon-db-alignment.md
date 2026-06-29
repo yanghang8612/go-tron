@@ -1463,8 +1463,9 @@ Status:
   sell/cancel including metadata-derived maker order rows behind compatible
   price levels, exchange token operations including metadata-derived TRC10
   asset rows for both exchange token legs, update/unfreeze-asset operations
-  including owner-account-derived TRC10 asset metadata rows, owner-only
-  actuators, and account-create families.
+  including owner-account-derived TRC10 asset metadata rows, account metadata
+  operations including account-name/account-ID uniqueness index rows,
+  owner-only actuators, and account-create families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
 - `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
   `BlockChain.applyBlock` enables the prefetcher only when
