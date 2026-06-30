@@ -2187,6 +2187,37 @@ def check_snapshot_profile_row(row):
     return issues
 
 
+def check_snapshot_point_thresholds(row, max_sidecar_share_milli, max_snapshot_share_milli):
+    if max_sidecar_share_milli is None and max_snapshot_share_milli is None:
+        return []
+    if not snapshot_profile_evidence_row(row):
+        return ["snapshot point threshold requires snapshot manifest profile evidence"]
+    issues = []
+    for prefix in SNAPSHOT_PROFILE_POINT_FIELDS:
+        segments_field = f"{prefix}Segments"
+        segments = as_non_negative_int(row, segments_field)
+        if segments is None:
+            issues.append(f"{segments_field}={row.get(segments_field)!r}, want non-negative integer")
+            continue
+        if segments <= 0:
+            continue
+        if max_sidecar_share_milli is not None:
+            field = f"{prefix}SidecarShareMilli"
+            share = as_number(row, field)
+            if share is None:
+                issues.append(f"{field}={row.get(field)!r}, want numeric value")
+            elif share > max_sidecar_share_milli:
+                issues.append(f"{field}={share:g} exceeds max {max_sidecar_share_milli:g}")
+        if max_snapshot_share_milli is not None:
+            field = f"{prefix}SnapshotShareMilli"
+            share = as_number(row, field)
+            if share is None:
+                issues.append(f"{field}={row.get(field)!r}, want numeric value")
+            elif share > max_snapshot_share_milli:
+                issues.append(f"{field}={share:g} exceeds max {max_snapshot_share_milli:g}")
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -2272,6 +2303,13 @@ def check_row(row, args):
             issues.append("snapshot manifest profile evidence is missing")
         else:
             issues.extend(check_snapshot_profile_row(row))
+    issues.extend(
+        check_snapshot_point_thresholds(
+            row,
+            args.max_snapshot_point_sidecar_share_milli,
+            args.max_snapshot_point_snapshot_share_milli,
+        )
+    )
 
     for field in ZERO_ISSUE_FIELDS:
         value = as_number(row, field)
@@ -2435,6 +2473,18 @@ def build_parser():
         "--require-snapshot-profile-evidence",
         action="store_true",
         help="require selected rows to include valid snapshot manifest payload/sidecar profile counters",
+    )
+    parser.add_argument(
+        "--max-snapshot-point-sidecar-share-milli",
+        type=float,
+        metavar="N",
+        help="fail if any present snapshot point candidate sidecar share exceeds N/1000 of candidate bytes",
+    )
+    parser.add_argument(
+        "--max-snapshot-point-snapshot-share-milli",
+        type=float,
+        metavar="N",
+        help="fail if any present snapshot point candidate bytes exceed N/1000 of total snapshot bytes",
     )
     parser.add_argument(
         "--archive-api-method",

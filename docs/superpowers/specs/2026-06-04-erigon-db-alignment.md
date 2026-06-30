@@ -1294,12 +1294,15 @@ Needed:
   Nile sync acceptance can require the same evidence on the latest selected
   production sample with `--require-snapshot-profile-evidence`. Both paths gate
   the emitted overall or family-specific share fields through ordinary `--max`
-  thresholds. The standalone profiler can also gate saved artifacts with
-  `--max-sidecar-share-milli`, `--max-family-sidecar-share-milli`,
-  `--max-point-sidecar-share-milli`, or `--max-point-snapshot-share-milli`;
-  use that evidence to evaluate compact/merged cold index formats for block
-  hash by number, tx lookup, per-tx info, and state-root lookup only if
-  sidecar profiles show they dominate disk or lookup latency.
+  thresholds, and can now gate any present point-index candidate with
+  `--max-snapshot-point-sidecar-share-milli` or
+  `--max-snapshot-point-snapshot-share-milli`. The standalone profiler can also
+  gate saved artifacts with `--max-sidecar-share-milli`,
+  `--max-family-sidecar-share-milli`, `--max-point-sidecar-share-milli`, or
+  `--max-point-snapshot-share-milli`; use that evidence to evaluate
+  compact/merged cold index formats for block hash by number, tx lookup,
+  per-tx info, and state-root lookup only if sidecar profiles show they
+  dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
 - Wire the exported Prometheus textfile payload into the deployment-specific

@@ -835,6 +835,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     str(SCRIPT),
                     str(result),
                     "--require-snapshot-profile-evidence",
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "1000",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "200",
                     "--max",
                     "snapshotSidecarShareMilli=200",
                 ],
@@ -872,6 +876,53 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "for snapshotPointEventLogIndexBytes=200 totalBytes=1600",
                 proc.stderr,
             )
+
+    def test_rejects_snapshot_point_profile_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [add_snapshot_profile_evidence(clean_full_staged_sync_row())])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "999",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotPointTxHashLookupSidecarShareMilli=1000 exceeds max 999", proc.stderr)
+            self.assertIn("snapshotPointEventLogIndexSnapshotShareMilli=125 exceeds max 100", proc.stderr)
+
+    def test_rejects_snapshot_point_threshold_without_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshot point threshold requires snapshot manifest profile evidence", proc.stderr)
 
     def test_rejects_missing_snapshot_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -397,6 +397,8 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-retired-prune-mode minimal \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
+  --max-snapshot-point-sidecar-share-milli 1000 \
+  --max-snapshot-point-snapshot-share-milli 200 \
   --max minimal.producer.snapshotSidecarShareMilli=350 \
   --min minimal.producer.tailPrunedThroughBlock=100000
 ```
@@ -490,8 +492,11 @@ P3 recsplit/existence-filter candidates: `txHashLookup`, `eventLogIndex`,
 `stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
 and `commitmentSnapshot`; `--max-point-sidecar-share-milli` and
 `--max-point-snapshot-share-milli` can fail saved artifacts when any candidate
-is too sidecar-heavy or consumes too much of the snapshot. The benchmark JSONL
-row exposes the same values as
+is too sidecar-heavy or consumes too much of the snapshot. The acceptance script
+can apply the same gate to JSONL rows with
+`--max-snapshot-point-sidecar-share-milli` and
+`--max-snapshot-point-snapshot-share-milli`. The benchmark JSONL row exposes the
+same values as
 `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`.
 Keep the compact/merged index-format decision evidence-driven: only consider
 replacing sorted `chain-index`, `event-log-index`, accessor, or btree sidecars

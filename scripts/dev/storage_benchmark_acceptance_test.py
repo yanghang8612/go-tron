@@ -2615,6 +2615,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--require-snapshot-profile-evidence",
                     "--require-snapshot-profile-mode",
                     "minimal",
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "1000",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "200",
                     "--max",
                     "minimal.producer.snapshotSidecarShareMilli=200",
                 ],
@@ -2652,6 +2656,82 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn(
                 "snapshotPointEventLogIndexSnapshotShareMilli=999, want 125 "
                 "for snapshotPointEventLogIndexBytes=200 totalBytes=1600",
+                proc.stderr,
+            )
+
+    def test_rejects_snapshot_point_profile_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "999",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointTxHashLookupSidecarShareMilli=1000 exceeds max 999",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointEventLogIndexSnapshotShareMilli=125 exceeds max 100",
+                proc.stderr,
+            )
+
+    def test_rejects_snapshot_point_threshold_without_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer snapshot point threshold requires snapshot manifest profile evidence",
                 proc.stderr,
             )
 

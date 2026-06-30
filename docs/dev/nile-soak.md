@@ -421,6 +421,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max-cold-archive-bytes-per-block 250000 \
   --max-derived-index-bytes-per-block 40000 \
   --require-snapshot-profile-evidence \
+  --max-snapshot-point-sidecar-share-milli 1000 \
+  --max-snapshot-point-snapshot-share-milli 200 \
   --max snapshotSidecarShareMilli=350
 ```
 
@@ -541,7 +543,10 @@ Nile/mainnet storage budget. The sampler also records
 `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`
 fields for the P3 decisions: `txHashLookup`, `eventLogIndex`,
 `stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
-and `commitmentSnapshot`. When a sample indicates sidecar pressure, run
+and `commitmentSnapshot`. Add `--max-snapshot-point-sidecar-share-milli` or
+`--max-snapshot-point-snapshot-share-milli` to fail the acceptance run when any
+present candidate is too sidecar-heavy or consumes too much of the snapshot.
+When a sample indicates sidecar pressure, run
 `scripts/dev/snapshot_manifest_profile.py <state-snapshots> --json` against
 the saved datadir for the full `pointIndexCandidates` breakdown; add
 `--max-point-sidecar-share-milli` or `--max-point-snapshot-share-milli` when
