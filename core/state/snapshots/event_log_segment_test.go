@@ -530,6 +530,21 @@ func TestBuildEventLogIndexSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	}
 }
 
+func TestVerifyEventLogIndexSegmentAgainstEventLogsRejectsEventChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	ref := writeVerifiableEventLogSegment(t, dir, 1, 1)
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	ref.Checksum = badSnapshotChecksum()
+
+	err = verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{ref})
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("verifyEventLogIndexSegmentAgainstEventLogs err = %v, want checksum mismatch", err)
+	}
+}
+
 func TestEventLogIndexBuildRejectsGappedSegments(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

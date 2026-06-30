@@ -236,6 +236,29 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainIndex(t *testing.T) {
 	}
 }
 
+func TestVerifyStateDomainChangeBinaryCompanionsRejectsChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 30,
+		ToTxNum:   31,
+		Path:      "history/state-domain-change-30-31.seg",
+	}, []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 30, 1, "slot/a"),
+		binaryStateDomainChange(2, 31, 1, "slot/b"),
+	})
+	if err != nil {
+		t.Fatalf("write state-domain history: %v", err)
+	}
+	idxRef.Checksum = badSnapshotChecksum()
+
+	err = verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, segRef, idxRef, accessorRef)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("verifyStateDomainChangeBinaryCompanionsAgainstSegment err = %v, want checksum mismatch", err)
+	}
+}
+
 func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryAccessor(t *testing.T) {
 	dir := t.TempDir()
 	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
@@ -273,6 +296,18 @@ func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryBTree(t *testing.T) {
 	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
 	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
 		t.Fatalf("VerifyLoadedManifestFiles stale latest btree err = %v, want segment checksum mismatch", err)
+	}
+}
+
+func TestVerifyManifestLatestBinarySidecarsRejectsChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	accessorRef.Checksum = badSnapshotChecksum()
+	manifest := NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+
+	err := verifyManifestLatestBinarySidecars(dir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("verifyManifestLatestBinarySidecars err = %v, want checksum mismatch", err)
 	}
 }
 
@@ -320,6 +355,10 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 	if _, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageHeaders); err != nil || ok {
 		t.Fatalf("canonical Headers stage should not be advanced by snapshot install: ok=%v err=%v", ok, err)
 	}
+}
+
+func badSnapshotChecksum() string {
+	return "sha256:" + strings.Repeat("00", sha256.Size)
 }
 
 func writeLatestBinaryCompanionManifestForTest(t *testing.T, dir string) (SegmentRef, SegmentRef, SegmentRef) {

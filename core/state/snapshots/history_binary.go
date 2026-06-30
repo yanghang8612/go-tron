@@ -1017,6 +1017,16 @@ func validateStateDomainChangeBinaryAccessorEntryAgainstSegment(source stateDoma
 }
 
 func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRef, indexRef, accessorRef SegmentRef) error {
+	if err := CheckStateDomainChangeSegment(dir, historyRef); err != nil {
+		return err
+	}
+	if err := CheckStateDomainChangeIndexSegment(dir, indexRef); err != nil {
+		return err
+	}
+	if err := CheckStateDomainChangeAccessorSegment(dir, accessorRef); err != nil {
+		return err
+	}
+
 	segment, segmentHeader, segmentSize, err := openStateDomainChangeBinarySegmentReader(dir, historyRef)
 	if err != nil {
 		return err

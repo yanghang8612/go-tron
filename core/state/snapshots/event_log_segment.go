@@ -357,6 +357,9 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 			return fmt.Errorf("snapshots: event-log segment %q range [%d,%d] crosses event-log-index %q range [%d,%d]",
 				ref.Path, ref.FromTxNum, ref.ToTxNum, indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
 		}
+		if err := CheckEventLogSegment(dir, ref); err != nil {
+			return err
+		}
 		seg, err := OpenEventLogSegment(dir, ref)
 		if err != nil {
 			return err

@@ -400,6 +400,9 @@ func VerifyChainIndexSegmentAgainstChainFreezer(dir string, indexRef, freezerRef
 	if err := CheckChainIndexSegment(dir, indexRef); err != nil {
 		return err
 	}
+	if err := CheckChainFreezerSegment(dir, freezerRef); err != nil {
+		return err
+	}
 	seg, err := OpenChainIndexSegment(dir, indexRef)
 	if err != nil {
 		return err

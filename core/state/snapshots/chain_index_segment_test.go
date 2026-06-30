@@ -73,6 +73,32 @@ func TestChainIndexSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestVerifyChainIndexSegmentAgainstChainFreezerRejectsFreezerChecksumMismatch(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	freezerRef.Checksum = badSnapshotChecksum()
+
+	err = VerifyChainIndexSegmentAgainstChainFreezer(snapshotDir, indexRef, freezerRef)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("VerifyChainIndexSegmentAgainstChainFreezer err = %v, want checksum mismatch", err)
+	}
+}
+
 func TestManifestRejectsChainIndexWithoutFreezer(t *testing.T) {
 	ref := SegmentRef{
 		Dataset:   SegmentDatasetChainFreezer,

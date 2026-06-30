@@ -60,6 +60,32 @@ func TestChainFreezerAccessorBuildCheckVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFreezerAccessorAgainstChainFreezerRejectsFreezerChecksumMismatch(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	accessorRef, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment: %v", err)
+	}
+	freezerRef.Checksum = badSnapshotChecksum()
+
+	err = VerifyChainFreezerAccessorSegmentAgainstChainFreezer(snapshotDir, accessorRef, freezerRef)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("VerifyChainFreezerAccessorSegmentAgainstChainFreezer err = %v, want checksum mismatch", err)
+	}
+}
+
 func TestManagerAncientUsesChainFreezerAccessorWhenPresent(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))

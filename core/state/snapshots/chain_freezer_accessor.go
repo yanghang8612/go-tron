@@ -224,6 +224,9 @@ func VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir string, accessorRe
 	if err := CheckChainFreezerAccessorSegment(dir, accessorRef); err != nil {
 		return err
 	}
+	if err := CheckChainFreezerSegment(dir, freezerRef); err != nil {
+		return err
+	}
 	accessor, err := OpenChainFreezerAccessorSegment(dir, accessorRef)
 	if err != nil {
 		return err
