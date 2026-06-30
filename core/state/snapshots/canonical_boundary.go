@@ -68,6 +68,9 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 	if block.Hash() != row.BlockHash {
 		return nil, fmt.Errorf("snapshots: canonical boundary block %d hash %x, want state tx range hash %x", row.BlockNum, block.Hash(), row.BlockHash)
 	}
+	if err := verifyCanonicalBoundaryCommitmentCheckpoint(db, row.BlockNum, row.BlockHash); err != nil {
+		return nil, err
+	}
 	if err := rawdb.WriteBlockNumber(db, row.BlockHash, row.BlockNum); err != nil {
 		return nil, err
 	}
@@ -80,6 +83,30 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 		BlockNum:  row.BlockNum,
 		BlockHash: row.BlockHash,
 	}, nil
+}
+
+func verifyCanonicalBoundaryCommitmentCheckpoint(db ethdb.KeyValueReader, blockNum uint64, blockHash common.Hash) error {
+	checkpoint, ok, err := rawdb.ReadLatestStateCommitmentCheckpoint(db)
+	if err != nil {
+		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint unreadable: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	if checkpoint.BlockNum != blockNum {
+		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint block %d, want %d", checkpoint.BlockNum, blockNum)
+	}
+	if checkpoint.BlockHash != blockHash {
+		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint hash %x, want boundary hash %x", checkpoint.BlockHash, blockHash)
+	}
+	restoredRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
+	if err != nil {
+		return fmt.Errorf("snapshots: canonical boundary restored commitment root unreadable: %w", err)
+	}
+	if ok && checkpoint.Root != restoredRoot {
+		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint root %x, want latest root %x", checkpoint.Root, restoredRoot)
+	}
+	return nil
 }
 
 func stateTxRangeAtTxNum(db ethdb.Iteratee, txNum uint64) (*rawdb.StateTxRange, bool, error) {
