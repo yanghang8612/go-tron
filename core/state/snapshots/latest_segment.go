@@ -40,6 +40,7 @@ type LatestSegment struct {
 type Manager struct {
 	dir      string
 	manifest *Manifest
+	pinned   bool
 	cache    map[string]*LatestSegment
 }
 
@@ -751,6 +752,16 @@ func OpenManager(dir string) (*Manager, error) {
 	return &Manager{dir: dir, manifest: manifest, cache: make(map[string]*LatestSegment)}, nil
 }
 
+func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
+	if manifest == nil {
+		return nil, errors.New("snapshots: nil pinned manifest")
+	}
+	if err := manifest.ValidateProduction(); err != nil {
+		return nil, err
+	}
+	return &Manager{dir: dir, manifest: cloneManifest(manifest), pinned: true, cache: make(map[string]*LatestSegment)}, nil
+}
+
 func (m *Manager) Manifest() *Manifest {
 	manifest, err := m.currentManifest()
 	if err != nil || manifest == nil {
@@ -1123,6 +1134,9 @@ func latestBinaryBTreeRef(manifest *Manifest, latestRef SegmentRef) (SegmentRef,
 func (m *Manager) currentManifest() (*Manifest, error) {
 	if m == nil {
 		return nil, nil
+	}
+	if m.pinned {
+		return m.manifest, nil
 	}
 	manifest, err := LoadProductionManifest(m.dir)
 	if err != nil {

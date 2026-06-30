@@ -440,11 +440,7 @@ func RestoreChainFreezerFromVerifiedManifestWithOptions(store ChainFreezerAncien
 	if store == nil {
 		return nil, errors.New("snapshots: nil ancient store")
 	}
-	report, err := VerifyRemoteManifestFiles(dir, expected)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := LoadProductionManifest(dir)
+	manifest, report, err := VerifyRemoteProductionManifest(dir, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -459,11 +455,7 @@ func RestoreChainFreezerFromVerifiedCatalogWithOptions(store ChainFreezerAncient
 	if store == nil {
 		return nil, errors.New("snapshots: nil ancient store")
 	}
-	_, report, err := VerifySignedSnapshotCatalog(dir, expected, trustedKeys)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := LoadProductionManifest(dir)
+	_, manifest, report, err := VerifySignedSnapshotCatalogManifest(dir, expected, trustedKeys)
 	if err != nil {
 		return nil, err
 	}

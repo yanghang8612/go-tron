@@ -1033,10 +1033,7 @@ func snapshotPruneChainLookupsCmd(ctx *cli.Context) error {
 }
 
 func pruneVerifiedHotChainLookups(db ethdb.KeyValueStore, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotChainLookupResult, error) {
-	if _, _, err := statesnapshots.VerifySignedSnapshotCatalog(dir, identity, trustedKeys); err != nil {
-		return nil, err
-	}
-	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	_, manifest, _, err := statesnapshots.VerifySignedSnapshotCatalogManifest(dir, identity, trustedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,10 +1091,7 @@ func snapshotPruneBalanceTracesCmd(ctx *cli.Context) error {
 }
 
 func pruneVerifiedHotBalanceTraces(db ethdb.KeyValueStore, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotBalanceTraceResult, error) {
-	if _, _, err := statesnapshots.VerifySignedSnapshotCatalog(dir, identity, trustedKeys); err != nil {
-		return nil, err
-	}
-	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	_, manifest, _, err := statesnapshots.VerifySignedSnapshotCatalogManifest(dir, identity, trustedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -1154,10 +1148,7 @@ func snapshotPruneSectionBloomsCmd(ctx *cli.Context) error {
 }
 
 func pruneVerifiedHotSectionBlooms(db ethdb.KeyValueStore, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotSectionBloomResult, error) {
-	if _, _, err := statesnapshots.VerifySignedSnapshotCatalog(dir, identity, trustedKeys); err != nil {
-		return nil, err
-	}
-	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	_, manifest, _, err := statesnapshots.VerifySignedSnapshotCatalogManifest(dir, identity, trustedKeys)
 	if err != nil {
 		return nil, err
 	}

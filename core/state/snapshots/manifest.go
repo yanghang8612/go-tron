@@ -133,6 +133,10 @@ func LoadManifest(dir string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeManifest(data)
+}
+
+func decodeManifest(data []byte) (*Manifest, error) {
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, err
@@ -144,6 +148,17 @@ func LoadManifest(dir string) (*Manifest, error) {
 	sortSegments(manifest.Segments)
 	sortSegments(manifest.Retired)
 	return &manifest, nil
+}
+
+func decodeProductionManifest(data []byte) (*Manifest, error) {
+	manifest, err := decodeManifest(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := manifest.ValidateProduction(); err != nil {
+		return nil, err
+	}
+	return manifest, nil
 }
 
 func LoadProductionManifest(dir string) (*Manifest, error) {
@@ -297,6 +312,24 @@ type segmentFamily struct {
 	dataset SegmentDataset
 	domain  kvdomains.KVDomain
 	kind    SegmentKind
+}
+
+func cloneManifest(in *Manifest) *Manifest {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Chain != nil {
+		chain := *in.Chain
+		out.Chain = &chain
+	}
+	if in.Progress != nil {
+		progress := *in.Progress
+		out.Progress = &progress
+	}
+	out.Segments = append([]SegmentRef(nil), in.Segments...)
+	out.Retired = append([]SegmentRef(nil), in.Retired...)
+	return &out
 }
 
 func normalizeManifest(manifest *Manifest) {

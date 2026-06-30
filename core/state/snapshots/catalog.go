@@ -2,7 +2,6 @@ package snapshots
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -100,33 +99,39 @@ func LoadSnapshotCatalog(dir string) (*SnapshotCatalog, error) {
 }
 
 func VerifySignedSnapshotCatalog(dir string, expected ChainIdentity, trustedKeys []ed25519.PublicKey) (*SnapshotCatalog, *ManifestVerificationReport, error) {
+	catalog, _, report, err := VerifySignedSnapshotCatalogManifest(dir, expected, trustedKeys)
+	return catalog, report, err
+}
+
+func VerifySignedSnapshotCatalogManifest(dir string, expected ChainIdentity, trustedKeys []ed25519.PublicKey) (*SnapshotCatalog, *Manifest, *ManifestVerificationReport, error) {
 	catalog, err := LoadSnapshotCatalog(dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := catalog.ValidateChainIdentity(expected); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := catalog.VerifySignature(trustedKeys); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	gotChecksum, err := checksumFile(filepath.Join(dir, catalog.ManifestPath))
+	manifestData, err := os.ReadFile(filepath.Join(dir, catalog.ManifestPath))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	gotChecksum := checksumBytes(manifestData)
 	if !strings.EqualFold(gotChecksum, catalog.ManifestChecksum) {
-		return nil, nil, fmt.Errorf("snapshots: catalog manifest checksum %s, got %s", catalog.ManifestChecksum, gotChecksum)
+		return nil, nil, nil, fmt.Errorf("snapshots: catalog manifest checksum %s, got %s", catalog.ManifestChecksum, gotChecksum)
 	}
-	manifest, err := LoadProductionManifest(dir)
+	manifest, err := decodeProductionManifest(manifestData)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if manifest.VisibleTxStart != catalog.VisibleTxStart || manifest.VisibleTxEnd != catalog.VisibleTxEnd {
-		return nil, nil, fmt.Errorf("snapshots: catalog visible range [%d,%d], manifest range [%d,%d]",
+		return nil, nil, nil, fmt.Errorf("snapshots: catalog visible range [%d,%d], manifest range [%d,%d]",
 			catalog.VisibleTxStart, catalog.VisibleTxEnd, manifest.VisibleTxStart, manifest.VisibleTxEnd)
 	}
 	if err := manifest.ValidateChainIdentity(expected); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	report, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
 		ExpectedChain:     &expected,
@@ -134,9 +139,9 @@ func VerifySignedSnapshotCatalog(dir string, expected ChainIdentity, trustedKeys
 		RequireChecksums:  true,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return catalog, report, nil
+	return catalog, manifest, report, nil
 }
 
 func RestoreSnapshotFromVerifiedCatalog(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, trustedKeys []ed25519.PublicKey) (*RestoreVerifiedSnapshotResult, error) {
@@ -144,15 +149,14 @@ func RestoreSnapshotFromVerifiedCatalog(db ethdb.KeyValueWriter, dir string, exp
 }
 
 func RestoreSnapshotFromVerifiedCatalogWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, trustedKeys []ed25519.PublicKey, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedSnapshotResult, error) {
-	_, report, err := VerifySignedSnapshotCatalog(dir, expected, trustedKeys)
+	_, manifest, report, err := VerifySignedSnapshotCatalogManifest(dir, expected, trustedKeys)
 	if err != nil {
 		return nil, err
 	}
-	result, err := RestoreSnapshotFromVerifiedManifestWithOptions(db, dir, expected, opts)
+	result, err := restoreSnapshotFromVerifiedManifestWithOptions(db, dir, manifest, *report, opts)
 	if err != nil {
 		return nil, err
 	}
-	result.Verification = *report
 	return result, nil
 }
 
@@ -311,8 +315,7 @@ func checksumFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return checksumBytes(data), nil
 }
 
 func normalizeSnapshotCatalog(catalog *SnapshotCatalog) {

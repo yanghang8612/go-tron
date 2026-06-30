@@ -74,11 +74,24 @@ func VerifyManifestFiles(dir string, opts VerifyManifestOptions) (*ManifestVerif
 // snapshot bootstrap catalogs. It rejects manifests that lack chain identity,
 // reference unknown segment families, or omit per-file checksums.
 func VerifyRemoteManifestFiles(dir string, expected ChainIdentity) (*ManifestVerificationReport, error) {
-	return VerifyManifestFiles(dir, VerifyManifestOptions{
+	_, report, err := VerifyRemoteProductionManifest(dir, expected)
+	return report, err
+}
+
+func VerifyRemoteProductionManifest(dir string, expected ChainIdentity) (*Manifest, *ManifestVerificationReport, error) {
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	report, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
 		ExpectedChain:     &expected,
 		RequireRegistered: true,
 		RequireChecksums:  true,
 	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return manifest, report, nil
 }
 
 // RestoreLatestFromVerifiedManifest performs the strict remote-manifest
@@ -90,15 +103,19 @@ func RestoreLatestFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, expe
 }
 
 func RestoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedLatestResult, error) {
-	report, err := VerifyRemoteManifestFiles(dir, expected)
+	manifest, report, err := VerifyRemoteProductionManifest(dir, expected)
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := OpenManager(dir)
+	return restoreLatestFromVerifiedManifestWithOptions(db, dir, manifest, *report, opts)
+}
+
+func restoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, manifest *Manifest, report ManifestVerificationReport, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedLatestResult, error) {
+	mgr, err := OpenPinnedManager(dir, manifest)
 	if err != nil {
 		return nil, err
 	}
-	manifest := mgr.Manifest()
+	manifest = mgr.Manifest()
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
@@ -113,7 +130,7 @@ func RestoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 		return nil, err
 	}
 	return &RestoreVerifiedLatestResult{
-		Verification:  *report,
+		Verification:  report,
 		RestoredTxNum: manifest.VisibleTxEnd,
 	}, nil
 }
@@ -126,15 +143,19 @@ func RestoreHistoryFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, exp
 }
 
 func RestoreHistoryFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedHistoryResult, error) {
-	report, err := VerifyRemoteManifestFiles(dir, expected)
+	manifest, report, err := VerifyRemoteProductionManifest(dir, expected)
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := OpenManager(dir)
+	return restoreHistoryFromVerifiedManifestWithOptions(db, dir, manifest, *report, opts)
+}
+
+func restoreHistoryFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, manifest *Manifest, report ManifestVerificationReport, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedHistoryResult, error) {
+	mgr, err := OpenPinnedManager(dir, manifest)
 	if err != nil {
 		return nil, err
 	}
-	manifest := mgr.Manifest()
+	manifest = mgr.Manifest()
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
@@ -143,7 +164,7 @@ func RestoreHistoryFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir 
 		return nil, err
 	}
 	return &RestoreVerifiedHistoryResult{
-		Verification:     *report,
+		Verification:     report,
 		FromTxNum:        restored.FromTxNum,
 		ToTxNum:          restored.ToTxNum,
 		ChangesRestored:  restored.ChangesRestored,
@@ -159,15 +180,19 @@ func RestoreSnapshotFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, ex
 }
 
 func RestoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedSnapshotResult, error) {
-	report, err := VerifyRemoteManifestFiles(dir, expected)
+	manifest, report, err := VerifyRemoteProductionManifest(dir, expected)
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := OpenManager(dir)
+	return restoreSnapshotFromVerifiedManifestWithOptions(db, dir, manifest, *report, opts)
+}
+
+func restoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, manifest *Manifest, report ManifestVerificationReport, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedSnapshotResult, error) {
+	mgr, err := OpenPinnedManager(dir, manifest)
 	if err != nil {
 		return nil, err
 	}
-	manifest := mgr.Manifest()
+	manifest = mgr.Manifest()
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
@@ -190,7 +215,7 @@ func RestoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 		return nil, err
 	}
 	return &RestoreVerifiedSnapshotResult{
-		Verification:     *report,
+		Verification:     report,
 		RestoredTxNum:    manifest.VisibleTxEnd,
 		ChangesRestored:  restoredHistory.ChangesRestored,
 		TxRangesRestored: restoredHistory.TxRangesRestored,

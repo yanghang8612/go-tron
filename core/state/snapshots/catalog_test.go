@@ -103,3 +103,36 @@ func TestRestoreSnapshotFromVerifiedCatalog(t *testing.T) {
 		t.Fatalf("SnapshotInstall progress = %d ok=%v err=%v, want 12", got, ok, err)
 	}
 }
+
+func TestRestoreSnapshotFromVerifiedCatalogUsesVerifiedManifest(t *testing.T) {
+	dir, identity, owner := writeVerifiableHistoryManifest(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := PublishSignedSnapshotCatalog(dir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	_, manifest, report, err := VerifySignedSnapshotCatalogManifest(dir, identity, []ed25519.PublicKey{pub})
+	if err != nil {
+		t.Fatalf("VerifySignedSnapshotCatalogManifest: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifestForChain(99, 99, nil, identity)); err != nil {
+		t.Fatalf("swap manifest after verification: %v", err)
+	}
+
+	restored := rawdb.NewMemoryDatabase()
+	result, err := restoreSnapshotFromVerifiedManifestWithOptions(restored, dir, manifest, *report, RestoreVerifiedSnapshotOptions{})
+	if err != nil {
+		t.Fatalf("restoreSnapshotFromVerifiedManifestWithOptions: %v", err)
+	}
+	if result.RestoredTxNum != 12 || result.ChangesRestored != 2 || result.TxRangesRestored != 2 {
+		t.Fatalf("result = %+v, want verified manifest boundary txNum=12 with 2 changes and 2 tx ranges", result)
+	}
+	if got, ok, err := rawdb.ReadStateDomainChange(restored, 1, 1); err != nil || !ok || got.Owner != owner {
+		t.Fatalf("restored state change = %+v ok=%v err=%v, want verified manifest change for owner %x", got, ok, err, owner)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageSnapshotInstall); err != nil || !ok || got != 12 {
+		t.Fatalf("SnapshotInstall progress = %d ok=%v err=%v, want verified manifest txNum 12", got, ok, err)
+	}
+}

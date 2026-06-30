@@ -27,10 +27,7 @@ type canonicalBoundaryDB interface {
 // snapshot boundary. Callers that already hold a verified manifest can use
 // InstallCanonicalBoundaryFromVerifiedSnapshot directly.
 func InstallCanonicalBoundaryFromVerifiedCatalog(db canonicalBoundaryDB, chainDB *rawdb.ChainDB, dir string, expected ChainIdentity, trustedKeys []ed25519.PublicKey) (*RestoreCanonicalBoundaryResult, error) {
-	if _, _, err := VerifySignedSnapshotCatalog(dir, expected, trustedKeys); err != nil {
-		return nil, err
-	}
-	manifest, err := LoadProductionManifest(dir)
+	_, manifest, _, err := VerifySignedSnapshotCatalogManifest(dir, expected, trustedKeys)
 	if err != nil {
 		return nil, err
 	}
