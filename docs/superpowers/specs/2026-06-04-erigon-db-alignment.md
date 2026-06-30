@@ -1251,6 +1251,9 @@ Status:
   iterators for balance traces and section blooms are likewise pinned to
   function-scoped snapshot build/prune/backfill boundaries, so an API or
   adjacent helper in the same source file cannot scan hot-only rows directly.
+  State-history as-of rawdb readers are pinned the same way to
+  `buildDefaultDomainRegistry`, leaving the registry as the only audited
+  snapshot boundary that may hold those low-level function references.
 - `gtron db storage-alerts --json` now packages freezer, stage, and snapshot
   health into one machine-readable report for soak/production monitors. The
   JSON form preserves the same critical exit semantics as the text command and

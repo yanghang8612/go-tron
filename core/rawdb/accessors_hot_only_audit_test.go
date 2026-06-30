@@ -444,13 +444,9 @@ func TestProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries(t *testing.T) 
 
 func TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
-	offenders := auditForbiddenRawDBReferences(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
 		"core/state/snapshots/domain_registry.go": {
-			"ReadStateAccountLatestAsOfTxNum":      {},
-			"ReadStateKVAsOfTxNum":                 {},
-			"ReadStateKVGenerationAsOfTxNum":       {},
-			"ReadStateAccountKVAsOfTxNum":          {},
-			"IterateStateAccountKVAsOfPrefixTxNum": {},
+			"buildDefaultDomainRegistry": {},
 		},
 	})
 	if len(offenders) > 0 {
@@ -537,6 +533,30 @@ func query(db any) {
 	joined := strings.Join(offenders, "\n")
 	if !strings.Contains(joined, "rawdb.ReadStateKVAsOfTxNum") || !strings.Contains(joined, "rawdb.ReadStateKVGenerationAsOfTxNum") {
 		t.Fatalf("offenders = %+v, want both state-as-of references rejected", offenders)
+	}
+}
+
+func TestStateHistoryAsOfAuditRejectsSameFileNonBoundaryReference(t *testing.T) {
+	root := writeAuditFixture(t, "core/state/snapshots/domain_registry.go", `package snapshots
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func buildDefaultDomainRegistry() {
+	_ = rawdb.ReadStateKVAsOfTxNum
+}
+
+func debugAsOfReader(db any) {
+	_, _, _ = rawdb.ReadStateKVGenerationAsOfTxNum(db, nil, 1, 2)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
+		"core/state/snapshots/domain_registry.go": {
+			"buildDefaultDomainRegistry": {},
+		},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadStateKVGenerationAsOfTxNum") {
+		t.Fatalf("offenders = %+v, want same-file non-boundary state history as-of read rejected", offenders)
 	}
 }
 
