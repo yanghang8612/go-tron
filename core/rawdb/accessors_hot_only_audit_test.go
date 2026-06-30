@@ -208,11 +208,20 @@ func TestVMBlockHashReadsUseStrictBoundary(t *testing.T) {
 
 func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
-	offenders := auditHotOnlyChainDBConstructors(t, root, map[string]struct{}{
-		"cmd/gtron/db_cmd.go":            {},
-		"core/balance_trace_backfill.go": {},
-		"core/blockchain.go":             {},
-		"core/genesis.go":                {},
+	offenders := auditHotOnlyChainDBConstructors(t, root, map[string]map[string]struct{}{
+		"cmd/gtron/db_cmd.go": {
+			"dbSeedBalanceTraceReplayFromSnapshot": {},
+		},
+		"core/balance_trace_backfill.go": {
+			"BackfillBalanceTracesByReplay":   {},
+			"collectReplayedBalanceTraceRows": {},
+		},
+		"core/blockchain.go": {
+			"NewBlockChainWithAncient": {},
+		},
+		"core/genesis.go": {
+			"SetupGenesisBlockWithAncient": {},
+		},
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production code must not construct hot-only ChainDB wrappers outside audited constructor/replay/diagnostic boundaries:\n%s", strings.Join(offenders, "\n"))
@@ -316,6 +325,30 @@ func build(external rawdb.AncientReader) {
 
 	if offenders := auditHotOnlyChainDBConstructors(t, root, nil); len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want fallback with external ancient reader accepted", offenders)
+	}
+}
+
+func TestHotOnlyChainDBAuditRejectsSameFileNonBoundaryConstructor(t *testing.T) {
+	root := writeAuditFixture(t, "core/blockchain.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func NewBlockChainWithAncient() {
+	_ = rawdb.NewChainDB(nil, rawdb.NoopAncient{})
+}
+
+func debugHotOnlyReader() {
+	_ = rawdb.NewChainDB(nil, rawdb.NoopAncient{})
+}
+`)
+
+	offenders := auditHotOnlyChainDBConstructors(t, root, map[string]map[string]struct{}{
+		"core/blockchain.go": {
+			"NewBlockChainWithAncient": {},
+		},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.NewChainDB(..., nil/NoopAncient)") {
+		t.Fatalf("offenders = %+v, want same-file non-boundary hot-only constructor rejected", offenders)
 	}
 }
 
@@ -1656,7 +1689,7 @@ func auditForbiddenRawDBReferencesSkipping(t *testing.T, root string, forbidden 
 	return offenders
 }
 
-func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[string]struct{}) []string {
+func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[string]map[string]struct{}) []string {
 	t.Helper()
 	var offenders []string
 	fset := token.NewFileSet()
@@ -1709,7 +1742,7 @@ func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[stri
 					if !isHotOnlyAncientExpr(n.Args[1], rawdbNames, hotOnlyAncientAliases) {
 						return true
 					}
-					if isAllowedAuditPath(root, path, allowed) {
+					if isAllowedAuditFunction(root, path, fn.Name.Name, allowed) {
 						return true
 					}
 					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), "rawdb.NewChainDB(..., nil/NoopAncient)"))
@@ -2340,6 +2373,19 @@ func isAllowedAuditPath(root, path string, allowed map[string]struct{}) bool {
 	}
 	rel = filepath.ToSlash(rel)
 	_, ok := allowed[rel]
+	return ok
+}
+
+func isAllowedAuditFunction(root, path, function string, allowed map[string]map[string]struct{}) bool {
+	if len(allowed) == 0 {
+		return false
+	}
+	rel := auditRelPath(root, path)
+	functions := allowed[rel]
+	if len(functions) == 0 {
+		return false
+	}
+	_, ok := functions[function]
 	return ok
 }
 

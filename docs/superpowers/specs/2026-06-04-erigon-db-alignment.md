@@ -1240,7 +1240,10 @@ Status:
   readers, zero-value `AncientReader` aliases, and all-hot
   `NewFallbackAncientReader` compositions, preventing new call sites from
   creating chain readers that skip ancient freezer and cold index sidecars by
-  construction. The same cold-boundary audit now covers the
+  construction. That constructor audit now uses function-scoped allowlists for
+  the remaining replay/genesis constructor boundaries, so adding another
+  hot-only `NewChainDB` in the same source file fails the audit unless the
+  exact boundary is reviewed. The same cold-boundary audit now covers the
   integrity-preserving strict readers for block numbers, transaction indexes,
   transaction infos, state roots, section blooms, balance traces, and account
   traces, so new production code cannot call those variants on a hot-only KV
