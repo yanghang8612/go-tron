@@ -265,7 +265,11 @@ Status:
   rejects non-empty `TransactionInfo.Id` values that do not match the
   canonical transaction hash from the block body, while preserving legacy
   no-id `TransactionRet` payloads whose block-local position is the only
-  available binding. TRON HTTP and gRPC transaction-info routes now apply the
+  available binding. JSON-RPC `eth_getTransactionByHash` applies the same
+  lookup-metadata guard before rendering transaction objects: a backend result
+  that names a transaction but lacks the canonical block or block-local index
+  surfaces as an archive data error in both handlers instead of producing an
+  invalid response. TRON HTTP and gRPC transaction-info routes now apply the
   same split: explicit transaction-info misses still return the java-compatible
   empty/NotFound response, but hot/cold transaction-info read, decode, or
   consistency errors surface as HTTP 500 / gRPC Internal instead of looking

@@ -883,6 +883,9 @@ func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, er
 	if tx == nil {
 		return nil, nil // not found → null
 	}
+	if err := validateTransactionLookupMetadata(hash, block, index); err != nil {
+		return nil, err
+	}
 	return txToRPC(tx, hash, block, index), nil
 }
 func (api *API) ethGetTransactionByBlockNumberAndIndex(params json.RawMessage) (interface{}, error) {
@@ -1192,6 +1195,20 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 
 func transactionReceiptLookupError(hash common.Hash) error {
 	return fmt.Errorf("transaction receipt exists for %s but transaction lookup is missing", rpcHashHex(hash))
+}
+
+func validateTransactionLookupMetadata(hash common.Hash, block *types.Block, index int) error {
+	if block == nil {
+		return transactionLookupMetadataError(hash, "block")
+	}
+	if index < 0 {
+		return transactionLookupMetadataError(hash, "index")
+	}
+	return nil
+}
+
+func transactionLookupMetadataError(hash common.Hash, field string) error {
+	return fmt.Errorf("transaction lookup for %s is missing %s metadata", rpcHashHex(hash), field)
 }
 
 func rpcHashHex(hash common.Hash) string {

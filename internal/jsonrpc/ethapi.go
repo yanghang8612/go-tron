@@ -408,6 +408,9 @@ func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 	if tx == nil {
 		return nil, nil
 	}
+	if err := validateTransactionLookupMetadata(hash, block, index); err != nil {
+		return nil, err
+	}
 	return txToRPC(tx, hash, block, index), nil
 }
 

@@ -832,6 +832,52 @@ func TestEthGetTransactionByHash_NotFound(t *testing.T) {
 	}
 }
 
+func TestEthGetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+
+	tests := []struct {
+		name    string
+		backend *stubBackend
+		want    string
+	}{
+		{
+			name: "missing block",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: nil,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " is missing block metadata",
+		},
+		{
+			name: "missing index",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: -1,
+			},
+			want: "transaction lookup for " + txHash + " is missing index metadata",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, tt.backend)
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, "eth_getTransactionByHash", []interface{}{txHash})
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("eth_getTransactionByHash error = %v, want JSON-RPC error", resp["error"])
+			}
+			if errObj["message"] != tt.want {
+				t.Fatalf("eth_getTransactionByHash error message = %v, want %q", errObj["message"], tt.want)
+			}
+		})
+	}
+}
+
 func TestEthGetTransactionReceipt_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{txInfo: nil})
 	defer srv.Close()
@@ -901,6 +947,47 @@ func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
 	}
 	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt "+txHash+" transaction info id 0x") || !strings.Contains(msg, "does not match transaction hash") {
 		t.Fatalf("eth_getTransactionReceipt error message = %v, want txInfo/hash mismatch", errObj["message"])
+	}
+}
+
+func TestEthAPI_GetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+
+	tests := []struct {
+		name    string
+		backend *stubBackend
+		want    string
+	}{
+		{
+			name: "missing block",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: nil,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " is missing block metadata",
+		},
+		{
+			name: "missing index",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: -1,
+			},
+			want: "transaction lookup for " + txHash + " is missing index metadata",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := jsonrpc.NewEthAPI(tt.backend, nil)
+			got, err := api.GetTransactionByHash(txHash)
+			if err == nil || got != nil || err.Error() != tt.want {
+				t.Fatalf("EthAPI.GetTransactionByHash = %v/%v, want %q", got, err, tt.want)
+			}
+		})
 	}
 }
 
