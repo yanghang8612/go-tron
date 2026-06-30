@@ -536,7 +536,7 @@ func TestSolidity_GetBlockByNumBackendErrorReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestSolidity_GetTransactionInfoByBlockNumBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidity_GetTransactionInfoByBlockNumBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("rawdb: transaction info block 4 decode: corrupt")
 	backend := &solidTestBackend{
 		testBackend: testBackend{txInfoByBlockErr: backendErr},
@@ -545,11 +545,8 @@ func TestSolidity_GetTransactionInfoByBlockNumBackendErrorReturnsEmpty(t *testin
 	client := newSolidityClient(t, backend)
 
 	resp, err := client.GetTransactionInfoByBlockNum(context.Background(), &apipb.NumberMessage{Num: 4})
-	if err != nil {
-		t.Fatalf("GetTransactionInfoByBlockNum backend error: %v", err)
-	}
-	if resp == nil || len(resp.GetTransactionInfo()) != 0 {
-		t.Fatalf("GetTransactionInfoByBlockNum backend error = %+v, want empty list", resp)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got resp=%+v err=%v", resp, err)
 	}
 }
 
@@ -794,7 +791,7 @@ func TestSolidity_GetTransactionInfoByIdWithinSolidReadsBackend(t *testing.T) {
 	}
 }
 
-func TestSolidity_GetTransactionInfoByIdBackendErrorReturnsNotFound(t *testing.T) {
+func TestSolidity_GetTransactionInfoByIdBackendErrorReturnsInternal(t *testing.T) {
 	hash := solidityTestHash(0x13)
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	backend := &solidTestBackend{
@@ -806,8 +803,8 @@ func TestSolidity_GetTransactionInfoByIdBackendErrorReturnsNotFound(t *testing.T
 	client := newSolidityClient(t, backend)
 
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("want NotFound for backend tx-info read error, got %v", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal for backend tx-info read error, got %v", err)
 	}
 	if backend.txInfoCalls != 1 {
 		t.Fatalf("GetTransactionInfoByID called %d times, want 1", backend.txInfoCalls)

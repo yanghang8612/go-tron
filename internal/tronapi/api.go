@@ -801,7 +801,11 @@ func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
 func (api *API) writeTransactionInfoByID(w http.ResponseWriter, hash common.Hash) {
 	info, err := api.backend.GetTransactionInfoByID(hash)
 	if err != nil {
-		writeEmptyJSON(w)
+		if transactionLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if info == nil {
@@ -856,7 +860,7 @@ func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Requ
 func (api *API) writeTransactionInfoByBlockNum(w http.ResponseWriter, num uint64) {
 	infos, err := api.backend.GetTransactionInfoByBlockNum(num)
 	if err != nil {
-		writeEmptyJSONArray(w)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	var result []map[string]interface{}

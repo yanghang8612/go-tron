@@ -1160,12 +1160,12 @@ func TestGetTransactionInfoById_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetTransactionInfoById_BackendErrorReturnsNotFound(t *testing.T) {
+func TestGetTransactionInfoById_BackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	client := newTestClient(t, &testBackend{txInfoErr: backendErr})
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("want NotFound, got %v", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -1181,15 +1181,12 @@ func TestGetTransactionInfoByBlockNum_Empty(t *testing.T) {
 	}
 }
 
-func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmpty(t *testing.T) {
+func TestGetTransactionInfoByBlockNumBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
 	client := newTestClient(t, &testBackend{txInfoByBlockErr: backendErr})
 	resp, err := client.GetTransactionInfoByBlockNum(context.Background(), &apipb.NumberMessage{Num: 1})
-	if err != nil {
-		t.Fatalf("GetTransactionInfoByBlockNum backend error: %v", err)
-	}
-	if resp == nil || len(resp.GetTransactionInfo()) != 0 {
-		t.Fatalf("GetTransactionInfoByBlockNum backend error = %+v, want empty list", resp)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got resp=%+v err=%v", resp, err)
 	}
 }
 

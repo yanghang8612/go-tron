@@ -215,7 +215,7 @@ func (s *SolidityServer) GetTransactionInfoByBlockNum(_ context.Context, in *api
 	}
 	infos, err := s.backend.GetTransactionInfoByBlockNum(uint64(in.Num))
 	if err != nil {
-		return &apipb.TransactionInfoList{}, nil
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &apipb.TransactionInfoList{TransactionInfo: infos}, nil
 }
@@ -511,7 +511,10 @@ func (s *SolidityServer) GetTransactionInfoById(_ context.Context, in *apipb.Byt
 	}
 	info, err := s.backend.GetTransactionInfoByID(hash)
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "transaction info not found")
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction info not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")

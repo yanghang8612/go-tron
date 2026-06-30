@@ -1653,7 +1653,7 @@ func TestGetTransactionByIdSurfacesBackendError(t *testing.T) {
 	}
 }
 
-func TestGetTransactionReceiptByIdBackendErrorReturnsEmpty(t *testing.T) {
+func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	srv := newTestServer(t, &stubBackend{txInfoErr: backendErr})
 	defer srv.Close()
@@ -1663,10 +1663,12 @@ func TestGetTransactionReceiptByIdBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("POST gettransactionreceiptbyid: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactionreceiptbyid status = %d, want 500", resp.StatusCode)
+	}
 }
 
-func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) {
+func TestGetTransactionInfoByBlockNumSurfacesBackendError(t *testing.T) {
 	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
 	srv := newTestServer(t, &stubBackend{txInfoByBlockErr: backendErr})
 	defer srv.Close()
@@ -1676,7 +1678,9 @@ func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) 
 		t.Fatalf("POST gettransactioninfobyblocknum: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyArray(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactioninfobyblocknum status = %d, want 500", resp.StatusCode)
+	}
 }
 
 // --- Tests: M9.7 broadcastTransaction synchronous actuator.Validate ---

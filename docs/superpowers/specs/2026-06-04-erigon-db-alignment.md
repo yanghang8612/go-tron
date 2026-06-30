@@ -265,7 +265,11 @@ Status:
   rejects non-empty `TransactionInfo.Id` values that do not match the
   canonical transaction hash from the block body, while preserving legacy
   no-id `TransactionRet` payloads whose block-local position is the only
-  available binding.
+  available binding. TRON HTTP and gRPC transaction-info routes now apply the
+  same split: explicit transaction-info misses still return the java-compatible
+  empty/NotFound response, but hot/cold transaction-info read, decode, or
+  consistency errors surface as HTTP 500 / gRPC Internal instead of looking
+  like an empty archive result.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the

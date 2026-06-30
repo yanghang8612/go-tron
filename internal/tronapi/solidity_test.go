@@ -207,7 +207,7 @@ func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestSolidityGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) {
+func TestSolidityGetTransactionInfoByBlockNumSurfacesBackendError(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{txInfoByBlockErr: errors.New("rawdb: transaction info block 2 decode: corrupt")},
 		solidNum:    3,
@@ -221,7 +221,9 @@ func TestSolidityGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *tes
 		t.Fatalf("POST walletsolidity/gettransactioninfobyblocknum: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyArray(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("walletsolidity/gettransactioninfobyblocknum status = %d, want 500", resp.StatusCode)
+	}
 }
 
 // TestPbftGetNowBlockNotFoundReturnsEmpty checks that /walletpbft/getnowblock
