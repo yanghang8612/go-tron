@@ -32,6 +32,7 @@ ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
 ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
 ARCHIVE_API_TRACE_TRANSACTION=0
+ARCHIVE_API_TRACE_BLOCK=0
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -110,6 +111,7 @@ RUN_ARCHIVE_API_BLOCK=-1
 RUN_ARCHIVE_API_DEPTH_BLOCKS=-1
 RUN_ARCHIVE_API_CALL_PROBE="false"
 RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="false"
+RUN_ARCHIVE_API_TRACE_BLOCK_PROBE="false"
 RUN_ARCHIVE_API_METHODS="[]"
 RUN_ARCHIVE_API_TX_PROBE="false"
 RUN_ARCHIVE_API_TX_HASH=""
@@ -153,6 +155,8 @@ Options:
   --archive-api-call-data HEX    Include eth_call and debug_traceCall with this calldata against archive-api-address
   --archive-api-trace-transaction
                                   Include debug_traceTransaction when archive-api-block has a transaction
+  --archive-api-trace-block
+                                  Include debug_traceBlockByNumber/Hash for archive-api-block
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -192,6 +196,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
+    --archive-api-trace-block) ARCHIVE_API_TRACE_BLOCK=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -335,6 +340,11 @@ reset_run_metrics() {
     RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="true"
   else
     RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE="false"
+  fi
+  if [ "$ARCHIVE_API_TRACE_BLOCK" -eq 1 ]; then
+    RUN_ARCHIVE_API_TRACE_BLOCK_PROBE="true"
+  else
+    RUN_ARCHIVE_API_TRACE_BLOCK_PROBE="false"
   fi
   RUN_ARCHIVE_API_METHODS="[]"
   RUN_ARCHIVE_API_TX_PROBE="false"
@@ -530,31 +540,32 @@ write_storage_benchmark_prometheus() {
   local archive_api_failures="${60}"
   local archive_api_call_probe="${61}"
   local archive_api_trace_transaction_probe="${62}"
-  local archive_api_methods="${63}"
-  local archive_api_tx_probe="${64}"
-  local archive_api_tx_methods="${65}"
-  local cold_freezer_to_block="${66}"
-  local derived_index_to_block="${67}"
-  local chain_lookup_prune_to_block="${68}"
-  local tail_pruned_through_block="${69}"
-  local balance_trace_prune_to_block="${70}"
-  local section_bloom_prune_to_section="${71}"
-  local signed_cold_prune="${72}"
-  local tail_pruned_files="${73}"
-  local history_window="${74}"
-  local event_log_index_segments="${75}"
-  local event_log_index_address_keys="${76}"
-  local event_log_index_address_postings="${77}"
-  local event_log_index_address_avg_postings_milli="${78}"
-  local event_log_index_address_max_postings="${79}"
-  local event_log_index_address_singleton_keys="${80}"
-  local event_log_index_address_multi_posting_keys="${81}"
-  local event_log_index_topic_keys="${82}"
-  local event_log_index_topic_postings="${83}"
-  local event_log_index_topic_avg_postings_milli="${84}"
-  local event_log_index_topic_max_postings="${85}"
-  local event_log_index_topic_singleton_keys="${86}"
-  local event_log_index_topic_multi_posting_keys="${87}"
+  local archive_api_trace_block_probe="${63}"
+  local archive_api_methods="${64}"
+  local archive_api_tx_probe="${65}"
+  local archive_api_tx_methods="${66}"
+  local cold_freezer_to_block="${67}"
+  local derived_index_to_block="${68}"
+  local chain_lookup_prune_to_block="${69}"
+  local tail_pruned_through_block="${70}"
+  local balance_trace_prune_to_block="${71}"
+  local section_bloom_prune_to_section="${72}"
+  local signed_cold_prune="${73}"
+  local tail_pruned_files="${74}"
+  local history_window="${75}"
+  local event_log_index_segments="${76}"
+  local event_log_index_address_keys="${77}"
+  local event_log_index_address_postings="${78}"
+  local event_log_index_address_avg_postings_milli="${79}"
+  local event_log_index_address_max_postings="${80}"
+  local event_log_index_address_singleton_keys="${81}"
+  local event_log_index_address_multi_posting_keys="${82}"
+  local event_log_index_topic_keys="${83}"
+  local event_log_index_topic_postings="${84}"
+  local event_log_index_topic_avg_postings_milli="${85}"
+  local event_log_index_topic_max_postings="${86}"
+  local event_log_index_topic_singleton_keys="${87}"
+  local event_log_index_topic_multi_posting_keys="${88}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" \
@@ -581,7 +592,7 @@ write_storage_benchmark_prometheus() {
     "$snapshot_point_commitment_snapshot_sidecar_share_milli" "$snapshot_point_commitment_snapshot_share_milli" \
     "$archive_api_checks" "$archive_api_block" \
     "$archive_api_depth_blocks" "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
-    "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
+    "$archive_api_trace_block_probe" "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
     "$cold_freezer_to_block" "$derived_index_to_block" "$chain_lookup_prune_to_block" \
     "$tail_pruned_through_block" "$balance_trace_prune_to_block" \
     "$section_bloom_prune_to_section" "$signed_cold_prune" "$tail_pruned_files" \
@@ -647,31 +658,32 @@ snapshot_point_commitment_snapshot_share_milli = int(sys.argv[56])
 archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[57:61])
 archive_api_call_probe = sys.argv[61].lower() in {"1", "true", "yes"}
 archive_api_trace_transaction_probe = sys.argv[62].lower() in {"1", "true", "yes"}
-archive_api_methods_raw = sys.argv[63]
-archive_api_tx_probe = sys.argv[64].lower() in {"1", "true", "yes"}
-archive_api_tx_methods_raw = sys.argv[65]
-cold_freezer_to_block = int(sys.argv[66])
-derived_index_to_block = int(sys.argv[67])
-chain_lookup_prune_to_block = int(sys.argv[68])
-tail_pruned_through_block = int(sys.argv[69])
-balance_trace_prune_to_block = int(sys.argv[70])
-section_bloom_prune_to_section = int(sys.argv[71])
-signed_cold_prune = int(sys.argv[72])
-tail_pruned_files = int(sys.argv[73])
-history_window = int(sys.argv[74])
-event_log_index_segments = int(sys.argv[75])
-event_log_index_address_keys = int(sys.argv[76])
-event_log_index_address_postings = int(sys.argv[77])
-event_log_index_address_avg_postings_milli = int(sys.argv[78])
-event_log_index_address_max_postings = int(sys.argv[79])
-event_log_index_address_singleton_keys = int(sys.argv[80])
-event_log_index_address_multi_posting_keys = int(sys.argv[81])
-event_log_index_topic_keys = int(sys.argv[82])
-event_log_index_topic_postings = int(sys.argv[83])
-event_log_index_topic_avg_postings_milli = int(sys.argv[84])
-event_log_index_topic_max_postings = int(sys.argv[85])
-event_log_index_topic_singleton_keys = int(sys.argv[86])
-event_log_index_topic_multi_posting_keys = int(sys.argv[87])
+archive_api_trace_block_probe = sys.argv[63].lower() in {"1", "true", "yes"}
+archive_api_methods_raw = sys.argv[64]
+archive_api_tx_probe = sys.argv[65].lower() in {"1", "true", "yes"}
+archive_api_tx_methods_raw = sys.argv[66]
+cold_freezer_to_block = int(sys.argv[67])
+derived_index_to_block = int(sys.argv[68])
+chain_lookup_prune_to_block = int(sys.argv[69])
+tail_pruned_through_block = int(sys.argv[70])
+balance_trace_prune_to_block = int(sys.argv[71])
+section_bloom_prune_to_section = int(sys.argv[72])
+signed_cold_prune = int(sys.argv[73])
+tail_pruned_files = int(sys.argv[74])
+history_window = int(sys.argv[75])
+event_log_index_segments = int(sys.argv[76])
+event_log_index_address_keys = int(sys.argv[77])
+event_log_index_address_postings = int(sys.argv[78])
+event_log_index_address_avg_postings_milli = int(sys.argv[79])
+event_log_index_address_max_postings = int(sys.argv[80])
+event_log_index_address_singleton_keys = int(sys.argv[81])
+event_log_index_address_multi_posting_keys = int(sys.argv[82])
+event_log_index_topic_keys = int(sys.argv[83])
+event_log_index_topic_postings = int(sys.argv[84])
+event_log_index_topic_avg_postings_milli = int(sys.argv[85])
+event_log_index_topic_max_postings = int(sys.argv[86])
+event_log_index_topic_singleton_keys = int(sys.argv[87])
+event_log_index_topic_multi_posting_keys = int(sys.argv[88])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -706,6 +718,7 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionByBlockHashAndIndex",
 )
 ARCHIVE_API_TRACE_TRANSACTION_METHODS = ("debug_traceTransaction",)
+ARCHIVE_API_TRACE_BLOCK_METHODS = ("debug_traceBlockByNumber", "debug_traceBlockByHash")
 BENCHMARK_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
@@ -735,6 +748,10 @@ def archive_api_expected_methods(successful_methods):
         method in successful_methods for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS
     ):
         expected.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+    if archive_api_trace_block_probe or any(
+        method in successful_methods for method in ARCHIVE_API_TRACE_BLOCK_METHODS
+    ):
+        expected.extend(ARCHIVE_API_TRACE_BLOCK_METHODS)
     return expected
 
 def labels_with(extra):
@@ -1197,7 +1214,8 @@ archive_api_probe_values() {
   local slot="$4"
   local call_data="$5"
   local trace_transaction="$6"
-  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" "$trace_transaction" <<'PY'
+  local trace_block="$7"
+  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" "$trace_transaction" "$trace_block" <<'PY'
 import json
 import subprocess
 import sys
@@ -1208,6 +1226,7 @@ address = sys.argv[3]
 slot = sys.argv[4]
 call_data = sys.argv[5]
 trace_transaction = sys.argv[6] == "1"
+trace_block = sys.argv[7] == "1"
 block_tag = hex(block)
 
 def rpc_call(request_id, method, params):
@@ -1267,6 +1286,30 @@ def is_hex_string(value):
 selected_block_hash = ""
 selected_tx_hash = ""
 
+def trace_result_ok(result):
+    return (
+        isinstance(result, dict)
+        and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
+    )
+
+def trace_block_result_ok(result):
+    if not isinstance(result, list):
+        return False
+    for entry in result:
+        if not isinstance(entry, dict):
+            return False
+        tx_hash = entry.get("txHash") or entry.get("transactionHash")
+        if tx_hash is not None and not normalize_hash(tx_hash):
+            return False
+        if "result" in entry:
+            if not trace_result_ok(entry.get("result")):
+                return False
+            continue
+        if "error" in entry:
+            return isinstance(entry.get("error"), str) and bool(entry.get("error"))
+        return False
+    return True
+
 def archive_result_ok(method, result, params):
     if method == "eth_getBlockByNumber":
         if not isinstance(result, dict):
@@ -1294,10 +1337,9 @@ def archive_result_ok(method, result, params):
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
         return is_hex_string(result)
     if method in {"debug_traceCall", "debug_traceTransaction"}:
-        return (
-            isinstance(result, dict)
-            and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
-        )
+        return trace_result_ok(result)
+    if method in {"debug_traceBlockByNumber", "debug_traceBlockByHash"}:
+        return trace_block_result_ok(result)
     if method == "eth_getLogs":
         return isinstance(result, list)
     if method == "eth_getTransactionByHash":
@@ -1396,6 +1438,9 @@ while idx < len(calls):
     if method == "eth_getBlockByNumber":
         selected_block_hash = block_hash(result)
         calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
+        if trace_block:
+            calls.append(("debug_traceBlockByNumber", [block_tag, {}]))
+            calls.append(("debug_traceBlockByHash", [selected_block_hash, {}]))
         tx_hash = first_tx_hash(result)
         if tx_hash:
             tx_probe = True
@@ -1445,7 +1490,7 @@ run_archive_api_probe() {
   fi
   local values
   echo "probing archive JSON-RPC APIs at block $probe_block" >>"$log_path"
-  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION")"
+  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" "$ARCHIVE_API_TRACE_BLOCK")"
   RUN_ARCHIVE_API_STATUS="$(printf '%s\n' "$values" | sed -n '1p')"
   RUN_ARCHIVE_API_CHECKS="$(printf '%s\n' "$values" | sed -n '2p')"
   RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"
@@ -2009,7 +2054,7 @@ emit_result() {
     "$snapshot_point_commitment_snapshot_payload_bytes" "$snapshot_point_commitment_snapshot_sidecar_bytes" \
     "$snapshot_point_commitment_snapshot_sidecar_share_milli" "$snapshot_point_commitment_snapshot_share_milli" \
     "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_FAILURES" \
-    "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
+    "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_TRACE_BLOCK_PROBE" \
     "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" "$RUN_TAIL_PRUNED_THROUGH_BLOCK" \
@@ -2088,7 +2133,7 @@ emit_result() {
     "$RUN_SNAPSHOT_RETIRED_BYTES" \
     "$RUN_ARCHIVE_API_STATUS" "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_CALL_PROBE" \
-    "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_METHODS" \
+    "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_TRACE_BLOCK_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
@@ -2156,7 +2201,7 @@ keys = [
     "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
     "archiveApiBlock", "archiveApiDepthBlocks", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
-    "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
+    "archiveApiTraceBlockProbe", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
     "archiveApiTxMethods", "storageBenchmarkPrometheus", "storageAlertPrometheus",
     "datadir", "log",
 ]
@@ -2226,6 +2271,7 @@ bools = {
     "stageAlertPipelineComplete",
     "archiveApiCallProbe",
     "archiveApiTraceTransactionProbe",
+    "archiveApiTraceBlockProbe",
     "archiveApiTxProbe",
 }
 row = {"unix": int(time.time())}

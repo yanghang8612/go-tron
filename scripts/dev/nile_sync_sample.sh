@@ -33,6 +33,7 @@ ARCHIVE_API_ADDRESS="0x410000000000000000000000000000000000000000"
 ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
 ARCHIVE_API_TRACE_TRANSACTION=0
+ARCHIVE_API_TRACE_BLOCK=0
 
 usage() {
   cat <<'EOF'
@@ -67,6 +68,8 @@ Options:
                               Include eth_call and debug_traceCall with this calldata against archive-api-address
   --archive-api-trace-transaction
                               Include debug_traceTransaction when archive-api-block has a transaction
+  --archive-api-trace-block
+                              Include debug_traceBlockByNumber/Hash for archive-api-block
   -h, --help                 Show this help
 
 Examples:
@@ -110,6 +113,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-storage-slot) ARCHIVE_API_STORAGE_SLOT="${2:?}"; shift 2 ;;
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
+    --archive-api-trace-block) ARCHIVE_API_TRACE_BLOCK=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -262,6 +266,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
   "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
   "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" \
+  "$ARCHIVE_API_TRACE_BLOCK" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -307,6 +312,7 @@ from pathlib import Path
     archive_api_storage_slot,
     archive_api_call_data,
     archive_api_trace_transaction,
+    archive_api_trace_block,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -328,7 +334,7 @@ def load_json(path):
     except Exception:
         return {}
 
-def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data, trace_transaction):
+def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data, trace_transaction, trace_block):
     row = {
         "archiveApiStatus": "not-run",
         "archiveApiEndpoint": endpoint,
@@ -338,6 +344,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         "archiveApiDepthBlocks": -1,
         "archiveApiCallProbe": bool(call_data),
         "archiveApiTraceTransactionProbe": str(trace_transaction) == "1",
+        "archiveApiTraceBlockProbe": str(trace_block) == "1",
         "archiveApiMethods": [],
         "archiveApiTxProbe": False,
         "archiveApiTxHash": "",
@@ -413,6 +420,30 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     selected_block_hash = ""
     selected_tx_hash = ""
 
+    def trace_result_ok(result):
+        return (
+            isinstance(result, dict)
+            and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
+        )
+
+    def trace_block_result_ok(result):
+        if not isinstance(result, list):
+            return False
+        for entry in result:
+            if not isinstance(entry, dict):
+                return False
+            tx_hash = entry.get("txHash") or entry.get("transactionHash")
+            if tx_hash is not None and not normalize_hash(tx_hash):
+                return False
+            if "result" in entry:
+                if not trace_result_ok(entry.get("result")):
+                    return False
+                continue
+            if "error" in entry:
+                return isinstance(entry.get("error"), str) and bool(entry.get("error"))
+            return False
+        return True
+
     def archive_result_ok(method, result, params):
         if method == "eth_getBlockByNumber":
             if not isinstance(result, dict):
@@ -440,10 +471,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
             return is_hex_string(result)
         if method in {"debug_traceCall", "debug_traceTransaction"}:
-            return (
-                isinstance(result, dict)
-                and any(key in result for key in ("structLogs", "returnValue", "type", "calls"))
-            )
+            return trace_result_ok(result)
+        if method in {"debug_traceBlockByNumber", "debug_traceBlockByHash"}:
+            return trace_block_result_ok(result)
         if method == "eth_getLogs":
             return isinstance(result, list)
         if method == "eth_getTransactionByHash":
@@ -540,6 +570,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         if method == "eth_getBlockByNumber":
             selected_block_hash = block_hash(result)
             calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
+            if str(trace_block) == "1":
+                calls.append(("debug_traceBlockByNumber", [block_tag, {}]))
+                calls.append(("debug_traceBlockByHash", [selected_block_hash, {}]))
             tx_hash = first_tx_hash(result)
             if tx_hash:
                 row["archiveApiTxProbe"] = True
@@ -2490,6 +2523,11 @@ ARCHIVE_API_TRACE_TRANSACTION_METHODS = (
     "debug_traceTransaction",
 )
 
+ARCHIVE_API_TRACE_BLOCK_METHODS = (
+    "debug_traceBlockByNumber",
+    "debug_traceBlockByHash",
+)
+
 def prometheus_escape(value):
     return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
@@ -2589,6 +2627,8 @@ def archive_api_expected_methods(row, successful_methods):
         expected.extend(ARCHIVE_API_TX_METHODS)
     if row.get("archiveApiTraceTransactionProbe") or any(method in successful_methods for method in ARCHIVE_API_TRACE_TRANSACTION_METHODS):
         expected.extend(ARCHIVE_API_TRACE_TRANSACTION_METHODS)
+    if row.get("archiveApiTraceBlockProbe") or any(method in successful_methods for method in ARCHIVE_API_TRACE_BLOCK_METHODS):
+        expected.extend(ARCHIVE_API_TRACE_BLOCK_METHODS)
     return expected
 
 def append_archive_api_prometheus(lines, row):
@@ -2674,6 +2714,7 @@ archive_api = archive_api_probe_values(
     archive_api_storage_slot,
     archive_api_call_data,
     archive_api_trace_transaction,
+    archive_api_trace_block,
 )
 now = int(time.time())
 start = int(start_unix)

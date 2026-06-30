@@ -295,6 +295,10 @@ ARCHIVE_API_CALL_METHODS = (
 )
 
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+ARCHIVE_API_TRACE_BLOCK_METHODS = (
+    "debug_traceBlockByNumber",
+    "debug_traceBlockByHash",
+)
 
 ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_method_success"
 ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_tx_method_success"
@@ -1102,6 +1106,8 @@ def expected_archive_api_method_metrics(row, successful_methods):
         expected.update(ARCHIVE_API_TX_METHODS)
     if as_bool(row, "archiveApiTraceTransactionProbe"):
         expected.add(ARCHIVE_API_TRACE_TX_METHOD)
+    if as_bool(row, "archiveApiTraceBlockProbe"):
+        expected.update(ARCHIVE_API_TRACE_BLOCK_METHODS)
     return sorted(expected)
 
 
@@ -1930,7 +1936,7 @@ def archive_api_method_count(row):
     return len(raw)
 
 
-def check_archive_api_evidence(row, required_methods, min_depth_blocks=None):
+def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, require_trace_block=False):
     issues = []
     status = str(row.get("archiveApiStatus", "")).lower()
     if status != "ok":
@@ -1945,6 +1951,11 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None):
         issues.append(f"archiveApiFailures={failures}, want 0")
     elif failures != 0:
         issues.append(f"archiveApiFailures={failures:g}, want 0")
+
+    if require_trace_block and not as_bool(row, "archiveApiTraceBlockProbe"):
+        issues.append(
+            "archiveApiTraceBlockProbe is not true; run nile_sync_sample.sh with --archive-api-trace-block"
+        )
 
     block = as_number(row, "archiveApiBlock")
     if block is None or block < 0:
@@ -2277,10 +2288,15 @@ def check_row(row, args):
         args.require_archive_api_evidence
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
+        or args.require_archive_trace_block
     ):
         required_archive_methods = list(args.archive_api_methods_required)
         if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
             for method in archive_api_tx_required_methods(args.require_archive_trace_transaction):
+                if method not in required_archive_methods:
+                    required_archive_methods.append(method)
+        if args.require_archive_trace_block:
+            for method in ARCHIVE_API_TRACE_BLOCK_METHODS:
                 if method not in required_archive_methods:
                     required_archive_methods.append(method)
         issues.extend(
@@ -2288,6 +2304,7 @@ def check_row(row, args):
                 row,
                 required_archive_methods,
                 args.min_archive_api_depth_blocks,
+                require_trace_block=args.require_archive_trace_block,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
@@ -2462,6 +2479,14 @@ def build_parser():
         help=(
             "require archive tx evidence to include a successful "
             "debug_traceTransaction probe for the selected transaction"
+        ),
+    )
+    parser.add_argument(
+        "--require-archive-trace-block",
+        action="store_true",
+        help=(
+            "require archive API evidence to include successful "
+            "debug_traceBlockByNumber and debug_traceBlockByHash probes"
         ),
     )
     parser.add_argument(

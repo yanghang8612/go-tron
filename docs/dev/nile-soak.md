@@ -88,7 +88,9 @@ contains a transaction, it also probes `eth_getTransactionByHash`,
 to pin the historical target; choose a block with at least one transaction when
 the acceptance gate uses `--require-archive-tx-evidence`. Add
 `--archive-api-call-data` when the target is a known historical contract and
-the sample should also prove `eth_call`.
+the sample should also prove `eth_call`; add `--archive-api-trace-block` when
+the sample should also prove `debug_traceBlockByNumber` and
+`debug_traceBlockByHash` against the same historical block.
 The sampler counts only shape-valid JSON-RPC results as successful: block reads
 must return an object, account/code/storage/call reads must return hex strings,
 logs must return a list, and transaction/receipt reads must return objects
@@ -172,8 +174,9 @@ fall back to cumulative sync and current disk distribution. Rows also include
 pressure. Rows produced with `--archive-api-probe` also include
 `archiveApiStatus`, `archiveApiChecks`, `archiveApiFailures`,
 `archiveApiBlock`, `archiveApiDepthBlocks`, `archiveApiMethods`, `archiveApiEndpoint`,
-`archiveApiTxProbe`, `archiveApiTxHash`, and `archiveApiTxMethods` for
-historical JSON-RPC read validation. Derived index bytes are the
+`archiveApiCallProbe`, `archiveApiTraceTransactionProbe`,
+`archiveApiTraceBlockProbe`, `archiveApiTxProbe`, `archiveApiTxHash`, and
+`archiveApiTxMethods` for historical JSON-RPC read validation. Derived index bytes are the
 chain-index/accessor, balance-trace,
 section-bloom, and event-log/index sidecars inside `state-snapshots`;
 `snapshotCommitmentBytes` tracks commitment root/checkpoint/branch snapshot
@@ -600,7 +603,10 @@ to report same-row archive API evidence, `archiveApiTxProbe=true`, a
 `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` probes.
 Add `--archive-api-method eth_call` to the acceptance command only for samples
-that were collected with `--archive-api-call-data`.
+that were collected with `--archive-api-call-data`. Add
+`--require-archive-trace-block` only for samples collected with
+`--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
+and `debug_traceBlockByHash` archive probes.
 
 If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
 the restart path should repair it by keeping only a contiguous hash-bound prefix.

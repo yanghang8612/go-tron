@@ -53,6 +53,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                           *debug_traceTransaction*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
                             ;;
+                          *debug_traceBlockByNumber*|*debug_traceBlockByHash*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"txHash":"0x1212121212121212121212121212121212121212121212121212121212121212","result":{"failed":false,"returnValue":"","structLogs":[]}}]}'
+                            ;;
                           *debug_traceCall*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
                             ;;
@@ -129,6 +132,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
+                    "--archive-api-trace-block",
                 ],
                 cwd=REPO_ROOT,
                 env=env,
@@ -141,12 +145,13 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 15)
+            self.assertEqual(row["archiveApiChecks"], 17)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
             self.assertTrue(row["archiveApiCallProbe"])
             self.assertTrue(row["archiveApiTraceTransactionProbe"])
+            self.assertTrue(row["archiveApiTraceBlockProbe"])
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
@@ -160,6 +165,8 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getStorageAt",
                     "eth_getLogs",
                     "eth_getBlockTransactionCountByHash",
+                    "debug_traceBlockByNumber",
+                    "debug_traceBlockByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
                     "eth_getTransactionByBlockNumberAndIndex",
@@ -196,6 +203,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertRegex(
                 benchmark_metrics,
                 r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 1\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceBlockByNumber"[^}]*\} 1\n',
             )
             self.assertRegex(
                 benchmark_metrics,

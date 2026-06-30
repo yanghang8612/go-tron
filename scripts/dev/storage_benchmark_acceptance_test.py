@@ -2049,6 +2049,79 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("archiveApiTraceTransactionProbe is not true", proc.stderr)
 
+    def test_requires_archive_trace_block_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base_row = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "minimal",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "height": 200,
+                "tailPrunedThroughBlock": 90,
+                "archiveApiStatus": "ok",
+                "archiveApiChecks": 10,
+                "archiveApiFailures": 0,
+                "archiveApiBlock": 80,
+                "archiveApiTraceBlockProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockTransactionCountByHash",
+                    "debug_traceBlockByNumber",
+                    "debug_traceBlockByHash",
+                ],
+            }
+            write_result(result, [base_row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-block",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+            trace_not_requested = dict(base_row)
+            trace_not_requested["archiveApiTraceBlockProbe"] = False
+            write_result(result, [trace_not_requested])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-block",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTraceBlockProbe is not true", proc.stderr)
+
     def test_rejects_archive_tx_evidence_missing_required_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -723,15 +723,17 @@ Status:
   `eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`,
   `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and
   optional contract `eth_call` and
-  `debug_traceCall` samples, plus opt-in
+  `debug_traceCall` samples, opt-in `debug_traceBlockByNumber` /
+  `debug_traceBlockByHash` checks for the selected historical block, plus opt-in
   `debug_traceTransaction` checks when a transaction hash is available. When
   the selected historical block contains a transaction, the same probe now adds
   `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
   `eth_getTransactionByBlockNumberAndIndex`, and
   `eth_getTransactionByBlockHashAndIndex` evidence plus `archiveApiTx*` fields,
   and the Nile/storage acceptance gates can require tx/receipt/indexed-tx
-  archive proof with `--require-archive-tx-evidence` or add transaction trace
-  proof with `--require-archive-trace-transaction`. The probe
+  archive proof with `--require-archive-tx-evidence`, add block trace proof with
+  `--require-archive-trace-block`, or add transaction trace proof with
+  `--require-archive-trace-transaction`. The probe
   now validates JSON-RPC result
   shapes and target bindings before counting a method as successful: scalar
   account/code/storage/call results must be `0x` hex strings, the block result

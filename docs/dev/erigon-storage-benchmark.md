@@ -119,6 +119,7 @@ The output path is printed at startup. Each JSON row contains:
 - `archiveApiDepthBlocks`
 - `archiveApiCallProbe`
 - `archiveApiTraceTransactionProbe`
+- `archiveApiTraceBlockProbe`
 - `archiveApiMethods`
 - `archiveApiTxProbe`
 - `archiveApiTxHash`
@@ -191,6 +192,9 @@ transaction, the probe also adds `eth_getTransactionByHash`, `eth_getTransaction
 `--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
 when a run needs to target a known historical contract/account. Pass
 `--archive-api-call-data` as well to include `eth_call` against that address.
+Pass `--archive-api-trace-block` when the run should also prove
+`debug_traceBlockByNumber` and `debug_traceBlockByHash` on the selected
+historical block.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -460,7 +464,10 @@ same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
 `eth_getTransactionReceipt`, `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` probes. Add
 `--archive-api-method eth_call` when the samples also pass
-`--archive-api-call-data` against a known historical contract. If the row also
+`--archive-api-call-data` against a known historical contract. Add
+`--require-archive-trace-block` for runs collected with
+`--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
+and `debug_traceBlockByHash` probes. If the row also
 reports `chainLookupPruneToBlock` or `tailPrunedThroughBlock`, the archive API
 block must be at or below the corresponding prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. With

@@ -159,6 +159,10 @@ ARCHIVE_API_TX_METHODS = (
 )
 
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
+ARCHIVE_API_TRACE_BLOCK_METHODS = (
+    "debug_traceBlockByNumber",
+    "debug_traceBlockByHash",
+)
 
 ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_method_success"
 ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_tx_method_success"
@@ -816,6 +820,8 @@ def expected_archive_api_method_metrics(row, successful_methods):
         expected.update(ARCHIVE_API_TX_METHODS)
     if as_bool(row, "archiveApiTraceTransactionProbe"):
         expected.add(ARCHIVE_API_TRACE_TX_METHOD)
+    if as_bool(row, "archiveApiTraceBlockProbe"):
+        expected.update(ARCHIVE_API_TRACE_BLOCK_METHODS)
     return sorted(expected)
 
 
@@ -1151,7 +1157,7 @@ def has_archive_api_evidence(row):
     return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
 
 
-def check_archive_api_evidence(rows, required_methods, required_modes=(), min_depth_blocks=None):
+def check_archive_api_evidence(rows, required_methods, required_modes=(), min_depth_blocks=None, require_trace_block=False):
     issues = []
     latest = list(latest_rows(rows).values())
     evidence_rows = [
@@ -1184,6 +1190,12 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
             issues.append(f"{line_label(row)} archiveApiFailures={failures}, want 0")
         elif failures != 0:
             issues.append(f"{line_label(row)} archiveApiFailures={failures:g}, want 0")
+
+        if require_trace_block and not as_bool(row, "archiveApiTraceBlockProbe"):
+            issues.append(
+                f"{line_label(row)} archiveApiTraceBlockProbe is not true; "
+                "run storage_benchmark.sh with --archive-api-trace-block"
+            )
 
         block = as_number(row, "archiveApiBlock")
         if block is None or block < 0:
@@ -1858,6 +1870,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-archive-trace-block",
+        action="store_true",
+        help=(
+            "require archive API evidence to include successful "
+            "debug_traceBlockByNumber and debug_traceBlockByHash probes"
+        ),
+    )
+    parser.add_argument(
         "--require-archive-tx-mode",
         action="append",
         default=[],
@@ -2035,6 +2055,10 @@ def main(argv=None):
             archive_api_methods_required.append(method)
     if args.require_archive_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in archive_api_methods_required:
         archive_api_methods_required.append(ARCHIVE_API_TRACE_TX_METHOD)
+    if args.require_archive_trace_block:
+        for method in ARCHIVE_API_TRACE_BLOCK_METHODS:
+            if method not in archive_api_methods_required:
+                archive_api_methods_required.append(method)
     required_archive_api_modes = split_modes(
         args.require_archive_api_mode + args.require_archive_api_modes
     )
@@ -2050,6 +2074,7 @@ def main(argv=None):
         or archive_api_required_modes
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
+        or args.require_archive_trace_block
         or required_archive_tx_modes
         or args.min_archive_api_depth_blocks is not None
     ):
@@ -2059,6 +2084,7 @@ def main(argv=None):
                 archive_api_methods_required,
                 archive_api_required_modes,
                 min_depth_blocks=args.min_archive_api_depth_blocks,
+                require_trace_block=args.require_archive_trace_block,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction or required_archive_tx_modes:
