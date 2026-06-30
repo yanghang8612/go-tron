@@ -1155,6 +1155,19 @@ func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditEventLogCoverageCheckCalls(t, root, eventLogCoverageCheckMethods(), map[string]map[string]struct{}{
+		"core/state/snapshots/event_log_segment.go": {
+			"EventLogIndexedRangeCovered":   {},
+			"EventLogRangeCoveredForFilter": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production event-log coverage checks must stay behind audited snapshot boundaries; API queries should use IterateCoveredEventLogs:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestProductionEventLogIndexedCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditEventLogIndexedCoverageCalls(t, root, map[string]map[string]struct{}{
@@ -1167,6 +1180,50 @@ func TestProductionEventLogIndexedCoverageChecksStayOnAuditedBoundaries(t *testi
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production indexed event-log coverage checks must stay on snapshot prune or db diagnostics boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestEventLogCoverageAuditRejectsAPIBoundaryBypass(t *testing.T) {
+	root := writeAuditFixture(t, "core/tron_backend.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db *rawdb.ChainDB) {
+	_, _ = db.EventLogRangeCoveredForFilter(1, 2, rawdb.EventLogFilter{})
+}
+`)
+
+	offenders := auditEventLogCoverageCheckCalls(t, root, eventLogCoverageCheckMethods(), nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCoveredForFilter") {
+		t.Fatalf("offenders = %+v, want API event-log coverage check rejected", offenders)
+	}
+}
+
+func TestEventLogCoverageAuditScopesAllowedBoundariesToFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "app/coverage.go", `package app
+
+type coldManager struct{}
+
+func (coldManager) EventLogRangeCovered(uint64, uint64) (bool, error) {
+	return true, nil
+}
+
+func allowed(m coldManager) {
+	_, _ = m.EventLogRangeCovered(1, 2)
+}
+
+func query(m coldManager) {
+	_, _ = m.EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogCoverageCheckCalls(t, root, eventLogCoverageCheckMethods(), map[string]map[string]struct{}{
+		"app/coverage.go": {
+			"allowed": {},
+		},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
+		t.Fatalf("offenders = %+v, want same-file event-log coverage check outside allowed function rejected", offenders)
 	}
 }
 
@@ -2072,6 +2129,67 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 	})
 	if err != nil {
 		t.Fatalf("audit event-log method calls: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
+func eventLogCoverageCheckMethods() map[string]struct{} {
+	return map[string]struct{}{
+		"EventLogRangeCovered":          {},
+		"EventLogRangeCoveredForFilter": {},
+	}
+}
+
+func auditEventLogCoverageCheckCalls(t *testing.T, root string, watched map[string]struct{}, allowed map[string]map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fnName := ""
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				fnName = fn.Name.Name
+			}
+			ast.Inspect(decl, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if _, watch := watched[selector.Sel.Name]; !watch {
+					return true
+				}
+				if isAllowedAuditFunc(root, path, fnName, allowed) {
+					return true
+				}
+				offenders = append(offenders, formatAuditOffender(fset, root, path, selector.Pos(), selector.Sel.Name))
+				return true
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit event-log coverage checks: %v", err)
 	}
 	sort.Strings(offenders)
 	return offenders

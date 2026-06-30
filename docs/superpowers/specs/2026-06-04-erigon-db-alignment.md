@@ -1794,7 +1794,11 @@ Status:
   cold event-log index is missing or unreadable but complete `event-log`
   segments still cover the requested range, it degrades to a cold segment scan
   instead of surfacing the index-sidecar failure to `eth_getLogs`. Checker
-  failures for corrupted covered rows still surface as archive data errors.
+  failures for corrupted covered rows still surface as archive data errors. A
+  source audit now also rejects production API/business code that directly calls
+  `EventLogRangeCovered*` coverage checks; archive log queries must use the
+  single `IterateCoveredEventLogs` boundary so coverage and row iteration share
+  one cold manifest view and can fall back from stale indexes consistently.
   `gtron snapshot
   event-log-index-stats` now gives operators a readonly profile of active
   event-log-index sidecars, including address/topic key counts, postings,
