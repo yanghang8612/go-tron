@@ -737,6 +737,37 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	}
 }
 
+func TestLatestBinaryFastPathsValidateCodeValue(t *testing.T) {
+	dir := t.TempDir()
+	codeHash, ref, accessorRef, btreeRef := buildCorruptCodeLatestBinaryWithCompanions(t, dir)
+	if err := CheckLatestSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("CheckLatestSegment corrupt code = %v, want code-hash mismatch", err)
+	}
+	if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+		t.Fatalf("CheckLatestAccessorSegment: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		t.Fatalf("CheckLatestBTreeSegment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 20, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if got, ok, err := mgr.GetCode(codeHash, 10); err == nil || ok || got != nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("GetCode corrupt binary code = %x/%v/%v, want code-hash mismatch", got, ok, err)
+	}
+	if err := mgr.IterateCodePrefix(codeHash[:1], 10, func(common.Hash, []byte) (bool, error) {
+		t.Fatal("callback called for corrupt binary code")
+		return true, nil
+	}); err == nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("IterateCodePrefix corrupt binary code = %v, want code-hash mismatch", err)
+	}
+}
+
 func TestFlatLatestSegmentsBuildServeAndRestore(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -1051,6 +1082,86 @@ func (s *recordingLatestHotStore) WriteCommitmentDomain(logicalKey, value []byte
 	}
 	s.writtenCommitment[string(logicalKey)] = append([]byte(nil), value...)
 	return nil
+}
+
+func buildCorruptCodeLatestBinaryWithCompanions(t *testing.T, dir string) (common.Hash, SegmentRef, SegmentRef, SegmentRef) {
+	t.Helper()
+	goodCode := []byte{0x60, 0x00}
+	badCode := []byte{0x60, 0x01}
+	codeHash := common.Keccak256(goodCode)
+	seg := &LatestSegment{
+		Version:   LatestSegmentVersion,
+		Dataset:   SegmentDatasetCode,
+		FromTxNum: 1,
+		ToTxNum:   20,
+		Entries: []LatestEntry{{
+			Key:   CodeSnapshotKey(codeHash),
+			Value: badCode,
+		}},
+	}
+	data, err := encodeLatestBinarySegment(seg)
+	if err != nil {
+		t.Fatalf("encode corrupt code latest binary segment: %v", err)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetCode,
+		Kind:      SegmentLatest,
+		FromTxNum: seg.FromTxNum,
+		ToTxNum:   seg.ToTxNum,
+		Path:      "latest/corrupt-code.seg",
+	}
+	abs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		t.Fatalf("WriteFile corrupt code segment: %v", err)
+	}
+	size, checksum, checksumBytes, err := latestBinaryFileMetadata(abs)
+	if err != nil {
+		t.Fatalf("latestBinaryFileMetadata: %v", err)
+	}
+	ref.Size = size
+	ref.Checksum = checksum
+
+	accessorRef, err := writeLatestBinaryAccessorForSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("writeLatestBinaryAccessorForSegment: %v", err)
+	}
+	payload, err := os.CreateTemp(dir, "corrupt-code-btree-payload-*.tmp")
+	if err != nil {
+		t.Fatalf("CreateTemp payload: %v", err)
+	}
+	payloadName := payload.Name()
+	defer os.Remove(payloadName)
+	offsets, err := os.CreateTemp(dir, "corrupt-code-btree-offsets-*.tmp")
+	if err != nil {
+		_ = payload.Close()
+		t.Fatalf("CreateTemp offsets: %v", err)
+	}
+	offsetsName := offsets.Name()
+	defer os.Remove(offsetsName)
+	if err := writeLatestBinaryBTreeTempEntry(payload, offsets, latestBinaryBTreeEntry{
+		key:           CodeSnapshotKey(codeHash),
+		ordinal:       0,
+		segmentOffset: latestBinaryHeaderSize,
+	}); err != nil {
+		_ = payload.Close()
+		_ = offsets.Close()
+		t.Fatalf("writeLatestBinaryBTreeTempEntry: %v", err)
+	}
+	if err := payload.Close(); err != nil {
+		_ = offsets.Close()
+		t.Fatalf("close payload: %v", err)
+	}
+	if err := offsets.Close(); err != nil {
+		t.Fatalf("close offsets: %v", err)
+	}
+	btreeRef, err := writeLatestBinaryBTreeFromTempFiles(dir, ref, checksumBytes, payloadName, offsetsName, 1)
+	if err != nil {
+		t.Fatalf("writeLatestBinaryBTreeFromTempFiles: %v", err)
+	}
+	return codeHash, ref, accessorRef, btreeRef
 }
 
 func recordingLatestKVKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) string {
