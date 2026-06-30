@@ -1876,8 +1876,11 @@ Status:
   cold state-domain/code snapshots after hot block state roots, latest rows, and
   code rows are pruned. Transaction tracing uses strict tx/block readers so
   corrupt archive rows surface instead of looking like misses; whole-block
-  trace methods reuse the same transaction replay path and return geth/Erigon
-  style `txHash` + `result`/`error` entries for every transaction in the block.
+  trace methods now delegate to a backend whole-block replay that opens the
+  parent state once, attaches one tracer per transaction, and no longer depends
+  on hot `tx-` lookup rows after the target block has already been resolved.
+  They still return geth/Erigon style `txHash` + `result`/`error` entries for
+  every transaction in the block.
 - Event-log archive reads now include backend coverage for block-hash single
   block filters after hot transaction-info rows are removed, proving the cold
   event-log segment path is not limited to from/to range filters. A stronger

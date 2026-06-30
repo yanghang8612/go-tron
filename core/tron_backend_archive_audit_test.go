@@ -53,6 +53,7 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 		"ListProposalsAt":                      1,
 		"ListWitnessesAt":                      1,
 		"NextMaintenanceTimeAt":                1,
+		"TraceBlock":                           1,
 		"TraceTransaction":                     1,
 		"TriggerConstantContractAt":            1,
 		"accountAtOrNil":                       1,

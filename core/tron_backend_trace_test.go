@@ -247,6 +247,12 @@ func TestTraceTransaction_NotFound(t *testing.T) {
 func TestDebugTraceBlockUsesTransactionReplay(t *testing.T) {
 	b, txHash := newTraceTxBackend(t)
 	block := b.chain.CurrentBlock()
+	if err := rawdb.DeleteTransactionIndex(b.chain.db, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex: %v", err)
+	}
+	if _, err := b.TraceTransaction(txHash, &tracers.TraceConfig{}); err == nil {
+		t.Fatal("TraceTransaction should require the pruned tx index")
+	}
 
 	rpcServer := jsonrpc.NewServer(b, 0)
 	defer rpcServer.Stop()

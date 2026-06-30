@@ -59,16 +59,19 @@ type stubBackend struct {
 	// Trace recording (debug namespace): the *At methods capture the parsed
 	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
 	// return traceResult as the canned tracer output.
-	traceResult    interface{}
-	gotTraceFrom   *common.Address
-	gotTraceTo     *common.Address
-	gotTraceData   []byte
-	gotTraceValue  int64
-	gotTraceBlock  *uint64
-	gotTraceCfg    *tracers.TraceConfig
-	gotTraceHash   common.Hash
-	gotTraceHashes []common.Hash
-	traceErr       error
+	traceResult      interface{}
+	gotTraceFrom     *common.Address
+	gotTraceTo       *common.Address
+	gotTraceData     []byte
+	gotTraceValue    int64
+	gotTraceBlock    *uint64
+	gotTraceCfg      *tracers.TraceConfig
+	gotTraceHash     common.Hash
+	gotTraceHashes   []common.Hash
+	gotTraceBlockObj *types.Block
+	traceErr         error
+	traceBlockErr    error
+	traceBlockResult []jsonrpc.BlockTraceResult
 }
 
 func (s *stubBackend) ChainID() int64      { return s.chainID }
@@ -168,6 +171,32 @@ func (s *stubBackend) TraceTransaction(hash common.Hash, cfg *tracers.TraceConfi
 		return nil, s.traceErr
 	}
 	return s.traceResult, nil
+}
+func (s *stubBackend) TraceBlock(block *types.Block, cfg *tracers.TraceConfig) ([]jsonrpc.BlockTraceResult, error) {
+	s.gotTraceBlockObj = block
+	s.gotTraceCfg = cfg
+	if s.traceBlockErr != nil {
+		return nil, s.traceBlockErr
+	}
+	if s.traceBlockResult != nil {
+		return s.traceBlockResult, nil
+	}
+	if block == nil {
+		return nil, nil
+	}
+	results := make([]jsonrpc.BlockTraceResult, 0, len(block.Transactions()))
+	for _, tx := range block.Transactions() {
+		hash := tx.Hash()
+		s.gotTraceHashes = append(s.gotTraceHashes, hash)
+		item := jsonrpc.BlockTraceResult{TxHash: "0x" + hash.Hex()}
+		if s.traceErr != nil {
+			item.Error = s.traceErr.Error()
+		} else {
+			item.Result = s.traceResult
+		}
+		results = append(results, item)
+	}
+	return results, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	return s.logs, nil

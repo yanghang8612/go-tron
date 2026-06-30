@@ -473,6 +473,11 @@ func ProcessBlockTraced(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	return txInfos, err
 }
 
+func processBlockTracedEach(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, forkPassCache *forks.VersionPassCache, tracerForTx func(index int, tx *types.Transaction) vm.Tracer, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{}, forkPassCache, -1, nil, tracerForTx)
+	return txInfos, err
+}
+
 func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	if len(values) == 0 {
 		return tcommon.Hash{}
@@ -513,7 +518,7 @@ func normalizeProcessBlockPrefetchConfig(cfg processBlockPrefetchConfig) process
 	return cfg
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {
@@ -573,7 +578,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// traceTracer is installed only on the target tx index (debug_traceTransaction
 		// replay); -1 disables it for the normal block-apply path.
 		var txTracer vm.Tracer
-		if traceTxIndex >= 0 && i == traceTxIndex {
+		if len(traceForTxOpt) > 0 && traceForTxOpt[0] != nil {
+			txTracer = traceForTxOpt[0](i, tx)
+		} else if traceTxIndex >= 0 && i == traceTxIndex {
 			txTracer = traceTracer
 		}
 		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, prefetcher, txTracer)

@@ -122,7 +122,10 @@ func TestDebugAPI_TraceBlockByNumberRoutesTransactions(t *testing.T) {
 		t.Fatalf("debug_traceBlockByNumber error: %+v", errObj)
 	}
 	if len(be.gotTraceHashes) != 1 || be.gotTraceHashes[0] != txHash {
-		t.Fatalf("TraceTransaction hashes = %x, want %x", be.gotTraceHashes, txHash)
+		t.Fatalf("TraceBlock hashes = %x, want %x", be.gotTraceHashes, txHash)
+	}
+	if be.gotTraceBlockObj != block {
+		t.Fatalf("TraceBlock block = %p, want %p", be.gotTraceBlockObj, block)
 	}
 	if be.gotTraceCfg == nil || be.gotTraceCfg.Tracer == nil || *be.gotTraceCfg.Tracer != "callTracer" {
 		t.Fatalf("tracer name not parsed into TraceConfig: %+v", be.gotTraceCfg)
@@ -160,7 +163,10 @@ func TestDebugAPI_TraceBlockByHashRoutesTransactions(t *testing.T) {
 		t.Fatalf("debug_traceBlockByHash error: %+v", errObj)
 	}
 	if len(be.gotTraceHashes) != 1 || be.gotTraceHashes[0] != txHash {
-		t.Fatalf("TraceTransaction hashes = %x, want %x", be.gotTraceHashes, txHash)
+		t.Fatalf("TraceBlock hashes = %x, want %x", be.gotTraceHashes, txHash)
+	}
+	if be.gotTraceBlockObj != block {
+		t.Fatalf("TraceBlock block = %p, want %p", be.gotTraceBlockObj, block)
 	}
 	var traces []map[string]interface{}
 	if err := json.Unmarshal(result, &traces); err != nil {

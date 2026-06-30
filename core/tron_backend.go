@@ -564,6 +564,83 @@ func (b *TronBackend) TraceTransaction(hash tcommon.Hash, cfg *tracers.TraceConf
 	return res, nil
 }
 
+// TraceBlock re-executes a historical block from its parent post-state once,
+// installing one tracer per transaction. Unlike TraceTransaction, it does not
+// need the tx-hash lookup index after the caller has resolved the block.
+func (b *TronBackend) TraceBlock(block *types.Block, cfg *tracers.TraceConfig) ([]jsonrpc.BlockTraceResult, error) {
+	if block == nil {
+		return nil, fmt.Errorf("block not found")
+	}
+	txs := block.Transactions()
+	if len(txs) == 0 {
+		return []jsonrpc.BlockTraceResult{}, nil
+	}
+	if block.Number() == 0 {
+		return nil, fmt.Errorf("cannot trace genesis-block transactions")
+	}
+
+	txTracers := make([]tracers.Tracer, len(txs))
+	for i, tx := range txs {
+		if tx == nil {
+			return nil, fmt.Errorf("block %d contains nil transaction %d", block.Number(), i)
+		}
+		tracer, err := tracers.New(cfg)
+		if err != nil {
+			return nil, err
+		}
+		txTracers[i] = tracer
+	}
+
+	parentNum := block.Number() - 1
+	session, err := b.archiveStateAt(parentNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	parentRoot, err := b.archiveExecutionRoot(parentNum, session)
+	if err != nil {
+		return nil, err
+	}
+	statedbCopy, err := b.archiveExecutionState(parentRoot, parentNum, session.reader, parentNum)
+	if err != nil {
+		return nil, err
+	}
+	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+
+	selected := make([]bool, len(txs))
+	_, replayErr := processBlockTracedEach(statedbCopy, dp, block, b.chain.vmKV(b.chain.buffer),
+		b.chain.ActiveWitnesses(), b.chain.GenesisTimestamp(), b.chain.Config().EnergyLimitForkBlockNum(),
+		false, b.chain.versionPassCache, func(index int, tx *types.Transaction) vm.Tracer {
+			if index >= 0 && index < len(selected) {
+				selected[index] = true
+				return txTracers[index]
+			}
+			return nil
+		}, b.chain.effectiveGenesisHash())
+
+	results := make([]jsonrpc.BlockTraceResult, 0, len(txs))
+	for i, tx := range txs {
+		hash := tx.Hash()
+		item := jsonrpc.BlockTraceResult{TxHash: "0x" + hash.Hex()}
+		if replayErr != nil && !selected[i] {
+			item.Error = fmt.Sprintf("trace replay aborted before tx %d: %v", i, replayErr)
+			results = append(results, item)
+			continue
+		}
+		result, err := txTracers[i].GetResult()
+		if err != nil {
+			item.Error = err.Error()
+			if replayErr != nil {
+				item.Error = fmt.Sprintf("trace replay tx %d: %v", i, replayErr)
+			}
+		} else {
+			item.Result = result
+		}
+		results = append(results, item)
+	}
+	return results, nil
+}
+
 func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, error) {
 	tx, _, ok, err := b.indexedTransactionByID(txHash)
 	if err != nil {

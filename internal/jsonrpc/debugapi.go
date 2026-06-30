@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/vm/tracers"
 )
 
@@ -18,12 +17,6 @@ import (
 // is the JSON-RPC tracing namespace.
 type DebugAPI struct {
 	backend Backend
-}
-
-type blockTraceResult struct {
-	TxHash string      `json:"txHash"`
-	Result interface{} `json:"result,omitempty"`
-	Error  string      `json:"error,omitempty"`
 }
 
 // NewDebugAPI builds a DebugAPI over the given backend.
@@ -61,11 +54,9 @@ func (d *DebugAPI) TraceTransaction(hashHex string, config *tracers.TraceConfig)
 	return d.backend.TraceTransaction(hash, config)
 }
 
-// TraceBlockByNumber serves debug_traceBlockByNumber by tracing every
-// transaction in the selected canonical block. It reuses TraceTransaction so
-// historical execution uses the same archive state and strict tx/block readers
-// as single-transaction tracing.
-func (d *DebugAPI) TraceBlockByNumber(blockParam string, config *tracers.TraceConfig) ([]blockTraceResult, error) {
+// TraceBlockByNumber serves debug_traceBlockByNumber by resolving the selected
+// canonical block and delegating whole-block replay to the backend.
+func (d *DebugAPI) TraceBlockByNumber(blockParam string, config *tracers.TraceConfig) ([]BlockTraceResult, error) {
 	block, err := blockByNumberOrHash(d.backend, blockParam)
 	if err != nil {
 		return nil, err
@@ -73,12 +64,12 @@ func (d *DebugAPI) TraceBlockByNumber(blockParam string, config *tracers.TraceCo
 	if block == nil {
 		return nil, fmt.Errorf("block not found")
 	}
-	return d.traceBlock(block, config)
+	return d.backend.TraceBlock(block, config)
 }
 
-// TraceBlockByHash serves debug_traceBlockByHash by tracing every transaction
-// in the block resolved through the archive-aware hash lookup path.
-func (d *DebugAPI) TraceBlockByHash(hashHex string, config *tracers.TraceConfig) ([]blockTraceResult, error) {
+// TraceBlockByHash serves debug_traceBlockByHash by resolving the block through
+// the archive-aware hash lookup path and delegating whole-block replay.
+func (d *DebugAPI) TraceBlockByHash(hashHex string, config *tracers.TraceConfig) ([]BlockTraceResult, error) {
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashHex))
 	block, err := d.backend.GetBlockByHash(hash)
@@ -91,27 +82,7 @@ func (d *DebugAPI) TraceBlockByHash(hashHex string, config *tracers.TraceConfig)
 	if block == nil {
 		return nil, fmt.Errorf("block not found")
 	}
-	return d.traceBlock(block, config)
-}
-
-func (d *DebugAPI) traceBlock(block *types.Block, config *tracers.TraceConfig) ([]blockTraceResult, error) {
-	txs := block.Transactions()
-	results := make([]blockTraceResult, 0, len(txs))
-	for _, tx := range txs {
-		if tx == nil {
-			return nil, fmt.Errorf("block %d contains nil transaction", block.Number())
-		}
-		hash := tx.Hash()
-		result, err := d.backend.TraceTransaction(hash, config)
-		item := blockTraceResult{TxHash: "0x" + hash.Hex()}
-		if err != nil {
-			item.Error = err.Error()
-		} else {
-			item.Result = result
-		}
-		results = append(results, item)
-	}
-	return results, nil
+	return d.backend.TraceBlock(block, config)
 }
 
 // resolveTraceBlock maps a block tag to a *uint64 block number: a nil/empty tag

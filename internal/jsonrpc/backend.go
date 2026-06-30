@@ -29,6 +29,15 @@ type RPCLog struct {
 	Removed          bool     `json:"removed"`
 }
 
+// BlockTraceResult is one entry in debug_traceBlockByNumber/Hash output.
+// It follows the geth/Erigon shape: each transaction has its hash plus either
+// a tracer result or a trace error.
+type BlockTraceResult struct {
+	TxHash string      `json:"txHash"`
+	Result interface{} `json:"result,omitempty"`
+	Error  string      `json:"error,omitempty"`
+}
+
 // Backend is the data-access interface for the JSON-RPC API.
 // Implemented by core.TronBackend.
 type Backend interface {
@@ -66,9 +75,11 @@ type Backend interface {
 	// Tracing (debug namespace). TraceCall replays a read-only call with the
 	// configured tracer (blockNumber nil = head, else archive at that block);
 	// TraceTransaction re-executes a historical tx from its parent state. Both
-	// return the tracer's rendered result.
+	// return the tracer's rendered result. TraceBlock re-executes a whole block
+	// from its parent state, returning one result per transaction.
 	TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error)
 	TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error)
+	TraceBlock(block *types.Block, cfg *tracers.TraceConfig) ([]BlockTraceResult, error)
 
 	// EstimateGas simulates execution and returns energy used.
 	EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)
