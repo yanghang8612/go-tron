@@ -949,7 +949,13 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 		return nil, err
 	}
 	if tx == nil {
-		return nil, nil // receipt exists but can't find tx — treat as not found
+		return nil, transactionReceiptLookupError(hash)
+	}
+	if block == nil {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction block lookup is missing", rpcHashHex(hash))
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
@@ -1175,6 +1181,14 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 		out = append(out, receiptToRPC(hash, tx.Proto(), infos[i], block, i))
 	}
 	return out, nil
+}
+
+func transactionReceiptLookupError(hash common.Hash) error {
+	return fmt.Errorf("transaction receipt exists for %s but transaction lookup is missing", rpcHashHex(hash))
+}
+
+func rpcHashHex(hash common.Hash) string {
+	return "0x" + hash.Hex()
 }
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.

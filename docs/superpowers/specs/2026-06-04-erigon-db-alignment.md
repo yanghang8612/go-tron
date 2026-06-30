@@ -257,7 +257,11 @@ Status:
   block bodies to locate legacy receipt rows whose `TransactionInfo.Id` is
   absent. Hot `ti-<txid>` and `tib-<block>` read failures are also surfaced in
   strict mode instead of being collapsed into misses before consulting cold
-  lookup fallbacks.
+  lookup fallbacks. JSON-RPC `eth_getTransactionReceipt` now preserves the same
+  invariant at the API boundary: if `TransactionInfo` exists but the matching
+  transaction lookup, block, or block-local index is missing, both the legacy
+  handler and reflection `EthAPI` return an archive data error instead of
+  disguising the inconsistent receipt as `null`.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the

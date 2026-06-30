@@ -841,6 +841,23 @@ func TestEthGetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
 	}
 }
 
+func TestEthGetTransactionReceipt_RejectsReceiptWithoutTransactionLookup(t *testing.T) {
+	txHash := "0x00000000000000000000000000000000000000000000000000000000000000aa"
+	srv := newTestServer(t, &stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt exists for "+txHash+" but transaction lookup is missing") {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want receipt/tx lookup mismatch", errObj["message"])
+	}
+}
+
 func TestEthAPI_GetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
 	backendErr := errors.New("rawdb: block 1 decode: corrupt")
 	api := jsonrpc.NewEthAPI(&stubBackend{
@@ -851,6 +868,18 @@ func TestEthAPI_GetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
 	got, err := api.GetTransactionReceipt("0x0000000000000000000000000000000000000000000000000000000000000000")
 	if err == nil || got != nil || err.Error() != backendErr.Error() {
 		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want backend error", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsReceiptWithoutTransactionLookup(t *testing.T) {
+	txHash := "0x00000000000000000000000000000000000000000000000000000000000000aa"
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "transaction receipt exists for "+txHash+" but transaction lookup is missing") {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want receipt/tx lookup mismatch", got, err)
 	}
 }
 

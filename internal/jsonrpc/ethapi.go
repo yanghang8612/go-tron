@@ -471,7 +471,13 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 		return nil, err
 	}
 	if tx == nil {
-		return nil, nil
+		return nil, transactionReceiptLookupError(hash)
+	}
+	if block == nil {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction block lookup is missing", rpcHashHex(hash))
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
