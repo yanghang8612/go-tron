@@ -488,7 +488,7 @@ def add_archive_trace_evidence(row):
     row.update(
         {
             "archiveApiStatus": "ok",
-            "archiveApiChecks": 16,
+            "archiveApiChecks": 17,
             "archiveApiFailures": 0,
             "archiveApiBlock": 999,
             "archiveApiDepthBlocks": 1,
@@ -502,6 +502,7 @@ def add_archive_trace_evidence(row):
                 "eth_getCode",
                 "eth_call",
                 "debug_traceCall",
+                "eth_estimateGas",
                 "eth_getStorageAt",
                 "eth_getLogs",
                 "eth_getBlockByHash",

@@ -480,7 +480,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                     if normalize_hash(receipt.get("blockHash")) != selected_block_hash:
                         return False
             return True
-        if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
+        if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
             return is_hex_string(result)
         if method in {"debug_traceCall", "debug_traceTransaction"}:
             return trace_result_ok(result)
@@ -565,6 +565,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         calls[5:5] = [
             ("eth_call", [{"to": address, "data": call_data}, block_tag]),
             ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
+            ("eth_estimateGas", [{"to": address, "data": call_data}, block_tag]),
         ]
 
     failures = 0
@@ -2525,6 +2526,7 @@ ARCHIVE_API_BASE_METHODS = (
 ARCHIVE_API_CALL_METHODS = (
     "eth_call",
     "debug_traceCall",
+    "eth_estimateGas",
 )
 
 ARCHIVE_API_TX_METHODS = (

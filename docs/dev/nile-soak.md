@@ -88,8 +88,9 @@ the probed block contains a transaction, it also probes `eth_getTransactionByHas
 to pin the historical target; choose a block with at least one transaction when
 the acceptance gate uses `--require-archive-tx-evidence`. Add
 `--archive-api-call-data` when the target is a known historical contract and
-the sample should also prove `eth_call`; add `--archive-api-trace-block` when
-the sample should also prove `debug_traceBlockByNumber` and
+the sample should also prove `eth_call`, `debug_traceCall`, and
+`eth_estimateGas`; add `--archive-api-trace-block` when the sample should also
+prove `debug_traceBlockByNumber` and
 `debug_traceBlockByHash` against the same historical block.
 The sampler counts only shape-valid JSON-RPC results as successful: block reads
 must return an object, account/code/storage/call reads must return hex strings,
@@ -602,8 +603,9 @@ to report same-row archive API evidence, `archiveApiTxProbe=true`, a
 `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
 `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` probes.
-Add `--archive-api-method eth_call` to the acceptance command only for samples
-that were collected with `--archive-api-call-data`. Add
+Add `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,
+and `--archive-api-method eth_estimateGas` to the acceptance command only for
+samples that were collected with `--archive-api-call-data`. Add
 `--require-archive-trace-block` only for samples collected with
 `--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
 and `debug_traceBlockByHash` archive probes.

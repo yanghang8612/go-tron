@@ -148,7 +148,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 18)
+            self.assertEqual(row["archiveApiChecks"], 19)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
@@ -165,6 +165,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getCode",
                     "eth_call",
                     "debug_traceCall",
+                    "eth_estimateGas",
                     "eth_getStorageAt",
                     "eth_getLogs",
                     "eth_getBlockByHash",
@@ -211,6 +212,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertRegex(
                 benchmark_metrics,
                 r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceBlockByNumber"[^}]*\} 1\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="eth_estimateGas"[^}]*\} 1\n',
             )
             self.assertRegex(
                 benchmark_metrics,
@@ -336,7 +341,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 16)
+            self.assertEqual(row["archiveApiChecks"], 17)
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertTrue(row["archiveApiCallProbe"])
             self.assertTrue(row["archiveApiTraceTransactionProbe"])
@@ -350,6 +355,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getCode",
                     "eth_call",
                     "debug_traceCall",
+                    "eth_estimateGas",
                     "eth_getStorageAt",
                     "eth_getLogs",
                     "eth_getBlockByHash",

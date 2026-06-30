@@ -711,7 +711,7 @@ ARCHIVE_API_BASE_METHODS = (
     "eth_getStorageAt",
     "eth_getLogs",
 )
-ARCHIVE_API_CALL_METHODS = ("eth_call", "debug_traceCall")
+ARCHIVE_API_CALL_METHODS = ("eth_call", "debug_traceCall", "eth_estimateGas")
 ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionByHash",
     "eth_getTransactionReceipt",
@@ -1347,7 +1347,7 @@ def archive_result_ok(method, result, params):
                 if normalize_hash(receipt.get("blockHash")) != selected_block_hash:
                     return False
         return True
-    if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
+    if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
         return is_hex_string(result)
     if method in {"debug_traceCall", "debug_traceTransaction"}:
         return trace_result_ok(result)
@@ -1432,6 +1432,7 @@ if call_data:
     calls[5:5] = [
         ("eth_call", [{"to": address, "data": call_data}, block_tag]),
         ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
+        ("eth_estimateGas", [{"to": address, "data": call_data}, block_tag]),
     ]
 
 methods = []

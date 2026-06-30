@@ -150,6 +150,7 @@ DEFAULT_ARCHIVE_API_METHODS = (
 ARCHIVE_API_CALL_METHODS = (
     "eth_call",
     "debug_traceCall",
+    "eth_estimateGas",
 )
 
 ARCHIVE_API_TX_METHODS = (

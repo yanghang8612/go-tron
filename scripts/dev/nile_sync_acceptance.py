@@ -293,6 +293,7 @@ ARCHIVE_API_TX_METHODS = (
 ARCHIVE_API_CALL_METHODS = (
     "eth_call",
     "debug_traceCall",
+    "eth_estimateGas",
 )
 
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
