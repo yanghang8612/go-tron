@@ -94,13 +94,6 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 	if err != nil {
 		return nil, err
 	}
-	if err := writeSnapshotBytesAtomic(opts.Dir, SnapshotCatalogFile, catalogBytes); err != nil {
-		return nil, err
-	}
-	if err := writeSnapshotBytesAtomic(opts.Dir, ManifestFile, manifestBytes); err != nil {
-		return nil, err
-	}
-
 	refs := append([]SegmentRef(nil), manifest.Segments...)
 	if opts.CheckRetired {
 		refs = append(refs, manifest.Retired...)
@@ -111,6 +104,13 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 	}
 	result.FilesDownloaded += files
 	result.BytesDownloaded += bytes
+
+	if err := writeSnapshotBytesAtomic(opts.Dir, SnapshotCatalogFile, catalogBytes); err != nil {
+		return nil, err
+	}
+	if err := writeSnapshotBytesAtomic(opts.Dir, ManifestFile, manifestBytes); err != nil {
+		return nil, err
+	}
 
 	_, report, err := VerifySignedSnapshotCatalog(opts.Dir, opts.Expected, opts.TrustedKeys)
 	if err != nil {

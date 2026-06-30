@@ -85,6 +85,43 @@ func TestFetchRemoteSnapshotRejectsManifestChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestFetchRemoteSnapshotDoesNotPublishManifestOnSegmentFailure(t *testing.T) {
+	source, identity, _ := writeVerifiableHistoryManifest(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/")
+		if rel != SnapshotCatalogFile && rel != ManifestFile {
+			http.Error(w, "segment unavailable", http.StatusInternalServerError)
+			return
+		}
+		http.FileServer(http.Dir(source)).ServeHTTP(w, r)
+	}))
+	defer server.Close()
+
+	dest := t.TempDir()
+	_, err = FetchRemoteSnapshot(context.Background(), FetchRemoteSnapshotOptions{
+		BaseURL:                server.URL,
+		Dir:                    dest,
+		Expected:               identity,
+		TrustedKeys:            []ed25519.PublicKey{pub},
+		MaxConcurrentDownloads: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "500 Internal Server Error") {
+		t.Fatalf("FetchRemoteSnapshot error = %v, want segment download failure", err)
+	}
+	for _, rel := range []string{SnapshotCatalogFile, ManifestFile} {
+		if _, statErr := os.Stat(filepath.Join(dest, rel)); !os.IsNotExist(statErr) {
+			t.Fatalf("%s stat err = %v, want not exist after failed fetch", rel, statErr)
+		}
+	}
+}
+
 func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	source, identity, _ := writeVerifiableHistoryManifest(t)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
