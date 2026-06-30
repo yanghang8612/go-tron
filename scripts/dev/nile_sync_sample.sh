@@ -2194,7 +2194,11 @@ def snapshot_manifest_profile_defaults(status):
         row[f"{prefix}Bytes"] = 0
         row[f"{prefix}ShareMilli"] = -1
     for _, prefix in SNAPSHOT_PROFILE_POINT_CANDIDATES:
+        row[f"{prefix}Segments"] = 0
         row[f"{prefix}Bytes"] = 0
+        row[f"{prefix}PayloadBytes"] = 0
+        row[f"{prefix}SidecarBytes"] = 0
+        row[f"{prefix}SidecarShareMilli"] = -1
         row[f"{prefix}SnapshotShareMilli"] = -1
     return row
 
@@ -2255,7 +2259,11 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
         stats = point_candidates.get(candidate, {})
         if not isinstance(stats, dict):
             stats = {}
+        row[f"{prefix}Segments"] = int_field(stats.get("segments"))
         row[f"{prefix}Bytes"] = int_field(stats.get("totalBytes"))
+        row[f"{prefix}PayloadBytes"] = int_field(stats.get("payloadBytes"))
+        row[f"{prefix}SidecarBytes"] = int_field(stats.get("sidecarBytes"))
+        row[f"{prefix}SidecarShareMilli"] = int_field(stats.get("sidecarShareMilli"), -1)
         row[f"{prefix}SnapshotShareMilli"] = int_field(stats.get("snapshotShareMilli"), -1)
     return row
 
@@ -2334,18 +2342,46 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock", "Selected soak-efficiency derived index bytes per block."),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes", "Snapshot bytes covered by the tx-hash point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments", "Snapshot segment count covered by the tx-hash point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_payload_bytes", "snapshotPointTxHashLookupPayloadBytes", "Snapshot payload bytes covered by the tx-hash point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_bytes", "snapshotPointTxHashLookupSidecarBytes", "Snapshot sidecar bytes covered by the tx-hash point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_share_milli", "snapshotPointTxHashLookupSidecarShareMilli", "Candidate-local sidecar share for the tx-hash point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli", "snapshotPointTxHashLookupSnapshotShareMilli", "Snapshot-wide share for the tx-hash point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_event_log_index_bytes", "snapshotPointEventLogIndexBytes", "Snapshot bytes covered by the event-log point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_event_log_index_segments", "snapshotPointEventLogIndexSegments", "Snapshot segment count covered by the event-log point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_event_log_index_payload_bytes", "snapshotPointEventLogIndexPayloadBytes", "Snapshot payload bytes covered by the event-log point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_bytes", "snapshotPointEventLogIndexSidecarBytes", "Snapshot sidecar bytes covered by the event-log point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_share_milli", "snapshotPointEventLogIndexSidecarShareMilli", "Candidate-local sidecar share for the event-log point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli", "snapshotPointEventLogIndexSnapshotShareMilli", "Snapshot-wide share for the event-log point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_state_history_accessor_bytes", "snapshotPointStateHistoryAccessorBytes", "Snapshot bytes covered by the state-history accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_state_history_accessor_segments", "snapshotPointStateHistoryAccessorSegments", "Snapshot segment count covered by the state-history accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_state_history_accessor_payload_bytes", "snapshotPointStateHistoryAccessorPayloadBytes", "Snapshot payload bytes covered by the state-history accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_state_history_accessor_sidecar_bytes", "snapshotPointStateHistoryAccessorSidecarBytes", "Snapshot sidecar bytes covered by the state-history accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_state_history_accessor_sidecar_share_milli", "snapshotPointStateHistoryAccessorSidecarShareMilli", "Candidate-local sidecar share for the state-history accessor point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_state_history_accessor_snapshot_share_milli", "snapshotPointStateHistoryAccessorSnapshotShareMilli", "Snapshot-wide share for the state-history accessor point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_latest_btree_bytes", "snapshotPointLatestBTreeBytes", "Snapshot bytes covered by the latest-BTree point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_latest_btree_segments", "snapshotPointLatestBTreeSegments", "Snapshot segment count covered by the latest-BTree point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_latest_btree_payload_bytes", "snapshotPointLatestBTreePayloadBytes", "Snapshot payload bytes covered by the latest-BTree point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_latest_btree_sidecar_bytes", "snapshotPointLatestBTreeSidecarBytes", "Snapshot sidecar bytes covered by the latest-BTree point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_latest_btree_sidecar_share_milli", "snapshotPointLatestBTreeSidecarShareMilli", "Candidate-local sidecar share for the latest-BTree point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_latest_btree_snapshot_share_milli", "snapshotPointLatestBTreeSnapshotShareMilli", "Snapshot-wide share for the latest-BTree point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_bytes", "snapshotPointChainFreezerAccessorBytes", "Snapshot bytes covered by the chain-freezer accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_segments", "snapshotPointChainFreezerAccessorSegments", "Snapshot segment count covered by the chain-freezer accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_payload_bytes", "snapshotPointChainFreezerAccessorPayloadBytes", "Snapshot payload bytes covered by the chain-freezer accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_sidecar_bytes", "snapshotPointChainFreezerAccessorSidecarBytes", "Snapshot sidecar bytes covered by the chain-freezer accessor point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_sidecar_share_milli", "snapshotPointChainFreezerAccessorSidecarShareMilli", "Candidate-local sidecar share for the chain-freezer accessor point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_chain_freezer_accessor_snapshot_share_milli", "snapshotPointChainFreezerAccessorSnapshotShareMilli", "Snapshot-wide share for the chain-freezer accessor point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_code_domain_bytes", "snapshotPointCodeDomainBytes", "Snapshot bytes covered by the CodeDomain point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_code_domain_segments", "snapshotPointCodeDomainSegments", "Snapshot segment count covered by the CodeDomain point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_code_domain_payload_bytes", "snapshotPointCodeDomainPayloadBytes", "Snapshot payload bytes covered by the CodeDomain point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_code_domain_sidecar_bytes", "snapshotPointCodeDomainSidecarBytes", "Snapshot sidecar bytes covered by the CodeDomain point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_code_domain_sidecar_share_milli", "snapshotPointCodeDomainSidecarShareMilli", "Candidate-local sidecar share for the CodeDomain point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_code_domain_snapshot_share_milli", "snapshotPointCodeDomainSnapshotShareMilli", "Snapshot-wide share for the CodeDomain point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_commitment_snapshot_bytes", "snapshotPointCommitmentSnapshotBytes", "Snapshot bytes covered by the commitment-snapshot point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_commitment_snapshot_segments", "snapshotPointCommitmentSnapshotSegments", "Snapshot segment count covered by the commitment-snapshot point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_commitment_snapshot_payload_bytes", "snapshotPointCommitmentSnapshotPayloadBytes", "Snapshot payload bytes covered by the commitment-snapshot point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_commitment_snapshot_sidecar_bytes", "snapshotPointCommitmentSnapshotSidecarBytes", "Snapshot sidecar bytes covered by the commitment-snapshot point lookup candidate."),
+    ("gtron_nile_sync_snapshot_point_commitment_snapshot_sidecar_share_milli", "snapshotPointCommitmentSnapshotSidecarShareMilli", "Candidate-local sidecar share for the commitment-snapshot point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_commitment_snapshot_snapshot_share_milli", "snapshotPointCommitmentSnapshotSnapshotShareMilli", "Snapshot-wide share for the commitment-snapshot point lookup candidate in milli-units."),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune", "Whether signed cold-prune evidence is present."),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock", "Highest block covered by cold freezer segments."),

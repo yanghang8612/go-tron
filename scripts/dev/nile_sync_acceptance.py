@@ -86,11 +86,19 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock"),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments"),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_payload_bytes", "snapshotPointTxHashLookupPayloadBytes"),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_bytes", "snapshotPointTxHashLookupSidecarBytes"),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_share_milli", "snapshotPointTxHashLookupSidecarShareMilli"),
     (
         "gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli",
         "snapshotPointTxHashLookupSnapshotShareMilli",
     ),
     ("gtron_nile_sync_snapshot_point_event_log_index_bytes", "snapshotPointEventLogIndexBytes"),
+    ("gtron_nile_sync_snapshot_point_event_log_index_segments", "snapshotPointEventLogIndexSegments"),
+    ("gtron_nile_sync_snapshot_point_event_log_index_payload_bytes", "snapshotPointEventLogIndexPayloadBytes"),
+    ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_bytes", "snapshotPointEventLogIndexSidecarBytes"),
+    ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_share_milli", "snapshotPointEventLogIndexSidecarShareMilli"),
     (
         "gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli",
         "snapshotPointEventLogIndexSnapshotShareMilli",
@@ -100,10 +108,30 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
         "snapshotPointStateHistoryAccessorBytes",
     ),
     (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_segments",
+        "snapshotPointStateHistoryAccessorSegments",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_payload_bytes",
+        "snapshotPointStateHistoryAccessorPayloadBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_sidecar_bytes",
+        "snapshotPointStateHistoryAccessorSidecarBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_sidecar_share_milli",
+        "snapshotPointStateHistoryAccessorSidecarShareMilli",
+    ),
+    (
         "gtron_nile_sync_snapshot_point_state_history_accessor_snapshot_share_milli",
         "snapshotPointStateHistoryAccessorSnapshotShareMilli",
     ),
     ("gtron_nile_sync_snapshot_point_latest_btree_bytes", "snapshotPointLatestBTreeBytes"),
+    ("gtron_nile_sync_snapshot_point_latest_btree_segments", "snapshotPointLatestBTreeSegments"),
+    ("gtron_nile_sync_snapshot_point_latest_btree_payload_bytes", "snapshotPointLatestBTreePayloadBytes"),
+    ("gtron_nile_sync_snapshot_point_latest_btree_sidecar_bytes", "snapshotPointLatestBTreeSidecarBytes"),
+    ("gtron_nile_sync_snapshot_point_latest_btree_sidecar_share_milli", "snapshotPointLatestBTreeSidecarShareMilli"),
     (
         "gtron_nile_sync_snapshot_point_latest_btree_snapshot_share_milli",
         "snapshotPointLatestBTreeSnapshotShareMilli",
@@ -113,10 +141,30 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
         "snapshotPointChainFreezerAccessorBytes",
     ),
     (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_segments",
+        "snapshotPointChainFreezerAccessorSegments",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_payload_bytes",
+        "snapshotPointChainFreezerAccessorPayloadBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_sidecar_bytes",
+        "snapshotPointChainFreezerAccessorSidecarBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_sidecar_share_milli",
+        "snapshotPointChainFreezerAccessorSidecarShareMilli",
+    ),
+    (
         "gtron_nile_sync_snapshot_point_chain_freezer_accessor_snapshot_share_milli",
         "snapshotPointChainFreezerAccessorSnapshotShareMilli",
     ),
     ("gtron_nile_sync_snapshot_point_code_domain_bytes", "snapshotPointCodeDomainBytes"),
+    ("gtron_nile_sync_snapshot_point_code_domain_segments", "snapshotPointCodeDomainSegments"),
+    ("gtron_nile_sync_snapshot_point_code_domain_payload_bytes", "snapshotPointCodeDomainPayloadBytes"),
+    ("gtron_nile_sync_snapshot_point_code_domain_sidecar_bytes", "snapshotPointCodeDomainSidecarBytes"),
+    ("gtron_nile_sync_snapshot_point_code_domain_sidecar_share_milli", "snapshotPointCodeDomainSidecarShareMilli"),
     (
         "gtron_nile_sync_snapshot_point_code_domain_snapshot_share_milli",
         "snapshotPointCodeDomainSnapshotShareMilli",
@@ -124,6 +172,22 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     (
         "gtron_nile_sync_snapshot_point_commitment_snapshot_bytes",
         "snapshotPointCommitmentSnapshotBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_segments",
+        "snapshotPointCommitmentSnapshotSegments",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_payload_bytes",
+        "snapshotPointCommitmentSnapshotPayloadBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_sidecar_bytes",
+        "snapshotPointCommitmentSnapshotSidecarBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_sidecar_share_milli",
+        "snapshotPointCommitmentSnapshotSidecarShareMilli",
     ),
     (
         "gtron_nile_sync_snapshot_point_commitment_snapshot_snapshot_share_milli",
@@ -2059,12 +2123,52 @@ def check_snapshot_profile_row(row):
                 f"{share_field}={family_share:g}, want >= 0 when {bytes_field}={family_bytes}"
             )
     for prefix in SNAPSHOT_PROFILE_POINT_FIELDS:
+        segments_field = f"{prefix}Segments"
         bytes_field = f"{prefix}Bytes"
+        payload_field = f"{prefix}PayloadBytes"
+        sidecar_field = f"{prefix}SidecarBytes"
+        sidecar_share_field = f"{prefix}SidecarShareMilli"
         share_field = f"{prefix}SnapshotShareMilli"
+        point_segments = as_non_negative_int(row, segments_field)
         point_bytes = as_non_negative_int(row, bytes_field)
+        point_payload = as_non_negative_int(row, payload_field)
+        point_sidecar = as_non_negative_int(row, sidecar_field)
+        point_sidecar_share = as_number(row, sidecar_share_field)
         point_share = as_number(row, share_field)
+        if point_segments is None:
+            issues.append(f"{segments_field}={row.get(segments_field)!r}, want non-negative integer")
         if point_bytes is None:
             issues.append(f"{bytes_field}={row.get(bytes_field)!r}, want non-negative integer")
+        if point_payload is None:
+            issues.append(f"{payload_field}={row.get(payload_field)!r}, want non-negative integer")
+        if point_sidecar is None:
+            issues.append(f"{sidecar_field}={row.get(sidecar_field)!r}, want non-negative integer")
+        if (
+            point_bytes is not None
+            and point_payload is not None
+            and point_sidecar is not None
+            and point_bytes != point_payload + point_sidecar
+        ):
+            issues.append(
+                f"{prefix} payload+sidecar={point_payload + point_sidecar} "
+                f"must equal bytes={point_bytes}"
+            )
+        if point_sidecar_share is None:
+            issues.append(f"{sidecar_share_field}={row.get(sidecar_share_field)!r}, want numeric value")
+        elif point_sidecar_share < -1 or point_sidecar_share > 1000:
+            issues.append(f"{sidecar_share_field}={point_sidecar_share:g}, want -1..1000")
+        elif point_sidecar is not None and point_sidecar > 0 and point_sidecar_share < 0:
+            issues.append(
+                f"{sidecar_share_field}={point_sidecar_share:g}, want >= 0 "
+                f"when {sidecar_field}={point_sidecar}"
+            )
+        elif point_bytes is not None and point_sidecar is not None and point_sidecar_share >= 0:
+            want_sidecar_share = sidecar_share_milli(point_sidecar, point_bytes)
+            if point_sidecar_share != want_sidecar_share:
+                issues.append(
+                    f"{sidecar_share_field}={point_sidecar_share:g}, want {want_sidecar_share} "
+                    f"for {sidecar_field}={point_sidecar} {bytes_field}={point_bytes}"
+                )
         if point_share is None:
             issues.append(f"{share_field}={row.get(share_field)!r}, want numeric value")
         elif point_share < -1 or point_share > 1000:

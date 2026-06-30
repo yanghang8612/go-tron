@@ -66,52 +66,33 @@ BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS = (
     ("gtron_storage_benchmark_derived_index_bytes_per_block", ("derivedIndexBytes",)),
 )
 
+BENCHMARK_PROMETHEUS_SNAPSHOT_POINT_FIELDS = tuple(
+    (
+        f"gtron_storage_benchmark_snapshot_point_{metric_prefix}_{metric_suffix}",
+        f"{field_prefix}{field_suffix}",
+    )
+    for metric_prefix, field_prefix in (
+        ("tx_hash_lookup", "snapshotPointTxHashLookup"),
+        ("event_log_index", "snapshotPointEventLogIndex"),
+        ("state_history_accessor", "snapshotPointStateHistoryAccessor"),
+        ("latest_btree", "snapshotPointLatestBTree"),
+        ("chain_freezer_accessor", "snapshotPointChainFreezerAccessor"),
+        ("code_domain", "snapshotPointCodeDomain"),
+        ("commitment_snapshot", "snapshotPointCommitmentSnapshot"),
+    )
+    for metric_suffix, field_suffix in (
+        ("segments", "Segments"),
+        ("bytes", "Bytes"),
+        ("payload_bytes", "PayloadBytes"),
+        ("sidecar_bytes", "SidecarBytes"),
+        ("sidecar_share_milli", "SidecarShareMilli"),
+        ("snapshot_share_milli", "SnapshotShareMilli"),
+    )
+)
+
 BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ("gtron_storage_benchmark_archive_api_depth_blocks", "archiveApiDepthBlocks"),
-    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
-    (
-        "gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli",
-        "snapshotPointTxHashLookupSnapshotShareMilli",
-    ),
-    ("gtron_storage_benchmark_snapshot_point_event_log_index_bytes", "snapshotPointEventLogIndexBytes"),
-    (
-        "gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli",
-        "snapshotPointEventLogIndexSnapshotShareMilli",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_state_history_accessor_bytes",
-        "snapshotPointStateHistoryAccessorBytes",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_state_history_accessor_snapshot_share_milli",
-        "snapshotPointStateHistoryAccessorSnapshotShareMilli",
-    ),
-    ("gtron_storage_benchmark_snapshot_point_latest_btree_bytes", "snapshotPointLatestBTreeBytes"),
-    (
-        "gtron_storage_benchmark_snapshot_point_latest_btree_snapshot_share_milli",
-        "snapshotPointLatestBTreeSnapshotShareMilli",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_bytes",
-        "snapshotPointChainFreezerAccessorBytes",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_snapshot_share_milli",
-        "snapshotPointChainFreezerAccessorSnapshotShareMilli",
-    ),
-    ("gtron_storage_benchmark_snapshot_point_code_domain_bytes", "snapshotPointCodeDomainBytes"),
-    (
-        "gtron_storage_benchmark_snapshot_point_code_domain_snapshot_share_milli",
-        "snapshotPointCodeDomainSnapshotShareMilli",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_commitment_snapshot_bytes",
-        "snapshotPointCommitmentSnapshotBytes",
-    ),
-    (
-        "gtron_storage_benchmark_snapshot_point_commitment_snapshot_snapshot_share_milli",
-        "snapshotPointCommitmentSnapshotSnapshotShareMilli",
-    ),
+    *BENCHMARK_PROMETHEUS_SNAPSHOT_POINT_FIELDS,
     ("gtron_storage_benchmark_cold_freezer_to_block", "coldFreezerToBlock"),
     ("gtron_storage_benchmark_derived_index_to_block", "derivedIndexToBlock"),
     ("gtron_storage_benchmark_chain_lookup_prune_to_block", "chainLookupPruneToBlock"),
@@ -1662,12 +1643,53 @@ def check_snapshot_profile_row(row):
                 f"when {bytes_field}={family_bytes}"
             )
     for prefix in SNAPSHOT_PROFILE_POINT_FIELDS:
+        segments_field = f"{prefix}Segments"
         bytes_field = f"{prefix}Bytes"
+        payload_field = f"{prefix}PayloadBytes"
+        sidecar_field = f"{prefix}SidecarBytes"
+        sidecar_share_field = f"{prefix}SidecarShareMilli"
         share_field = f"{prefix}SnapshotShareMilli"
+        point_segments = as_non_negative_int(row, segments_field)
         point_bytes = as_non_negative_int(row, bytes_field)
+        point_payload = as_non_negative_int(row, payload_field)
+        point_sidecar = as_non_negative_int(row, sidecar_field)
+        point_sidecar_share = as_number(row, sidecar_share_field)
         point_share = as_number(row, share_field)
+        if point_segments is None:
+            issues.append(f"{line_label(row)} {segments_field}={row.get(segments_field)!r}, want non-negative integer")
         if point_bytes is None:
             issues.append(f"{line_label(row)} {bytes_field}={row.get(bytes_field)!r}, want non-negative integer")
+        if point_payload is None:
+            issues.append(f"{line_label(row)} {payload_field}={row.get(payload_field)!r}, want non-negative integer")
+        if point_sidecar is None:
+            issues.append(f"{line_label(row)} {sidecar_field}={row.get(sidecar_field)!r}, want non-negative integer")
+        if (
+            point_bytes is not None
+            and point_payload is not None
+            and point_sidecar is not None
+            and point_bytes != point_payload + point_sidecar
+        ):
+            issues.append(
+                f"{line_label(row)} {prefix} payload+sidecar={point_payload + point_sidecar} "
+                f"must equal bytes={point_bytes}"
+            )
+        if point_sidecar_share is None:
+            issues.append(f"{line_label(row)} {sidecar_share_field}={row.get(sidecar_share_field)!r}, want numeric value")
+        elif point_sidecar_share < -1 or point_sidecar_share > 1000:
+            issues.append(f"{line_label(row)} {sidecar_share_field}={point_sidecar_share:g}, want -1..1000")
+        elif point_sidecar is not None and point_sidecar > 0 and point_sidecar_share < 0:
+            issues.append(
+                f"{line_label(row)} {sidecar_share_field}={point_sidecar_share:g}, want >= 0 "
+                f"when {sidecar_field}={point_sidecar}"
+            )
+        elif point_bytes is not None and point_sidecar is not None and point_sidecar_share >= 0:
+            want_sidecar_share = sidecar_share_milli(point_sidecar, point_bytes)
+            if point_sidecar_share != want_sidecar_share:
+                issues.append(
+                    f"{line_label(row)} {sidecar_share_field}={point_sidecar_share:g}, "
+                    f"want {want_sidecar_share} for {sidecar_field}={point_sidecar} "
+                    f"{bytes_field}={point_bytes}"
+                )
         if point_share is None:
             issues.append(f"{line_label(row)} {share_field}={row.get(share_field)!r}, want numeric value")
         elif point_share < -1 or point_share > 1000:

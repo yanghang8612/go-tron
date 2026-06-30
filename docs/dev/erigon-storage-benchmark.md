@@ -484,14 +484,15 @@ is useful; it reports `sidecarShareMilli` overall and per family (`latest`,
 `state-history`, `chain-freezer`, `event-log`, `balance-trace`,
 `section-bloom`, and `other`) and can fail a run with
 `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Its JSON
-also includes `pointIndexCandidates`, with direct byte/share counters for the
+also includes `pointIndexCandidates`, with direct segment, byte, payload,
+sidecar, candidate-local sidecar-share, and snapshot-share counters for the
 P3 recsplit/existence-filter candidates: `txHashLookup`, `eventLogIndex`,
 `stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
 and `commitmentSnapshot`; the benchmark JSONL row exposes the same values as
-`snapshotPoint*Bytes` and `snapshotPoint*SnapshotShareMilli`. Keep the
-compact/merged index-format decision evidence-driven: only consider replacing
-sorted `chain-index`, `event-log-index`, accessor, or btree sidecars after the
-profile shows they dominate disk or lookup latency in long samples.
+`snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`.
+Keep the compact/merged index-format decision evidence-driven: only consider
+replacing sorted `chain-index`, `event-log-index`, accessor, or btree sidecars
+after the profile shows they dominate disk or lookup latency in long samples.
 Use `--require-size-reduction MODE:BASE_MODE:FIELD=RATIO` on comparable
 multi-mode runs to require the latest selected `MODE` row to reduce a byte
 counter by at least `RATIO` versus `BASE_MODE`; for example,

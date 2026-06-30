@@ -17,22 +17,65 @@ def write_result(path, rows):
             fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-SNAPSHOT_POINT_PROFILE_EVIDENCE = {
-    "snapshotPointTxHashLookupBytes": 100,
-    "snapshotPointTxHashLookupSnapshotShareMilli": 63,
-    "snapshotPointEventLogIndexBytes": 200,
-    "snapshotPointEventLogIndexSnapshotShareMilli": 125,
-    "snapshotPointStateHistoryAccessorBytes": 0,
-    "snapshotPointStateHistoryAccessorSnapshotShareMilli": 0,
-    "snapshotPointLatestBTreeBytes": 0,
-    "snapshotPointLatestBTreeSnapshotShareMilli": 0,
-    "snapshotPointChainFreezerAccessorBytes": 0,
-    "snapshotPointChainFreezerAccessorSnapshotShareMilli": 0,
-    "snapshotPointCodeDomainBytes": 0,
-    "snapshotPointCodeDomainSnapshotShareMilli": 0,
-    "snapshotPointCommitmentSnapshotBytes": 0,
-    "snapshotPointCommitmentSnapshotSnapshotShareMilli": 0,
+SNAPSHOT_POINT_PREFIXES = (
+    "snapshotPointTxHashLookup",
+    "snapshotPointEventLogIndex",
+    "snapshotPointStateHistoryAccessor",
+    "snapshotPointLatestBTree",
+    "snapshotPointChainFreezerAccessor",
+    "snapshotPointCodeDomain",
+    "snapshotPointCommitmentSnapshot",
+)
+
+
+SNAPSHOT_POINT_METRIC_PREFIXES = {
+    "snapshotPointTxHashLookup": "gtron_storage_benchmark_snapshot_point_tx_hash_lookup",
+    "snapshotPointEventLogIndex": "gtron_storage_benchmark_snapshot_point_event_log_index",
+    "snapshotPointStateHistoryAccessor": "gtron_storage_benchmark_snapshot_point_state_history_accessor",
+    "snapshotPointLatestBTree": "gtron_storage_benchmark_snapshot_point_latest_btree",
+    "snapshotPointChainFreezerAccessor": "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor",
+    "snapshotPointCodeDomain": "gtron_storage_benchmark_snapshot_point_code_domain",
+    "snapshotPointCommitmentSnapshot": "gtron_storage_benchmark_snapshot_point_commitment_snapshot",
 }
+
+
+SNAPSHOT_POINT_FIELD_SUFFIXES = (
+    ("Segments", "segments"),
+    ("Bytes", "bytes"),
+    ("PayloadBytes", "payload_bytes"),
+    ("SidecarBytes", "sidecar_bytes"),
+    ("SidecarShareMilli", "sidecar_share_milli"),
+    ("SnapshotShareMilli", "snapshot_share_milli"),
+)
+
+
+def snapshot_point_fields(prefix, segments, total, payload, sidecar, sidecar_share, snapshot_share):
+    values = (segments, total, payload, sidecar, sidecar_share, snapshot_share)
+    return {
+        f"{prefix}{field_suffix}": value
+        for (field_suffix, _), value in zip(SNAPSHOT_POINT_FIELD_SUFFIXES, values)
+    }
+
+
+def snapshot_point_metric_values(evidence):
+    metrics = {}
+    for prefix, metric_prefix in SNAPSHOT_POINT_METRIC_PREFIXES.items():
+        for field_suffix, metric_suffix in SNAPSHOT_POINT_FIELD_SUFFIXES:
+            field = f"{prefix}{field_suffix}"
+            if field in evidence:
+                metrics[f"{metric_prefix}_{metric_suffix}"] = evidence[field]
+    return metrics
+
+
+SNAPSHOT_POINT_PROFILE_EVIDENCE = {}
+SNAPSHOT_POINT_PROFILE_EVIDENCE.update(
+    snapshot_point_fields("snapshotPointTxHashLookup", 1, 100, 0, 100, 1000, 63)
+)
+SNAPSHOT_POINT_PROFILE_EVIDENCE.update(
+    snapshot_point_fields("snapshotPointEventLogIndex", 1, 200, 0, 200, 1000, 125)
+)
+for prefix in SNAPSHOT_POINT_PREFIXES[2:]:
+    SNAPSHOT_POINT_PROFILE_EVIDENCE.update(snapshot_point_fields(prefix, 0, 0, 0, 0, 0, 0))
 
 
 def clean_snapshot_profile_evidence_row():
@@ -878,10 +921,6 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
                 "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
-                "gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes": 100,
-                "gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli": 63,
-                "gtron_storage_benchmark_snapshot_point_event_log_index_bytes": 200,
-                "gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli": 125,
                 "gtron_storage_benchmark_archive_api_checks": 5,
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_depth_blocks": 20,
@@ -909,62 +948,59 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_event_log_index_topic_singleton_keys": 1,
                 "gtron_storage_benchmark_event_log_index_topic_multi_posting_keys": 1,
             }
+            values.update(snapshot_point_metric_values(SNAPSHOT_POINT_PROFILE_EVIDENCE))
             write_benchmark_prometheus(prom, datadir, values)
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 5,
+                "archiveApiBlock": 80,
+                "archiveApiDepthBlocks": 20,
+                "archiveApiFailures": 0,
+                "coldFreezerToBlock": 90,
+                "derivedIndexToBlock": 90,
+                "chainLookupPruneToBlock": 80,
+                "tailPrunedThroughBlock": 75,
+                "balanceTracePruneToBlock": 80,
+                "sectionBloomPruneToSection": 2,
+                "signedColdPrune": 1,
+                "tailPrunedFiles": 3,
+                "historyWindow": 256,
+                "eventLogIndexSegments": 2,
+                "eventLogIndexAddressKeys": 3,
+                "eventLogIndexAddressPostings": 6,
+                "eventLogIndexAddressAvgPostingsMilli": 2000,
+                "eventLogIndexAddressMaxPostings": 3,
+                "eventLogIndexAddressSingletonKeys": 1,
+                "eventLogIndexAddressMultiPostingKeys": 2,
+                "eventLogIndexTopicKeys": 2,
+                "eventLogIndexTopicPostings": 3,
+                "eventLogIndexTopicAvgPostingsMilli": 1500,
+                "eventLogIndexTopicMaxPostings": 2,
+                "eventLogIndexTopicSingletonKeys": 1,
+                "eventLogIndexTopicMultiPostingKeys": 1,
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            row.update(SNAPSHOT_POINT_PROFILE_EVIDENCE)
             write_result(
                 result,
-                [
-                    {
-                        "unix": 10,
-                        "profile": "producer",
-                        "role": "producer",
-                        "status": "ok",
-                        "freezerAlertStatus": "ok",
-                        "stageVerifyStatus": "ok",
-                        "modeAlertStatus": "ok",
-                        "snapshotAlertStatus": "ok",
-                        "mode": "minimal",
-                        "height": 100,
-                        "elapsedSeconds": 9,
-                        "datadirBytes": 10000,
-                        "chaindataBytes": 2000,
-                        "ancientBytes": 3000,
-                        "snapshotBytes": 1000,
-                        "derivedIndexBytes": 500,
-                        "snapshotSidecarShareMilli": 125,
-                        "snapshotPointTxHashLookupBytes": 100,
-                        "snapshotPointTxHashLookupSnapshotShareMilli": 63,
-                        "snapshotPointEventLogIndexBytes": 200,
-                        "snapshotPointEventLogIndexSnapshotShareMilli": 125,
-                        "archiveApiChecks": 5,
-                        "archiveApiBlock": 80,
-                        "archiveApiDepthBlocks": 20,
-                        "archiveApiFailures": 0,
-                        "coldFreezerToBlock": 90,
-                        "derivedIndexToBlock": 90,
-                        "chainLookupPruneToBlock": 80,
-                        "tailPrunedThroughBlock": 75,
-                        "balanceTracePruneToBlock": 80,
-                        "sectionBloomPruneToSection": 2,
-                        "signedColdPrune": 1,
-                        "tailPrunedFiles": 3,
-                        "historyWindow": 256,
-                        "eventLogIndexSegments": 2,
-                        "eventLogIndexAddressKeys": 3,
-                        "eventLogIndexAddressPostings": 6,
-                        "eventLogIndexAddressAvgPostingsMilli": 2000,
-                        "eventLogIndexAddressMaxPostings": 3,
-                        "eventLogIndexAddressSingletonKeys": 1,
-                        "eventLogIndexAddressMultiPostingKeys": 2,
-                        "eventLogIndexTopicKeys": 2,
-                        "eventLogIndexTopicPostings": 3,
-                        "eventLogIndexTopicAvgPostingsMilli": 1500,
-                        "eventLogIndexTopicMaxPostings": 2,
-                        "eventLogIndexTopicSingletonKeys": 1,
-                        "eventLogIndexTopicMultiPostingKeys": 1,
-                        "datadir": datadir,
-                        "storageBenchmarkPrometheus": prom.name,
-                    }
-                ],
+                [row],
             )
 
             proc = subprocess.run(

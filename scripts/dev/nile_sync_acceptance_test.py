@@ -35,6 +35,68 @@ def write_result(path, rows):
             fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+SNAPSHOT_POINT_PREFIXES = (
+    "snapshotPointTxHashLookup",
+    "snapshotPointEventLogIndex",
+    "snapshotPointStateHistoryAccessor",
+    "snapshotPointLatestBTree",
+    "snapshotPointChainFreezerAccessor",
+    "snapshotPointCodeDomain",
+    "snapshotPointCommitmentSnapshot",
+)
+
+
+SNAPSHOT_POINT_METRIC_PREFIXES = {
+    "snapshotPointTxHashLookup": "gtron_nile_sync_snapshot_point_tx_hash_lookup",
+    "snapshotPointEventLogIndex": "gtron_nile_sync_snapshot_point_event_log_index",
+    "snapshotPointStateHistoryAccessor": "gtron_nile_sync_snapshot_point_state_history_accessor",
+    "snapshotPointLatestBTree": "gtron_nile_sync_snapshot_point_latest_btree",
+    "snapshotPointChainFreezerAccessor": "gtron_nile_sync_snapshot_point_chain_freezer_accessor",
+    "snapshotPointCodeDomain": "gtron_nile_sync_snapshot_point_code_domain",
+    "snapshotPointCommitmentSnapshot": "gtron_nile_sync_snapshot_point_commitment_snapshot",
+}
+
+
+SNAPSHOT_POINT_FIELD_SUFFIXES = (
+    ("Segments", "segments"),
+    ("Bytes", "bytes"),
+    ("PayloadBytes", "payload_bytes"),
+    ("SidecarBytes", "sidecar_bytes"),
+    ("SidecarShareMilli", "sidecar_share_milli"),
+    ("SnapshotShareMilli", "snapshot_share_milli"),
+)
+
+
+def snapshot_point_fields(prefix, segments, total, payload, sidecar, sidecar_share, snapshot_share):
+    values = (segments, total, payload, sidecar, sidecar_share, snapshot_share)
+    return {
+        f"{prefix}{field_suffix}": value
+        for (field_suffix, _), value in zip(SNAPSHOT_POINT_FIELD_SUFFIXES, values)
+    }
+
+
+def snapshot_point_profile_evidence():
+    evidence = {}
+    evidence.update(snapshot_point_fields("snapshotPointTxHashLookup", 1, 100, 0, 100, 1000, 63))
+    evidence.update(snapshot_point_fields("snapshotPointEventLogIndex", 1, 200, 0, 200, 1000, 125))
+    for prefix in SNAPSHOT_POINT_PREFIXES[2:]:
+        evidence.update(snapshot_point_fields(prefix, 0, 0, 0, 0, 0, 0))
+    return evidence
+
+
+def snapshot_point_prometheus_lines(row, labels):
+    lines = []
+    for prefix, metric_prefix in SNAPSHOT_POINT_METRIC_PREFIXES.items():
+        for field_suffix, metric_suffix in SNAPSHOT_POINT_FIELD_SUFFIXES:
+            field = f"{prefix}{field_suffix}"
+            if field not in row:
+                continue
+            metric = f"{metric_prefix}_{metric_suffix}"
+            lines.append(f"# TYPE {metric} gauge")
+            lines.append(f"{metric}{{{labels}}} {row[field]}")
+    return lines
+
+
 def full_stage_details(blocks=None, verified=None):
     blocks = blocks or {}
     verified = verified or {}
@@ -183,22 +245,9 @@ def add_snapshot_profile_evidence(row):
             "snapshotBalanceTraceSidecarShareMilli": -1,
             "snapshotSectionBloomSidecarBytes": 0,
             "snapshotSectionBloomSidecarShareMilli": -1,
-            "snapshotPointTxHashLookupBytes": 100,
-            "snapshotPointTxHashLookupSnapshotShareMilli": 63,
-            "snapshotPointEventLogIndexBytes": 200,
-            "snapshotPointEventLogIndexSnapshotShareMilli": 125,
-            "snapshotPointStateHistoryAccessorBytes": 0,
-            "snapshotPointStateHistoryAccessorSnapshotShareMilli": 0,
-            "snapshotPointLatestBTreeBytes": 0,
-            "snapshotPointLatestBTreeSnapshotShareMilli": 0,
-            "snapshotPointChainFreezerAccessorBytes": 0,
-            "snapshotPointChainFreezerAccessorSnapshotShareMilli": 0,
-            "snapshotPointCodeDomainBytes": 0,
-            "snapshotPointCodeDomainSnapshotShareMilli": 0,
-            "snapshotPointCommitmentSnapshotBytes": 0,
-            "snapshotPointCommitmentSnapshotSnapshotShareMilli": 0,
         }
     )
+    row.update(snapshot_point_profile_evidence())
     return row
 
 
@@ -257,10 +306,6 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "intervalStageChainFreezerBlocksPerSecond": 0.0,
             "intervalStageSnapshotEventLogBuildBlocksPerSecond": 0.0,
             "snapshotSidecarShareMilli": 188,
-            "snapshotPointTxHashLookupBytes": 100,
-            "snapshotPointTxHashLookupSnapshotShareMilli": 63,
-            "snapshotPointEventLogIndexBytes": 200,
-            "snapshotPointEventLogIndexSnapshotShareMilli": 125,
             "signedColdPrune": 0,
             "coldFreezerToBlock": -1,
             "chainLookupPruneToBlock": -1,
@@ -273,6 +318,7 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "stageStalled": False,
         }
     )
+    row.update(snapshot_point_profile_evidence())
     metric_height = row["height"] if height is None else height
     labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
     path.write_text(
@@ -378,14 +424,7 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block{{{labels}}} {row["soakEfficiencyDerivedIndexBytesPerBlock"]}',
                 "# TYPE gtron_nile_sync_snapshot_sidecar_share_milli gauge",
                 f'gtron_nile_sync_snapshot_sidecar_share_milli{{{labels}}} {row["snapshotSidecarShareMilli"]}',
-                "# TYPE gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes gauge",
-                f'gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes{{{labels}}} {row["snapshotPointTxHashLookupBytes"]}',
-                "# TYPE gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli gauge",
-                f'gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli{{{labels}}} {row["snapshotPointTxHashLookupSnapshotShareMilli"]}',
-                "# TYPE gtron_nile_sync_snapshot_point_event_log_index_bytes gauge",
-                f'gtron_nile_sync_snapshot_point_event_log_index_bytes{{{labels}}} {row["snapshotPointEventLogIndexBytes"]}',
-                "# TYPE gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli gauge",
-                f'gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli{{{labels}}} {row["snapshotPointEventLogIndexSnapshotShareMilli"]}',
+                *snapshot_point_prometheus_lines(row, labels),
                 "# TYPE gtron_nile_sync_signed_cold_prune gauge",
                 f'gtron_nile_sync_signed_cold_prune{{{labels}}} {row["signedColdPrune"]}',
                 "# TYPE gtron_nile_sync_cold_freezer_to_block gauge",

@@ -482,61 +482,103 @@ write_storage_benchmark_prometheus() {
   local snapshots="${12}"
   local derived_index_bytes="${13}"
   local snapshot_sidecar_share_milli="${14}"
-  local snapshot_point_tx_hash_lookup_bytes="${15}"
-  local snapshot_point_tx_hash_lookup_share_milli="${16}"
-  local snapshot_point_event_log_index_bytes="${17}"
-  local snapshot_point_event_log_index_share_milli="${18}"
-  local snapshot_point_state_history_accessor_bytes="${19}"
-  local snapshot_point_state_history_accessor_share_milli="${20}"
-  local snapshot_point_latest_btree_bytes="${21}"
-  local snapshot_point_latest_btree_share_milli="${22}"
-  local snapshot_point_chain_freezer_accessor_bytes="${23}"
-  local snapshot_point_chain_freezer_accessor_share_milli="${24}"
-  local snapshot_point_code_domain_bytes="${25}"
-  local snapshot_point_code_domain_share_milli="${26}"
-  local snapshot_point_commitment_snapshot_bytes="${27}"
-  local snapshot_point_commitment_snapshot_share_milli="${28}"
-  local archive_api_checks="${29}"
-  local archive_api_block="${30}"
-  local archive_api_depth_blocks="${31}"
-  local archive_api_failures="${32}"
-  local archive_api_call_probe="${33}"
-  local archive_api_trace_transaction_probe="${34}"
-  local archive_api_methods="${35}"
-  local archive_api_tx_probe="${36}"
-  local archive_api_tx_methods="${37}"
-  local cold_freezer_to_block="${38}"
-  local derived_index_to_block="${39}"
-  local chain_lookup_prune_to_block="${40}"
-  local tail_pruned_through_block="${41}"
-  local balance_trace_prune_to_block="${42}"
-  local section_bloom_prune_to_section="${43}"
-  local signed_cold_prune="${44}"
-  local tail_pruned_files="${45}"
-  local history_window="${46}"
-  local event_log_index_segments="${47}"
-  local event_log_index_address_keys="${48}"
-  local event_log_index_address_postings="${49}"
-  local event_log_index_address_avg_postings_milli="${50}"
-  local event_log_index_address_max_postings="${51}"
-  local event_log_index_address_singleton_keys="${52}"
-  local event_log_index_address_multi_posting_keys="${53}"
-  local event_log_index_topic_keys="${54}"
-  local event_log_index_topic_postings="${55}"
-  local event_log_index_topic_avg_postings_milli="${56}"
-  local event_log_index_topic_max_postings="${57}"
-  local event_log_index_topic_singleton_keys="${58}"
-  local event_log_index_topic_multi_posting_keys="${59}"
+  local snapshot_point_tx_hash_lookup_segments="${15}"
+  local snapshot_point_tx_hash_lookup_bytes="${16}"
+  local snapshot_point_tx_hash_lookup_payload_bytes="${17}"
+  local snapshot_point_tx_hash_lookup_sidecar_bytes="${18}"
+  local snapshot_point_tx_hash_lookup_sidecar_share_milli="${19}"
+  local snapshot_point_tx_hash_lookup_share_milli="${20}"
+  local snapshot_point_event_log_index_segments="${21}"
+  local snapshot_point_event_log_index_bytes="${22}"
+  local snapshot_point_event_log_index_payload_bytes="${23}"
+  local snapshot_point_event_log_index_sidecar_bytes="${24}"
+  local snapshot_point_event_log_index_sidecar_share_milli="${25}"
+  local snapshot_point_event_log_index_share_milli="${26}"
+  local snapshot_point_state_history_accessor_segments="${27}"
+  local snapshot_point_state_history_accessor_bytes="${28}"
+  local snapshot_point_state_history_accessor_payload_bytes="${29}"
+  local snapshot_point_state_history_accessor_sidecar_bytes="${30}"
+  local snapshot_point_state_history_accessor_sidecar_share_milli="${31}"
+  local snapshot_point_state_history_accessor_share_milli="${32}"
+  local snapshot_point_latest_btree_segments="${33}"
+  local snapshot_point_latest_btree_bytes="${34}"
+  local snapshot_point_latest_btree_payload_bytes="${35}"
+  local snapshot_point_latest_btree_sidecar_bytes="${36}"
+  local snapshot_point_latest_btree_sidecar_share_milli="${37}"
+  local snapshot_point_latest_btree_share_milli="${38}"
+  local snapshot_point_chain_freezer_accessor_segments="${39}"
+  local snapshot_point_chain_freezer_accessor_bytes="${40}"
+  local snapshot_point_chain_freezer_accessor_payload_bytes="${41}"
+  local snapshot_point_chain_freezer_accessor_sidecar_bytes="${42}"
+  local snapshot_point_chain_freezer_accessor_sidecar_share_milli="${43}"
+  local snapshot_point_chain_freezer_accessor_share_milli="${44}"
+  local snapshot_point_code_domain_segments="${45}"
+  local snapshot_point_code_domain_bytes="${46}"
+  local snapshot_point_code_domain_payload_bytes="${47}"
+  local snapshot_point_code_domain_sidecar_bytes="${48}"
+  local snapshot_point_code_domain_sidecar_share_milli="${49}"
+  local snapshot_point_code_domain_share_milli="${50}"
+  local snapshot_point_commitment_snapshot_segments="${51}"
+  local snapshot_point_commitment_snapshot_bytes="${52}"
+  local snapshot_point_commitment_snapshot_payload_bytes="${53}"
+  local snapshot_point_commitment_snapshot_sidecar_bytes="${54}"
+  local snapshot_point_commitment_snapshot_sidecar_share_milli="${55}"
+  local snapshot_point_commitment_snapshot_share_milli="${56}"
+  local archive_api_checks="${57}"
+  local archive_api_block="${58}"
+  local archive_api_depth_blocks="${59}"
+  local archive_api_failures="${60}"
+  local archive_api_call_probe="${61}"
+  local archive_api_trace_transaction_probe="${62}"
+  local archive_api_methods="${63}"
+  local archive_api_tx_probe="${64}"
+  local archive_api_tx_methods="${65}"
+  local cold_freezer_to_block="${66}"
+  local derived_index_to_block="${67}"
+  local chain_lookup_prune_to_block="${68}"
+  local tail_pruned_through_block="${69}"
+  local balance_trace_prune_to_block="${70}"
+  local section_bloom_prune_to_section="${71}"
+  local signed_cold_prune="${72}"
+  local tail_pruned_files="${73}"
+  local history_window="${74}"
+  local event_log_index_segments="${75}"
+  local event_log_index_address_keys="${76}"
+  local event_log_index_address_postings="${77}"
+  local event_log_index_address_avg_postings_milli="${78}"
+  local event_log_index_address_max_postings="${79}"
+  local event_log_index_address_singleton_keys="${80}"
+  local event_log_index_address_multi_posting_keys="${81}"
+  local event_log_index_topic_keys="${82}"
+  local event_log_index_topic_postings="${83}"
+  local event_log_index_topic_avg_postings_milli="${84}"
+  local event_log_index_topic_max_postings="${85}"
+  local event_log_index_topic_singleton_keys="${86}"
+  local event_log_index_topic_multi_posting_keys="${87}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" \
-    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
-    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
-    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
-    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
-    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
-    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
-    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
+    "$snapshot_point_tx_hash_lookup_segments" "$snapshot_point_tx_hash_lookup_bytes" \
+    "$snapshot_point_tx_hash_lookup_payload_bytes" "$snapshot_point_tx_hash_lookup_sidecar_bytes" \
+    "$snapshot_point_tx_hash_lookup_sidecar_share_milli" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_segments" "$snapshot_point_event_log_index_bytes" \
+    "$snapshot_point_event_log_index_payload_bytes" "$snapshot_point_event_log_index_sidecar_bytes" \
+    "$snapshot_point_event_log_index_sidecar_share_milli" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_segments" "$snapshot_point_state_history_accessor_bytes" \
+    "$snapshot_point_state_history_accessor_payload_bytes" "$snapshot_point_state_history_accessor_sidecar_bytes" \
+    "$snapshot_point_state_history_accessor_sidecar_share_milli" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_segments" "$snapshot_point_latest_btree_bytes" \
+    "$snapshot_point_latest_btree_payload_bytes" "$snapshot_point_latest_btree_sidecar_bytes" \
+    "$snapshot_point_latest_btree_sidecar_share_milli" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_segments" "$snapshot_point_chain_freezer_accessor_bytes" \
+    "$snapshot_point_chain_freezer_accessor_payload_bytes" "$snapshot_point_chain_freezer_accessor_sidecar_bytes" \
+    "$snapshot_point_chain_freezer_accessor_sidecar_share_milli" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_segments" "$snapshot_point_code_domain_bytes" \
+    "$snapshot_point_code_domain_payload_bytes" "$snapshot_point_code_domain_sidecar_bytes" \
+    "$snapshot_point_code_domain_sidecar_share_milli" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_segments" "$snapshot_point_commitment_snapshot_bytes" \
+    "$snapshot_point_commitment_snapshot_payload_bytes" "$snapshot_point_commitment_snapshot_sidecar_bytes" \
+    "$snapshot_point_commitment_snapshot_sidecar_share_milli" "$snapshot_point_commitment_snapshot_share_milli" \
     "$archive_api_checks" "$archive_api_block" \
     "$archive_api_depth_blocks" "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
     "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
@@ -560,48 +602,76 @@ height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
 datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
-snapshot_point_tx_hash_lookup_bytes = int(sys.argv[15])
-snapshot_point_tx_hash_lookup_share_milli = int(sys.argv[16])
-snapshot_point_event_log_index_bytes = int(sys.argv[17])
-snapshot_point_event_log_index_share_milli = int(sys.argv[18])
-snapshot_point_state_history_accessor_bytes = int(sys.argv[19])
-snapshot_point_state_history_accessor_share_milli = int(sys.argv[20])
-snapshot_point_latest_btree_bytes = int(sys.argv[21])
-snapshot_point_latest_btree_share_milli = int(sys.argv[22])
-snapshot_point_chain_freezer_accessor_bytes = int(sys.argv[23])
-snapshot_point_chain_freezer_accessor_share_milli = int(sys.argv[24])
-snapshot_point_code_domain_bytes = int(sys.argv[25])
-snapshot_point_code_domain_share_milli = int(sys.argv[26])
-snapshot_point_commitment_snapshot_bytes = int(sys.argv[27])
-snapshot_point_commitment_snapshot_share_milli = int(sys.argv[28])
-archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[29:33])
-archive_api_call_probe = sys.argv[33].lower() in {"1", "true", "yes"}
-archive_api_trace_transaction_probe = sys.argv[34].lower() in {"1", "true", "yes"}
-archive_api_methods_raw = sys.argv[35]
-archive_api_tx_probe = sys.argv[36].lower() in {"1", "true", "yes"}
-archive_api_tx_methods_raw = sys.argv[37]
-cold_freezer_to_block = int(sys.argv[38])
-derived_index_to_block = int(sys.argv[39])
-chain_lookup_prune_to_block = int(sys.argv[40])
-tail_pruned_through_block = int(sys.argv[41])
-balance_trace_prune_to_block = int(sys.argv[42])
-section_bloom_prune_to_section = int(sys.argv[43])
-signed_cold_prune = int(sys.argv[44])
-tail_pruned_files = int(sys.argv[45])
-history_window = int(sys.argv[46])
-event_log_index_segments = int(sys.argv[47])
-event_log_index_address_keys = int(sys.argv[48])
-event_log_index_address_postings = int(sys.argv[49])
-event_log_index_address_avg_postings_milli = int(sys.argv[50])
-event_log_index_address_max_postings = int(sys.argv[51])
-event_log_index_address_singleton_keys = int(sys.argv[52])
-event_log_index_address_multi_posting_keys = int(sys.argv[53])
-event_log_index_topic_keys = int(sys.argv[54])
-event_log_index_topic_postings = int(sys.argv[55])
-event_log_index_topic_avg_postings_milli = int(sys.argv[56])
-event_log_index_topic_max_postings = int(sys.argv[57])
-event_log_index_topic_singleton_keys = int(sys.argv[58])
-event_log_index_topic_multi_posting_keys = int(sys.argv[59])
+snapshot_point_tx_hash_lookup_segments = int(sys.argv[15])
+snapshot_point_tx_hash_lookup_bytes = int(sys.argv[16])
+snapshot_point_tx_hash_lookup_payload_bytes = int(sys.argv[17])
+snapshot_point_tx_hash_lookup_sidecar_bytes = int(sys.argv[18])
+snapshot_point_tx_hash_lookup_sidecar_share_milli = int(sys.argv[19])
+snapshot_point_tx_hash_lookup_share_milli = int(sys.argv[20])
+snapshot_point_event_log_index_segments = int(sys.argv[21])
+snapshot_point_event_log_index_bytes = int(sys.argv[22])
+snapshot_point_event_log_index_payload_bytes = int(sys.argv[23])
+snapshot_point_event_log_index_sidecar_bytes = int(sys.argv[24])
+snapshot_point_event_log_index_sidecar_share_milli = int(sys.argv[25])
+snapshot_point_event_log_index_share_milli = int(sys.argv[26])
+snapshot_point_state_history_accessor_segments = int(sys.argv[27])
+snapshot_point_state_history_accessor_bytes = int(sys.argv[28])
+snapshot_point_state_history_accessor_payload_bytes = int(sys.argv[29])
+snapshot_point_state_history_accessor_sidecar_bytes = int(sys.argv[30])
+snapshot_point_state_history_accessor_sidecar_share_milli = int(sys.argv[31])
+snapshot_point_state_history_accessor_share_milli = int(sys.argv[32])
+snapshot_point_latest_btree_segments = int(sys.argv[33])
+snapshot_point_latest_btree_bytes = int(sys.argv[34])
+snapshot_point_latest_btree_payload_bytes = int(sys.argv[35])
+snapshot_point_latest_btree_sidecar_bytes = int(sys.argv[36])
+snapshot_point_latest_btree_sidecar_share_milli = int(sys.argv[37])
+snapshot_point_latest_btree_share_milli = int(sys.argv[38])
+snapshot_point_chain_freezer_accessor_segments = int(sys.argv[39])
+snapshot_point_chain_freezer_accessor_bytes = int(sys.argv[40])
+snapshot_point_chain_freezer_accessor_payload_bytes = int(sys.argv[41])
+snapshot_point_chain_freezer_accessor_sidecar_bytes = int(sys.argv[42])
+snapshot_point_chain_freezer_accessor_sidecar_share_milli = int(sys.argv[43])
+snapshot_point_chain_freezer_accessor_share_milli = int(sys.argv[44])
+snapshot_point_code_domain_segments = int(sys.argv[45])
+snapshot_point_code_domain_bytes = int(sys.argv[46])
+snapshot_point_code_domain_payload_bytes = int(sys.argv[47])
+snapshot_point_code_domain_sidecar_bytes = int(sys.argv[48])
+snapshot_point_code_domain_sidecar_share_milli = int(sys.argv[49])
+snapshot_point_code_domain_share_milli = int(sys.argv[50])
+snapshot_point_commitment_snapshot_segments = int(sys.argv[51])
+snapshot_point_commitment_snapshot_bytes = int(sys.argv[52])
+snapshot_point_commitment_snapshot_payload_bytes = int(sys.argv[53])
+snapshot_point_commitment_snapshot_sidecar_bytes = int(sys.argv[54])
+snapshot_point_commitment_snapshot_sidecar_share_milli = int(sys.argv[55])
+snapshot_point_commitment_snapshot_share_milli = int(sys.argv[56])
+archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[57:61])
+archive_api_call_probe = sys.argv[61].lower() in {"1", "true", "yes"}
+archive_api_trace_transaction_probe = sys.argv[62].lower() in {"1", "true", "yes"}
+archive_api_methods_raw = sys.argv[63]
+archive_api_tx_probe = sys.argv[64].lower() in {"1", "true", "yes"}
+archive_api_tx_methods_raw = sys.argv[65]
+cold_freezer_to_block = int(sys.argv[66])
+derived_index_to_block = int(sys.argv[67])
+chain_lookup_prune_to_block = int(sys.argv[68])
+tail_pruned_through_block = int(sys.argv[69])
+balance_trace_prune_to_block = int(sys.argv[70])
+section_bloom_prune_to_section = int(sys.argv[71])
+signed_cold_prune = int(sys.argv[72])
+tail_pruned_files = int(sys.argv[73])
+history_window = int(sys.argv[74])
+event_log_index_segments = int(sys.argv[75])
+event_log_index_address_keys = int(sys.argv[76])
+event_log_index_address_postings = int(sys.argv[77])
+event_log_index_address_avg_postings_milli = int(sys.argv[78])
+event_log_index_address_max_postings = int(sys.argv[79])
+event_log_index_address_singleton_keys = int(sys.argv[80])
+event_log_index_address_multi_posting_keys = int(sys.argv[81])
+event_log_index_topic_keys = int(sys.argv[82])
+event_log_index_topic_postings = int(sys.argv[83])
+event_log_index_topic_avg_postings_milli = int(sys.argv[84])
+event_log_index_topic_max_postings = int(sys.argv[85])
+event_log_index_topic_singleton_keys = int(sys.argv[86])
+event_log_index_topic_multi_posting_keys = int(sys.argv[87])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -670,6 +740,34 @@ def labels_with(extra):
     labels_map.update(extra)
     return "{" + ",".join(f'{key}="{esc(labels_map[key])}"' for key in sorted(labels_map)) + "}"
 
+def snapshot_point_metrics(
+    slug,
+    display,
+    segments,
+    total_bytes,
+    payload_bytes,
+    sidecar_bytes,
+    sidecar_share_milli,
+    snapshot_share_milli,
+):
+    prefix = f"gtron_storage_benchmark_snapshot_point_{slug}"
+    return (
+        (f"{prefix}_segments", f"Benchmark snapshot segment count covered by the {display}.", segments),
+        (f"{prefix}_bytes", f"Benchmark snapshot bytes covered by the {display}.", total_bytes),
+        (f"{prefix}_payload_bytes", f"Benchmark snapshot payload bytes covered by the {display}.", payload_bytes),
+        (f"{prefix}_sidecar_bytes", f"Benchmark snapshot sidecar bytes covered by the {display}.", sidecar_bytes),
+        (
+            f"{prefix}_sidecar_share_milli",
+            f"Benchmark candidate-local sidecar share for the {display} in milli-units.",
+            sidecar_share_milli,
+        ),
+        (
+            f"{prefix}_snapshot_share_milli",
+            f"Benchmark snapshot-wide share for the {display} in milli-units.",
+            snapshot_share_milli,
+        ),
+    )
+
 metrics = (
     (
         "gtron_storage_benchmark_status",
@@ -689,20 +787,76 @@ metrics = (
     ("gtron_storage_benchmark_cold_archive_bytes_per_block", "Benchmark cold archive bytes per imported block.", cold_archive_per_block),
     ("gtron_storage_benchmark_derived_index_bytes_per_block", "Benchmark derived cold index bytes per imported block.", derived_index_per_block),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes", "Benchmark snapshot bytes covered by the tx-hash point lookup candidate.", snapshot_point_tx_hash_lookup_bytes),
-    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli", "Benchmark snapshot-wide share for the tx-hash point lookup candidate in milli-units.", snapshot_point_tx_hash_lookup_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_event_log_index_bytes", "Benchmark snapshot bytes covered by the event-log point lookup candidate.", snapshot_point_event_log_index_bytes),
-    ("gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli", "Benchmark snapshot-wide share for the event-log point lookup candidate in milli-units.", snapshot_point_event_log_index_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_state_history_accessor_bytes", "Benchmark snapshot bytes covered by the state-history accessor point lookup candidate.", snapshot_point_state_history_accessor_bytes),
-    ("gtron_storage_benchmark_snapshot_point_state_history_accessor_snapshot_share_milli", "Benchmark snapshot-wide share for the state-history accessor point lookup candidate in milli-units.", snapshot_point_state_history_accessor_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_latest_btree_bytes", "Benchmark snapshot bytes covered by the latest-BTree point lookup candidate.", snapshot_point_latest_btree_bytes),
-    ("gtron_storage_benchmark_snapshot_point_latest_btree_snapshot_share_milli", "Benchmark snapshot-wide share for the latest-BTree point lookup candidate in milli-units.", snapshot_point_latest_btree_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_bytes", "Benchmark snapshot bytes covered by the chain-freezer accessor point lookup candidate.", snapshot_point_chain_freezer_accessor_bytes),
-    ("gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_snapshot_share_milli", "Benchmark snapshot-wide share for the chain-freezer accessor point lookup candidate in milli-units.", snapshot_point_chain_freezer_accessor_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_code_domain_bytes", "Benchmark snapshot bytes covered by the CodeDomain point lookup candidate.", snapshot_point_code_domain_bytes),
-    ("gtron_storage_benchmark_snapshot_point_code_domain_snapshot_share_milli", "Benchmark snapshot-wide share for the CodeDomain point lookup candidate in milli-units.", snapshot_point_code_domain_share_milli),
-    ("gtron_storage_benchmark_snapshot_point_commitment_snapshot_bytes", "Benchmark snapshot bytes covered by the commitment-snapshot point lookup candidate.", snapshot_point_commitment_snapshot_bytes),
-    ("gtron_storage_benchmark_snapshot_point_commitment_snapshot_snapshot_share_milli", "Benchmark snapshot-wide share for the commitment-snapshot point lookup candidate in milli-units.", snapshot_point_commitment_snapshot_share_milli),
+    *snapshot_point_metrics(
+        "tx_hash_lookup",
+        "tx-hash point lookup candidate",
+        snapshot_point_tx_hash_lookup_segments,
+        snapshot_point_tx_hash_lookup_bytes,
+        snapshot_point_tx_hash_lookup_payload_bytes,
+        snapshot_point_tx_hash_lookup_sidecar_bytes,
+        snapshot_point_tx_hash_lookup_sidecar_share_milli,
+        snapshot_point_tx_hash_lookup_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "event_log_index",
+        "event-log point lookup candidate",
+        snapshot_point_event_log_index_segments,
+        snapshot_point_event_log_index_bytes,
+        snapshot_point_event_log_index_payload_bytes,
+        snapshot_point_event_log_index_sidecar_bytes,
+        snapshot_point_event_log_index_sidecar_share_milli,
+        snapshot_point_event_log_index_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "state_history_accessor",
+        "state-history accessor point lookup candidate",
+        snapshot_point_state_history_accessor_segments,
+        snapshot_point_state_history_accessor_bytes,
+        snapshot_point_state_history_accessor_payload_bytes,
+        snapshot_point_state_history_accessor_sidecar_bytes,
+        snapshot_point_state_history_accessor_sidecar_share_milli,
+        snapshot_point_state_history_accessor_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "latest_btree",
+        "latest-BTree point lookup candidate",
+        snapshot_point_latest_btree_segments,
+        snapshot_point_latest_btree_bytes,
+        snapshot_point_latest_btree_payload_bytes,
+        snapshot_point_latest_btree_sidecar_bytes,
+        snapshot_point_latest_btree_sidecar_share_milli,
+        snapshot_point_latest_btree_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "chain_freezer_accessor",
+        "chain-freezer accessor point lookup candidate",
+        snapshot_point_chain_freezer_accessor_segments,
+        snapshot_point_chain_freezer_accessor_bytes,
+        snapshot_point_chain_freezer_accessor_payload_bytes,
+        snapshot_point_chain_freezer_accessor_sidecar_bytes,
+        snapshot_point_chain_freezer_accessor_sidecar_share_milli,
+        snapshot_point_chain_freezer_accessor_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "code_domain",
+        "CodeDomain point lookup candidate",
+        snapshot_point_code_domain_segments,
+        snapshot_point_code_domain_bytes,
+        snapshot_point_code_domain_payload_bytes,
+        snapshot_point_code_domain_sidecar_bytes,
+        snapshot_point_code_domain_sidecar_share_milli,
+        snapshot_point_code_domain_share_milli,
+    ),
+    *snapshot_point_metrics(
+        "commitment_snapshot",
+        "commitment-snapshot point lookup candidate",
+        snapshot_point_commitment_snapshot_segments,
+        snapshot_point_commitment_snapshot_bytes,
+        snapshot_point_commitment_snapshot_payload_bytes,
+        snapshot_point_commitment_snapshot_sidecar_bytes,
+        snapshot_point_commitment_snapshot_sidecar_share_milli,
+        snapshot_point_commitment_snapshot_share_milli,
+    ),
     ("gtron_storage_benchmark_archive_api_checks", "Benchmark historical archive API probe check count.", archive_api_checks),
     ("gtron_storage_benchmark_archive_api_block", "Benchmark historical archive API probe block number.", archive_api_block),
     ("gtron_storage_benchmark_archive_api_depth_blocks", "Benchmark historical archive API probe depth below sampled head.", archive_api_depth_blocks),
@@ -938,23 +1092,34 @@ collect_event_log_index_stats() {
   RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS="${topic_multi:-0}"
 }
 
+snapshot_manifest_profile_default_values() {
+  local status="$1"
+  local missing_share=-1
+  printf '%s\n' "$status" 0 0 0 0 "$missing_share"
+  for _ in latest state-history chain-freezer event-log balance-trace section-bloom; do
+    printf '%s\n' 0 "$missing_share"
+  done
+  for _ in txHashLookup eventLogIndex stateHistoryAccessor latestBTree chainFreezerAccessor codeDomain commitmentSnapshot; do
+    printf '%s\n' 0 0 0 0 "$missing_share" "$missing_share"
+  done
+}
+
 snapshot_manifest_profile_values() {
   local snapshot_dir="$1"
   local log_path="$2"
-  local missing_share=-1
   if [ ! -f "$snapshot_dir/manifest.json" ]; then
-    printf '%s\n' "missing" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    snapshot_manifest_profile_default_values "missing"
     return
   fi
   if [ ! -x "$SNAPSHOT_PROFILE_SCRIPT" ]; then
     echo "warning: snapshot manifest profiler not executable: $SNAPSHOT_PROFILE_SCRIPT" >>"$log_path"
-    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    snapshot_manifest_profile_default_values "error"
     return
   fi
   local profile_out="$WORKDIR/snapshot-profile-$(basename "$(dirname "$(dirname "$snapshot_dir")")").json"
   if ! "$SNAPSHOT_PROFILE_SCRIPT" "$snapshot_dir" --json >"$profile_out" 2>>"$log_path"; then
     echo "warning: snapshot manifest profile failed for $snapshot_dir; see $log_path" >>"$log_path"
-    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    snapshot_manifest_profile_default_values "error"
     return
   fi
   python3 - "$profile_out" <<'PY'
@@ -1008,7 +1173,11 @@ for candidate in (
     "codeDomain",
     "commitmentSnapshot",
 ):
+    print(point_value(candidate, "segments"))
     print(point_value(candidate, "totalBytes"))
+    print(point_value(candidate, "payloadBytes"))
+    print(point_value(candidate, "sidecarBytes"))
+    print(point_value(candidate, "sidecarShareMilli", -1))
     print(point_value(candidate, "snapshotShareMilli", -1))
 PY
 }
@@ -1673,13 +1842,13 @@ emit_result() {
   local snapshot_event_log_sidecar_bytes snapshot_event_log_sidecar_share_milli
   local snapshot_balance_trace_sidecar_bytes snapshot_balance_trace_sidecar_share_milli
   local snapshot_section_bloom_sidecar_bytes snapshot_section_bloom_sidecar_share_milli
-  local snapshot_point_tx_hash_lookup_bytes snapshot_point_tx_hash_lookup_share_milli
-  local snapshot_point_event_log_index_bytes snapshot_point_event_log_index_share_milli
-  local snapshot_point_state_history_accessor_bytes snapshot_point_state_history_accessor_share_milli
-  local snapshot_point_latest_btree_bytes snapshot_point_latest_btree_share_milli
-  local snapshot_point_chain_freezer_accessor_bytes snapshot_point_chain_freezer_accessor_share_milli
-  local snapshot_point_code_domain_bytes snapshot_point_code_domain_share_milli
-  local snapshot_point_commitment_snapshot_bytes snapshot_point_commitment_snapshot_share_milli
+  local snapshot_point_tx_hash_lookup_segments snapshot_point_tx_hash_lookup_bytes snapshot_point_tx_hash_lookup_payload_bytes snapshot_point_tx_hash_lookup_sidecar_bytes snapshot_point_tx_hash_lookup_sidecar_share_milli snapshot_point_tx_hash_lookup_share_milli
+  local snapshot_point_event_log_index_segments snapshot_point_event_log_index_bytes snapshot_point_event_log_index_payload_bytes snapshot_point_event_log_index_sidecar_bytes snapshot_point_event_log_index_sidecar_share_milli snapshot_point_event_log_index_share_milli
+  local snapshot_point_state_history_accessor_segments snapshot_point_state_history_accessor_bytes snapshot_point_state_history_accessor_payload_bytes snapshot_point_state_history_accessor_sidecar_bytes snapshot_point_state_history_accessor_sidecar_share_milli snapshot_point_state_history_accessor_share_milli
+  local snapshot_point_latest_btree_segments snapshot_point_latest_btree_bytes snapshot_point_latest_btree_payload_bytes snapshot_point_latest_btree_sidecar_bytes snapshot_point_latest_btree_sidecar_share_milli snapshot_point_latest_btree_share_milli
+  local snapshot_point_chain_freezer_accessor_segments snapshot_point_chain_freezer_accessor_bytes snapshot_point_chain_freezer_accessor_payload_bytes snapshot_point_chain_freezer_accessor_sidecar_bytes snapshot_point_chain_freezer_accessor_sidecar_share_milli snapshot_point_chain_freezer_accessor_share_milli
+  local snapshot_point_code_domain_segments snapshot_point_code_domain_bytes snapshot_point_code_domain_payload_bytes snapshot_point_code_domain_sidecar_bytes snapshot_point_code_domain_sidecar_share_milli snapshot_point_code_domain_share_milli
+  local snapshot_point_commitment_snapshot_segments snapshot_point_commitment_snapshot_bytes snapshot_point_commitment_snapshot_payload_bytes snapshot_point_commitment_snapshot_sidecar_bytes snapshot_point_commitment_snapshot_sidecar_share_milli snapshot_point_commitment_snapshot_share_milli
   snapshot_profile_status="$(printf '%s\n' "$profile_values" | sed -n '1p')"
   snapshot_profile_segments="$(printf '%s\n' "$profile_values" | sed -n '2p')"
   snapshot_profile_total_bytes="$(printf '%s\n' "$profile_values" | sed -n '3p')"
@@ -1698,31 +1867,73 @@ emit_result() {
   snapshot_balance_trace_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '16p')"
   snapshot_section_bloom_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '17p')"
   snapshot_section_bloom_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '18p')"
-  snapshot_point_tx_hash_lookup_bytes="$(printf '%s\n' "$profile_values" | sed -n '19p')"
-  snapshot_point_tx_hash_lookup_share_milli="$(printf '%s\n' "$profile_values" | sed -n '20p')"
-  snapshot_point_event_log_index_bytes="$(printf '%s\n' "$profile_values" | sed -n '21p')"
-  snapshot_point_event_log_index_share_milli="$(printf '%s\n' "$profile_values" | sed -n '22p')"
-  snapshot_point_state_history_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '23p')"
-  snapshot_point_state_history_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '24p')"
-  snapshot_point_latest_btree_bytes="$(printf '%s\n' "$profile_values" | sed -n '25p')"
-  snapshot_point_latest_btree_share_milli="$(printf '%s\n' "$profile_values" | sed -n '26p')"
-  snapshot_point_chain_freezer_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '27p')"
-  snapshot_point_chain_freezer_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '28p')"
-  snapshot_point_code_domain_bytes="$(printf '%s\n' "$profile_values" | sed -n '29p')"
-  snapshot_point_code_domain_share_milli="$(printf '%s\n' "$profile_values" | sed -n '30p')"
-  snapshot_point_commitment_snapshot_bytes="$(printf '%s\n' "$profile_values" | sed -n '31p')"
-  snapshot_point_commitment_snapshot_share_milli="$(printf '%s\n' "$profile_values" | sed -n '32p')"
+  snapshot_point_tx_hash_lookup_segments="$(printf '%s\n' "$profile_values" | sed -n '19p')"
+  snapshot_point_tx_hash_lookup_bytes="$(printf '%s\n' "$profile_values" | sed -n '20p')"
+  snapshot_point_tx_hash_lookup_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '21p')"
+  snapshot_point_tx_hash_lookup_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '22p')"
+  snapshot_point_tx_hash_lookup_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '23p')"
+  snapshot_point_tx_hash_lookup_share_milli="$(printf '%s\n' "$profile_values" | sed -n '24p')"
+  snapshot_point_event_log_index_segments="$(printf '%s\n' "$profile_values" | sed -n '25p')"
+  snapshot_point_event_log_index_bytes="$(printf '%s\n' "$profile_values" | sed -n '26p')"
+  snapshot_point_event_log_index_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '27p')"
+  snapshot_point_event_log_index_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '28p')"
+  snapshot_point_event_log_index_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '29p')"
+  snapshot_point_event_log_index_share_milli="$(printf '%s\n' "$profile_values" | sed -n '30p')"
+  snapshot_point_state_history_accessor_segments="$(printf '%s\n' "$profile_values" | sed -n '31p')"
+  snapshot_point_state_history_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '32p')"
+  snapshot_point_state_history_accessor_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '33p')"
+  snapshot_point_state_history_accessor_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '34p')"
+  snapshot_point_state_history_accessor_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '35p')"
+  snapshot_point_state_history_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '36p')"
+  snapshot_point_latest_btree_segments="$(printf '%s\n' "$profile_values" | sed -n '37p')"
+  snapshot_point_latest_btree_bytes="$(printf '%s\n' "$profile_values" | sed -n '38p')"
+  snapshot_point_latest_btree_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '39p')"
+  snapshot_point_latest_btree_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '40p')"
+  snapshot_point_latest_btree_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '41p')"
+  snapshot_point_latest_btree_share_milli="$(printf '%s\n' "$profile_values" | sed -n '42p')"
+  snapshot_point_chain_freezer_accessor_segments="$(printf '%s\n' "$profile_values" | sed -n '43p')"
+  snapshot_point_chain_freezer_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '44p')"
+  snapshot_point_chain_freezer_accessor_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '45p')"
+  snapshot_point_chain_freezer_accessor_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '46p')"
+  snapshot_point_chain_freezer_accessor_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '47p')"
+  snapshot_point_chain_freezer_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '48p')"
+  snapshot_point_code_domain_segments="$(printf '%s\n' "$profile_values" | sed -n '49p')"
+  snapshot_point_code_domain_bytes="$(printf '%s\n' "$profile_values" | sed -n '50p')"
+  snapshot_point_code_domain_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '51p')"
+  snapshot_point_code_domain_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '52p')"
+  snapshot_point_code_domain_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '53p')"
+  snapshot_point_code_domain_share_milli="$(printf '%s\n' "$profile_values" | sed -n '54p')"
+  snapshot_point_commitment_snapshot_segments="$(printf '%s\n' "$profile_values" | sed -n '55p')"
+  snapshot_point_commitment_snapshot_bytes="$(printf '%s\n' "$profile_values" | sed -n '56p')"
+  snapshot_point_commitment_snapshot_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '57p')"
+  snapshot_point_commitment_snapshot_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '58p')"
+  snapshot_point_commitment_snapshot_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '59p')"
+  snapshot_point_commitment_snapshot_share_milli="$(printf '%s\n' "$profile_values" | sed -n '60p')"
   local benchmark_prometheus="$ARTIFACT_DIR/$mode-$role-storage-benchmark.prom"
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
     "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
-    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
-    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
-    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
-    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
-    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
-    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
-    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
+    "$snapshot_point_tx_hash_lookup_segments" "$snapshot_point_tx_hash_lookup_bytes" \
+    "$snapshot_point_tx_hash_lookup_payload_bytes" "$snapshot_point_tx_hash_lookup_sidecar_bytes" \
+    "$snapshot_point_tx_hash_lookup_sidecar_share_milli" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_segments" "$snapshot_point_event_log_index_bytes" \
+    "$snapshot_point_event_log_index_payload_bytes" "$snapshot_point_event_log_index_sidecar_bytes" \
+    "$snapshot_point_event_log_index_sidecar_share_milli" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_segments" "$snapshot_point_state_history_accessor_bytes" \
+    "$snapshot_point_state_history_accessor_payload_bytes" "$snapshot_point_state_history_accessor_sidecar_bytes" \
+    "$snapshot_point_state_history_accessor_sidecar_share_milli" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_segments" "$snapshot_point_latest_btree_bytes" \
+    "$snapshot_point_latest_btree_payload_bytes" "$snapshot_point_latest_btree_sidecar_bytes" \
+    "$snapshot_point_latest_btree_sidecar_share_milli" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_segments" "$snapshot_point_chain_freezer_accessor_bytes" \
+    "$snapshot_point_chain_freezer_accessor_payload_bytes" "$snapshot_point_chain_freezer_accessor_sidecar_bytes" \
+    "$snapshot_point_chain_freezer_accessor_sidecar_share_milli" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_segments" "$snapshot_point_code_domain_bytes" \
+    "$snapshot_point_code_domain_payload_bytes" "$snapshot_point_code_domain_sidecar_bytes" \
+    "$snapshot_point_code_domain_sidecar_share_milli" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_segments" "$snapshot_point_commitment_snapshot_bytes" \
+    "$snapshot_point_commitment_snapshot_payload_bytes" "$snapshot_point_commitment_snapshot_sidecar_bytes" \
+    "$snapshot_point_commitment_snapshot_sidecar_share_milli" "$snapshot_point_commitment_snapshot_share_milli" \
     "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
     "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS" \
@@ -1748,13 +1959,27 @@ emit_result() {
     "$snapshot_event_log_sidecar_bytes" "$snapshot_event_log_sidecar_share_milli" \
     "$snapshot_balance_trace_sidecar_bytes" "$snapshot_balance_trace_sidecar_share_milli" \
     "$snapshot_section_bloom_sidecar_bytes" "$snapshot_section_bloom_sidecar_share_milli" \
-    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
-    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
-    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
-    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
-    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
-    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
-    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
+    "$snapshot_point_tx_hash_lookup_segments" "$snapshot_point_tx_hash_lookup_bytes" \
+    "$snapshot_point_tx_hash_lookup_payload_bytes" "$snapshot_point_tx_hash_lookup_sidecar_bytes" \
+    "$snapshot_point_tx_hash_lookup_sidecar_share_milli" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_segments" "$snapshot_point_event_log_index_bytes" \
+    "$snapshot_point_event_log_index_payload_bytes" "$snapshot_point_event_log_index_sidecar_bytes" \
+    "$snapshot_point_event_log_index_sidecar_share_milli" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_segments" "$snapshot_point_state_history_accessor_bytes" \
+    "$snapshot_point_state_history_accessor_payload_bytes" "$snapshot_point_state_history_accessor_sidecar_bytes" \
+    "$snapshot_point_state_history_accessor_sidecar_share_milli" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_segments" "$snapshot_point_latest_btree_bytes" \
+    "$snapshot_point_latest_btree_payload_bytes" "$snapshot_point_latest_btree_sidecar_bytes" \
+    "$snapshot_point_latest_btree_sidecar_share_milli" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_segments" "$snapshot_point_chain_freezer_accessor_bytes" \
+    "$snapshot_point_chain_freezer_accessor_payload_bytes" "$snapshot_point_chain_freezer_accessor_sidecar_bytes" \
+    "$snapshot_point_chain_freezer_accessor_sidecar_share_milli" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_segments" "$snapshot_point_code_domain_bytes" \
+    "$snapshot_point_code_domain_payload_bytes" "$snapshot_point_code_domain_sidecar_bytes" \
+    "$snapshot_point_code_domain_sidecar_share_milli" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_segments" "$snapshot_point_commitment_snapshot_bytes" \
+    "$snapshot_point_commitment_snapshot_payload_bytes" "$snapshot_point_commitment_snapshot_sidecar_bytes" \
+    "$snapshot_point_commitment_snapshot_sidecar_share_milli" "$snapshot_point_commitment_snapshot_share_milli" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
     "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_EVENT_LOG_INDEX_SEGMENTS" \
     "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" \
@@ -1806,13 +2031,30 @@ keys = [
     "snapshotEventLogSidecarBytes", "snapshotEventLogSidecarShareMilli",
     "snapshotBalanceTraceSidecarBytes", "snapshotBalanceTraceSidecarShareMilli",
     "snapshotSectionBloomSidecarBytes", "snapshotSectionBloomSidecarShareMilli",
-    "snapshotPointTxHashLookupBytes", "snapshotPointTxHashLookupSnapshotShareMilli",
-    "snapshotPointEventLogIndexBytes", "snapshotPointEventLogIndexSnapshotShareMilli",
-    "snapshotPointStateHistoryAccessorBytes", "snapshotPointStateHistoryAccessorSnapshotShareMilli",
-    "snapshotPointLatestBTreeBytes", "snapshotPointLatestBTreeSnapshotShareMilli",
-    "snapshotPointChainFreezerAccessorBytes", "snapshotPointChainFreezerAccessorSnapshotShareMilli",
-    "snapshotPointCodeDomainBytes", "snapshotPointCodeDomainSnapshotShareMilli",
-    "snapshotPointCommitmentSnapshotBytes", "snapshotPointCommitmentSnapshotSnapshotShareMilli",
+    "snapshotPointTxHashLookupSegments", "snapshotPointTxHashLookupBytes",
+    "snapshotPointTxHashLookupPayloadBytes", "snapshotPointTxHashLookupSidecarBytes",
+    "snapshotPointTxHashLookupSidecarShareMilli", "snapshotPointTxHashLookupSnapshotShareMilli",
+    "snapshotPointEventLogIndexSegments", "snapshotPointEventLogIndexBytes",
+    "snapshotPointEventLogIndexPayloadBytes", "snapshotPointEventLogIndexSidecarBytes",
+    "snapshotPointEventLogIndexSidecarShareMilli", "snapshotPointEventLogIndexSnapshotShareMilli",
+    "snapshotPointStateHistoryAccessorSegments", "snapshotPointStateHistoryAccessorBytes",
+    "snapshotPointStateHistoryAccessorPayloadBytes", "snapshotPointStateHistoryAccessorSidecarBytes",
+    "snapshotPointStateHistoryAccessorSidecarShareMilli",
+    "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    "snapshotPointLatestBTreeSegments", "snapshotPointLatestBTreeBytes",
+    "snapshotPointLatestBTreePayloadBytes", "snapshotPointLatestBTreeSidecarBytes",
+    "snapshotPointLatestBTreeSidecarShareMilli", "snapshotPointLatestBTreeSnapshotShareMilli",
+    "snapshotPointChainFreezerAccessorSegments", "snapshotPointChainFreezerAccessorBytes",
+    "snapshotPointChainFreezerAccessorPayloadBytes", "snapshotPointChainFreezerAccessorSidecarBytes",
+    "snapshotPointChainFreezerAccessorSidecarShareMilli",
+    "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    "snapshotPointCodeDomainSegments", "snapshotPointCodeDomainBytes",
+    "snapshotPointCodeDomainPayloadBytes", "snapshotPointCodeDomainSidecarBytes",
+    "snapshotPointCodeDomainSidecarShareMilli", "snapshotPointCodeDomainSnapshotShareMilli",
+    "snapshotPointCommitmentSnapshotSegments", "snapshotPointCommitmentSnapshotBytes",
+    "snapshotPointCommitmentSnapshotPayloadBytes", "snapshotPointCommitmentSnapshotSidecarBytes",
+    "snapshotPointCommitmentSnapshotSidecarShareMilli",
+    "snapshotPointCommitmentSnapshotSnapshotShareMilli",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
     "derivedIndexBuildSeconds", "eventLogIndexSegments", "eventLogIndexAddressKeys",
     "eventLogIndexAddressPostings", "eventLogIndexAddressAvgPostingsMilli",
@@ -1861,13 +2103,30 @@ ints = {
     "snapshotEventLogSidecarShareMilli", "snapshotBalanceTraceSidecarBytes",
     "snapshotBalanceTraceSidecarShareMilli", "snapshotSectionBloomSidecarBytes",
     "snapshotSectionBloomSidecarShareMilli",
-    "snapshotPointTxHashLookupBytes", "snapshotPointTxHashLookupSnapshotShareMilli",
-    "snapshotPointEventLogIndexBytes", "snapshotPointEventLogIndexSnapshotShareMilli",
-    "snapshotPointStateHistoryAccessorBytes", "snapshotPointStateHistoryAccessorSnapshotShareMilli",
-    "snapshotPointLatestBTreeBytes", "snapshotPointLatestBTreeSnapshotShareMilli",
-    "snapshotPointChainFreezerAccessorBytes", "snapshotPointChainFreezerAccessorSnapshotShareMilli",
-    "snapshotPointCodeDomainBytes", "snapshotPointCodeDomainSnapshotShareMilli",
-    "snapshotPointCommitmentSnapshotBytes", "snapshotPointCommitmentSnapshotSnapshotShareMilli",
+    "snapshotPointTxHashLookupSegments", "snapshotPointTxHashLookupBytes",
+    "snapshotPointTxHashLookupPayloadBytes", "snapshotPointTxHashLookupSidecarBytes",
+    "snapshotPointTxHashLookupSidecarShareMilli", "snapshotPointTxHashLookupSnapshotShareMilli",
+    "snapshotPointEventLogIndexSegments", "snapshotPointEventLogIndexBytes",
+    "snapshotPointEventLogIndexPayloadBytes", "snapshotPointEventLogIndexSidecarBytes",
+    "snapshotPointEventLogIndexSidecarShareMilli", "snapshotPointEventLogIndexSnapshotShareMilli",
+    "snapshotPointStateHistoryAccessorSegments", "snapshotPointStateHistoryAccessorBytes",
+    "snapshotPointStateHistoryAccessorPayloadBytes", "snapshotPointStateHistoryAccessorSidecarBytes",
+    "snapshotPointStateHistoryAccessorSidecarShareMilli",
+    "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    "snapshotPointLatestBTreeSegments", "snapshotPointLatestBTreeBytes",
+    "snapshotPointLatestBTreePayloadBytes", "snapshotPointLatestBTreeSidecarBytes",
+    "snapshotPointLatestBTreeSidecarShareMilli", "snapshotPointLatestBTreeSnapshotShareMilli",
+    "snapshotPointChainFreezerAccessorSegments", "snapshotPointChainFreezerAccessorBytes",
+    "snapshotPointChainFreezerAccessorPayloadBytes", "snapshotPointChainFreezerAccessorSidecarBytes",
+    "snapshotPointChainFreezerAccessorSidecarShareMilli",
+    "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    "snapshotPointCodeDomainSegments", "snapshotPointCodeDomainBytes",
+    "snapshotPointCodeDomainPayloadBytes", "snapshotPointCodeDomainSidecarBytes",
+    "snapshotPointCodeDomainSidecarShareMilli", "snapshotPointCodeDomainSnapshotShareMilli",
+    "snapshotPointCommitmentSnapshotSegments", "snapshotPointCommitmentSnapshotBytes",
+    "snapshotPointCommitmentSnapshotPayloadBytes", "snapshotPointCommitmentSnapshotSidecarBytes",
+    "snapshotPointCommitmentSnapshotSidecarShareMilli",
+    "snapshotPointCommitmentSnapshotSnapshotShareMilli",
     "eventLogIndexSegments", "eventLogIndexAddressKeys", "eventLogIndexAddressPostings",
     "eventLogIndexAddressAvgPostingsMilli", "eventLogIndexAddressMaxPostings",
     "eventLogIndexAddressSingletonKeys", "eventLogIndexAddressMultiPostingKeys",

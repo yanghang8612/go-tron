@@ -840,11 +840,23 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
             self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
             self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
+            self.assertEqual(row["snapshotPointTxHashLookupSegments"], 1)
             self.assertEqual(row["snapshotPointTxHashLookupBytes"], 100)
+            self.assertEqual(row["snapshotPointTxHashLookupPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointTxHashLookupSidecarBytes"], 100)
+            self.assertEqual(row["snapshotPointTxHashLookupSidecarShareMilli"], 1000)
             self.assertEqual(row["snapshotPointTxHashLookupSnapshotShareMilli"], 63)
+            self.assertEqual(row["snapshotPointEventLogIndexSegments"], 1)
             self.assertEqual(row["snapshotPointEventLogIndexBytes"], 200)
+            self.assertEqual(row["snapshotPointEventLogIndexPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointEventLogIndexSidecarBytes"], 200)
+            self.assertEqual(row["snapshotPointEventLogIndexSidecarShareMilli"], 1000)
             self.assertEqual(row["snapshotPointEventLogIndexSnapshotShareMilli"], 125)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorSegments"], 0)
             self.assertEqual(row["snapshotPointStateHistoryAccessorBytes"], 0)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorSidecarBytes"], 0)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorSidecarShareMilli"], 0)
             self.assertEqual(row["snapshotPointStateHistoryAccessorSnapshotShareMilli"], 0)
             self.assertEqual(row["derivedIndexFiles"], 2)
             self.assertGreater(row["derivedIndexBytes"], 0)
@@ -858,12 +870,26 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_chain_lookup_prune_to_block\{[^}]*\} -1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_signed_cold_prune\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_tail_pruned_files\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_segments\{[^}]*\} 1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes\{[^}]*\} 100\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_payload_bytes\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_sidecar_bytes\{[^}]*\} 100\n")
+            self.assertRegex(
+                benchmark_metrics,
+                r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_sidecar_share_milli\{[^}]*\} 1000\n",
+            )
             self.assertRegex(
                 benchmark_metrics,
                 r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli\{[^}]*\} 63\n",
             )
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_segments\{[^}]*\} 1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_bytes\{[^}]*\} 200\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_payload_bytes\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_sidecar_bytes\{[^}]*\} 200\n")
+            self.assertRegex(
+                benchmark_metrics,
+                r"gtron_storage_benchmark_snapshot_point_event_log_index_sidecar_share_milli\{[^}]*\} 1000\n",
+            )
             self.assertRegex(
                 benchmark_metrics,
                 r"gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli\{[^}]*\} 125\n",

@@ -537,11 +537,11 @@ totals, a recomputable `snapshotSidecarShareMilli`, and sane per-family
 `snapshot*SidecarShareMilli` fields. Pair it with `--max
 snapshotSidecarShareMilli=...` or family gates such as `--max
 snapshotEventLogSidecarShareMilli=...` to keep sidecar overhead within the
-Nile/mainnet storage budget. The sampler also records `snapshotPoint*Bytes`
-and `snapshotPoint*SnapshotShareMilli` fields for the P3 decisions:
-`txHashLookup`, `eventLogIndex`, `stateHistoryAccessor`, `latestBTree`,
-`chainFreezerAccessor`, `codeDomain`, and `commitmentSnapshot`. When a sample
-indicates sidecar pressure, run
+Nile/mainnet storage budget. The sampler also records
+`snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`
+fields for the P3 decisions: `txHashLookup`, `eventLogIndex`,
+`stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
+and `commitmentSnapshot`. When a sample indicates sidecar pressure, run
 `scripts/dev/snapshot_manifest_profile.py <state-snapshots> --json` against
 the saved datadir for the full `pointIndexCandidates` breakdown.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only

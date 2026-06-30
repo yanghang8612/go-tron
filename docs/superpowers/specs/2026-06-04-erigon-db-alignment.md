@@ -2103,8 +2103,8 @@ Status:
   whether recsplit-style accessors or existence filters are justified before
   adding another on-disk format. `storage_benchmark.sh` and
   `nile_sync_sample.sh` surface the same candidate totals as
-  `snapshotPoint*Bytes` / `snapshotPoint*SnapshotShareMilli` JSONL fields and
-  `gtron_*_snapshot_point_*` Prometheus gauges.
+  `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`
+  JSONL fields and matching `gtron_*_snapshot_point_*` Prometheus gauges.
 
 Adopt only where profiles justify it:
 

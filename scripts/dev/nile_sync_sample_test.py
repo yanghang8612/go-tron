@@ -492,11 +492,23 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
             self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
             self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
+            self.assertEqual(row["snapshotPointTxHashLookupSegments"], 1)
             self.assertEqual(row["snapshotPointTxHashLookupBytes"], 100)
+            self.assertEqual(row["snapshotPointTxHashLookupPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointTxHashLookupSidecarBytes"], 100)
+            self.assertEqual(row["snapshotPointTxHashLookupSidecarShareMilli"], 1000)
             self.assertEqual(row["snapshotPointTxHashLookupSnapshotShareMilli"], 63)
+            self.assertEqual(row["snapshotPointEventLogIndexSegments"], 1)
             self.assertEqual(row["snapshotPointEventLogIndexBytes"], 200)
+            self.assertEqual(row["snapshotPointEventLogIndexPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointEventLogIndexSidecarBytes"], 200)
+            self.assertEqual(row["snapshotPointEventLogIndexSidecarShareMilli"], 1000)
             self.assertEqual(row["snapshotPointEventLogIndexSnapshotShareMilli"], 125)
+            self.assertEqual(row["snapshotPointCodeDomainSegments"], 0)
             self.assertEqual(row["snapshotPointCodeDomainBytes"], 0)
+            self.assertEqual(row["snapshotPointCodeDomainPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointCodeDomainSidecarBytes"], 0)
+            self.assertEqual(row["snapshotPointCodeDomainSidecarShareMilli"], 0)
             self.assertEqual(row["snapshotPointCodeDomainSnapshotShareMilli"], 0)
             self.assertEqual(row["snapshotLatestSidecarBytes"], 0)
             self.assertEqual(row["snapshotLatestSidecarShareMilli"], -1)
@@ -505,12 +517,38 @@ class NileSyncSampleTest(unittest.TestCase):
                 f'datadir="{datadir}",label="{row["label"]}",'
                 f'mode="{row["mode"]}",network="{row["network"]}"'
             )
+            self.assertIn(f"gtron_nile_sync_snapshot_point_tx_hash_lookup_segments{{{labels}}} 1", metrics)
             self.assertIn(f"gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes{{{labels}}} 100", metrics)
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_tx_hash_lookup_payload_bytes{{{labels}}} 0",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_bytes{{{labels}}} 100",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_tx_hash_lookup_sidecar_share_milli{{{labels}}} 1000",
+                metrics,
+            )
             self.assertIn(
                 f"gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli{{{labels}}} 63",
                 metrics,
             )
+            self.assertIn(f"gtron_nile_sync_snapshot_point_event_log_index_segments{{{labels}}} 1", metrics)
             self.assertIn(f"gtron_nile_sync_snapshot_point_event_log_index_bytes{{{labels}}} 200", metrics)
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_event_log_index_payload_bytes{{{labels}}} 0",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_event_log_index_sidecar_bytes{{{labels}}} 200",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_event_log_index_sidecar_share_milli{{{labels}}} 1000",
+                metrics,
+            )
             self.assertIn(
                 f"gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli{{{labels}}} 125",
                 metrics,
