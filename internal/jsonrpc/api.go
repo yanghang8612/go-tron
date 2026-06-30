@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -957,6 +958,9 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 	if index < 0 {
 		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
 	}
+	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
 func (api *API) ethGetBlockReceipts(params json.RawMessage) (interface{}, error) {
@@ -1178,6 +1182,9 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 			return nil, fmt.Errorf("block %d transaction info %d is nil", block.Number(), i)
 		}
 		hash := tx.Hash()
+		if err := validateTransactionInfoID(hash, infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
+			return nil, err
+		}
 		out = append(out, receiptToRPC(hash, tx.Proto(), infos[i], block, i))
 	}
 	return out, nil
@@ -1189,6 +1196,19 @@ func transactionReceiptLookupError(hash common.Hash) error {
 
 func rpcHashHex(hash common.Hash) string {
 	return "0x" + hash.Hex()
+}
+
+func validateTransactionInfoID(hash common.Hash, info *corepb.TransactionInfo, context string) error {
+	if info == nil || len(info.Id) == 0 {
+		return nil
+	}
+	if len(info.Id) != common.HashLength {
+		return fmt.Errorf("%s transaction info id length %d, want %d", context, len(info.Id), common.HashLength)
+	}
+	if !bytes.Equal(info.Id, hash[:]) {
+		return fmt.Errorf("%s transaction info id 0x%x does not match transaction hash %s", context, info.Id, rpcHashHex(hash))
+	}
+	return nil
 }
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.

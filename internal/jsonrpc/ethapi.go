@@ -479,6 +479,9 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	if index < 0 {
 		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
 	}
+	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
 

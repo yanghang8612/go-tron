@@ -261,7 +261,11 @@ Status:
   invariant at the API boundary: if `TransactionInfo` exists but the matching
   transaction lookup, block, or block-local index is missing, both the legacy
   handler and reflection `EthAPI` return an archive data error instead of
-  disguising the inconsistent receipt as `null`.
+  disguising the inconsistent receipt as `null`. Receipt rendering now also
+  rejects non-empty `TransactionInfo.Id` values that do not match the
+  canonical transaction hash from the block body, while preserving legacy
+  no-id `TransactionRet` payloads whose block-local position is the only
+  available binding.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the
