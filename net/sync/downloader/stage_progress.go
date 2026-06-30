@@ -2093,17 +2093,51 @@ func RepairSyncPipelineProgressOrderFromDB(db ethdb.KeyValueStore, opts SyncPipe
 		result.ErrorStage = result.Before.ReadErrors[0].Stage
 		return result
 	}
-	if len(result.Before.Issues) == 0 {
-		result.After = result.Before
-		result.Complete = true
-		return result
-	}
 	rows := make(map[rawdb.StageID]rawdb.StageProgress, len(result.Before.Rows))
 	for _, row := range result.Before.Rows {
 		rows[row.Stage] = row
 	}
 	deleted := make(map[rawdb.StageID]struct{})
+	for _, stage := range FullSyncPipelineProgressStages() {
+		row, ok := rows[stage]
+		if !ok || row.HasBlockHash {
+			continue
+		}
+		repair := SyncPipelineProgressOrderRepair{
+			Stage: stage,
+			Row:   row,
+		}
+		if err := rawdb.DeleteStageProgress(db, stage); err != nil {
+			repair.DeleteError = err
+			result.Repairs = append(result.Repairs, repair)
+			result.Interrupted = true
+			result.ErrorStage = stage
+			return result
+		}
+		result.Repairs = append(result.Repairs, repair)
+		result.Deleted++
+		deleted[stage] = struct{}{}
+		delete(rows, stage)
+	}
+	if len(result.Before.Issues) == 0 {
+		if len(result.Repairs) == 0 {
+			result.After = result.Before
+			result.Complete = true
+			return result
+		}
+		result.After = CheckSyncPipelineProgressOrderFromDB(db, opts)
+		if len(result.After.ReadErrors) > 0 {
+			result.Interrupted = true
+			result.ErrorStage = result.After.ReadErrors[0].Stage
+			return result
+		}
+		result.Complete = len(result.After.Issues) == 0 && !result.Interrupted
+		return result
+	}
 	for _, issue := range result.Before.Issues {
+		if _, ok := deleted[issue.Downstream]; ok {
+			continue
+		}
 		if issue.Downstream == rawdb.StageSyncBodiesReady && issue.Upstream == rawdb.StageSyncBodies {
 			if repair, ok := repairSyncBodiesProgressFromReady(db, rows[rawdb.StageSyncBodiesReady], issue); ok {
 				result.Repairs = append(result.Repairs, repair)

@@ -1564,6 +1564,40 @@ func TestRepairSyncPipelineProgressOrderFromDBDeletesDownstreamTail(t *testing.T
 	}
 }
 
+func TestRepairSyncPipelineProgressOrderFromDBDeletesUnboundFullPipelineRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x09}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodies, 7); err != nil {
+		t.Fatalf("write legacy SyncBodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodiesReady, 8); err != nil {
+		t.Fatalf("write legacy SyncBodiesReady progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 8, hash); err != nil {
+		t.Fatalf("write hash-bound SyncImport progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Interrupted || got.Deleted != 2 || got.Updated != 0 || len(got.Repairs) != 2 {
+		t.Fatalf("repair result = %+v, want two legacy unbound rows deleted", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncBodiesReady {
+		t.Fatalf("before issues = %+v, want ready ahead of bodies before legacy cleanup", got.Before.Issues)
+	}
+	if len(got.After.Issues) != 0 || len(got.After.ReadErrors) != 0 {
+		t.Fatalf("after check = %+v, want clean order after legacy cleanup", got.After)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want deleted legacy row", stage, row, ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncImport); err != nil || !ok ||
+		row.BlockNum != 8 || row.BlockHash != hash || !row.HasBlockHash {
+		t.Fatalf("SyncImport after repair = %+v ok=%v err=%v, want hash-bound row kept", row, ok, err)
+	}
+}
+
 func TestRepairSyncPipelineProgressOrderFromDBAdvancesBodiesFromVerifiedReady(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	block7 := testBufferedBlock(7)
