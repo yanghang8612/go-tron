@@ -255,6 +255,57 @@ func CheckEventLogSegment(dir string, ref SegmentRef) error {
 	return checkEventLogIndex(file, ref, header, fileSize)
 }
 
+func checkEventLogSegmentPayload(dir string, ref SegmentRef) error {
+	if err := validateEventLogRef(ref); err != nil {
+		return err
+	}
+	if err := checkSegmentFileMetadata(dir, ref, false); err != nil {
+		return err
+	}
+	file, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		return err
+	}
+	fileSize := uint64(stat.Size())
+	if err := validateEventLogHeader(ref, header, fileSize); err != nil {
+		return err
+	}
+	_, _, err = checkEventLogPayloadIndex(file, ref, header, fileSize)
+	return err
+}
+
+func checkCoveredEventLogPayloads(dir string, refs []SegmentRef, fromBlock, toBlock uint64) error {
+	next := fromBlock
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return fmt.Errorf("snapshots: event log range [%d,%d] is not continuously covered", fromBlock, toBlock)
+		}
+		if err := checkEventLogSegmentPayload(dir, ref); err != nil {
+			return err
+		}
+		if ref.ToTxNum >= toBlock {
+			return nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			break
+		}
+		next = ref.ToTxNum + 1
+	}
+	return fmt.Errorf("snapshots: event log range [%d,%d] is not continuously covered", fromBlock, toBlock)
+}
+
 func CheckEventLogIndexSegment(dir string, ref SegmentRef) error {
 	if err := validateEventLogIndexRef(ref); err != nil {
 		return err
@@ -407,7 +458,7 @@ func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eve
 
 func eventLogSegmentHasFilterMatch(seg *EventLogSegment, fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
 	matched := false
-	err := seg.IterateLogs(fromBlock, toBlock, filter, func(EventLog) (bool, error) {
+	err := seg.iterateLogsFullScan(fromBlock, toBlock, filter, func(EventLog) (bool, error) {
 		matched = true
 		return false, nil
 	})
@@ -574,6 +625,21 @@ func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLog
 	}
 	if used, err := s.iterateLogsByLookupIndexes(fromBlock, toBlock, filter, fn); err != nil || used {
 		return err
+	}
+	return s.iterateLogsFullScan(fromBlock, toBlock, filter, fn)
+}
+
+func (s *EventLogSegment) iterateLogsFullScan(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+	if s == nil || s.file == nil {
+		return errors.New("snapshots: nil event log segment")
+	}
+	if toBlock < fromBlock {
+		return fmt.Errorf("snapshots: event log iterate range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	fromBlock = max(fromBlock, s.header.fromBlock)
+	toBlock = min(toBlock, s.header.toBlock)
+	if toBlock < fromBlock {
+		return nil
 	}
 	for i := uint64(0); i < s.header.rowCount; i++ {
 		entry, err := readEventLogIndexEntryAt(s.file, eventLogIndexEntryOffset(s.header, i))
@@ -780,7 +846,7 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 	if err != nil {
 		return err
 	}
-	return m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, fn)
+	return m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, true, fn)
 }
 
 func (m *Manager) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
@@ -794,20 +860,20 @@ func (m *Manager) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Even
 	if err != nil || manifest == nil {
 		return false, err
 	}
-	refs, covered, err := m.coveredEventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
+	refs, covered, forceFullScan, err := m.coveredEventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return false, err
 	}
 	if len(refs) == 0 {
 		return true, nil
 	}
-	if err := m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, fn); err != nil {
+	if err := m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, !forceFullScan, fn); err != nil {
 		return true, err
 	}
 	return true, nil
 }
 
-func (m *Manager) iterateEventLogRefs(refs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+func (m *Manager) iterateEventLogRefs(refs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, useLookup bool, fn func(EventLog) (bool, error)) error {
 	nextBlock := fromBlock
 	for _, ref := range refs {
 		if ref.ToTxNum < nextBlock || ref.FromTxNum > toBlock {
@@ -823,7 +889,11 @@ func (m *Manager) iterateEventLogRefs(refs []SegmentRef, fromBlock, toBlock uint
 			return err
 		}
 		stopped := false
-		err = seg.IterateLogs(iterFrom, iterTo, filter, func(row EventLog) (bool, error) {
+		iterate := seg.IterateLogs
+		if !useLookup {
+			iterate = seg.iterateLogsFullScan
+		}
+		err = iterate(iterFrom, iterTo, filter, func(row EventLog) (bool, error) {
 			cont, err := fn(row)
 			if err != nil {
 				return false, err
@@ -882,19 +952,22 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 	return out, nil
 }
 
-func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock uint64, filter EventLogFilter) ([]SegmentRef, bool, error) {
+func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock uint64, filter EventLogFilter) ([]SegmentRef, bool, bool, error) {
 	refs := eventLogRefs(manifest)
 	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {
 		if eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
-			return refs, true, nil
+			if err := checkCoveredEventLogPayloads(m.dir, refs, fromBlock, toBlock); err != nil {
+				return nil, false, false, err
+			}
+			return refs, true, true, nil
 		}
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if indexed {
 		candidates := eventLogIndexCandidateStartSet(plans)
 		if len(candidates) == 0 {
-			return nil, true, nil
+			return nil, true, false, nil
 		}
 		out := make([]SegmentRef, 0, len(candidates))
 		for _, ref := range refs {
@@ -905,35 +978,45 @@ func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toB
 				continue
 			}
 			if err := CheckEventLogSegment(m.dir, ref); err != nil {
-				return nil, false, err
+				if !eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
+					return nil, false, false, err
+				}
+				if payloadErr := checkCoveredEventLogPayloads(m.dir, refs, fromBlock, toBlock); payloadErr != nil {
+					return nil, false, false, payloadErr
+				}
+				return refs, true, true, nil
 			}
 			out = append(out, ref)
 		}
-		return out, true, nil
+		return out, true, false, nil
 	}
 
 	next := fromBlock
 	var out []SegmentRef
+	forceFullScan := false
 	for _, ref := range refs {
 		if ref.ToTxNum < next {
 			continue
 		}
 		if ref.FromTxNum > next {
-			return nil, false, nil
+			return nil, false, false, nil
 		}
 		if err := CheckEventLogSegment(m.dir, ref); err != nil {
-			return nil, false, err
+			if payloadErr := checkEventLogSegmentPayload(m.dir, ref); payloadErr != nil {
+				return nil, false, false, payloadErr
+			}
+			forceFullScan = true
 		}
 		out = append(out, ref)
 		if ref.ToTxNum >= toBlock {
-			return out, true, nil
+			return out, true, forceFullScan, nil
 		}
 		if ref.ToTxNum == ^uint64(0) {
-			return nil, false, nil
+			return nil, false, false, nil
 		}
 		next = ref.ToTxNum + 1
 	}
-	return nil, false, nil
+	return nil, false, false, nil
 }
 
 type eventLogIndexQueryPlan struct {
@@ -1759,44 +1842,9 @@ func validateEventLogIndexHeader(ref SegmentRef, header eventLogIndexHeader, fil
 }
 
 func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) error {
-	var prev eventLogIndexEntry
-	expectedAddress := make(map[string][]uint64)
-	expectedTopic := make(map[string][]uint64)
-	for i := uint64(0); i < header.rowCount; i++ {
-		entry, err := readEventLogIndexEntryAt(file, eventLogIndexEntryOffset(header, i))
-		if err != nil {
-			return err
-		}
-		if entry.blockNum < ref.FromTxNum || entry.blockNum > ref.ToTxNum {
-			return fmt.Errorf("snapshots: event log segment %q entry %d block %d outside [%d,%d]", ref.Path, i, entry.blockNum, ref.FromTxNum, ref.ToTxNum)
-		}
-		end, overflow := checkedAdd(entry.offset, entry.length)
-		if overflow || entry.offset < header.payloadOffset || end > fileSize {
-			return fmt.Errorf("snapshots: event log segment %q entry %d payload [%d,%d] outside file size %d", ref.Path, i, entry.offset, end, fileSize)
-		}
-		if i > 0 && compareEventLogEntries(prev, entry) >= 0 {
-			return fmt.Errorf("snapshots: event log segment %q index entry %d is not strictly sorted", ref.Path, i)
-		}
-		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length)
-		if err != nil {
-			return err
-		}
-		var log corepb.TransactionInfo_Log
-		if err := proto.Unmarshal(raw, &log); err != nil {
-			return fmt.Errorf("snapshots: event log segment %q entry %d payload: %w", ref.Path, i, err)
-		}
-		if eventLogAddress(log.GetAddress()) != entry.address {
-			return fmt.Errorf("snapshots: event log segment %q entry %d address index mismatch", ref.Path, i)
-		}
-		addressKey := string(eventLogAddressLookupKey(entry.address))
-		expectedAddress[addressKey] = append(expectedAddress[addressKey], i)
-		for position, rawTopic := range log.GetTopics() {
-			var topic common.Hash
-			copy(topic[:], rawTopic)
-			key := string(eventLogTopicLookupKey(uint64(position), topic))
-			expectedTopic[key] = append(expectedTopic[key], i)
-		}
-		prev = entry
+	expectedAddress, expectedTopic, err := checkEventLogPayloadIndex(file, ref, header, fileSize)
+	if err != nil {
+		return err
 	}
 	if header.version >= 2 {
 		if err := checkEventLogAddressLookupIndex(file, ref, header); err != nil {
@@ -1810,6 +1858,49 @@ func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader,
 		}
 	}
 	return nil
+}
+
+func checkEventLogPayloadIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) (map[string][]uint64, map[string][]uint64, error) {
+	var prev eventLogIndexEntry
+	expectedAddress := make(map[string][]uint64)
+	expectedTopic := make(map[string][]uint64)
+	for i := uint64(0); i < header.rowCount; i++ {
+		entry, err := readEventLogIndexEntryAt(file, eventLogIndexEntryOffset(header, i))
+		if err != nil {
+			return nil, nil, err
+		}
+		if entry.blockNum < ref.FromTxNum || entry.blockNum > ref.ToTxNum {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d block %d outside [%d,%d]", ref.Path, i, entry.blockNum, ref.FromTxNum, ref.ToTxNum)
+		}
+		end, overflow := checkedAdd(entry.offset, entry.length)
+		if overflow || entry.offset < header.payloadOffset || end > fileSize {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d payload [%d,%d] outside file size %d", ref.Path, i, entry.offset, end, fileSize)
+		}
+		if i > 0 && compareEventLogEntries(prev, entry) >= 0 {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q index entry %d is not strictly sorted", ref.Path, i)
+		}
+		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length)
+		if err != nil {
+			return nil, nil, err
+		}
+		var log corepb.TransactionInfo_Log
+		if err := proto.Unmarshal(raw, &log); err != nil {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d payload: %w", ref.Path, i, err)
+		}
+		if eventLogAddress(log.GetAddress()) != entry.address {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d address index mismatch", ref.Path, i)
+		}
+		addressKey := string(eventLogAddressLookupKey(entry.address))
+		expectedAddress[addressKey] = append(expectedAddress[addressKey], i)
+		for position, rawTopic := range log.GetTopics() {
+			var topic common.Hash
+			copy(topic[:], rawTopic)
+			key := string(eventLogTopicLookupKey(uint64(position), topic))
+			expectedTopic[key] = append(expectedTopic[key], i)
+		}
+		prev = entry
+	}
+	return expectedAddress, expectedTopic, nil
 }
 
 func eventLogAddress(raw []byte) common.Address {

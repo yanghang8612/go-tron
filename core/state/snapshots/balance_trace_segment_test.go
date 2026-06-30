@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestBalanceTraceSegmentBuildVerifyLookup(t *testing.T) {
@@ -217,6 +218,45 @@ func TestCheckBalanceTraceSegmentRejectsMalformedOperationAddress(t *testing.T) 
 	}
 }
 
+func TestBalanceTraceSegmentBlockBalanceTraceRejectsPayloadNumberMismatch(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(source, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 12, 12)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	rewriteBalanceTracePayloadNumber(t, snapshotDir, ref, 12, 13)
+
+	seg, err := OpenBalanceTraceSegment(snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("OpenBalanceTraceSegment: %v", err)
+	}
+	trace, ok, err := seg.BlockBalanceTrace(12)
+	closeErr := seg.Close()
+	if err == nil || !ok || trace == nil || !strings.Contains(err.Error(), "payload number 13") {
+		t.Fatalf("BlockBalanceTrace mismatched payload = trace %+v ok %v err %v, want payload-number error", trace, ok, err)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err = mgr.BlockBalanceTrace(12)
+	if err == nil || ok || trace != nil || !strings.Contains(err.Error(), "payload number 13") {
+		t.Fatalf("manager BlockBalanceTrace mismatched payload = trace %+v ok %v err %v, want payload-number error", trace, ok, err)
+	}
+}
+
 func TestBalanceTraceManagerSearchesOlderSegments(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
@@ -301,4 +341,50 @@ func balanceTraceTestBlockTrace(blockNum int64, timestamp int64) *contractpb.Blo
 		},
 		Timestamp: timestamp,
 	}
+}
+
+func rewriteBalanceTracePayloadNumber(t *testing.T, dir string, ref SegmentRef, blockNum, payloadNumber int64) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer file.Close()
+	header, err := readBalanceTraceHeader(file)
+	if err != nil {
+		t.Fatalf("readBalanceTraceHeader: %v", err)
+	}
+	for i := uint64(0); i < header.blockCount; i++ {
+		entry, err := readBalanceTraceBlockIndexEntryAt(file, header.blockIndexOffset+i*balanceTraceBlockIndexEntrySize)
+		if err != nil {
+			t.Fatalf("readBalanceTraceBlockIndexEntryAt: %v", err)
+		}
+		if entry.blockNum != uint64(blockNum) {
+			continue
+		}
+		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length)
+		if err != nil {
+			t.Fatalf("readBalanceTracePayloadAt: %v", err)
+		}
+		var trace contractpb.BlockBalanceTrace
+		if err := proto.Unmarshal(raw, &trace); err != nil {
+			t.Fatalf("unmarshal balance trace payload: %v", err)
+		}
+		if trace.BlockIdentifier == nil {
+			trace.BlockIdentifier = &contractpb.BlockBalanceTrace_BlockIdentifier{}
+		}
+		trace.BlockIdentifier.Number = payloadNumber
+		encoded, err := proto.Marshal(&trace)
+		if err != nil {
+			t.Fatalf("marshal balance trace payload: %v", err)
+		}
+		if uint64(len(encoded)) != entry.length {
+			t.Fatalf("rewritten payload length = %d, want %d", len(encoded), entry.length)
+		}
+		if _, err := file.WriteAt(encoded, int64(entry.offset)); err != nil {
+			t.Fatalf("rewrite balance trace payload: %v", err)
+		}
+		return
+	}
+	t.Fatalf("balance trace block %d not found", blockNum)
 }

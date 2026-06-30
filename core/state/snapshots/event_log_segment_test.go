@@ -1030,6 +1030,119 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 	}
 }
 
+func TestManagerIterateCoveredEventLogsFallsBackToPayloadScanWhenSegmentLookupStale(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x4c)
+	topic := common.Hash{0xdc}
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x0c}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	var eventRef, indexRef SegmentRef
+	for _, ref := range result.Segments {
+		switch ref.Kind {
+		case SegmentEventLog:
+			eventRef = ref
+		case SegmentEventLogIndex:
+			indexRef = ref
+		}
+	}
+	zeroEventLogLookupCount(t, dir, eventRef, "address")
+	eventRef = refreshEventLogSegmentMetadata(t, dir, eventRef)
+	if err := CheckEventLogSegment(dir, eventRef); err == nil || !strings.Contains(err.Error(), "address lookup keys 0, want 1") {
+		t.Fatalf("CheckEventLogSegment stale address lookup = %v, want lookup coverage error", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{eventRef, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	var rows []EventLog
+	covered, err := mgr.IterateCoveredEventLogs(1, 1, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("IterateCoveredEventLogs stale segment lookup = covered %v err %v, want true/nil", covered, err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x0c}) {
+		t.Fatalf("IterateCoveredEventLogs stale segment lookup rows = %+v, want block1 payload", rows)
+	}
+}
+
+func TestManagerIterateCoveredEventLogsFallsBackWhenGlobalAndSegmentLookupsStale(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x4d)
+	topic := common.Hash{0xdd}
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x0d}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	eventRef, err := BuildEventLogSegmentFromChain(db, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	zeroEventLogLookupCount(t, dir, eventRef, "address")
+	eventRef = refreshEventLogSegmentMetadata(t, dir, eventRef)
+	badIndexRef, err := writeEventLogIndexSegment(dir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "log/event-log-index-empty-combined-1-1.idx",
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("writeEventLogIndexSegment empty: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{eventRef, badIndexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}
+	covered, err := mgr.EventLogRangeCoveredForFilter(1, 1, filter)
+	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
+		t.Fatalf("EventLogRangeCoveredForFilter combined stale lookup = %v/%v, want false/missing-candidate error", covered, err)
+	}
+	var rows []EventLog
+	covered, err = mgr.IterateCoveredEventLogs(1, 1, filter, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("IterateCoveredEventLogs combined stale lookup = covered %v err %v, want true/nil", covered, err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x0d}) {
+		t.Fatalf("IterateCoveredEventLogs combined stale lookup rows = %+v, want block1 payload", rows)
+	}
+}
+
 func TestEventLogRangeCoveredForFilterSkipsMissingNonCandidateSegment(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

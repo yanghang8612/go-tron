@@ -179,6 +179,9 @@ func (s *BalanceTraceSegment) BlockBalanceTrace(blockNum int64) (*contractpb.Blo
 	if err := proto.Unmarshal(raw, &trace); err != nil {
 		return nil, false, fmt.Errorf("snapshots: decode balance trace block %d: %w", blockNum, err)
 	}
+	if err := validateBalanceTracePayloadBlockNumber(blockNum, &trace); err != nil {
+		return &trace, true, err
+	}
 	return &trace, true, nil
 }
 
@@ -510,6 +513,16 @@ func validateBalanceTraceRef(ref SegmentRef) error {
 	return nil
 }
 
+func validateBalanceTracePayloadBlockNumber(blockNum int64, trace *contractpb.BlockBalanceTrace) error {
+	if trace == nil {
+		return errors.New("snapshots: nil BlockBalanceTrace")
+	}
+	if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != blockNum {
+		return fmt.Errorf("snapshots: balance trace payload number %d does not match requested block %d", id.GetNumber(), blockNum)
+	}
+	return nil
+}
+
 func validateBalanceTraceHeader(ref SegmentRef, header balanceTraceHeader, fileSize uint64) error {
 	if header.fromBlock != ref.FromTxNum || header.toBlock != ref.ToTxNum {
 		return fmt.Errorf("snapshots: balance trace segment %q range [%d,%d], want [%d,%d]",
@@ -575,9 +588,8 @@ func checkBalanceTraceBlockIndex(file io.ReaderAt, ref SegmentRef, header balanc
 		if err := proto.Unmarshal(raw, &trace); err != nil {
 			return nil, fmt.Errorf("snapshots: decode balance trace block %d: %w", entry.blockNum, err)
 		}
-		if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != int64(entry.blockNum) {
-			return nil, fmt.Errorf("snapshots: balance trace segment %q block payload number %d does not match index %d",
-				ref.Path, id.GetNumber(), entry.blockNum)
+		if err := validateBalanceTracePayloadBlockNumber(int64(entry.blockNum), &trace); err != nil {
+			return nil, fmt.Errorf("snapshots: balance trace segment %q block %d: %w", ref.Path, entry.blockNum, err)
 		}
 		for _, txTrace := range trace.GetTransactionBalanceTrace() {
 			if txTrace == nil {
