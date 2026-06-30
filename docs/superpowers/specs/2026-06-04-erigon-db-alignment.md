@@ -697,9 +697,10 @@ Status:
   sync-pipeline progress mismatches where execution/commitment/finish are ahead
   of their upstream sync stage.
 - JSON-RPC archive coverage now includes Ethereum-compatible block transaction
-  count and block-indexed transaction lookups. Both the legacy handler and the
-  reflection `EthAPI` expose `eth_getBlockTransactionCountByNumber`,
-  `eth_getBlockTransactionCountByHash`,
+  count, whole-block receipt, and block-indexed transaction lookups. Both the
+  legacy handler and the reflection `EthAPI` expose
+  `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+  `eth_getBlockReceipts`,
   `eth_getTransactionByBlockNumberAndIndex`, and
   `eth_getTransactionByBlockHashAndIndex`, reusing the same hot/cold block
   readers as existing block queries. Freeze corpus and framework parity tests
@@ -719,8 +720,9 @@ Status:
   for older diagnostics. It can also run a live JSON-RPC archive-read probe and
   emit `archiveApi*` evidence for `eth_getBlockByNumber`,
   `eth_getBlockTransactionCountByNumber`,
-  `eth_getBlockTransactionCountByHash`, `eth_getBalance`, `eth_getCode`,
-  `eth_getStorageAt`, `eth_getLogs`, and optional contract `eth_call` and
+  `eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`,
+  `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and
+  optional contract `eth_call` and
   `debug_traceCall` samples, plus opt-in
   `debug_traceTransaction` checks when a transaction hash is available. When
   the selected historical block contains a transaction, the same probe now adds

@@ -488,7 +488,7 @@ def add_archive_trace_evidence(row):
     row.update(
         {
             "archiveApiStatus": "ok",
-            "archiveApiChecks": 14,
+            "archiveApiChecks": 15,
             "archiveApiFailures": 0,
             "archiveApiBlock": 999,
             "archiveApiDepthBlocks": 1,
@@ -497,6 +497,7 @@ def add_archive_trace_evidence(row):
             "archiveApiMethods": [
                 "eth_getBlockByNumber",
                 "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockReceipts",
                 "eth_getBalance",
                 "eth_getCode",
                 "eth_call",
@@ -3616,12 +3617,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 7,
+                        "archiveApiChecks": 8,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
                             "eth_getStorageAt",
@@ -3668,13 +3670,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 1000,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 7,
+                        "archiveApiChecks": 8,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 850,
                         "archiveApiDepthBlocks": 150,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
                             "eth_getStorageAt",
@@ -3883,12 +3886,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 11,
+                        "archiveApiChecks": 12,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
                             "eth_getStorageAt",
@@ -3944,13 +3948,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "fullStagedSyncCompleteAtHead": True,
                 "height": 100,
                 "archiveApiStatus": "ok",
-                "archiveApiChecks": 12,
+                "archiveApiChecks": 13,
                 "archiveApiFailures": 0,
                 "archiveApiBlock": 99,
                 "archiveApiTraceTransactionProbe": True,
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_getStorageAt",
@@ -3993,7 +3998,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("nile sync acceptance: ok", proc.stdout)
 
             missing_trace = dict(base_row)
-            missing_trace["archiveApiChecks"] = 11
+            missing_trace["archiveApiChecks"] = 12
             missing_trace["archiveApiMethods"] = [
                 method for method in base_row["archiveApiMethods"] if method != "debug_traceTransaction"
             ]
@@ -4224,12 +4229,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 10,
+                        "archiveApiChecks": 11,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
                             "eth_getStorageAt",

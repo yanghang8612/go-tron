@@ -1185,7 +1185,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
                 "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
-                "gtron_storage_benchmark_archive_api_checks": 14,
+                "gtron_storage_benchmark_archive_api_checks": 15,
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_failures": 0,
             }
@@ -1207,7 +1207,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "snapshotBytes": 1000,
                 "derivedIndexBytes": 500,
                 "snapshotSidecarShareMilli": 125,
-                "archiveApiChecks": 14,
+                "archiveApiChecks": 15,
                 "archiveApiBlock": 80,
                 "archiveApiFailures": 0,
                 "archiveApiCallProbe": True,
@@ -1215,6 +1215,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_call",
@@ -1281,7 +1282,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
                 "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
                 "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
-                "gtron_storage_benchmark_archive_api_checks": 14,
+                "gtron_storage_benchmark_archive_api_checks": 15,
                 "gtron_storage_benchmark_archive_api_block": 80,
                 "gtron_storage_benchmark_archive_api_failures": 0,
             }
@@ -1303,7 +1304,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "snapshotBytes": 1000,
                 "derivedIndexBytes": 500,
                 "snapshotSidecarShareMilli": 125,
-                "archiveApiChecks": 14,
+                "archiveApiChecks": 15,
                 "archiveApiBlock": 80,
                 "archiveApiFailures": 0,
                 "archiveApiCallProbe": True,
@@ -1311,6 +1312,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_call",
@@ -1691,13 +1693,14 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "height": 200,
                     "tailPrunedThroughBlock": 90,
                     "archiveApiStatus": "ok",
-                    "archiveApiChecks": 7,
+                    "archiveApiChecks": 8,
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiDepthBlocks": 120,
                     "archiveApiMethods": [
                         "eth_getBlockByNumber",
                         "eth_getBlockTransactionCountByNumber",
+                        "eth_getBlockReceipts",
                         "eth_getBalance",
                         "eth_getCode",
                         "eth_getStorageAt",
@@ -1880,12 +1883,13 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "height": 200,
                     "tailPrunedThroughBlock": 90,
                     "archiveApiStatus": "ok",
-                    "archiveApiChecks": 11,
+                    "archiveApiChecks": 12,
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiMethods": [
                         "eth_getBlockByNumber",
                         "eth_getBlockTransactionCountByNumber",
+                        "eth_getBlockReceipts",
                         "eth_getBalance",
                         "eth_getCode",
                         "eth_getStorageAt",
@@ -1944,13 +1948,14 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "height": 200,
                 "tailPrunedThroughBlock": 90,
                 "archiveApiStatus": "ok",
-                "archiveApiChecks": 12,
+                "archiveApiChecks": 13,
                 "archiveApiFailures": 0,
                 "archiveApiBlock": 80,
                 "archiveApiTraceTransactionProbe": True,
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_getStorageAt",
@@ -1992,7 +1997,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
 
             missing_trace = dict(base_row)
-            missing_trace["archiveApiChecks"] = 11
+            missing_trace["archiveApiChecks"] = 12
             missing_trace["archiveApiMethods"] = [
                 method for method in base_row["archiveApiMethods"] if method != "debug_traceTransaction"
             ]

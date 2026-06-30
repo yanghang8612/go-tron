@@ -152,6 +152,7 @@ func newFreezeBackend() *stubBackend {
 		txBlock:     block,
 		txIndex:     0,
 		txInfo:      buildFreezeTxInfo(),
+		txInfos:     []*corepb.TransactionInfo{buildFreezeTxInfo()},
 		callResult:  common.FromHex("0x0000000000000000000000000000000000000000000000000000000000000001"),
 		logs:        buildFreezeLogs(block),
 		gasPrice:    freezeGasPrice,

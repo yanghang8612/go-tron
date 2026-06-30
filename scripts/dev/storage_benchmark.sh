@@ -692,6 +692,7 @@ ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBlockTransactionCountByNumber",
     "eth_getBlockTransactionCountByHash",
+    "eth_getBlockReceipts",
     "eth_getBalance",
     "eth_getCode",
     "eth_getStorageAt",
@@ -1276,6 +1277,20 @@ def archive_result_ok(method, result, params):
     if method in {"eth_getBlockTransactionCountByNumber", "eth_getBlockTransactionCountByHash"}:
         count = hex_quantity(result)
         return is_hex_string(result) and count is not None
+    if method == "eth_getBlockReceipts":
+        if not isinstance(result, list):
+            return False
+        requested_number = hex_quantity(params[0] if params else None)
+        for receipt in result:
+            if not isinstance(receipt, dict):
+                return False
+            result_number = hex_quantity(receipt.get("blockNumber"))
+            if requested_number is not None and result_number is not None and result_number != requested_number:
+                return False
+            if selected_block_hash and receipt.get("blockHash") is not None:
+                if normalize_hash(receipt.get("blockHash")) != selected_block_hash:
+                    return False
+        return True
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
         return is_hex_string(result)
     if method in {"debug_traceCall", "debug_traceTransaction"}:
@@ -1352,13 +1367,14 @@ def first_tx_hash(block_result):
 calls = [
     ("eth_getBlockByNumber", [block_tag, False]),
     ("eth_getBlockTransactionCountByNumber", [block_tag]),
+    ("eth_getBlockReceipts", [block_tag]),
     ("eth_getBalance", [address, block_tag]),
     ("eth_getCode", [address, block_tag]),
     ("eth_getStorageAt", [address, slot, block_tag]),
     ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
 ]
 if call_data:
-    calls[4:4] = [
+    calls[5:5] = [
         ("eth_call", [{"to": address, "data": call_data}, block_tag]),
         ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
     ]

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -29,6 +30,8 @@ type stubBackend struct {
 	txBlock           *types.Block
 	txIndex           int
 	txInfo            *corepb.TransactionInfo
+	txInfos           []*corepb.TransactionInfo
+	txInfoErr         error
 	callResult        []byte
 	callAtResult      []byte
 	callAtBlock       uint64
@@ -123,7 +126,16 @@ func (s *stubBackend) GetTransactionByHash(hash common.Hash) (*corepb.Transactio
 	return s.tx, s.txBlock, s.txIndex, nil
 }
 func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
 	return s.txInfo, nil
+}
+func (s *stubBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
+	return s.txInfos, nil
 }
 func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) ([]byte, error) {
 	s.liveCallCalls++
@@ -447,7 +459,8 @@ func TestEthBlockTransactionCountAndIndexedTransactionLookups(t *testing.T) {
 	block := buildFreezeBlock()
 	blockHash := freezeBlockHashHex()
 	txHash := freezeTxHashHex()
-	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	txInfo := buildFreezeTxInfo()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{txInfo}})
 	defer srv.Close()
 
 	for _, tt := range []struct {
@@ -528,6 +541,42 @@ func TestEthBlockTransactionCountAndIndexedTransactionLookups(t *testing.T) {
 			}
 		})
 	}
+
+	for _, tt := range []struct {
+		name   string
+		params []interface{}
+	}{
+		{name: "receipts by latest", params: []interface{}{"latest"}},
+		{name: "receipts by number", params: []interface{}{"0x64"}},
+		{name: "receipts by hash", params: []interface{}{blockHash}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, "eth_getBlockReceipts", tt.params)
+			receipts, ok := resp["result"].([]interface{})
+			if !ok || len(receipts) != 1 {
+				t.Fatalf("eth_getBlockReceipts result = %T %v, want one receipt", resp["result"], resp["result"])
+			}
+			receipt, ok := receipts[0].(map[string]interface{})
+			if !ok {
+				t.Fatalf("eth_getBlockReceipts receipt = %T %v, want object", receipts[0], receipts[0])
+			}
+			if receipt["transactionHash"] != txHash {
+				t.Fatalf("eth_getBlockReceipts transactionHash = %v, want %s", receipt["transactionHash"], txHash)
+			}
+			if receipt["blockNumber"] != "0x64" || receipt["transactionIndex"] != "0x0" || receipt["status"] != "0x1" {
+				t.Fatalf("eth_getBlockReceipts receipt = %+v, want block/index/status pinned", receipt)
+			}
+		})
+	}
+
+	t.Run("receipts unknown block", func(t *testing.T) {
+		unknown := newTestServer(t, &stubBackend{blockNumber: block.Number()})
+		defer unknown.Close()
+		resp := rpcCall(t, unknown, "eth_getBlockReceipts", []interface{}{"0x64"})
+		if resp["result"] != nil {
+			t.Fatalf("eth_getBlockReceipts unknown block = %v, want null", resp["result"])
+		}
+	})
 }
 
 func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
@@ -557,6 +606,11 @@ func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
 			method: "eth_getTransactionByBlockHashAndIndex",
 			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000", "0x0"},
 		},
+		{
+			name:   "block receipts",
+			method: "eth_getBlockReceipts",
+			params: []interface{}{"0x1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -571,6 +625,42 @@ func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
 				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
 			}
 		})
+	}
+}
+
+func TestEthGetBlockReceipts_PropagatesTxInfoError(t *testing.T) {
+	block := buildFreezeBlock()
+	backendErr := errors.New("rawdb: transaction info block 100 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfoErr: backendErr})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if errObj["message"] != backendErr.Error() {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want %q", errObj["message"], backendErr.Error())
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfoErr: backendErr}, nil)
+	if got, err := api.GetBlockReceipts("0x64"); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockReceipts = %v/%v, want backend error", got, err)
+	}
+}
+
+func TestEthGetBlockReceipts_RejectsIncompleteTxInfoCoverage(t *testing.T) {
+	block := buildFreezeBlock()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction info count 0 does not match block transaction count 1") {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want incomplete coverage", errObj["message"])
 	}
 }
 

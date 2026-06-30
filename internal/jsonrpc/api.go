@@ -158,6 +158,8 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.ethGetTransactionByBlockHashAndIndex(req.Params)
 	case "eth_getTransactionReceipt":
 		result, err = api.ethGetTransactionReceipt(req.Params)
+	case "eth_getBlockReceipts":
+		result, err = api.ethGetBlockReceipts(req.Params)
 	case "eth_getLogs":
 		result, err = api.ethGetLogs(req.Params)
 	case "eth_gasPrice":
@@ -438,6 +440,40 @@ func parseQuantityParam(s, name string) (uint64, error) {
 		return 0, fmt.Errorf("invalid %s %q", name, s)
 	}
 	return n, nil
+}
+
+func isBlockHashParam(s string) bool {
+	return len(s) == 66 && s[0:2] == "0x"
+}
+
+func blockByNumberOrHash(backend Backend, blockParam string) (*types.Block, error) {
+	if isBlockHashParam(blockParam) {
+		var hash common.Hash
+		copy(hash[:], common.FromHex(blockParam))
+		block, err := backend.GetBlockByHash(hash)
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return block, nil
+	}
+	num, err := parseBlockParam(blockParam)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = backend.BlockNumber()
+	}
+	block, err := backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return block, nil
 }
 
 // ── Stub handlers (replaced task by task) ───────────────────────────────────
@@ -817,6 +853,17 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
+func (api *API) ethGetBlockReceipts(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	block, err := blockByNumberOrHash(api.backend, p[0])
+	if err != nil {
+		return nil, err
+	}
+	return blockReceiptsToRPC(api.backend, block)
+}
 func (api *API) ethGetLogs(params json.RawMessage) (interface{}, error) {
 	var p []json.RawMessage
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
@@ -999,6 +1046,35 @@ func transactionByBlockIndex(block *types.Block, index uint64) interface{} {
 	}
 	tx := txs[index]
 	return txToRPC(tx.Proto(), tx.Hash(), block, int(index))
+}
+
+func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error) {
+	if block == nil {
+		return nil, nil
+	}
+	txs := block.Transactions()
+	if len(txs) == 0 {
+		return []interface{}{}, nil
+	}
+	infos, err := backend.GetTransactionInfoByBlockNum(block.Number())
+	if err != nil {
+		return nil, err
+	}
+	if len(infos) != len(txs) {
+		return nil, fmt.Errorf("transaction info count %d does not match block transaction count %d for block %d", len(infos), len(txs), block.Number())
+	}
+	out := make([]interface{}, 0, len(txs))
+	for i, tx := range txs {
+		if tx == nil {
+			return nil, fmt.Errorf("block %d transaction %d is nil", block.Number(), i)
+		}
+		if infos[i] == nil {
+			return nil, fmt.Errorf("block %d transaction info %d is nil", block.Number(), i)
+		}
+		hash := tx.Hash()
+		out = append(out, receiptToRPC(hash, tx.Proto(), infos[i], block, i))
+	}
+	return out, nil
 }
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.

@@ -126,6 +126,7 @@ func freezeSpecs() []requestSpec {
 		{name: "eth_getTransactionByBlockNumberAndIndex", method: "eth_getTransactionByBlockNumberAndIndex", params: []interface{}{"0x64", "0x0"}},
 		{name: "eth_getTransactionByBlockHashAndIndex", method: "eth_getTransactionByBlockHashAndIndex", params: []interface{}{blockHash, "0x0"}},
 		{name: "eth_getTransactionReceipt", method: "eth_getTransactionReceipt", params: []interface{}{txHash}},
+		{name: "eth_getBlockReceipts", method: "eth_getBlockReceipts", params: []interface{}{"0x64"}},
 
 		// ── logs ──
 		{name: "eth_getLogs", method: "eth_getLogs", params: []interface{}{

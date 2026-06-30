@@ -388,6 +388,16 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	return receiptToRPC(hash, tx, info, block, index), nil
 }
 
+// GetBlockReceipts serves eth_getBlockReceipts for an Ethereum-compatible block
+// tag or 32-byte block hash. Unknown block => null.
+func (e *EthAPI) GetBlockReceipts(blockParam string) (interface{}, error) {
+	block, err := blockByNumberOrHash(e.backend, blockParam)
+	if err != nil {
+		return nil, err
+	}
+	return blockReceiptsToRPC(e.backend, block)
+}
+
 // logFilterArgs is the eth_getLogs filter object. Address and Topics are kept
 // raw because each is polymorphic (address: string|[]string; topics: array of
 // null|string|[]string), parsed below exactly as the legacy handler does.

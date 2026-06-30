@@ -213,6 +213,7 @@ func TestEthAPI_BlockTxFrameworkParity(t *testing.T) {
 		"eth_getBlockByHash_hashesOnly",
 		"eth_getTransactionByHash",
 		"eth_getTransactionReceipt",
+		"eth_getBlockReceipts",
 	} {
 		t.Run(name, func(t *testing.T) {
 			req, wantResult := loadCorpusCase(t, name)
