@@ -56,6 +56,13 @@ func PublishSignedSnapshotCatalog(dir string, privateKey ed25519.PrivateKey) (*S
 	if manifest.Chain == nil {
 		return nil, errors.New("snapshots: manifest has no chain identity")
 	}
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
+		ExpectedChain:     manifest.Chain,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	}); err != nil {
+		return nil, err
+	}
 	manifestChecksum, err := checksumFile(filepath.Join(dir, ManifestFile))
 	if err != nil {
 		return nil, err

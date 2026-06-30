@@ -37,6 +37,84 @@ func TestPublishVerifySignedSnapshotCatalog(t *testing.T) {
 	}
 }
 
+func TestPublishSignedSnapshotCatalogRequiresSegmentChecksums(t *testing.T) {
+	dir, _, _ := writeVerifiableHistoryManifest(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if len(manifest.Segments) == 0 {
+		t.Fatal("manifest has no segments")
+	}
+	manifest.Segments[0].Checksum = ""
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	_, err = PublishSignedSnapshotCatalog(dir, priv)
+	if err == nil || !strings.Contains(err.Error(), "missing required checksum") {
+		t.Fatalf("PublishSignedSnapshotCatalog err = %v, want missing required checksum", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, SnapshotCatalogFile)); !os.IsNotExist(statErr) {
+		t.Fatalf("catalog stat err = %v, want not exist", statErr)
+	}
+}
+
+func TestPublishSignedSnapshotCatalogRejectsCorruptSegment(t *testing.T) {
+	dir, _, _ := writeVerifiableHistoryManifest(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if len(manifest.Segments) == 0 {
+		t.Fatal("manifest has no segments")
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifest.Segments[0].Path), []byte(`{"corrupt":true}`), 0o644); err != nil {
+		t.Fatalf("corrupt segment: %v", err)
+	}
+
+	if _, err := PublishSignedSnapshotCatalog(dir, priv); err == nil {
+		t.Fatal("PublishSignedSnapshotCatalog accepted corrupt segment")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, SnapshotCatalogFile)); !os.IsNotExist(statErr) {
+		t.Fatalf("catalog stat err = %v, want not exist", statErr)
+	}
+}
+
+func TestPublishSignedSnapshotCatalogRejectsStaleSidecar(t *testing.T) {
+	dir := t.TempDir()
+	identity := ChainIdentity{
+		ChainID:     1,
+		NetworkID:   2,
+		GenesisHash: strings.Repeat("01", 32),
+	}
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	corruptLatestBinaryCompanionSegmentChecksum(t, dir, &accessorRef)
+	if err := PublishManifest(dir, NewManifestForChain(1, 10, []SegmentRef{segRef, accessorRef, btreeRef}, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	_, err = PublishSignedSnapshotCatalog(dir, priv)
+	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
+		t.Fatalf("PublishSignedSnapshotCatalog err = %v, want segment checksum mismatch", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, SnapshotCatalogFile)); !os.IsNotExist(statErr) {
+		t.Fatalf("catalog stat err = %v, want not exist", statErr)
+	}
+}
+
 func TestVerifySignedSnapshotCatalogRejectsManifestTamper(t *testing.T) {
 	dir, identity, _ := writeVerifiableHistoryManifest(t)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

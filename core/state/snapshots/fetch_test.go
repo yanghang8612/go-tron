@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,9 +139,7 @@ func TestFetchRemoteSnapshotDoesNotPublishManifestOnSemanticFailure(t *testing.T
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
-		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
-	}
+	publishUncheckedSignedSnapshotCatalogForTest(t, source, priv)
 	server := httptest.NewServer(http.FileServer(http.Dir(source)))
 	defer server.Close()
 
@@ -214,6 +213,38 @@ func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	if maxInFlight.Load() < 2 {
 		t.Fatalf("max concurrent segment downloads = %d, want at least 2", maxInFlight.Load())
 	}
+}
+
+func publishUncheckedSignedSnapshotCatalogForTest(t *testing.T, dir string, priv ed25519.PrivateKey) *SnapshotCatalog {
+	t.Helper()
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	manifestChecksum, err := checksumFile(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		t.Fatalf("checksum manifest: %v", err)
+	}
+	catalog := &SnapshotCatalog{
+		Version:          SnapshotCatalogVersion,
+		PublishedUnix:    time.Now().Unix(),
+		ManifestPath:     ManifestFile,
+		ManifestChecksum: manifestChecksum,
+		VisibleTxStart:   manifest.VisibleTxStart,
+		VisibleTxEnd:     manifest.VisibleTxEnd,
+		Chain:            cloneChainIdentity(manifest.Chain),
+		SignatureScheme:  snapshotCatalogSignatureScheme,
+		Signer:           hex.EncodeToString(priv.Public().(ed25519.PublicKey)),
+	}
+	payload, err := catalog.signaturePayload()
+	if err != nil {
+		t.Fatalf("catalog signature payload: %v", err)
+	}
+	catalog.Signature = hex.EncodeToString(ed25519.Sign(priv, payload))
+	if err := writeSnapshotCatalog(dir, catalog); err != nil {
+		t.Fatalf("write unchecked catalog: %v", err)
+	}
+	return catalog
 }
 
 func TestNormaliseSnapshotFetchConcurrency(t *testing.T) {
