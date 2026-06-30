@@ -488,7 +488,10 @@ also includes `pointIndexCandidates`, with direct segment, byte, payload,
 sidecar, candidate-local sidecar-share, and snapshot-share counters for the
 P3 recsplit/existence-filter candidates: `txHashLookup`, `eventLogIndex`,
 `stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
-and `commitmentSnapshot`; the benchmark JSONL row exposes the same values as
+and `commitmentSnapshot`; `--max-point-sidecar-share-milli` and
+`--max-point-snapshot-share-milli` can fail saved artifacts when any candidate
+is too sidecar-heavy or consumes too much of the snapshot. The benchmark JSONL
+row exposes the same values as
 `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`.
 Keep the compact/merged index-format decision evidence-driven: only consider
 replacing sorted `chain-index`, `event-log-index`, accessor, or btree sidecars

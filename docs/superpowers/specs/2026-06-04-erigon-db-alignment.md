@@ -1295,10 +1295,11 @@ Needed:
   production sample with `--require-snapshot-profile-evidence`. Both paths gate
   the emitted overall or family-specific share fields through ordinary `--max`
   thresholds. The standalone profiler can also gate saved artifacts with
-  `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`; use that
-  evidence to evaluate compact/merged cold index formats for block hash by
-  number, tx lookup, per-tx info, and state-root lookup only if sidecar
-  profiles show they dominate disk or lookup latency.
+  `--max-sidecar-share-milli`, `--max-family-sidecar-share-milli`,
+  `--max-point-sidecar-share-milli`, or `--max-point-snapshot-share-milli`;
+  use that evidence to evaluate compact/merged cold index formats for block
+  hash by number, tx lookup, per-tx info, and state-root lookup only if
+  sidecar profiles show they dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
 - Wire the exported Prometheus textfile payload into the deployment-specific
@@ -2104,7 +2105,9 @@ Status:
   adding another on-disk format. `storage_benchmark.sh` and
   `nile_sync_sample.sh` surface the same candidate totals as
   `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`
-  JSONL fields and matching `gtron_*_snapshot_point_*` Prometheus gauges.
+  JSONL fields and matching `gtron_*_snapshot_point_*` Prometheus gauges. The
+  standalone profiler can fail saved manifests on point-candidate overhead with
+  `--max-point-sidecar-share-milli` and `--max-point-snapshot-share-milli`.
 
 Adopt only where profiles justify it:
 

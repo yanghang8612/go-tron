@@ -543,7 +543,9 @@ fields for the P3 decisions: `txHashLookup`, `eventLogIndex`,
 `stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
 and `commitmentSnapshot`. When a sample indicates sidecar pressure, run
 `scripts/dev/snapshot_manifest_profile.py <state-snapshots> --json` against
-the saved datadir for the full `pointIndexCandidates` breakdown.
+the saved datadir for the full `pointIndexCandidates` breakdown; add
+`--max-point-sidecar-share-milli` or `--max-point-snapshot-share-milli` when
+the saved artifact should fail on a point-heavy accessor candidate.
 When `--allow-warning-health` is used, stage-stall warning rows can pass only
 if `stageStalled*`, `stageStalls`, and `soakHealthIssues` describe the same
 primary stalled stage. Add `--require-stage-stall-evidence` for production

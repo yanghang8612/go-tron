@@ -65,6 +65,18 @@ def parse_args(argv):
         metavar="N",
         help="Fail if any family sidecar bytes exceed N/1000 of that family's total bytes.",
     )
+    parser.add_argument(
+        "--max-point-sidecar-share-milli",
+        type=int,
+        metavar="N",
+        help="Fail if any point-index candidate sidecar bytes exceed N/1000 of that candidate's bytes.",
+    )
+    parser.add_argument(
+        "--max-point-snapshot-share-milli",
+        type=int,
+        metavar="N",
+        help="Fail if any point-index candidate bytes exceed N/1000 of total snapshot bytes.",
+    )
     return parser.parse_args(argv)
 
 
@@ -228,7 +240,13 @@ def profile_manifest(path, include_retired=False):
     return profile
 
 
-def apply_thresholds(profile, max_sidecar_share_milli, max_family_sidecar_share_milli):
+def apply_thresholds(
+    profile,
+    max_sidecar_share_milli,
+    max_family_sidecar_share_milli,
+    max_point_sidecar_share_milli=None,
+    max_point_snapshot_share_milli=None,
+):
     issues = []
     if (
         max_sidecar_share_milli is not None
@@ -245,6 +263,25 @@ def apply_thresholds(profile, max_sidecar_share_milli, max_family_sidecar_share_
                     f"{family} sidecar share {stats['sidecarShareMilli']} milli "
                     f"exceeds max {max_family_sidecar_share_milli}"
                 )
+    for name, stats in profile["pointIndexCandidates"].items():
+        if stats["segments"] <= 0:
+            continue
+        if (
+            max_point_sidecar_share_milli is not None
+            and stats["sidecarShareMilli"] > max_point_sidecar_share_milli
+        ):
+            issues.append(
+                f"{name} point sidecar share {stats['sidecarShareMilli']} milli "
+                f"exceeds max {max_point_sidecar_share_milli}"
+            )
+        if (
+            max_point_snapshot_share_milli is not None
+            and stats["snapshotShareMilli"] > max_point_snapshot_share_milli
+        ):
+            issues.append(
+                f"{name} point snapshot share {stats['snapshotShareMilli']} milli "
+                f"exceeds max {max_point_snapshot_share_milli}"
+            )
     profile["issues"] = issues
     return issues
 
@@ -305,6 +342,8 @@ def main(argv=None):
             profile,
             args.max_sidecar_share_milli,
             args.max_family_sidecar_share_milli,
+            args.max_point_sidecar_share_milli,
+            args.max_point_snapshot_share_milli,
         )
     except Exception as exc:
         print(f"snapshot manifest profile: {exc}", file=sys.stderr)

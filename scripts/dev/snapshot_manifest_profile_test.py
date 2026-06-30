@@ -135,6 +135,40 @@ class SnapshotManifestProfileTest(unittest.TestCase):
             self.assertIn("event-log sidecar share 600 milli exceeds max 500", profile["issues"])
             self.assertIn("overall sidecar share", proc.stderr)
 
+    def test_threshold_gate_rejects_heavy_point_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            write_manifest(
+                tmpdir,
+                [
+                    {"dataset": "event-log", "kind": "event-log", "fromTxNum": 1, "toTxNum": 1, "path": "log/event.seg", "size": 400},
+                    {"dataset": "event-log", "kind": "event-log-index", "fromTxNum": 1, "toTxNum": 1, "path": "log/event.idx", "size": 600},
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(tmpdir),
+                    "--json",
+                    "--max-point-sidecar-share-milli",
+                    "500",
+                    "--max-point-snapshot-share-milli",
+                    "500",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            profile = json.loads(proc.stdout)
+            self.assertIn("eventLogIndex point sidecar share 1000 milli exceeds max 500", profile["issues"])
+            self.assertIn("eventLogIndex point snapshot share 600 milli exceeds max 500", profile["issues"])
+            self.assertIn("eventLogIndex point sidecar share", proc.stderr)
+            self.assertIn("eventLogIndex point snapshot share", proc.stderr)
+
     def test_include_retired_adds_retired_segments_to_totals(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
