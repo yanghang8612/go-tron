@@ -182,11 +182,12 @@ restarts once so the tail-prune lifecycle can run. Use a small
 the intended retention window.
 
 With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
-surface (`eth_getBlockByNumber`, `eth_getBlockTransactionCountByNumber`,
-`eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`, `eth_getBalance`,
-`eth_getCode`, `eth_getStorageAt`, and `eth_getLogs`) at `height-1` by default
-and emits `archiveApi*` fields. When the probed historical block contains a
-transaction, the probe also adds `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
+surface (`eth_getBlockByNumber`, `eth_getBlockByHash`,
+`eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+`eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+and `eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields.
+When the probed historical block contains a transaction, the probe also adds
+`eth_getTransactionByHash`, `eth_getTransactionReceipt`,
 `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` plus `archiveApiTx*` fields. Pass
 `--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
@@ -446,9 +447,10 @@ With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
-method set (`eth_getBlockByNumber`, `eth_getBlockTransactionCountByNumber`,
-`eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`, `eth_getBalance`,
-`eth_getCode`, `eth_getStorageAt`, and `eth_getLogs`). If
+method set (`eth_getBlockByNumber`, `eth_getBlockByHash`,
+`eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+`eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+and `eth_getLogs`). If
 `archiveApiDepthBlocks` is present, the checker requires it to equal
 `height - archiveApiBlock`; add
 `--min-archive-api-depth-blocks BLOCKS` when the row must prove the archive

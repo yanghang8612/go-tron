@@ -76,11 +76,11 @@ scripts/dev/nile_sync_sample.sh \
 ```
 
 For archive-read evidence, add `--archive-api-probe`. The sampler probes
-`eth_getBlockByNumber`, `eth_getBlockTransactionCountByNumber`,
-`eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`,
-`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, and `eth_getLogs` at
-`height-1` by default and emits `archiveApi*` fields. If the probed block
-contains a transaction, it also probes `eth_getTransactionByHash`,
+`eth_getBlockByNumber`, `eth_getBlockByHash`,
+`eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+`eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+and `eth_getLogs` at `height-1` by default and emits `archiveApi*` fields. If
+the probed block contains a transaction, it also probes `eth_getTransactionByHash`,
 `eth_getTransactionReceipt`,
 `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` and emits `archiveApiTx*` fields. Use

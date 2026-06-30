@@ -273,6 +273,7 @@ STARTUP_RECOVERY_ZERO_FIELDS = (
 
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
+    "eth_getBlockByHash",
     "eth_getBlockTransactionCountByNumber",
     "eth_getBlockTransactionCountByHash",
     "eth_getBlockReceipts",

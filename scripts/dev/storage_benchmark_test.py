@@ -44,6 +44,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                           *eth_getBlockByNumber*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
+                          *eth_getBlockByHash*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
                           *eth_getBlockReceipts*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab"}]}'
                             ;;
@@ -145,7 +148,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiChecks"], 18)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
@@ -164,6 +167,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "debug_traceCall",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
                     "debug_traceBlockByNumber",
                     "debug_traceBlockByHash",
@@ -242,6 +246,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                       http://127.0.0.1:*)
                         case "$payload" in
                           *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBlockReceipts*)
@@ -329,7 +336,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 15)
+            self.assertEqual(row["archiveApiChecks"], 16)
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertTrue(row["archiveApiCallProbe"])
             self.assertTrue(row["archiveApiTraceTransactionProbe"])
@@ -345,6 +352,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "debug_traceCall",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
@@ -396,6 +404,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                       http://127.0.0.1:*)
                         case "$payload" in
                           *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBlockReceipts*)
@@ -474,7 +485,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 12)
+            self.assertEqual(row["archiveApiChecks"], 13)
             self.assertEqual(row["archiveApiFailures"], 4)
             self.assertEqual(
                 row["archiveApiMethods"],
@@ -486,6 +497,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getCode",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
                 ],
             )
@@ -525,6 +537,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                       http://127.0.0.1:*)
                         case "$payload" in
                           *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBlockReceipts*)
@@ -603,7 +618,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 12)
+            self.assertEqual(row["archiveApiChecks"], 13)
             self.assertEqual(row["archiveApiFailures"], 4)
             self.assertEqual(
                 row["archiveApiMethods"],
@@ -615,6 +630,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getCode",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
                 ],
             )
@@ -654,6 +670,9 @@ class StorageBenchmarkTest(unittest.TestCase):
                       http://127.0.0.1:*)
                         case "$payload" in
                           *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBalance*)
@@ -735,7 +754,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 12)
+            self.assertEqual(row["archiveApiChecks"], 13)
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertEqual(
                 row["archiveApiMethods"],
@@ -746,6 +765,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getCode",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",

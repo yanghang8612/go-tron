@@ -702,6 +702,7 @@ labels = (
 
 ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockByNumber",
+    "eth_getBlockByHash",
     "eth_getBlockTransactionCountByNumber",
     "eth_getBlockTransactionCountByHash",
     "eth_getBlockReceipts",
@@ -1317,6 +1318,18 @@ def archive_result_ok(method, result, params):
         result_number = hex_quantity(result.get("number"))
         requested_number = hex_quantity(params[0] if params else None)
         return result_number is not None and result_number == requested_number
+    if method == "eth_getBlockByHash":
+        if not isinstance(result, dict):
+            return False
+        result_hash = normalize_hash(result.get("hash") or result.get("blockHash"))
+        requested_hash = normalize_hash(params[0] if params else "")
+        result_number = hex_quantity(result.get("number"))
+        requested_number = hex_quantity(block_tag)
+        return (
+            result_hash == requested_hash
+            and result_number is not None
+            and result_number == requested_number
+        )
     if method in {"eth_getBlockTransactionCountByNumber", "eth_getBlockTransactionCountByHash"}:
         count = hex_quantity(result)
         return is_hex_string(result) and count is not None
@@ -1437,6 +1450,8 @@ while idx < len(calls):
     methods.append(method)
     if method == "eth_getBlockByNumber":
         selected_block_hash = block_hash(result)
+        if selected_block_hash:
+            calls.append(("eth_getBlockByHash", [selected_block_hash, False]))
         calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
         if trace_block:
             calls.append(("debug_traceBlockByNumber", [block_tag, {}]))
