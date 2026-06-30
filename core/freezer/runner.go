@@ -593,6 +593,9 @@ func (r *Runner) OnePass() (uint64, error) {
 			if err != nil {
 				return fmt.Errorf("freezer: read state root for block %d hash %x: %w", n, hash.Bytes(), err)
 			}
+			if err := validateFreezerStateRootRaw(n, stateRoot); err != nil {
+				return err
+			}
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
 			}
@@ -674,6 +677,16 @@ func validateFreezerTransactionInfosRaw(blockNum uint64, block *coretypes.Block,
 		return fmt.Errorf("freezer: tx infos row %d contains block number %d", blockNum, ret.BlockNumber)
 	}
 	return rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), ret.Transactioninfo, "chain freezer append")
+}
+
+func validateFreezerStateRootRaw(blockNum uint64, raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if len(raw) != tcommon.HashLength {
+		return fmt.Errorf("freezer: state root for block %d has length %d, want %d", blockNum, len(raw), tcommon.HashLength)
+	}
+	return nil
 }
 
 func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {

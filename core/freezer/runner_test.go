@@ -557,6 +557,40 @@ func TestOnePassRejectsStateRootLookupErrorBeforeAppending(t *testing.T) {
 	}
 }
 
+func TestOnePassRejectsMalformedStateRootBeforeAppending(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 3; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.mu.Lock()
+	fc.stateRootRaw[0] = []byte{0x01}
+	fc.mu.Unlock()
+	fc.setSolidified(2)
+
+	f := newFreezer(t)
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "state root for block 0 has length 1") {
+		t.Fatalf("OnePass malformed state root = frozen %d err %v, want length error", frozen, err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen after malformed state root = %d, want 0", frozen)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if count, err := f.AncientCount(kind); err != nil || count != 0 {
+			t.Fatalf("ancient %s count after malformed state root = %d/%v, want 0/nil", kind, count, err)
+		}
+	}
+	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
+		t.Fatalf("hot block row after malformed state root = len %d err %v, want retained", len(v), err)
+	}
+}
+
 func TestOnePass_CapsFreezeToVerifiedFinishStage(t *testing.T) {
 	t.Parallel()
 	fc := newFakeChain()
