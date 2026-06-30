@@ -137,6 +137,8 @@ BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
 
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
+    "eth_getBlockTransactionCountByNumber",
+    "eth_getBlockTransactionCountByHash",
     "eth_getBalance",
     "eth_getCode",
     "eth_getStorageAt",
@@ -151,6 +153,8 @@ ARCHIVE_API_CALL_METHODS = (
 ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionByHash",
     "eth_getTransactionReceipt",
+    "eth_getTransactionByBlockNumberAndIndex",
+    "eth_getTransactionByBlockHashAndIndex",
 )
 
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"

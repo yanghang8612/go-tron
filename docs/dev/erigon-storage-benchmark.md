@@ -181,14 +181,16 @@ restarts once so the tail-prune lifecycle can run. Use a small
 the intended retention window.
 
 With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
-surface (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
+surface (`eth_getBlockByNumber`, `eth_getBlockTransactionCountByNumber`,
+`eth_getBlockTransactionCountByHash`, `eth_getBalance`, `eth_getCode`,
 `eth_getStorageAt`, and `eth_getLogs`) at `height-1` by default and emits
 `archiveApi*` fields. When the probed historical block contains a transaction,
-the probe also adds `eth_getTransactionByHash` and
-`eth_getTransactionReceipt` plus `archiveApiTx*` fields. Pass `--archive-api-block`,
-`--archive-api-address`, or `--archive-api-storage-slot` when a run needs to
-target a known historical contract/account. Pass `--archive-api-call-data` as
-well to include `eth_call` against that address.
+the probe also adds `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
+`eth_getTransactionByBlockNumberAndIndex`, and
+`eth_getTransactionByBlockHashAndIndex` plus `archiveApiTx*` fields. Pass
+`--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
+when a run needs to target a known historical contract/account. Pass
+`--archive-api-call-data` as well to include `eth_call` against that address.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -440,7 +442,8 @@ With `--require-archive-api-evidence`, at least one latest selected row must
 prove historical archive API reads by reporting `archiveApiStatus=ok`,
 `archiveApiChecks>0`, `archiveApiFailures=0`, a historical `archiveApiBlock`
 below the sampled `height`, and `archiveApiMethods` covering the default
-method set (`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
+method set (`eth_getBlockByNumber`, `eth_getBlockTransactionCountByNumber`,
+`eth_getBlockTransactionCountByHash`, `eth_getBalance`, `eth_getCode`,
 `eth_getStorageAt`, and `eth_getLogs`). If `archiveApiDepthBlocks` is present,
 the checker requires it to equal `height - archiveApiBlock`; add
 `--min-archive-api-depth-blocks BLOCKS` when the row must prove the archive
@@ -452,8 +455,9 @@ must prove mode-local archive reads for more modes. Add
 `--require-archive-tx-evidence` and `--require-archive-tx-mode minimal` when the
 selected probe block is known to contain a transaction; this requires
 same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
-32-byte `archiveApiTxHash`, and successful `eth_getTransactionByHash` plus
-`eth_getTransactionReceipt` probes. Add
+32-byte `archiveApiTxHash`, and successful `eth_getTransactionByHash`,
+`eth_getTransactionReceipt`, `eth_getTransactionByBlockNumberAndIndex`, and
+`eth_getTransactionByBlockHashAndIndex` probes. Add
 `--archive-api-method eth_call` when the samples also pass
 `--archive-api-call-data` against a known historical contract. If the row also
 reports `chainLookupPruneToBlock` or `tailPrunedThroughBlock`, the archive API

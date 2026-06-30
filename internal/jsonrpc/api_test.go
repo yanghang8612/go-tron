@@ -443,6 +443,137 @@ func TestEthAPI_GetBlockLookups_PropagateBackendError(t *testing.T) {
 	}
 }
 
+func TestEthBlockTransactionCountAndIndexedTransactionLookups(t *testing.T) {
+	block := buildFreezeBlock()
+	blockHash := freezeBlockHashHex()
+	txHash := freezeTxHashHex()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	defer srv.Close()
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getBlockTransactionCountByNumber",
+			params: []interface{}{"latest"},
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getBlockTransactionCountByHash",
+			params: []interface{}{blockHash},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != "0x1" {
+				t.Fatalf("%s result = %v, want 0x1", tt.method, resp["result"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "tx by number/index",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "tx by hash/index",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			tx, ok := resp["result"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s result = %T %v, want transaction object", tt.method, resp["result"], resp["result"])
+			}
+			if tx["hash"] != txHash {
+				t.Fatalf("%s hash = %v, want %s", tt.method, tx["hash"], txHash)
+			}
+			if tx["transactionIndex"] != "0x0" {
+				t.Fatalf("%s transactionIndex = %v, want 0x0", tt.method, tx["transactionIndex"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "tx by number/index out of range",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x1"},
+		},
+		{
+			name:   "tx by hash/index out of range",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x1"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != nil {
+				t.Fatalf("%s out-of-range result = %v, want null", tt.method, resp["result"])
+			}
+		})
+	}
+}
+
+func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getBlockTransactionCountByNumber",
+			params: []interface{}{"0x1"},
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getBlockTransactionCountByHash",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+		{
+			name:   "tx by number/index",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x1", "0x0"},
+		},
+		{
+			name:   "tx by hash/index",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000", "0x0"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
+}
+
 func TestEthGetTransactionByHash_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{tx: nil})
 	defer srv.Close()

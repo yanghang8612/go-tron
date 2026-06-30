@@ -690,13 +690,20 @@ labels = (
 
 ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockByNumber",
+    "eth_getBlockTransactionCountByNumber",
+    "eth_getBlockTransactionCountByHash",
     "eth_getBalance",
     "eth_getCode",
     "eth_getStorageAt",
     "eth_getLogs",
 )
 ARCHIVE_API_CALL_METHODS = ("eth_call", "debug_traceCall")
-ARCHIVE_API_TX_METHODS = ("eth_getTransactionByHash", "eth_getTransactionReceipt")
+ARCHIVE_API_TX_METHODS = (
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+    "eth_getTransactionByBlockNumberAndIndex",
+    "eth_getTransactionByBlockHashAndIndex",
+)
 ARCHIVE_API_TRACE_TRANSACTION_METHODS = ("debug_traceTransaction",)
 BENCHMARK_STATUS_VALUES = {
     "ok": 0,
@@ -1256,6 +1263,9 @@ def is_hex_string(value):
         and all(ch in "0123456789abcdefABCDEF" for ch in value[2:])
     )
 
+selected_block_hash = ""
+selected_tx_hash = ""
+
 def archive_result_ok(method, result, params):
     if method == "eth_getBlockByNumber":
         if not isinstance(result, dict):
@@ -1263,6 +1273,9 @@ def archive_result_ok(method, result, params):
         result_number = hex_quantity(result.get("number"))
         requested_number = hex_quantity(params[0] if params else None)
         return result_number is not None and result_number == requested_number
+    if method in {"eth_getBlockTransactionCountByNumber", "eth_getBlockTransactionCountByHash"}:
+        count = hex_quantity(result)
+        return is_hex_string(result) and count is not None
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"}:
         return is_hex_string(result)
     if method in {"debug_traceCall", "debug_traceTransaction"}:
@@ -1282,7 +1295,40 @@ def archive_result_ok(method, result, params):
             isinstance(result, dict)
             and normalize_hash(result.get("transactionHash") or result.get("hash")) == normalize_hash(params[0])
         )
+    if method == "eth_getTransactionByBlockNumberAndIndex":
+        if not isinstance(result, dict):
+            return False
+        result_hash = normalize_hash(result.get("hash") or result.get("transactionHash"))
+        result_number = hex_quantity(result.get("blockNumber"))
+        requested_number = hex_quantity(params[0] if params else None)
+        result_index = hex_quantity(result.get("transactionIndex"))
+        requested_index = hex_quantity(params[1] if len(params) > 1 else None)
+        return (
+            (not selected_tx_hash or result_hash == selected_tx_hash)
+            and result_number is not None
+            and result_number == requested_number
+            and result_index is not None
+            and result_index == requested_index
+        )
+    if method == "eth_getTransactionByBlockHashAndIndex":
+        if not isinstance(result, dict):
+            return False
+        result_hash = normalize_hash(result.get("hash") or result.get("transactionHash"))
+        result_block_hash = normalize_hash(result.get("blockHash"))
+        result_index = hex_quantity(result.get("transactionIndex"))
+        requested_index = hex_quantity(params[1] if len(params) > 1 else None)
+        return (
+            (not selected_tx_hash or result_hash == selected_tx_hash)
+            and result_block_hash == normalize_hash(params[0] if params else "")
+            and result_index is not None
+            and result_index == requested_index
+        )
     return result is not None
+
+def block_hash(block_result):
+    if not isinstance(block_result, dict):
+        return ""
+    return normalize_hash(block_result.get("hash") or block_result.get("blockHash"))
 
 def first_tx_hash(block_result):
     if not isinstance(block_result, dict):
@@ -1305,13 +1351,14 @@ def first_tx_hash(block_result):
 
 calls = [
     ("eth_getBlockByNumber", [block_tag, False]),
+    ("eth_getBlockTransactionCountByNumber", [block_tag]),
     ("eth_getBalance", [address, block_tag]),
     ("eth_getCode", [address, block_tag]),
     ("eth_getStorageAt", [address, slot, block_tag]),
     ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
 ]
 if call_data:
-    calls[3:3] = [
+    calls[4:4] = [
         ("eth_call", [{"to": address, "data": call_data}, block_tag]),
         ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
     ]
@@ -1331,15 +1378,26 @@ while idx < len(calls):
         continue
     methods.append(method)
     if method == "eth_getBlockByNumber":
+        selected_block_hash = block_hash(result)
+        calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
         tx_hash = first_tx_hash(result)
         if tx_hash:
             tx_probe = True
             tx_hash_value = tx_hash
+            selected_tx_hash = normalize_hash(tx_hash)
             calls.append(("eth_getTransactionByHash", [tx_hash]))
             calls.append(("eth_getTransactionReceipt", [tx_hash]))
+            calls.append(("eth_getTransactionByBlockNumberAndIndex", [block_tag, "0x0"]))
+            calls.append(("eth_getTransactionByBlockHashAndIndex", [selected_block_hash, "0x0"]))
             if trace_transaction:
                 calls.append(("debug_traceTransaction", [tx_hash, {}]))
-    elif method in {"eth_getTransactionByHash", "eth_getTransactionReceipt", "debug_traceTransaction"}:
+    elif method in {
+        "eth_getTransactionByHash",
+        "eth_getTransactionReceipt",
+        "eth_getTransactionByBlockNumberAndIndex",
+        "eth_getTransactionByBlockHashAndIndex",
+        "debug_traceTransaction",
+    }:
         tx_methods.append(method)
     idx += 1
 

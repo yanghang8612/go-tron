@@ -146,8 +146,16 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.ethGetBlockByNumber(req.Params)
 	case "eth_getBlockByHash":
 		result, err = api.ethGetBlockByHash(req.Params)
+	case "eth_getBlockTransactionCountByNumber":
+		result, err = api.ethGetBlockTransactionCountByNumber(req.Params)
+	case "eth_getBlockTransactionCountByHash":
+		result, err = api.ethGetBlockTransactionCountByHash(req.Params)
 	case "eth_getTransactionByHash":
 		result, err = api.ethGetTransactionByHash(req.Params)
+	case "eth_getTransactionByBlockNumberAndIndex":
+		result, err = api.ethGetTransactionByBlockNumberAndIndex(req.Params)
+	case "eth_getTransactionByBlockHashAndIndex":
+		result, err = api.ethGetTransactionByBlockHashAndIndex(req.Params)
 	case "eth_getTransactionReceipt":
 		result, err = api.ethGetTransactionReceipt(req.Params)
 	case "eth_getLogs":
@@ -417,6 +425,21 @@ func parseBlockParam(s string) (uint64, error) {
 	}
 }
 
+func parseQuantityParam(s, name string) (uint64, error) {
+	if len(s) > 2 && s[:2] == "0x" {
+		n, err := strconv.ParseUint(s[2:], 16, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid %s %q", name, s)
+		}
+		return n, nil
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q", name, s)
+	}
+	return n, nil
+}
+
 // ── Stub handlers (replaced task by task) ───────────────────────────────────
 
 func (api *API) netVersion(_ json.RawMessage) (interface{}, error) {
@@ -663,6 +686,51 @@ func (api *API) ethGetBlockByHash(params json.RawMessage) (interface{}, error) {
 	}
 	return blockToRPC(block, fullTx), nil
 }
+func (api *API) ethGetBlockTransactionCountByNumber(params json.RawMessage) (interface{}, error) {
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var blockTag string
+	json.Unmarshal(p[0], &blockTag)
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = api.backend.BlockNumber()
+	}
+	block, err := api.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+func (api *API) ethGetBlockTransactionCountByHash(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+	block, err := api.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
 func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, error) {
 	var p []string
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
@@ -679,6 +747,51 @@ func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, er
 		return nil, nil // not found → null
 	}
 	return txToRPC(tx, hash, block, index), nil
+}
+func (api *API) ethGetTransactionByBlockNumberAndIndex(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	num, err := parseBlockParam(p[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = api.backend.BlockNumber()
+	}
+	index, err := parseQuantityParam(p[1], "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := api.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
+}
+func (api *API) ethGetTransactionByBlockHashAndIndex(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+	index, err := parseQuantityParam(p[1], "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := api.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
 }
 func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, error) {
 	var p []string
@@ -874,6 +987,18 @@ func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index
 		result["to"] = nil
 	}
 	return result
+}
+
+func transactionByBlockIndex(block *types.Block, index uint64) interface{} {
+	if block == nil {
+		return nil
+	}
+	txs := block.Transactions()
+	if index >= uint64(len(txs)) {
+		return nil
+	}
+	tx := txs[index]
+	return txToRPC(tx.Proto(), tx.Hash(), block, int(index))
 }
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.

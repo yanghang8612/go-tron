@@ -1,0 +1,16 @@
+{
+  "name": "eth_getBlockTransactionCountByNumber",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockTransactionCountByNumber",
+    "params": [
+      "latest"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x1"
+  }
+}

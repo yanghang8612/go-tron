@@ -221,6 +221,48 @@ func TestEthAPI_BlockTxFrameworkParity(t *testing.T) {
 	}
 }
 
+func TestEthAPI_BlockIndexedTxFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	blockHash := freezeBlockHashHex()
+	_, txResult := loadCorpusCase(t, "eth_getTransactionByHash")
+
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantResult string
+	}{
+		{
+			name:       "count by number",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getBlockTransactionCountByNumber","params":["latest"]}`,
+			wantResult: `"0x1"`,
+		},
+		{
+			name:       "count by hash",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getBlockTransactionCountByHash","params":["` + blockHash + `"]}`,
+			wantResult: `"0x1"`,
+		},
+		{
+			name:       "tx by number/index",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockNumberAndIndex","params":["0x64","0x0"]}`,
+			wantResult: txResult,
+		},
+		{
+			name:       "tx by hash/index",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockHashAndIndex","params":["` + blockHash + `","0x0"]}`,
+			wantResult: txResult,
+		},
+		{
+			name:       "tx by number/index out of range",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockNumberAndIndex","params":["0x64","0x1"]}`,
+			wantResult: `null`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			postParity(t, ts.URL, tc.body, tc.wantResult)
+		})
+	}
+}
+
 // loadCorpusCase reads a freeze-corpus file and returns its request JSON and
 // expected result JSON.
 func loadCorpusCase(t *testing.T, name string) (reqJSON, resultJSON string) {

@@ -268,6 +268,47 @@ func (e *EthAPI) GetBlockByHash(hashHex string, fullTx *bool) (interface{}, erro
 	return blockToRPC(block, fullTx != nil && *fullTx), nil
 }
 
+// GetBlockTransactionCountByNumber serves
+// eth_getBlockTransactionCountByNumber. Unknown block => null.
+func (e *EthAPI) GetBlockTransactionCountByNumber(blockTag string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+
+// GetBlockTransactionCountByHash serves eth_getBlockTransactionCountByHash.
+// Unknown block => null.
+func (e *EthAPI) GetBlockTransactionCountByHash(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+
 // GetTransactionByHash serves eth_getTransactionByHash. Not found => null.
 func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 	var hash common.Hash
@@ -280,6 +321,50 @@ func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 		return nil, nil
 	}
 	return txToRPC(tx, hash, block, index), nil
+}
+
+// GetTransactionByBlockNumberAndIndex serves
+// eth_getTransactionByBlockNumberAndIndex. Unknown block or out-of-range index
+// => null.
+func (e *EthAPI) GetTransactionByBlockNumberAndIndex(blockTag, indexHex string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	index, err := parseQuantityParam(indexHex, "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
+}
+
+// GetTransactionByBlockHashAndIndex serves eth_getTransactionByBlockHashAndIndex.
+// Unknown block or out-of-range index => null.
+func (e *EthAPI) GetTransactionByBlockHashAndIndex(hashHex, indexHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	index, err := parseQuantityParam(indexHex, "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
 }
 
 // GetTransactionReceipt serves eth_getTransactionReceipt. Not found => null.

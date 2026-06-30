@@ -77,8 +77,15 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         method = request.get("method")
         tx_hash = "0x" + "12" * 32
         wrong_tx_hash = "0x" + "34" * 32
+        block_hash = "0x" + "ab" * 32
         if method == "eth_getBlockByNumber":
-            result = {"number": request.get("params", ["0x0"])[0], "transactions": [tx_hash]}
+            result = {
+                "number": request.get("params", ["0x0"])[0],
+                "hash": block_hash,
+                "transactions": [tx_hash],
+            }
+        elif method in {"eth_getBlockTransactionCountByNumber", "eth_getBlockTransactionCountByHash"}:
+            result = "0x1"
         elif method == "eth_getBalance" and getattr(self.server, "invalid_scalar_results", False):
             result = "not-hex"
         elif method == "eth_getTransactionByHash":
@@ -95,6 +102,23 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                 result = {"transactionHash": wrong_tx_hash, "blockNumber": "0x63"}
             else:
                 result = {"transactionHash": tx_hash, "blockNumber": "0x63"}
+        elif method in {"eth_getTransactionByBlockNumberAndIndex", "eth_getTransactionByBlockHashAndIndex"}:
+            if getattr(self.server, "null_tx_results", False):
+                result = None
+            elif getattr(self.server, "mismatched_tx_results", False):
+                result = {
+                    "hash": wrong_tx_hash,
+                    "blockNumber": "0x62",
+                    "blockHash": "0x" + "cd" * 32,
+                    "transactionIndex": "0x1",
+                }
+            else:
+                result = {
+                    "hash": tx_hash,
+                    "blockNumber": "0x63",
+                    "blockHash": block_hash,
+                    "transactionIndex": "0x0",
+                }
         elif method == "eth_getLogs":
             result = []
         elif method == "debug_traceTransaction":
@@ -164,7 +188,7 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiEndpoint"], endpoint)
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 10)
+            self.assertEqual(row["archiveApiChecks"], 14)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 99)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
@@ -172,14 +196,18 @@ class NileSyncSampleTest(unittest.TestCase):
                 row["archiveApiMethods"],
                 [
                     "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_call",
                     "debug_traceCall",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockTransactionCountByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                     "debug_traceTransaction",
                 ],
             )
@@ -190,6 +218,8 @@ class NileSyncSampleTest(unittest.TestCase):
                 [
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                     "debug_traceTransaction",
                 ],
             )
@@ -234,20 +264,24 @@ class NileSyncSampleTest(unittest.TestCase):
 
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 10)
+            self.assertEqual(row["archiveApiChecks"], 14)
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
                     "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_call",
                     "debug_traceCall",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockTransactionCountByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -257,6 +291,8 @@ class NileSyncSampleTest(unittest.TestCase):
                 [
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
 
@@ -293,16 +329,18 @@ class NileSyncSampleTest(unittest.TestCase):
 
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 7)
-            self.assertEqual(row["archiveApiFailures"], 2)
+            self.assertEqual(row["archiveApiChecks"], 11)
+            self.assertEqual(row["archiveApiFailures"], 4)
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
                     "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
                     "eth_getBalance",
                     "eth_getCode",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockTransactionCountByHash",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -342,8 +380,8 @@ class NileSyncSampleTest(unittest.TestCase):
 
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 7)
-            self.assertEqual(row["archiveApiFailures"], 2)
+            self.assertEqual(row["archiveApiChecks"], 11)
+            self.assertEqual(row["archiveApiFailures"], 4)
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
             self.assertEqual(row["archiveApiTxMethods"], [])
@@ -381,17 +419,21 @@ class NileSyncSampleTest(unittest.TestCase):
 
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiStatus"], "failed")
-            self.assertEqual(row["archiveApiChecks"], 7)
+            self.assertEqual(row["archiveApiChecks"], 11)
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
                     "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
                     "eth_getCode",
                     "eth_getStorageAt",
                     "eth_getLogs",
+                    "eth_getBlockTransactionCountByHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -401,6 +443,8 @@ class NileSyncSampleTest(unittest.TestCase):
                 [
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
 
@@ -631,7 +675,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_tail_pruned_files{{{labels}}} 0', metrics)
             self.assertIn(f'gtron_nile_sync_balance_trace_prune_to_block{{{labels}}} -1', metrics)
             self.assertIn(f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} -1', metrics)
-            self.assertIn(f'gtron_nile_sync_archive_api_checks{{{labels}}} 10', metrics)
+            self.assertIn(f'gtron_nile_sync_archive_api_checks{{{labels}}} 14', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_block{{{labels}}} 99', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} 1', metrics)
             self.assertIn(f'gtron_nile_sync_archive_api_failures{{{labels}}} 0', metrics)
