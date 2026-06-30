@@ -697,9 +697,11 @@ Status:
   sync-pipeline progress mismatches where execution/commitment/finish are ahead
   of their upstream sync stage.
 - JSON-RPC archive coverage now includes Ethereum-compatible block transaction
-  count, whole-block receipt, and block-indexed transaction lookups. Both the
+  count, TRON-empty uncle count, whole-block receipt, and block-indexed
+  transaction lookups. Both the
   legacy handler and the reflection `EthAPI` expose
   `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+  `eth_getUncleCountByBlockNumber`, `eth_getUncleCountByBlockHash`,
   `eth_getBlockReceipts`,
   `eth_getTransactionByBlockNumberAndIndex`, and
   `eth_getTransactionByBlockHashAndIndex`, reusing the same hot/cold block
@@ -720,10 +722,11 @@ Status:
   for older diagnostics. It can also run a live JSON-RPC archive-read probe and
   emit `archiveApi*` evidence for `eth_getBlockByNumber`,
   `eth_getBlockTransactionCountByNumber`,
-  `eth_getBlockTransactionCountByHash`, `eth_getBlockReceipts`,
-  `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and
-  optional contract `eth_call` and
-  `debug_traceCall` samples, opt-in `debug_traceBlockByNumber` /
+  `eth_getBlockTransactionCountByHash`, `eth_getUncleCountByBlockNumber`,
+  `eth_getUncleCountByBlockHash`, `eth_getBlockReceipts`, `eth_getBalance`,
+  `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and optional contract
+  `eth_call`, `debug_traceCall`, and `eth_estimateGas` samples, opt-in
+  `debug_traceBlockByNumber` /
   `debug_traceBlockByHash` checks for the selected historical block, plus opt-in
   `debug_traceTransaction` checks when a transaction hash is available. When
   the selected historical block contains a transaction, the same probe now adds

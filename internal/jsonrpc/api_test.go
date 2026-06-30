@@ -614,6 +614,86 @@ func TestEthBlockTransactionCountAndIndexedTransactionLookups(t *testing.T) {
 	})
 }
 
+func TestEthUncleLookupsReturnEmptyForTRONBlocks(t *testing.T) {
+	block := buildFreezeBlock()
+	blockHash := freezeBlockHashHex()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	defer srv.Close()
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+		want   interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"latest"},
+			want:   "0x0",
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{blockHash},
+			want:   "0x0",
+		},
+		{
+			name:   "uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != tt.want {
+				t.Fatalf("%s result = %v, want %v", tt.method, resp["result"], tt.want)
+			}
+		})
+	}
+
+	unknown := newTestServer(t, &stubBackend{blockNumber: block.Number()})
+	defer unknown.Close()
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "unknown count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"0x64"},
+		},
+		{
+			name:   "unknown count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{blockHash},
+		},
+		{
+			name:   "unknown uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "unknown uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, unknown, tt.method, tt.params)
+			if resp["result"] != nil {
+				t.Fatalf("%s unknown result = %v, want null", tt.method, resp["result"])
+			}
+		})
+	}
+}
+
 func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
 	backendErr := errors.New("rawdb: block 1 decode: corrupt")
 	tests := []struct {
@@ -630,6 +710,26 @@ func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
 			name:   "count by hash",
 			method: "eth_getBlockTransactionCountByHash",
 			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+		{
+			name:   "uncle count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"0x1"},
+		},
+		{
+			name:   "uncle count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+		{
+			name:   "uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x1", "0x0"},
+		},
+		{
+			name:   "uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000", "0x0"},
 		},
 		{
 			name:   "tx by number/index",

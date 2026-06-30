@@ -152,7 +152,7 @@ Options:
   --archive-api-block N          Historical block for archive API probe (default: height-1)
   --archive-api-address HEX      0x41-prefixed TRON address for account/contract probes
   --archive-api-storage-slot HEX Storage slot for eth_getStorageAt probe (default: 0x0)
-  --archive-api-call-data HEX    Include eth_call and debug_traceCall with this calldata against archive-api-address
+  --archive-api-call-data HEX    Include eth_call, debug_traceCall, and eth_estimateGas with this calldata against archive-api-address
   --archive-api-trace-transaction
                                   Include debug_traceTransaction when archive-api-block has a transaction
   --archive-api-trace-block
@@ -705,6 +705,8 @@ ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockByHash",
     "eth_getBlockTransactionCountByNumber",
     "eth_getBlockTransactionCountByHash",
+    "eth_getUncleCountByBlockNumber",
+    "eth_getUncleCountByBlockHash",
     "eth_getBlockReceipts",
     "eth_getBalance",
     "eth_getCode",
@@ -1330,7 +1332,12 @@ def archive_result_ok(method, result, params):
             and result_number is not None
             and result_number == requested_number
         )
-    if method in {"eth_getBlockTransactionCountByNumber", "eth_getBlockTransactionCountByHash"}:
+    if method in {
+        "eth_getBlockTransactionCountByNumber",
+        "eth_getBlockTransactionCountByHash",
+        "eth_getUncleCountByBlockNumber",
+        "eth_getUncleCountByBlockHash",
+    }:
         count = hex_quantity(result)
         return is_hex_string(result) and count is not None
     if method == "eth_getBlockReceipts":
@@ -1422,6 +1429,7 @@ def first_tx_hash(block_result):
 calls = [
     ("eth_getBlockByNumber", [block_tag, False]),
     ("eth_getBlockTransactionCountByNumber", [block_tag]),
+    ("eth_getUncleCountByBlockNumber", [block_tag]),
     ("eth_getBlockReceipts", [block_tag]),
     ("eth_getBalance", [address, block_tag]),
     ("eth_getCode", [address, block_tag]),
@@ -1429,7 +1437,7 @@ calls = [
     ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
 ]
 if call_data:
-    calls[5:5] = [
+    calls[6:6] = [
         ("eth_call", [{"to": address, "data": call_data}, block_tag]),
         ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
         ("eth_estimateGas", [{"to": address, "data": call_data}, block_tag]),
@@ -1453,7 +1461,8 @@ while idx < len(calls):
         selected_block_hash = block_hash(result)
         if selected_block_hash:
             calls.append(("eth_getBlockByHash", [selected_block_hash, False]))
-        calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
+            calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
+            calls.append(("eth_getUncleCountByBlockHash", [selected_block_hash]))
         if trace_block:
             calls.append(("debug_traceBlockByNumber", [block_tag, {}]))
             calls.append(("debug_traceBlockByHash", [selected_block_hash, {}]))

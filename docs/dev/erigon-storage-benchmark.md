@@ -184,6 +184,7 @@ the intended retention window.
 With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
 surface (`eth_getBlockByNumber`, `eth_getBlockByHash`,
 `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+`eth_getUncleCountByBlockNumber`, `eth_getUncleCountByBlockHash`,
 `eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 and `eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields.
 When the probed historical block contains a transaction, the probe also adds
@@ -353,7 +354,8 @@ staged-body mismatches.
 Use `--archive-api-probe` on the Nile sampler when the same production JSONL
 must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
 `archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`,
-`archiveApiDepthBlocks`, and `archiveApiMethods` from historical JSON-RPC reads.
+`archiveApiDepthBlocks`, and `archiveApiMethods` from historical JSON-RPC reads,
+including TRON-empty uncle-count probes for Ethereum client compatibility.
 When the probed block has a transaction, it also emits `archiveApiTxProbe`,
 `archiveApiTxHash`, and `archiveApiTxMethods`; add `--archive-api-call-data`
 plus `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,

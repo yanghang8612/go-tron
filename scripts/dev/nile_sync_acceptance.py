@@ -276,6 +276,8 @@ DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByHash",
     "eth_getBlockTransactionCountByNumber",
     "eth_getBlockTransactionCountByHash",
+    "eth_getUncleCountByBlockNumber",
+    "eth_getUncleCountByBlockHash",
     "eth_getBlockReceipts",
     "eth_getBalance",
     "eth_getCode",

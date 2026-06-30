@@ -309,6 +309,94 @@ func (e *EthAPI) GetBlockTransactionCountByHash(hashHex string) (interface{}, er
 	return hexUint64(uint64(len(block.Transactions()))), nil
 }
 
+// GetUncleCountByBlockNumber serves eth_getUncleCountByBlockNumber. TRON has no
+// uncle blocks, so known blocks always return 0x0; unknown blocks return null.
+func (e *EthAPI) GetUncleCountByBlockNumber(blockTag string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+
+// GetUncleCountByBlockHash serves eth_getUncleCountByBlockHash. TRON has no
+// uncle blocks, so known blocks always return 0x0; unknown blocks return null.
+func (e *EthAPI) GetUncleCountByBlockHash(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+
+// GetUncleByBlockNumberAndIndex serves eth_getUncleByBlockNumberAndIndex.
+// Known TRON blocks have no uncles, so every valid index resolves to null.
+func (e *EthAPI) GetUncleByBlockNumberAndIndex(blockTag, indexHex string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	if _, err := parseQuantityParam(indexHex, "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// GetUncleByBlockHashAndIndex serves eth_getUncleByBlockHashAndIndex. Known
+// TRON blocks have no uncles, so every valid index resolves to null.
+func (e *EthAPI) GetUncleByBlockHashAndIndex(hashHex, indexHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	if _, err := parseQuantityParam(indexHex, "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
+}
+
 // GetTransactionByHash serves eth_getTransactionByHash. Not found => null.
 func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 	var hash common.Hash

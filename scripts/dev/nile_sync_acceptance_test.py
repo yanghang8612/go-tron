@@ -488,7 +488,7 @@ def add_archive_trace_evidence(row):
     row.update(
         {
             "archiveApiStatus": "ok",
-            "archiveApiChecks": 17,
+            "archiveApiChecks": 19,
             "archiveApiFailures": 0,
             "archiveApiBlock": 999,
             "archiveApiDepthBlocks": 1,
@@ -497,6 +497,7 @@ def add_archive_trace_evidence(row):
             "archiveApiMethods": [
                 "eth_getBlockByNumber",
                 "eth_getBlockTransactionCountByNumber",
+                "eth_getUncleCountByBlockNumber",
                 "eth_getBlockReceipts",
                 "eth_getBalance",
                 "eth_getCode",
@@ -507,6 +508,7 @@ def add_archive_trace_evidence(row):
                 "eth_getLogs",
                 "eth_getBlockByHash",
                 "eth_getBlockTransactionCountByHash",
+                "eth_getUncleCountByBlockHash",
                 "eth_getTransactionByHash",
                 "eth_getTransactionReceipt",
                 "eth_getTransactionByBlockNumberAndIndex",
@@ -3619,12 +3621,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 9,
+                        "archiveApiChecks": 11,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
                             "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
@@ -3632,6 +3635,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getLogs",
                             "eth_getBlockByHash",
                             "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
                         ],
                     }
                 ],
@@ -3673,13 +3677,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 1000,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 9,
+                        "archiveApiChecks": 11,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 850,
                         "archiveApiDepthBlocks": 150,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
                             "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
@@ -3687,6 +3692,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getLogs",
                             "eth_getBlockByHash",
                             "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
                         ],
                     }
                 ],
@@ -3890,12 +3896,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 13,
+                        "archiveApiChecks": 15,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
                             "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
@@ -3903,6 +3910,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getLogs",
                             "eth_getBlockByHash",
                             "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
                             "eth_getTransactionByHash",
                             "eth_getTransactionReceipt",
                             "eth_getTransactionByBlockNumberAndIndex",
@@ -3953,13 +3961,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "fullStagedSyncCompleteAtHead": True,
                 "height": 100,
                 "archiveApiStatus": "ok",
-                "archiveApiChecks": 14,
+                "archiveApiChecks": 16,
                 "archiveApiFailures": 0,
                 "archiveApiBlock": 99,
                 "archiveApiTraceTransactionProbe": True,
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
                     "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
@@ -3967,6 +3976,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "eth_getLogs",
                     "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
                     "eth_getTransactionByHash",
                     "eth_getTransactionReceipt",
                     "eth_getTransactionByBlockNumberAndIndex",
@@ -4004,7 +4014,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("nile sync acceptance: ok", proc.stdout)
 
             missing_trace = dict(base_row)
-            missing_trace["archiveApiChecks"] = 13
+            missing_trace["archiveApiChecks"] = 15
             missing_trace["archiveApiMethods"] = [
                 method for method in base_row["archiveApiMethods"] if method != "debug_traceTransaction"
             ]
@@ -4073,13 +4083,14 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "fullStagedSyncCompleteAtHead": True,
                 "height": 100,
                 "archiveApiStatus": "ok",
-                "archiveApiChecks": 11,
+                "archiveApiChecks": 13,
                 "archiveApiFailures": 0,
                 "archiveApiBlock": 99,
                 "archiveApiTraceBlockProbe": True,
                 "archiveApiMethods": [
                     "eth_getBlockByNumber",
                     "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
                     "eth_getBlockReceipts",
                     "eth_getBalance",
                     "eth_getCode",
@@ -4087,6 +4098,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "eth_getLogs",
                     "eth_getBlockByHash",
                     "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
                     "debug_traceBlockByNumber",
                     "debug_traceBlockByHash",
                 ],
@@ -4309,12 +4321,13 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncCompleteAtHead": True,
                         "height": 100,
                         "archiveApiStatus": "ok",
-                        "archiveApiChecks": 12,
+                        "archiveApiChecks": 14,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
                             "eth_getBlockReceipts",
                             "eth_getBalance",
                             "eth_getCode",
@@ -4322,6 +4335,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                             "eth_getLogs",
                             "eth_getBlockByHash",
                             "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
                             "eth_getTransactionByHash",
                             "eth_getTransactionByBlockNumberAndIndex",
                             "eth_getTransactionByBlockHashAndIndex",

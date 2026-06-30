@@ -120,6 +120,10 @@ func freezeSpecs() []requestSpec {
 		{name: "eth_getBlockByHash_fullTx", method: "eth_getBlockByHash", params: []interface{}{blockHash, true}},
 		{name: "eth_getBlockTransactionCountByNumber", method: "eth_getBlockTransactionCountByNumber", params: []interface{}{"latest"}},
 		{name: "eth_getBlockTransactionCountByHash", method: "eth_getBlockTransactionCountByHash", params: []interface{}{blockHash}},
+		{name: "eth_getUncleCountByBlockNumber", method: "eth_getUncleCountByBlockNumber", params: []interface{}{"latest"}},
+		{name: "eth_getUncleCountByBlockHash", method: "eth_getUncleCountByBlockHash", params: []interface{}{blockHash}},
+		{name: "eth_getUncleByBlockNumberAndIndex", method: "eth_getUncleByBlockNumberAndIndex", params: []interface{}{"0x64", "0x0"}},
+		{name: "eth_getUncleByBlockHashAndIndex", method: "eth_getUncleByBlockHashAndIndex", params: []interface{}{blockHash, "0x0"}},
 
 		// ── transaction queries ──
 		{name: "eth_getTransactionByHash", method: "eth_getTransactionByHash", params: []interface{}{txHash}},

@@ -150,6 +150,14 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.ethGetBlockTransactionCountByNumber(req.Params)
 	case "eth_getBlockTransactionCountByHash":
 		result, err = api.ethGetBlockTransactionCountByHash(req.Params)
+	case "eth_getUncleCountByBlockNumber":
+		result, err = api.ethGetUncleCountByBlockNumber(req.Params)
+	case "eth_getUncleCountByBlockHash":
+		result, err = api.ethGetUncleCountByBlockHash(req.Params)
+	case "eth_getUncleByBlockNumberAndIndex":
+		result, err = api.ethGetUncleByBlockNumberAndIndex(req.Params)
+	case "eth_getUncleByBlockHashAndIndex":
+		result, err = api.ethGetUncleByBlockHashAndIndex(req.Params)
 	case "eth_getTransactionByHash":
 		result, err = api.ethGetTransactionByHash(req.Params)
 	case "eth_getTransactionByBlockNumberAndIndex":
@@ -766,6 +774,98 @@ func (api *API) ethGetBlockTransactionCountByHash(params json.RawMessage) (inter
 		return nil, nil
 	}
 	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+func (api *API) ethGetUncleCountByBlockNumber(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	num, err := parseBlockParam(p[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = api.backend.BlockNumber()
+	}
+	block, err := api.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+func (api *API) ethGetUncleCountByBlockHash(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+	block, err := api.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+func (api *API) ethGetUncleByBlockNumberAndIndex(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	num, err := parseBlockParam(p[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = api.backend.BlockNumber()
+	}
+	if _, err := parseQuantityParam(p[1], "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := api.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
+}
+func (api *API) ethGetUncleByBlockHashAndIndex(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+	if _, err := parseQuantityParam(p[1], "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := api.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
 }
 func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, error) {
 	var p []string
