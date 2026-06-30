@@ -59,14 +59,16 @@ type stubBackend struct {
 	// Trace recording (debug namespace): the *At methods capture the parsed
 	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
 	// return traceResult as the canned tracer output.
-	traceResult   interface{}
-	gotTraceFrom  *common.Address
-	gotTraceTo    *common.Address
-	gotTraceData  []byte
-	gotTraceValue int64
-	gotTraceBlock *uint64
-	gotTraceCfg   *tracers.TraceConfig
-	gotTraceHash  common.Hash
+	traceResult    interface{}
+	gotTraceFrom   *common.Address
+	gotTraceTo     *common.Address
+	gotTraceData   []byte
+	gotTraceValue  int64
+	gotTraceBlock  *uint64
+	gotTraceCfg    *tracers.TraceConfig
+	gotTraceHash   common.Hash
+	gotTraceHashes []common.Hash
+	traceErr       error
 }
 
 func (s *stubBackend) ChainID() int64      { return s.chainID }
@@ -160,7 +162,11 @@ func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int
 }
 func (s *stubBackend) TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
 	s.gotTraceHash = hash
+	s.gotTraceHashes = append(s.gotTraceHashes, hash)
 	s.gotTraceCfg = cfg
+	if s.traceErr != nil {
+		return nil, s.traceErr
+	}
 	return s.traceResult, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {

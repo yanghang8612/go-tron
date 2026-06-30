@@ -1870,11 +1870,14 @@ Status:
   `Call`/`CallAt`, `EstimateGas`/`EstimateGasAt`, etc.), while explicit
   constants such as TRON's nonce-less `eth_getTransactionCount` stay listed as
   audited exceptions.
-- JSON-RPC `debug_traceCall` and `debug_traceTransaction` now use the same
+- JSON-RPC `debug_traceCall`, `debug_traceTransaction`,
+  `debug_traceBlockByNumber`, and `debug_traceBlockByHash` now use the same
   archive execution-state setup as `eth_call`: historical traces can run from
   cold state-domain/code snapshots after hot block state roots, latest rows, and
-  code rows are pruned, and transaction tracing uses strict tx/block readers so
-  corrupt archive rows surface instead of looking like misses.
+  code rows are pruned. Transaction tracing uses strict tx/block readers so
+  corrupt archive rows surface instead of looking like misses; whole-block
+  trace methods reuse the same transaction replay path and return geth/Erigon
+  style `txHash` + `result`/`error` entries for every transaction in the block.
 - Event-log archive reads now include backend coverage for block-hash single
   block filters after hot transaction-info rows are removed, proving the cold
   event-log segment path is not limited to from/to range filters. A stronger
