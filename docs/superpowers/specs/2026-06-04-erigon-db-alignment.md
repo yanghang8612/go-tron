@@ -1062,7 +1062,11 @@ Status:
   continuing linearly. Tests prove the accessor build/check/verify path, range
   reads across segment boundaries, `maxBytes` truncation, gap handling, and that
   Manager can serve a row even when full segment scanning would reject trailing
-  bytes. `Manager.HasAncient` now proves the requested cold row is actually
+  bytes. Accessor-backed point and range reads still validate the decoded block
+  number, transaction-info coverage, and state-root shape for each row before
+  returning table payloads, so a stale same-size offset table cannot return a
+  different freezer row through the runtime fast path. `Manager.HasAncient` now
+  proves the requested cold row is actually
   readable instead of trusting only the manifest range, and
   `Manager.AncientCount` verifies the highest advertised cold row before
   reporting a snapshot-backed ancient head. Missing chain-freezer files

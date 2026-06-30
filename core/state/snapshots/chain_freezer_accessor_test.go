@@ -117,6 +117,34 @@ func TestManagerAncientUsesChainFreezerAccessorWhenPresent(t *testing.T) {
 	}
 }
 
+func TestManagerAncientRejectsAccessorOffsetPointingAtDifferentBlock(t *testing.T) {
+	snapshotDir, accessorRef := buildChainFreezerWithStaleAccessor(t)
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{accessorRef.freezer, accessorRef.accessor})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if _, err := mgr.Ancient(rawdb.AncientBlocksTable, 1); err == nil || !strings.Contains(err.Error(), "row 1 contains block number 2") {
+		t.Fatalf("Ancient with stale accessor = %v, want block-number mismatch", err)
+	}
+}
+
+func TestManagerAncientRangeRejectsAccessorOffsetPointingAtDifferentBlock(t *testing.T) {
+	snapshotDir, accessorRef := buildChainFreezerWithStaleAccessor(t)
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{accessorRef.freezer, accessorRef.accessor})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if _, err := mgr.AncientRange(rawdb.AncientBlocksTable, 1, 1, 0); err == nil || !strings.Contains(err.Error(), "row 1 contains block number 2") {
+		t.Fatalf("AncientRange with stale accessor = %v, want block-number mismatch", err)
+	}
+}
+
 func TestManifestRejectsChainFreezerAccessorWithoutFreezer(t *testing.T) {
 	ref := SegmentRef{
 		Dataset:   SegmentDatasetChainFreezer,
@@ -216,4 +244,50 @@ func TestChainFreezerRangeCoveredRejectsStaleAccessorOffsets(t *testing.T) {
 	if err == nil || covered {
 		t.Fatalf("ChainFreezerRangeCovered stale accessor = %v/%v, want false/error", covered, err)
 	}
+}
+
+type staleChainFreezerAccessorRefs struct {
+	freezer  SegmentRef
+	accessor SegmentRef
+}
+
+func buildChainFreezerWithStaleAccessor(t *testing.T) (string, staleChainFreezerAccessorRefs) {
+	t.Helper()
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+		{block: canonicalBoundaryTestBlock(t, 2)},
+	})
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 2)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	offsets, err := chainFreezerRowOffsets(snapshotDir, freezerRef)
+	if err != nil {
+		t.Fatalf("chainFreezerRowOffsets: %v", err)
+	}
+	if len(offsets) != 3 {
+		t.Fatalf("offsets = %v, want three rows", offsets)
+	}
+	staleOffsets := append([]uint64(nil), offsets...)
+	staleOffsets[1] = offsets[2]
+	staleOffsets[2] = offsets[2] + 1
+	accessorRef, err := writeChainFreezerAccessorSegment(snapshotDir, SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainFreezerAccessor,
+		FromTxNum: 0,
+		ToTxNum:   2,
+		Path:      "chain/freezer-accessor-stale-0-2.idx",
+	}, staleOffsets)
+	if err != nil {
+		t.Fatalf("writeChainFreezerAccessorSegment stale: %v", err)
+	}
+	if err := CheckChainFreezerAccessorSegment(snapshotDir, accessorRef); err != nil {
+		t.Fatalf("CheckChainFreezerAccessorSegment stale shape: %v", err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	return snapshotDir, staleChainFreezerAccessorRefs{freezer: freezerRef, accessor: accessorRef}
 }

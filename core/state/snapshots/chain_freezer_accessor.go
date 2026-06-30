@@ -206,6 +206,9 @@ func readChainFreezerSegmentRowWithAccessor(dir string, freezerRef, accessorRef 
 	if err != nil {
 		return chainFreezerRow{}, false, err
 	}
+	if _, err := validateChainFreezerRowPayload(row, "chain-freezer accessor read"); err != nil {
+		return chainFreezerRow{}, false, err
+	}
 	return row, true, nil
 }
 

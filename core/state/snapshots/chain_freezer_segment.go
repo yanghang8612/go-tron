@@ -841,6 +841,9 @@ func (m *Manager) ancientRangeFromChainFreezerSegment(manifest *Manifest, ref Se
 		if err != nil {
 			return nil, 0, 0, false, err
 		}
+		if _, err := validateChainFreezerRowPayload(row, "chain-freezer range read"); err != nil {
+			return nil, 0, 0, false, err
+		}
 		payload := chainFreezerAncientPayload(row, kind)
 		payloadLen := uint64(len(payload))
 		if maxBytes > 0 && (haveRows || len(rows) > 0) && totalBytes+bytesRead+payloadLen > maxBytes {

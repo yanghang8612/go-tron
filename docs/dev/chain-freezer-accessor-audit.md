@@ -53,6 +53,11 @@ hot-only `ChainDB` constructors, cold archive reader boundaries, state latest
 and as-of raw readers, event-log cold boundaries, and snapshot transaction-info
 publisher strictness.
 
+Runtime chain-freezer accessor point and range reads must validate the decoded
+row they land on before returning a table payload. This keeps a format-valid
+but stale offset sidecar from returning block `N+1` data for a block `N`
+lookup outside full manifest verification or tail-prune coverage checks.
+
 `TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries` also rejects
 new production `rawdb.NewChainDB(..., rawdb.NoopAncient{})` wrappers. Those
 wrappers bypass ancient/cold sidecars by construction, so the whitelist is kept
