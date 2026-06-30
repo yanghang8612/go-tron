@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,6 +138,100 @@ func TestRestoreHistoryFromVerifiedManifestRestoresHotRowsAndIndexes(t *testing.
 	}
 	if len(keyed) != 1 || keyed[0].TxNum != 10 || string(keyed[0].Next) != "new-a" {
 		t.Fatalf("keyed restored changes = %+v", keyed)
+	}
+}
+
+func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) {
+	dir := t.TempDir()
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 10,
+		ToTxNum:   11,
+		Path:      "history/state-domain-change-10-11.seg",
+	}, []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 10, 1, "slot/a"),
+		binaryStateDomainChange(2, 11, 1, "slot/b"),
+	})
+	if err != nil {
+		t.Fatalf("write state-domain history: %v", err)
+	}
+	manifest := NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
+	if len(data) < stateDomainChangeBinaryHeaderSize+16 {
+		t.Fatalf("accessor data length = %d, want second offset", len(data))
+	}
+	secondEntryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize+8 : stateDomainChangeBinaryHeaderSize+16])
+	if secondEntryOffset+4 > uint64(len(data)) {
+		t.Fatalf("second accessor offset %d outside data length %d", secondEntryOffset, len(data))
+	}
+	keyLen := binary.BigEndian.Uint32(data[secondEntryOffset : secondEntryOffset+4])
+	keyEnd := secondEntryOffset + 4 + uint64(keyLen)
+	if keyEnd == secondEntryOffset+4 || keyEnd > uint64(len(data)) {
+		t.Fatalf("second accessor key range [%d,%d) outside data length %d", secondEntryOffset+4, keyEnd, len(data))
+	}
+	if data[keyEnd-1] != 'b' {
+		t.Fatalf("second accessor key suffix = %q, want b", data[keyEnd-1])
+	}
+	data[keyEnd-1] = 'c'
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {
+		t.Fatalf("write stale accessor: %v", err)
+	}
+	if err := CheckStateDomainChangeAccessorSegment(dir, accessorRef); err != nil {
+		t.Fatalf("single-file accessor check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
+	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "key mismatch") {
+		t.Fatalf("VerifyLoadedManifestFiles stale accessor err = %v, want key mismatch", err)
+	}
+}
+
+func TestVerifyLoadedManifestFilesRejectsStaleStateDomainIndex(t *testing.T) {
+	dir := t.TempDir()
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 20,
+		ToTxNum:   21,
+		Path:      "history/state-domain-change-20-21.seg",
+	}, []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 20, 1, "slot/a"),
+		binaryStateDomainChange(2, 21, 1, "slot/b"),
+	})
+	if err != nil {
+		t.Fatalf("write state-domain history: %v", err)
+	}
+	manifest := NewManifest(20, 21, []SegmentRef{segRef, idxRef, accessorRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	data := mustReadFile(t, filepath.Join(dir, idxRef.Path))
+	if len(data) < stateDomainChangeBinaryHeaderSize+2*stateDomainChangeBinaryIndexEntrySize {
+		t.Fatalf("index data length = %d, want two entries", len(data))
+	}
+	firstOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize+8 : stateDomainChangeBinaryHeaderSize+16])
+	secondOffsetField := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryIndexEntrySize + 8
+	binary.BigEndian.PutUint64(data[secondOffsetField:secondOffsetField+8], firstOffset)
+	setStateDomainChangeBinaryRefMetadata(&idxRef, data)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, idxRef.Path), data); err != nil {
+		t.Fatalf("write stale index: %v", err)
+	}
+	if err := CheckStateDomainChangeIndexSegment(dir, idxRef); err != nil {
+		t.Fatalf("single-file index check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(20, 21, []SegmentRef{segRef, idxRef, accessorRef})
+	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "offset") {
+		t.Fatalf("VerifyLoadedManifestFiles stale index err = %v, want offset mismatch", err)
 	}
 }
 
