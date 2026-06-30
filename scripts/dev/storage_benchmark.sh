@@ -893,18 +893,18 @@ snapshot_manifest_profile_values() {
   local log_path="$2"
   local missing_share=-1
   if [ ! -f "$snapshot_dir/manifest.json" ]; then
-    printf '%s\n' "missing" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    printf '%s\n' "missing" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
     return
   fi
   if [ ! -x "$SNAPSHOT_PROFILE_SCRIPT" ]; then
     echo "warning: snapshot manifest profiler not executable: $SNAPSHOT_PROFILE_SCRIPT" >>"$log_path"
-    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
     return
   fi
   local profile_out="$WORKDIR/snapshot-profile-$(basename "$(dirname "$(dirname "$snapshot_dir")")").json"
   if ! "$SNAPSHOT_PROFILE_SCRIPT" "$snapshot_dir" --json >"$profile_out" 2>>"$log_path"; then
     echo "warning: snapshot manifest profile failed for $snapshot_dir; see $log_path" >>"$log_path"
-    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
+    printf '%s\n' "error" 0 0 0 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share" 0 "$missing_share"
     return
   fi
   python3 - "$profile_out" <<'PY'
@@ -914,9 +914,20 @@ from pathlib import Path
 
 profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 families = profile.get("byFamily", {})
+point_candidates = profile.get("pointIndexCandidates", {})
 
 def family_value(name, key, default=0):
     value = families.get(name, {}).get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+def point_value(name, key, default=0):
+    stats = point_candidates.get(name, {})
+    if not isinstance(stats, dict):
+        stats = {}
+    value = stats.get(key, default)
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -938,6 +949,17 @@ for family in (
 ):
     print(family_value(family, "sidecarBytes"))
     print(family_value(family, "sidecarShareMilli", -1))
+for candidate in (
+    "txHashLookup",
+    "eventLogIndex",
+    "stateHistoryAccessor",
+    "latestBTree",
+    "chainFreezerAccessor",
+    "codeDomain",
+    "commitmentSnapshot",
+):
+    print(point_value(candidate, "totalBytes"))
+    print(point_value(candidate, "snapshotShareMilli", -1))
 PY
 }
 
@@ -1601,6 +1623,13 @@ emit_result() {
   local snapshot_event_log_sidecar_bytes snapshot_event_log_sidecar_share_milli
   local snapshot_balance_trace_sidecar_bytes snapshot_balance_trace_sidecar_share_milli
   local snapshot_section_bloom_sidecar_bytes snapshot_section_bloom_sidecar_share_milli
+  local snapshot_point_tx_hash_lookup_bytes snapshot_point_tx_hash_lookup_share_milli
+  local snapshot_point_event_log_index_bytes snapshot_point_event_log_index_share_milli
+  local snapshot_point_state_history_accessor_bytes snapshot_point_state_history_accessor_share_milli
+  local snapshot_point_latest_btree_bytes snapshot_point_latest_btree_share_milli
+  local snapshot_point_chain_freezer_accessor_bytes snapshot_point_chain_freezer_accessor_share_milli
+  local snapshot_point_code_domain_bytes snapshot_point_code_domain_share_milli
+  local snapshot_point_commitment_snapshot_bytes snapshot_point_commitment_snapshot_share_milli
   snapshot_profile_status="$(printf '%s\n' "$profile_values" | sed -n '1p')"
   snapshot_profile_segments="$(printf '%s\n' "$profile_values" | sed -n '2p')"
   snapshot_profile_total_bytes="$(printf '%s\n' "$profile_values" | sed -n '3p')"
@@ -1619,6 +1648,20 @@ emit_result() {
   snapshot_balance_trace_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '16p')"
   snapshot_section_bloom_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '17p')"
   snapshot_section_bloom_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '18p')"
+  snapshot_point_tx_hash_lookup_bytes="$(printf '%s\n' "$profile_values" | sed -n '19p')"
+  snapshot_point_tx_hash_lookup_share_milli="$(printf '%s\n' "$profile_values" | sed -n '20p')"
+  snapshot_point_event_log_index_bytes="$(printf '%s\n' "$profile_values" | sed -n '21p')"
+  snapshot_point_event_log_index_share_milli="$(printf '%s\n' "$profile_values" | sed -n '22p')"
+  snapshot_point_state_history_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '23p')"
+  snapshot_point_state_history_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '24p')"
+  snapshot_point_latest_btree_bytes="$(printf '%s\n' "$profile_values" | sed -n '25p')"
+  snapshot_point_latest_btree_share_milli="$(printf '%s\n' "$profile_values" | sed -n '26p')"
+  snapshot_point_chain_freezer_accessor_bytes="$(printf '%s\n' "$profile_values" | sed -n '27p')"
+  snapshot_point_chain_freezer_accessor_share_milli="$(printf '%s\n' "$profile_values" | sed -n '28p')"
+  snapshot_point_code_domain_bytes="$(printf '%s\n' "$profile_values" | sed -n '29p')"
+  snapshot_point_code_domain_share_milli="$(printf '%s\n' "$profile_values" | sed -n '30p')"
+  snapshot_point_commitment_snapshot_bytes="$(printf '%s\n' "$profile_values" | sed -n '31p')"
+  snapshot_point_commitment_snapshot_share_milli="$(printf '%s\n' "$profile_values" | sed -n '32p')"
   local benchmark_prometheus="$ARTIFACT_DIR/$mode-$role-storage-benchmark.prom"
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
@@ -1648,6 +1691,13 @@ emit_result() {
     "$snapshot_event_log_sidecar_bytes" "$snapshot_event_log_sidecar_share_milli" \
     "$snapshot_balance_trace_sidecar_bytes" "$snapshot_balance_trace_sidecar_share_milli" \
     "$snapshot_section_bloom_sidecar_bytes" "$snapshot_section_bloom_sidecar_share_milli" \
+    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
     "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_EVENT_LOG_INDEX_SEGMENTS" \
     "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" \
@@ -1699,6 +1749,13 @@ keys = [
     "snapshotEventLogSidecarBytes", "snapshotEventLogSidecarShareMilli",
     "snapshotBalanceTraceSidecarBytes", "snapshotBalanceTraceSidecarShareMilli",
     "snapshotSectionBloomSidecarBytes", "snapshotSectionBloomSidecarShareMilli",
+    "snapshotPointTxHashLookupBytes", "snapshotPointTxHashLookupSnapshotShareMilli",
+    "snapshotPointEventLogIndexBytes", "snapshotPointEventLogIndexSnapshotShareMilli",
+    "snapshotPointStateHistoryAccessorBytes", "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    "snapshotPointLatestBTreeBytes", "snapshotPointLatestBTreeSnapshotShareMilli",
+    "snapshotPointChainFreezerAccessorBytes", "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    "snapshotPointCodeDomainBytes", "snapshotPointCodeDomainSnapshotShareMilli",
+    "snapshotPointCommitmentSnapshotBytes", "snapshotPointCommitmentSnapshotSnapshotShareMilli",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
     "derivedIndexBuildSeconds", "eventLogIndexSegments", "eventLogIndexAddressKeys",
     "eventLogIndexAddressPostings", "eventLogIndexAddressAvgPostingsMilli",
@@ -1747,6 +1804,13 @@ ints = {
     "snapshotEventLogSidecarShareMilli", "snapshotBalanceTraceSidecarBytes",
     "snapshotBalanceTraceSidecarShareMilli", "snapshotSectionBloomSidecarBytes",
     "snapshotSectionBloomSidecarShareMilli",
+    "snapshotPointTxHashLookupBytes", "snapshotPointTxHashLookupSnapshotShareMilli",
+    "snapshotPointEventLogIndexBytes", "snapshotPointEventLogIndexSnapshotShareMilli",
+    "snapshotPointStateHistoryAccessorBytes", "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    "snapshotPointLatestBTreeBytes", "snapshotPointLatestBTreeSnapshotShareMilli",
+    "snapshotPointChainFreezerAccessorBytes", "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    "snapshotPointCodeDomainBytes", "snapshotPointCodeDomainSnapshotShareMilli",
+    "snapshotPointCommitmentSnapshotBytes", "snapshotPointCommitmentSnapshotSnapshotShareMilli",
     "eventLogIndexSegments", "eventLogIndexAddressKeys", "eventLogIndexAddressPostings",
     "eventLogIndexAddressAvgPostingsMilli", "eventLogIndexAddressMaxPostings",
     "eventLogIndexAddressSingletonKeys", "eventLogIndexAddressMultiPostingKeys",

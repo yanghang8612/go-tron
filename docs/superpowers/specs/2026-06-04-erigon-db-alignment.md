@@ -2094,6 +2094,16 @@ Status:
   soak sampling after minimal-mode tail pruning. Freezer repair events now also
   update `ancient/repair/*` metrics and the opt-in debug metrics endpoint can
   filter those rows for alert exporters.
+- `scripts/dev/snapshot_manifest_profile.py --json` now emits
+  `pointIndexCandidates` for the P3 decision set (`txHashLookup`,
+  `eventLogIndex`, `stateHistoryAccessor`, `latestBTree`,
+  `chainFreezerAccessor`, `codeDomain`, and `commitmentSnapshot`). Each
+  candidate carries segment counts, payload/sidecar bytes, candidate-local
+  sidecar share, and snapshot-wide share so long Nile/storage samples can show
+  whether recsplit-style accessors or existence filters are justified before
+  adding another on-disk format. `storage_benchmark.sh` and
+  `nile_sync_sample.sh` surface the same candidate totals as
+  `snapshotPoint*Bytes` and `snapshotPoint*SnapshotShareMilli` fields.
 
 Adopt only where profiles justify it:
 

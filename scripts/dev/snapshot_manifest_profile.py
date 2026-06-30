@@ -24,6 +24,16 @@ LATEST_DATASETS = {
     "commitment-checkpoint",
 }
 
+POINT_INDEX_CANDIDATES = (
+    "txHashLookup",
+    "eventLogIndex",
+    "stateHistoryAccessor",
+    "latestBTree",
+    "chainFreezerAccessor",
+    "codeDomain",
+    "commitmentSnapshot",
+)
+
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
@@ -133,11 +143,36 @@ def finalize_stats(stats):
     return stats
 
 
+def finalize_candidate_stats(stats, snapshot_total):
+    stats = finalize_stats(stats)
+    stats["snapshotShareMilli"] = ratio_milli(stats["totalBytes"], snapshot_total)
+    return stats
+
+
 def sorted_stats(stats_by_key):
     return {
         key: finalize_stats(dict(value))
         for key, value in sorted(stats_by_key.items(), key=lambda item: item[0])
     }
+
+
+def point_index_candidate_names(dataset, kind):
+    names = []
+    if kind == "chain-index":
+        names.append("txHashLookup")
+    if kind == "event-log-index":
+        names.append("eventLogIndex")
+    if dataset == "state-domain-change":
+        names.append("stateHistoryAccessor")
+    if kind == "btree":
+        names.append("latestBTree")
+    if kind == "chain-freezer-accessor":
+        names.append("chainFreezerAccessor")
+    if dataset == "code":
+        names.append("codeDomain")
+    if dataset in {"commitment-root", "commitment-checkpoint"}:
+        names.append("commitmentSnapshot")
+    return names
 
 
 def profile_manifest(path, include_retired=False):
@@ -150,6 +185,7 @@ def profile_manifest(path, include_retired=False):
     by_kind = defaultdict(empty_stats)
     by_dataset = defaultdict(empty_stats)
     sidecar_kinds = defaultdict(int)
+    point_candidates = {name: empty_stats() for name in POINT_INDEX_CANDIDATES}
 
     for source, refs in (("active", active), ("retired", retired)):
         for ref in refs:
@@ -164,6 +200,8 @@ def profile_manifest(path, include_retired=False):
             add_stats(by_dataset[dataset or "<missing>"], size, sidecar)
             if sidecar:
                 sidecar_kinds[kind] += 1
+            for name in point_index_candidate_names(dataset, kind):
+                add_stats(point_candidates[name], size, sidecar)
 
     profile = finalize_stats(overall)
     profile.update(
@@ -180,6 +218,10 @@ def profile_manifest(path, include_retired=False):
             "byKind": sorted_stats(by_kind),
             "byDataset": sorted_stats(by_dataset),
             "sidecarKinds": dict(sorted(sidecar_kinds.items())),
+            "pointIndexCandidates": {
+                name: finalize_candidate_stats(dict(point_candidates[name]), profile["totalBytes"])
+                for name in POINT_INDEX_CANDIDATES
+            },
             "issues": [],
         }
     )
@@ -230,6 +272,25 @@ def print_human(profile):
             f"sidecarBytes={stats['sidecarBytes']} "
             f"sidecarShareMilli={stats['sidecarShareMilli']}"
         )
+    candidates = {
+        name: stats
+        for name, stats in profile["pointIndexCandidates"].items()
+        if stats["segments"] > 0
+    }
+    if candidates:
+        print("point-index candidates:")
+        for name, stats in sorted(
+            candidates.items(),
+            key=lambda item: (-item[1]["totalBytes"], item[0]),
+        ):
+            print(
+                f"{name}: segments={stats['segments']} "
+                f"totalBytes={stats['totalBytes']} "
+                f"payloadBytes={stats['payloadBytes']} "
+                f"sidecarBytes={stats['sidecarBytes']} "
+                f"sidecarShareMilli={stats['sidecarShareMilli']} "
+                f"snapshotShareMilli={stats['snapshotShareMilli']}"
+            )
     if profile["issues"]:
         print("issues:")
         for issue in profile["issues"]:

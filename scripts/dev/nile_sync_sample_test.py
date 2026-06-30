@@ -489,6 +489,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
             self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
             self.assertEqual(row["snapshotEventLogSidecarShareMilli"], 400)
+            self.assertEqual(row["snapshotPointTxHashLookupBytes"], 100)
+            self.assertEqual(row["snapshotPointTxHashLookupSnapshotShareMilli"], 63)
+            self.assertEqual(row["snapshotPointEventLogIndexBytes"], 200)
+            self.assertEqual(row["snapshotPointEventLogIndexSnapshotShareMilli"], 125)
+            self.assertEqual(row["snapshotPointCodeDomainBytes"], 0)
+            self.assertEqual(row["snapshotPointCodeDomainSnapshotShareMilli"], 0)
             self.assertEqual(row["snapshotLatestSidecarBytes"], 0)
             self.assertEqual(row["snapshotLatestSidecarShareMilli"], -1)
 

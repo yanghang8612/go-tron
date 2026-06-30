@@ -68,6 +68,19 @@ class SnapshotManifestProfileTest(unittest.TestCase):
             self.assertEqual(profile["byFamily"]["event-log"]["sidecarShareMilli"], 334)
             self.assertEqual(profile["byKind"]["chain-index"]["sidecarBytes"], 100)
             self.assertEqual(profile["byDataset"]["account-latest"]["totalBytes"], 1200)
+            candidates = profile["pointIndexCandidates"]
+            self.assertEqual(candidates["txHashLookup"]["totalBytes"], 100)
+            self.assertEqual(candidates["txHashLookup"]["snapshotShareMilli"], 22)
+            self.assertEqual(candidates["eventLogIndex"]["totalBytes"], 250)
+            self.assertEqual(candidates["eventLogIndex"]["snapshotShareMilli"], 55)
+            self.assertEqual(candidates["stateHistoryAccessor"]["totalBytes"], 150)
+            self.assertEqual(candidates["stateHistoryAccessor"]["payloadBytes"], 100)
+            self.assertEqual(candidates["stateHistoryAccessor"]["sidecarBytes"], 50)
+            self.assertEqual(candidates["stateHistoryAccessor"]["sidecarShareMilli"], 334)
+            self.assertEqual(candidates["latestBTree"]["totalBytes"], 80)
+            self.assertEqual(candidates["chainFreezerAccessor"]["totalBytes"], 300)
+            self.assertEqual(candidates["chainFreezerAccessor"]["snapshotShareMilli"], 66)
+            self.assertEqual(candidates["codeDomain"]["segments"], 0)
 
     def test_human_output_accepts_manifest_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +98,9 @@ class SnapshotManifestProfileTest(unittest.TestCase):
             self.assertIn("snapshot manifest:", proc.stdout)
             self.assertIn("chain-freezer:", proc.stdout)
             self.assertIn("sidecarShareMilli=196", proc.stdout)
+            self.assertIn("point-index candidates:", proc.stdout)
+            self.assertIn("eventLogIndex:", proc.stdout)
+            self.assertIn("snapshotShareMilli=55", proc.stdout)
 
     def test_threshold_gate_rejects_high_sidecar_share(self):
         with tempfile.TemporaryDirectory() as tmp:

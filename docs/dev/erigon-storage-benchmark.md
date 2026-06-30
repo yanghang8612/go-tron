@@ -483,7 +483,12 @@ long runs. Run the profiler directly on saved artifacts when a standalone gate
 is useful; it reports `sidecarShareMilli` overall and per family (`latest`,
 `state-history`, `chain-freezer`, `event-log`, `balance-trace`,
 `section-bloom`, and `other`) and can fail a run with
-`--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Keep the
+`--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Its JSON
+also includes `pointIndexCandidates`, with direct byte/share counters for the
+P3 recsplit/existence-filter candidates: `txHashLookup`, `eventLogIndex`,
+`stateHistoryAccessor`, `latestBTree`, `chainFreezerAccessor`, `codeDomain`,
+and `commitmentSnapshot`; the benchmark JSONL row exposes the same values as
+`snapshotPoint*Bytes` and `snapshotPoint*SnapshotShareMilli`. Keep the
 compact/merged index-format decision evidence-driven: only consider replacing
 sorted `chain-index`, `event-log-index`, accessor, or btree sidecars after the
 profile shows they dominate disk or lookup latency in long samples.

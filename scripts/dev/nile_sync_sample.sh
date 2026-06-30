@@ -2171,6 +2171,15 @@ SNAPSHOT_PROFILE_FAMILIES = (
     ("balance-trace", "snapshotBalanceTraceSidecar"),
     ("section-bloom", "snapshotSectionBloomSidecar"),
 )
+SNAPSHOT_PROFILE_POINT_CANDIDATES = (
+    ("txHashLookup", "snapshotPointTxHashLookup"),
+    ("eventLogIndex", "snapshotPointEventLogIndex"),
+    ("stateHistoryAccessor", "snapshotPointStateHistoryAccessor"),
+    ("latestBTree", "snapshotPointLatestBTree"),
+    ("chainFreezerAccessor", "snapshotPointChainFreezerAccessor"),
+    ("codeDomain", "snapshotPointCodeDomain"),
+    ("commitmentSnapshot", "snapshotPointCommitmentSnapshot"),
+)
 
 def snapshot_manifest_profile_defaults(status):
     row = {
@@ -2184,6 +2193,9 @@ def snapshot_manifest_profile_defaults(status):
     for _, prefix in SNAPSHOT_PROFILE_FAMILIES:
         row[f"{prefix}Bytes"] = 0
         row[f"{prefix}ShareMilli"] = -1
+    for _, prefix in SNAPSHOT_PROFILE_POINT_CANDIDATES:
+        row[f"{prefix}Bytes"] = 0
+        row[f"{prefix}SnapshotShareMilli"] = -1
     return row
 
 def int_field(value, default=0):
@@ -2236,6 +2248,15 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
             stats = {}
         row[f"{prefix}Bytes"] = int_field(stats.get("sidecarBytes"))
         row[f"{prefix}ShareMilli"] = int_field(stats.get("sidecarShareMilli"), -1)
+    point_candidates = profile.get("pointIndexCandidates", {})
+    if not isinstance(point_candidates, dict):
+        point_candidates = {}
+    for candidate, prefix in SNAPSHOT_PROFILE_POINT_CANDIDATES:
+        stats = point_candidates.get(candidate, {})
+        if not isinstance(stats, dict):
+            stats = {}
+        row[f"{prefix}Bytes"] = int_field(stats.get("totalBytes"))
+        row[f"{prefix}SnapshotShareMilli"] = int_field(stats.get("snapshotShareMilli"), -1)
     return row
 
 SAMPLE_STATUS_VALUES = {
