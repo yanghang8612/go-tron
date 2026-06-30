@@ -803,6 +803,24 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 		receipt["status"] != "0x1" {
 		t.Fatalf("cold eth_getTransactionReceipt = %+v, want tx/block/index/status from cold chain data", receipt)
 	}
+	for _, blockParam := range []string{"0x1", blockHashHex} {
+		resp := postCoreJSONRPC(t, httpServer.URL, "eth_getBlockReceipts", []any{blockParam})
+		receipts, ok := resp["result"].([]any)
+		if !ok || len(receipts) != 1 {
+			t.Fatalf("eth_getBlockReceipts(%s) result = %T %v, want one cold receipt", blockParam, resp["result"], resp["result"])
+		}
+		blockReceipt, ok := receipts[0].(map[string]any)
+		if !ok {
+			t.Fatalf("eth_getBlockReceipts(%s)[0] = %T %v, want object", blockParam, receipts[0], receipts[0])
+		}
+		if blockReceipt["transactionHash"] != txHashHex ||
+			blockReceipt["blockHash"] != blockHashHex ||
+			blockReceipt["blockNumber"] != "0x1" ||
+			blockReceipt["transactionIndex"] != "0x0" ||
+			blockReceipt["status"] != "0x1" {
+			t.Fatalf("cold eth_getBlockReceipts(%s) = %+v, want tx/block/index/status from cold chain data", blockParam, blockReceipt)
+		}
+	}
 	if got := bc.StateRootAtBlock(block.Number()); got != wantRoot {
 		t.Fatalf("StateRootAtBlock = %x, want %x", got, wantRoot)
 	}
@@ -955,6 +973,34 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 		logObj["blockNumber"] != "0x1" ||
 		logObj["logIndex"] != "0x0" {
 		t.Fatalf("cold eth_getTransactionReceipt = receipt %+v log %+v, want cold log payload", receipt, logObj)
+	}
+	blockReceiptsResp := postCoreJSONRPC(t, httpServer.URL, "eth_getBlockReceipts", []any{"0x1"})
+	blockReceipts, ok := blockReceiptsResp["result"].([]any)
+	if !ok || len(blockReceipts) != 1 {
+		t.Fatalf("eth_getBlockReceipts result = %T %v, want one cold receipt", blockReceiptsResp["result"], blockReceiptsResp["result"])
+	}
+	blockReceipt, ok := blockReceipts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts[0] = %T %v, want object", blockReceipts[0], blockReceipts[0])
+	}
+	blockLogs, ok := blockReceipt["logs"].([]any)
+	if !ok || len(blockLogs) != 1 {
+		t.Fatalf("cold eth_getBlockReceipts logs = %T %v, want one log", blockReceipt["logs"], blockReceipt["logs"])
+	}
+	blockLog, ok := blockLogs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("cold block receipt log = %T %v, want object", blockLogs[0], blockLogs[0])
+	}
+	if blockReceipt["transactionHash"] != txHashHex ||
+		blockReceipt["blockHash"] != "0x"+block.Hash().Hex() ||
+		blockReceipt["status"] != "0x0" ||
+		blockReceipt["gasUsed"] != "0x3039" ||
+		blockLog["address"] != "0x"+fmt.Sprintf("%x", logAddress) ||
+		blockLog["data"] != "0x9c9d" ||
+		blockLog["transactionHash"] != txHashHex ||
+		blockLog["blockNumber"] != "0x1" ||
+		blockLog["logIndex"] != "0x0" {
+		t.Fatalf("cold eth_getBlockReceipts = receipt %+v log %+v, want cold log payload", blockReceipt, blockLog)
 	}
 }
 

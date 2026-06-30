@@ -1069,7 +1069,7 @@ Status:
   (`getblockbyid`, `getblockbynum`, `gettransactionbyid`,
   `gettransactioninfobyid`, `gettransactioninfobyblocknum`,
   `eth_getBlockByHash`, `eth_getBlockByNumber`, `eth_getTransactionReceipt`,
-  and `eth_getLogs`) against that restored cold backend, including
+  `eth_getBlockReceipts`, and `eth_getLogs`) against that restored cold backend, including
   solidity/PBFT bound-block paths, full-transaction block responses, and both
   range and `blockHash` log filters.
 - The same restore regression now seeds minimal latest-account, code, and
