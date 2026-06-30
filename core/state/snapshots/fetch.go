@@ -105,6 +105,16 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 	result.FilesDownloaded += files
 	result.BytesDownloaded += bytes
 
+	report, err := VerifyLoadedManifestFiles(opts.Dir, manifest, VerifyManifestOptions{
+		ExpectedChain:     &opts.Expected,
+		CheckRetired:      opts.CheckRetired,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	if err := writeSnapshotBytesAtomic(opts.Dir, SnapshotCatalogFile, catalogBytes); err != nil {
 		return nil, err
 	}
@@ -112,21 +122,6 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 		return nil, err
 	}
 
-	_, report, err := VerifySignedSnapshotCatalog(opts.Dir, opts.Expected, opts.TrustedKeys)
-	if err != nil {
-		return nil, err
-	}
-	if opts.CheckRetired {
-		report, err = VerifyLoadedManifestFiles(opts.Dir, manifest, VerifyManifestOptions{
-			ExpectedChain:     &opts.Expected,
-			CheckRetired:      true,
-			RequireRegistered: true,
-			RequireChecksums:  true,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
 	result.Catalog = catalog
 	result.Verification = *report
 	return result, nil

@@ -122,6 +122,45 @@ func TestFetchRemoteSnapshotDoesNotPublishManifestOnSegmentFailure(t *testing.T)
 	}
 }
 
+func TestFetchRemoteSnapshotDoesNotPublishManifestOnSemanticFailure(t *testing.T) {
+	source := t.TempDir()
+	identity := ChainIdentity{
+		ChainID:     1,
+		NetworkID:   2,
+		GenesisHash: strings.Repeat("01", 32),
+	}
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, source)
+	corruptLatestBinaryCompanionSegmentChecksum(t, source, &accessorRef)
+	if err := PublishManifest(source, NewManifestForChain(1, 10, []SegmentRef{segRef, accessorRef, btreeRef}, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	server := httptest.NewServer(http.FileServer(http.Dir(source)))
+	defer server.Close()
+
+	dest := t.TempDir()
+	_, err = FetchRemoteSnapshot(context.Background(), FetchRemoteSnapshotOptions{
+		BaseURL:     server.URL,
+		Dir:         dest,
+		Expected:    identity,
+		TrustedKeys: []ed25519.PublicKey{pub},
+	})
+	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
+		t.Fatalf("FetchRemoteSnapshot stale sidecar error = %v, want segment checksum mismatch", err)
+	}
+	for _, rel := range []string{SnapshotCatalogFile, ManifestFile} {
+		if _, statErr := os.Stat(filepath.Join(dest, rel)); !os.IsNotExist(statErr) {
+			t.Fatalf("%s stat err = %v, want not exist after semantic verification failure", rel, statErr)
+		}
+	}
+}
+
 func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	source, identity, _ := writeVerifiableHistoryManifest(t)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
