@@ -79,6 +79,7 @@ For archive-read evidence, add `--archive-api-probe`. The sampler probes
 `eth_getBlockByNumber`, `eth_getBlockByHash`,
 `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
 `eth_getUncleCountByBlockNumber`, `eth_getUncleCountByBlockHash`,
+`eth_getUncleByBlockNumberAndIndex`, `eth_getUncleByBlockHashAndIndex`,
 `eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 and `eth_getLogs` at `height-1` by default and emits `archiveApi*` fields. If
 the probed block contains a transaction, it also probes `eth_getTransactionByHash`,
@@ -96,9 +97,10 @@ prove `debug_traceBlockByNumber` and
 The sampler counts only shape-valid JSON-RPC results as successful: block reads
 must return an object, account/code/storage/call reads must return hex strings,
 logs must return a list, and transaction/receipt reads must return objects
-rather than `null`. The block result must also carry the requested historical
-block number, and transaction/receipt results must carry the transaction hash
-selected from that block.
+rather than `null`; TRON-empty uncle-by-index reads must return `null`. The
+block result must also carry the requested historical block number, and
+transaction/receipt results must carry the transaction hash selected from that
+block.
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,

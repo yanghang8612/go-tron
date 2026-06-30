@@ -707,6 +707,8 @@ ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockTransactionCountByHash",
     "eth_getUncleCountByBlockNumber",
     "eth_getUncleCountByBlockHash",
+    "eth_getUncleByBlockNumberAndIndex",
+    "eth_getUncleByBlockHashAndIndex",
     "eth_getBlockReceipts",
     "eth_getBalance",
     "eth_getCode",
@@ -1340,6 +1342,8 @@ def archive_result_ok(method, result, params):
     }:
         count = hex_quantity(result)
         return is_hex_string(result) and count is not None
+    if method in {"eth_getUncleByBlockNumberAndIndex", "eth_getUncleByBlockHashAndIndex"}:
+        return result is None
     if method == "eth_getBlockReceipts":
         if not isinstance(result, list):
             return False
@@ -1430,6 +1434,7 @@ calls = [
     ("eth_getBlockByNumber", [block_tag, False]),
     ("eth_getBlockTransactionCountByNumber", [block_tag]),
     ("eth_getUncleCountByBlockNumber", [block_tag]),
+    ("eth_getUncleByBlockNumberAndIndex", [block_tag, "0x0"]),
     ("eth_getBlockReceipts", [block_tag]),
     ("eth_getBalance", [address, block_tag]),
     ("eth_getCode", [address, block_tag]),
@@ -1437,7 +1442,7 @@ calls = [
     ("eth_getLogs", [{"fromBlock": block_tag, "toBlock": block_tag}]),
 ]
 if call_data:
-    calls[6:6] = [
+    calls[7:7] = [
         ("eth_call", [{"to": address, "data": call_data}, block_tag]),
         ("debug_traceCall", [{"to": address, "data": call_data}, block_tag, {}]),
         ("eth_estimateGas", [{"to": address, "data": call_data}, block_tag]),
@@ -1463,6 +1468,7 @@ while idx < len(calls):
             calls.append(("eth_getBlockByHash", [selected_block_hash, False]))
             calls.append(("eth_getBlockTransactionCountByHash", [selected_block_hash]))
             calls.append(("eth_getUncleCountByBlockHash", [selected_block_hash]))
+            calls.append(("eth_getUncleByBlockHashAndIndex", [selected_block_hash, "0x0"]))
         if trace_block:
             calls.append(("debug_traceBlockByNumber", [block_tag, {}]))
             calls.append(("debug_traceBlockByHash", [selected_block_hash, {}]))

@@ -185,6 +185,7 @@ With `--archive-api-probe`, the runner also calls the JSON-RPC archive read
 surface (`eth_getBlockByNumber`, `eth_getBlockByHash`,
 `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
 `eth_getUncleCountByBlockNumber`, `eth_getUncleCountByBlockHash`,
+`eth_getUncleByBlockNumberAndIndex`, `eth_getUncleByBlockHashAndIndex`,
 `eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 and `eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields.
 When the probed historical block contains a transaction, the probe also adds
@@ -355,7 +356,8 @@ Use `--archive-api-probe` on the Nile sampler when the same production JSONL
 must satisfy archive-read acceptance gates. It emits `archiveApiStatus`,
 `archiveApiChecks`, `archiveApiFailures`, `archiveApiBlock`,
 `archiveApiDepthBlocks`, and `archiveApiMethods` from historical JSON-RPC reads,
-including TRON-empty uncle-count probes for Ethereum client compatibility.
+including TRON-empty uncle-count and uncle-by-index probes for Ethereum client
+compatibility.
 When the probed block has a transaction, it also emits `archiveApiTxProbe`,
 `archiveApiTxHash`, and `archiveApiTxMethods`; add `--archive-api-call-data`
 plus `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,
@@ -454,6 +456,8 @@ prove historical archive API reads by reporting `archiveApiStatus=ok`,
 below the sampled `height`, and `archiveApiMethods` covering the default
 method set (`eth_getBlockByNumber`, `eth_getBlockByHash`,
 `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`,
+`eth_getUncleCountByBlockNumber`, `eth_getUncleCountByBlockHash`,
+`eth_getUncleByBlockNumberAndIndex`, `eth_getUncleByBlockHashAndIndex`,
 `eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 and `eth_getLogs`). If
 `archiveApiDepthBlocks` is present, the checker requires it to equal
