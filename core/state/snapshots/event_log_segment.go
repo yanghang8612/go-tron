@@ -48,6 +48,7 @@ type EventLogSegment struct {
 	ref    SegmentRef
 	file   *os.File
 	header eventLogHeader
+	size   uint64
 }
 
 type EventLogIndexSegment struct {
@@ -487,7 +488,7 @@ func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 		_ = file.Close()
 		return nil, err
 	}
-	return &EventLogSegment{ref: ref, file: file, header: header}, nil
+	return &EventLogSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}, nil
 }
 
 func OpenEventLogIndexSegment(dir string, ref SegmentRef) (*EventLogIndexSegment, error) {
@@ -816,7 +817,7 @@ func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]
 }
 
 func (s *EventLogSegment) readLog(entry eventLogIndexEntry) (*corepb.TransactionInfo_Log, error) {
-	raw, err := readEventLogPayloadAt(s.file, entry.offset, entry.length)
+	raw, err := s.readLogPayload(entry)
 	if err != nil {
 		return nil, err
 	}
@@ -829,6 +830,16 @@ func (s *EventLogSegment) readLog(entry eventLogIndexEntry) (*corepb.Transaction
 		return nil, fmt.Errorf("snapshots: event log row block=%d tx=%d log=%d address %x does not match payload address %x", entry.blockNum, entry.txIndex, entry.logIndex, entry.address, payloadAddress)
 	}
 	return &log, nil
+}
+
+func (s *EventLogSegment) readLogPayload(entry eventLogIndexEntry) ([]byte, error) {
+	if s == nil || s.file == nil {
+		return nil, errors.New("snapshots: nil event log segment")
+	}
+	if err := validateEventLogPayloadEntry(s.ref, s.header, s.size, entry); err != nil {
+		return nil, fmt.Errorf("snapshots: event log segment %q: %w", s.ref.Path, err)
+	}
+	return readEventLogPayloadAt(s.file, entry.offset, entry.length)
 }
 
 func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -1869,12 +1880,8 @@ func checkEventLogPayloadIndex(file io.ReaderAt, ref SegmentRef, header eventLog
 		if err != nil {
 			return nil, nil, err
 		}
-		if entry.blockNum < ref.FromTxNum || entry.blockNum > ref.ToTxNum {
-			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d block %d outside [%d,%d]", ref.Path, i, entry.blockNum, ref.FromTxNum, ref.ToTxNum)
-		}
-		end, overflow := checkedAdd(entry.offset, entry.length)
-		if overflow || entry.offset < header.payloadOffset || end > fileSize {
-			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d payload [%d,%d] outside file size %d", ref.Path, i, entry.offset, end, fileSize)
+		if err := validateEventLogPayloadEntry(ref, header, fileSize, entry); err != nil {
+			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d: %w", ref.Path, i, err)
 		}
 		if i > 0 && compareEventLogEntries(prev, entry) >= 0 {
 			return nil, nil, fmt.Errorf("snapshots: event log segment %q index entry %d is not strictly sorted", ref.Path, i)
@@ -1901,6 +1908,29 @@ func checkEventLogPayloadIndex(file io.ReaderAt, ref SegmentRef, header eventLog
 		prev = entry
 	}
 	return expectedAddress, expectedTopic, nil
+}
+
+func validateEventLogPayloadEntry(ref SegmentRef, header eventLogHeader, fileSize uint64, entry eventLogIndexEntry) error {
+	if entry.blockNum < ref.FromTxNum || entry.blockNum > ref.ToTxNum {
+		return fmt.Errorf("entry block %d outside [%d,%d]", entry.blockNum, ref.FromTxNum, ref.ToTxNum)
+	}
+	if entry.length == 0 {
+		return fmt.Errorf("entry block=%d tx=%d log=%d has empty payload", entry.blockNum, entry.txIndex, entry.logIndex)
+	}
+	payloadEnd := eventLogPayloadEnd(header, fileSize)
+	end, overflow := checkedAdd(entry.offset, entry.length)
+	if overflow || entry.offset < header.payloadOffset || end > payloadEnd {
+		return fmt.Errorf("entry block=%d tx=%d log=%d payload [%d,%d] outside payload section [%d,%d]",
+			entry.blockNum, entry.txIndex, entry.logIndex, entry.offset, end, header.payloadOffset, payloadEnd)
+	}
+	return nil
+}
+
+func eventLogPayloadEnd(header eventLogHeader, fileSize uint64) uint64 {
+	if header.version >= 2 {
+		return header.payloadEnd
+	}
+	return fileSize
 }
 
 func eventLogAddress(raw []byte) common.Address {

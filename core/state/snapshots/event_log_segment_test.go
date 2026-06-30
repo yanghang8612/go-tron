@@ -695,6 +695,89 @@ func TestEventLogSegmentIterateRejectsPayloadAddressMismatch(t *testing.T) {
 	}
 }
 
+func TestEventLogSegmentIterateRejectsEmptyPayloadEntry(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x37)
+	topic := common.Hash{0xbf}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x05}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	ref := eventLogSegmentRefForTest(t, result.Segments)
+	rewriteEventLogIndexEntry(t, dir, ref, 0, func(_ eventLogHeader, entry *eventLogIndexEntry) {
+		entry.length = 0
+	})
+	ref = refreshEventLogSegmentMetadata(t, dir, ref)
+	if err := CheckEventLogSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "empty payload") {
+		t.Fatalf("CheckEventLogSegment empty payload = %v, want empty-payload error", err)
+	}
+
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment after corruption: %v", err)
+	}
+	defer seg.Close()
+	err = seg.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for empty event-log payload")
+		return true, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty payload") {
+		t.Fatalf("IterateLogs empty payload = %v, want empty-payload error", err)
+	}
+}
+
+func TestEventLogSegmentIterateRejectsPayloadOutsidePayloadSection(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x38)
+	topic := common.Hash{0xc0}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x06}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	ref := eventLogSegmentRefForTest(t, result.Segments)
+	rewriteEventLogIndexEntry(t, dir, ref, 0, func(header eventLogHeader, entry *eventLogIndexEntry) {
+		entry.offset = header.addressIndexOffset
+		entry.length = 1
+	})
+	ref = refreshEventLogSegmentMetadata(t, dir, ref)
+	if err := CheckEventLogSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "outside payload section") {
+		t.Fatalf("CheckEventLogSegment outside payload = %v, want payload-section error", err)
+	}
+
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment after corruption: %v", err)
+	}
+	defer seg.Close()
+	err = seg.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for out-of-section event-log payload")
+		return true, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside payload section") {
+		t.Fatalf("IterateLogs outside payload = %v, want payload-section error", err)
+	}
+}
+
 func TestEventLogSegmentIterateRejectsStaleTopicLookupPosting(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -1456,6 +1539,43 @@ func eventLogTestAddress(seed byte) []byte {
 		out[i] = seed + byte(i)
 	}
 	return out
+}
+
+func eventLogSegmentRefForTest(t *testing.T, refs []SegmentRef) SegmentRef {
+	t.Helper()
+	for _, ref := range refs {
+		if ref.Kind == SegmentEventLog && ref.normalizedDataset() == SegmentDatasetEventLog {
+			return ref
+		}
+	}
+	t.Fatalf("event-log segment not found in refs %+v", refs)
+	return SegmentRef{}
+}
+
+func rewriteEventLogIndexEntry(t *testing.T, dir string, ref SegmentRef, index uint64, mutate func(eventLogHeader, *eventLogIndexEntry)) eventLogIndexEntry {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer file.Close()
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatalf("readEventLogHeader: %v", err)
+	}
+	if index >= header.rowCount {
+		t.Fatalf("event-log entry index %d outside row count %d", index, header.rowCount)
+	}
+	offset := eventLogIndexEntryOffset(header, index)
+	entry, err := readEventLogIndexEntryAt(file, offset)
+	if err != nil {
+		t.Fatalf("readEventLogIndexEntryAt: %v", err)
+	}
+	mutate(header, &entry)
+	if err := writeEventLogIndexEntryAt(file, offset, entry); err != nil {
+		t.Fatalf("writeEventLogIndexEntryAt: %v", err)
+	}
+	return entry
 }
 
 func zeroEventLogLookupCount(t *testing.T, dir string, ref SegmentRef, lookup string) {
