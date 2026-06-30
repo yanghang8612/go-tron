@@ -704,6 +704,10 @@ func CheckLatestAccessorSegment(dir string, ref SegmentRef) error {
 }
 
 func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
+	path := filepath.Join(dir, ref.Path)
+	if err := verifyLatestBinaryFileRef(path, ref); err != nil {
+		return err
+	}
 	file, header, err := openLatestBinaryBTreeReader(dir, ref)
 	if err != nil {
 		return err

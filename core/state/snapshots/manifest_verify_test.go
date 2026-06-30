@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -235,6 +236,46 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainIndex(t *testing.T) {
 	}
 }
 
+func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryAccessor(t *testing.T) {
+	dir := t.TempDir()
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	manifest := NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	corruptLatestBinaryCompanionSegmentChecksum(t, dir, &accessorRef)
+	if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+		t.Fatalf("single-file accessor check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
+		t.Fatalf("VerifyLoadedManifestFiles stale latest accessor err = %v, want segment checksum mismatch", err)
+	}
+}
+
+func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryBTree(t *testing.T) {
+	dir := t.TempDir()
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	manifest := NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	corruptLatestBinaryCompanionSegmentChecksum(t, dir, &btreeRef)
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		t.Fatalf("single-file btree check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
+		t.Fatalf("VerifyLoadedManifestFiles stale latest btree err = %v, want segment checksum mismatch", err)
+	}
+}
+
 func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) {
 	dir, identity, _ := writeVerifiableHistoryManifest(t)
 	eventRef := writeVerifiableEventLogSegment(t, dir, 1, 2)
@@ -278,6 +319,43 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 	}
 	if _, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageHeaders); err != nil || ok {
 		t.Fatalf("canonical Headers stage should not be advanced by snapshot install: ok=%v err=%v", ok, err)
+	}
+}
+
+func writeLatestBinaryCompanionManifestForTest(t *testing.T, dir string) (SegmentRef, SegmentRef, SegmentRef) {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x64}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner, 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		if err := rawdb.WriteStateKVLatest(db, owner, 7, kvdomains.SystemDynamicProperty, []byte(key), []byte("value-"+key)); err != nil {
+			t.Fatalf("write kv latest %q: %v", key, err)
+		}
+	}
+	segRef, accessorRef, btreeRef, err := BuildLatestDomainSegmentFilesFromDB(db, dir, kvdomains.SystemDynamicProperty, 1, 10, "latest/system-dp.seg")
+	if err != nil {
+		t.Fatalf("BuildLatestDomainSegmentFilesFromDB: %v", err)
+	}
+	return segRef, accessorRef, btreeRef
+}
+
+func corruptLatestBinaryCompanionSegmentChecksum(t *testing.T, dir string, ref *SegmentRef) {
+	t.Helper()
+	data := mustReadFile(t, filepath.Join(dir, ref.Path))
+	checksumStart := latestBinaryAccessorHeaderSize - sha256.Size
+	if len(data) < checksumStart+sha256.Size {
+		t.Fatalf("latest binary companion %q length = %d, want checksum header", ref.Path, len(data))
+	}
+	for i := 0; i < sha256.Size; i++ {
+		data[checksumStart+i] ^= 0xff
+	}
+	size, checksum := latestBinaryMetadata(data)
+	ref.Size = size
+	ref.Checksum = checksum
+	if err := os.WriteFile(filepath.Join(dir, ref.Path), data, 0o644); err != nil {
+		t.Fatalf("write stale latest binary companion %q: %v", ref.Path, err)
 	}
 }
 

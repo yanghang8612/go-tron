@@ -704,6 +704,11 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
 		t.Fatalf("check latest btree: %v", err)
 	}
+	badBTreeChecksum := btreeRef
+	badBTreeChecksum.Checksum = "sha256:bad"
+	if err := CheckLatestBTreeSegment(dir, badBTreeChecksum); err == nil {
+		t.Fatal("latest btree with bad checksum checked successfully")
+	}
 	if err := PublishManifest(dir, NewManifest(1, 20, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
