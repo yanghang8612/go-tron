@@ -183,6 +183,20 @@ def add_snapshot_profile_evidence(row):
             "snapshotBalanceTraceSidecarShareMilli": -1,
             "snapshotSectionBloomSidecarBytes": 0,
             "snapshotSectionBloomSidecarShareMilli": -1,
+            "snapshotPointTxHashLookupBytes": 100,
+            "snapshotPointTxHashLookupSnapshotShareMilli": 63,
+            "snapshotPointEventLogIndexBytes": 200,
+            "snapshotPointEventLogIndexSnapshotShareMilli": 125,
+            "snapshotPointStateHistoryAccessorBytes": 0,
+            "snapshotPointStateHistoryAccessorSnapshotShareMilli": 0,
+            "snapshotPointLatestBTreeBytes": 0,
+            "snapshotPointLatestBTreeSnapshotShareMilli": 0,
+            "snapshotPointChainFreezerAccessorBytes": 0,
+            "snapshotPointChainFreezerAccessorSnapshotShareMilli": 0,
+            "snapshotPointCodeDomainBytes": 0,
+            "snapshotPointCodeDomainSnapshotShareMilli": 0,
+            "snapshotPointCommitmentSnapshotBytes": 0,
+            "snapshotPointCommitmentSnapshotSnapshotShareMilli": 0,
         }
     )
     return row
@@ -780,6 +794,33 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_invalid_snapshot_point_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            row = add_snapshot_profile_evidence(clean_full_staged_sync_row())
+            row["snapshotPointEventLogIndexSnapshotShareMilli"] = 999
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-snapshot-profile-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "snapshotPointEventLogIndexSnapshotShareMilli=999, want 125 "
+                "for snapshotPointEventLogIndexBytes=200 totalBytes=1600",
+                proc.stderr,
+            )
 
     def test_rejects_missing_snapshot_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

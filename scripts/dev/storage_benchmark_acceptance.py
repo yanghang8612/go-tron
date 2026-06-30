@@ -1528,9 +1528,25 @@ SNAPSHOT_PROFILE_FAMILY_FIELDS = (
     "snapshotSectionBloomSidecar",
 )
 
+SNAPSHOT_PROFILE_POINT_FIELDS = (
+    "snapshotPointTxHashLookup",
+    "snapshotPointEventLogIndex",
+    "snapshotPointStateHistoryAccessor",
+    "snapshotPointLatestBTree",
+    "snapshotPointChainFreezerAccessor",
+    "snapshotPointCodeDomain",
+    "snapshotPointCommitmentSnapshot",
+)
+
 
 def snapshot_profile_evidence_row(row):
-    return any(field in row for field in SNAPSHOT_PROFILE_EVIDENCE_FIELDS)
+    return (
+        any(field in row for field in SNAPSHOT_PROFILE_EVIDENCE_FIELDS)
+        or any(
+            f"{prefix}Bytes" in row or f"{prefix}SnapshotShareMilli" in row
+            for prefix in SNAPSHOT_PROFILE_POINT_FIELDS
+        )
+    )
 
 
 def sidecar_share_milli(sidecar_bytes, total_bytes):
@@ -1601,6 +1617,29 @@ def check_snapshot_profile_row(row):
                 f"{line_label(row)} {share_field}={family_share:g}, want >= 0 "
                 f"when {bytes_field}={family_bytes}"
             )
+    for prefix in SNAPSHOT_PROFILE_POINT_FIELDS:
+        bytes_field = f"{prefix}Bytes"
+        share_field = f"{prefix}SnapshotShareMilli"
+        point_bytes = as_non_negative_int(row, bytes_field)
+        point_share = as_number(row, share_field)
+        if point_bytes is None:
+            issues.append(f"{line_label(row)} {bytes_field}={row.get(bytes_field)!r}, want non-negative integer")
+        if point_share is None:
+            issues.append(f"{line_label(row)} {share_field}={row.get(share_field)!r}, want numeric value")
+        elif point_share < -1 or point_share > 1000:
+            issues.append(f"{line_label(row)} {share_field}={point_share:g}, want -1..1000")
+        elif point_bytes is not None and point_bytes > 0 and point_share < 0:
+            issues.append(
+                f"{line_label(row)} {share_field}={point_share:g}, want >= 0 "
+                f"when {bytes_field}={point_bytes}"
+            )
+        elif total_bytes is not None and point_bytes is not None and point_share >= 0:
+            want_share = sidecar_share_milli(point_bytes, total_bytes)
+            if point_share != want_share:
+                issues.append(
+                    f"{line_label(row)} {share_field}={point_share:g}, want {want_share} "
+                    f"for {bytes_field}={point_bytes} totalBytes={total_bytes}"
+                )
     return issues
 
 
