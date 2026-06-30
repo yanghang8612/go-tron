@@ -1160,12 +1160,12 @@ func TestGetTransactionInfoById_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetTransactionInfoById_BackendError(t *testing.T) {
+func TestGetTransactionInfoById_BackendErrorReturnsNotFound(t *testing.T) {
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	client := newTestClient(t, &testBackend{txInfoErr: backendErr})
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("want Internal, got %v", err)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
 	}
 }
 

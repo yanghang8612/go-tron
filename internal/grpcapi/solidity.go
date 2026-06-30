@@ -511,10 +511,7 @@ func (s *SolidityServer) GetTransactionInfoById(_ context.Context, in *apipb.Byt
 	}
 	info, err := s.backend.GetTransactionInfoByID(hash)
 	if err != nil {
-		if transactionLookupNotFound(err) {
-			return nil, status.Error(codes.NotFound, "transaction info not found")
-		}
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")

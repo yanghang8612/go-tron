@@ -1653,7 +1653,7 @@ func TestGetTransactionByIdSurfacesBackendError(t *testing.T) {
 	}
 }
 
-func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
+func TestGetTransactionReceiptByIdBackendErrorReturnsEmpty(t *testing.T) {
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	srv := newTestServer(t, &stubBackend{txInfoErr: backendErr})
 	defer srv.Close()
@@ -1663,9 +1663,7 @@ func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
 		t.Fatalf("POST gettransactionreceiptbyid: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("gettransactionreceiptbyid status = %d, want 500", resp.StatusCode)
-	}
+	assertHTTPEmptyObject(t, resp)
 }
 
 func TestGetTransactionInfoByBlockNumBackendErrorReturnsEmptyList(t *testing.T) {

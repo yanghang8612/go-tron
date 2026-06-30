@@ -801,17 +801,11 @@ func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
 func (api *API) writeTransactionInfoByID(w http.ResponseWriter, hash common.Hash) {
 	info, err := api.backend.GetTransactionInfoByID(hash)
 	if err != nil {
-		if transactionLookupNotFound(err) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{}"))
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeEmptyJSON(w)
 		return
 	}
 	if info == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, info)

@@ -794,7 +794,7 @@ func TestSolidity_GetTransactionInfoByIdWithinSolidReadsBackend(t *testing.T) {
 	}
 }
 
-func TestSolidity_GetTransactionInfoByIdSurfacesBackendError(t *testing.T) {
+func TestSolidity_GetTransactionInfoByIdBackendErrorReturnsNotFound(t *testing.T) {
 	hash := solidityTestHash(0x13)
 	backendErr := errors.New("rawdb: cold tx lookup corrupt")
 	backend := &solidTestBackend{
@@ -806,8 +806,8 @@ func TestSolidity_GetTransactionInfoByIdSurfacesBackendError(t *testing.T) {
 	client := newSolidityClient(t, backend)
 
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: hash[:]})
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("want Internal for backend tx-info read error, got %v", err)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for backend tx-info read error, got %v", err)
 	}
 	if backend.txInfoCalls != 1 {
 		t.Fatalf("GetTransactionInfoByID called %d times, want 1", backend.txInfoCalls)
