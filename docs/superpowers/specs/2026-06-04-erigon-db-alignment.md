@@ -1247,7 +1247,10 @@ Status:
   integrity-preserving strict readers for block numbers, transaction indexes,
   transaction infos, state roots, section blooms, balance traces, and account
   traces, so new production code cannot call those variants on a hot-only KV
-  store and accidentally bypass registered cold sidecars.
+  store and accidentally bypass registered cold sidecars. Derived hot-row
+  iterators for balance traces and section blooms are likewise pinned to
+  function-scoped snapshot build/prune/backfill boundaries, so an API or
+  adjacent helper in the same source file cannot scan hot-only rows directly.
 - `gtron db storage-alerts --json` now packages freezer, stage, and snapshot
   health into one machine-readable report for soak/production monitors. The
   JSON form preserves the same critical exit semantics as the text command and

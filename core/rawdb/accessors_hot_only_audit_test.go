@@ -418,23 +418,23 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 
 func TestProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
-	offenders := auditForbiddenRawDBReferences(t, root, derivedHotRowIteratorReferences(), map[string]map[string]struct{}{
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, derivedHotRowIteratorReferences(), map[string]map[string]struct{}{
 		"core/balance_trace_backfill.go": {
-			"IterateAccountTraceRows": {},
+			"collectReplayedBalanceTraceRows": {},
 		},
 		"core/state/snapshots/balance_trace_prune.go": {
-			"IterateAccountTraceRows":      {},
-			"IterateBlockBalanceTraceRows": {},
+			"verifyHotBalanceTraceRowsCovered": {},
 		},
 		"core/state/snapshots/balance_trace_segment.go": {
-			"IterateAccountTraceRows":      {},
-			"IterateBlockBalanceTraceRows": {},
+			"countBalanceTraceBlockRows":          {},
+			"collectBalanceTraceAccountRowsToETL": {},
+			"writeBalanceTraceSegmentFromDB":      {},
 		},
 		"core/state/snapshots/section_bloom_prune.go": {
-			"IterateSectionBloomRows": {},
+			"verifyHotSectionBloomRowsCovered": {},
 		},
 		"core/state/snapshots/section_bloom_segment.go": {
-			"IterateSectionBloomRows": {},
+			"collectSectionBloomRowsToETL": {},
 		},
 	})
 	if len(offenders) > 0 {
@@ -491,6 +491,30 @@ func query(db any) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
 		}
+	}
+}
+
+func TestDerivedHotRowIteratorAuditRejectsSameFileNonBoundaryReference(t *testing.T) {
+	root := writeAuditFixture(t, "core/state/snapshots/balance_trace_segment.go", `package snapshots
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func countBalanceTraceBlockRows(db any) {
+	_ = rawdb.IterateBlockBalanceTraceRows(db, 1, 2, nil)
+}
+
+func debugIterator(db any) {
+	_ = rawdb.IterateBlockBalanceTraceRows(db, 1, 2, nil)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, derivedHotRowIteratorReferences(), map[string]map[string]struct{}{
+		"core/state/snapshots/balance_trace_segment.go": {
+			"countBalanceTraceBlockRows": {},
+		},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.IterateBlockBalanceTraceRows") {
+		t.Fatalf("offenders = %+v, want same-file non-boundary derived iterator rejected", offenders)
 	}
 }
 
@@ -1684,6 +1708,73 @@ func auditForbiddenRawDBReferencesSkipping(t *testing.T, root string, forbidden 
 	})
 	if err != nil {
 		t.Fatalf("audit forbidden rawdb references: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
+func auditForbiddenRawDBReferencesOutsideAllowedFuncs(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		if len(rawdbNames) == 0 {
+			return nil
+		}
+		for _, decl := range file.Decls {
+			fnName := ""
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				fnName = fn.Name.Name
+			}
+			ast.Inspect(decl, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.SelectorExpr:
+					ident, ok := n.X.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					if _, imported := rawdbNames[ident.Name]; !imported {
+						return true
+					}
+					if _, banned := forbidden[n.Sel.Name]; banned && !isAllowedAuditFunc(root, path, fnName, allowed) {
+						offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), ident.Name+"."+n.Sel.Name))
+					}
+				case *ast.Ident:
+					if _, dotImported := rawdbNames["."]; !dotImported {
+						return true
+					}
+					if _, banned := forbidden[n.Name]; banned && !isAllowedAuditFunc(root, path, fnName, allowed) {
+						offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), n.Name))
+					}
+				}
+				return true
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit forbidden rawdb references outside allowed funcs: %v", err)
 	}
 	sort.Strings(offenders)
 	return offenders
