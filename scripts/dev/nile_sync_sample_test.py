@@ -463,6 +463,7 @@ class NileSyncSampleTest(unittest.TestCase):
             thread.start()
             self.addCleanup(server.shutdown)
             self.addCleanup(server.server_close)
+            prometheus = tmpdir / "snapshot-profile.prom"
 
             proc = subprocess.run(
                 [
@@ -471,6 +472,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     str(datadir),
                     "--http",
                     f"http://127.0.0.1:{server.server_address[1]}",
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -497,6 +500,21 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["snapshotPointCodeDomainSnapshotShareMilli"], 0)
             self.assertEqual(row["snapshotLatestSidecarBytes"], 0)
             self.assertEqual(row["snapshotLatestSidecarShareMilli"], -1)
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = (
+                f'datadir="{datadir}",label="{row["label"]}",'
+                f'mode="{row["mode"]}",network="{row["network"]}"'
+            )
+            self.assertIn(f"gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes{{{labels}}} 100", metrics)
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli{{{labels}}} 63",
+                metrics,
+            )
+            self.assertIn(f"gtron_nile_sync_snapshot_point_event_log_index_bytes{{{labels}}} 200", metrics)
+            self.assertIn(
+                f"gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli{{{labels}}} 125",
+                metrics,
+            )
 
     def test_sample_writes_prometheus_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

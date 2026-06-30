@@ -85,6 +85,50 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock"),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock"),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
+    ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
+    (
+        "gtron_nile_sync_snapshot_point_tx_hash_lookup_snapshot_share_milli",
+        "snapshotPointTxHashLookupSnapshotShareMilli",
+    ),
+    ("gtron_nile_sync_snapshot_point_event_log_index_bytes", "snapshotPointEventLogIndexBytes"),
+    (
+        "gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli",
+        "snapshotPointEventLogIndexSnapshotShareMilli",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_bytes",
+        "snapshotPointStateHistoryAccessorBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_state_history_accessor_snapshot_share_milli",
+        "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    ),
+    ("gtron_nile_sync_snapshot_point_latest_btree_bytes", "snapshotPointLatestBTreeBytes"),
+    (
+        "gtron_nile_sync_snapshot_point_latest_btree_snapshot_share_milli",
+        "snapshotPointLatestBTreeSnapshotShareMilli",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_bytes",
+        "snapshotPointChainFreezerAccessorBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_chain_freezer_accessor_snapshot_share_milli",
+        "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    ),
+    ("gtron_nile_sync_snapshot_point_code_domain_bytes", "snapshotPointCodeDomainBytes"),
+    (
+        "gtron_nile_sync_snapshot_point_code_domain_snapshot_share_milli",
+        "snapshotPointCodeDomainSnapshotShareMilli",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_bytes",
+        "snapshotPointCommitmentSnapshotBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_point_commitment_snapshot_snapshot_share_milli",
+        "snapshotPointCommitmentSnapshotSnapshotShareMilli",
+    ),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune"),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock"),
     ("gtron_nile_sync_chain_lookup_prune_to_block", "chainLookupPruneToBlock"),

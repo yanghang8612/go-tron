@@ -858,6 +858,16 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_chain_lookup_prune_to_block\{[^}]*\} -1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_signed_cold_prune\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_tail_pruned_files\{[^}]*\} 0\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes\{[^}]*\} 100\n")
+            self.assertRegex(
+                benchmark_metrics,
+                r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli\{[^}]*\} 63\n",
+            )
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_bytes\{[^}]*\} 200\n")
+            self.assertRegex(
+                benchmark_metrics,
+                r"gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli\{[^}]*\} 125\n",
+            )
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_event_log_index_segments\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_event_log_index_address_postings\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_archive_api_checks\{[^}]*\} 0\n")

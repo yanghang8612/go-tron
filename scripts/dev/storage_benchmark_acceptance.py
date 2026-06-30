@@ -68,6 +68,50 @@ BENCHMARK_PROMETHEUS_PER_BLOCK_FIELDS = (
 
 BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ("gtron_storage_benchmark_archive_api_depth_blocks", "archiveApiDepthBlocks"),
+    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
+    (
+        "gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli",
+        "snapshotPointTxHashLookupSnapshotShareMilli",
+    ),
+    ("gtron_storage_benchmark_snapshot_point_event_log_index_bytes", "snapshotPointEventLogIndexBytes"),
+    (
+        "gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli",
+        "snapshotPointEventLogIndexSnapshotShareMilli",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_state_history_accessor_bytes",
+        "snapshotPointStateHistoryAccessorBytes",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_state_history_accessor_snapshot_share_milli",
+        "snapshotPointStateHistoryAccessorSnapshotShareMilli",
+    ),
+    ("gtron_storage_benchmark_snapshot_point_latest_btree_bytes", "snapshotPointLatestBTreeBytes"),
+    (
+        "gtron_storage_benchmark_snapshot_point_latest_btree_snapshot_share_milli",
+        "snapshotPointLatestBTreeSnapshotShareMilli",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_bytes",
+        "snapshotPointChainFreezerAccessorBytes",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_snapshot_share_milli",
+        "snapshotPointChainFreezerAccessorSnapshotShareMilli",
+    ),
+    ("gtron_storage_benchmark_snapshot_point_code_domain_bytes", "snapshotPointCodeDomainBytes"),
+    (
+        "gtron_storage_benchmark_snapshot_point_code_domain_snapshot_share_milli",
+        "snapshotPointCodeDomainSnapshotShareMilli",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_commitment_snapshot_bytes",
+        "snapshotPointCommitmentSnapshotBytes",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_point_commitment_snapshot_snapshot_share_milli",
+        "snapshotPointCommitmentSnapshotSnapshotShareMilli",
+    ),
     ("gtron_storage_benchmark_cold_freezer_to_block", "coldFreezerToBlock"),
     ("gtron_storage_benchmark_derived_index_to_block", "derivedIndexToBlock"),
     ("gtron_storage_benchmark_chain_lookup_prune_to_block", "chainLookupPruneToBlock"),

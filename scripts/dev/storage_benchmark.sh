@@ -482,40 +482,62 @@ write_storage_benchmark_prometheus() {
   local snapshots="${12}"
   local derived_index_bytes="${13}"
   local snapshot_sidecar_share_milli="${14}"
-  local archive_api_checks="${15}"
-  local archive_api_block="${16}"
-  local archive_api_depth_blocks="${17}"
-  local archive_api_failures="${18}"
-  local archive_api_call_probe="${19}"
-  local archive_api_trace_transaction_probe="${20}"
-  local archive_api_methods="${21}"
-  local archive_api_tx_probe="${22}"
-  local archive_api_tx_methods="${23}"
-  local cold_freezer_to_block="${24}"
-  local derived_index_to_block="${25}"
-  local chain_lookup_prune_to_block="${26}"
-  local tail_pruned_through_block="${27}"
-  local balance_trace_prune_to_block="${28}"
-  local section_bloom_prune_to_section="${29}"
-  local signed_cold_prune="${30}"
-  local tail_pruned_files="${31}"
-  local history_window="${32}"
-  local event_log_index_segments="${33}"
-  local event_log_index_address_keys="${34}"
-  local event_log_index_address_postings="${35}"
-  local event_log_index_address_avg_postings_milli="${36}"
-  local event_log_index_address_max_postings="${37}"
-  local event_log_index_address_singleton_keys="${38}"
-  local event_log_index_address_multi_posting_keys="${39}"
-  local event_log_index_topic_keys="${40}"
-  local event_log_index_topic_postings="${41}"
-  local event_log_index_topic_avg_postings_milli="${42}"
-  local event_log_index_topic_max_postings="${43}"
-  local event_log_index_topic_singleton_keys="${44}"
-  local event_log_index_topic_multi_posting_keys="${45}"
+  local snapshot_point_tx_hash_lookup_bytes="${15}"
+  local snapshot_point_tx_hash_lookup_share_milli="${16}"
+  local snapshot_point_event_log_index_bytes="${17}"
+  local snapshot_point_event_log_index_share_milli="${18}"
+  local snapshot_point_state_history_accessor_bytes="${19}"
+  local snapshot_point_state_history_accessor_share_milli="${20}"
+  local snapshot_point_latest_btree_bytes="${21}"
+  local snapshot_point_latest_btree_share_milli="${22}"
+  local snapshot_point_chain_freezer_accessor_bytes="${23}"
+  local snapshot_point_chain_freezer_accessor_share_milli="${24}"
+  local snapshot_point_code_domain_bytes="${25}"
+  local snapshot_point_code_domain_share_milli="${26}"
+  local snapshot_point_commitment_snapshot_bytes="${27}"
+  local snapshot_point_commitment_snapshot_share_milli="${28}"
+  local archive_api_checks="${29}"
+  local archive_api_block="${30}"
+  local archive_api_depth_blocks="${31}"
+  local archive_api_failures="${32}"
+  local archive_api_call_probe="${33}"
+  local archive_api_trace_transaction_probe="${34}"
+  local archive_api_methods="${35}"
+  local archive_api_tx_probe="${36}"
+  local archive_api_tx_methods="${37}"
+  local cold_freezer_to_block="${38}"
+  local derived_index_to_block="${39}"
+  local chain_lookup_prune_to_block="${40}"
+  local tail_pruned_through_block="${41}"
+  local balance_trace_prune_to_block="${42}"
+  local section_bloom_prune_to_section="${43}"
+  local signed_cold_prune="${44}"
+  local tail_pruned_files="${45}"
+  local history_window="${46}"
+  local event_log_index_segments="${47}"
+  local event_log_index_address_keys="${48}"
+  local event_log_index_address_postings="${49}"
+  local event_log_index_address_avg_postings_milli="${50}"
+  local event_log_index_address_max_postings="${51}"
+  local event_log_index_address_singleton_keys="${52}"
+  local event_log_index_address_multi_posting_keys="${53}"
+  local event_log_index_topic_keys="${54}"
+  local event_log_index_topic_postings="${55}"
+  local event_log_index_topic_avg_postings_milli="${56}"
+  local event_log_index_topic_max_postings="${57}"
+  local event_log_index_topic_singleton_keys="${58}"
+  local event_log_index_topic_multi_posting_keys="${59}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
-    "$snapshot_sidecar_share_milli" "$archive_api_checks" "$archive_api_block" \
+    "$snapshot_sidecar_share_milli" \
+    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
+    "$archive_api_checks" "$archive_api_block" \
     "$archive_api_depth_blocks" "$archive_api_failures" "$archive_api_call_probe" "$archive_api_trace_transaction_probe" \
     "$archive_api_methods" "$archive_api_tx_probe" "$archive_api_tx_methods" \
     "$cold_freezer_to_block" "$derived_index_to_block" "$chain_lookup_prune_to_block" \
@@ -538,34 +560,48 @@ height, elapsed = (int(sys.argv[6]), int(sys.argv[7]))
 datadir = sys.argv[8]
 total, chain, ancient, snapshots, derived_index = map(int, sys.argv[9:14])
 snapshot_sidecar_share_milli = int(sys.argv[14])
-archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[15:19])
-archive_api_call_probe = sys.argv[19].lower() in {"1", "true", "yes"}
-archive_api_trace_transaction_probe = sys.argv[20].lower() in {"1", "true", "yes"}
-archive_api_methods_raw = sys.argv[21]
-archive_api_tx_probe = sys.argv[22].lower() in {"1", "true", "yes"}
-archive_api_tx_methods_raw = sys.argv[23]
-cold_freezer_to_block = int(sys.argv[24])
-derived_index_to_block = int(sys.argv[25])
-chain_lookup_prune_to_block = int(sys.argv[26])
-tail_pruned_through_block = int(sys.argv[27])
-balance_trace_prune_to_block = int(sys.argv[28])
-section_bloom_prune_to_section = int(sys.argv[29])
-signed_cold_prune = int(sys.argv[30])
-tail_pruned_files = int(sys.argv[31])
-history_window = int(sys.argv[32])
-event_log_index_segments = int(sys.argv[33])
-event_log_index_address_keys = int(sys.argv[34])
-event_log_index_address_postings = int(sys.argv[35])
-event_log_index_address_avg_postings_milli = int(sys.argv[36])
-event_log_index_address_max_postings = int(sys.argv[37])
-event_log_index_address_singleton_keys = int(sys.argv[38])
-event_log_index_address_multi_posting_keys = int(sys.argv[39])
-event_log_index_topic_keys = int(sys.argv[40])
-event_log_index_topic_postings = int(sys.argv[41])
-event_log_index_topic_avg_postings_milli = int(sys.argv[42])
-event_log_index_topic_max_postings = int(sys.argv[43])
-event_log_index_topic_singleton_keys = int(sys.argv[44])
-event_log_index_topic_multi_posting_keys = int(sys.argv[45])
+snapshot_point_tx_hash_lookup_bytes = int(sys.argv[15])
+snapshot_point_tx_hash_lookup_share_milli = int(sys.argv[16])
+snapshot_point_event_log_index_bytes = int(sys.argv[17])
+snapshot_point_event_log_index_share_milli = int(sys.argv[18])
+snapshot_point_state_history_accessor_bytes = int(sys.argv[19])
+snapshot_point_state_history_accessor_share_milli = int(sys.argv[20])
+snapshot_point_latest_btree_bytes = int(sys.argv[21])
+snapshot_point_latest_btree_share_milli = int(sys.argv[22])
+snapshot_point_chain_freezer_accessor_bytes = int(sys.argv[23])
+snapshot_point_chain_freezer_accessor_share_milli = int(sys.argv[24])
+snapshot_point_code_domain_bytes = int(sys.argv[25])
+snapshot_point_code_domain_share_milli = int(sys.argv[26])
+snapshot_point_commitment_snapshot_bytes = int(sys.argv[27])
+snapshot_point_commitment_snapshot_share_milli = int(sys.argv[28])
+archive_api_checks, archive_api_block, archive_api_depth_blocks, archive_api_failures = map(int, sys.argv[29:33])
+archive_api_call_probe = sys.argv[33].lower() in {"1", "true", "yes"}
+archive_api_trace_transaction_probe = sys.argv[34].lower() in {"1", "true", "yes"}
+archive_api_methods_raw = sys.argv[35]
+archive_api_tx_probe = sys.argv[36].lower() in {"1", "true", "yes"}
+archive_api_tx_methods_raw = sys.argv[37]
+cold_freezer_to_block = int(sys.argv[38])
+derived_index_to_block = int(sys.argv[39])
+chain_lookup_prune_to_block = int(sys.argv[40])
+tail_pruned_through_block = int(sys.argv[41])
+balance_trace_prune_to_block = int(sys.argv[42])
+section_bloom_prune_to_section = int(sys.argv[43])
+signed_cold_prune = int(sys.argv[44])
+tail_pruned_files = int(sys.argv[45])
+history_window = int(sys.argv[46])
+event_log_index_segments = int(sys.argv[47])
+event_log_index_address_keys = int(sys.argv[48])
+event_log_index_address_postings = int(sys.argv[49])
+event_log_index_address_avg_postings_milli = int(sys.argv[50])
+event_log_index_address_max_postings = int(sys.argv[51])
+event_log_index_address_singleton_keys = int(sys.argv[52])
+event_log_index_address_multi_posting_keys = int(sys.argv[53])
+event_log_index_topic_keys = int(sys.argv[54])
+event_log_index_topic_postings = int(sys.argv[55])
+event_log_index_topic_avg_postings_milli = int(sys.argv[56])
+event_log_index_topic_max_postings = int(sys.argv[57])
+event_log_index_topic_singleton_keys = int(sys.argv[58])
+event_log_index_topic_multi_posting_keys = int(sys.argv[59])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -653,6 +689,20 @@ metrics = (
     ("gtron_storage_benchmark_cold_archive_bytes_per_block", "Benchmark cold archive bytes per imported block.", cold_archive_per_block),
     ("gtron_storage_benchmark_derived_index_bytes_per_block", "Benchmark derived cold index bytes per imported block.", derived_index_per_block),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_bytes", "Benchmark snapshot bytes covered by the tx-hash point lookup candidate.", snapshot_point_tx_hash_lookup_bytes),
+    ("gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli", "Benchmark snapshot-wide share for the tx-hash point lookup candidate in milli-units.", snapshot_point_tx_hash_lookup_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_event_log_index_bytes", "Benchmark snapshot bytes covered by the event-log point lookup candidate.", snapshot_point_event_log_index_bytes),
+    ("gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli", "Benchmark snapshot-wide share for the event-log point lookup candidate in milli-units.", snapshot_point_event_log_index_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_state_history_accessor_bytes", "Benchmark snapshot bytes covered by the state-history accessor point lookup candidate.", snapshot_point_state_history_accessor_bytes),
+    ("gtron_storage_benchmark_snapshot_point_state_history_accessor_snapshot_share_milli", "Benchmark snapshot-wide share for the state-history accessor point lookup candidate in milli-units.", snapshot_point_state_history_accessor_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_latest_btree_bytes", "Benchmark snapshot bytes covered by the latest-BTree point lookup candidate.", snapshot_point_latest_btree_bytes),
+    ("gtron_storage_benchmark_snapshot_point_latest_btree_snapshot_share_milli", "Benchmark snapshot-wide share for the latest-BTree point lookup candidate in milli-units.", snapshot_point_latest_btree_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_bytes", "Benchmark snapshot bytes covered by the chain-freezer accessor point lookup candidate.", snapshot_point_chain_freezer_accessor_bytes),
+    ("gtron_storage_benchmark_snapshot_point_chain_freezer_accessor_snapshot_share_milli", "Benchmark snapshot-wide share for the chain-freezer accessor point lookup candidate in milli-units.", snapshot_point_chain_freezer_accessor_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_code_domain_bytes", "Benchmark snapshot bytes covered by the CodeDomain point lookup candidate.", snapshot_point_code_domain_bytes),
+    ("gtron_storage_benchmark_snapshot_point_code_domain_snapshot_share_milli", "Benchmark snapshot-wide share for the CodeDomain point lookup candidate in milli-units.", snapshot_point_code_domain_share_milli),
+    ("gtron_storage_benchmark_snapshot_point_commitment_snapshot_bytes", "Benchmark snapshot bytes covered by the commitment-snapshot point lookup candidate.", snapshot_point_commitment_snapshot_bytes),
+    ("gtron_storage_benchmark_snapshot_point_commitment_snapshot_snapshot_share_milli", "Benchmark snapshot-wide share for the commitment-snapshot point lookup candidate in milli-units.", snapshot_point_commitment_snapshot_share_milli),
     ("gtron_storage_benchmark_archive_api_checks", "Benchmark historical archive API probe check count.", archive_api_checks),
     ("gtron_storage_benchmark_archive_api_block", "Benchmark historical archive API probe block number.", archive_api_block),
     ("gtron_storage_benchmark_archive_api_depth_blocks", "Benchmark historical archive API probe depth below sampled head.", archive_api_depth_blocks),
@@ -1666,6 +1716,13 @@ emit_result() {
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
     "$derived_index_bytes" "$snapshot_sidecar_share_milli" \
+    "$snapshot_point_tx_hash_lookup_bytes" "$snapshot_point_tx_hash_lookup_share_milli" \
+    "$snapshot_point_event_log_index_bytes" "$snapshot_point_event_log_index_share_milli" \
+    "$snapshot_point_state_history_accessor_bytes" "$snapshot_point_state_history_accessor_share_milli" \
+    "$snapshot_point_latest_btree_bytes" "$snapshot_point_latest_btree_share_milli" \
+    "$snapshot_point_chain_freezer_accessor_bytes" "$snapshot_point_chain_freezer_accessor_share_milli" \
+    "$snapshot_point_code_domain_bytes" "$snapshot_point_code_domain_share_milli" \
+    "$snapshot_point_commitment_snapshot_bytes" "$snapshot_point_commitment_snapshot_share_milli" \
     "$RUN_ARCHIVE_API_CHECKS" "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_FAILURES" \
     "$RUN_ARCHIVE_API_CALL_PROBE" "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" \
     "$RUN_ARCHIVE_API_METHODS" "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_METHODS" \
