@@ -447,6 +447,41 @@ func TestWriteSnapshotInstallProgressRequiresEventLogIndexCoverage(t *testing.T)
 	}
 }
 
+func TestWriteSnapshotInstallProgressPreflightsEventLogBoundaryBeforeWritingStages(t *testing.T) {
+	dir := t.TempDir()
+	eventRef := writeVerifiableEventLogSegment(t, dir, 1, 2)
+	eventIndexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{eventRef}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	manifest := NewManifest(0, 12, []SegmentRef{
+		{
+			Dataset:   SegmentDatasetStateDomainChange,
+			Kind:      SegmentHistory,
+			FromTxNum: 1,
+			ToTxNum:   12,
+			Path:      "history/state-domain-change-1-12.seg",
+		},
+		eventRef,
+		eventIndexRef,
+	})
+	db := rawdb.NewMemoryDatabase()
+
+	_, err = WriteSnapshotInstallProgress(db, manifest)
+	if err == nil || !strings.Contains(err.Error(), string(rawdb.StageSnapshotEventLogBuild)) {
+		t.Fatalf("WriteSnapshotInstallProgress err = %v, want event-log boundary error", err)
+	}
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageSnapshotInstall,
+		rawdb.StageSnapshotHistory,
+		rawdb.StageSnapshotEventLogBuild,
+	} {
+		if got, ok, readErr := rawdb.ReadStageProgress(db, stage); readErr != nil || ok {
+			t.Fatalf("%s progress = %d ok=%v err=%v, want absent after failed preflight", stage, got, ok, readErr)
+		}
+	}
+}
+
 func writeVerifiableEventLogSegment(t *testing.T, dir string, fromBlock, toBlock uint64) SegmentRef {
 	t.Helper()
 	db := rawdb.NewMemoryChainDB()

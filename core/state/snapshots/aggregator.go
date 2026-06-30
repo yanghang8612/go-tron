@@ -326,19 +326,35 @@ func writeEventLogBuildStage(db any, manifest *Manifest) error {
 	if !ok {
 		return nil
 	}
+	row, ok, err := eventLogBuildStageProgress(db, manifest)
+	if err != nil || !ok {
+		return err
+	}
+	return rawdb.WriteStageProgressRows(writer, []rawdb.StageProgress{row})
+}
+
+func eventLogBuildStageProgress(db any, manifest *Manifest) (rawdb.StageProgress, bool, error) {
+	if _, ok := db.(ethdb.KeyValueWriter); !ok {
+		return rawdb.StageProgress{}, false, nil
+	}
 	block, ok := eventLogBuildBlockFromManifest(manifest)
 	if !ok {
-		return nil
+		return rawdb.StageProgress{}, false, nil
 	}
 	reader, ok := db.(ethdb.KeyValueReader)
 	if !ok {
-		return fmt.Errorf("snapshots: %s stage block %d requires readable database", rawdb.StageSnapshotEventLogBuild, block)
+		return rawdb.StageProgress{}, false, fmt.Errorf("snapshots: %s stage block %d requires readable database", rawdb.StageSnapshotEventLogBuild, block)
 	}
 	hash, err := requireSnapshotStageBoundaryHash(reader, rawdb.StageSnapshotEventLogBuild, block)
 	if err != nil {
-		return err
+		return rawdb.StageProgress{}, false, err
 	}
-	return rawdb.WriteStageProgressWithHash(writer, rawdb.StageSnapshotEventLogBuild, block, hash)
+	return rawdb.StageProgress{
+		Stage:        rawdb.StageSnapshotEventLogBuild,
+		BlockNum:     block,
+		BlockHash:    hash,
+		HasBlockHash: true,
+	}, true, nil
 }
 
 func (a *Aggregator) eventLogRefsAfterIntegrating(newEventRefs []SegmentRef) ([]SegmentRef, error) {
@@ -438,16 +454,63 @@ func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (
 		return nil, nil
 	}
 	progress := progressForInstalledManifest(manifest)
-	if err := WriteManifestProgressStages(db, progress); err != nil {
+	rows, err := snapshotInstallProgressRows(db, progress, manifest)
+	if err != nil {
 		return nil, err
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotInstall, manifest.VisibleTxEnd); err != nil {
-		return nil, err
-	}
-	if err := writeEventLogBuildStage(db, manifest); err != nil {
+	if err := rawdb.WriteStageProgressRows(db, rows); err != nil {
 		return nil, err
 	}
 	return progress, nil
+}
+
+func snapshotInstallProgressRows(db ethdb.KeyValueWriter, progress *Progress, manifest *Manifest) ([]rawdb.StageProgress, error) {
+	rows := manifestProgressStageRows(progress)
+	rows = append(rows, rawdb.StageProgress{
+		Stage:    rawdb.StageSnapshotInstall,
+		BlockNum: manifest.VisibleTxEnd,
+	})
+	eventRow, ok, err := eventLogBuildStageProgress(db, manifest)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		rows = append(rows, eventRow)
+	}
+	return rows, nil
+}
+
+func manifestProgressStageRows(progress *Progress) []rawdb.StageProgress {
+	if progress == nil {
+		return nil
+	}
+	stages := []rawdb.StageProgress{
+		{Stage: rawdb.StageSnapshotLatest, BlockNum: progress.LatestBuildTxNum},
+		{Stage: rawdb.StageSnapshotHistory, BlockNum: progress.HistoryBuildTxNum},
+		{Stage: rawdb.StageSnapshotAccessor, BlockNum: progress.AccessorBuildTxNum},
+		{Stage: rawdb.StageSnapshotCommitmentFlush, BlockNum: progress.CommitmentFlushTxNum},
+		{Stage: rawdb.StageSnapshotHotPrune, BlockNum: progress.HotPruneTxNum},
+	}
+	rows := make([]rawdb.StageProgress, 0, len(stages))
+	for _, row := range stages {
+		if row.BlockNum == 0 {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {
+	if store == nil {
+		return nil
+	}
+	for _, row := range manifestProgressStageRows(progress) {
+		if err := store.Write(row.Stage, row.BlockNum); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
@@ -509,31 +572,6 @@ func eventLogIndexedCoverageBlockFromRefs(indexRefs []SegmentRef, fromBlock, max
 		return 0, false
 	}
 	return next - 1, true
-}
-
-func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {
-	if store == nil || progress == nil {
-		return nil
-	}
-	stages := []struct {
-		stage rawdb.StageID
-		txNum uint64
-	}{
-		{stage: rawdb.StageSnapshotLatest, txNum: progress.LatestBuildTxNum},
-		{stage: rawdb.StageSnapshotHistory, txNum: progress.HistoryBuildTxNum},
-		{stage: rawdb.StageSnapshotAccessor, txNum: progress.AccessorBuildTxNum},
-		{stage: rawdb.StageSnapshotCommitmentFlush, txNum: progress.CommitmentFlushTxNum},
-		{stage: rawdb.StageSnapshotHotPrune, txNum: progress.HotPruneTxNum},
-	}
-	for _, item := range stages {
-		if item.txNum == 0 {
-			continue
-		}
-		if err := store.Write(item.stage, item.txNum); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func progressForInstalledManifest(manifest *Manifest) *Progress {
