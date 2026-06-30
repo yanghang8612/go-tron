@@ -155,6 +155,107 @@ func TestBuildSectionBloomSegmentRejectsOversizedDecodedRow(t *testing.T) {
 	}
 }
 
+func TestSectionBloomSegmentBitSetRejectsMalformedPayload(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	row := sectionBloomTestEncodedBit(t, 5)
+	if err := rawdb.WriteSectionBloom(source, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	ref, err := BuildSectionBloomSegmentFromDB(source, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+	rewriteSectionBloomEntryLength(t, snapshotDir, ref, 0, 42, 1)
+	if err := CheckSectionBloomSegment(snapshotDir, ref); err == nil {
+		t.Fatal("CheckSectionBloomSegment accepted malformed section bloom payload")
+	}
+
+	seg, err := OpenSectionBloomSegment(snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("OpenSectionBloomSegment: %v", err)
+	}
+	raw, ok, lookupErr := seg.SectionBloom(0, 42)
+	if lookupErr != nil || !ok || len(raw) != 1 {
+		t.Fatalf("SectionBloom malformed raw payload = %x/%v/%v, want raw hit", raw, ok, lookupErr)
+	}
+	bitset, ok, lookupErr := seg.SectionBloomBitSet(0, 42)
+	closeErr := seg.Close()
+	if lookupErr == nil || ok || bitset != nil || !strings.Contains(lookupErr.Error(), "decode 0/42") {
+		t.Fatalf("SectionBloomBitSet malformed payload = %x/%v/%v, want decode error", bitset, ok, lookupErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	raw, ok, lookupErr = mgr.SectionBloom(0, 42)
+	if lookupErr != nil || !ok || len(raw) != 1 {
+		t.Fatalf("manager SectionBloom malformed raw payload = %x/%v/%v, want raw hit", raw, ok, lookupErr)
+	}
+	bitset, ok, lookupErr = mgr.SectionBloomBitSet(0, 42)
+	if lookupErr == nil || ok || bitset != nil || !strings.Contains(lookupErr.Error(), "decode 0/42") {
+		t.Fatalf("manager SectionBloomBitSet malformed payload = %x/%v/%v, want decode error", bitset, ok, lookupErr)
+	}
+
+	coldOnly := rawdb.NewMemoryChainDB()
+	coldOnly.SetSectionBloomReader(mgr)
+	bitset, ok, lookupErr = rawdb.ReadSectionBloomBitSetStrict(coldOnly, 0, 42)
+	if lookupErr == nil || ok || bitset != nil || !strings.Contains(lookupErr.Error(), "decode 0/42") {
+		t.Fatalf("rawdb strict malformed cold section bloom = %x/%v/%v, want decode error", bitset, ok, lookupErr)
+	}
+}
+
+func TestSectionBloomSegmentLookupRejectsInvalidEntryBounds(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	row := sectionBloomTestEncodedBit(t, 5)
+	if err := rawdb.WriteSectionBloom(source, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	ref, err := BuildSectionBloomSegmentFromDB(source, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+	rewriteSectionBloomEntryLength(t, snapshotDir, ref, 0, 42, 0)
+	if err := CheckSectionBloomSegment(snapshotDir, ref); err == nil {
+		t.Fatal("CheckSectionBloomSegment accepted empty section bloom payload")
+	}
+
+	seg, err := OpenSectionBloomSegment(snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("OpenSectionBloomSegment: %v", err)
+	}
+	raw, ok, lookupErr := seg.SectionBloom(0, 42)
+	closeErr := seg.Close()
+	if lookupErr == nil || ok || raw != nil || !strings.Contains(lookupErr.Error(), "empty payload") {
+		t.Fatalf("SectionBloom empty payload = %x/%v/%v, want bounds error", raw, ok, lookupErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	raw, ok, lookupErr = mgr.SectionBloom(0, 42)
+	if lookupErr == nil || ok || raw != nil || !strings.Contains(lookupErr.Error(), "empty payload") {
+		t.Fatalf("manager SectionBloom empty payload = %x/%v/%v, want bounds error", raw, ok, lookupErr)
+	}
+}
+
 func sectionBloomTestEncodedBit(t *testing.T, bit uint64) []byte {
 	t.Helper()
 	encoded, err := rawdb.EncodeSectionBloomBitSet(sectionBloomTestSetBit(nil, bit))
@@ -186,4 +287,32 @@ func sectionBloomTestSetBit(bitset []byte, bit uint64) []byte {
 	}
 	bitset[byteIndex] |= 1 << (bit % 8)
 	return bitset
+}
+
+func rewriteSectionBloomEntryLength(t *testing.T, dir string, ref SegmentRef, section, bitIndex, length uint64) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer file.Close()
+	header, err := readSectionBloomHeader(file)
+	if err != nil {
+		t.Fatalf("readSectionBloomHeader: %v", err)
+	}
+	for i := uint64(0); i < header.rowCount; i++ {
+		entry, err := readSectionBloomIndexEntryAt(file, sectionBloomIndexEntryOffset(header, i))
+		if err != nil {
+			t.Fatalf("readSectionBloomIndexEntryAt: %v", err)
+		}
+		if entry.section != section || entry.bitIndex != bitIndex {
+			continue
+		}
+		entry.length = length
+		if err := writeSectionBloomIndexEntryAt(file, sectionBloomIndexEntryOffset(header, i), entry); err != nil {
+			t.Fatalf("writeSectionBloomIndexEntryAt: %v", err)
+		}
+		return
+	}
+	t.Fatalf("section bloom row %d/%d not found", section, bitIndex)
 }

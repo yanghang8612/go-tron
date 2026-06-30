@@ -136,15 +136,48 @@ func ReadSectionBloomBitSet(db ethdb.KeyValueReader, section, bitIndex uint64) (
 // ReadSectionBloomBitSetStrict reads and decodes a section-bloom row while
 // preserving cold sidecar errors for callers that require complete indexes.
 func ReadSectionBloomBitSetStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
-	value, ok, err := ReadSectionBloomStrict(db, section, bitIndex)
-	if err != nil || !ok {
-		return nil, ok, err
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
 	}
-	bitset, err := DecodeSectionBloomBitSet(value)
+	key := sectionBloomKey(section, bitIndex)
+	exists, err := db.Has(key)
 	if err != nil {
-		return nil, true, fmt.Errorf("section bloom %d/%d: decode: %w", section, bitIndex, err)
+		return nil, false, err
 	}
-	return bitset, true, nil
+	if exists {
+		value, err := db.Get(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(value) != 0 {
+			bitset, err := DecodeSectionBloomBitSet(value)
+			if err != nil {
+				return nil, true, fmt.Errorf("section bloom %d/%d: decode: %w", section, bitIndex, err)
+			}
+			return bitset, true, nil
+		}
+	}
+	if cdb, ok := db.(*ChainDB); ok && cdb.sectionBloom != nil {
+		if bitsetReader, ok := cdb.sectionBloom.(SectionBloomBitSetReader); ok {
+			bitset, ok, err := bitsetReader.SectionBloomBitSet(section, bitIndex)
+			if err != nil || !ok {
+				return nil, ok, err
+			}
+			out := make([]byte, len(bitset))
+			copy(out, bitset)
+			return out, true, nil
+		}
+		value, ok, err := cdb.sectionBloom.SectionBloom(section, bitIndex)
+		if err != nil || !ok || len(value) == 0 {
+			return nil, ok, err
+		}
+		bitset, err := DecodeSectionBloomBitSet(value)
+		if err != nil {
+			return nil, true, fmt.Errorf("section bloom %d/%d: decode: %w", section, bitIndex, err)
+		}
+		return bitset, true, nil
+	}
+	return nil, false, nil
 }
 
 func IterateSectionBloomRows(db ethdb.Iteratee, fn func(section, bitIndex uint64, value []byte) (bool, error)) error {

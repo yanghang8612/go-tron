@@ -71,6 +71,14 @@ type SectionBloomReader interface {
 	SectionBloom(section, bitIndex uint64) ([]byte, bool, error)
 }
 
+// SectionBloomBitSetReader is an optional extension for cold section-bloom
+// sidecars that can return already-decoded bitsets. Strict log-prefilter reads
+// use it to let verified segment readers validate payloads without forcing an
+// extra decode after the raw row is returned.
+type SectionBloomBitSetReader interface {
+	SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error)
+}
+
 // EventLogFilter is the raw cold-event-log query shape shared by snapshots and
 // JSON-RPC. Topics[i] uses nil/empty as wildcard and non-empty as OR values.
 type EventLogFilter struct {

@@ -75,6 +75,38 @@ func TestSectionBloom_ColdFallback(t *testing.T) {
 	}
 }
 
+func TestSectionBloomBitSetStrictUsesDecodedColdReader(t *testing.T) {
+	coldBitset := setSectionBloomBit(nil, 7)
+	hotBitset := setSectionBloomBit(nil, 9)
+	hotEncoded, err := EncodeSectionBloomBitSet(hotBitset)
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet hot: %v", err)
+	}
+
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomBitSetReader{
+		bitsets: map[[2]uint64][]byte{
+			{3, 42}: coldBitset,
+		},
+		rawErr: errors.New("raw section bloom should not be read"),
+	})
+	bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, 42)
+	if err != nil || !ok || !SectionBloomBitSetHas(bitset, 7) {
+		t.Fatalf("strict decoded cold ReadSectionBloomBitSet = %x/%v/%v, want bit 7", bitset, ok, err)
+	}
+	if got := ReadSectionBloom(db, 3, 42); got != nil {
+		t.Fatalf("ReadSectionBloom decoded-only reader = %x, want nil compatibility miss", got)
+	}
+
+	if err := WriteSectionBloom(db, 3, 42, hotEncoded); err != nil {
+		t.Fatalf("WriteSectionBloom hot: %v", err)
+	}
+	bitset, ok, err = ReadSectionBloomBitSetStrict(db, 3, 42)
+	if err != nil || !ok || !SectionBloomBitSetHas(bitset, 9) || SectionBloomBitSetHas(bitset, 7) {
+		t.Fatalf("strict hot ReadSectionBloomBitSet = %x/%v/%v, want hot bit 9 only", bitset, ok, err)
+	}
+}
+
 func TestSectionBloomStrictSurfacesColdReaderError(t *testing.T) {
 	db := NewMemoryChainDB()
 	db.SetSectionBloomReader(fakeSectionBloomReader{err: errors.New("cold section bloom corrupt")})
@@ -219,6 +251,38 @@ func (r fakeSectionBloomReader) SectionBloom(section, bitIndex uint64) ([]byte, 
 		return nil, false, nil
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+type fakeSectionBloomBitSetReader struct {
+	bitsets map[[2]uint64][]byte
+	err     error
+	rawErr  error
+}
+
+func (r fakeSectionBloomBitSetReader) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	if r.rawErr != nil {
+		return nil, false, r.rawErr
+	}
+	bitset, ok := r.bitsets[[2]uint64{section, bitIndex}]
+	if !ok {
+		return nil, false, nil
+	}
+	encoded, err := EncodeSectionBloomBitSet(bitset)
+	if err != nil {
+		return nil, false, err
+	}
+	return encoded, true, nil
+}
+
+func (r fakeSectionBloomBitSetReader) SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error) {
+	if r.err != nil {
+		return nil, false, r.err
+	}
+	bitset, ok := r.bitsets[[2]uint64{section, bitIndex}]
+	if !ok {
+		return nil, false, nil
+	}
+	return append([]byte(nil), bitset...), true, nil
 }
 
 type failingGetStore struct {

@@ -29,6 +29,7 @@ type SectionBloomSegment struct {
 	ref    SegmentRef
 	file   *os.File
 	header sectionBloomHeader
+	size   uint64
 }
 
 type sectionBloomHeader struct {
@@ -138,7 +139,7 @@ func OpenSectionBloomSegment(dir string, ref SegmentRef) (*SectionBloomSegment, 
 		_ = file.Close()
 		return nil, err
 	}
-	return &SectionBloomSegment{ref: ref, file: file, header: header}, nil
+	return &SectionBloomSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}, nil
 }
 
 func (s *SectionBloomSegment) Close() error {
@@ -178,7 +179,7 @@ func (s *SectionBloomSegment) SectionBloom(section, bitIndex uint64) ([]byte, bo
 	if entry.section != section || entry.bitIndex != bitIndex {
 		return nil, false, nil
 	}
-	raw, err := readSectionBloomPayloadAt(s.file, entry.offset, entry.length)
+	raw, err := s.readSectionBloomPayload(entry)
 	if err != nil {
 		return nil, false, err
 	}
@@ -194,7 +195,7 @@ func (s *SectionBloomSegment) IterateRows(fn func(section, bitIndex uint64, raw 
 		if err != nil {
 			return err
 		}
-		raw, err := readSectionBloomPayloadAt(s.file, entry.offset, entry.length)
+		raw, err := s.readSectionBloomPayload(entry)
 		if err != nil {
 			return err
 		}
@@ -203,6 +204,32 @@ func (s *SectionBloomSegment) IterateRows(fn func(section, bitIndex uint64, raw 
 		}
 	}
 	return nil
+}
+
+func (s *SectionBloomSegment) readSectionBloomPayload(entry sectionBloomIndexEntry) ([]byte, error) {
+	if s == nil || s.file == nil {
+		return nil, errors.New("snapshots: nil section bloom segment")
+	}
+	if err := validateSectionBloomLookupEntry(s.ref, s.header, s.size, entry); err != nil {
+		return nil, err
+	}
+	raw, err := readSectionBloomPayloadAt(s.file, entry.offset, entry.length)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (s *SectionBloomSegment) SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error) {
+	raw, ok, err := s.SectionBloom(section, bitIndex)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	decoded, err := rawdb.DecodeSectionBloomBitSet(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("snapshots: section bloom segment %q decode %d/%d: %w", s.ref.Path, section, bitIndex, err)
+	}
+	return decoded, true, nil
 }
 
 func (m *Manager) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
@@ -228,6 +255,34 @@ func (m *Manager) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
 		}
 		if ok {
 			return raw, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (m *Manager) SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error) {
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return nil, false, err
+	}
+	for _, ref := range sectionBloomRefs(manifest) {
+		if !sectionBloomRefCoversSection(ref, section) {
+			continue
+		}
+		seg, err := OpenSectionBloomSegment(m.dir, ref)
+		if err != nil {
+			return nil, false, err
+		}
+		bitset, ok, lookupErr := seg.SectionBloomBitSet(section, bitIndex)
+		closeErr := seg.Close()
+		if lookupErr != nil {
+			return nil, false, lookupErr
+		}
+		if closeErr != nil {
+			return nil, false, closeErr
+		}
+		if ok {
+			return bitset, true, nil
 		}
 	}
 	return nil, false, nil
@@ -530,19 +585,11 @@ func checkSectionBloomIndex(file io.ReaderAt, ref SegmentRef, header sectionBloo
 		if err != nil {
 			return err
 		}
-		if !sectionBloomRefCoversSection(ref, entry.section) {
-			return fmt.Errorf("snapshots: section bloom segment %q entry %d points to section %d outside source block range [%d,%d]",
-				ref.Path, i, entry.section, ref.FromTxNum, ref.ToTxNum)
-		}
-		if entry.bitIndex >= rawdb.SectionBloomBitSize {
-			return fmt.Errorf("snapshots: section bloom segment %q entry %d bit index %d exceeds %d",
-				ref.Path, i, entry.bitIndex, rawdb.SectionBloomBitSize)
+		if err := validateSectionBloomLookupEntry(ref, header, fileSize, entry); err != nil {
+			return fmt.Errorf("snapshots: section bloom segment %q entry %d: %w", ref.Path, i, err)
 		}
 		if prev != nil && compareSectionBloomEntries(*prev, entry) >= 0 {
 			return fmt.Errorf("snapshots: section bloom segment %q index is not sorted", ref.Path)
-		}
-		if entry.length == 0 {
-			return fmt.Errorf("snapshots: section bloom segment %q entry %d has empty payload", ref.Path, i)
 		}
 		end, overflow := checkedAdd(entry.offset, entry.length)
 		if overflow || entry.offset != expectedOffset || end > fileSize {
@@ -567,6 +614,23 @@ func checkSectionBloomIndex(file io.ReaderAt, ref SegmentRef, header sectionBloo
 	}
 	if expectedOffset != fileSize {
 		return fmt.Errorf("snapshots: section bloom segment %q size %d, want %d", ref.Path, fileSize, expectedOffset)
+	}
+	return nil
+}
+
+func validateSectionBloomLookupEntry(ref SegmentRef, header sectionBloomHeader, fileSize uint64, entry sectionBloomIndexEntry) error {
+	if !sectionBloomRefCoversSection(ref, entry.section) {
+		return fmt.Errorf("entry points to section %d outside source block range [%d,%d]", entry.section, ref.FromTxNum, ref.ToTxNum)
+	}
+	if entry.bitIndex >= rawdb.SectionBloomBitSize {
+		return fmt.Errorf("entry bit index %d exceeds %d", entry.bitIndex, rawdb.SectionBloomBitSize)
+	}
+	if entry.length == 0 {
+		return fmt.Errorf("entry has empty payload")
+	}
+	end, overflow := checkedAdd(entry.offset, entry.length)
+	if overflow || entry.offset < header.payloadOffset || end > fileSize {
+		return fmt.Errorf("entry payload [%d,%d] outside payload range [%d,%d]", entry.offset, end, header.payloadOffset, fileSize)
 	}
 	return nil
 }
