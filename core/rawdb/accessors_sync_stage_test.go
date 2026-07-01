@@ -732,6 +732,34 @@ func TestWriteSyncImportProgressBatchRejectsProgressWithoutDeleteProof(t *testin
 	}
 }
 
+func TestWriteSyncImportProgressBatchRejectsDeleteWithoutProgressProof(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(2, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: block.Number(), Hash: block.Hash()},
+	}, nil)
+	if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "staged deletes have no import progress proof") {
+		t.Fatalf("result = %+v, want delete-without-progress proof error", result)
+	}
+	if result.Deleted != 0 || result.ProgressRows != 0 || len(result.DeleteErrors) != 0 {
+		t.Fatalf("result = %+v, want no delete/progress writes", result)
+	}
+	if db.batches != 0 || db.directDeletes != 0 || db.directPuts != 0 {
+		t.Fatalf("writer side effects batches=%d deletes=%d puts=%d, want none", db.batches, db.directDeletes, db.directPuts)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after rejected delete-only write ok=%v err=%v, want present", ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(base, StageSyncImport); err != nil || ok {
+		t.Fatalf("sync import progress after rejected delete-only write = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}
+
 func TestSyncStagedBlockRawIterate(t *testing.T) {
 	db := NewMemoryDatabase()
 	for _, n := range []uint64{4, 2, 3} {

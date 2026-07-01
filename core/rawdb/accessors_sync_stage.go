@@ -331,7 +331,10 @@ func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBloc
 // WriteSyncImportProgressBatch commits the storage side effects for an applied
 // sync import prefix: delete imported staged body rows and persist hash-bound
 // sync pipeline progress rows. Backends with batch support flush all writes in
-// one batch.
+// one batch. Imported body deletes require at least one progress row so the
+// staged-body proof is not discarded before a durable SyncImport boundary
+// exists; cleanup-only callers should use the explicit staged-body cleanup
+// helpers instead.
 func WriteSyncImportProgressBatch(db interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
@@ -454,8 +457,11 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 }
 
 func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, rows []StageProgress) error {
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(deletes) == 0 {
 		return nil
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("rawdb: sync staged deletes have no import progress proof")
 	}
 	if len(deletes) == 0 {
 		return fmt.Errorf("rawdb: sync import progress has no staged delete prefix")
