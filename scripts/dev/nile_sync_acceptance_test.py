@@ -1494,7 +1494,39 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "cold stage lag evidence missing: "
-                "stageSnapshotEventLogBuildHeadLagBlocks is missing or non-numeric",
+                "stageSnapshotEventLogBuildHeadLagBlocks is missing or not a non-negative integer",
+                proc.stderr,
+            )
+
+    def test_rejects_fractional_cold_stage_lag_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["stageChainFreezerHeadLagBlocks"] = 120.5
+            row["stageSnapshotEventLogBuildHeadLagBlocks"] = 200
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-cold-stage-lag-blocks",
+                    "500",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "cold stage lag evidence missing: "
+                "stageChainFreezerHeadLagBlocks is missing or not a non-negative integer",
                 proc.stderr,
             )
 

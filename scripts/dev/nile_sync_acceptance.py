@@ -734,15 +734,13 @@ def check_max_cold_stage_lag_blocks(row, maximum):
         return []
     issues = []
     for field in COLD_STAGE_LAG_FIELDS:
-        value = as_number(row, field)
+        value = as_non_negative_int(row, field)
         if value is None:
             issues.append(
-                f"cold stage lag evidence missing: {field} is missing or non-numeric"
+                f"cold stage lag evidence missing: {field} is missing or not a non-negative integer"
             )
             continue
-        if value < 0:
-            issues.append(f"{field}={value:g}, want >= 0")
-        elif value > maximum:
+        if value > maximum:
             issues.append(f"{field}={value:g} failed <= max cold stage lag {maximum:g}")
     return issues
 
