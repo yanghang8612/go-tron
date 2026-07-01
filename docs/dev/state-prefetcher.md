@@ -51,6 +51,7 @@ raw benchmark output:
 ```bash
 scripts/dev/state_prefetch_benchmark_acceptance.py \
   build/state-prefetch-bench/<run>/benchmark.txt \
+  --min-samples 5 \
   --min-heavy-improvement 0.10 \
   --max-light-overhead 0.01 \
   --max-bytes-overhead 0.05 \
@@ -65,8 +66,10 @@ candidate when thresholds are loosened. The `--max-bytes-overhead` and
 `--max-allocs-overhead` gates are optional but recommended for rollout
 decisions; they fail any selected variant whose `B/op` or `allocs/op` median
 grows beyond the configured ratio on any required benchmark case. The checker
-is a benchmark gate only; keep the Nile/mainnet replay soak as the final
-default-on gate.
+requires at least five samples per required baseline and candidate case by
+default, matching the harness `--count 5`; use `--min-samples 1` only for an
+explicit smoke run. The checker is a benchmark gate only; keep the Nile/mainnet
+replay soak as the final default-on gate.
 
 The underlying focused benchmark command is:
 

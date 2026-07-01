@@ -10,22 +10,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "state_prefetch_benchmark_acceptance.py"
 
 
-def write_benchmark(path, rows):
+def write_benchmark(path, rows, repeat=5):
     with path.open("w", encoding="utf-8") as fh:
         fh.write("goos: darwin\n")
         fh.write("goarch: arm64\n")
-        for row in rows:
-            if len(row) == 3:
-                case, variant, ns = row
-                bytes_op = 100
-                allocs_op = 10
-            else:
-                case, variant, ns, bytes_op, allocs_op = row
-            fh.write(
-                f"BenchmarkProcessBlock_{case}/{variant}-10          "
-                f"       5       {ns:.0f} ns/op       "
-                f"{bytes_op:.0f} B/op       {allocs_op:.0f} allocs/op\n"
-            )
+        for _ in range(repeat):
+            for row in rows:
+                if len(row) == 3:
+                    case, variant, ns = row
+                    bytes_op = 100
+                    allocs_op = 10
+                else:
+                    case, variant, ns, bytes_op, allocs_op = row
+                fh.write(
+                    f"BenchmarkProcessBlock_{case}/{variant}-10          "
+                    f"       5       {ns:.0f} ns/op       "
+                    f"{bytes_op:.0f} B/op       {allocs_op:.0f} allocs/op\n"
+                )
         fh.write("PASS\n")
 
 
@@ -311,6 +312,44 @@ class StatePrefetchBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("benchmark iterations=0, want positive integer", proc.stderr)
             self.assertIn("ns/op=0, want positive value", proc.stderr)
+
+    def test_rejects_under_sampled_benchmark_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            write_benchmark(benchmark, complete_rows(), repeat=4)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(benchmark)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "prefetch=off LightTRX_HeavyState ns/op samples=4, want >= 5",
+                proc.stderr,
+            )
+            self.assertIn(
+                "prefetch=on_workers=2_lookahead=8 HeavyTRX_ColdState "
+                "ns/op samples=4, want >= 5",
+                proc.stderr,
+            )
+
+    def test_accepts_explicit_single_sample_smoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            write_benchmark(benchmark, complete_rows(), repeat=1)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(benchmark), "--min-samples", "1"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("state prefetch benchmark acceptance: ok", proc.stdout)
 
 
 if __name__ == "__main__":

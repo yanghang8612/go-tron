@@ -90,6 +90,10 @@ def median_metric(samples, case, variant, metric):
     return statistics.median(values)
 
 
+def sample_count(samples, case, variant, metric):
+    return len(samples.get(case, {}).get(variant, {}).get(metric) or [])
+
+
 def ratio(got, base):
     if base is None or base <= 0 or got is None:
         return None
@@ -123,16 +127,25 @@ def is_prefetch_on_variant(variant):
     return variant.startswith("prefetch=on")
 
 
-def check_required(samples, required_cases):
+def check_required(samples, required_cases, min_samples):
     issues = []
+    fatal = False
     for case in required_cases:
         variants = samples.get(case)
         if not variants:
             issues.append(f"missing benchmark case {case}")
+            fatal = True
             continue
         if OFF_VARIANT not in variants:
             issues.append(f"missing {OFF_VARIANT} baseline for {case}")
-    return issues
+            fatal = True
+            continue
+        count = sample_count(samples, case, OFF_VARIANT, "ns")
+        if count < min_samples:
+            issues.append(
+                f"{OFF_VARIANT} {case} ns/op samples={count}, want >= {min_samples}"
+            )
+    return issues, fatal
 
 
 def evaluate_variant(
@@ -146,6 +159,7 @@ def evaluate_variant(
     max_heavy_hot,
     max_bytes_overhead,
     max_allocs_overhead,
+    min_samples,
 ):
     issues = []
     heavy_improvements = []
@@ -157,6 +171,10 @@ def evaluate_variant(
     for case in required_cases:
         if median_metric(samples, case, variant, "ns") is None:
             issues.append(f"{variant} missing benchmark case {case}")
+            continue
+        count = sample_count(samples, case, variant, "ns")
+        if count < min_samples:
+            issues.append(f"{variant} {case} ns/op samples={count}, want >= {min_samples}")
 
     for case in heavy_cases:
         base = median_metric(samples, case, OFF_VARIANT, "ns")
@@ -211,9 +229,20 @@ def evaluate_variant(
             if base is None:
                 issues.append(f"missing {label} baseline for {case}")
                 continue
+            base_count = sample_count(samples, case, OFF_VARIANT, metric)
+            if base_count < min_samples:
+                issues.append(
+                    f"{OFF_VARIANT} {case} {label} samples={base_count}, "
+                    f"want >= {min_samples}"
+                )
             if got is None:
                 issues.append(f"{variant} missing {label} sample for {case}")
                 continue
+            got_count = sample_count(samples, case, variant, metric)
+            if got_count < min_samples:
+                issues.append(
+                    f"{variant} {case} {label} samples={got_count}, want >= {min_samples}"
+                )
             overhead = overhead_ratio(got, base)
             out.append(overhead)
             if overhead is None or overhead > max_allowed:
@@ -241,8 +270,8 @@ def check_benchmarks(samples, args):
     for case in args.heavy_case + args.light_case + args.require_case:
         if case not in required_cases:
             required_cases.append(case)
-    issues = check_required(samples, required_cases)
-    if issues:
+    issues, fatal = check_required(samples, required_cases, args.min_samples)
+    if fatal:
         return None, issues, []
 
     variants = candidate_variants(samples, args.variant)
@@ -267,14 +296,14 @@ def check_benchmarks(samples, args):
             args.max_heavy_hot_overhead,
             args.max_bytes_overhead,
             args.max_allocs_overhead,
+            args.min_samples,
         )
         for variant in variants
     ]
     passing = [result for result in results if not result["issues"]]
-    if passing:
+    if passing and not issues:
         return max(passing, key=lambda result: result["score"]), [], results
 
-    issues = []
     for result in results:
         issues.extend(result["issues"])
     return None, issues, results
@@ -339,12 +368,23 @@ def build_parser():
         default=None,
         help="optional maximum allocs/op overhead ratio across all required cases",
     )
+    parser.add_argument(
+        "--min-samples",
+        type=int,
+        default=5,
+        help=(
+            "minimum repeated benchmark samples required for each baseline and "
+            "candidate case (default: 5, matching state_prefetch_benchmark.sh)"
+        ),
+    )
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.min_samples < 1:
+        parser.error("--min-samples must be >= 1")
     if not args.heavy_case:
         args.heavy_case = list(DEFAULT_HEAVY_CASES)
     else:
