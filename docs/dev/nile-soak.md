@@ -544,6 +544,9 @@ event-log, chain-lookup, bloom, and balance-trace indexes trade disk for query
 and catch-up speed.
 Use `--require-snapshot-profile-evidence` once the snapshot manifest exists to
 prove the sampler profiled active payload bytes versus lookup sidecar bytes.
+The sampler runs the manifest profiler with file verification enabled, so rows
+only report `snapshotManifestProfileStatus=ok` when every profiled segment file
+exists under `state-snapshots` and matches the manifest `size`.
 The gate requires `snapshotManifestProfileStatus=ok`, positive active segment
 and total-byte counters, matching `snapshotPayloadBytes + snapshotSidecarBytes`
 totals, a recomputable `snapshotSidecarShareMilli`, and sane per-family

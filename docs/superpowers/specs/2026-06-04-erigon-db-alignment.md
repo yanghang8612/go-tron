@@ -2136,6 +2136,11 @@ Status:
   falls back to canonical block/TransactionInfo scanning for the bounded query
   range. Strict section-bloom errors still surface through rebuild, prune, and
   verification paths where the index itself is the artifact being audited.
+- Snapshot manifest profiling can now verify active segment files while
+  producing sidecar-size evidence. The storage benchmark harness and Nile
+  sampler run the profiler with `--verify-files`, so sidecar-overhead gates are
+  backed by files that exist under `state-snapshots` and match the manifest
+  `size` fields instead of trusting stale manifest counters alone.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

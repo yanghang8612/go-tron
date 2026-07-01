@@ -2342,7 +2342,7 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
         return snapshot_manifest_profile_defaults("error")
     try:
         proc = subprocess.run(
-            [sys.executable, str(script), str(snapshot_dir), "--json"],
+            [sys.executable, str(script), str(snapshot_dir), "--json", "--verify-files"],
             check=False,
             text=True,
             capture_output=True,

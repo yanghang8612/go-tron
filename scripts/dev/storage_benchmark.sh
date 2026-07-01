@@ -1147,7 +1147,7 @@ snapshot_manifest_profile_values() {
     return
   fi
   local profile_out="$WORKDIR/snapshot-profile-$(basename "$(dirname "$(dirname "$snapshot_dir")")").json"
-  if ! "$SNAPSHOT_PROFILE_SCRIPT" "$snapshot_dir" --json >"$profile_out" 2>>"$log_path"; then
+  if ! "$SNAPSHOT_PROFILE_SCRIPT" "$snapshot_dir" --json --verify-files >"$profile_out" 2>>"$log_path"; then
     echo "warning: snapshot manifest profile failed for $snapshot_dir; see $log_path" >>"$log_path"
     snapshot_manifest_profile_default_values "error"
     return

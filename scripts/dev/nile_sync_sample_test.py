@@ -615,6 +615,12 @@ class NileSyncSampleTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (snapshot_dir / "chain").mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "log").mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "chain" / "freezer.seg").write_bytes(b"f" * 1000)
+            (snapshot_dir / "chain" / "index.idx").write_bytes(b"i" * 100)
+            (snapshot_dir / "log" / "event.seg").write_bytes(b"e" * 300)
+            (snapshot_dir / "log" / "event.idx").write_bytes(b"x" * 200)
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)

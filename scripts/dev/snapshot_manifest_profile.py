@@ -54,6 +54,11 @@ def parse_args(argv):
         help="Print a machine-readable JSON profile.",
     )
     parser.add_argument(
+        "--verify-files",
+        action="store_true",
+        help="Verify each profiled segment path exists under the snapshot directory and matches its manifest size.",
+    )
+    parser.add_argument(
         "--max-sidecar-share-milli",
         type=int,
         metavar="N",
@@ -110,6 +115,34 @@ def segment_size(ref, source):
         path = ref.get("path", "<unknown>")
         raise ValueError(f"{source} segment {path} has negative size {out}")
     return out
+
+
+def segment_file_path(manifest_dir, ref, source):
+    path = ref.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError(f"{source} segment has missing path")
+    candidate = Path(path)
+    if candidate.is_absolute():
+        raise ValueError(f"{source} segment {path} must use a relative path")
+    base = manifest_dir.resolve()
+    resolved = (manifest_dir / candidate).resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"{source} segment {path} escapes snapshot directory") from exc
+    return resolved
+
+
+def verify_segment_file(manifest_dir, ref, source, expected_size):
+    path = segment_file_path(manifest_dir, ref, source)
+    if not path.is_file():
+        raise ValueError(f"{source} segment {ref.get('path')} is missing")
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        raise ValueError(
+            f"{source} segment {ref.get('path')} file size {actual_size} "
+            f"does not match manifest size {expected_size}"
+        )
 
 
 def is_sidecar(kind):
@@ -187,8 +220,9 @@ def point_index_candidate_names(dataset, kind):
     return names
 
 
-def profile_manifest(path, include_retired=False):
+def profile_manifest(path, include_retired=False, verify_files=False):
     resolved, manifest = load_manifest(path)
+    manifest_dir = resolved.parent
     active = list(manifest.get("segments") or [])
     retired = list(manifest.get("retired") or []) if include_retired else []
 
@@ -198,12 +232,16 @@ def profile_manifest(path, include_retired=False):
     by_dataset = defaultdict(empty_stats)
     sidecar_kinds = defaultdict(int)
     point_candidates = {name: empty_stats() for name in POINT_INDEX_CANDIDATES}
+    verified_segments = 0
 
     for source, refs in (("active", active), ("retired", retired)):
         for ref in refs:
             kind = str(ref.get("kind", "")).strip()
             dataset = str(ref.get("dataset", "")).strip()
             size = segment_size(ref, source)
+            if verify_files:
+                verify_segment_file(manifest_dir, ref, source, size)
+                verified_segments += 1
             sidecar = is_sidecar(kind)
             family = segment_family(dataset, kind)
             add_stats(overall, size, sidecar)
@@ -224,6 +262,8 @@ def profile_manifest(path, include_retired=False):
             "visibleTxStart": manifest.get("visibleTxStart"),
             "visibleTxEnd": manifest.get("visibleTxEnd"),
             "includeRetired": include_retired,
+            "verifyFiles": verify_files,
+            "verifiedSegments": verified_segments,
             "activeSegments": len(active),
             "retiredSegments": len(retired),
             "byFamily": sorted_stats(by_family),
@@ -337,7 +377,11 @@ def print_human(profile):
 def main(argv=None):
     args = parse_args(argv or sys.argv[1:])
     try:
-        profile = profile_manifest(args.path, include_retired=args.include_retired)
+        profile = profile_manifest(
+            args.path,
+            include_retired=args.include_retired,
+            verify_files=args.verify_files,
+        )
         issues = apply_thresholds(
             profile,
             args.max_sidecar_share_milli,

@@ -910,8 +910,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             (snapshot_dir / "chain").mkdir(parents=True, exist_ok=True)
             (snapshot_dir / "log").mkdir(parents=True, exist_ok=True)
-            (snapshot_dir / "chain" / "chain-index.idx").write_bytes(b"chain-index")
-            (snapshot_dir / "log" / "event-log.idx").write_bytes(b"event-log")
+            (snapshot_dir / "chain" / "freezer.seg").write_bytes(b"f" * 1000)
+            (snapshot_dir / "chain" / "chain-index.idx").write_bytes(b"i" * 100)
+            (snapshot_dir / "log" / "event.seg").write_bytes(b"e" * 300)
+            (snapshot_dir / "log" / "event-log.idx").write_bytes(b"x" * 200)
             output = tmpdir / "results.jsonl"
             env = dict(os.environ)
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"

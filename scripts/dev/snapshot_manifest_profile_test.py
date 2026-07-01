@@ -42,6 +42,13 @@ def sample_segments():
     ]
 
 
+def write_segment_files(root, segments):
+    for ref in segments:
+        path = root / ref["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * int(ref["size"]))
+
+
 class SnapshotManifestProfileTest(unittest.TestCase):
     def test_profiles_active_segments_by_family_kind_and_dataset(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,6 +88,66 @@ class SnapshotManifestProfileTest(unittest.TestCase):
             self.assertEqual(candidates["chainFreezerAccessor"]["totalBytes"], 300)
             self.assertEqual(candidates["chainFreezerAccessor"]["snapshotShareMilli"], 66)
             self.assertEqual(candidates["codeDomain"]["segments"], 0)
+
+    def test_verify_files_accepts_matching_segment_sizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            segments = sample_segments()
+            write_manifest(tmpdir, segments)
+            write_segment_files(tmpdir, segments)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(tmpdir), "--json", "--verify-files"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            profile = json.loads(proc.stdout)
+            self.assertTrue(profile["verifyFiles"])
+            self.assertEqual(profile["verifiedSegments"], len(segments))
+            self.assertEqual(profile["totalBytes"], 4600)
+
+    def test_verify_files_rejects_size_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            segments = [
+                {"dataset": "event-log", "kind": "event-log", "fromTxNum": 1, "toTxNum": 1, "path": "log/event.seg", "size": 10},
+            ]
+            write_manifest(tmpdir, segments)
+            (tmpdir / "log").mkdir(parents=True)
+            (tmpdir / "log" / "event.seg").write_bytes(b"short")
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(tmpdir), "--verify-files"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("file size 5 does not match manifest size 10", proc.stderr)
+
+    def test_verify_files_rejects_paths_outside_snapshot_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            write_manifest(
+                tmpdir,
+                [
+                    {"dataset": "event-log", "kind": "event-log", "fromTxNum": 1, "toTxNum": 1, "path": "../event.seg", "size": 10},
+                ],
+            )
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(tmpdir), "--verify-files"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("escapes snapshot directory", proc.stderr)
 
     def test_human_output_accepts_manifest_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -495,10 +495,11 @@ additional mode-local log-index proofs. Add `--min
 eventLogIndexAddressPostings=1` when the sample is expected to include logs and
 should prove non-empty index fanout.
 The benchmark harness and Nile sampler automatically run
-`scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json` when a
-manifest exists and records the active payload/sidecar split in the
-`snapshot*Sidecar*` fields. Add `--require-snapshot-profile-mode minimal` (or
-the plural mode list) to the storage benchmark checker, or
+`scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json --verify-files`
+when a manifest exists and records the active payload/sidecar split in the
+`snapshot*Sidecar*` fields only after each segment file exists and matches the
+manifest size. Add `--require-snapshot-profile-mode minimal` (or the plural
+mode list) to the storage benchmark checker, or
 `--require-snapshot-profile-evidence` to `nile_sync_acceptance.py`, so the
 latest selected row must carry a valid manifest profile with
 `snapshotManifestProfileStatus=ok`, consistent payload+sidecar totals, and a
