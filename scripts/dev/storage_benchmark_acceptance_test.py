@@ -2838,6 +2838,67 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
 
+    def test_rejects_fractional_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "snap",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "derivedIndexToBlock": 80.5,
+                        "eventLogIndexSegments": 1.5,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexAddressKeys": 3,
+                        "eventLogIndexAddressPostings": 6,
+                        "eventLogIndexAddressAvgPostingsMilli": 2000,
+                        "eventLogIndexAddressMaxPostings": 3,
+                        "eventLogIndexAddressSingletonKeys": 1,
+                        "eventLogIndexAddressMultiPostingKeys": 2,
+                        "eventLogIndexTopicKeys": 2,
+                        "eventLogIndexTopicPostings": 3,
+                        "eventLogIndexTopicAvgPostingsMilli": 1500,
+                        "eventLogIndexTopicMaxPostings": 2,
+                        "eventLogIndexTopicSingletonKeys": 1,
+                        "eventLogIndexTopicMultiPostingKeys": 1,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "derivedIndexToBlock=80.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "eventLogIndexSegments=1.5, want positive integer",
+                proc.stderr,
+            )
+
     def test_rejects_missing_or_invalid_event_log_index_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

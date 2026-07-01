@@ -1704,11 +1704,19 @@ def check_event_log_index_evidence(rows, required_modes=(), require_non_empty=Fa
             issues.append(f"{line_label(row)} missing event-log index evidence for required mode {mode!r}")
 
     for row in evidence_rows:
-        derived_to = as_number(row, "derivedIndexToBlock")
-        if derived_to is None or derived_to < 0:
-            issues.append(f"{line_label(row)} derivedIndexToBlock={derived_to}, want >= 0")
+        derived_to = as_non_negative_int(row, "derivedIndexToBlock")
+        if derived_to is None:
+            issues.append(
+                f"{line_label(row)} derivedIndexToBlock={row.get('derivedIndexToBlock')!r}, "
+                "want non-negative integer"
+            )
         segments = as_non_negative_int(row, "eventLogIndexSegments")
-        if segments is None or segments <= 0:
+        if segments is None:
+            issues.append(
+                f"{line_label(row)} eventLogIndexSegments={row.get('eventLogIndexSegments')!r}, "
+                "want positive integer"
+            )
+        elif segments <= 0:
             issues.append(
                 f"{line_label(row)} eventLogIndexSegments={row.get('eventLogIndexSegments')!r}, want > 0"
             )
@@ -1729,10 +1737,10 @@ def check_event_log_index_evidence(rows, required_modes=(), require_non_empty=Fa
                 issues.append(
                     f"{line_label(row)} event-log index range [{from_block},{to_block}] is inverted"
                 )
-            elif derived_to is not None and not approx_equal(derived_to, to_block):
+            elif derived_to is not None and derived_to != to_block:
                 issues.append(
                     f"{line_label(row)} eventLogIndexToBlock={to_block} must match "
-                    f"derivedIndexToBlock={derived_to:g}"
+                    f"derivedIndexToBlock={derived_to}"
                 )
             tail_pruned = as_number(row, "tailPrunedThroughBlock")
             if tail_pruned is not None and tail_pruned >= 0:
