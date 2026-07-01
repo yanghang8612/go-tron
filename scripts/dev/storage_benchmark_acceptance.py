@@ -137,6 +137,44 @@ BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ),
 )
 
+BENCHMARK_PROMETHEUS_SIGNED_INTEGER_DIRECT_FIELDS = {
+    "coldFreezerToBlock",
+    "derivedIndexToBlock",
+    "chainLookupPruneToBlock",
+    "tailPrunedThroughBlock",
+    "balanceTracePruneToBlock",
+    "sectionBloomPruneToSection",
+    "eventLogIndexFromBlock",
+    "eventLogIndexToBlock",
+}
+
+BENCHMARK_PROMETHEUS_NON_NEGATIVE_INTEGER_DIRECT_FIELDS = {
+    "archiveApiDepthBlocks",
+    "snapshotPointTxHashLookupSegments",
+    "snapshotPointEventLogIndexSegments",
+    "snapshotPointStateHistoryAccessorSegments",
+    "snapshotPointLatestBTreeSegments",
+    "snapshotPointChainFreezerAccessorSegments",
+    "snapshotPointCodeDomainSegments",
+    "snapshotPointCommitmentSnapshotSegments",
+    "signedColdPrune",
+    "tailPrunedFiles",
+    "historyWindow",
+    "eventLogIndexSegments",
+    "eventLogIndexAddressKeys",
+    "eventLogIndexAddressPostings",
+    "eventLogIndexAddressAvgPostingsMilli",
+    "eventLogIndexAddressMaxPostings",
+    "eventLogIndexAddressSingletonKeys",
+    "eventLogIndexAddressMultiPostingKeys",
+    "eventLogIndexTopicKeys",
+    "eventLogIndexTopicPostings",
+    "eventLogIndexTopicAvgPostingsMilli",
+    "eventLogIndexTopicMaxPostings",
+    "eventLogIndexTopicSingletonKeys",
+    "eventLogIndexTopicMultiPostingKeys",
+}
+
 DEFAULT_ARCHIVE_API_METHODS = (
     "eth_getBlockByNumber",
     "eth_getBlockByHash",
@@ -1012,16 +1050,41 @@ def check_benchmark_prometheus_artifacts(result_path, rows):
         for metric, field in BENCHMARK_PROMETHEUS_DIRECT_FIELDS:
             if field not in row:
                 continue
-            want = as_number(row, field)
+            integer_field = (
+                field in BENCHMARK_PROMETHEUS_SIGNED_INTEGER_DIRECT_FIELDS
+                or field in BENCHMARK_PROMETHEUS_NON_NEGATIVE_INTEGER_DIRECT_FIELDS
+            )
+            if field in BENCHMARK_PROMETHEUS_SIGNED_INTEGER_DIRECT_FIELDS:
+                want = as_int(row, field)
+                want_text = "integer"
+            elif field in BENCHMARK_PROMETHEUS_NON_NEGATIVE_INTEGER_DIRECT_FIELDS:
+                want = as_non_negative_int(row, field)
+                want_text = "non-negative integer"
+            else:
+                want = as_number(row, field)
+                want_text = "numeric"
             if want is None:
                 issues.append(
-                    f"{line_label(row)} benchmark prometheus evidence field {field!r} "
-                    f"is non-numeric for {metric}"
+                    f"{line_label(row)} benchmark prometheus evidence field {field!r}="
+                    f"{row.get(field)!r}, want {want_text} for {metric}"
                 )
                 continue
             got = benchmark_prometheus_metric_value(text, metric, row)
             if got is None:
                 issues.append(f"{line_label(row)} benchmark prometheus artifact {path} missing {metric}")
+            elif integer_field and (
+                not got.is_integer()
+                or (field in BENCHMARK_PROMETHEUS_NON_NEGATIVE_INTEGER_DIRECT_FIELDS and got < 0)
+            ):
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus artifact {path} "
+                    f"{metric}={got:g}, want {want_text}"
+                )
+            elif integer_field and int(got) != want:
+                issues.append(
+                    f"{line_label(row)} benchmark prometheus artifact {path} "
+                    f"{metric}={int(got):g}, want {want:g}"
+                )
             elif got != want:
                 issues.append(
                     f"{line_label(row)} benchmark prometheus artifact {path} "

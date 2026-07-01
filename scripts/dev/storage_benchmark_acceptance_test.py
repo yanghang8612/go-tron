@@ -1120,6 +1120,92 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
 
+    def test_rejects_fractional_benchmark_prometheus_direct_integer_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 20.5,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_cold_freezer_to_block": 90,
+                "gtron_storage_benchmark_chain_lookup_prune_to_block": 80,
+                "gtron_storage_benchmark_tail_pruned_through_block": 75,
+                "gtron_storage_benchmark_signed_cold_prune": 1,
+                "gtron_storage_benchmark_tail_pruned_files": 3,
+                "gtron_storage_benchmark_event_log_index_segments": 2,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 5,
+                "archiveApiBlock": 80,
+                "archiveApiDepthBlocks": 20,
+                "archiveApiFailures": 0,
+                "coldFreezerToBlock": 90,
+                "chainLookupPruneToBlock": 80.5,
+                "tailPrunedThroughBlock": 75,
+                "signedColdPrune": 1,
+                "tailPrunedFiles": 3,
+                "eventLogIndexSegments": 2,
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "benchmark prometheus evidence field 'chainLookupPruneToBlock'=80.5, "
+                "want integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_depth_blocks=20.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_rejects_benchmark_prometheus_label_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
