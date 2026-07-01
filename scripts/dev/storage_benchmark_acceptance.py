@@ -1192,13 +1192,19 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
         if status != "ok":
             issues.append(f"{line_label(row)} archiveApiStatus={row.get('archiveApiStatus')!r}, want 'ok'")
 
-        checks = as_number(row, "archiveApiChecks")
+        checks = as_non_negative_int(row, "archiveApiChecks")
         if checks is None or checks <= 0:
-            issues.append(f"{line_label(row)} archiveApiChecks={checks}, want > 0")
+            issues.append(
+                f"{line_label(row)} archiveApiChecks={row.get('archiveApiChecks')!r}, "
+                "want positive integer"
+            )
 
-        failures = as_number(row, "archiveApiFailures")
+        failures = as_non_negative_int(row, "archiveApiFailures")
         if failures is None:
-            issues.append(f"{line_label(row)} archiveApiFailures={failures}, want 0")
+            issues.append(
+                f"{line_label(row)} archiveApiFailures={row.get('archiveApiFailures')!r}, "
+                "want non-negative integer"
+            )
         elif failures != 0:
             issues.append(f"{line_label(row)} archiveApiFailures={failures:g}, want 0")
 
@@ -1208,11 +1214,21 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
                 "run storage_benchmark.sh with --archive-api-trace-block"
             )
 
-        block = as_number(row, "archiveApiBlock")
-        if block is None or block < 0:
-            issues.append(f"{line_label(row)} archiveApiBlock={block}, want >= 0 historical block")
+        block = as_non_negative_int(row, "archiveApiBlock")
+        if block is None:
+            issues.append(
+                f"{line_label(row)} archiveApiBlock={row.get('archiveApiBlock')!r}, "
+                "want non-negative integer historical block"
+            )
         else:
-            height = as_number(row, "height")
+            height = None
+            if field_present(row, "height"):
+                height = as_non_negative_int(row, "height")
+                if height is None:
+                    issues.append(
+                        f"{line_label(row)} height={row.get('height')!r}, "
+                        "want non-negative integer for archive API depth evidence"
+                    )
             depth = None
             if height is not None and block >= height:
                 issues.append(
@@ -1221,11 +1237,11 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
             if height is not None:
                 depth = height - block
                 if field_present(row, "archiveApiDepthBlocks"):
-                    reported_depth = as_number(row, "archiveApiDepthBlocks")
+                    reported_depth = as_non_negative_int(row, "archiveApiDepthBlocks")
                     if reported_depth is None:
                         issues.append(
                             f"{line_label(row)} archiveApiDepthBlocks="
-                            f"{row.get('archiveApiDepthBlocks')!r}, want numeric"
+                            f"{row.get('archiveApiDepthBlocks')!r}, want non-negative integer"
                         )
                     elif not approx_equal(reported_depth, depth):
                         issues.append(

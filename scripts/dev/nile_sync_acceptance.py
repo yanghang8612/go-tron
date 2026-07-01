@@ -1952,13 +1952,17 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, req
     if status != "ok":
         issues.append(f"archiveApiStatus={row.get('archiveApiStatus')!r}, want 'ok'")
 
-    checks = as_number(row, "archiveApiChecks")
+    checks = as_non_negative_int(row, "archiveApiChecks")
     if checks is None or checks <= 0:
-        issues.append(f"archiveApiChecks={checks}, want > 0")
+        issues.append(
+            f"archiveApiChecks={row.get('archiveApiChecks')!r}, want positive integer"
+        )
 
-    failures = as_number(row, "archiveApiFailures")
+    failures = as_non_negative_int(row, "archiveApiFailures")
     if failures is None:
-        issues.append(f"archiveApiFailures={failures}, want 0")
+        issues.append(
+            f"archiveApiFailures={row.get('archiveApiFailures')!r}, want non-negative integer"
+        )
     elif failures != 0:
         issues.append(f"archiveApiFailures={failures:g}, want 0")
 
@@ -1967,21 +1971,32 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, req
             "archiveApiTraceBlockProbe is not true; run nile_sync_sample.sh with --archive-api-trace-block"
         )
 
-    block = as_number(row, "archiveApiBlock")
-    if block is None or block < 0:
-        issues.append(f"archiveApiBlock={block}, want >= 0 historical block")
+    block = as_non_negative_int(row, "archiveApiBlock")
+    if block is None:
+        issues.append(
+            f"archiveApiBlock={row.get('archiveApiBlock')!r}, "
+            "want non-negative integer historical block"
+        )
     else:
-        height = as_number(row, "height")
+        height = None
+        if field_present(row, "height"):
+            height = as_non_negative_int(row, "height")
+            if height is None:
+                issues.append(
+                    f"height={row.get('height')!r}, "
+                    "want non-negative integer for archive API depth evidence"
+                )
         depth = None
         if height is not None and block >= height:
             issues.append(f"archiveApiBlock={block:g} must be below height={height:g}")
         if height is not None:
             depth = height - block
             if field_present(row, "archiveApiDepthBlocks"):
-                reported_depth = as_number(row, "archiveApiDepthBlocks")
+                reported_depth = as_non_negative_int(row, "archiveApiDepthBlocks")
                 if reported_depth is None:
                     issues.append(
-                        f"archiveApiDepthBlocks={row.get('archiveApiDepthBlocks')!r}, want numeric"
+                        f"archiveApiDepthBlocks={row.get('archiveApiDepthBlocks')!r}, "
+                        "want non-negative integer"
                     )
                 elif not approx_equal(reported_depth, depth):
                     issues.append(

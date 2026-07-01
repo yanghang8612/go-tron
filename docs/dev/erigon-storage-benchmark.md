@@ -464,7 +464,9 @@ method set (`eth_getBlockByNumber`, `eth_getBlockByHash`,
 `eth_getBlockReceipts`, `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 and `eth_getLogs`). If
 `archiveApiDepthBlocks` is present, the checker requires it to equal
-`height - archiveApiBlock`; add
+`height - archiveApiBlock`; `archiveApiChecks`, `archiveApiFailures`,
+`archiveApiBlock`, `archiveApiDepthBlocks`, and `height` must be integer block
+or count evidence. Add
 `--min-archive-api-depth-blocks BLOCKS` when the row must prove the archive
 probe reached at least that far below the sampled head. Add
 `--require-archive-api-mode minimal` so the latest pruned minimal row must prove its own archive reads

@@ -2575,9 +2575,9 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("archiveApiStatus='failed', want 'ok'", proc.stderr)
-            self.assertIn("archiveApiChecks=0.0, want > 0", proc.stderr)
+            self.assertIn("archiveApiChecks=0, want positive integer", proc.stderr)
             self.assertIn("archiveApiFailures=2, want 0", proc.stderr)
-            self.assertIn("archiveApiFailures=None, want 0", proc.stderr)
+            self.assertIn("archiveApiFailures=None, want non-negative integer", proc.stderr)
             self.assertIn("archiveApiBlock=100 must be below height=100", proc.stderr)
             self.assertIn("archiveApiMethods missing required methods", proc.stderr)
             self.assertIn("archiveApiBlock=45 must be <= tailPrunedThroughBlock=40", proc.stderr)
@@ -2585,6 +2585,66 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("archiveApiMethods must be a non-empty list", proc.stderr)
             self.assertIn(
                 "archiveApiChecks=2 must equal successful archiveApiMethods=5 when archiveApiFailures=0",
+                proc.stderr,
+            )
+
+    def test_rejects_fractional_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 13,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80.5,
+                        "archiveApiDepthBlocks": 19.5,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBlockByHash",
+                            "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockNumber",
+                            "eth_getUncleCountByBlockHash",
+                            "eth_getUncleByBlockNumberAndIndex",
+                            "eth_getUncleByBlockHashAndIndex",
+                            "eth_getBlockReceipts",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiBlock=80.5, want non-negative integer historical block",
                 proc.stderr,
             )
 
