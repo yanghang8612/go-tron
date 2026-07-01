@@ -3364,10 +3364,44 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "stageSyncPipelineMonotonic=false",
                 "stageOrderIssueRows=1",
                 "offlineDbCheckStatus='error'",
-                "height=999.0",
-                "fullStagedSyncHeadLagBlocks=500.0",
+                "height=999",
+                "fullStagedSyncHeadLagBlocks=500",
             ):
                 self.assertIn(want, proc.stderr)
+
+    def test_rejects_fractional_height_and_lag_threshold_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["height"] = 1000.5
+            row["fullStagedSyncHeadLagBlocks"] = 0.5
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-height",
+                    "1000",
+                    "--max-lag-blocks",
+                    "10",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("height=1000.5, want non-negative integer", proc.stderr)
+            self.assertIn(
+                "fullStagedSyncHeadLagBlocks=0.5, want non-negative integer",
+                proc.stderr,
+            )
 
     def test_rejects_offline_prometheus_artifact_without_issue_metric(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2592,13 +2592,20 @@ def check_row(row, args):
             issues.extend(check_prometheus_artifact(args.result, row))
 
     if args.min_height is not None:
-        height = as_number(row, "height")
-        if height is None or height < args.min_height:
-            issues.append(f"height={height}, want >= {args.min_height}")
+        height = as_non_negative_int(row, "height")
+        if height is None:
+            issues.append(f"height={row.get('height')!r}, want non-negative integer")
+        elif height < args.min_height:
+            issues.append(f"height={height:g}, want >= {args.min_height}")
     if args.max_lag_blocks is not None:
-        lag = as_number(row, "fullStagedSyncHeadLagBlocks")
-        if lag is None or lag > args.max_lag_blocks:
-            issues.append(f"fullStagedSyncHeadLagBlocks={lag}, want <= {args.max_lag_blocks}")
+        lag = as_non_negative_int(row, "fullStagedSyncHeadLagBlocks")
+        if lag is None:
+            issues.append(
+                "fullStagedSyncHeadLagBlocks="
+                f"{row.get('fullStagedSyncHeadLagBlocks')!r}, want non-negative integer"
+            )
+        elif lag > args.max_lag_blocks:
+            issues.append(f"fullStagedSyncHeadLagBlocks={lag:g}, want <= {args.max_lag_blocks}")
 
     issues.extend(check_max_cold_stage_lag_blocks(row, args.max_cold_stage_lag_blocks))
     issues.extend(
