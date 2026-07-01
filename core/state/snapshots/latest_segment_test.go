@@ -87,6 +87,50 @@ func TestLatestSegmentIteratorWriterRejectsUnsortedStream(t *testing.T) {
 	}
 }
 
+func TestManagerReloadsLatestSegmentWhenSamePathMetadataChanges(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x21)
+	key := AccountKVSnapshotKey(owner, 1, []byte("slot/a"))
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   10,
+		Path:      "latest/system-dp-1-10.json",
+	}
+
+	firstRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte("old")}})
+	if err != nil {
+		t.Fatalf("write first segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{firstRef})); err != nil {
+		t.Fatalf("publish first manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "old" {
+		t.Fatalf("first GetKVLatest = %q ok=%v err=%v, want old/true/nil", got, ok, err)
+	}
+
+	secondRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte("new")}})
+	if err != nil {
+		t.Fatalf("write second segment: %v", err)
+	}
+	if secondRef.Checksum == firstRef.Checksum {
+		t.Fatalf("test fixture did not change segment checksum: first size/checksum %d/%s second %d/%s", firstRef.Size, firstRef.Checksum, secondRef.Size, secondRef.Checksum)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{secondRef})); err != nil {
+		t.Fatalf("publish second manifest: %v", err)
+	}
+
+	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "new" {
+		t.Fatalf("reloaded GetKVLatest = %q ok=%v err=%v, want new/true/nil", got, ok, err)
+	}
+}
+
 func TestLatestSegmentBuildsAccountKVDomainsFromHotStore(t *testing.T) {
 	dir := t.TempDir()
 	owner1 := latestStoreTestAddress(0x13)

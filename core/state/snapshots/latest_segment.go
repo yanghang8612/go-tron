@@ -1150,15 +1150,27 @@ func (m *Manager) currentManifest() (*Manifest, error) {
 }
 
 func (m *Manager) load(ref SegmentRef) (*LatestSegment, error) {
-	if seg := m.cache[ref.Path]; seg != nil {
-		return seg, nil
+	cacheKey, cacheable := latestSegmentCacheKey(ref)
+	if cacheable {
+		if seg := m.cache[cacheKey]; seg != nil {
+			return seg, nil
+		}
 	}
 	seg, err := OpenLatestSegment(m.dir, ref)
 	if err != nil {
 		return nil, err
 	}
-	m.cache[ref.Path] = seg
+	if cacheable {
+		m.cache[cacheKey] = seg
+	}
 	return seg, nil
+}
+
+func latestSegmentCacheKey(ref SegmentRef) (string, bool) {
+	if ref.Checksum == "" && ref.Size == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("%s\x00%d\x00%s", ref.Path, ref.Size, ref.Checksum), true
 }
 
 func (s *LatestSegment) Validate() error {
