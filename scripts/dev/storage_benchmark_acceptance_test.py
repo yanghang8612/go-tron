@@ -3670,6 +3670,71 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("value=9, want 10", proc.stderr)
             self.assertIn("value=7, want 8", proc.stderr)
 
+    def test_rejects_fractional_prometheus_stage_pipeline_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_complete gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_complete{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2.5\n'
+                'gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 0.5\n'
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 10.5\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 8.5\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2.5,
+                        "stageAlertPipelineIssues": 0.5,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10.5,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8.5,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("stageAlertPipelinePending=2.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineIssues=0.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineNextTarget=10.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineNextCurrent=8.5, want non-negative integer", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

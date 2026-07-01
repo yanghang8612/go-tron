@@ -695,24 +695,39 @@ def check_prometheus_stage_pipeline(label, path, text, row):
             )
         )
     if "stageAlertPipelinePending" in row:
-        pending = as_number(row, "stageAlertPipelinePending")
+        pending = as_non_negative_int(row, "stageAlertPipelinePending")
         if pending is not None:
             issues.extend(
                 check_prometheus_metric_value(
                     label, path, text, "gtron_storage_stage_pipeline_pending", pending, row
                 )
             )
+        else:
+            issues.append(
+                f"{label} stageAlertPipelinePending="
+                f"{row.get('stageAlertPipelinePending')!r}, want non-negative integer"
+            )
     if "stageAlertPipelineIssues" in row:
-        count = as_number(row, "stageAlertPipelineIssues")
+        count = as_non_negative_int(row, "stageAlertPipelineIssues")
         if count is not None:
             issues.extend(
                 check_prometheus_metric_value(
                     label, path, text, "gtron_storage_stage_pipeline_issues", count, row
                 )
             )
+        else:
+            issues.append(
+                f"{label} stageAlertPipelineIssues="
+                f"{row.get('stageAlertPipelineIssues')!r}, want non-negative integer"
+            )
     next_stage = row.get("stageAlertPipelineNext")
     if next_stage:
-        want_target = as_number(row, "stageAlertPipelineNextTarget")
+        want_target = as_non_negative_int(row, "stageAlertPipelineNextTarget")
+        if want_target is None:
+            issues.append(
+                f"{label} stageAlertPipelineNextTarget="
+                f"{row.get('stageAlertPipelineNextTarget')!r}, want non-negative integer"
+            )
         want_status = str(row.get("stageAlertPipelineNextStatus", ""))
         want_upstream = str(row.get("stageAlertPipelineNextUpstream", ""))
 
@@ -741,7 +756,12 @@ def check_prometheus_stage_pipeline(label, path, text, row):
                 f"value={matched[-1]:g}, want {want_target:g}"
             )
 
-        want_current = as_number(row, "stageAlertPipelineNextCurrent")
+        want_current = as_non_negative_int(row, "stageAlertPipelineNextCurrent")
+        if want_current is None:
+            issues.append(
+                f"{label} stageAlertPipelineNextCurrent="
+                f"{row.get('stageAlertPipelineNextCurrent')!r}, want non-negative integer"
+            )
         candidates = prometheus_metric_samples(text, "gtron_storage_stage_pipeline_next_current_block")
         matched = [
             value
