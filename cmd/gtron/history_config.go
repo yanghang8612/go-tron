@@ -27,17 +27,17 @@ import (
 // section-parser keeps the dep tree clean.
 //
 // applyHistoryConfig also turns HistoryEnabled on whenever the operator has
-// explicitly asked for archive or snap mode (both need temporal capture to
-// answer as-of queries) OR has explicitly opted in via --history.enabled /
-// [history] enabled. Full/blocks/minimal modes are inert without one of those:
-// the domain pruner Lifecycle only registers when flat history or commitment
-// checkpoints are enabled. These non-archive modes with no opt-in stay on the
-// zero-cost default path: no capture, no pruning.
+// explicitly selected an Erigon-style prune mode OR has explicitly opted in via
+// --history.enabled / [history] enabled. An unset mode still defaults to "full"
+// without enabling capture, preserving the legacy zero-cost default. Once an
+// operator explicitly writes a mode, that mode owns the expected history
+// retention semantics instead of being only a label.
 //
 // Precedence for the enable toggle: --history.enabled CLI flag (when set)
-// overrides [history] enabled TOML, which overrides the archive-implied
-// default. The function returns an error only when the TOML file exists
-// but is malformed.
+// overrides [history] enabled TOML. A later explicit prune-mode implication can
+// still force capture back on, because a requested retention mode without
+// capture is operationally inconsistent. The function returns an error only
+// when the TOML file exists but is malformed.
 func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 	if cfg == nil {
 		return nil
@@ -73,17 +73,23 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 		cfg.HistoryEnabled = ctx.Bool("history.enabled")
 	}
 
-	// Step 3: archive/snap modes implicitly turn on temporal capture even when
-	// the operator didn't pass --history.enabled. Without HistoryEnabled the
-	// on-disk history stays empty and an archive-query RPC would silently return
-	// live state for every blockNum — operationally broken. An explicit
-	// --history.enabled=false in those modes is contradictory; retention mode
-	// wins (the history the operator asked to retain must actually be captured).
-	switch cfg.EffectiveHistoryMode() {
-	case params.HistoryModeArchive, params.HistoryModeSnap:
+	// Step 3: explicit retention modes imply temporal capture. Without
+	// HistoryEnabled the on-disk history stays empty and the mode cannot deliver
+	// the state-retention behavior it advertises. Archive/snap also imply
+	// capture when sourced from chain defaults because they are never meaningful
+	// without history rows.
+	modeExplicit := (tomlPresent && tomlMode != "") || modeFlagExplicit(ctx)
+	switch {
+	case modeExplicit:
+		cfg.HistoryEnabled = true
+	case cfg.EffectiveHistoryMode() == params.HistoryModeArchive || cfg.EffectiveHistoryMode() == params.HistoryModeSnap:
 		cfg.HistoryEnabled = true
 	}
 	return nil
+}
+
+func modeFlagExplicit(ctx *cli.Context) bool {
+	return ctx != nil && (ctx.IsSet("gcmode") || ctx.IsSet("prune.mode"))
 }
 
 func historyModeFromFlags(ctx *cli.Context) (string, bool, error) {

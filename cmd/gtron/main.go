@@ -154,7 +154,7 @@ var (
 	}
 	historyEnabledFlag = &cli.BoolFlag{
 		Name:  "history.enabled",
-		Usage: "Turn on flat temporal state capture. Required to populate as-of history; archive mode implies it.",
+		Usage: "Turn on flat temporal state capture. Explicit prune modes imply it.",
 	}
 	snapshotCompressHistoryFlag = &cli.BoolFlag{
 		Name:    "snapshot.compress-history",

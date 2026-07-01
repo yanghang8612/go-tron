@@ -72,8 +72,8 @@ func TestApplyHistoryConfig_PruneModeBlocksAndMinimal(t *testing.T) {
 			if got := cfg.EffectiveHistoryMode(); got != mode {
 				t.Errorf("--prune.mode %s: mode = %q, want %q", mode, got, mode)
 			}
-			if cfg.HistoryEnabled {
-				t.Error("blocks/minimal prune modes should not auto-enable state history capture")
+			if !cfg.HistoryEnabled {
+				t.Error("explicit blocks/minimal prune modes should enable state history capture")
 			}
 		})
 	}
@@ -234,26 +234,24 @@ func TestApplyHistoryConfig_TOMLNoHistorySection(t *testing.T) {
 	}
 }
 
-// TestApplyHistoryConfig_GcmodeFullDoesNotAutoEnable asserts the
-// archive-flip-HistoryEnabled rule is restricted to archive mode. A
-// full-mode operator must opt into HistoryEnabled explicitly (slice 2)
-// — slice 5 doesn't change that contract.
-func TestApplyHistoryConfig_GcmodeFullDoesNotAutoEnable(t *testing.T) {
+// TestApplyHistoryConfig_ExplicitGcmodeFullEnablesHistory asserts the
+// Erigon-style mode contract: an operator who explicitly requests full mode gets
+// the recent-history capture needed for full-mode state retention. The no-flag
+// default remains zero-cost and is covered by TestApplyHistoryConfig_DefaultsToFull.
+func TestApplyHistoryConfig_ExplicitGcmodeFullEnablesHistory(t *testing.T) {
 	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "full"})
 	cfg := &params.ChainConfig{}
 	if err := applyHistoryConfig(ctx, cfg); err != nil {
 		t.Fatalf("applyHistoryConfig: %v", err)
 	}
-	if cfg.HistoryEnabled {
-		t.Error("--gcmode=full unexpectedly turned on HistoryEnabled")
+	if !cfg.HistoryEnabled {
+		t.Error("--gcmode=full did not turn on HistoryEnabled")
 	}
 }
 
-// TestApplyHistoryConfig_FullModeEnabledIsReachable is the regression for the
-// slice-5 spec-review escalation: full-mode pruning was operationally
-// unreachable because nothing flipped HistoryEnabled on outside archive mode.
-// `--history.enabled` (or [history] enabled = true) is the canonical opt-in;
-// combined with the default full mode it yields a captured-and-pruned index.
+// TestApplyHistoryConfig_FullModeEnabledIsReachable keeps the direct
+// --history.enabled opt-in usable for operators who leave prune.mode unset but
+// still want captured-and-pruned full-mode state history.
 func TestApplyHistoryConfig_FullModeEnabledIsReachable(t *testing.T) {
 	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "full", "--history.enabled"})
 	cfg := &params.ChainConfig{}
@@ -265,6 +263,58 @@ func TestApplyHistoryConfig_FullModeEnabledIsReachable(t *testing.T) {
 	}
 	if !cfg.HistoryEnabled {
 		t.Fatal("--history.enabled did not turn on HistoryEnabled in full mode")
+	}
+}
+
+func TestApplyHistoryConfig_TOMLModeFullEnablesHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gtron.toml")
+	if err := os.WriteFile(path, []byte("[history]\nmode = \"full\"\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	ctx := makeHistoryFlagSet(t, []string{"--config", path})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeFull {
+		t.Errorf("mode = %q, want full", got)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("[history] mode=full did not turn on HistoryEnabled")
+	}
+}
+
+func TestApplyHistoryConfig_ExplicitModeOverridesHistoryDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gtron.toml")
+	if err := os.WriteFile(path, []byte("[history]\nmode = \"blocks\"\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	ctx := makeHistoryFlagSet(t, []string{"--config", path})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeBlocks {
+		t.Errorf("mode = %q, want blocks", got)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("explicit prune mode should override enabled=false")
+	}
+}
+
+func TestApplyHistoryConfig_CLIPruneModeOverridesHistoryDisabled(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--prune.mode", "full", "--history.enabled=false"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeFull {
+		t.Errorf("mode = %q, want full", got)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("--prune.mode should override --history.enabled=false")
 	}
 }
 

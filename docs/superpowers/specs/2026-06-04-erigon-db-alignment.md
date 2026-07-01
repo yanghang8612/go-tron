@@ -1381,6 +1381,12 @@ Status:
 
 - `--prune.mode` is now accepted as the Erigon-style CLI entry point.
 - `--gcmode` remains a deprecated alias.
+- Explicit operator mode selection now implies the matching temporal state
+  capture. A node that does not set `--prune.mode` still keeps the historical
+  zero-cost default (`full` label with history capture disabled), but
+  `--prune.mode=full|blocks|minimal|snap|archive` and `[history] mode = ...`
+  all turn on `HistoryEnabled` so the requested mode can actually retain the
+  state history it advertises.
 - The runtime pruning policy now preserves distinct internal mode labels for
   `full`, `blocks`, `minimal`, `snap`, and `archive`. `blocks` and `minimal`
   share `full`'s finite state-history retention window for hot

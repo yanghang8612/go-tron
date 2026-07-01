@@ -15,9 +15,10 @@ type ChainConfig struct {
 	BlockNumForEnergyLimit *int64
 	// HistoryEnabled toggles flat temporal StateDomainChange capture. false
 	// (the default) leaves applyBlock and StateDB on the zero-overhead fast
-	// path — no per-mutation accounting, no per-block temporal flush. Archive
-	// operators opt in via node config; the gate is independent of any
-	// java-tron proposal, so flipping it never affects consensus.
+	// path — no per-mutation accounting, no per-block temporal flush. Explicit
+	// prune modes and archive/snap defaults turn it on via node config; the gate
+	// is independent of any java-tron proposal, so flipping it never affects
+	// consensus.
 	HistoryEnabled bool
 	// HistoryMode is the retention policy for StateDomainChange/StateTxRange
 	// rows captured by applyBlock. "full", "blocks", and "minimal" prune rows
