@@ -1763,6 +1763,15 @@ STAGE_STALL_EVIDENCE_FIELDS = (
 )
 
 
+def require_stage_stall_int(row, field, issues, *, non_negative=False, context=""):
+    value = as_non_negative_int(row, field) if non_negative else as_int(row, field)
+    if value is None:
+        prefix = f"{context} " if context else ""
+        want = "non-negative integer" if non_negative else "integer"
+        issues.append(f"{prefix}{field}={row.get(field)!r}, want {want}")
+    return value
+
+
 def check_stage_stall_evidence(row):
     if not any(field in row for field in STAGE_STALL_EVIDENCE_FIELDS):
         return []
@@ -1776,7 +1785,11 @@ def check_stage_stall_evidence(row):
         issues.append(f"stageStalls={stalls!r}, want list")
         stalls = []
 
-    count = as_number(row, "stageStalledCount")
+    count = None
+    if field_present(row, "stageStalledCount"):
+        count = require_stage_stall_int(
+            row, "stageStalledCount", issues, non_negative=True
+        )
     if count is not None and count != len(stalls):
         issues.append(f"stageStalledCount={count:g}, want len(stageStalls)={len(stalls)}")
 
@@ -1788,8 +1801,14 @@ def check_stage_stall_evidence(row):
         issues.append("soakHealthIssues contains 'stage-stalled' but stageStalled is false")
 
     stage = str(row.get("stageStalledStage", ""))
-    seconds = as_number(row, "stageStalledSeconds")
-    lag = as_number(row, "stageStalledLagBlocks")
+    seconds = None
+    if field_present(row, "stageStalledSeconds"):
+        seconds = require_stage_stall_int(
+            row, "stageStalledSeconds", issues, non_negative=True
+        )
+    lag = None
+    if field_present(row, "stageStalledLagBlocks"):
+        lag = require_stage_stall_int(row, "stageStalledLagBlocks", issues)
     if not stalled:
         if stalls:
             issues.append(f"stageStalls has {len(stalls)} entries while stageStalled is false")
@@ -1815,23 +1834,37 @@ def check_stage_stall_evidence(row):
         if not isinstance(stall, dict):
             issues.append(f"stageStalls entry {stall!r} is not an object")
             continue
+        require_stage_stall_int(
+            stall,
+            "stalledSeconds",
+            issues,
+            non_negative=True,
+            context=f"stageStalls entry {stall.get('stage', '')!r}",
+        )
+        require_stage_stall_int(
+            stall,
+            "lagBlocks",
+            issues,
+            non_negative=True,
+            context=f"stageStalls entry {stall.get('stage', '')!r}",
+        )
         if primary is None:
             primary = stall
             continue
         current_key = (
-            as_number(stall, "stalledSeconds") or 0,
-            as_number(stall, "lagBlocks") or 0,
+            as_non_negative_int(stall, "stalledSeconds") or 0,
+            as_non_negative_int(stall, "lagBlocks") or 0,
         )
         primary_key = (
-            as_number(primary, "stalledSeconds") or 0,
-            as_number(primary, "lagBlocks") or 0,
+            as_non_negative_int(primary, "stalledSeconds") or 0,
+            as_non_negative_int(primary, "lagBlocks") or 0,
         )
         if current_key > primary_key:
             primary = stall
     if primary is not None:
         primary_stage = str(primary.get("stage", ""))
-        primary_seconds = as_number(primary, "stalledSeconds")
-        primary_lag = as_number(primary, "lagBlocks")
+        primary_seconds = as_non_negative_int(primary, "stalledSeconds")
+        primary_lag = as_non_negative_int(primary, "lagBlocks")
         if stage and primary_stage and stage != primary_stage:
             issues.append(f"stageStalledStage={stage!r}, want primary stalled stage {primary_stage!r}")
         if seconds is not None and primary_seconds is not None and seconds != primary_seconds:

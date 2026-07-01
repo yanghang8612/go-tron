@@ -2945,6 +2945,61 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn("stageStalledSeconds=10, want primary stalled seconds 20", proc.stderr)
             self.assertIn("stageStalledLagBlocks=5, want primary stalled lag 7", proc.stderr)
 
+    def test_rejects_fractional_stage_stall_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "soakHealthStatus": "warning",
+                    "soakHealthIssues": ["stage-stalled"],
+                    "stageStalled": True,
+                    "stageStalledCount": 1.5,
+                    "stageStalledStage": "stageSyncExecution",
+                    "stageStalledSeconds": 120.5,
+                    "stageStalledLagBlocks": 7.5,
+                    "stageStalls": [
+                        {
+                            "stage": "stageSyncExecution",
+                            "stalledSeconds": 120.5,
+                            "lagBlocks": 7.5,
+                        }
+                    ],
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--allow-warning-health",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("stageStalledCount=1.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageStalledSeconds=120.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageStalledLagBlocks=7.5, want integer", proc.stderr)
+            self.assertIn(
+                "stageStalls entry 'stageSyncExecution' stalledSeconds=120.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "stageStalls entry 'stageSyncExecution' lagBlocks=7.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_requires_stage_stall_evidence_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
