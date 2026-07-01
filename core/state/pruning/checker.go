@@ -400,6 +400,12 @@ func (c Checker) checkSnapshots(report *CheckReport) error {
 	}
 	for _, ref := range manifest.Segments {
 		report.SnapshotSegments++
+		if cfg, ok := snapshots.DefaultDomainRegistry().ConfigForRef(ref); ok && cfg.HasHistory && ref.Kind == snapshots.SegmentHistory {
+			if err := snapshots.VerifyHistorySegmentWithCompanions(c.SnapshotDir, manifest, ref); err != nil {
+				return err
+			}
+			continue
+		}
 		checked, err := snapshots.CheckRegisteredSegment(c.SnapshotDir, ref)
 		if err != nil {
 			return err
