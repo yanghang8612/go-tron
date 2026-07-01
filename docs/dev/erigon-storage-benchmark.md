@@ -436,9 +436,10 @@ stage/status/upstream labels match that same row. When the row carries
 `gtron_storage_prune_boundary_block{field=...}` samples match. It confirms
 minimal-mode signed cold lookup pruning plus tail-prune evidence, rejects
 mode-semantics regressions such as `archive` rows with prune progress or
-`blocks` rows with freezer-tail pruning, requires signed cold prune rows in
-every non-`archive` mode to carry a valid chain-lookup prune boundary covered by
-`coldFreezerToBlock`, and
+`blocks` rows with freezer-tail pruning, requires every selected row under
+`--require-prune-mode-semantics` to carry a persisted `pruneMode` matching the
+sampled `mode`, requires signed cold prune rows in every non-`archive` mode to
+carry a valid chain-lookup prune boundary covered by `coldFreezerToBlock`, and
 rejects `minimal` tail-prune boundaries that exceed the matching lookup-prune,
 cold-freezer, or derived-index coverage boundary. It also rejects physical
 freezer-tail file deletion outside `minimal`, and positive `tailPrunedFiles`

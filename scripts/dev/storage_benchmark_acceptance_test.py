@@ -619,6 +619,56 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
             self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
 
+    def test_rejects_missing_prune_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "pruneMode": "unknown",
+                    "pruneModePersisted": False,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("mode is missing", proc.stderr)
+            self.assertIn("pruneMode is missing or unknown", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+
     def test_accepts_required_size_reduction(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

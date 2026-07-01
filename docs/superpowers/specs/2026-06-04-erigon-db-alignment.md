@@ -1463,9 +1463,9 @@ Status:
   minimal-mode signed cold lookup prune plus tail-prune evidence, and
   project-specific numeric `--min`/`--max` thresholds. Its optional
   `--require-prune-mode-semantics` gate also checks the Erigon-style mode
-  matrix directly: persisted prune mode must match the sampled mode, `archive`
-  rows must not show hot/cold prune progress, and `blocks`/`full`/`snap` rows
-  must not show freezer-tail pruning.
+  matrix directly: persisted prune mode evidence must be present and match the
+  sampled mode, `archive` rows must not show hot/cold prune progress, and
+  `blocks`/`full`/`snap` rows must not show freezer-tail pruning.
 
 Remaining:
 

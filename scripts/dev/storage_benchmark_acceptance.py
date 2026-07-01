@@ -1053,15 +1053,18 @@ def check_prune_mode_semantics(rows):
     for row in latest_rows(rows).values():
         mode = str(row.get("mode", "")).lower()
         if not mode:
+            issues.append(f"{line_label(row)} mode is missing")
             continue
 
         persisted_mode = str(row.get("pruneMode", "")).lower()
-        if persisted_mode and persisted_mode != "unknown" and persisted_mode != mode:
+        if not persisted_mode or persisted_mode == "unknown":
+            issues.append(f"{line_label(row)} pruneMode is missing or unknown")
+        elif persisted_mode != mode:
             issues.append(
                 f"{line_label(row)} pruneMode={row.get('pruneMode')!r} does not match mode={mode!r}"
             )
 
-        if field_present(row, "pruneModePersisted") and not as_bool(row, "pruneModePersisted"):
+        if not as_bool(row, "pruneModePersisted"):
             issues.append(f"{line_label(row)} pruneModePersisted must be true")
 
         if mode == "archive":
