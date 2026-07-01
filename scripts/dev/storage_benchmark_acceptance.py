@@ -590,8 +590,13 @@ def check_prometheus_prune_boundaries(label, path, text, row):
             )
         )
     for field in PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
-        want = as_number(row, field)
+        want = as_int(row, field)
         if want is None:
+            if field_present(row, field):
+                issues.append(
+                    f"{label} {field}={row.get(field)!r}, want integer "
+                    "for prometheus prune boundary evidence"
+                )
             continue
         got = prometheus_prune_boundary_value(text, field, row)
         if got is None:
@@ -599,10 +604,17 @@ def check_prometheus_prune_boundaries(label, path, text, row):
                 f"{label} prometheus artifact {path} missing "
                 f"gtron_storage_prune_boundary_block field={field!r}"
             )
-        elif got != want:
+        elif not got.is_integer():
             issues.append(
                 f"{label} prometheus artifact {path} "
-                f"gtron_storage_prune_boundary_block field={field!r}={got:g}, want {want:g}"
+                f"gtron_storage_prune_boundary_block field={field!r}={got:g}, "
+                "want integer"
+            )
+        elif int(got) != want:
+            issues.append(
+                f"{label} prometheus artifact {path} "
+                f"gtron_storage_prune_boundary_block field={field!r}={int(got):g}, "
+                f"want {want:g}"
             )
     return issues
 

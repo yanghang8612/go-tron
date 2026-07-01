@@ -3435,6 +3435,67 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_fractional_prometheus_prune_boundary_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_signed_cold_prune gauge\n'
+                '# TYPE gtron_storage_prune_boundary_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50.5\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45.5\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "signedColdPrune": 1,
+                        "chainLookupPruneToBlock": 50.5,
+                        "tailPrunedThroughBlock": 45.5,
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "chainLookupPruneToBlock=50.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "tailPrunedThroughBlock=45.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+
     def test_rejects_prometheus_artifact_missing_structured_issue_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
