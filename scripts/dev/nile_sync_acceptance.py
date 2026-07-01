@@ -2174,6 +2174,21 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, req
             "archiveApiTraceBlockProbe is not true; run nile_sync_sample.sh with --archive-api-trace-block"
         )
 
+    chain_lookup = None
+    if field_present(row, "chainLookupPruneToBlock"):
+        chain_lookup = as_int(row, "chainLookupPruneToBlock")
+        if chain_lookup is None:
+            issues.append(
+                f"chainLookupPruneToBlock={row.get('chainLookupPruneToBlock')!r}, want integer"
+            )
+    tail_pruned = None
+    if field_present(row, "tailPrunedThroughBlock"):
+        tail_pruned = as_int(row, "tailPrunedThroughBlock")
+        if tail_pruned is None:
+            issues.append(
+                f"tailPrunedThroughBlock={row.get('tailPrunedThroughBlock')!r}, want integer"
+            )
+
     block = as_non_negative_int(row, "archiveApiBlock")
     if block is None:
         issues.append(
@@ -2215,13 +2230,11 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, req
                         f"archiveApiBlock depth={depth:g} failed >= min archive API "
                         f"depth {min_depth_blocks:g} blocks"
                     )
-        chain_lookup = as_number(row, "chainLookupPruneToBlock")
         if chain_lookup is not None and chain_lookup >= 0 and block > chain_lookup:
             issues.append(
                 f"archiveApiBlock={block:g} must be <= chainLookupPruneToBlock={chain_lookup:g} "
                 "to prove post-chain-lookup-prune archive reads"
             )
-        tail_pruned = as_number(row, "tailPrunedThroughBlock")
         if tail_pruned is not None and tail_pruned >= 0 and block > tail_pruned:
             issues.append(
                 f"archiveApiBlock={block:g} must be <= tailPrunedThroughBlock={tail_pruned:g} "

@@ -1364,6 +1364,23 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
                 "run storage_benchmark.sh with --archive-api-trace-block"
             )
 
+        chain_lookup = None
+        if field_present(row, "chainLookupPruneToBlock"):
+            chain_lookup = as_int(row, "chainLookupPruneToBlock")
+            if chain_lookup is None:
+                issues.append(
+                    f"{line_label(row)} chainLookupPruneToBlock="
+                    f"{row.get('chainLookupPruneToBlock')!r}, want integer"
+                )
+        tail_pruned = None
+        if field_present(row, "tailPrunedThroughBlock"):
+            tail_pruned = as_int(row, "tailPrunedThroughBlock")
+            if tail_pruned is None:
+                issues.append(
+                    f"{line_label(row)} tailPrunedThroughBlock="
+                    f"{row.get('tailPrunedThroughBlock')!r}, want integer"
+                )
+
         block = as_non_negative_int(row, "archiveApiBlock")
         if block is None:
             issues.append(
@@ -1406,14 +1423,12 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
                         f"{line_label(row)} archiveApiBlock depth={depth:g} failed >= "
                         f"min archive API depth {min_depth_blocks:g} blocks"
                     )
-            chain_lookup = as_number(row, "chainLookupPruneToBlock")
             if chain_lookup is not None and chain_lookup >= 0 and block > chain_lookup:
                 issues.append(
                     f"{line_label(row)} archiveApiBlock={block:g} must be <= "
                     f"chainLookupPruneToBlock={chain_lookup:g} "
                     "to prove post-chain-lookup-prune archive reads"
                 )
-            tail_pruned = as_number(row, "tailPrunedThroughBlock")
             if tail_pruned is not None and tail_pruned >= 0 and block > tail_pruned:
                 issues.append(
                     f"{line_label(row)} archiveApiBlock={block:g} must be <= "

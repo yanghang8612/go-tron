@@ -4906,6 +4906,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 80.5,
                         "archiveApiDepthBlocks": 19.5,
+                        "chainLookupPruneToBlock": 80.5,
+                        "tailPrunedThroughBlock": 75.5,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockByHash",
@@ -4945,6 +4947,8 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "archiveApiBlock=80.5, want non-negative integer historical block",
                 proc.stderr,
             )
+            self.assertIn("chainLookupPruneToBlock=80.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=75.5, want integer", proc.stderr)
 
     def test_rejects_archive_api_check_count_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
