@@ -1077,6 +1077,110 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("height=0, want > 0 for datadir bytes-per-block evidence", proc.stderr)
 
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100.5,
+                        "datadirBytes": 10000,
+                    }
+                ],
+            )
+            fractional_height = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                fractional_height.returncode,
+                0,
+                fractional_height.stdout + fractional_height.stderr,
+            )
+            self.assertIn(
+                "height=100.5, want > 0 for datadir bytes-per-block evidence",
+                fractional_height.stderr,
+            )
+
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 10000.5,
+                        "chaindataBytes": -1,
+                        "ancientBytes": 3000.5,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500.5,
+                    }
+                ],
+            )
+            invalid_bytes = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(invalid_bytes.returncode, 0, invalid_bytes.stdout + invalid_bytes.stderr)
+            self.assertIn(
+                "datadir bytes-per-block evidence invalid fields: datadirBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "hot bytes-per-block evidence invalid fields: chaindataBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "cold archive bytes-per-block evidence invalid fields: ancientBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "derived index bytes-per-block evidence invalid fields: derivedIndexBytes",
+                invalid_bytes.stderr,
+            )
+
     def test_accepts_benchmark_prometheus_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -483,25 +483,31 @@ def check_max_bytes_per_block(rows, maximum, label, fields, metric_name):
         return []
     issues = []
     for row in latest_rows(rows).values():
-        height = as_number(row, "height")
-        if height is None or height <= 0:
+        height = as_non_negative_int(row, "height")
+        if height is None:
             issues.append(
                 f"{line_label(row)} height={row.get('height')!r}, want > 0 "
                 f"for {label} bytes-per-block evidence"
             )
             continue
-        total = 0.0
-        missing = []
+        if height <= 0:
+            issues.append(
+                f"{line_label(row)} height={height}, want > 0 "
+                f"for {label} bytes-per-block evidence"
+            )
+            continue
+        total = 0
+        invalid = []
         for field in fields:
-            value = as_number(row, field)
-            if value is None or value < 0:
-                missing.append(field)
+            value = as_non_negative_int(row, field)
+            if value is None:
+                invalid.append(field)
                 continue
             total += value
-        if missing:
+        if invalid:
             issues.append(
-                f"{line_label(row)} {label} bytes-per-block evidence missing fields: "
-                + ",".join(missing)
+                f"{line_label(row)} {label} bytes-per-block evidence invalid fields: "
+                + ",".join(invalid)
             )
             continue
         per_block = total / height
