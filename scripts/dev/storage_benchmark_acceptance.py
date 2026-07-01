@@ -450,16 +450,22 @@ def check_size_reductions(rows, raws, role):
             issues.append(f"{raw}: no latest row for baseline mode {base_mode!r}{role_suffix}")
             continue
 
-        got = as_number(row, field)
+        got = as_non_negative_int(row, field)
         if got is None:
-            issues.append(f"{raw}: {line_label(row)} {field} is missing or non-numeric")
+            issues.append(
+                f"{raw}: {line_label(row)} {field}={row.get(field)!r}, "
+                "want non-negative integer byte counter"
+            )
             continue
-        baseline = as_number(base, field)
+        baseline = as_non_negative_int(base, field)
         if baseline is None:
-            issues.append(f"{raw}: {line_label(base)} {field} is missing or non-numeric")
+            issues.append(
+                f"{raw}: {line_label(base)} {field}={base.get(field)!r}, "
+                "want non-negative integer byte counter"
+            )
             continue
         if baseline <= 0:
-            issues.append(f"{raw}: {line_label(base)} {field}={baseline:g} must be > 0")
+            issues.append(f"{raw}: {line_label(base)} {field}={baseline} must be > 0")
             continue
 
         reduction = (baseline - got) / baseline
@@ -467,7 +473,7 @@ def check_size_reductions(rows, raws, role):
             issues.append(
                 f"{raw}: {mode} {field} reduction={reduction:.2%}, "
                 f"want >= {want_ratio:.2%} versus {base_mode} "
-                f"(candidate {line_label(row)}={got:g}, baseline {line_label(base)}={baseline:g})"
+                f"(candidate {line_label(row)}={got}, baseline {line_label(base)}={baseline})"
             )
     return issues
 

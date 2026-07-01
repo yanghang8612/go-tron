@@ -820,6 +820,82 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_non_integer_required_size_reduction_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000.5,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": -1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "minimal:full:chaindataBytes=0.40: line 2 minimal/producer "
+                "chaindataBytes=-1, want non-negative integer byte counter",
+                proc.stderr,
+            )
+
+            rows[0]["chaindataBytes"] = 1000
+            rows[1]["chaindataBytes"] = 550.5
+            write_result(result, rows)
+            fractional = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(fractional.returncode, 0, fractional.stdout + fractional.stderr)
+            self.assertIn(
+                "minimal:full:chaindataBytes=0.40: line 2 minimal/producer "
+                "chaindataBytes=550.5, want non-negative integer byte counter",
+                fractional.stderr,
+            )
+
     def test_rejects_malformed_required_size_reduction(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
