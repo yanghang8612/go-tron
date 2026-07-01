@@ -455,21 +455,28 @@ def as_number(row, field):
         return None
 
 
-def as_non_negative_int(row, field):
+def as_int(row, field):
     value = row.get(field)
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        parsed = value
-    elif isinstance(value, float):
-        if not value.is_integer():
-            return None
-        parsed = int(value)
-    else:
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
         try:
-            parsed = int(value)
-        except (TypeError, ValueError):
+            return int(value, 10)
+        except ValueError:
             return None
+    return None
+
+
+def as_non_negative_int(row, field):
+    parsed = as_int(row, field)
+    if parsed is None:
+        return None
     if parsed < 0:
         return None
     return parsed
@@ -1868,8 +1875,38 @@ def check_positive_forbidden(row, field, reason):
     return []
 
 
+PRUNE_BOUNDARY_INTEGER_FIELDS = (
+    "coldFreezerToBlock",
+    "chainLookupPruneToBlock",
+    "tailPrunedThroughBlock",
+    "balanceTracePruneToBlock",
+    "sectionBloomPruneToSection",
+)
+
+PRUNE_COUNT_INTEGER_FIELDS = ("tailPrunedFiles",)
+
+
+def check_integer_fields(row, fields):
+    issues = []
+    for field in fields:
+        if field_present(row, field) and as_int(row, field) is None:
+            issues.append(f"{field}={row.get(field)!r}, want integer")
+    return issues
+
+
+def check_non_negative_integer_fields(row, fields):
+    issues = []
+    for field in fields:
+        if field_present(row, field) and as_non_negative_int(row, field) is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+    return issues
+
+
 def check_prune_mode_semantics(row):
     issues = []
+    issues.extend(check_integer_fields(row, PRUNE_BOUNDARY_INTEGER_FIELDS))
+    issues.extend(check_non_negative_integer_fields(row, PRUNE_COUNT_INTEGER_FIELDS))
+
     mode = str(row.get("mode", "")).lower()
     if not mode:
         issues.append("mode is missing")

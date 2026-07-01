@@ -289,6 +289,24 @@ def as_number(row, field):
         return None
 
 
+def as_int(row, field):
+    value = row.get(field)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        try:
+            return int(value, 10)
+        except ValueError:
+            return None
+    return None
+
+
 def as_bool(row, field):
     value = row.get(field)
     if isinstance(value, bool):
@@ -999,6 +1017,9 @@ def check_minimal_tail_prune(rows, role):
         return [f"required minimal tail-prune evidence has no selected {scope} row"]
 
     issues = []
+    issues.extend(
+        check_integer_fields(row, ("chainLookupPruneToBlock", "tailPrunedThroughBlock"))
+    )
     if as_number(row, "signedColdPrune") != 1.0:
         issues.append(f"{line_label(row)} signedColdPrune must be true")
     chain_lookup = as_number(row, "chainLookupPruneToBlock")
@@ -1022,6 +1043,7 @@ def check_minimal_physical_tail_prune(rows, role):
         return [f"required minimal physical tail-prune evidence has no selected {scope} row"]
 
     issues = []
+    issues.extend(check_non_negative_integer_fields(row, ("tailPrunedFiles",)))
     tail_pruned_files = as_number(row, "tailPrunedFiles")
     if tail_pruned_files is None or tail_pruned_files <= 0:
         issues.append(f"{line_label(row)} tailPrunedFiles={tail_pruned_files}, want > 0")
@@ -1050,9 +1072,42 @@ def check_positive_forbidden(row, field, reason):
     return []
 
 
+PRUNE_BOUNDARY_INTEGER_FIELDS = (
+    "coldFreezerToBlock",
+    "derivedIndexToBlock",
+    "chainLookupPruneToBlock",
+    "tailPrunedThroughBlock",
+    "balanceTracePruneToBlock",
+    "sectionBloomPruneToSection",
+)
+
+PRUNE_COUNT_INTEGER_FIELDS = ("tailPrunedFiles",)
+
+
+def check_integer_fields(row, fields):
+    issues = []
+    for field in fields:
+        if field_present(row, field) and as_int(row, field) is None:
+            issues.append(f"{line_label(row)} {field}={row.get(field)!r}, want integer")
+    return issues
+
+
+def check_non_negative_integer_fields(row, fields):
+    issues = []
+    for field in fields:
+        if field_present(row, field) and as_non_negative_int(row, field) is None:
+            issues.append(
+                f"{line_label(row)} {field}={row.get(field)!r}, want non-negative integer"
+            )
+    return issues
+
+
 def check_prune_mode_semantics(rows):
     issues = []
     for row in latest_rows(rows).values():
+        issues.extend(check_integer_fields(row, PRUNE_BOUNDARY_INTEGER_FIELDS))
+        issues.extend(check_non_negative_integer_fields(row, PRUNE_COUNT_INTEGER_FIELDS))
+
         mode = str(row.get("mode", "")).lower()
         if not mode:
             issues.append(f"{line_label(row)} mode is missing")
@@ -1384,22 +1439,10 @@ def check_archive_tx_evidence(rows, required_modes=(), require_trace_transaction
 
 
 def as_non_negative_int(row, field):
-    value = row.get(field)
-    if isinstance(value, bool):
+    parsed = as_int(row, field)
+    if parsed is None or parsed < 0:
         return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, float):
-        if value.is_integer() and value >= 0:
-            return int(value)
-        return None
-    if isinstance(value, str):
-        try:
-            parsed = int(value, 10)
-        except ValueError:
-            return None
-        return parsed if parsed >= 0 else None
-    return None
+    return parsed
 
 
 RETIRED_PRUNE_RAN_FIELD = "retiredPruneRan"

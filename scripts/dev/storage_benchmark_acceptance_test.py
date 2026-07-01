@@ -621,6 +621,54 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
             self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
 
+    def test_rejects_fractional_prune_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+                "unix": 10,
+                "mode": "minimal",
+                "pruneMode": "minimal",
+                "signedColdPrune": 1,
+                "chainLookupPruneToBlock": 50.5,
+                "coldFreezerToBlock": 50.5,
+                "derivedIndexToBlock": 50.5,
+                "tailPrunedThroughBlock": 45.5,
+                "tailPrunedFiles": 1.5,
+                "balanceTracePruneToBlock": 44.5,
+                "sectionBloomPruneToSection": 2.5,
+            }
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("chainLookupPruneToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("coldFreezerToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("derivedIndexToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=45.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedFiles=1.5, want non-negative integer", proc.stderr)
+            self.assertIn("balanceTracePruneToBlock=44.5, want integer", proc.stderr)
+            self.assertIn("sectionBloomPruneToSection=2.5, want integer", proc.stderr)
+
     def test_rejects_missing_prune_mode_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
