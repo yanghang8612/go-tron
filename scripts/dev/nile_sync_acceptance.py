@@ -1075,8 +1075,16 @@ def check_sample_prometheus_full_staged_sync_stage_detail(path, text, row, index
             f"want {present_want:g}"
         )
 
-    block_want = as_number(detail, "block")
-    if block_want is not None:
+    block_want = None
+    block_present = field_present(detail, "block")
+    if block_present:
+        block_want = as_non_negative_int(detail, "block")
+        if block_want is None:
+            issues.append(
+                f"samplePrometheus artifact {path} "
+                f"fullStagedSyncStageDetails[{index}].block={detail.get('block')!r}, "
+                "want non-negative integer"
+            )
         block_got = sample_prometheus_metric_value(
             text,
             "gtron_nile_sync_full_staged_sync_stage_block",
@@ -1089,11 +1097,18 @@ def check_sample_prometheus_full_staged_sync_stage_detail(path, text, row, index
                 f"gtron_nile_sync_full_staged_sync_stage_block"
                 f"{{stage={stage!r},field={field!r}}}"
             )
-        elif block_got != block_want:
+        elif block_got < 0 or not block_got.is_integer():
             issues.append(
                 f"samplePrometheus artifact {path} "
                 f"gtron_nile_sync_full_staged_sync_stage_block"
                 f"{{stage={stage!r},field={field!r}}}={block_got:g}, "
+                "want non-negative integer"
+            )
+        elif block_want is not None and int(block_got) != block_want:
+            issues.append(
+                f"samplePrometheus artifact {path} "
+                f"gtron_nile_sync_full_staged_sync_stage_block"
+                f"{{stage={stage!r},field={field!r}}}={int(block_got):g}, "
                 f"want {block_want:g}"
             )
 

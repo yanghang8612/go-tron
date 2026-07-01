@@ -838,6 +838,43 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_fractional_sample_prometheus_stage_detail_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["fullStagedSyncStageDetails"] = full_stage_details(
+                blocks={"SyncExecution": 1000.5}
+            )
+            row = add_sample_prometheus_evidence(row, prom)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "fullStagedSyncStageDetails[3].block=1000.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_nile_sync_full_staged_sync_stage_block"
+                "{stage='SyncExecution',field='stageSyncExecution'}=1000.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_accepts_snapshot_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
