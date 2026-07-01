@@ -261,6 +261,57 @@ class StatePrefetchBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_fractional_resource_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            benchmark.write_text(
+                "goos: darwin\n"
+                "goarch: arm64\n"
+                "BenchmarkProcessBlock_LightTRX_HeavyState/prefetch=off-10          "
+                "5       1000 ns/op       100.5 B/op       10 allocs/op\n"
+                "BenchmarkProcessBlock_LightTRX_ColdState/prefetch=off-10          "
+                "5       2000 ns/op       100 B/op       10.5 allocs/op\n"
+                "PASS\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(benchmark)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("cannot parse benchmark line", proc.stderr)
+            self.assertIn("100.5 B/op", proc.stderr)
+            self.assertIn("10.5 allocs/op", proc.stderr)
+
+    def test_rejects_zero_iteration_or_time_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            benchmark.write_text(
+                "goos: darwin\n"
+                "goarch: arm64\n"
+                "BenchmarkProcessBlock_LightTRX_HeavyState/prefetch=off-10          "
+                "0       1000 ns/op       100 B/op       10 allocs/op\n"
+                "BenchmarkProcessBlock_LightTRX_ColdState/prefetch=off-10          "
+                "5       0 ns/op       100 B/op       10 allocs/op\n"
+                "PASS\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(benchmark)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("benchmark iterations=0, want positive integer", proc.stderr)
+            self.assertIn("ns/op=0, want positive value", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

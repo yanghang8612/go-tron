@@ -26,9 +26,10 @@ BENCH_RE = re.compile(
     r"(?P<case>[A-Za-z0-9_]+)/"
     r"(?P<variant>[^ \t]+)-\d+\s+"
     r"(?P<iters>\d+)\s+"
-    r"(?P<ns>[0-9.]+)\s+ns/op"
-    r"(?:\s+(?P<bytes>[0-9.]+)\s+B/op)?"
-    r"(?:\s+(?P<allocs>[0-9.]+)\s+allocs/op)?"
+    r"(?P<ns>\d+(?:\.\d+)?)\s+ns/op"
+    r"(?:\s+(?P<bytes>\d+)\s+B/op)?"
+    r"(?:\s+(?P<allocs>\d+)\s+allocs/op)?"
+    r"\s*$"
 )
 
 
@@ -59,15 +60,23 @@ def load_benchmarks(path):
             continue
         case = match.group("case")
         variant = match.group("variant")
+        iters = int(match.group("iters"))
+        if iters <= 0:
+            issues.append(f"{path}:{line_no}: benchmark iterations={iters}, want positive integer")
+            continue
+        ns = float(match.group("ns"))
+        if ns <= 0:
+            issues.append(f"{path}:{line_no}: ns/op={ns:g}, want positive value")
+            continue
         sample = samples.setdefault(case, {}).setdefault(
             variant,
             {"ns": [], "bytes": [], "allocs": []},
         )
-        sample["ns"].append(float(match.group("ns")))
+        sample["ns"].append(ns)
         if match.group("bytes") is not None:
-            sample["bytes"].append(float(match.group("bytes")))
+            sample["bytes"].append(int(match.group("bytes")))
         if match.group("allocs") is not None:
-            sample["allocs"].append(float(match.group("allocs")))
+            sample["allocs"].append(int(match.group("allocs")))
 
     if not samples and not issues:
         issues.append(f"{path}: no ProcessBlock prefetch benchmark rows found")
