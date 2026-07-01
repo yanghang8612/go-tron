@@ -502,6 +502,14 @@ def approx_equal(got, want, tolerance=1e-9):
     return abs(got - want) <= tolerance
 
 
+def require_non_negative_int(row, field, issues, context=""):
+    value = as_non_negative_int(row, field)
+    if value is None:
+        prefix = f"{context} " if context else ""
+        issues.append(f"{prefix}{field}={row.get(field)!r}, want non-negative integer")
+    return value
+
+
 def filter_rows(rows, args):
     out = []
     for row in rows:
@@ -1475,16 +1483,19 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
     if required != expected:
         issues.append(f"fullStagedSyncRequiredStages={required!r}, want {expected!r}")
 
-    stage_count = as_number(row, "fullStagedSyncStageCount")
-    present_count = as_number(row, "fullStagedSyncPresentStageCount")
-    verified_count = as_number(row, "fullStagedSyncVerifiedStageCount")
-    expected_count = float(len(expected))
+    stage_count = as_non_negative_int(row, "fullStagedSyncStageCount")
+    present_count = as_non_negative_int(row, "fullStagedSyncPresentStageCount")
+    verified_count = as_non_negative_int(row, "fullStagedSyncVerifiedStageCount")
+    expected_count = len(expected)
     if stage_count != expected_count:
-        issues.append(f"fullStagedSyncStageCount={stage_count}, want {len(expected)}")
+        got = stage_count if stage_count is not None else row.get("fullStagedSyncStageCount")
+        issues.append(f"fullStagedSyncStageCount={got}, want {len(expected)}")
     if present_count != expected_count:
-        issues.append(f"fullStagedSyncPresentStageCount={present_count}, want {len(expected)}")
+        got = present_count if present_count is not None else row.get("fullStagedSyncPresentStageCount")
+        issues.append(f"fullStagedSyncPresentStageCount={got}, want {len(expected)}")
     if verified_count != expected_count:
-        issues.append(f"fullStagedSyncVerifiedStageCount={verified_count}, want {len(expected)}")
+        got = verified_count if verified_count is not None else row.get("fullStagedSyncVerifiedStageCount")
+        issues.append(f"fullStagedSyncVerifiedStageCount={got}, want {len(expected)}")
 
     for field in (
         "fullStagedSyncMissingStages",
@@ -1500,16 +1511,9 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
         if value != 1.0:
             issues.append(f"{field}={value}, want 1")
 
-    complete = as_number(row, "fullStagedSyncCompleteBlock")
-    head = as_number(row, "fullStagedSyncHeadBlock")
-    lag = as_number(row, "fullStagedSyncHeadLagBlocks")
-    for field, value in (
-        ("fullStagedSyncCompleteBlock", complete),
-        ("fullStagedSyncHeadBlock", head),
-        ("fullStagedSyncHeadLagBlocks", lag),
-    ):
-        if value is None or value < 0:
-            issues.append(f"{field}={value}, want >= 0")
+    complete = require_non_negative_int(row, "fullStagedSyncCompleteBlock", issues)
+    head = require_non_negative_int(row, "fullStagedSyncHeadBlock", issues)
+    lag = require_non_negative_int(row, "fullStagedSyncHeadLagBlocks", issues)
     if complete is not None and head is not None and lag is not None:
         if head < complete:
             issues.append(f"fullStagedSyncHeadBlock={head:g} is below complete block {complete:g}")
@@ -1527,15 +1531,15 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
                 "from fullStagedSyncCompleteBlock/fullStagedSyncHeadBlock"
             )
 
-    pipeline_lag = as_number(row, "fullStagedSyncPipelineLagBlocks")
-    if pipeline_lag is None or pipeline_lag < 0:
-        issues.append(f"fullStagedSyncPipelineLagBlocks={pipeline_lag}, want >= 0")
-    elif lag is not None and lag >= 0 and pipeline_lag < lag:
+    pipeline_lag = require_non_negative_int(row, "fullStagedSyncPipelineLagBlocks", issues)
+    if pipeline_lag is not None and lag is not None and lag >= 0 and pipeline_lag < lag:
         issues.append(
             f"fullStagedSyncPipelineLagBlocks={pipeline_lag:g} is below "
             f"fullStagedSyncHeadLagBlocks={lag:g}"
         )
-    stage_pipeline_lag = as_number(row, "stageSyncPipelineLagBlocks")
+    stage_pipeline_lag = None
+    if field_present(row, "stageSyncPipelineLagBlocks"):
+        stage_pipeline_lag = require_non_negative_int(row, "stageSyncPipelineLagBlocks", issues)
     if (
         pipeline_lag is not None
         and stage_pipeline_lag is not None
@@ -1547,10 +1551,8 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
         )
 
     bottleneck = str(row.get("fullStagedSyncBottleneck", ""))
-    bottleneck_lag = as_number(row, "fullStagedSyncBottleneckLagBlocks")
-    if bottleneck_lag is None or bottleneck_lag < 0:
-        issues.append(f"fullStagedSyncBottleneckLagBlocks={bottleneck_lag}, want >= 0")
-    elif pipeline_lag is not None and pipeline_lag >= 0:
+    bottleneck_lag = require_non_negative_int(row, "fullStagedSyncBottleneckLagBlocks", issues)
+    if bottleneck_lag is not None and pipeline_lag is not None and pipeline_lag >= 0:
         if bottleneck_lag > pipeline_lag:
             issues.append(
                 f"fullStagedSyncBottleneckLagBlocks={bottleneck_lag:g} exceeds "
@@ -1568,7 +1570,9 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
         issues.append(
             f"fullStagedSyncBottleneck={bottleneck!r}, want stageSyncBottleneck={stage_bottleneck!r}"
         )
-    stage_bottleneck_lag = as_number(row, "stageSyncBottleneckLagBlocks")
+    stage_bottleneck_lag = None
+    if field_present(row, "stageSyncBottleneckLagBlocks"):
+        stage_bottleneck_lag = require_non_negative_int(row, "stageSyncBottleneckLagBlocks", issues)
     if (
         bottleneck_lag is not None
         and stage_bottleneck_lag is not None
@@ -1587,7 +1591,9 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
                 "from fullStagedSyncBottleneckLagBlocks/fullStagedSyncPipelineLagBlocks"
             )
 
-    height = as_number(row, "height")
+    height = None
+    if field_present(row, "height"):
+        height = require_non_negative_int(row, "height", issues)
     if height is not None and head is not None and head != height:
         issues.append(f"fullStagedSyncHeadBlock={head:g}, want height {height:g}")
 
@@ -1667,18 +1673,25 @@ def check_full_staged_sync_stage_details(row, require=False):
             issues.append(f"{stage} detail field={field!r}, want {want_field!r}")
 
         present = as_bool(detail, "present")
-        block = as_number(detail, "block")
+        block_number = as_number(detail, "block")
+        block = as_non_negative_int(detail, "block") if present else block_number
         verified = str(detail.get("verified", ""))
-        row_stage_value = as_number(row, want_field)
+        row_stage_value = None
+        if field_present(row, want_field):
+            row_stage_value = as_non_negative_int(row, want_field)
+            if row_stage_value is None:
+                issues.append(f"{want_field}={row.get(want_field)!r}, want non-negative integer")
         if not present:
             missing.append(stage)
-            if block is not None and block >= 0:
-                issues.append(f"{stage} detail present=false but block={block:g}")
+            if block_number is not None and block_number >= 0:
+                issues.append(f"{stage} detail present=false but block={block_number:g}")
             continue
 
         present_count += 1
-        if block is None or block < 0:
-            issues.append(f"{stage} detail block={block}, want >= 0")
+        if block is None:
+            issues.append(
+                f"{stage} detail block={detail.get('block')!r}, want non-negative integer"
+            )
         else:
             present_values.append((stage, block))
             if row_stage_value is not None and block != row_stage_value:
@@ -1692,8 +1705,8 @@ def check_full_staged_sync_stage_details(row, require=False):
             unverified.append(stage)
 
     for field, got, want in (
-        ("fullStagedSyncPresentStageCount", as_number(row, "fullStagedSyncPresentStageCount"), present_count),
-        ("fullStagedSyncVerifiedStageCount", as_number(row, "fullStagedSyncVerifiedStageCount"), verified_count),
+        ("fullStagedSyncPresentStageCount", as_non_negative_int(row, "fullStagedSyncPresentStageCount"), present_count),
+        ("fullStagedSyncVerifiedStageCount", as_non_negative_int(row, "fullStagedSyncVerifiedStageCount"), verified_count),
     ):
         if got is not None and got != want:
             issues.append(f"{field}={got:g}, want detail-derived {want}")
@@ -1709,15 +1722,22 @@ def check_full_staged_sync_stage_details(row, require=False):
         issues.append(f"fullStagedSyncUnverifiedStages={expected_unverified!r}, want detail-derived {unverified!r}")
 
     finish_detail = next((item for item in details if isinstance(item, dict) and item.get("stage") == "SyncFinish"), None)
-    finish_block = as_number(finish_detail, "block") if finish_detail else None
-    complete = as_number(row, "fullStagedSyncCompleteBlock")
+    finish_block = as_non_negative_int(finish_detail, "block") if finish_detail else None
+    complete = as_non_negative_int(row, "fullStagedSyncCompleteBlock")
     if finish_block is not None and finish_block >= 0 and complete is not None and finish_block != complete:
         issues.append(f"fullStagedSyncCompleteBlock={complete:g}, want SyncFinish detail block={finish_block:g}")
 
     if present_values:
         min_stage, min_value = min(present_values, key=lambda item: item[1])
         row_min_stage = str(row.get("fullStagedSyncMinStage", ""))
-        row_min_value = as_number(row, "fullStagedSyncMinStageBlock")
+        row_min_value = None
+        if field_present(row, "fullStagedSyncMinStageBlock"):
+            row_min_value = as_non_negative_int(row, "fullStagedSyncMinStageBlock")
+            if row_min_value is None:
+                issues.append(
+                    f"fullStagedSyncMinStageBlock={row.get('fullStagedSyncMinStageBlock')!r}, "
+                    "want non-negative integer"
+                )
         if row_min_stage and row_min_stage != min_stage:
             issues.append(f"fullStagedSyncMinStage={row_min_stage!r}, want detail-derived {min_stage!r}")
         if row_min_value is not None and row_min_value != min_value:

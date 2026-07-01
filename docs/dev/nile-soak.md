@@ -444,6 +444,8 @@ requires all six sync stages to be present and hash-verified in the
 `fullStagedSyncHeadLagBlocks` matches
 `fullStagedSyncHeadBlock - fullStagedSyncCompleteBlock` and that
 `fullStagedSyncHeadBlock` matches the sampled `height` when both are present.
+Full staged-sync stage counts, block numbers, lag fields, and per-stage detail
+blocks must be integer evidence; fractional values are rejected.
 It cross-checks the derived staged-sync metrics too:
 `fullStagedSyncCompletionRatio` must match complete/head, pipeline lag must
 cover the finish-head lag and match `stageSyncPipelineLagBlocks`, and the

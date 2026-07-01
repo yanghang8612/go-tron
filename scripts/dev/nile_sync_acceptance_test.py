@@ -3021,6 +3021,49 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("fullStagedSyncStageDetails is missing", proc.stderr)
 
+    def test_rejects_fractional_full_staged_sync_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["fullStagedSyncStageCount"] = 6.5
+            row["fullStagedSyncHeadBlock"] = 1000.5
+            row["fullStagedSyncHeadLagBlocks"] = 0.5
+            row["fullStagedSyncStageDetails"] = full_stage_details(
+                blocks={"SyncFinish": 1000.5}
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-stage-detail-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("fullStagedSyncStageCount=6.5, want 6", proc.stderr)
+            self.assertIn(
+                "fullStagedSyncHeadBlock=1000.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "fullStagedSyncHeadLagBlocks=0.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "SyncFinish detail block=1000.5, want non-negative integer",
+                proc.stderr,
+            )
+
     def test_rejects_mismatched_stage_detail_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
