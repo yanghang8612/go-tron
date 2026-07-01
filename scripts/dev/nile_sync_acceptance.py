@@ -2573,8 +2573,12 @@ def check_row(row, args):
     )
 
     for field in ZERO_ISSUE_FIELDS:
-        value = as_number(row, field)
-        if value is not None and value != 0:
+        if not field_present(row, field):
+            continue
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer zero")
+        elif value != 0:
             issues.append(f"{field}={value:g}, want 0")
 
     if args.require_offline_db_check:

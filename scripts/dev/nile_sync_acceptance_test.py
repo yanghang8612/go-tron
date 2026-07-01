@@ -3369,6 +3369,41 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             ):
                 self.assertIn(want, proc.stderr)
 
+    def test_rejects_non_integer_zero_issue_counters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["heightRegressionBlocks"] = 0.5
+            row["stageMismatchRows"] = -1
+            row["stageSyncPipelineViolationCount"] = 0.0
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "heightRegressionBlocks=0.5, want non-negative integer zero",
+                proc.stderr,
+            )
+            self.assertIn(
+                "stageMismatchRows=-1, want non-negative integer zero",
+                proc.stderr,
+            )
+            self.assertNotIn("stageSyncPipelineViolationCount=0", proc.stderr)
+
     def test_rejects_fractional_height_and_lag_threshold_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
