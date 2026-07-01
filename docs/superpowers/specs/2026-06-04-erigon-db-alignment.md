@@ -2140,7 +2140,11 @@ Status:
   producing sidecar-size evidence. The storage benchmark harness and Nile
   sampler run the profiler with `--verify-files`, so sidecar-overhead gates are
   backed by files that exist under `state-snapshots` and match the manifest
-  `size` fields instead of trusting stale manifest counters alone.
+  `size` fields instead of trusting stale manifest counters alone. The JSONL
+  samplers now preserve that as explicit
+  `snapshotProfileVerifyFiles`/`snapshotProfileVerifiedSegments` evidence, and
+  the storage/Nile acceptance gates reject snapshot-profile rows that do not
+  prove every active manifest segment was verified.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

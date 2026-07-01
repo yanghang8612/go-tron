@@ -2005,6 +2005,11 @@ emit_result() {
   snapshot_payload_bytes="$(printf '%s\n' "$profile_values" | sed -n '4p')"
   snapshot_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '5p')"
   snapshot_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '6p')"
+  local snapshot_profile_verify_files="false" snapshot_profile_verified_segments=0
+  if [ "$snapshot_profile_status" = "ok" ]; then
+    snapshot_profile_verify_files="true"
+    snapshot_profile_verified_segments="$snapshot_profile_segments"
+  fi
   snapshot_latest_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '7p')"
   snapshot_latest_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '8p')"
   snapshot_state_history_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '9p')"
@@ -2102,6 +2107,7 @@ emit_result() {
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \
     "$snapshot_profile_status" "$snapshot_profile_segments" "$snapshot_profile_total_bytes" \
+    "$snapshot_profile_verify_files" "$snapshot_profile_verified_segments" \
     "$snapshot_payload_bytes" "$snapshot_sidecar_bytes" "$snapshot_sidecar_share_milli" \
     "$snapshot_latest_sidecar_bytes" "$snapshot_latest_sidecar_share_milli" \
     "$snapshot_state_history_sidecar_bytes" "$snapshot_state_history_sidecar_share_milli" \
@@ -2174,6 +2180,7 @@ keys = [
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles", "derivedIndexBytes", "derivedIndexFiles",
     "snapshotManifestProfileStatus", "snapshotProfileSegments", "snapshotProfileTotalBytes",
+    "snapshotProfileVerifyFiles", "snapshotProfileVerifiedSegments",
     "snapshotPayloadBytes", "snapshotSidecarBytes", "snapshotSidecarShareMilli",
     "snapshotLatestSidecarBytes", "snapshotLatestSidecarShareMilli",
     "snapshotStateHistorySidecarBytes", "snapshotStateHistorySidecarShareMilli",
@@ -2245,7 +2252,8 @@ ints = {
     "ancientFiles", "snapshotFiles", "derivedIndexBytes", "derivedIndexFiles",
     "coldFreezerToBlock", "derivedIndexToBlock",
     "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
-    "snapshotProfileSegments", "snapshotProfileTotalBytes", "snapshotPayloadBytes",
+    "snapshotProfileSegments", "snapshotProfileTotalBytes", "snapshotProfileVerifiedSegments",
+    "snapshotPayloadBytes",
     "snapshotSidecarBytes", "snapshotSidecarShareMilli", "snapshotLatestSidecarBytes",
     "snapshotLatestSidecarShareMilli", "snapshotStateHistorySidecarBytes",
     "snapshotStateHistorySidecarShareMilli", "snapshotChainFreezerSidecarBytes",
@@ -2297,6 +2305,7 @@ ints = {
     "archiveApiChecks", "archiveApiFailures", "archiveApiBlock", "archiveApiDepthBlocks",
 }
 bools = {
+    "snapshotProfileVerifyFiles",
     "pruneModePersisted",
     "retiredPruneRan",
     "stageAlertPipelineComplete",

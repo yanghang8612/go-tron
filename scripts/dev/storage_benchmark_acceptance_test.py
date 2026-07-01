@@ -91,6 +91,8 @@ def clean_snapshot_profile_evidence_row():
         "snapshotAlertStatus": "ok",
         "snapshotManifestProfileStatus": "ok",
         "snapshotProfileSegments": 4,
+        "snapshotProfileVerifyFiles": True,
+        "snapshotProfileVerifiedSegments": 4,
         "snapshotProfileTotalBytes": 1600,
         "snapshotPayloadBytes": 1300,
         "snapshotSidecarBytes": 300,
@@ -2982,6 +2984,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "snapshotAlertStatus": "ok",
                         "snapshotManifestProfileStatus": "missing",
                         "snapshotProfileSegments": 0,
+                        "snapshotProfileVerifyFiles": False,
+                        "snapshotProfileVerifiedSegments": 3,
                         "snapshotProfileTotalBytes": 1600,
                         "snapshotPayloadBytes": 1200,
                         "snapshotSidecarBytes": 300,
@@ -3019,6 +3023,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("snapshotManifestProfileStatus='missing', want 'ok'", proc.stderr)
             self.assertIn("snapshotProfileSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotProfileVerifyFiles must be true", proc.stderr)
+            self.assertIn("snapshotProfileVerifiedSegments=3, want snapshotProfileSegments=0", proc.stderr)
             self.assertIn("snapshot payload+sidecar=1500 must equal total=1600", proc.stderr)
             self.assertIn(
                 "snapshotSidecarShareMilli=111, want 188 for sidecarBytes=300 totalBytes=1600",

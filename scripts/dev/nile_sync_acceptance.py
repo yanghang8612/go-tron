@@ -84,6 +84,8 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_soak_efficiency_hot_bytes_per_block", "soakEfficiencyHotBytesPerBlock"),
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock"),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock"),
+    ("gtron_nile_sync_snapshot_profile_verify_files", "snapshotProfileVerifyFiles"),
+    ("gtron_nile_sync_snapshot_profile_verified_segments", "snapshotProfileVerifiedSegments"),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments"),
@@ -373,6 +375,8 @@ BYTES_PER_BLOCK_SAMPLE_BLOCK_FIELDS = {
 SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotManifestProfileStatus",
     "snapshotProfileSegments",
+    "snapshotProfileVerifyFiles",
+    "snapshotProfileVerifiedSegments",
     "snapshotProfileTotalBytes",
     "snapshotPayloadBytes",
     "snapshotSidecarBytes",
@@ -2096,6 +2100,17 @@ def check_snapshot_profile_row(row):
     segments = as_non_negative_int(row, "snapshotProfileSegments")
     if segments is None or segments <= 0:
         issues.append(f"snapshotProfileSegments={row.get('snapshotProfileSegments')!r}, want > 0")
+    if not as_bool(row, "snapshotProfileVerifyFiles"):
+        issues.append("snapshotProfileVerifyFiles must be true")
+    verified_segments = as_non_negative_int(row, "snapshotProfileVerifiedSegments")
+    if verified_segments is None:
+        issues.append(
+            f"snapshotProfileVerifiedSegments={row.get('snapshotProfileVerifiedSegments')!r}, want non-negative integer"
+        )
+    elif segments is not None and verified_segments != segments:
+        issues.append(
+            f"snapshotProfileVerifiedSegments={verified_segments}, want snapshotProfileSegments={segments}"
+        )
 
     total_bytes = as_non_negative_int(row, "snapshotProfileTotalBytes")
     payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")

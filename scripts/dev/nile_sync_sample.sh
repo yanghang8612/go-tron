@@ -2310,6 +2310,8 @@ def snapshot_manifest_profile_defaults(status):
     row = {
         "snapshotManifestProfileStatus": status,
         "snapshotProfileSegments": 0,
+        "snapshotProfileVerifyFiles": False,
+        "snapshotProfileVerifiedSegments": 0,
         "snapshotProfileTotalBytes": 0,
         "snapshotPayloadBytes": 0,
         "snapshotSidecarBytes": 0,
@@ -2362,6 +2364,8 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
     row.update(
         {
             "snapshotProfileSegments": int_field(profile.get("activeSegments")),
+            "snapshotProfileVerifyFiles": bool(profile.get("verifyFiles")),
+            "snapshotProfileVerifiedSegments": int_field(profile.get("verifiedSegments")),
             "snapshotProfileTotalBytes": int_field(profile.get("totalBytes")),
             "snapshotPayloadBytes": int_field(profile.get("payloadBytes")),
             "snapshotSidecarBytes": int_field(profile.get("sidecarBytes")),
@@ -2465,6 +2469,8 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_soak_efficiency_hot_bytes_per_block", "soakEfficiencyHotBytesPerBlock", "Selected soak-efficiency hot bytes per block."),
     ("gtron_nile_sync_soak_efficiency_cold_archive_bytes_per_block", "soakEfficiencyColdArchiveBytesPerBlock", "Selected soak-efficiency cold archive bytes per block."),
     ("gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block", "soakEfficiencyDerivedIndexBytesPerBlock", "Selected soak-efficiency derived index bytes per block."),
+    ("gtron_nile_sync_snapshot_profile_verify_files", "snapshotProfileVerifyFiles", "Whether snapshot manifest profile evidence verified files on disk."),
+    ("gtron_nile_sync_snapshot_profile_verified_segments", "snapshotProfileVerifiedSegments", "Snapshot segment files verified by the manifest profiler."),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes", "Snapshot bytes covered by the tx-hash point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments", "Snapshot segment count covered by the tx-hash point lookup candidate."),

@@ -948,6 +948,8 @@ class StorageBenchmarkTest(unittest.TestCase):
             row = json.loads(rows[0])
             self.assertEqual(row["snapshotManifestProfileStatus"], "ok")
             self.assertEqual(row["snapshotProfileSegments"], 4)
+            self.assertTrue(row["snapshotProfileVerifyFiles"])
+            self.assertEqual(row["snapshotProfileVerifiedSegments"], 4)
             self.assertEqual(row["snapshotProfileTotalBytes"], 1600)
             self.assertEqual(row["snapshotPayloadBytes"], 1300)
             self.assertEqual(row["snapshotSidecarBytes"], 300)

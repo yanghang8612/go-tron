@@ -548,9 +548,11 @@ The sampler runs the manifest profiler with file verification enabled, so rows
 only report `snapshotManifestProfileStatus=ok` when every profiled segment file
 exists under `state-snapshots` and matches the manifest `size`.
 The gate requires `snapshotManifestProfileStatus=ok`, positive active segment
-and total-byte counters, matching `snapshotPayloadBytes + snapshotSidecarBytes`
-totals, a recomputable `snapshotSidecarShareMilli`, and sane per-family
-`snapshot*SidecarShareMilli` fields. Pair it with `--max
+and total-byte counters, `snapshotProfileVerifyFiles=true`,
+`snapshotProfileVerifiedSegments == snapshotProfileSegments`, matching
+`snapshotPayloadBytes + snapshotSidecarBytes` totals, a recomputable
+`snapshotSidecarShareMilli`, and sane per-family `snapshot*SidecarShareMilli`
+fields. Pair it with `--max
 snapshotSidecarShareMilli=...` or family gates such as `--max
 snapshotEventLogSidecarShareMilli=...` to keep sidecar overhead within the
 Nile/mainnet storage budget. The sampler also records

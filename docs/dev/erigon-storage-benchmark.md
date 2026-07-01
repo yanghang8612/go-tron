@@ -502,13 +502,15 @@ manifest size. Add `--require-snapshot-profile-mode minimal` (or the plural
 mode list) to the storage benchmark checker, or
 `--require-snapshot-profile-evidence` to `nile_sync_acceptance.py`, so the
 latest selected row must carry a valid manifest profile with
-`snapshotManifestProfileStatus=ok`, consistent payload+sidecar totals, and a
-recomputable `snapshotSidecarShareMilli`. Then use ordinary `--max` thresholds
-such as `--max minimal.producer.snapshotSidecarShareMilli=350` for benchmark
-rows, `--max snapshotSidecarShareMilli=350` for Nile rows, or family-specific
-fields such as `snapshotEventLogSidecarShareMilli` to gate sidecar overhead in
-long runs. Run the profiler directly on saved artifacts when a standalone gate
-is useful; it reports `sidecarShareMilli` overall and per family (`latest`,
+`snapshotManifestProfileStatus=ok`, `snapshotProfileVerifyFiles=true`,
+`snapshotProfileVerifiedSegments == snapshotProfileSegments`, consistent
+payload+sidecar totals, and a recomputable `snapshotSidecarShareMilli`. Then
+use ordinary `--max` thresholds such as
+`--max minimal.producer.snapshotSidecarShareMilli=350` for benchmark rows,
+`--max snapshotSidecarShareMilli=350` for Nile rows, or family-specific fields
+such as `snapshotEventLogSidecarShareMilli` to gate sidecar overhead in long
+runs. Run the profiler directly on saved artifacts when a standalone gate is
+useful; it reports `sidecarShareMilli` overall and per family (`latest`,
 `state-history`, `chain-freezer`, `event-log`, `balance-trace`,
 `section-bloom`, and `other`) and can fail a run with
 `--max-sidecar-share-milli` or `--max-family-sidecar-share-milli`. Its JSON

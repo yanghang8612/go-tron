@@ -1564,6 +1564,8 @@ def check_event_log_index_evidence(rows, required_modes=()):
 SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotManifestProfileStatus",
     "snapshotProfileSegments",
+    "snapshotProfileVerifyFiles",
+    "snapshotProfileVerifiedSegments",
     "snapshotProfileTotalBytes",
     "snapshotPayloadBytes",
     "snapshotSidecarBytes",
@@ -1617,6 +1619,18 @@ def check_snapshot_profile_row(row):
     if segments is None or segments <= 0:
         issues.append(
             f"{line_label(row)} snapshotProfileSegments={row.get('snapshotProfileSegments')!r}, want > 0"
+        )
+    if not as_bool(row, "snapshotProfileVerifyFiles"):
+        issues.append(f"{line_label(row)} snapshotProfileVerifyFiles must be true")
+    verified_segments = as_non_negative_int(row, "snapshotProfileVerifiedSegments")
+    if verified_segments is None:
+        issues.append(
+            f"{line_label(row)} snapshotProfileVerifiedSegments={row.get('snapshotProfileVerifiedSegments')!r}, want non-negative integer"
+        )
+    elif segments is not None and verified_segments != segments:
+        issues.append(
+            f"{line_label(row)} snapshotProfileVerifiedSegments={verified_segments}, "
+            f"want snapshotProfileSegments={segments}"
         )
     total_bytes = as_non_negative_int(row, "snapshotProfileTotalBytes")
     payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")
