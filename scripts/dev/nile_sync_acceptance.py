@@ -616,11 +616,15 @@ def sync_rate_sample_block_evidence(row, rate_field):
             fields = ("height",)
         else:
             fields = ("intervalBlocks", "height")
+    invalid = []
     for field in fields:
-        value = as_number(row, field)
-        if value is not None and value >= 0:
-            return field, value
-    return None, None
+        if not field_present(row, field):
+            continue
+        value = as_non_negative_int(row, field)
+        if value is not None:
+            return field, value, invalid
+        invalid.append(field)
+    return None, None, invalid
 
 
 def check_min_sync_rate(row, minimum, min_blocks=None):
@@ -635,9 +639,19 @@ def check_min_sync_rate(row, minimum, min_blocks=None):
         ]
     issues = []
     if min_blocks is not None:
-        block_field, blocks = sync_rate_sample_block_evidence(row, field)
+        block_field, blocks, invalid = sync_rate_sample_block_evidence(row, field)
         if block_field is None:
-            issues.append(f"sync rate sample size evidence missing for {field}")
+            if invalid:
+                issues.append(
+                    f"sync rate sample size evidence invalid for {field}: "
+                    + ",".join(
+                        f"{sample_field}={row.get(sample_field)!r}"
+                        for sample_field in invalid
+                    )
+                    + ", want non-negative integer"
+                )
+            else:
+                issues.append(f"sync rate sample size evidence missing for {field}")
         elif blocks < min_blocks:
             issues.append(
                 f"{block_field}={blocks:g} failed >= min sync rate sample blocks "

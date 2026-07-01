@@ -2016,6 +2016,41 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_fractional_min_sync_rate_sample_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["intervalBlocksPerSecond"] = 12.5
+            row["intervalBlocks"] = 100.5
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-sync-rate",
+                    "10",
+                    "--min-sync-rate-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "sync rate sample size evidence invalid for "
+                "intervalBlocksPerSecond: intervalBlocks=100.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_rejects_min_sync_rate_sample_blocks_without_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
