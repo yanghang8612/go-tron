@@ -2863,6 +2863,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "eventLogIndexSegments": 1.5,
                         "eventLogIndexFromBlock": 1,
                         "eventLogIndexToBlock": 80,
+                        "tailPrunedThroughBlock": 75.5,
                         "eventLogIndexAddressKeys": 3,
                         "eventLogIndexAddressPostings": 6,
                         "eventLogIndexAddressAvgPostingsMilli": 2000,
@@ -2902,6 +2903,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "eventLogIndexSegments=1.5, want positive integer",
                 proc.stderr,
             )
+            self.assertIn("tailPrunedThroughBlock=75.5, want integer", proc.stderr)
 
     def test_rejects_missing_or_invalid_event_log_index_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

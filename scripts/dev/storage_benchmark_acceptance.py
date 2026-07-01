@@ -1757,7 +1757,14 @@ def check_event_log_index_evidence(rows, required_modes=(), require_non_empty=Fa
                     f"{line_label(row)} eventLogIndexToBlock={to_block} must match "
                     f"derivedIndexToBlock={derived_to}"
                 )
-            tail_pruned = as_number(row, "tailPrunedThroughBlock")
+            tail_pruned = None
+            if field_present(row, "tailPrunedThroughBlock"):
+                tail_pruned = as_int(row, "tailPrunedThroughBlock")
+                if tail_pruned is None:
+                    issues.append(
+                        f"{line_label(row)} tailPrunedThroughBlock="
+                        f"{row.get('tailPrunedThroughBlock')!r}, want integer"
+                    )
             if tail_pruned is not None and tail_pruned >= 0:
                 if from_block > tail_pruned or to_block < tail_pruned:
                     issues.append(
