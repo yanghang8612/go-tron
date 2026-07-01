@@ -1555,6 +1555,11 @@ Status:
 - `scripts/dev/state_prefetch_benchmark.sh` now provides the repeatable sweep
   harness for these benchmarks, recording commit/environment metadata, raw Go
   benchmark output, and optional `benchstat` summaries.
+- `scripts/dev/state_prefetch_benchmark_acceptance.py` gates those raw benchmark
+  outputs before any default-on decision. It requires the selected candidate to
+  be an actual `prefetch=on...` benchmark variant, so the `prefetch=off`
+  baseline or unrelated labels cannot pass as rollout evidence even when
+  thresholds are relaxed.
 
 Remaining:
 

@@ -107,8 +107,11 @@ def candidate_variants(samples, explicit):
     variants = set()
     for by_variant in samples.values():
         variants.update(by_variant)
-    variants.discard(OFF_VARIANT)
-    return sorted(variants)
+    return sorted(variant for variant in variants if is_prefetch_on_variant(variant))
+
+
+def is_prefetch_on_variant(variant):
+    return variant.startswith("prefetch=on")
 
 
 def check_required(samples, required_cases):
@@ -234,6 +237,12 @@ def check_benchmarks(samples, args):
         return None, issues, []
 
     variants = candidate_variants(samples, args.variant)
+    invalid_variants = [variant for variant in variants if not is_prefetch_on_variant(variant)]
+    if invalid_variants:
+        return None, [
+            f"{variant} is not a prefetch=on benchmark variant"
+            for variant in invalid_variants
+        ], []
     if not variants:
         return None, ["no prefetch=on benchmark variants found"], []
 

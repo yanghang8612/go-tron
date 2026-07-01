@@ -152,6 +152,53 @@ class StatePrefetchBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_baseline_as_explicit_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            write_benchmark(benchmark, complete_rows())
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(benchmark),
+                    "--variant",
+                    "prefetch=off",
+                    "--min-heavy-improvement",
+                    "0",
+                    "--max-light-overhead",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("prefetch=off is not a prefetch=on benchmark variant", proc.stderr)
+
+    def test_auto_selection_ignores_non_prefetch_on_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            rows = complete_rows() + [
+                ("LightTRX_HeavyState", "experimental=on", 500),
+                ("LightTRX_ColdState", "experimental=on", 500),
+                ("HeavyTRX_HeavyState", "experimental=on", 500),
+                ("HeavyTRX_ColdState", "experimental=on", 500),
+            ]
+            write_benchmark(benchmark, rows)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(benchmark)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("variant=prefetch=on_workers=2_lookahead=8", proc.stdout)
+            self.assertNotIn("experimental=on", proc.stdout)
+
     def test_accepts_optional_resource_overhead_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
             benchmark = Path(tmp) / "benchmark.txt"

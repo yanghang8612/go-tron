@@ -59,8 +59,10 @@ scripts/dev/state_prefetch_benchmark_acceptance.py \
 
 Without `--variant`, the checker selects the `prefetch=on_*` variant that meets
 the gates and has the best heavy cold-state improvement. Use `--variant` when
-validating one proposed default worker/lookahead pair. The `--max-bytes-overhead`
-and `--max-allocs-overhead` gates are optional but recommended for rollout
+validating one proposed default worker/lookahead pair; explicit variants must
+still be `prefetch=on...` rows, so the `prefetch=off` baseline cannot pass as a
+candidate when thresholds are loosened. The `--max-bytes-overhead` and
+`--max-allocs-overhead` gates are optional but recommended for rollout
 decisions; they fail any selected variant whose `B/op` or `allocs/op` median
 grows beyond the configured ratio on any required benchmark case. The checker
 is a benchmark gate only; keep the Nile/mainnet replay soak as the final
