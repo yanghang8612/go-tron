@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -128,6 +129,78 @@ func TestManagerReloadsLatestSegmentWhenSamePathMetadataChanges(t *testing.T) {
 
 	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "new" {
 		t.Fatalf("reloaded GetKVLatest = %q ok=%v err=%v, want new/true/nil", got, ok, err)
+	}
+}
+
+func TestManagerConcurrentLatestReadsAndManifestReload(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x22)
+	logicalKey := []byte("slot/a")
+	key := AccountKVSnapshotKey(owner, 1, logicalKey)
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   10,
+		Path:      "latest/system-dp-1-10.json",
+	}
+	publish := func(value string) {
+		t.Helper()
+		segRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte(value)}})
+		if err != nil {
+			t.Fatalf("write segment %q: %v", value, err)
+		}
+		if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{segRef})); err != nil {
+			t.Fatalf("publish manifest %q: %v", value, err)
+		}
+	}
+	publish("value-00")
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	errs := make(chan error, 256)
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 40; j++ {
+				got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, logicalKey, 10)
+				if err != nil || !ok || !strings.HasPrefix(string(got), "value-") {
+					errs <- fmt.Errorf("GetKVLatest = %q ok=%v err=%v", got, ok, err)
+					return
+				}
+				if manifest := mgr.Manifest(); manifest == nil {
+					errs <- fmt.Errorf("Manifest returned nil")
+					return
+				}
+				seen := false
+				err = mgr.IterateKVLatestPrefix(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/"), 10, func(key, value []byte) (bool, error) {
+					seen = true
+					if string(key) != string(logicalKey) || !strings.HasPrefix(string(value), "value-") {
+						return false, fmt.Errorf("prefix row key=%q value=%q", key, value)
+					}
+					return true, nil
+				})
+				if err != nil || !seen {
+					errs <- fmt.Errorf("IterateKVLatestPrefix seen=%v err=%v", seen, err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 1; i <= 25; i++ {
+		publish(fmt.Sprintf("value-%02d", i))
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

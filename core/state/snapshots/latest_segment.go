@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -39,6 +40,7 @@ type LatestSegment struct {
 
 type Manager struct {
 	dir      string
+	mu       sync.RWMutex
 	manifest *Manifest
 	pinned   bool
 	cache    map[string]*LatestSegment
@@ -1030,10 +1032,14 @@ func (m *Manager) getLatestValue(dataset SegmentDataset, domain kvdomains.KVDoma
 
 func (m *Manager) getLatestValueFromRef(ref SegmentRef, key []byte) ([]byte, bool, error) {
 	if isLatestBinarySegmentPath(ref.Path) {
-		if btreeRef, ok := latestBinaryBTreeRef(m.manifest, ref); ok {
+		manifest, err := m.currentManifest()
+		if err != nil {
+			return nil, false, err
+		}
+		if btreeRef, ok := latestBinaryBTreeRef(manifest, ref); ok {
 			return readLatestBinaryValueByBTreeFile(m.dir, filepath.Join(m.dir, ref.Path), ref, btreeRef, key)
 		}
-		if accessorRef, ok := latestBinaryAccessorRef(m.manifest, ref); ok {
+		if accessorRef, ok := latestBinaryAccessorRef(manifest, ref); ok {
 			return readLatestBinaryValueByAccessorFile(m.dir, filepath.Join(m.dir, ref.Path), ref, accessorRef, key)
 		}
 		return readLatestBinaryValue(filepath.Join(m.dir, ref.Path), ref, key)
@@ -1051,10 +1057,14 @@ func (m *Manager) iterateLatestPrefix(dataset SegmentDataset, domain kvdomains.K
 		return err
 	}
 	if isLatestBinarySegmentPath(ref.Path) {
-		if btreeRef, ok := latestBinaryBTreeRef(m.manifest, ref); ok {
+		manifest, err := m.currentManifest()
+		if err != nil {
+			return err
+		}
+		if btreeRef, ok := latestBinaryBTreeRef(manifest, ref); ok {
 			return iterateLatestBinaryPrefixByBTreeFile(m.dir, filepath.Join(m.dir, ref.Path), ref, btreeRef, prefix, fn)
 		}
-		if accessorRef, ok := latestBinaryAccessorRef(m.manifest, ref); ok {
+		if accessorRef, ok := latestBinaryAccessorRef(manifest, ref); ok {
 			return iterateLatestBinaryPrefixByAccessorFile(m.dir, filepath.Join(m.dir, ref.Path), ref, accessorRef, prefix, fn)
 		}
 		return iterateLatestBinaryPrefix(filepath.Join(m.dir, ref.Path), ref, prefix, fn)
@@ -1136,32 +1146,52 @@ func (m *Manager) currentManifest() (*Manifest, error) {
 		return nil, nil
 	}
 	if m.pinned {
-		return m.manifest, nil
+		m.mu.RLock()
+		manifest := m.manifest
+		m.mu.RUnlock()
+		return manifest, nil
 	}
 	manifest, err := LoadProductionManifest(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			m.mu.Lock()
+			m.manifest = nil
+			m.mu.Unlock()
 			return nil, nil
 		}
 		return nil, err
 	}
+	m.mu.Lock()
 	m.manifest = manifest
+	m.mu.Unlock()
 	return manifest, nil
 }
 
 func (m *Manager) load(ref SegmentRef) (*LatestSegment, error) {
 	cacheKey, cacheable := latestSegmentCacheKey(ref)
 	if cacheable {
+		m.mu.RLock()
 		if seg := m.cache[cacheKey]; seg != nil {
+			m.mu.RUnlock()
 			return seg, nil
 		}
+		m.mu.RUnlock()
 	}
 	seg, err := OpenLatestSegment(m.dir, ref)
 	if err != nil {
 		return nil, err
 	}
 	if cacheable {
+		m.mu.Lock()
+		if m.cache == nil {
+			m.cache = make(map[string]*LatestSegment)
+		}
+		if cached := m.cache[cacheKey]; cached != nil {
+			m.mu.Unlock()
+			return cached, nil
+		}
 		m.cache[cacheKey] = seg
+		m.mu.Unlock()
 	}
 	return seg, nil
 }
