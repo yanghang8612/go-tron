@@ -248,12 +248,8 @@ func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) 
 		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
 			continue
 		}
-		checked, err := snapshots.CheckRegisteredSegment(w.SnapshotDir, ref)
-		if err != nil {
-			return nil, err
-		}
-		if !checked {
-			return nil, fmt.Errorf("pruning: state-domain history segment %q has no registered checker", ref.Path)
+		if err := snapshots.VerifyHistorySegmentWithCompanions(w.SnapshotDir, manifest, ref); err != nil {
+			return nil, fmt.Errorf("pruning: verify state-domain history coverage %q: %w", ref.Path, err)
 		}
 		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
 	}

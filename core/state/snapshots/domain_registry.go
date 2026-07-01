@@ -633,6 +633,63 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 	return false, nil
 }
 
+// VerifyHistorySegmentWithCompanions verifies a history segment and the
+// registered binary sidecars needed to read it after hot history is pruned.
+func VerifyHistorySegmentWithCompanions(dir string, manifest *Manifest, ref SegmentRef) error {
+	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
+	if !ok || !cfg.HasHistory || ref.Kind != SegmentHistory {
+		return fmt.Errorf("snapshots: segment %q has no registered history checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+	}
+	checked, err := CheckRegisteredSegment(dir, ref)
+	if err != nil {
+		return err
+	}
+	if !checked {
+		return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+	}
+	if !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+		return nil
+	}
+	if !cfg.HasHistoryInvertedIndex && !cfg.HasHistoryAccessor {
+		return fmt.Errorf("snapshots: binary %s history %q missing registered companion configuration", cfg.Dataset, ref.Path)
+	}
+	var idxRef SegmentRef
+	var accessorRef SegmentRef
+	var companionRefs []SegmentRef
+	if cfg.HasHistoryInvertedIndex {
+		var ok bool
+		idxRef, ok = cfg.HistoryIndexRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary %s history %q missing required index %q", cfg.Dataset, ref.Path, cfg.HistoryIndexPathFor(ref.Path))
+		}
+		companionRefs = append(companionRefs, idxRef)
+	}
+	if cfg.HasHistoryAccessor {
+		var ok bool
+		accessorRef, ok = cfg.HistoryAccessorRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
+		}
+		companionRefs = append(companionRefs, accessorRef)
+	}
+	if cfg.Dataset == SegmentDatasetStateDomainChange {
+		if !cfg.HasHistoryInvertedIndex || !cfg.HasHistoryAccessor {
+			return fmt.Errorf("snapshots: binary %s history %q missing registered state-domain companion configuration", cfg.Dataset, ref.Path)
+		}
+		return verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, ref, idxRef, accessorRef)
+	}
+	for _, companionRef := range companionRefs {
+		checked, err := CheckRegisteredSegment(dir, companionRef)
+		if err != nil {
+			return err
+		}
+		if !checked {
+			return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", companionRef.Path, companionRef.NormalizedDataset(), companionRef.Kind)
+		}
+	}
+	return nil
+}
+
 func checkLatestSegmentRef(dir string, ref SegmentRef) error {
 	return CheckLatestSegment(dir, ref)
 }

@@ -248,6 +248,44 @@ func TestWorkerSnapRequiresReadableSnapshotCoverage(t *testing.T) {
 	}
 }
 
+func TestWorkerSnapRequiresReadableSnapshotCompanions(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	corruptedAccessor := false
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentAccessor {
+			if err := os.WriteFile(filepath.Join(dir, ref.Path), []byte("corrupt-accessor"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			corruptedAccessor = true
+			break
+		}
+	}
+	if !corruptedAccessor {
+		t.Fatal("test fixture did not build a snapshot accessor companion")
+	}
+
+	stats, err := Worker{DB: db, Policy: SnapPolicy(3, 2), SnapshotDir: dir}.PruneTo(5)
+	if err == nil || !strings.Contains(err.Error(), "accessor") {
+		t.Fatalf("snap prune stats = %+v err = %v, want snapshot accessor error", stats, err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("state tx range after failed companion prune ok:%v err:%v, want retained", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("domain change after failed companion prune ok:%v err:%v, want retained", ok, err)
+	}
+}
+
 func TestCheckerValidatesSnapshotSegmentsAndCodeHashes(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
