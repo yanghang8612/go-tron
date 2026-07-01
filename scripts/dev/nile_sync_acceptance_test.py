@@ -2210,6 +2210,42 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_fractional_storage_bytes_per_block_sample_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["soakEfficiencyWindow"] = "interval"
+            row["intervalBlocks"] = 100.5
+            row["soakEfficiencyDatadirBytesPerBlock"] = 150000
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--max-datadir-bytes-per-block",
+                    "160000",
+                    "--min-storage-sample-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "datadir bytes-per-block sample size evidence invalid for "
+                "soakEfficiencyDatadirBytesPerBlock: intervalBlocks=100.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_rejects_storage_bytes_per_block_sample_blocks_without_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

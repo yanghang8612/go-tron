@@ -666,18 +666,30 @@ def bytes_per_block_sample_block_evidence(row, bytes_field):
             fields = ("height",)
         else:
             fields = ("intervalBlocks", "height")
+    invalid = []
     for field in fields:
-        value = as_number(row, field)
-        if value is not None and value >= 0:
-            return field, value
-    return None, None
+        if not field_present(row, field):
+            continue
+        value = as_non_negative_int(row, field)
+        if value is not None:
+            return field, value, invalid
+        invalid.append(field)
+    return None, None, invalid
 
 
 def check_bytes_per_block_sample_blocks(row, bytes_field, min_blocks, label):
     if min_blocks is None:
         return []
-    block_field, blocks = bytes_per_block_sample_block_evidence(row, bytes_field)
+    block_field, blocks, invalid = bytes_per_block_sample_block_evidence(row, bytes_field)
     if block_field is None:
+        if invalid:
+            return [
+                f"{label} sample size evidence invalid for {bytes_field}: "
+                + ",".join(
+                    f"{field}={row.get(field)!r}" for field in invalid
+                )
+                + ", want non-negative integer"
+            ]
         return [f"{label} sample size evidence missing for {bytes_field}"]
     if blocks < min_blocks:
         return [
