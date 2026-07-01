@@ -706,6 +706,45 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("gtron_nile_sync_height=999, want 1000", proc.stderr)
 
+    def test_rejects_fractional_sample_prometheus_integer_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            row["syncTargetLagBlocks"] = 0.5
+            labels = sample_prometheus_labels()
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                f"gtron_nile_sync_stage_sync_bodies_ready_gap_blocks{{{labels}}} 0",
+                f"gtron_nile_sync_stage_sync_bodies_ready_gap_blocks{{{labels}}} 0.5",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "syncTargetLagBlocks=0.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_nile_sync_stage_sync_bodies_ready_gap_blocks=0.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
     def test_rejects_sample_prometheus_prune_boundary_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -208,6 +208,43 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures"),
 )
 
+SAMPLE_PROMETHEUS_SIGNED_INTEGER_FIELDS = set(PROMETHEUS_PRUNE_BOUNDARY_FIELDS)
+
+SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
+    "height",
+    "syncTargetLagBlocks",
+    "fullStagedSyncHeadLagBlocks",
+    "fullStagedSyncCompleteBlock",
+    "fullStagedSyncHeadBlock",
+    "fullStagedSyncPipelineLagBlocks",
+    "fullStagedSyncBottleneckLagBlocks",
+    "fullStagedSyncStageCount",
+    "fullStagedSyncPresentStageCount",
+    "fullStagedSyncVerifiedStageCount",
+    "stageSyncBodiesReadyGapBlocks",
+    "stageSyncImportExecutionLagBlocks",
+    "stageSyncExecutionCommitmentLagBlocks",
+    "stageSyncCommitmentFinishLagBlocks",
+    "stageSyncFinishHeadLagBlocks",
+    "stageSyncPipelineLagBlocks",
+    "stageSyncBottleneckLagBlocks",
+    "stageChainFreezerHeadLagBlocks",
+    "stageSnapshotEventLogBuildHeadLagBlocks",
+    "snapshotProfileVerifiedSegments",
+    "snapshotPointTxHashLookupSegments",
+    "snapshotPointEventLogIndexSegments",
+    "snapshotPointStateHistoryAccessorSegments",
+    "snapshotPointLatestBTreeSegments",
+    "snapshotPointChainFreezerAccessorSegments",
+    "snapshotPointCodeDomainSegments",
+    "snapshotPointCommitmentSnapshotSegments",
+    "tailPrunedFiles",
+    "archiveApiChecks",
+    "archiveApiBlock",
+    "archiveApiDepthBlocks",
+    "archiveApiFailures",
+}
+
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
@@ -963,12 +1000,43 @@ def check_sample_prometheus_artifact(result_path, row):
         )
 
     for metric, field in SAMPLE_PROMETHEUS_FIELD_METRICS:
-        want = as_number(row, field)
+        integer_field = (
+            field in SAMPLE_PROMETHEUS_SIGNED_INTEGER_FIELDS
+            or field in SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS
+        )
+        if integer_field:
+            if field not in row:
+                continue
+            if field in SAMPLE_PROMETHEUS_SIGNED_INTEGER_FIELDS:
+                want = as_int(row, field)
+                want_text = "integer"
+            else:
+                want = as_non_negative_int(row, field)
+                want_text = "non-negative integer"
+            if want is None:
+                issues.append(
+                    f"samplePrometheus artifact {path} {field}={row.get(field)!r}, "
+                    f"want {want_text}"
+                )
+                continue
+        else:
+            want = as_number(row, field)
         if want is None:
             continue
         got = prometheus_metric_value(text, metric, row)
         if got is None:
             issues.append(f"samplePrometheus artifact {path} missing {metric}")
+        elif integer_field and (
+            not got.is_integer()
+            or (field in SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS and got < 0)
+        ):
+            issues.append(
+                f"samplePrometheus artifact {path} {metric}={got:g}, want {want_text}"
+            )
+        elif integer_field and int(got) != want:
+            issues.append(
+                f"samplePrometheus artifact {path} {metric}={int(got):g}, want {want:g}"
+            )
         elif got != want:
             issues.append(f"samplePrometheus artifact {path} {metric}={got:g}, want {want:g}")
     if "stageStalled" in row:
