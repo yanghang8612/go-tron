@@ -103,6 +103,8 @@ BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ("gtron_storage_benchmark_tail_pruned_files", "tailPrunedFiles"),
     ("gtron_storage_benchmark_history_window", "historyWindow"),
     ("gtron_storage_benchmark_event_log_index_segments", "eventLogIndexSegments"),
+    ("gtron_storage_benchmark_event_log_index_from_block", "eventLogIndexFromBlock"),
+    ("gtron_storage_benchmark_event_log_index_to_block", "eventLogIndexToBlock"),
     ("gtron_storage_benchmark_event_log_index_address_keys", "eventLogIndexAddressKeys"),
     ("gtron_storage_benchmark_event_log_index_address_postings", "eventLogIndexAddressPostings"),
     (
@@ -1531,7 +1533,7 @@ def check_event_log_index_lookup_stats(row, label, prefix):
     return issues
 
 
-def check_event_log_index_evidence(rows, required_modes=()):
+def check_event_log_index_evidence(rows, required_modes=(), require_non_empty=False):
     issues = []
     evidence_rows = [
         row for row in latest_rows(rows).values() if event_log_index_evidence_row(row)
@@ -1556,8 +1558,44 @@ def check_event_log_index_evidence(rows, required_modes=()):
             issues.append(
                 f"{line_label(row)} eventLogIndexSegments={row.get('eventLogIndexSegments')!r}, want > 0"
             )
+        from_block = as_non_negative_int(row, "eventLogIndexFromBlock")
+        to_block = as_non_negative_int(row, "eventLogIndexToBlock")
+        if from_block is None:
+            issues.append(
+                f"{line_label(row)} eventLogIndexFromBlock={row.get('eventLogIndexFromBlock')!r}, "
+                "want non-negative integer"
+            )
+        if to_block is None:
+            issues.append(
+                f"{line_label(row)} eventLogIndexToBlock={row.get('eventLogIndexToBlock')!r}, "
+                "want non-negative integer"
+            )
+        if from_block is not None and to_block is not None:
+            if from_block > to_block:
+                issues.append(
+                    f"{line_label(row)} event-log index range [{from_block},{to_block}] is inverted"
+                )
+            elif derived_to is not None and not approx_equal(derived_to, to_block):
+                issues.append(
+                    f"{line_label(row)} eventLogIndexToBlock={to_block} must match "
+                    f"derivedIndexToBlock={derived_to:g}"
+                )
+            tail_pruned = as_number(row, "tailPrunedThroughBlock")
+            if tail_pruned is not None and tail_pruned >= 0:
+                if from_block > tail_pruned or to_block < tail_pruned:
+                    issues.append(
+                        f"{line_label(row)} event-log index range [{from_block},{to_block}] "
+                        f"must cover tailPrunedThroughBlock={tail_pruned:g}"
+                    )
         issues.extend(check_event_log_index_lookup_stats(row, "address", "Address"))
         issues.extend(check_event_log_index_lookup_stats(row, "topic", "Topic"))
+        if require_non_empty:
+            address_postings = as_non_negative_int(row, "eventLogIndexAddressPostings")
+            if address_postings is None or address_postings <= 0:
+                issues.append(
+                    f"{line_label(row)} eventLogIndexAddressPostings="
+                    f"{row.get('eventLogIndexAddressPostings')!r}, want > 0"
+                )
     return issues
 
 
@@ -1930,6 +1968,14 @@ def build_parser():
         help="comma-separated modes whose latest selected rows must include event-log-index fanout/selectivity counters",
     )
     parser.add_argument(
+        "--require-event-log-index-non-empty",
+        action="store_true",
+        help=(
+            "when event-log-index evidence is required, require address postings "
+            "to be non-empty for samples expected to include logs"
+        ),
+    )
+    parser.add_argument(
         "--require-retired-prune-evidence",
         action="store_true",
         help="require latest rows to include clean retired snapshot prune evidence",
@@ -2121,8 +2167,18 @@ def main(argv=None):
     required_event_log_index_modes = split_modes(
         args.require_event_log_index_mode + args.require_event_log_index_modes
     )
-    if args.require_event_log_index_evidence or required_event_log_index_modes:
-        issues.extend(check_event_log_index_evidence(rows, required_event_log_index_modes))
+    if (
+        args.require_event_log_index_evidence
+        or required_event_log_index_modes
+        or args.require_event_log_index_non_empty
+    ):
+        issues.extend(
+            check_event_log_index_evidence(
+                rows,
+                required_event_log_index_modes,
+                require_non_empty=args.require_event_log_index_non_empty,
+            )
+        )
     required_retired_prune_modes = split_modes(
         args.require_retired_prune_mode + args.require_retired_prune_modes
     )

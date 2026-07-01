@@ -58,6 +58,8 @@ The output path is printed at startup. Each JSON row contains:
 - `derivedIndexSegments`
 - `derivedIndexBuildSeconds`
 - `eventLogIndexSegments`
+- `eventLogIndexFromBlock`
+- `eventLogIndexToBlock`
 - `eventLogIndexAddressKeys`
 - `eventLogIndexAddressPostings`
 - `eventLogIndexAddressAvgPostingsMilli`
@@ -485,15 +487,18 @@ reports `chainLookupPruneToBlock` or `tailPrunedThroughBlock`, the archive API
 block must be at or below the corresponding prune boundary so the row proves
 post-prune archive reads rather than a latest-state fallback. With
 `--require-event-log-index-evidence`, at least one latest derived-index row
-must report active `eventLogIndexSegments` plus internally consistent
-address/topic key, posting, average-fanout, max-fanout, singleton, and
-multi-posting counters. Add `--require-event-log-index-mode minimal` so the
-latest pruned minimal row must prove its own event-log index coverage instead
-of letting another mode's sidecar satisfy the run. Repeat
+must report active `eventLogIndexSegments`, a non-inverted
+`eventLogIndexFromBlock`/`eventLogIndexToBlock` range whose end matches
+`derivedIndexToBlock`, plus internally consistent address/topic key, posting,
+average-fanout, max-fanout, singleton, and multi-posting counters. Rows that
+also report `tailPrunedThroughBlock` must prove that the event-log index range
+covers the tail-prune boundary. Add `--require-event-log-index-mode minimal` so
+the latest pruned minimal row must prove its own event-log index coverage
+instead of letting another mode's sidecar satisfy the run. Repeat
 `--require-event-log-index-mode` or use `--require-event-log-index-modes` for
-additional mode-local log-index proofs. Add `--min
-eventLogIndexAddressPostings=1` when the sample is expected to include logs and
-should prove non-empty index fanout.
+additional mode-local log-index proofs. Add
+`--require-event-log-index-non-empty` when the sample is expected to include
+logs and should prove non-empty address-index fanout.
 The benchmark harness and Nile sampler automatically run
 `scripts/dev/snapshot_manifest_profile.py <snapshot-dir> --json --verify-files`
 when a manifest exists and records the active payload/sidecar split in the

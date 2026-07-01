@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -1179,9 +1180,25 @@ func snapshotEventLogIndexStatsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Event log index stats: dir=%s segments=%d addressKeys=%d addressPostings=%d addressAvgPostingsMilli=%d addressMaxPostings=%d addressSingletonKeys=%d addressMultiPostingKeys=%d topicKeys=%d topicPostings=%d topicAvgPostingsMilli=%d topicMaxPostings=%d topicSingletonKeys=%d topicMultiPostingKeys=%d\n",
+	fromBlock, toBlock := "-1", "-1"
+	var minBlock, maxBlock uint64
+	for i, stats := range inspection.Segments {
+		if i == 0 || stats.FromBlock < minBlock {
+			minBlock = stats.FromBlock
+		}
+		if i == 0 || stats.ToBlock > maxBlock {
+			maxBlock = stats.ToBlock
+		}
+	}
+	if len(inspection.Segments) > 0 {
+		fromBlock = strconv.FormatUint(minBlock, 10)
+		toBlock = strconv.FormatUint(maxBlock, 10)
+	}
+	fmt.Printf("Event log index stats: dir=%s segments=%d fromBlock=%s toBlock=%s addressKeys=%d addressPostings=%d addressAvgPostingsMilli=%d addressMaxPostings=%d addressSingletonKeys=%d addressMultiPostingKeys=%d topicKeys=%d topicPostings=%d topicAvgPostingsMilli=%d topicMaxPostings=%d topicSingletonKeys=%d topicMultiPostingKeys=%d\n",
 		dir,
 		len(inspection.Segments),
+		fromBlock,
+		toBlock,
 		inspection.Address.Keys,
 		inspection.Address.Postings,
 		inspection.Address.AveragePostingsPerKeyMilli,

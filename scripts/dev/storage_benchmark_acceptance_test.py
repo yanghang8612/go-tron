@@ -2607,6 +2607,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "snapshotAlertStatus": "ok",
                         "derivedIndexToBlock": 80,
                         "eventLogIndexSegments": 2,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
                         "eventLogIndexAddressKeys": 3,
                         "eventLogIndexAddressPostings": 6,
                         "eventLogIndexAddressAvgPostingsMilli": 2000,
@@ -2683,6 +2685,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         **base,
                         "derivedIndexToBlock": 80,
                         "eventLogIndexSegments": 0,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
                         "eventLogIndexAddressKeys": 2,
                         "eventLogIndexAddressPostings": 1,
                         "eventLogIndexAddressAvgPostingsMilli": 500,
@@ -2718,6 +2722,97 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("address postings=1 must be >= keys=2", invalid.stderr)
             self.assertIn("topic postings=1 must be 0 when keys=0", invalid.stderr)
 
+    def test_rejects_event_log_index_range_mismatch_and_empty_required_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "snap",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "eventLogIndexSegments": 1,
+                "eventLogIndexAddressKeys": 1,
+                "eventLogIndexAddressPostings": 1,
+                "eventLogIndexAddressAvgPostingsMilli": 1000,
+                "eventLogIndexAddressMaxPostings": 1,
+                "eventLogIndexAddressSingletonKeys": 1,
+                "eventLogIndexAddressMultiPostingKeys": 0,
+                "eventLogIndexTopicKeys": 1,
+                "eventLogIndexTopicPostings": 1,
+                "eventLogIndexTopicAvgPostingsMilli": 1000,
+                "eventLogIndexTopicMaxPostings": 1,
+                "eventLogIndexTopicSingletonKeys": 1,
+                "eventLogIndexTopicMultiPostingKeys": 0,
+            }
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 70,
+                    }
+                ],
+            )
+            mismatch = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(mismatch.returncode, 0, mismatch.stdout + mismatch.stderr)
+            self.assertIn("eventLogIndexToBlock=70 must match derivedIndexToBlock=80", mismatch.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexAddressKeys": 0,
+                        "eventLogIndexAddressPostings": 0,
+                        "eventLogIndexAddressAvgPostingsMilli": 0,
+                        "eventLogIndexAddressMaxPostings": 0,
+                        "eventLogIndexAddressSingletonKeys": 0,
+                        "eventLogIndexAddressMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            empty = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(empty.returncode, 0, empty.stdout + empty.stderr)
+            self.assertIn("eventLogIndexAddressPostings=0, want > 0", empty.stderr)
+
     def test_rejects_event_log_index_evidence_missing_required_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -2745,6 +2840,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "mode": "snap",
                     "derivedIndexToBlock": 80,
                     "eventLogIndexSegments": 1,
+                    "eventLogIndexFromBlock": 1,
+                    "eventLogIndexToBlock": 80,
                     "eventLogIndexAddressKeys": 1,
                     "eventLogIndexAddressPostings": 1,
                     "eventLogIndexAddressAvgPostingsMilli": 1000,

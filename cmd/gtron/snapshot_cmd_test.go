@@ -1232,6 +1232,8 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	for _, want := range []string{
 		"Event log index stats:",
 		"segments=1",
+		"fromBlock=7",
+		"toBlock=7",
 		"addressKeys=1",
 		"addressPostings=1",
 		"addressAvgPostingsMilli=1000",
