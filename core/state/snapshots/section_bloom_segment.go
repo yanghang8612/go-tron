@@ -213,7 +213,7 @@ func (s *SectionBloomSegment) readSectionBloomPayload(entry sectionBloomIndexEnt
 	if err := validateSectionBloomLookupEntry(s.ref, s.header, s.size, entry); err != nil {
 		return nil, err
 	}
-	raw, err := readSectionBloomPayloadAt(s.file, entry.offset, entry.length)
+	raw, err := readSectionBloomPayloadAt(s.file, entry.offset, entry.length, s.size)
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +596,7 @@ func checkSectionBloomIndex(file io.ReaderAt, ref SegmentRef, header sectionBloo
 			return fmt.Errorf("snapshots: section bloom segment %q entry %d payload [%d,%d] outside expected offset %d/size %d",
 				ref.Path, i, entry.offset, end, expectedOffset, fileSize)
 		}
-		raw, err := readSectionBloomPayloadAt(file, entry.offset, entry.length)
+		raw, err := readSectionBloomPayloadAt(file, entry.offset, entry.length, fileSize)
 		if err != nil {
 			return err
 		}
@@ -690,7 +690,11 @@ func readSectionBloomIndexEntryAt(file io.ReaderAt, offset uint64) (sectionBloom
 	}, nil
 }
 
-func readSectionBloomPayloadAt(file io.ReaderAt, offset, length uint64) ([]byte, error) {
+func readSectionBloomPayloadAt(file io.ReaderAt, offset, length, fileSize uint64) ([]byte, error) {
+	end, overflow := checkedAdd(offset, length)
+	if overflow || end > fileSize {
+		return nil, fmt.Errorf("snapshots: section bloom payload [%d,%d] exceeds segment size %d", offset, end, fileSize)
+	}
 	if length > uint64(^uint(0)>>1) || offset > math.MaxInt64 {
 		return nil, fmt.Errorf("snapshots: section bloom payload offset=%d length=%d overflows", offset, length)
 	}

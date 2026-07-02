@@ -111,6 +111,21 @@ func TestBalanceTraceSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestBalanceTracePayloadReadRejectsOutOfBoundsBeforeAlloc(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "balance-trace-payload.bin")
+	if err := os.WriteFile(path, []byte{0x01, 0x02, 0x03, 0x04}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer file.Close()
+	if _, err := readBalanceTracePayloadAt(file, 0, ^uint64(0), 4); err == nil || !strings.Contains(err.Error(), "exceeds segment bound") {
+		t.Fatalf("readBalanceTracePayloadAt error = %v, want bounded rejection", err)
+	}
+}
+
 func TestBuildBalanceTraceSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
@@ -362,7 +377,7 @@ func rewriteBalanceTracePayloadNumber(t *testing.T, dir string, ref SegmentRef, 
 		if entry.blockNum != uint64(blockNum) {
 			continue
 		}
-		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length)
+		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length, header.accountIndexOffset)
 		if err != nil {
 			t.Fatalf("readBalanceTracePayloadAt: %v", err)
 		}

@@ -375,7 +375,7 @@ func (s *BalanceTraceSegment) IterateBlockBalanceTraceRows(fn func(blockNum uint
 		if err := validateBalanceTracePayloadBounds(s.header, entry); err != nil {
 			return err
 		}
-		raw, err := readBalanceTracePayloadAt(s.file, entry.offset, entry.length)
+		raw, err := readBalanceTracePayloadAt(s.file, entry.offset, entry.length, s.header.accountIndexOffset)
 		if err != nil {
 			return err
 		}
@@ -422,7 +422,7 @@ func (s *BalanceTraceSegment) blockBalanceTraceRaw(blockNum int64) ([]byte, bool
 			if err := validateBalanceTracePayloadBounds(s.header, entry); err != nil {
 				return nil, false, err
 			}
-			raw, err := readBalanceTracePayloadAt(s.file, entry.offset, entry.length)
+			raw, err := readBalanceTracePayloadAt(s.file, entry.offset, entry.length, s.header.accountIndexOffset)
 			if err != nil {
 				return nil, false, err
 			}

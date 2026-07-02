@@ -1802,7 +1802,9 @@ Status:
   Non-covered manager iteration can still fall back to a full cold event-log
   segment scan when the immutable event-log segments continuously cover the
   request range, so stale global index sidecars degrade performance without
-  producing a false empty result.
+  producing a false empty result. Event-log payload reads are bounded by the
+  segment payload section before allocation, so corrupt length/offset entries
+  are rejected as data errors instead of triggering unbounded verifier memory.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
@@ -1876,7 +1878,10 @@ Status:
   already processed segments. Snap-mode history passes can also publish
   full-section `section-bloom` sidecars once the state-history cutoff fully
   covers a bloom section, ensuring the later section-bloom prune hook has
-  verified cold coverage before deleting whole hot `sb-` rows.
+  verified cold coverage before deleting whole hot `sb-` rows. Section-bloom
+  payload readers now require the caller's segment size bound before allocation,
+  so malformed sidecar lengths cannot bypass the index verifier into a large
+  allocation.
 - `rawdb.AuditBlockBalanceTraceCoverage` and
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested
@@ -1885,7 +1890,9 @@ Status:
   checks also require every block in the claimed balance-trace range to have a
   cold block-trace row, so a sparse sidecar cannot satisfy
   `SnapshotBalanceTracePrune` health checks or advance the balance-trace prune
-  stage.
+  stage. Balance-trace block payload reads are likewise bounded by the segment's
+  payload section before allocation, covering both verifier and archive/prune
+  reader paths.
 - `core.BackfillBalanceTracesByReplay` and
   `gtron db backfill-balance-traces` now provide a safe historical
   `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the

@@ -79,6 +79,21 @@ func TestSectionBloomSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestSectionBloomPayloadReadRejectsOutOfBoundsBeforeAlloc(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "section-bloom-payload.bin")
+	if err := os.WriteFile(path, []byte{0x01, 0x02, 0x03, 0x04}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer file.Close()
+	if _, err := readSectionBloomPayloadAt(file, 0, ^uint64(0), 4); err == nil || !strings.Contains(err.Error(), "exceeds segment size") {
+		t.Fatalf("readSectionBloomPayloadAt error = %v, want bounded rejection", err)
+	}
+}
+
 func TestBuildSectionBloomSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")

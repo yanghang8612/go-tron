@@ -136,6 +136,21 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestEventLogPayloadReadRejectsOutOfBoundsBeforeAlloc(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "event-log-payload.bin")
+	if err := os.WriteFile(path, []byte{0x01, 0x02, 0x03, 0x04}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer file.Close()
+	if _, err := readEventLogPayloadAt(file, 0, ^uint64(0), 4); err == nil || !strings.Contains(err.Error(), "exceeds segment bound") {
+		t.Fatalf("readEventLogPayloadAt error = %v, want bounded rejection", err)
+	}
+}
+
 func TestEventLogIndexLookupStatsAddRecomputesDistribution(t *testing.T) {
 	var total EventLogIndexLookupStats
 	total.add(EventLogIndexLookupStats{

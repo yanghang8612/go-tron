@@ -842,7 +842,7 @@ func (s *EventLogSegment) readLogPayload(entry eventLogIndexEntry) ([]byte, erro
 	if err := validateEventLogPayloadEntry(s.ref, s.header, s.size, entry); err != nil {
 		return nil, fmt.Errorf("snapshots: event log segment %q: %w", s.ref.Path, err)
 	}
-	return readEventLogPayloadAt(s.file, entry.offset, entry.length)
+	return readEventLogPayloadAt(s.file, entry.offset, entry.length, eventLogPayloadEnd(s.header, s.size))
 }
 
 func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -1864,7 +1864,7 @@ func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader,
 		if err := checkEventLogAddressLookupIndex(file, ref, header); err != nil {
 			return err
 		}
-		if err := checkEventLogTopicLookupIndex(file, ref, header); err != nil {
+		if err := checkEventLogTopicLookupIndex(file, ref, header, fileSize); err != nil {
 			return err
 		}
 		if err := checkEventLogSegmentLookupCoverage(file, ref, header, expectedAddress, expectedTopic); err != nil {
@@ -1889,7 +1889,7 @@ func checkEventLogPayloadIndex(file io.ReaderAt, ref SegmentRef, header eventLog
 		if i > 0 && compareEventLogEntries(prev, entry) >= 0 {
 			return nil, nil, fmt.Errorf("snapshots: event log segment %q index entry %d is not strictly sorted", ref.Path, i)
 		}
-		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length)
+		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length, eventLogPayloadEnd(header, fileSize))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2361,7 +2361,7 @@ func checkEventLogAddressLookupIndex(file io.ReaderAt, ref SegmentRef, header ev
 	})
 }
 
-func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader) error {
+func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) error {
 	return checkEventLogLookupIndex(file, ref, header, "topic", header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize, func(rowIndex uint64, key []byte) error {
 		position := binary.BigEndian.Uint64(key[:8])
 		want := key[8:]
@@ -2369,7 +2369,7 @@ func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header even
 		if err != nil {
 			return err
 		}
-		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length)
+		raw, err := readEventLogPayloadAt(file, entry.offset, entry.length, eventLogPayloadEnd(header, fileSize))
 		if err != nil {
 			return err
 		}
@@ -2704,7 +2704,11 @@ func readEventLogIndexEntryAt(file io.ReaderAt, offset int64) (eventLogIndexEntr
 	return entry, nil
 }
 
-func readEventLogPayloadAt(file io.ReaderAt, offset, length uint64) ([]byte, error) {
+func readEventLogPayloadAt(file io.ReaderAt, offset, length, maxEnd uint64) ([]byte, error) {
+	end, overflow := checkedAdd(offset, length)
+	if overflow || end > maxEnd {
+		return nil, fmt.Errorf("snapshots: event log payload [%d,%d] exceeds segment bound %d", offset, end, maxEnd)
+	}
 	if length > math.MaxInt {
 		return nil, fmt.Errorf("snapshots: event log payload length %d overflows int", length)
 	}

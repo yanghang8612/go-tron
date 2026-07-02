@@ -580,7 +580,7 @@ func checkBalanceTraceBlockIndex(file io.ReaderAt, ref SegmentRef, header balanc
 		if err := validateBalanceTracePayloadBounds(header, entry); err != nil {
 			return nil, fmt.Errorf("snapshots: balance trace segment %q block %d: %w", ref.Path, entry.blockNum, err)
 		}
-		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length)
+		raw, err := readBalanceTracePayloadAt(file, entry.offset, entry.length, header.accountIndexOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -711,7 +711,11 @@ func readBalanceTraceBlockIndexEntryAt(file io.ReaderAt, offset uint64) (balance
 	}, nil
 }
 
-func readBalanceTracePayloadAt(file io.ReaderAt, offset, length uint64) ([]byte, error) {
+func readBalanceTracePayloadAt(file io.ReaderAt, offset, length, maxEnd uint64) ([]byte, error) {
+	end, overflow := checkedAdd(offset, length)
+	if overflow || end > maxEnd {
+		return nil, fmt.Errorf("snapshots: balance trace payload [%d,%d] exceeds segment bound %d", offset, end, maxEnd)
+	}
 	if length > uint64(^uint(0)>>1) || offset > math.MaxInt64 {
 		return nil, fmt.Errorf("snapshots: balance trace payload offset=%d length=%d overflows", offset, length)
 	}
