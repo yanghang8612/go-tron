@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "nile_sync_acceptance.py"
 
 REQUIRED_SYNC_STAGES = [
+    "SyncInventory",
     "SyncBodies",
     "SyncBodiesReady",
     "SyncImport",
@@ -20,6 +21,7 @@ REQUIRED_SYNC_STAGES = [
 ]
 
 SYNC_STAGE_FIELDS = {
+    "SyncInventory": "stageSyncInventory",
     "SyncBodies": "stageSyncBodies",
     "SyncBodiesReady": "stageSyncBodiesReady",
     "SyncImport": "stageSyncImport",
@@ -106,7 +108,7 @@ def full_stage_details(blocks=None, verified=None):
             "field": SYNC_STAGE_FIELDS[stage],
             "present": True,
             "block": blocks.get(stage, 1000),
-            "verified": verified.get(stage, "canonical"),
+            "verified": verified.get(stage, "unbound" if stage == "SyncInventory" else "canonical"),
         }
         for stage in REQUIRED_SYNC_STAGES
     ]
@@ -125,9 +127,9 @@ def clean_full_staged_sync_row():
         "fullStagedSyncCompleteAtHead": True,
         "stageSyncPipelineMonotonic": True,
         "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
-        "fullStagedSyncStageCount": 6,
-        "fullStagedSyncPresentStageCount": 6,
-        "fullStagedSyncVerifiedStageCount": 6,
+        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
         "fullStagedSyncMissingStages": [],
         "fullStagedSyncHashIssues": [],
         "fullStagedSyncUnverifiedStages": [],
@@ -266,6 +268,8 @@ def sample_prometheus_labels(extra=None):
 
 
 def stage_detail_verified(stage, verification):
+    if stage == "SyncInventory":
+        return verification == "unbound"
     if stage in {"SyncBodies", "SyncBodiesReady"}:
         return verification in {"staged", "canonical"}
     return verification == "canonical"
@@ -904,7 +908,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
-                "fullStagedSyncStageDetails[3].block=1000.5, want non-negative integer",
+                "fullStagedSyncStageDetails[4].block=1000.5, want non-negative integer",
                 proc.stderr,
             )
             self.assertIn(
@@ -1126,17 +1130,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -2702,17 +2699,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -2772,17 +2762,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -2872,17 +2855,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": False,
                         "fullStagedSyncCompleteAtHead": True,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -2957,17 +2933,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -3046,17 +3015,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": False,
                         "stageSyncPipelineMonotonic": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -3270,7 +3232,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("fullStagedSyncRequiredStages=None", proc.stderr)
-            self.assertIn("fullStagedSyncStageCount=None, want 6", proc.stderr)
+            self.assertIn("fullStagedSyncStageCount=None, want 7", proc.stderr)
             self.assertIn("fullStagedSyncMissingStages=None, want []", proc.stderr)
 
     def test_requires_stage_detail_evidence_when_requested(self):
@@ -3326,7 +3288,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("fullStagedSyncStageCount=6.5, want 6", proc.stderr)
+            self.assertIn("fullStagedSyncStageCount=6.5, want 7", proc.stderr)
             self.assertIn(
                 "fullStagedSyncHeadBlock=1000.5, want non-negative integer",
                 proc.stderr,
@@ -3367,7 +3329,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("fullStagedSyncVerifiedStageCount=6, want detail-derived 5", proc.stderr)
+            self.assertIn("fullStagedSyncVerifiedStageCount=7, want detail-derived 6", proc.stderr)
             self.assertIn(
                 "fullStagedSyncHashIssues=[], want detail-derived "
                 "[{'stage': 'SyncExecution', 'verified': 'mismatch'}]",
@@ -3579,17 +3541,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncStatus": "caught-up",
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -3643,17 +3598,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncStatus": "caught-up",
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],
@@ -3935,17 +3883,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "fullStagedSyncStatus": "caught-up",
                         "fullStagedSyncReady": True,
                         "fullStagedSyncCompleteAtHead": True,
-                        "fullStagedSyncRequiredStages": [
-                            "SyncBodies",
-                            "SyncBodiesReady",
-                            "SyncImport",
-                            "SyncExecution",
-                            "SyncCommitment",
-                            "SyncFinish",
-                        ],
-                        "fullStagedSyncStageCount": 6,
-                        "fullStagedSyncPresentStageCount": 6,
-                        "fullStagedSyncVerifiedStageCount": 6,
+                        "fullStagedSyncRequiredStages": list(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncPresentStageCount": len(REQUIRED_SYNC_STAGES),
+                        "fullStagedSyncVerifiedStageCount": len(REQUIRED_SYNC_STAGES),
                         "fullStagedSyncMissingStages": [],
                         "fullStagedSyncHashIssues": [],
                         "fullStagedSyncUnverifiedStages": [],

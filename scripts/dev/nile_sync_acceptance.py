@@ -262,6 +262,7 @@ FULL_STAGED_SYNC_STATUS_VALUES = {
 }
 
 FULL_STAGED_SYNC_REQUIRED_STAGES = (
+    "SyncInventory",
     "SyncBodies",
     "SyncBodiesReady",
     "SyncImport",
@@ -271,6 +272,7 @@ FULL_STAGED_SYNC_REQUIRED_STAGES = (
 )
 
 FULL_STAGED_SYNC_STAGE_FIELDS = {
+    "SyncInventory": "stageSyncInventory",
     "SyncBodies": "stageSyncBodies",
     "SyncBodiesReady": "stageSyncBodiesReady",
     "SyncImport": "stageSyncImport",
@@ -1775,6 +1777,8 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
 
 
 def stage_detail_is_verified(stage, verified):
+    if stage == "SyncInventory":
+        return verified == "unbound"
     if stage in {"SyncBodies", "SyncBodiesReady"}:
         return verified in {"staged", "canonical"}
     return verified == "canonical"

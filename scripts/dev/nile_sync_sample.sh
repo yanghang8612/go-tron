@@ -1785,6 +1785,7 @@ def lag_sum(values):
 
 def stage_pipeline_violations(stages):
     pairs = [
+        ("inventory-bodies", "stageSyncInventory", "stageSyncBodies"),
         ("bodies-ready", "stageSyncBodies", "stageSyncBodiesReady"),
         ("ready-import", "stageSyncBodiesReady", "stageSyncImport"),
         ("import-execution", "stageSyncImport", "stageSyncExecution"),
@@ -1811,6 +1812,7 @@ def stage_pipeline_violations(stages):
 
 def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck_lag, pipeline_lag, finish_head_lag, head):
     required = [
+        ("SyncInventory", "stageSyncInventory"),
         ("SyncBodies", "stageSyncBodies"),
         ("SyncBodiesReady", "stageSyncBodiesReady"),
         ("SyncImport", "stageSyncImport"),
@@ -1870,7 +1872,11 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
             continue
         row["fullStagedSyncPresentStageCount"] += 1
         present_values.append((name, value))
-        if (name in body_stages and verified in {"staged", "canonical"}) or (name not in body_stages and verified == "canonical"):
+        if (
+            (name == "SyncInventory" and verified == "unbound")
+            or (name in body_stages and verified in {"staged", "canonical"})
+            or (name not in body_stages and name != "SyncInventory" and verified == "canonical")
+        ):
             row["fullStagedSyncVerifiedStageCount"] += 1
         elif verified:
             row["fullStagedSyncHashIssues"].append({"stage": name, "verified": verified})
@@ -2595,6 +2601,8 @@ def append_prometheus_gauge(lines, name, help_text, labels, value):
     lines.append(f"{name}{labels} {value:g}")
 
 def full_staged_sync_stage_verified(stage, verification):
+    if stage == "SyncInventory":
+        return verification == "unbound"
     if stage in {"SyncBodies", "SyncBodiesReady"}:
         return verification in {"staged", "canonical"}
     return verification == "canonical"

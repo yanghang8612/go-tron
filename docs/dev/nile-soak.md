@@ -324,10 +324,14 @@ full staged sync summary: `fullStagedSyncStatus`,
 `fullStagedSyncBottleneckLagShare`, `fullStagedSyncStageCoverageRatio`, and
 `fullStagedSyncVerificationRatio`, plus
 `fullStagedSyncStageDetails` for per-stage field/block/hash/verification
-evidence. `fullStagedSyncReady` means the six
-sync stages (`SyncBodies`, `SyncBodiesReady`, `SyncImport`, `SyncExecution`,
-`SyncCommitment`, `SyncFinish`) are present, hash/verification checks did not
-flag them, and the pipeline is monotonic; `fullStagedSyncCompleteAtHead` is the
+evidence. `fullStagedSyncReady` means all seven observable sync stages
+(`SyncInventory`, `SyncBodies`, `SyncBodiesReady`, `SyncImport`,
+`SyncExecution`, `SyncCommitment`, `SyncFinish`) are present, verification
+checks did not flag them, and the pipeline is monotonic; `SyncInventory` is
+valid as `verified=unbound` target-height evidence, `SyncBodies` and
+`SyncBodiesReady` may be `staged` or `canonical`, and the import, execution,
+commitment, and finish stages must be `canonical`.
+`fullStagedSyncCompleteAtHead` is the
 stricter condition where `SyncFinish` has caught up to the sampled HTTP head.
 Across consecutive JSONL rows it
 also reports `restartRecoveryStatus`, `heightRegressionBlocks`,
@@ -383,9 +387,11 @@ For a production Nile run, capture these checks:
 2. Periodically write `gtron db stage-status --json --datadir <dir>` output to
    the `--stage-status-file` path used by the sampler.
 3. Confirm `stageSyncPipelineMonotonic=true`, or manually check
-   `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
-   stageSyncExecution >= stageSyncCommitment >= stageSyncFinish`.
-   Full staged sync requires each sync stage to be hash-verified:
+   `stageSyncInventory >= stageSyncBodies >= stageSyncBodiesReady >=
+   stageSyncImport >= stageSyncExecution >= stageSyncCommitment >=
+   stageSyncFinish`.
+   Full staged sync requires each sync stage to carry acceptable verification
+   evidence: `SyncInventory` is `unbound` target-height evidence,
    `SyncBodies`/`SyncBodiesReady` may be `staged` or `canonical`; import,
    execution, commitment, and finish must be `canonical`. If a required stage
    is present but lacks verification evidence, the sampler reports
@@ -439,7 +445,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
 
 By default the checker validates the latest selected row, requires a captured
 stage-status file, accepts `catching-up` or `caught-up` staged-sync states, and
-requires all six sync stages to be present and hash-verified in the
+requires all seven observable sync stages to be present with acceptable
+verification evidence in the
 `fullStagedSync*` evidence fields. It also verifies that
 `fullStagedSyncHeadLagBlocks` matches
 `fullStagedSyncHeadBlock - fullStagedSyncCompleteBlock` and that

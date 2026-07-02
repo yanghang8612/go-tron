@@ -18,7 +18,8 @@ def write_full_stage_status(path):
     path.write_text(
         "\n".join(
             [
-                "Stage status: datadir=/tmp/nile known=32 rows=6",
+                "Stage status: datadir=/tmp/nile known=32 rows=7",
+                "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                 "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                 "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
                 "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
@@ -851,7 +852,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=9",
+                        "Stage status: datadir=/tmp/nile known=32 rows=10",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=96 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",
@@ -1042,7 +1044,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalDatadirOtherBytesPerBlock"], 0.0)
             self.assertEqual(row["stageStatusFileStatus"], "ok")
             self.assertEqual(row["stageKnown"], 32)
-            self.assertEqual(row["stageRows"], 9)
+            self.assertEqual(row["stageRows"], 10)
+            self.assertEqual(row["stageSyncInventory"], 100)
             self.assertEqual(row["stageSyncBodies"], 100)
             self.assertEqual(row["stageSyncBodiesReady"], 96)
             self.assertEqual(row["stageSyncImport"], 95)
@@ -1086,11 +1089,19 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertFalse(row["fullStagedSyncCompleteAtHead"])
             self.assertEqual(
                 row["fullStagedSyncRequiredStages"],
-                ["SyncBodies", "SyncBodiesReady", "SyncImport", "SyncExecution", "SyncCommitment", "SyncFinish"],
+                [
+                    "SyncInventory",
+                    "SyncBodies",
+                    "SyncBodiesReady",
+                    "SyncImport",
+                    "SyncExecution",
+                    "SyncCommitment",
+                    "SyncFinish",
+                ],
             )
-            self.assertEqual(row["fullStagedSyncStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 6)
+            self.assertEqual(row["fullStagedSyncStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 7)
             self.assertEqual(row["fullStagedSyncMissingStages"], [])
             self.assertEqual(row["fullStagedSyncHashIssues"], [])
             self.assertEqual(row["fullStagedSyncUnverifiedStages"], [])
@@ -1109,6 +1120,14 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(
                 row["fullStagedSyncStageDetails"],
                 [
+                    {
+                        "stage": "SyncInventory",
+                        "field": "stageSyncInventory",
+                        "present": True,
+                        "block": 100,
+                        "verified": "unbound",
+                        "hash": "none",
+                    },
                     {
                         "stage": "SyncBodies",
                         "field": "stageSyncBodies",
@@ -1213,7 +1232,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["soakEfficiencyStageBottleneck"], "finish-head")
             self.assertEqual(row["soakEfficiencyStageBottleneckLagBlocks"], 20)
             self.assertAlmostEqual(row["soakEfficiencyStageBottleneckLagShare"], 20 / 39)
-            self.assertEqual(row["stageUnboundRows"], 1)
+            self.assertEqual(row["stageUnboundRows"], 2)
             self.assertEqual(row["stageProgress"]["SyncFinish"]["value"], 80)
             self.assertFalse(row["stageProgress"]["SnapshotEventLogBuild"]["present"])
             self.assertEqual(row["processPidFile"], str(pid_file))
@@ -1421,6 +1440,7 @@ class NileSyncSampleTest(unittest.TestCase):
                             ],
                         },
                         "stages": [
+                            {"group": "sync", "name": "SyncInventory", "present": True, "status": "present", "value": 100, "hash": "none", "verified": "unbound"},
                             {"group": "sync", "name": "SyncBodies", "present": True, "status": "present", "value": 100, "hash": "aa", "verified": "canonical"},
                             {"group": "sync", "name": "SyncBodiesReady", "present": True, "status": "present", "value": 96, "hash": "bb", "verified": "staged-hash-mismatch", "details": ["stagedBlock=96", "stagedHash=cc"]},
                             {"group": "sync", "name": "SyncImport", "present": True, "status": "present", "value": 95, "hash": "cc", "verified": "canonical"},
@@ -1560,7 +1580,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=8",
+                        "Stage status: datadir=/tmp/nile known=32 rows=9",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=98 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",
@@ -1878,8 +1899,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["fullStagedSyncStatus"], "catching-up")
             self.assertTrue(row["fullStagedSyncReady"])
             self.assertFalse(row["fullStagedSyncCompleteAtHead"])
-            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 6)
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 7)
             self.assertEqual(row["fullStagedSyncMissingStages"], [])
             self.assertEqual(row["fullStagedSyncHashIssues"], [])
             self.assertEqual(row["fullStagedSyncCompleteBlock"], 90)
@@ -1929,7 +1950,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
@@ -2013,7 +2035,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=101 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=99 hash=cc verified=canonical",
@@ -2057,8 +2080,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["fullStagedSyncStatus"], "pipeline-violation")
             self.assertFalse(row["fullStagedSyncReady"])
             self.assertFalse(row["fullStagedSyncCompleteAtHead"])
-            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 6)
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 7)
             self.assertEqual(row["fullStagedSyncMissingStages"], [])
             self.assertEqual(row["fullStagedSyncHashIssues"], [])
             self.assertEqual(row["fullStagedSyncCompleteBlock"], 98)
@@ -2088,6 +2111,74 @@ class NileSyncSampleTest(unittest.TestCase):
                 ],
             )
 
+    def test_sample_reports_inventory_bodies_stage_pipeline_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=99 hash=none verified=unbound",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=98 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=98 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=98 hash=dd verified=canonical",
+                        "Stage progress: group=sync name=SyncCommitment value=98 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=98 hash=ff verified=canonical",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertFalse(row["stageSyncPipelineMonotonic"])
+            self.assertEqual(row["stageSyncPipelineViolation"], "inventory-bodies")
+            self.assertEqual(row["stageSyncPipelineViolationCount"], 1)
+            self.assertEqual(row["stageSyncPipelineMaxViolationBlocks"], 1)
+            self.assertEqual(row["fullStagedSyncStatus"], "pipeline-violation")
+            self.assertFalse(row["fullStagedSyncReady"])
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 7)
+            self.assertEqual(
+                row["stageSyncPipelineViolations"],
+                [
+                    {
+                        "name": "inventory-bodies",
+                        "upstreamStage": "stageSyncInventory",
+                        "upstreamValue": 99,
+                        "downstreamStage": "stageSyncBodies",
+                        "downstreamValue": 100,
+                        "violationBlocks": 1,
+                    }
+                ],
+            )
+
     def test_sample_reports_full_staged_sync_hash_issue(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -2097,7 +2188,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
@@ -2137,8 +2229,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["fullStagedSyncStatus"], "hash-issue")
             self.assertFalse(row["fullStagedSyncReady"])
             self.assertFalse(row["fullStagedSyncCompleteAtHead"])
-            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 5)
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 6)
             self.assertEqual(row["fullStagedSyncMissingStages"], [])
             self.assertEqual(row["fullStagedSyncHashIssues"], [{"stage": "SyncExecution", "verified": "mismatch"}])
             self.assertEqual(row["fullStagedSyncUnverifiedStages"], [])
@@ -2156,7 +2248,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
@@ -2196,8 +2289,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["fullStagedSyncStatus"], "unverified-stage")
             self.assertFalse(row["fullStagedSyncReady"])
             self.assertFalse(row["fullStagedSyncCompleteAtHead"])
-            self.assertEqual(row["fullStagedSyncPresentStageCount"], 6)
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 5)
+            self.assertEqual(row["fullStagedSyncPresentStageCount"], 7)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 6)
             self.assertEqual(row["fullStagedSyncMissingStages"], [])
             self.assertEqual(row["fullStagedSyncHashIssues"], [])
             self.assertEqual(row["fullStagedSyncUnverifiedStages"], ["SyncExecution"])
@@ -2215,7 +2308,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage status: datadir=/tmp/nile known=32 rows=7",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=staged-missing",
                         "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=staged-hash-mismatch stagedBlock=100 stagedHash=cc",
                         "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
@@ -2269,7 +2363,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     {"stage": "SyncBodiesReady", "verified": "staged-hash-mismatch"},
                 ],
             )
-            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 4)
+            self.assertEqual(row["fullStagedSyncVerifiedStageCount"], 5)
             self.assertEqual(row["soakHealthStatus"], "critical")
             self.assertIn("stage-staged-body-issue", row["soakHealthIssues"])
 
@@ -2282,7 +2376,8 @@ class NileSyncSampleTest(unittest.TestCase):
             stage_status.write_text(
                 "\n".join(
                     [
-                        "Stage status: datadir=/tmp/nile known=32 rows=8",
+                        "Stage status: datadir=/tmp/nile known=32 rows=9",
+                        "Stage progress: group=sync name=SyncInventory value=100 hash=none verified=unbound",
                         "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
                         "Stage progress: group=sync name=SyncBodiesReady value=96 hash=bb verified=canonical",
                         "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",

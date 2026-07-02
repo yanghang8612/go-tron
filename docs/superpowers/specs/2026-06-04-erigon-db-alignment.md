@@ -869,7 +869,10 @@ Status:
 - `scripts/dev/nile_sync_acceptance.py` now gates Nile sync JSONL samples for
   full staged-sync evidence. It checks latest-row sample health, captured
   stage-status availability, staged-sync readiness or caught-up status, stage
-  monotonicity, complete six-stage presence plus hash-verification evidence,
+  monotonicity, complete seven-stage presence plus acceptable verification
+  evidence (`SyncInventory` target-height evidence is `unbound`; body stages
+  may be staged or canonical; import/execution/commitment/finish must be
+  canonical),
   hash/staged-body/order/regression counters, optional stopped offline DB
   checks, optional required `stageStalled*`/`stageStalls` diagnostics,
   storage-alert Prometheus artifact shape, and project-specific numeric
