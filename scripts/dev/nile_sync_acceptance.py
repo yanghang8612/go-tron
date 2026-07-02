@@ -559,6 +559,58 @@ def require_non_negative_int(row, field, issues, context=""):
     return value
 
 
+def sampler_lag(high, low):
+    if high < 0 or low < 0 or high < low:
+        return -1
+    return high - low
+
+
+def sampler_ratio(numerator, denominator):
+    if numerator < 0 or denominator <= 0:
+        return -1.0
+    return numerator / denominator
+
+
+def optional_int(row, field, issues):
+    if not field_present(row, field):
+        return None, False
+    value = as_int(row, field)
+    if value is None:
+        issues.append(f"{field}={row.get(field)!r}, want integer")
+    return value, True
+
+
+def optional_number(row, field, issues):
+    if not field_present(row, field):
+        return None, False
+    value = as_number(row, field)
+    if value is None:
+        issues.append(f"{field}={row.get(field)!r}, want number")
+    return value, True
+
+
+def check_derived_int(row, field, want, issues, source):
+    if not field_present(row, field):
+        issues.append(f"{field} is missing while {source} is present")
+        return
+    got = as_int(row, field)
+    if got is None:
+        issues.append(f"{field}={row.get(field)!r}, want integer")
+    elif got != want:
+        issues.append(f"{field}={got:g}, want {want:g} from {source}")
+
+
+def check_derived_number(row, field, want, issues, source):
+    if not field_present(row, field):
+        issues.append(f"{field} is missing while {source} is present")
+        return
+    got = as_number(row, field)
+    if got is None:
+        issues.append(f"{field}={row.get(field)!r}, want number")
+    elif not approx_equal(got, want):
+        issues.append(f"{field}={got:g}, want {want:g} from {source}")
+
+
 def filter_rows(rows, args):
     out = []
     for row in rows:
@@ -1627,6 +1679,176 @@ def check_prometheus_stage_pipeline(path, text, row):
     return issues
 
 
+def check_full_staged_sync_derived_stage_metrics(row):
+    issues = []
+    gap_edges = (
+        (
+            "stageSyncInventoryBodiesGapBlocks",
+            "stageSyncInventory",
+            "stageSyncBodies",
+            "stageSyncInventory-stageSyncBodies",
+        ),
+        (
+            "stageSyncBodiesReadyGapBlocks",
+            "stageSyncBodies",
+            "stageSyncBodiesReady",
+            "stageSyncBodies-stageSyncBodiesReady",
+        ),
+        (
+            "stageSyncImportExecutionLagBlocks",
+            "stageSyncImport",
+            "stageSyncExecution",
+            "stageSyncImport-stageSyncExecution",
+        ),
+        (
+            "stageSyncExecutionCommitmentLagBlocks",
+            "stageSyncExecution",
+            "stageSyncCommitment",
+            "stageSyncExecution-stageSyncCommitment",
+        ),
+        (
+            "stageSyncCommitmentFinishLagBlocks",
+            "stageSyncCommitment",
+            "stageSyncFinish",
+            "stageSyncCommitment-stageSyncFinish",
+        ),
+    )
+    expected_gaps = {}
+    for gap_field, high_field, low_field, source in gap_edges:
+        high, high_present = optional_int(row, high_field, issues)
+        low, low_present = optional_int(row, low_field, issues)
+        if not (high_present and low_present) or high is None or low is None:
+            continue
+        want = sampler_lag(high, low)
+        expected_gaps[gap_field] = want
+        check_derived_int(row, gap_field, want, issues, source)
+
+    head_field = "height" if field_present(row, "height") else "fullStagedSyncHeadBlock"
+    head, head_present = optional_int(row, head_field, issues)
+    finish, finish_present = optional_int(row, "stageSyncFinish", issues)
+    if head_present and finish_present and head is not None and finish is not None:
+        want = sampler_lag(head, finish)
+        expected_gaps["stageSyncFinishHeadLagBlocks"] = want
+        check_derived_int(
+            row,
+            "stageSyncFinishHeadLagBlocks",
+            want,
+            issues,
+            f"{head_field}-stageSyncFinish",
+        )
+
+    pipeline_fields = (
+        "stageSyncInventoryBodiesGapBlocks",
+        "stageSyncBodiesReadyGapBlocks",
+        "stageSyncImportExecutionLagBlocks",
+        "stageSyncExecutionCommitmentLagBlocks",
+        "stageSyncCommitmentFinishLagBlocks",
+        "stageSyncFinishHeadLagBlocks",
+    )
+    if all(field in expected_gaps for field in pipeline_fields):
+        valid = [expected_gaps[field] for field in pipeline_fields if expected_gaps[field] >= 0]
+        pipeline_want = sum(valid) if valid else -1
+        check_derived_int(
+            row,
+            "stageSyncPipelineLagBlocks",
+            pipeline_want,
+            issues,
+            "sync stage lag fields",
+        )
+
+        candidates = (
+            ("inventory-bodies", expected_gaps["stageSyncInventoryBodiesGapBlocks"]),
+            ("bodies-ready-gap", expected_gaps["stageSyncBodiesReadyGapBlocks"]),
+            ("import-execution", expected_gaps["stageSyncImportExecutionLagBlocks"]),
+            ("execution-commitment", expected_gaps["stageSyncExecutionCommitmentLagBlocks"]),
+            ("commitment-finish", expected_gaps["stageSyncCommitmentFinishLagBlocks"]),
+            ("finish-head", expected_gaps["stageSyncFinishHeadLagBlocks"]),
+        )
+        valid_candidates = [(name, value) for name, value in candidates if value >= 0]
+        if not valid_candidates:
+            bottleneck_want, bottleneck_lag_want = "unknown", -1
+        else:
+            bottleneck_want, bottleneck_lag_want = max(valid_candidates, key=lambda item: item[1])
+            if bottleneck_lag_want == 0:
+                bottleneck_want = "none"
+        bottleneck = str(row.get("stageSyncBottleneck", ""))
+        if bottleneck != bottleneck_want:
+            issues.append(
+                f"stageSyncBottleneck={bottleneck!r}, want {bottleneck_want!r} "
+                "from sync stage lag fields"
+            )
+        check_derived_int(
+            row,
+            "stageSyncBottleneckLagBlocks",
+            bottleneck_lag_want,
+            issues,
+            "sync stage lag fields",
+        )
+
+    return issues
+
+
+def check_full_staged_sync_inventory_interval_metrics(row):
+    issues = []
+    inventory_blocks, inventory_present = optional_int(
+        row, "intervalStageSyncInventoryBlocks", issues
+    )
+    interval_blocks, interval_blocks_present = optional_int(row, "intervalBlocks", issues)
+    if (
+        inventory_present
+        and interval_blocks_present
+        and inventory_blocks is not None
+        and interval_blocks is not None
+    ):
+        check_derived_number(
+            row,
+            "intervalStageSyncInventoryToTargetRatio",
+            sampler_ratio(inventory_blocks, interval_blocks),
+            issues,
+            "intervalStageSyncInventoryBlocks/intervalBlocks",
+        )
+
+    bodies_blocks, bodies_present = optional_int(row, "intervalStageSyncBodiesBlocks", issues)
+    if (
+        bodies_present
+        and inventory_present
+        and bodies_blocks is not None
+        and inventory_blocks is not None
+    ):
+        check_derived_number(
+            row,
+            "intervalStageSyncBodiesToInventoryRatio",
+            sampler_ratio(bodies_blocks, inventory_blocks),
+            issues,
+            "intervalStageSyncBodiesBlocks/intervalStageSyncInventoryBlocks",
+        )
+
+    interval_seconds, interval_seconds_present = optional_number(row, "intervalSeconds", issues)
+    if (
+        inventory_present
+        and interval_seconds_present
+        and inventory_blocks is not None
+        and interval_seconds is not None
+    ):
+        want = float(inventory_blocks) / interval_seconds if interval_seconds > 0 else 0.0
+        check_derived_number(
+            row,
+            "intervalStageSyncInventoryBlocksPerSecond",
+            want,
+            issues,
+            "intervalStageSyncInventoryBlocks/intervalSeconds",
+        )
+        check_derived_number(
+            row,
+            "intervalStageSyncInventoryBlocksPerMinute",
+            want * 60.0,
+            issues,
+            "intervalStageSyncInventoryBlocksPerSecond*60",
+        )
+
+    return issues
+
+
 def check_full_staged_sync_evidence(row, require_stage_details=False):
     issues = []
     required = row.get("fullStagedSyncRequiredStages")
@@ -1747,6 +1969,9 @@ def check_full_staged_sync_evidence(row, require_stage_details=False):
         height = require_non_negative_int(row, "height", issues)
     if height is not None and head is not None and head != height:
         issues.append(f"fullStagedSyncHeadBlock={head:g}, want height {height:g}")
+
+    issues.extend(check_full_staged_sync_derived_stage_metrics(row))
+    issues.extend(check_full_staged_sync_inventory_interval_metrics(row))
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
     complete_at_head = as_bool(row, "fullStagedSyncCompleteAtHead")

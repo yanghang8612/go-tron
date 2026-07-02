@@ -459,7 +459,10 @@ It cross-checks the derived staged-sync metrics too:
 `fullStagedSyncCompletionRatio` must match complete/head, pipeline lag must
 cover the finish-head lag and match `stageSyncPipelineLagBlocks`, and the
 reported bottleneck, bottleneck lag, and lag share must agree with the
-corresponding `stageSync*` fields. When `fullStagedSyncStageDetails` is
+corresponding `stageSync*` fields. When stage source fields are present, the
+checker also recomputes the `SyncInventory -> SyncBodies` gap, total pipeline
+lag, the stage bottleneck, and the inventory interval ratio/rate fields from
+the same sampler inputs. When `fullStagedSyncStageDetails` is
 present, the checker also cross-checks each stage detail against the aggregate
 `fullStagedSync*` fields; add `--require-stage-detail-evidence` for production
 soak gates so older sampler rows cannot pass without that per-stage evidence.

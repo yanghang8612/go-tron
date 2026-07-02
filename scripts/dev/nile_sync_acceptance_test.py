@@ -146,6 +146,12 @@ def clean_full_staged_sync_row():
         "stageSyncPipelineLagBlocks": 0,
         "stageSyncBottleneck": "none",
         "stageSyncBottleneckLagBlocks": 0,
+        "stageSyncInventoryBodiesGapBlocks": 0,
+        "stageSyncBodiesReadyGapBlocks": 0,
+        "stageSyncImportExecutionLagBlocks": 0,
+        "stageSyncExecutionCommitmentLagBlocks": 0,
+        "stageSyncCommitmentFinishLagBlocks": 0,
+        "stageSyncFinishHeadLagBlocks": 0,
         "heightRegressionBlocks": 0,
         "stageProgressRegressionCount": 0,
         "stageMismatchRows": 0,
@@ -2843,6 +2849,134 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
             self.assertIn("fullStagedSyncBottleneckLagShare=0.5, want 1.33333", proc.stderr)
+
+    def test_rejects_stage_sync_derived_gap_and_bottleneck_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "fullStagedSyncStatus": "catching-up",
+                    "fullStagedSyncReady": True,
+                    "fullStagedSyncCompleteAtHead": False,
+                    "fullStagedSyncCompleteBlock": 950,
+                    "fullStagedSyncHeadBlock": 1000,
+                    "fullStagedSyncHeadLagBlocks": 50,
+                    "fullStagedSyncCompletionRatio": 0.95,
+                    "fullStagedSyncPipelineLagBlocks": 80,
+                    "fullStagedSyncBottleneck": "inventory-bodies",
+                    "fullStagedSyncBottleneckLagBlocks": 1,
+                    "fullStagedSyncBottleneckLagShare": 1 / 80,
+                    "stageSyncInventory": 1000,
+                    "stageSyncBodies": 980,
+                    "stageSyncBodiesReady": 970,
+                    "stageSyncImport": 970,
+                    "stageSyncExecution": 965,
+                    "stageSyncCommitment": 960,
+                    "stageSyncFinish": 950,
+                    "stageSyncInventoryBodiesGapBlocks": 1,
+                    "stageSyncBodiesReadyGapBlocks": 10,
+                    "stageSyncImportExecutionLagBlocks": 5,
+                    "stageSyncExecutionCommitmentLagBlocks": 5,
+                    "stageSyncCommitmentFinishLagBlocks": 10,
+                    "stageSyncFinishHeadLagBlocks": 50,
+                    "stageSyncPipelineLagBlocks": 80,
+                    "stageSyncBottleneck": "inventory-bodies",
+                    "stageSyncBottleneckLagBlocks": 1,
+                    "height": 1000,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "stageSyncInventoryBodiesGapBlocks=1, want 20 "
+                "from stageSyncInventory-stageSyncBodies",
+                proc.stderr,
+            )
+            self.assertIn(
+                "stageSyncPipelineLagBlocks=80, want 100 from sync stage lag fields",
+                proc.stderr,
+            )
+            self.assertIn(
+                "stageSyncBottleneck='inventory-bodies', want 'finish-head' "
+                "from sync stage lag fields",
+                proc.stderr,
+            )
+            self.assertIn(
+                "stageSyncBottleneckLagBlocks=1, want 50 from sync stage lag fields",
+                proc.stderr,
+            )
+
+    def test_rejects_inventory_interval_metric_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "intervalBlocks": 30,
+                    "intervalSeconds": 10,
+                    "intervalStageSyncInventoryBlocks": 15,
+                    "intervalStageSyncInventoryBlocksPerSecond": 2.0,
+                    "intervalStageSyncInventoryBlocksPerMinute": 60.0,
+                    "intervalStageSyncInventoryToTargetRatio": 0.4,
+                    "intervalStageSyncBodiesBlocks": 20,
+                    "intervalStageSyncBodiesToInventoryRatio": 1.0,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "intervalStageSyncInventoryToTargetRatio=0.4, want 0.5 "
+                "from intervalStageSyncInventoryBlocks/intervalBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncBodiesToInventoryRatio=1, want 1.33333 "
+                "from intervalStageSyncBodiesBlocks/intervalStageSyncInventoryBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncInventoryBlocksPerSecond=2, want 1.5 "
+                "from intervalStageSyncInventoryBlocks/intervalSeconds",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncInventoryBlocksPerMinute=60, want 90 "
+                "from intervalStageSyncInventoryBlocksPerSecond*60",
+                proc.stderr,
+            )
 
     def test_rejects_caught_up_row_with_ready_false(self):
         with tempfile.TemporaryDirectory() as tmp:
