@@ -223,7 +223,7 @@ func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {
 	}
 }
 
-func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory(t *testing.T) {
+func TestPersistentHistoryReaderReadsAccountStorageAndCodeFromColdStateDomainHistory(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0x75)
 	other := testAddr(0x76)
@@ -231,14 +231,20 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	slot[31] = 0x75
 	value1 := tcommon.HexToHash("01")
 	value2 := tcommon.HexToHash("02")
+	code1 := []byte{0x60, 0x75, 0x60, 0x01}
+	code2 := []byte{0x60, 0x75, 0x60, 0x02}
+	codeHash1 := tcommon.Keccak256(code1)
+	codeHash2 := tcommon.Keccak256(code2)
 
 	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
 		s.CreateAccount(addr, corepb.AccountType_Contract)
 		s.AddBalance(addr, 100)
+		s.SetCode(addr, code1)
 		s.SetState(addr, slot, value1)
 	})
 	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
 		s.AddBalance(addr, 50)
+		s.SetCode(addr, code2)
 		s.SetState(addr, slot, value2)
 	})
 	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
@@ -285,7 +291,28 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	if err != nil {
 		t.Fatalf("build cold contract storage latest: %v", err)
 	}
-	refs = append(refs, accountRef, accountAccessorRef, accountBTreeRef, storageRef, storageAccessorRef, storageBTreeRef)
+	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/code-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold code latest: %v", err)
+	}
+	refs = append(
+		refs,
+		accountRef,
+		accountAccessorRef,
+		accountBTreeRef,
+		storageRef,
+		storageAccessorRef,
+		storageBTreeRef,
+		codeRef,
+		codeAccessorRef,
+		codeBTreeRef,
+	)
 	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
 		t.Fatalf("publish cold state-domain history: %v", err)
 	}
@@ -321,6 +348,12 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, addr, generation, kvdomains.ContractStorage, nil); err != nil {
 		t.Fatalf("delete hot contract storage latest: %v", err)
 	}
+	if err := rawdb.DeleteStateCode(f.disk, codeHash1); err != nil {
+		t.Fatalf("delete hot code 1: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(f.disk, codeHash2); err != nil {
+		t.Fatalf("delete hot code 2: %v", err)
+	}
 
 	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
 	if _, err := hotOnly.AccountAt(addr, 1); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
@@ -355,6 +388,20 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	}
 	if headStorage != value2 {
 		t.Fatalf("cold StorageAt head = %x, want %x", headStorage, value2)
+	}
+	gotCode, err := cold.CodeAt(addr, 1)
+	if err != nil {
+		t.Fatalf("cold CodeAt block 1: %v", err)
+	}
+	if !bytes.Equal(gotCode, code1) {
+		t.Fatalf("cold CodeAt block 1 = %x, want %x", gotCode, code1)
+	}
+	headCode, err := cold.CodeAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold CodeAt head: %v", err)
+	}
+	if !bytes.Equal(headCode, code2) {
+		t.Fatalf("cold CodeAt head = %x, want %x", headCode, code2)
 	}
 }
 
