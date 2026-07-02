@@ -1412,6 +1412,30 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogPhaseCursorNextCanonical"], "Commitment")
             self.assertEqual(row["syncLogPhaseCursorNextSync"], "SyncCommitment")
             self.assertEqual(row["syncLogPhaseCursorBlockedStatus"], "missing")
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_completed_phases{{{labels}}} 2",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_scheduled_phases{{{labels}}} 4",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_completed_tasks{{{labels}}} 59",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_current_task_remaining{{{labels}}} 1",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_current_from_block{{{labels}}} 100",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_log_phase_cursor_next_block{{{labels}}} 100",
+                metrics,
+            )
             self.assertEqual(row["syncLogPhaseProgressCompletedPhases"], 2)
             self.assertEqual(row["syncLogPhaseProgressScheduledPhases"], 4)
             self.assertEqual(row["syncLogPhaseProgressIncompletePhases"], 2)

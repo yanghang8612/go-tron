@@ -77,6 +77,53 @@ STATE_PREFETCH_METRIC_FIELDS = (
     ("syncLogStatePrefetchErrors", "gtron_nile_sync_log_state_prefetch_errors"),
 )
 
+SYNC_PHASE_CURSOR_METRIC_FIELDS = (
+    (
+        "syncLogPhaseCursorCompletedPhases",
+        "gtron_nile_sync_log_phase_cursor_completed_phases",
+    ),
+    (
+        "syncLogPhaseCursorScheduledPhases",
+        "gtron_nile_sync_log_phase_cursor_scheduled_phases",
+    ),
+    (
+        "syncLogPhaseCursorIncompletePhases",
+        "gtron_nile_sync_log_phase_cursor_incomplete_phases",
+    ),
+    (
+        "syncLogPhaseCursorCompletedTasks",
+        "gtron_nile_sync_log_phase_cursor_completed_tasks",
+    ),
+    (
+        "syncLogPhaseCursorScheduledTasks",
+        "gtron_nile_sync_log_phase_cursor_scheduled_tasks",
+    ),
+    (
+        "syncLogPhaseCursorCurrentTaskIndex",
+        "gtron_nile_sync_log_phase_cursor_current_task_index",
+    ),
+    (
+        "syncLogPhaseCursorCurrentTaskCount",
+        "gtron_nile_sync_log_phase_cursor_current_task_count",
+    ),
+    (
+        "syncLogPhaseCursorCurrentTaskRemaining",
+        "gtron_nile_sync_log_phase_cursor_current_task_remaining",
+    ),
+    (
+        "syncLogPhaseCursorCurrentFromBlock",
+        "gtron_nile_sync_log_phase_cursor_current_from_block",
+    ),
+    (
+        "syncLogPhaseCursorCurrentToBlock",
+        "gtron_nile_sync_log_phase_cursor_current_to_block",
+    ),
+    (
+        "syncLogPhaseCursorNextBlock",
+        "gtron_nile_sync_log_phase_cursor_next_block",
+    ),
+)
+
 EVENT_LOG_INDEX_METRIC_FIELDS = (
     ("eventLogIndexSegments", "gtron_nile_sync_event_log_index_segments"),
     ("eventLogIndexFromBlock", "gtron_nile_sync_event_log_index_from_block"),
@@ -147,6 +194,16 @@ def snapshot_point_prometheus_lines(row, labels):
 def state_prefetch_prometheus_lines(row, labels):
     lines = []
     for field, metric in STATE_PREFETCH_METRIC_FIELDS:
+        if field not in row or row[field] < 0:
+            continue
+        lines.append(f"# TYPE {metric} gauge")
+        lines.append(f"{metric}{{{labels}}} {row[field]}")
+    return lines
+
+
+def sync_phase_cursor_prometheus_lines(row, labels):
+    lines = []
+    for field, metric in SYNC_PHASE_CURSOR_METRIC_FIELDS:
         if field not in row or row[field] < 0:
             continue
         lines.append(f"# TYPE {metric} gauge")
@@ -367,6 +424,44 @@ def add_state_prefetch_evidence(
             "syncLogStatePrefetchErrors": errors,
         }
     )
+    return row
+
+
+def add_sync_phase_cursor_evidence(row, **overrides):
+    values = {
+        "syncLogStatus": "ok",
+        "syncLogPhaseCursorComplete": False,
+        "syncLogPhaseCursorCompletedPhases": 2,
+        "syncLogPhaseCursorScheduledPhases": 4,
+        "syncLogPhaseCursorIncompletePhases": 2,
+        "syncLogPhaseCursorCompletedTasks": 59,
+        "syncLogPhaseCursorScheduledTasks": 80,
+        "syncLogPhaseCursorCurrent": "commitment",
+        "syncLogPhaseCursorCurrentCanonical": "Commitment",
+        "syncLogPhaseCursorCurrentSync": "SyncCommitment",
+        "syncLogPhaseCursorCurrentTaskIndex": 19,
+        "syncLogPhaseCursorCurrentTaskCount": 20,
+        "syncLogPhaseCursorCurrentTaskRemaining": 1,
+        "syncLogPhaseCursorCurrentFromBlock": 100,
+        "syncLogPhaseCursorCurrentToBlock": 100,
+        "syncLogPhaseCursorNextBlock": 100,
+        "syncLogPhaseCursorNextPhase": "commitment",
+        "syncLogPhaseCursorNextCanonical": "Commitment",
+        "syncLogPhaseCursorNextSync": "SyncCommitment",
+        "syncLogPhaseCursorBlockedStatus": "missing",
+    }
+    values.update(overrides)
+    if "syncLogPhaseCursorCompletionRatio" not in overrides:
+        scheduled = values["syncLogPhaseCursorScheduledPhases"]
+        values["syncLogPhaseCursorCompletionRatio"] = (
+            values["syncLogPhaseCursorCompletedPhases"] / scheduled if scheduled else -1.0
+        )
+    if "syncLogPhaseCursorTaskCompletionRatio" not in overrides:
+        scheduled = values["syncLogPhaseCursorScheduledTasks"]
+        values["syncLogPhaseCursorTaskCompletionRatio"] = (
+            values["syncLogPhaseCursorCompletedTasks"] / scheduled if scheduled else -1.0
+        )
+    row.update(values)
     return row
 
 
@@ -918,6 +1013,156 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("syncLogStatePrefetchErrors=2, want <= 0", proc.stderr)
+
+    def test_accepts_sync_phase_cursor_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_sync_phase_cursor_evidence(clean_full_staged_sync_row())
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sync-phase-cursor-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_sync_phase_cursor_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sync-phase-cursor-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "syncLogStatus=None, want 'ok' for sync phase cursor evidence",
+                proc.stderr,
+            )
+            self.assertIn("syncLogPhaseCursorComplete is missing", proc.stderr)
+            self.assertIn(
+                "syncLogPhaseCursorCompletedPhases=None, want non-negative integer",
+                proc.stderr,
+            )
+
+    def test_rejects_invalid_sync_phase_cursor_accounting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_sync_phase_cursor_evidence(
+                clean_full_staged_sync_row(),
+                syncLogPhaseCursorCompletedPhases=5,
+                syncLogPhaseCursorScheduledPhases=4,
+                syncLogPhaseCursorCompletedTasks=81,
+                syncLogPhaseCursorScheduledTasks=80,
+                syncLogPhaseCursorCurrentTaskIndex=18,
+                syncLogPhaseCursorCurrentTaskCount=20,
+                syncLogPhaseCursorCurrentTaskRemaining=1,
+                syncLogPhaseCursorCurrentFromBlock=101,
+                syncLogPhaseCursorCurrentToBlock=100,
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sync-phase-cursor-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "sync phase cursor completed phases=5 exceeds scheduled phases=4",
+                proc.stderr,
+            )
+            self.assertIn(
+                "sync phase cursor completed tasks=81 exceeds scheduled tasks=80",
+                proc.stderr,
+            )
+            self.assertIn(
+                "syncLogPhaseCursorCurrentTaskRemaining=1, "
+                "want currentTaskCount-currentTaskIndex=2",
+                proc.stderr,
+            )
+            self.assertIn("sync phase cursor block range inverted: from=101 to=100", proc.stderr)
+
+    def test_accepts_sample_prometheus_sync_phase_cursor_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            row = add_sync_phase_cursor_evidence(row)
+            labels = sample_prometheus_labels()
+            with prom.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(sync_phase_cursor_prometheus_lines(row, labels)) + "\n")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-sync-phase-cursor-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_sample_prometheus_missing_sync_phase_cursor_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            row = add_sync_phase_cursor_evidence(row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-sync-phase-cursor-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_log_phase_cursor_completed_phases",
+                proc.stderr,
+            )
 
     def test_accepts_event_log_index_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

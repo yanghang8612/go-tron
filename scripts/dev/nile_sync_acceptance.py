@@ -56,6 +56,67 @@ STATE_PREFETCH_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_log_state_prefetch_errors", "syncLogStatePrefetchErrors"),
 )
 
+SYNC_PHASE_CURSOR_INTEGER_FIELDS = (
+    "syncLogPhaseCursorCompletedPhases",
+    "syncLogPhaseCursorScheduledPhases",
+    "syncLogPhaseCursorIncompletePhases",
+    "syncLogPhaseCursorCompletedTasks",
+    "syncLogPhaseCursorScheduledTasks",
+    "syncLogPhaseCursorCurrentTaskIndex",
+    "syncLogPhaseCursorCurrentTaskCount",
+    "syncLogPhaseCursorCurrentTaskRemaining",
+    "syncLogPhaseCursorCurrentFromBlock",
+    "syncLogPhaseCursorCurrentToBlock",
+    "syncLogPhaseCursorNextBlock",
+)
+
+SYNC_PHASE_CURSOR_PROMETHEUS_FIELD_METRICS = (
+    (
+        "gtron_nile_sync_log_phase_cursor_completed_phases",
+        "syncLogPhaseCursorCompletedPhases",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_scheduled_phases",
+        "syncLogPhaseCursorScheduledPhases",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_incomplete_phases",
+        "syncLogPhaseCursorIncompletePhases",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_completed_tasks",
+        "syncLogPhaseCursorCompletedTasks",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_scheduled_tasks",
+        "syncLogPhaseCursorScheduledTasks",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_current_task_index",
+        "syncLogPhaseCursorCurrentTaskIndex",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_current_task_count",
+        "syncLogPhaseCursorCurrentTaskCount",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_current_task_remaining",
+        "syncLogPhaseCursorCurrentTaskRemaining",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_current_from_block",
+        "syncLogPhaseCursorCurrentFromBlock",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_current_to_block",
+        "syncLogPhaseCursorCurrentToBlock",
+    ),
+    (
+        "gtron_nile_sync_log_phase_cursor_next_block",
+        "syncLogPhaseCursorNextBlock",
+    ),
+)
+
 EVENT_LOG_INDEX_RANGE_FIELDS = (
     "eventLogIndexFromBlock",
     "eventLogIndexToBlock",
@@ -123,6 +184,7 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_height", "height"),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
     *STATE_PREFETCH_PROMETHEUS_FIELD_METRICS,
+    *SYNC_PHASE_CURSOR_PROMETHEUS_FIELD_METRICS,
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks"),
     ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady"),
     ("gtron_nile_sync_full_staged_sync_complete_at_head", "fullStagedSyncCompleteAtHead"),
@@ -330,6 +392,7 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "archiveApiDepthBlocks",
     "archiveApiFailures",
     *STATE_PREFETCH_EVIDENCE_FIELDS,
+    *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
     "eventLogIndexSegments",
     *EVENT_LOG_INDEX_RANGE_FIELDS,
     *EVENT_LOG_INDEX_LOOKUP_FIELDS,
@@ -337,6 +400,7 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
 
 SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = {
     *STATE_PREFETCH_EVIDENCE_FIELDS,
+    *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
     *EVENT_LOG_INDEX_RANGE_FIELDS,
 }
 
@@ -3032,6 +3096,154 @@ def check_state_prefetch_evidence(row, require_activity=False, max_errors=None):
     return issues
 
 
+def check_sync_phase_cursor_evidence(row):
+    issues = []
+    if row.get("syncLogStatus") != "ok":
+        issues.append(
+            f"syncLogStatus={row.get('syncLogStatus')!r}, want 'ok' "
+            "for sync phase cursor evidence"
+        )
+
+    if not field_present(row, "syncLogPhaseCursorComplete"):
+        issues.append("syncLogPhaseCursorComplete is missing")
+    complete = as_bool(row, "syncLogPhaseCursorComplete")
+
+    required_integer_fields = (
+        "syncLogPhaseCursorCompletedPhases",
+        "syncLogPhaseCursorScheduledPhases",
+        "syncLogPhaseCursorIncompletePhases",
+        "syncLogPhaseCursorCompletedTasks",
+        "syncLogPhaseCursorScheduledTasks",
+    )
+    values = {}
+    for field in required_integer_fields:
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+        else:
+            values[field] = value
+    if len(values) != len(required_integer_fields):
+        return issues
+
+    completed_phases = values["syncLogPhaseCursorCompletedPhases"]
+    scheduled_phases = values["syncLogPhaseCursorScheduledPhases"]
+    incomplete_phases = values["syncLogPhaseCursorIncompletePhases"]
+    completed_tasks = values["syncLogPhaseCursorCompletedTasks"]
+    scheduled_tasks = values["syncLogPhaseCursorScheduledTasks"]
+
+    if scheduled_phases <= 0:
+        issues.append(f"sync phase cursor scheduled phases={scheduled_phases:g}, want positive")
+    if completed_phases > scheduled_phases:
+        issues.append(
+            f"sync phase cursor completed phases={completed_phases:g} "
+            f"exceeds scheduled phases={scheduled_phases:g}"
+        )
+    expected_incomplete_phases = max(scheduled_phases - completed_phases, 0)
+    if incomplete_phases != expected_incomplete_phases:
+        issues.append(
+            f"sync phase cursor incomplete phases={incomplete_phases:g}, "
+            f"want scheduled-completed={expected_incomplete_phases:g}"
+        )
+
+    if scheduled_tasks <= 0:
+        issues.append(f"sync phase cursor scheduled tasks={scheduled_tasks:g}, want positive")
+    if completed_tasks > scheduled_tasks:
+        issues.append(
+            f"sync phase cursor completed tasks={completed_tasks:g} "
+            f"exceeds scheduled tasks={scheduled_tasks:g}"
+        )
+
+    phase_ratio = as_number(row, "syncLogPhaseCursorCompletionRatio")
+    if phase_ratio is not None and scheduled_phases > 0:
+        expected = completed_phases / scheduled_phases
+        if abs(phase_ratio - expected) > 1e-9:
+            issues.append(
+                f"syncLogPhaseCursorCompletionRatio={phase_ratio:g}, want {expected:g}"
+            )
+    task_ratio = as_number(row, "syncLogPhaseCursorTaskCompletionRatio")
+    if task_ratio is not None and scheduled_tasks > 0:
+        expected = completed_tasks / scheduled_tasks
+        if abs(task_ratio - expected) > 1e-9:
+            issues.append(
+                f"syncLogPhaseCursorTaskCompletionRatio={task_ratio:g}, want {expected:g}"
+            )
+
+    if complete:
+        if completed_phases != scheduled_phases:
+            issues.append(
+                "sync phase cursor complete=true but completed phases "
+                f"{completed_phases:g} != scheduled phases {scheduled_phases:g}"
+            )
+        if incomplete_phases != 0:
+            issues.append(
+                f"sync phase cursor complete=true but incomplete phases={incomplete_phases:g}"
+            )
+        if completed_tasks != scheduled_tasks:
+            issues.append(
+                "sync phase cursor complete=true but completed tasks "
+                f"{completed_tasks:g} != scheduled tasks {scheduled_tasks:g}"
+            )
+        return issues
+
+    string_fields = (
+        "syncLogPhaseCursorCurrent",
+        "syncLogPhaseCursorCurrentCanonical",
+        "syncLogPhaseCursorCurrentSync",
+        "syncLogPhaseCursorNextPhase",
+        "syncLogPhaseCursorNextCanonical",
+        "syncLogPhaseCursorNextSync",
+    )
+    missing = [field for field in string_fields if not field_present(row, field)]
+    if missing:
+        issues.append("sync phase cursor missing fields: " + ",".join(missing))
+
+    task_fields = (
+        "syncLogPhaseCursorCurrentTaskIndex",
+        "syncLogPhaseCursorCurrentTaskCount",
+        "syncLogPhaseCursorCurrentTaskRemaining",
+        "syncLogPhaseCursorCurrentFromBlock",
+        "syncLogPhaseCursorCurrentToBlock",
+        "syncLogPhaseCursorNextBlock",
+    )
+    task_values = {}
+    for field in task_fields:
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+        else:
+            task_values[field] = value
+    if len(task_values) != len(task_fields):
+        return issues
+
+    current_task_index = task_values["syncLogPhaseCursorCurrentTaskIndex"]
+    current_task_count = task_values["syncLogPhaseCursorCurrentTaskCount"]
+    current_task_remaining = task_values["syncLogPhaseCursorCurrentTaskRemaining"]
+    if current_task_count <= 0:
+        issues.append(
+            f"syncLogPhaseCursorCurrentTaskCount={current_task_count:g}, want positive"
+        )
+    elif current_task_index >= current_task_count:
+        issues.append(
+            f"syncLogPhaseCursorCurrentTaskIndex={current_task_index:g} "
+            f"must be less than current task count {current_task_count:g}"
+        )
+    else:
+        expected_remaining = current_task_count - current_task_index
+        if current_task_remaining != expected_remaining:
+            issues.append(
+                f"syncLogPhaseCursorCurrentTaskRemaining={current_task_remaining:g}, "
+                f"want currentTaskCount-currentTaskIndex={expected_remaining:g}"
+            )
+
+    current_from = task_values["syncLogPhaseCursorCurrentFromBlock"]
+    current_to = task_values["syncLogPhaseCursorCurrentToBlock"]
+    if current_from > current_to:
+        issues.append(
+            f"sync phase cursor block range inverted: from={current_from:g} to={current_to:g}"
+        )
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -3127,6 +3339,9 @@ def check_row(row, args):
                 max_errors=args.max_state_prefetch_errors,
             )
         )
+
+    if args.require_sync_phase_cursor_evidence:
+        issues.extend(check_sync_phase_cursor_evidence(row))
 
     if args.require_event_log_index_evidence or args.require_event_log_index_non_empty:
         if not event_log_index_evidence_row(row):
@@ -3341,6 +3556,11 @@ def build_parser():
         type=parse_non_negative_int_arg,
         metavar="N",
         help="fail if syncLogStatePrefetchErrors exceeds N; also requires state-prefetch evidence",
+    )
+    parser.add_argument(
+        "--require-sync-phase-cursor-evidence",
+        action="store_true",
+        help="require selected rows to include consistent syncLogPhaseCursor* runtime progress evidence",
     )
     parser.add_argument(
         "--require-event-log-index-evidence",

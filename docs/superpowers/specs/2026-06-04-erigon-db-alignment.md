@@ -822,7 +822,11 @@ Status:
   upstream-unbound, upstream-behind, and upstream hash-mismatch rejection paths
   through the `SyncService` entry point. The same read/verify/write
   sequence is now a downloader-owned resume-phase publish run, leaving
-  `SyncService` to provide only stage-progress read/write side effects.
+  `SyncService` to provide only stage-progress read/write side effects. Nile
+  soak rows can now require that runtime cursor evidence with
+  `--require-sync-phase-cursor-evidence`, and sample Prometheus artifacts export
+  matching `gtron_nile_sync_log_phase_cursor_*` gauges for the cursor's
+  non-negative phase/task/block counters.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can
@@ -1590,6 +1594,10 @@ Status:
   `--require-state-prefetch-evidence`, `--require-state-prefetch-activity`, and
   `--max-state-prefetch-errors`, and sample Prometheus artifacts export matching
   `gtron_nile_sync_log_state_prefetch_*` gauges for non-negative counters.
+- The Nile acceptance checker also gates sync-import phase cursor evidence with
+  `--require-sync-phase-cursor-evidence`, covering typed current/next
+  phase-cursor fields, task accounting, and the corresponding
+  `gtron_nile_sync_log_phase_cursor_*` sample Prometheus gauges.
 
 Remaining:
 

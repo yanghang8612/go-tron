@@ -433,6 +433,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-startup-recovery-evidence \
   --require-state-prefetch-evidence \
   --max-state-prefetch-errors 0 \
+  --require-sync-phase-cursor-evidence \
   --require-archive-api-evidence \
   --require-archive-tx-evidence \
   --require-sample-prometheus-artifact \
@@ -481,6 +482,14 @@ Use `--require-startup-recovery-evidence` when rows were collected with
 `ok`, at least one summary, completed sync-pipeline repair and current-head
 completion, no blocked/interrupted repair, zero pipeline order/read errors, and
 healthy optional order-repair/cursor checks when those subchecks ran.
+Use `--require-sync-phase-cursor-evidence` when rows were collected with
+`--sync-log-file` on binaries that emit `syncPhaseCursor*` fields in import
+logs. It requires `syncLogStatus=ok`, consistent completed/scheduled phase and
+task counts, valid ratio fields when present, and, for incomplete cursors, a
+non-empty current/next phase plus task index/count/remaining and block-range
+evidence. This is the production gate that proves a blocked or partially drained
+full staged-sync batch can be resumed from typed phase-cursor evidence rather
+than inferred from stage-progress counters alone.
 Use `--require-state-prefetch-evidence` when rows were collected with
 `--sync-log-file` on binaries that emit the state-prefetch counters. It requires
 `syncLogStatus=ok`, all six `syncLogStatePrefetch*` counters to be non-negative,
@@ -513,6 +522,7 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
 `gtron_nile_sync_log_state_prefetch_*`,
+`gtron_nile_sync_log_phase_cursor_*`,
 `gtron_nile_sync_event_log_index_*`,
 `gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,
 `gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
