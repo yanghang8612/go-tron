@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -148,6 +149,18 @@ func TestEventLogPayloadReadRejectsOutOfBoundsBeforeAlloc(t *testing.T) {
 	defer file.Close()
 	if _, err := readEventLogPayloadAt(file, 0, ^uint64(0), 4); err == nil || !strings.Contains(err.Error(), "exceeds segment bound") {
 		t.Fatalf("readEventLogPayloadAt error = %v, want bounded rejection", err)
+	}
+}
+
+func TestEventLogLookupRejectsOutOfFileBeforeAlloc(t *testing.T) {
+	data := make([]byte, 64)
+	binary.BigEndian.PutUint64(data[8:16], 1)
+	key := make([]byte, eventLogAddressLookupKeySize)
+	if _, err := readEventLogLookupRows(bytes.NewReader(data), 8, 1<<20, uint64(len(data)), key); err == nil || !strings.Contains(err.Error(), "outside file size") {
+		t.Fatalf("readEventLogLookupRows error = %v, want file-size bound", err)
+	}
+	if _, err := readEventLogLookupPostings(bytes.NewReader(data), 8, 1<<20, uint64(len(data)), 16, 64, 1024); err == nil || !strings.Contains(err.Error(), "outside file size") {
+		t.Fatalf("readEventLogLookupPostings error = %v, want file-size bound", err)
 	}
 }
 

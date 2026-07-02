@@ -2217,6 +2217,11 @@ Status:
   file-size bound to entry keys, entry values, skipped values, and `.bt` entry
   keys before allocating payload buffers, covering both sequential restore/check
   scans and accessor/btree point or prefix reads.
+- Event-log lookup readers now carry the actual `.seg`/`.idx` file size through
+  address/topic rows, stats, verifier maps, and postings reads. Corrupt lookup
+  headers can no longer declare an in-file directory with postings that only fit
+  inside an inflated header length and force large row allocations before the
+  missing bytes are read.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

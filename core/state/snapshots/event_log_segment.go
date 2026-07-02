@@ -55,6 +55,7 @@ type EventLogIndexSegment struct {
 	ref    SegmentRef
 	file   *os.File
 	header eventLogIndexHeader
+	size   uint64
 }
 
 type EventLogIndexLookupStats struct {
@@ -330,10 +331,11 @@ func CheckEventLogIndexSegment(dir string, ref SegmentRef) error {
 	if err := validateEventLogIndexHeader(ref, header, uint64(stat.Size())); err != nil {
 		return err
 	}
-	if err := checkEventLogSegmentStartLookupIndex(file, ref, "address", header.addressIndexOffset, header.addressIndexLength, eventLogAddressLookupKeySize); err != nil {
+	fileSize := uint64(stat.Size())
+	if err := checkEventLogSegmentStartLookupIndex(file, ref, "address", header.addressIndexOffset, header.addressIndexLength, fileSize, eventLogAddressLookupKeySize); err != nil {
 		return err
 	}
-	if err := checkEventLogSegmentStartLookupIndex(file, ref, "topic", header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize); err != nil {
+	if err := checkEventLogSegmentStartLookupIndex(file, ref, "topic", header.topicIndexOffset, header.topicIndexLength, fileSize, eventLogTopicLookupKeySize); err != nil {
 		return err
 	}
 	return nil
@@ -377,7 +379,7 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	if err != nil {
 		return err
 	}
-	actualAddress, err := readEventLogLookupIndexMap(index.file, index.header.addressIndexOffset, index.header.addressIndexLength, eventLogAddressLookupKeySize)
+	actualAddress, err := readEventLogLookupIndexMap(index.file, index.header.addressIndexOffset, index.header.addressIndexLength, index.size, eventLogAddressLookupKeySize)
 	if closeErr := index.Close(); err == nil {
 		err = closeErr
 	}
@@ -391,7 +393,7 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	if err != nil {
 		return err
 	}
-	actualTopic, err := readEventLogLookupIndexMap(index.file, index.header.topicIndexOffset, index.header.topicIndexLength, eventLogTopicLookupKeySize)
+	actualTopic, err := readEventLogLookupIndexMap(index.file, index.header.topicIndexOffset, index.header.topicIndexLength, index.size, eventLogTopicLookupKeySize)
 	if closeErr := index.Close(); err == nil {
 		err = closeErr
 	}
@@ -516,7 +518,7 @@ func OpenEventLogIndexSegment(dir string, ref SegmentRef) (*EventLogIndexSegment
 		_ = file.Close()
 		return nil, err
 	}
-	return &EventLogIndexSegment{ref: ref, file: file, header: header}, nil
+	return &EventLogIndexSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}, nil
 }
 
 func (s *EventLogSegment) Close() error {
@@ -541,11 +543,11 @@ func (s *EventLogIndexSegment) Stats() (EventLogIndexSegmentStats, error) {
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
-	address, err := readEventLogLookupStats(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize)
+	address, err := readEventLogLookupStats(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKeySize)
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
-	topic, err := readEventLogLookupStats(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKeySize)
+	topic, err := readEventLogLookupStats(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, s.size, eventLogTopicLookupKeySize)
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
@@ -688,7 +690,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 	if len(filter.Addresses) > 0 {
 		var union []uint64
 		for _, address := range filter.Addresses {
-			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKey(address))
+			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKey(address))
 			if err != nil {
 				return nil, true, err
 			}
@@ -703,7 +705,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 		}
 		var union []uint64
 		for _, topic := range required {
-			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKey(uint64(position), topic))
+			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, s.size, eventLogTopicLookupKey(uint64(position), topic))
 			if err != nil {
 				return nil, true, err
 			}
@@ -779,7 +781,7 @@ func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]
 		}
 		var union []uint64
 		for _, address := range filter.Addresses {
-			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKey(address))
+			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKey(address))
 			if err != nil {
 				return nil, true, err
 			}
@@ -797,7 +799,7 @@ func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]
 		}
 		var union []uint64
 		for _, topic := range required {
-			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKey(uint64(position), topic))
+			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, s.size, eventLogTopicLookupKey(uint64(position), topic))
 			if err != nil {
 				return nil, true, err
 			}
@@ -1861,13 +1863,13 @@ func checkEventLogIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader,
 		return err
 	}
 	if header.version >= 2 {
-		if err := checkEventLogAddressLookupIndex(file, ref, header); err != nil {
+		if err := checkEventLogAddressLookupIndex(file, ref, header, fileSize); err != nil {
 			return err
 		}
 		if err := checkEventLogTopicLookupIndex(file, ref, header, fileSize); err != nil {
 			return err
 		}
-		if err := checkEventLogSegmentLookupCoverage(file, ref, header, expectedAddress, expectedTopic); err != nil {
+		if err := checkEventLogSegmentLookupCoverage(file, ref, header, fileSize, expectedAddress, expectedTopic); err != nil {
 			return err
 		}
 	}
@@ -2055,7 +2057,7 @@ func writeEventLogLookupIndexAt(file *os.File, offset uint64, keySize int, posti
 	return uint64(buf.Len()), nil
 }
 
-func readEventLogLookupRows(file io.ReaderAt, offset, length uint64, key []byte) ([]uint64, error) {
+func readEventLogLookupRows(file io.ReaderAt, offset, length, fileSize uint64, key []byte) ([]uint64, error) {
 	if offset == 0 || length == 0 {
 		return nil, nil
 	}
@@ -2065,6 +2067,9 @@ func readEventLogLookupRows(file io.ReaderAt, offset, length uint64, key []byte)
 	indexEnd, overflow := checkedAdd(offset, length)
 	if overflow {
 		return nil, fmt.Errorf("snapshots: event log lookup range [%d,+%d] overflows", offset, length)
+	}
+	if indexEnd > fileSize {
+		return nil, fmt.Errorf("snapshots: event log lookup range [%d,%d] outside file size %d", offset, indexEnd, fileSize)
 	}
 	count, err := readEventLogUint64At(file, offset)
 	if err != nil {
@@ -2105,12 +2110,12 @@ func readEventLogLookupRows(file io.ReaderAt, offset, length uint64, key []byte)
 		}
 		postingsOffset := binary.BigEndian.Uint64(entry[len(key) : len(key)+8])
 		postingsCount := binary.BigEndian.Uint64(entry[len(key)+8 : len(key)+16])
-		return readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		return readEventLogLookupPostings(file, offset, length, fileSize, dirEnd, postingsOffset, postingsCount)
 	}
 	return nil, nil
 }
 
-func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize int) (map[string][]uint64, error) {
+func readEventLogLookupIndexMap(file io.ReaderAt, offset, length, fileSize uint64, keySize int) (map[string][]uint64, error) {
 	out := make(map[string][]uint64)
 	if offset == 0 || length == 0 {
 		return out, nil
@@ -2121,6 +2126,9 @@ func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize
 	indexEnd, overflow := checkedAdd(offset, length)
 	if overflow {
 		return nil, fmt.Errorf("snapshots: event log lookup range [%d,+%d] overflows", offset, length)
+	}
+	if indexEnd > fileSize {
+		return nil, fmt.Errorf("snapshots: event log lookup range [%d,%d] outside file size %d", offset, indexEnd, fileSize)
 	}
 	count, err := readEventLogUint64At(file, offset)
 	if err != nil {
@@ -2151,7 +2159,7 @@ func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize
 		key := string(append([]byte(nil), entryRaw[:keySize]...))
 		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
 		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
-		rows, err := readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		rows, err := readEventLogLookupPostings(file, offset, length, fileSize, dirEnd, postingsOffset, postingsCount)
 		if err != nil {
 			return nil, err
 		}
@@ -2160,7 +2168,7 @@ func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize
 	return out, nil
 }
 
-func readEventLogLookupStats(file io.ReaderAt, offset, length uint64, keySize int) (EventLogIndexLookupStats, error) {
+func readEventLogLookupStats(file io.ReaderAt, offset, length, fileSize uint64, keySize int) (EventLogIndexLookupStats, error) {
 	var stats EventLogIndexLookupStats
 	if offset == 0 || length == 0 {
 		return stats, nil
@@ -2171,6 +2179,9 @@ func readEventLogLookupStats(file io.ReaderAt, offset, length uint64, keySize in
 	indexEnd, overflow := checkedAdd(offset, length)
 	if overflow {
 		return stats, fmt.Errorf("snapshots: event log lookup range [%d,+%d] overflows", offset, length)
+	}
+	if indexEnd > fileSize {
+		return stats, fmt.Errorf("snapshots: event log lookup range [%d,%d] outside file size %d", offset, indexEnd, fileSize)
 	}
 	count, err := readEventLogUint64At(file, offset)
 	if err != nil {
@@ -2272,10 +2283,13 @@ func equalUint64Slices(a, b []uint64) bool {
 	return true
 }
 
-func readEventLogLookupPostings(file io.ReaderAt, indexOffset, indexLength, minPostingsOffset, postingsOffset, postingsCount uint64) ([]uint64, error) {
+func readEventLogLookupPostings(file io.ReaderAt, indexOffset, indexLength, fileSize, minPostingsOffset, postingsOffset, postingsCount uint64) ([]uint64, error) {
 	indexEnd, overflow := checkedAdd(indexOffset, indexLength)
 	if overflow {
 		return nil, fmt.Errorf("snapshots: event log lookup index range [%d,+%d] overflows", indexOffset, indexLength)
+	}
+	if indexEnd > fileSize {
+		return nil, fmt.Errorf("snapshots: event log lookup index range [%d,%d] outside file size %d", indexOffset, indexEnd, fileSize)
 	}
 	postingsBytes, overflow := checkedMul(postingsCount, 8)
 	if overflow {
@@ -2284,6 +2298,12 @@ func readEventLogLookupPostings(file io.ReaderAt, indexOffset, indexLength, minP
 	postingsEnd, overflow := checkedAdd(postingsOffset, postingsBytes)
 	if overflow || postingsOffset < minPostingsOffset || postingsEnd > indexEnd {
 		return nil, fmt.Errorf("snapshots: event log lookup postings [%d,%d] outside [%d,%d]", postingsOffset, postingsEnd, indexOffset, indexEnd)
+	}
+	if postingsEnd > fileSize {
+		return nil, fmt.Errorf("snapshots: event log lookup postings [%d,%d] outside file size %d", postingsOffset, postingsEnd, fileSize)
+	}
+	if postingsEnd > math.MaxInt64 {
+		return nil, fmt.Errorf("snapshots: event log lookup postings end %d exceeds int64", postingsEnd)
 	}
 	rows := make([]uint64, postingsCount)
 	var raw [8]byte
@@ -2348,8 +2368,8 @@ func intersectSortedUint64(a, b []uint64) []uint64 {
 	return out
 }
 
-func checkEventLogAddressLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader) error {
-	return checkEventLogLookupIndex(file, ref, header, "address", header.addressIndexOffset, header.addressIndexLength, eventLogAddressLookupKeySize, func(rowIndex uint64, key []byte) error {
+func checkEventLogAddressLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) error {
+	return checkEventLogLookupIndex(file, ref, header, "address", header.addressIndexOffset, header.addressIndexLength, fileSize, eventLogAddressLookupKeySize, func(rowIndex uint64, key []byte) error {
 		entry, err := readEventLogIndexEntryAt(file, eventLogIndexEntryOffset(header, rowIndex))
 		if err != nil {
 			return err
@@ -2362,7 +2382,7 @@ func checkEventLogAddressLookupIndex(file io.ReaderAt, ref SegmentRef, header ev
 }
 
 func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64) error {
-	return checkEventLogLookupIndex(file, ref, header, "topic", header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize, func(rowIndex uint64, key []byte) error {
+	return checkEventLogLookupIndex(file, ref, header, "topic", header.topicIndexOffset, header.topicIndexLength, fileSize, eventLogTopicLookupKeySize, func(rowIndex uint64, key []byte) error {
 		position := binary.BigEndian.Uint64(key[:8])
 		want := key[8:]
 		entry, err := readEventLogIndexEntryAt(file, eventLogIndexEntryOffset(header, rowIndex))
@@ -2384,15 +2404,15 @@ func checkEventLogTopicLookupIndex(file io.ReaderAt, ref SegmentRef, header even
 	})
 }
 
-func checkEventLogSegmentLookupCoverage(file io.ReaderAt, ref SegmentRef, header eventLogHeader, expectedAddress, expectedTopic map[string][]uint64) error {
-	actualAddress, err := readEventLogLookupIndexMap(file, header.addressIndexOffset, header.addressIndexLength, eventLogAddressLookupKeySize)
+func checkEventLogSegmentLookupCoverage(file io.ReaderAt, ref SegmentRef, header eventLogHeader, fileSize uint64, expectedAddress, expectedTopic map[string][]uint64) error {
+	actualAddress, err := readEventLogLookupIndexMap(file, header.addressIndexOffset, header.addressIndexLength, fileSize, eventLogAddressLookupKeySize)
 	if err != nil {
 		return err
 	}
 	if err := compareEventLogSegmentLookupIndexMaps(ref, "address", expectedAddress, actualAddress); err != nil {
 		return err
 	}
-	actualTopic, err := readEventLogLookupIndexMap(file, header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize)
+	actualTopic, err := readEventLogLookupIndexMap(file, header.topicIndexOffset, header.topicIndexLength, fileSize, eventLogTopicLookupKeySize)
 	if err != nil {
 		return err
 	}
@@ -2415,13 +2435,16 @@ func compareEventLogSegmentLookupIndexMaps(ref SegmentRef, name string, expected
 	return nil
 }
 
-func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, name string, offset, length uint64, keySize int, verify func(rowIndex uint64, key []byte) error) error {
+func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogHeader, name string, offset, length, fileSize uint64, keySize int, verify func(rowIndex uint64, key []byte) error) error {
 	if length < eventLogLookupHeaderSize {
 		return fmt.Errorf("snapshots: event log segment %q %s lookup length %d smaller than header", ref.Path, name, length)
 	}
 	indexEnd, overflow := checkedAdd(offset, length)
 	if overflow {
 		return fmt.Errorf("snapshots: event log segment %q %s lookup range [%d,+%d] overflows", ref.Path, name, offset, length)
+	}
+	if indexEnd > fileSize {
+		return fmt.Errorf("snapshots: event log segment %q %s lookup range [%d,%d] outside file size %d", ref.Path, name, offset, indexEnd, fileSize)
 	}
 	count, err := readEventLogUint64At(file, offset)
 	if err != nil {
@@ -2457,7 +2480,7 @@ func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogH
 		prevKey = key
 		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
 		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
-		rows, err := readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		rows, err := readEventLogLookupPostings(file, offset, length, fileSize, dirEnd, postingsOffset, postingsCount)
 		if err != nil {
 			return err
 		}
@@ -2478,13 +2501,16 @@ func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogH
 	return nil
 }
 
-func checkEventLogSegmentStartLookupIndex(file io.ReaderAt, ref SegmentRef, name string, offset, length uint64, keySize int) error {
+func checkEventLogSegmentStartLookupIndex(file io.ReaderAt, ref SegmentRef, name string, offset, length, fileSize uint64, keySize int) error {
 	if length < eventLogLookupHeaderSize {
 		return fmt.Errorf("snapshots: event log index %q %s lookup length %d smaller than header", ref.Path, name, length)
 	}
 	indexEnd, overflow := checkedAdd(offset, length)
 	if overflow {
 		return fmt.Errorf("snapshots: event log index %q %s lookup range [%d,+%d] overflows", ref.Path, name, offset, length)
+	}
+	if indexEnd > fileSize {
+		return fmt.Errorf("snapshots: event log index %q %s lookup range [%d,%d] outside file size %d", ref.Path, name, offset, indexEnd, fileSize)
 	}
 	count, err := readEventLogUint64At(file, offset)
 	if err != nil {
@@ -2520,7 +2546,7 @@ func checkEventLogSegmentStartLookupIndex(file io.ReaderAt, ref SegmentRef, name
 		prevKey = key
 		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
 		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
-		rows, err := readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		rows, err := readEventLogLookupPostings(file, offset, length, fileSize, dirEnd, postingsOffset, postingsCount)
 		if err != nil {
 			return err
 		}
