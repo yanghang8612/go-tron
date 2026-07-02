@@ -428,6 +428,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
+  --require-state-prefetch-evidence \
+  --max-state-prefetch-errors 0 \
   --require-archive-api-evidence \
   --require-archive-tx-evidence \
   --require-sample-prometheus-artifact \
@@ -474,6 +476,14 @@ Use `--require-startup-recovery-evidence` when rows were collected with
 `ok`, at least one summary, completed sync-pipeline repair and current-head
 completion, no blocked/interrupted repair, zero pipeline order/read errors, and
 healthy optional order-repair/cursor checks when those subchecks ran.
+Use `--require-state-prefetch-evidence` when rows were collected with
+`--sync-log-file` on binaries that emit the state-prefetch counters. It requires
+`syncLogStatus=ok`, all six `syncLogStatePrefetch*` counters to be non-negative,
+and `syncLogStatePrefetchProcessed` to equal hits plus misses plus errors. Add
+`--require-state-prefetch-activity` for prefetch-enabled comparison runs where
+the sampled segment must prove actual queued and processed warmup work. Use
+`--max-state-prefetch-errors 0` for production soak gates unless the run is
+intentionally exercising storage-read failure paths.
 Use `--require-sample-prometheus-artifact` when rows were collected with
 `--prometheus-output`. The checker requires `samplePrometheusStatus=ok`, reads
 the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
@@ -487,6 +497,7 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 `gtron_nile_sync_full_staged_sync_stage_{block,present,verified}` evidence
 when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
+`gtron_nile_sync_log_state_prefetch_*`,
 `gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,
 `gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
 stage-throughput gauges, hot/cold/index byte gauges,

@@ -2447,6 +2447,12 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_height", "height", "Current sampled block height."),
     ("gtron_nile_sync_node_info_current_block", "nodeInfoCurrentBlock", "Current block reported by node info."),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks", "Lag from the sampled block to the best known sync target."),
+    ("gtron_nile_sync_log_state_prefetch_enqueued", "syncLogStatePrefetchEnqueued", "State prefetch keys accepted by the latest sampled sync log segment."),
+    ("gtron_nile_sync_log_state_prefetch_dropped", "syncLogStatePrefetchDropped", "State prefetch keys dropped by the latest sampled sync log segment."),
+    ("gtron_nile_sync_log_state_prefetch_processed", "syncLogStatePrefetchProcessed", "State prefetch keys processed by the latest sampled sync log segment."),
+    ("gtron_nile_sync_log_state_prefetch_hits", "syncLogStatePrefetchHits", "State prefetch latest-domain hits in the latest sampled sync log segment."),
+    ("gtron_nile_sync_log_state_prefetch_misses", "syncLogStatePrefetchMisses", "State prefetch latest-domain misses in the latest sampled sync log segment."),
+    ("gtron_nile_sync_log_state_prefetch_errors", "syncLogStatePrefetchErrors", "State prefetch read errors in the latest sampled sync log segment."),
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks", "Lag between full staged-sync completion and sampled head."),
     ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady", "Whether full staged-sync evidence is present, verified, and monotonic."),
     ("gtron_nile_sync_full_staged_sync_complete_at_head", "fullStagedSyncCompleteAtHead", "Whether full staged-sync completion has caught up to the sampled head."),
@@ -2552,6 +2558,15 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures", "Historical archive API probe failures."),
     ("gtron_nile_sync_offline_db_check_exit", "offlineDbCheckExit", "Offline DB check process exit code."),
 )
+
+SAMPLE_PROMETHEUS_SKIP_NEGATIVE_FIELDS = {
+    "syncLogStatePrefetchEnqueued",
+    "syncLogStatePrefetchDropped",
+    "syncLogStatePrefetchProcessed",
+    "syncLogStatePrefetchHits",
+    "syncLogStatePrefetchMisses",
+    "syncLogStatePrefetchErrors",
+}
 
 ARCHIVE_API_BASE_METHODS = (
     "eth_getBlockByNumber",
@@ -2741,6 +2756,8 @@ def write_sample_prometheus(path, row):
     for metric, field, help_text in SAMPLE_PROMETHEUS_NUMERIC_FIELDS:
         value = prometheus_number(row, field)
         if value is None:
+            continue
+        if field in SAMPLE_PROMETHEUS_SKIP_NEGATIVE_FIELDS and value < 0:
             continue
         append_prometheus_gauge(lines, metric, help_text, prometheus_labels(row), value)
     append_full_staged_sync_prometheus(lines, row)

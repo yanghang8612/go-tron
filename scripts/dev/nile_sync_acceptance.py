@@ -38,9 +38,28 @@ SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_nile_sync_height{", "gtron_nile_sync_height"),
 )
 
+STATE_PREFETCH_EVIDENCE_FIELDS = (
+    "syncLogStatePrefetchEnqueued",
+    "syncLogStatePrefetchDropped",
+    "syncLogStatePrefetchProcessed",
+    "syncLogStatePrefetchHits",
+    "syncLogStatePrefetchMisses",
+    "syncLogStatePrefetchErrors",
+)
+
+STATE_PREFETCH_PROMETHEUS_FIELD_METRICS = (
+    ("gtron_nile_sync_log_state_prefetch_enqueued", "syncLogStatePrefetchEnqueued"),
+    ("gtron_nile_sync_log_state_prefetch_dropped", "syncLogStatePrefetchDropped"),
+    ("gtron_nile_sync_log_state_prefetch_processed", "syncLogStatePrefetchProcessed"),
+    ("gtron_nile_sync_log_state_prefetch_hits", "syncLogStatePrefetchHits"),
+    ("gtron_nile_sync_log_state_prefetch_misses", "syncLogStatePrefetchMisses"),
+    ("gtron_nile_sync_log_state_prefetch_errors", "syncLogStatePrefetchErrors"),
+)
+
 SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_height", "height"),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
+    *STATE_PREFETCH_PROMETHEUS_FIELD_METRICS,
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks"),
     ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady"),
     ("gtron_nile_sync_full_staged_sync_complete_at_head", "fullStagedSyncCompleteAtHead"),
@@ -246,7 +265,10 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "archiveApiBlock",
     "archiveApiDepthBlocks",
     "archiveApiFailures",
+    *STATE_PREFETCH_EVIDENCE_FIELDS,
 }
+
+SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = set(STATE_PREFETCH_EVIDENCE_FIELDS)
 
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
@@ -636,6 +658,16 @@ def parse_threshold(raw):
     except ValueError as exc:
         raise ValueError(f"{raw!r} has a non-numeric threshold") from exc
     return field, want
+
+
+def parse_non_negative_int_arg(raw):
+    try:
+        value = int(raw, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{raw!r} must be an integer") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"{raw!r} must be non-negative")
+    return value
 
 
 def check_thresholds(row, raws, op_name, predicate):
@@ -1094,6 +1126,22 @@ def check_sample_prometheus_artifact(result_path, row):
                 want = as_int(row, field)
                 want_text = "integer"
             else:
+                if field in SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS:
+                    raw_int = as_int(row, field)
+                    if raw_int is None:
+                        issues.append(
+                            f"samplePrometheus artifact {path} {field}={row.get(field)!r}, "
+                            "want integer"
+                        )
+                        continue
+                    if raw_int < 0:
+                        got = prometheus_metric_value(text, metric, row)
+                        if got is not None:
+                            issues.append(
+                                f"samplePrometheus artifact {path} {metric}={got:g}, "
+                                f"want omitted while {field}={raw_int:g}"
+                            )
+                        continue
                 want = as_non_negative_int(row, field)
                 want_text = "non-negative integer"
             if want is None:
@@ -2744,6 +2792,51 @@ def check_snapshot_point_thresholds(row, max_sidecar_share_milli, max_snapshot_s
     return issues
 
 
+def check_state_prefetch_evidence(row, require_activity=False, max_errors=None):
+    issues = []
+    if row.get("syncLogStatus") != "ok":
+        issues.append(
+            f"syncLogStatus={row.get('syncLogStatus')!r}, want 'ok' "
+            "for state prefetch evidence"
+        )
+
+    values = {}
+    for field in STATE_PREFETCH_EVIDENCE_FIELDS:
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+        else:
+            values[field] = value
+    if len(values) != len(STATE_PREFETCH_EVIDENCE_FIELDS):
+        return issues
+
+    enqueued = values["syncLogStatePrefetchEnqueued"]
+    processed = values["syncLogStatePrefetchProcessed"]
+    hits = values["syncLogStatePrefetchHits"]
+    misses = values["syncLogStatePrefetchMisses"]
+    errors = values["syncLogStatePrefetchErrors"]
+    want_processed = hits + misses + errors
+    if processed != want_processed:
+        issues.append(
+            f"state prefetch processed={processed:g}, "
+            f"want hits+misses+errors={want_processed:g}"
+        )
+    if processed > enqueued:
+        issues.append(
+            f"state prefetch processed={processed:g} exceeds enqueued={enqueued:g}"
+        )
+    if require_activity and (enqueued <= 0 or processed <= 0):
+        issues.append(
+            f"state prefetch activity missing: enqueued={enqueued:g} "
+            f"processed={processed:g}"
+        )
+    if max_errors is not None and errors > max_errors:
+        issues.append(
+            f"syncLogStatePrefetchErrors={errors:g}, want <= {max_errors:g}"
+        )
+    return issues
+
+
 def check_row(row, args):
     issues = []
     if row.get("sampleStatus") != "ok":
@@ -2826,6 +2919,19 @@ def check_row(row, args):
         )
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
+
+    if (
+        args.require_state_prefetch_evidence
+        or args.require_state_prefetch_activity
+        or args.max_state_prefetch_errors is not None
+    ):
+        issues.extend(
+            check_state_prefetch_evidence(
+                row,
+                require_activity=args.require_state_prefetch_activity,
+                max_errors=args.max_state_prefetch_errors,
+            )
+        )
 
     if args.require_sample_prometheus_artifact:
         issues.extend(check_sample_prometheus_artifact(args.result, row))
@@ -3014,6 +3120,22 @@ def build_parser():
         "--require-startup-recovery-evidence",
         action="store_true",
         help="require selected rows to include healthy staged-sync startup recovery evidence",
+    )
+    parser.add_argument(
+        "--require-state-prefetch-evidence",
+        action="store_true",
+        help="require selected rows to include complete non-negative syncLogStatePrefetch* counters",
+    )
+    parser.add_argument(
+        "--require-state-prefetch-activity",
+        action="store_true",
+        help="require state-prefetch evidence and at least one enqueued and processed prefetch key",
+    )
+    parser.add_argument(
+        "--max-state-prefetch-errors",
+        type=parse_non_negative_int_arg,
+        metavar="N",
+        help="fail if syncLogStatePrefetchErrors exceeds N; also requires state-prefetch evidence",
     )
     parser.add_argument(
         "--require-sample-prometheus-artifact",

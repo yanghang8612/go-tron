@@ -784,6 +784,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f"gtron_nile_sync_stage_sync_pipeline_lag_blocks{{{labels}}} 0", metrics)
             self.assertIn(f"gtron_nile_sync_stage_chain_freezer_head_lag_blocks{{{labels}}} -1", metrics)
             self.assertIn(f"gtron_nile_sync_interval_stage_sync_finish_blocks_per_second{{{labels}}} 0", metrics)
+            self.assertNotIn("gtron_nile_sync_log_state_prefetch_", metrics)
             stage_labels = f'datadir="{datadir}",field="stageSyncExecution",label="candidate",mode="full",network="nile",stage="SyncExecution"'
             self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_block{{{stage_labels}}} 100", metrics)
             self.assertIn(f"gtron_nile_sync_full_staged_sync_stage_present{{{stage_labels}}} 1", metrics)
@@ -892,6 +893,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.addCleanup(server.server_close)
 
             output = tmpdir / "samples.jsonl"
+            prometheus = tmpdir / "sync.prom"
             start_unix = str(int(time.time()) - 50)
             proc = subprocess.run(
                 [
@@ -914,6 +916,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     str(sync_log),
                     "--output",
                     str(output),
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -1277,6 +1281,14 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogStatePrefetchHits"], 20)
             self.assertEqual(row["syncLogStatePrefetchMisses"], 9)
             self.assertEqual(row["syncLogStatePrefetchErrors"], 1)
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="nile-sync",mode="full",network="nile"'
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_enqueued{{{labels}}} 31", metrics)
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_dropped{{{labels}}} 2", metrics)
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_processed{{{labels}}} 29", metrics)
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_hits{{{labels}}} 20", metrics)
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_misses{{{labels}}} 9", metrics)
+            self.assertIn(f"gtron_nile_sync_log_state_prefetch_errors{{{labels}}} 1", metrics)
             self.assertEqual(row["syncLogBlocksPerSecond"], 20.5)
             self.assertEqual(row["syncLogTxsPerSecond"], 7.5)
             self.assertEqual(row["syncLogSlowPhase"], "stateCommit")

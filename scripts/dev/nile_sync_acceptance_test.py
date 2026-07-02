@@ -68,6 +68,15 @@ SNAPSHOT_POINT_FIELD_SUFFIXES = (
     ("SnapshotShareMilli", "snapshot_share_milli"),
 )
 
+STATE_PREFETCH_METRIC_FIELDS = (
+    ("syncLogStatePrefetchEnqueued", "gtron_nile_sync_log_state_prefetch_enqueued"),
+    ("syncLogStatePrefetchDropped", "gtron_nile_sync_log_state_prefetch_dropped"),
+    ("syncLogStatePrefetchProcessed", "gtron_nile_sync_log_state_prefetch_processed"),
+    ("syncLogStatePrefetchHits", "gtron_nile_sync_log_state_prefetch_hits"),
+    ("syncLogStatePrefetchMisses", "gtron_nile_sync_log_state_prefetch_misses"),
+    ("syncLogStatePrefetchErrors", "gtron_nile_sync_log_state_prefetch_errors"),
+)
+
 
 def snapshot_point_fields(prefix, segments, total, payload, sidecar, sidecar_share, snapshot_share):
     values = (segments, total, payload, sidecar, sidecar_share, snapshot_share)
@@ -96,6 +105,16 @@ def snapshot_point_prometheus_lines(row, labels):
             metric = f"{metric_prefix}_{metric_suffix}"
             lines.append(f"# TYPE {metric} gauge")
             lines.append(f"{metric}{{{labels}}} {row[field]}")
+    return lines
+
+
+def state_prefetch_prometheus_lines(row, labels):
+    lines = []
+    for field, metric in STATE_PREFETCH_METRIC_FIELDS:
+        if field not in row or row[field] < 0:
+            continue
+        lines.append(f"# TYPE {metric} gauge")
+        lines.append(f"{metric}{{{labels}}} {row[field]}")
     return lines
 
 
@@ -281,6 +300,30 @@ def stage_detail_verified(stage, verification):
     return verification == "canonical"
 
 
+def add_state_prefetch_evidence(
+    row,
+    *,
+    enqueued=12,
+    dropped=1,
+    processed=11,
+    hits=8,
+    misses=2,
+    errors=1,
+):
+    row.update(
+        {
+            "syncLogStatus": "ok",
+            "syncLogStatePrefetchEnqueued": enqueued,
+            "syncLogStatePrefetchDropped": dropped,
+            "syncLogStatePrefetchProcessed": processed,
+            "syncLogStatePrefetchHits": hits,
+            "syncLogStatePrefetchMisses": misses,
+            "syncLogStatePrefetchErrors": errors,
+        }
+    )
+    return row
+
+
 def add_sample_prometheus_evidence(row, path, *, height=None):
     row.update(
         {
@@ -332,6 +375,7 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "stageStalled": False,
         }
     )
+    add_state_prefetch_evidence(row)
     row.update(snapshot_point_profile_evidence())
     metric_height = row["height"] if height is None else height
     labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
@@ -346,6 +390,7 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f"gtron_nile_sync_height{{{labels}}} {metric_height}",
                 "# TYPE gtron_nile_sync_target_lag_blocks gauge",
                 f'gtron_nile_sync_target_lag_blocks{{{labels}}} {row["syncTargetLagBlocks"]}',
+                *state_prefetch_prometheus_lines(row, labels),
                 "# TYPE gtron_nile_sync_full_staged_sync_head_lag_blocks gauge",
                 f'gtron_nile_sync_full_staged_sync_head_lag_blocks{{{labels}}} {row["fullStagedSyncHeadLagBlocks"]}',
                 "# TYPE gtron_nile_sync_full_staged_sync_ready gauge",
@@ -600,6 +645,211 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_accepts_sample_prometheus_without_state_prefetch_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            for field, _ in STATE_PREFETCH_METRIC_FIELDS:
+                row[field] = -1
+            row["syncLogStatus"] = "skipped"
+            text = prom.read_text(encoding="utf-8")
+            lines = [
+                line
+                for line in text.splitlines()
+                if "gtron_nile_sync_log_state_prefetch_" not in line
+            ]
+            prom.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_accepts_state_prefetch_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_state_prefetch_evidence(clean_full_staged_sync_row())
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-state-prefetch-evidence",
+                    "--max-state-prefetch-errors",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_state_prefetch_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-state-prefetch-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "syncLogStatus=None, want 'ok' for state prefetch evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "syncLogStatePrefetchEnqueued=None, want non-negative integer",
+                proc.stderr,
+            )
+
+    def test_rejects_state_prefetch_accounting_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_state_prefetch_evidence(
+                clean_full_staged_sync_row(),
+                processed=11,
+                hits=8,
+                misses=2,
+                errors=0,
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-state-prefetch-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "state prefetch processed=11, want hits+misses+errors=10",
+                proc.stderr,
+            )
+
+    def test_rejects_missing_state_prefetch_activity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_state_prefetch_evidence(
+                clean_full_staged_sync_row(),
+                enqueued=0,
+                dropped=0,
+                processed=0,
+                hits=0,
+                misses=0,
+                errors=0,
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-state-prefetch-activity",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "state prefetch activity missing: enqueued=0 processed=0",
+                proc.stderr,
+            )
+
+    def test_rejects_state_prefetch_error_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_state_prefetch_evidence(
+                clean_full_staged_sync_row(),
+                processed=11,
+                hits=8,
+                misses=1,
+                errors=2,
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--max-state-prefetch-errors",
+                    "0",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("syncLogStatePrefetchErrors=2, want <= 0", proc.stderr)
+
+    def test_rejects_sample_prometheus_missing_state_prefetch_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_log_state_prefetch_processed{datadir="/tmp/nile",label="",mode="full",network="nile"} 11\n',
+                "",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_log_state_prefetch_processed",
+                proc.stderr,
+            )
 
     def test_accepts_sample_prometheus_archive_method_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:

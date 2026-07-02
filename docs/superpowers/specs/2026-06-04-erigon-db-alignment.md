@@ -1586,6 +1586,10 @@ Status:
   `statePrefetchErrors`). The Nile sampler carries them into
   `syncLogStatePrefetch*` JSONL fields so production soaks can compare
   prefetch-on/off throughput against actual warmup work and missed/error counts.
+- The Nile acceptance checker now gates that evidence with
+  `--require-state-prefetch-evidence`, `--require-state-prefetch-activity`, and
+  `--max-state-prefetch-errors`, and sample Prometheus artifacts export matching
+  `gtron_nile_sync_log_state_prefetch_*` gauges for non-negative counters.
 
 Remaining:
 

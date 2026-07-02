@@ -106,6 +106,12 @@ For Nile/mainnet soak runs, pass the gtron log to
 the same counters as `syncLogStatePrefetch*` JSONL fields, so prefetch-on and
 prefetch-off runs can be compared against throughput, memory, and stage-progress
 evidence before changing defaults.
+When those rows are collected with `--prometheus-output`, the sampler also emits
+`gtron_nile_sync_log_state_prefetch_*` gauges for non-negative counter values.
+Gate prefetch comparison runs with
+`scripts/dev/nile_sync_acceptance.py --require-state-prefetch-evidence`; add
+`--require-state-prefetch-activity` for prefetch-on runs and
+`--max-state-prefetch-errors 0` for production soak evidence.
 
 ## Rollout Gate
 
