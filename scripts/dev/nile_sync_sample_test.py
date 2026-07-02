@@ -33,6 +33,22 @@ def write_full_stage_status(path):
     )
 
 
+def write_fake_event_log_index_gtron(path):
+    path.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = "snapshot" ] && [ "$2" = "event-log-index-stats" ]; then
+  echo 'Event log index stats: dir=/tmp/snap segments=2 fromBlock=1 toBlock=80 addressKeys=3 addressPostings=6 addressAvgPostingsMilli=2000 addressMaxPostings=3 addressSingletonKeys=1 addressMultiPostingKeys=2 topicKeys=2 topicPostings=3 topicAvgPostingsMilli=1500 topicMaxPostings=2 topicSingletonKeys=1 topicMultiPostingKeys=1'
+  exit 0
+fi
+echo "unexpected gtron args: $*" >&2
+exit 2
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 class NileSampleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         payloads = {
@@ -723,6 +739,70 @@ class NileSyncSampleTest(unittest.TestCase):
                 f"gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli{{{labels}}} 125",
                 metrics,
             )
+
+    def test_sample_includes_event_log_index_stats_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            fake_gtron = tmpdir / "gtron"
+            write_fake_event_log_index_gtron(fake_gtron)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            prometheus = tmpdir / "sync.prom"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--gtron",
+                    str(fake_gtron),
+                    "--event-log-index-stats",
+                    "--mode",
+                    "archive",
+                    "--label",
+                    "event-index",
+                    "--prometheus-output",
+                    str(prometheus),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["eventLogIndexStatsStatus"], "ok")
+            self.assertEqual(row["eventLogIndexSegments"], 2)
+            self.assertEqual(row["eventLogIndexFromBlock"], 1)
+            self.assertEqual(row["eventLogIndexToBlock"], 80)
+            self.assertEqual(row["eventLogIndexAddressKeys"], 3)
+            self.assertEqual(row["eventLogIndexAddressPostings"], 6)
+            self.assertEqual(row["eventLogIndexAddressAvgPostingsMilli"], 2000)
+            self.assertEqual(row["eventLogIndexAddressMaxPostings"], 3)
+            self.assertEqual(row["eventLogIndexAddressSingletonKeys"], 1)
+            self.assertEqual(row["eventLogIndexAddressMultiPostingKeys"], 2)
+            self.assertEqual(row["eventLogIndexTopicKeys"], 2)
+            self.assertEqual(row["eventLogIndexTopicPostings"], 3)
+            self.assertEqual(row["eventLogIndexTopicAvgPostingsMilli"], 1500)
+            self.assertEqual(row["eventLogIndexTopicMaxPostings"], 2)
+            self.assertEqual(row["eventLogIndexTopicSingletonKeys"], 1)
+            self.assertEqual(row["eventLogIndexTopicMultiPostingKeys"], 1)
+
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="event-index",mode="archive",network="nile"'
+            self.assertIn(f"gtron_nile_sync_event_log_index_segments{{{labels}}} 2", metrics)
+            self.assertIn(f"gtron_nile_sync_event_log_index_from_block{{{labels}}} 1", metrics)
+            self.assertIn(f"gtron_nile_sync_event_log_index_to_block{{{labels}}} 80", metrics)
+            self.assertIn(f"gtron_nile_sync_event_log_index_address_postings{{{labels}}} 6", metrics)
+            self.assertIn(f"gtron_nile_sync_event_log_index_topic_postings{{{labels}}} 3", metrics)
 
     def test_sample_writes_prometheus_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

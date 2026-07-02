@@ -25,6 +25,7 @@ PID_FILE=""
 DEBUG_METRICS_URL=""
 STORAGE_ALERT_PROMETHEUS_FILE=""
 PROMETHEUS_OUTPUT=""
+EVENT_LOG_INDEX_STATS=0
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 ARCHIVE_API_PROBE=0
@@ -54,6 +55,7 @@ Options:
   --sync-log-file FILE       Parse latest `Imported chain segment` log fields
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --debug-metrics-url URL    Fetch optional /debug/metrics JSON into the sample row
+  --event-log-index-stats    Run gtron snapshot event-log-index-stats and emit eventLogIndex* counters
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --storage-alert-prometheus-file FILE
                               Write storage-alerts Prometheus metrics when offline DB check runs
@@ -103,6 +105,7 @@ while [ "$#" -gt 0 ]; do
     --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
+    --event-log-index-stats) EVENT_LOG_INDEX_STATS=1; shift ;;
     --storage-alert-prometheus-file) STORAGE_ALERT_PROMETHEUS_FILE="${2:?}"; shift 2 ;;
     --prometheus-output) PROMETHEUS_OUTPUT="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
@@ -168,6 +171,7 @@ nodeinfo_json="$tmpdir/getnodeinfo.json"
 nodes_json="$tmpdir/listnodes.json"
 storage_alerts_out="$tmpdir/storage-alerts.out"
 debug_metrics_json="$tmpdir/debug-metrics.json"
+event_log_index_stats_out="$tmpdir/event-log-index-stats.out"
 
 nowblock_status="ok"
 nodeinfo_status="ok"
@@ -194,6 +198,20 @@ if [ -n "$DEBUG_METRICS_URL" ]; then
   fi
 else
   : >"$debug_metrics_json"
+fi
+
+event_log_index_stats_status="skipped"
+if [ "$EVENT_LOG_INDEX_STATS" -eq 1 ]; then
+  if [ ! -x "$GTRON" ]; then
+    event_log_index_stats_status="missing-gtron"
+    echo "gtron binary not executable: $GTRON" >"$event_log_index_stats_out"
+  elif "$GTRON" snapshot event-log-index-stats --datadir "$DATADIR" >"$event_log_index_stats_out" 2>&1; then
+    event_log_index_stats_status="ok"
+  else
+    event_log_index_stats_status="error"
+  fi
+else
+  : >"$event_log_index_stats_out"
 fi
 
 offline_status="skipped"
@@ -261,6 +279,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
   "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
+  "$event_log_index_stats_out" "$event_log_index_stats_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
@@ -297,6 +316,8 @@ from pathlib import Path
     debug_metrics_url,
     debug_metrics_path,
     debug_metrics_status,
+    event_log_index_stats_path,
+    event_log_index_stats_status,
     nowblock_status,
     nodeinfo_status,
     nodes_status,
@@ -2419,6 +2440,68 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
         row[f"{prefix}SnapshotShareMilli"] = int_field(stats.get("snapshotShareMilli"), -1)
     return row
 
+EVENT_LOG_INDEX_STAT_DEFAULTS = {
+    "eventLogIndexSegments": 0,
+    "eventLogIndexFromBlock": -1,
+    "eventLogIndexToBlock": -1,
+    "eventLogIndexAddressKeys": 0,
+    "eventLogIndexAddressPostings": 0,
+    "eventLogIndexAddressAvgPostingsMilli": 0,
+    "eventLogIndexAddressMaxPostings": 0,
+    "eventLogIndexAddressSingletonKeys": 0,
+    "eventLogIndexAddressMultiPostingKeys": 0,
+    "eventLogIndexTopicKeys": 0,
+    "eventLogIndexTopicPostings": 0,
+    "eventLogIndexTopicAvgPostingsMilli": 0,
+    "eventLogIndexTopicMaxPostings": 0,
+    "eventLogIndexTopicSingletonKeys": 0,
+    "eventLogIndexTopicMultiPostingKeys": 0,
+}
+
+EVENT_LOG_INDEX_STAT_FIELDS = {
+    "segments": "eventLogIndexSegments",
+    "fromBlock": "eventLogIndexFromBlock",
+    "toBlock": "eventLogIndexToBlock",
+    "addressKeys": "eventLogIndexAddressKeys",
+    "addressPostings": "eventLogIndexAddressPostings",
+    "addressAvgPostingsMilli": "eventLogIndexAddressAvgPostingsMilli",
+    "addressMaxPostings": "eventLogIndexAddressMaxPostings",
+    "addressSingletonKeys": "eventLogIndexAddressSingletonKeys",
+    "addressMultiPostingKeys": "eventLogIndexAddressMultiPostingKeys",
+    "topicKeys": "eventLogIndexTopicKeys",
+    "topicPostings": "eventLogIndexTopicPostings",
+    "topicAvgPostingsMilli": "eventLogIndexTopicAvgPostingsMilli",
+    "topicMaxPostings": "eventLogIndexTopicMaxPostings",
+    "topicSingletonKeys": "eventLogIndexTopicSingletonKeys",
+    "topicMultiPostingKeys": "eventLogIndexTopicMultiPostingKeys",
+}
+
+def event_log_index_stats_defaults(status):
+    row = {"eventLogIndexStatsStatus": status}
+    row.update(EVENT_LOG_INDEX_STAT_DEFAULTS)
+    return row
+
+def event_log_index_stats(path, status):
+    row = event_log_index_stats_defaults(status)
+    if status != "ok":
+        return row
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return event_log_index_stats_defaults("error")
+    stat_line = ""
+    for line in lines:
+        if "Event log index stats:" in line:
+            stat_line = line
+    if not stat_line:
+        return event_log_index_stats_defaults("error")
+    fields = parse_logfmt_fields(stat_line)
+    if not fields:
+        return event_log_index_stats_defaults("error")
+    for source, dest in EVENT_LOG_INDEX_STAT_FIELDS.items():
+        row[dest] = int_field(fields.get(source), EVENT_LOG_INDEX_STAT_DEFAULTS[dest])
+    return row
+
 SAMPLE_STATUS_VALUES = {
     "ok": 0,
     "height-mismatch": 1,
@@ -2515,6 +2598,21 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_bytes", "snapshotPointEventLogIndexSidecarBytes", "Snapshot sidecar bytes covered by the event-log point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_event_log_index_sidecar_share_milli", "snapshotPointEventLogIndexSidecarShareMilli", "Candidate-local sidecar share for the event-log point lookup candidate in milli-units."),
     ("gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli", "snapshotPointEventLogIndexSnapshotShareMilli", "Snapshot-wide share for the event-log point lookup candidate in milli-units."),
+    ("gtron_nile_sync_event_log_index_segments", "eventLogIndexSegments", "Active event-log-index sidecar segment count."),
+    ("gtron_nile_sync_event_log_index_from_block", "eventLogIndexFromBlock", "Lowest block covered by active event-log-index sidecars."),
+    ("gtron_nile_sync_event_log_index_to_block", "eventLogIndexToBlock", "Highest block covered by active event-log-index sidecars."),
+    ("gtron_nile_sync_event_log_index_address_keys", "eventLogIndexAddressKeys", "Event-log-index address key count."),
+    ("gtron_nile_sync_event_log_index_address_postings", "eventLogIndexAddressPostings", "Event-log-index address posting count."),
+    ("gtron_nile_sync_event_log_index_address_avg_postings_milli", "eventLogIndexAddressAvgPostingsMilli", "Event-log-index average address postings per key in milli-units."),
+    ("gtron_nile_sync_event_log_index_address_max_postings", "eventLogIndexAddressMaxPostings", "Event-log-index maximum address postings for one key."),
+    ("gtron_nile_sync_event_log_index_address_singleton_keys", "eventLogIndexAddressSingletonKeys", "Event-log-index address keys with one posting."),
+    ("gtron_nile_sync_event_log_index_address_multi_posting_keys", "eventLogIndexAddressMultiPostingKeys", "Event-log-index address keys with multiple postings."),
+    ("gtron_nile_sync_event_log_index_topic_keys", "eventLogIndexTopicKeys", "Event-log-index topic key count."),
+    ("gtron_nile_sync_event_log_index_topic_postings", "eventLogIndexTopicPostings", "Event-log-index topic posting count."),
+    ("gtron_nile_sync_event_log_index_topic_avg_postings_milli", "eventLogIndexTopicAvgPostingsMilli", "Event-log-index average topic postings per key in milli-units."),
+    ("gtron_nile_sync_event_log_index_topic_max_postings", "eventLogIndexTopicMaxPostings", "Event-log-index maximum topic postings for one key."),
+    ("gtron_nile_sync_event_log_index_topic_singleton_keys", "eventLogIndexTopicSingletonKeys", "Event-log-index topic keys with one posting."),
+    ("gtron_nile_sync_event_log_index_topic_multi_posting_keys", "eventLogIndexTopicMultiPostingKeys", "Event-log-index topic keys with multiple postings."),
     ("gtron_nile_sync_snapshot_point_state_history_accessor_bytes", "snapshotPointStateHistoryAccessorBytes", "Snapshot bytes covered by the state-history accessor point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_state_history_accessor_segments", "snapshotPointStateHistoryAccessorSegments", "Snapshot segment count covered by the state-history accessor point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_state_history_accessor_payload_bytes", "snapshotPointStateHistoryAccessorPayloadBytes", "Snapshot payload bytes covered by the state-history accessor point lookup candidate."),
@@ -2566,6 +2664,8 @@ SAMPLE_PROMETHEUS_SKIP_NEGATIVE_FIELDS = {
     "syncLogStatePrefetchHits",
     "syncLogStatePrefetchMisses",
     "syncLogStatePrefetchErrors",
+    "eventLogIndexFromBlock",
+    "eventLogIndexToBlock",
 }
 
 ARCHIVE_API_BASE_METHODS = (
@@ -3444,6 +3544,7 @@ row.update(process)
 row.update(debug_metrics)
 row.update(archive_api)
 row.update(snapshot_profile)
+row.update(event_log_index_stats(event_log_index_stats_path, event_log_index_stats_status))
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 row["samplePrometheus"] = prometheus_output

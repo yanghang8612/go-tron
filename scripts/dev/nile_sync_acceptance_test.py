@@ -77,6 +77,42 @@ STATE_PREFETCH_METRIC_FIELDS = (
     ("syncLogStatePrefetchErrors", "gtron_nile_sync_log_state_prefetch_errors"),
 )
 
+EVENT_LOG_INDEX_METRIC_FIELDS = (
+    ("eventLogIndexSegments", "gtron_nile_sync_event_log_index_segments"),
+    ("eventLogIndexFromBlock", "gtron_nile_sync_event_log_index_from_block"),
+    ("eventLogIndexToBlock", "gtron_nile_sync_event_log_index_to_block"),
+    ("eventLogIndexAddressKeys", "gtron_nile_sync_event_log_index_address_keys"),
+    ("eventLogIndexAddressPostings", "gtron_nile_sync_event_log_index_address_postings"),
+    (
+        "eventLogIndexAddressAvgPostingsMilli",
+        "gtron_nile_sync_event_log_index_address_avg_postings_milli",
+    ),
+    ("eventLogIndexAddressMaxPostings", "gtron_nile_sync_event_log_index_address_max_postings"),
+    (
+        "eventLogIndexAddressSingletonKeys",
+        "gtron_nile_sync_event_log_index_address_singleton_keys",
+    ),
+    (
+        "eventLogIndexAddressMultiPostingKeys",
+        "gtron_nile_sync_event_log_index_address_multi_posting_keys",
+    ),
+    ("eventLogIndexTopicKeys", "gtron_nile_sync_event_log_index_topic_keys"),
+    ("eventLogIndexTopicPostings", "gtron_nile_sync_event_log_index_topic_postings"),
+    (
+        "eventLogIndexTopicAvgPostingsMilli",
+        "gtron_nile_sync_event_log_index_topic_avg_postings_milli",
+    ),
+    ("eventLogIndexTopicMaxPostings", "gtron_nile_sync_event_log_index_topic_max_postings"),
+    (
+        "eventLogIndexTopicSingletonKeys",
+        "gtron_nile_sync_event_log_index_topic_singleton_keys",
+    ),
+    (
+        "eventLogIndexTopicMultiPostingKeys",
+        "gtron_nile_sync_event_log_index_topic_multi_posting_keys",
+    ),
+)
+
 
 def snapshot_point_fields(prefix, segments, total, payload, sidecar, sidecar_share, snapshot_share):
     values = (segments, total, payload, sidecar, sidecar_share, snapshot_share)
@@ -111,6 +147,16 @@ def snapshot_point_prometheus_lines(row, labels):
 def state_prefetch_prometheus_lines(row, labels):
     lines = []
     for field, metric in STATE_PREFETCH_METRIC_FIELDS:
+        if field not in row or row[field] < 0:
+            continue
+        lines.append(f"# TYPE {metric} gauge")
+        lines.append(f"{metric}{{{labels}}} {row[field]}")
+    return lines
+
+
+def event_log_index_prometheus_lines(row, labels):
+    lines = []
+    for field, metric in EVENT_LOG_INDEX_METRIC_FIELDS:
         if field not in row or row[field] < 0:
             continue
         lines.append(f"# TYPE {metric} gauge")
@@ -324,6 +370,54 @@ def add_state_prefetch_evidence(
     return row
 
 
+def add_event_log_index_evidence(
+    row,
+    *,
+    segments=2,
+    from_block=1,
+    to_block=1000,
+    address_keys=3,
+    address_postings=6,
+    address_max=3,
+    address_singleton=1,
+    address_multi=2,
+    topic_keys=2,
+    topic_postings=3,
+    topic_max=2,
+    topic_singleton=1,
+    topic_multi=1,
+):
+    row.update(
+        {
+            "eventLogIndexStatsStatus": "ok",
+            "eventLogIndexSegments": segments,
+            "eventLogIndexFromBlock": from_block,
+            "eventLogIndexToBlock": to_block,
+            "eventLogIndexAddressKeys": address_keys,
+            "eventLogIndexAddressPostings": address_postings,
+            "eventLogIndexAddressAvgPostingsMilli": (
+                (address_postings * 1000 + address_keys // 2) // address_keys
+                if address_keys
+                else 0
+            ),
+            "eventLogIndexAddressMaxPostings": address_max,
+            "eventLogIndexAddressSingletonKeys": address_singleton,
+            "eventLogIndexAddressMultiPostingKeys": address_multi,
+            "eventLogIndexTopicKeys": topic_keys,
+            "eventLogIndexTopicPostings": topic_postings,
+            "eventLogIndexTopicAvgPostingsMilli": (
+                (topic_postings * 1000 + topic_keys // 2) // topic_keys
+                if topic_keys
+                else 0
+            ),
+            "eventLogIndexTopicMaxPostings": topic_max,
+            "eventLogIndexTopicSingletonKeys": topic_singleton,
+            "eventLogIndexTopicMultiPostingKeys": topic_multi,
+        }
+    )
+    return row
+
+
 def add_sample_prometheus_evidence(row, path, *, height=None):
     row.update(
         {
@@ -502,10 +596,10 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_balance_trace_prune_to_block{{{labels}}} {row["balanceTracePruneToBlock"]}',
                 "# TYPE gtron_nile_sync_section_bloom_prune_to_section gauge",
                 f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} {row["sectionBloomPruneToSection"]}',
-                "# TYPE gtron_nile_sync_archive_api_failures gauge",
-                "# TYPE gtron_nile_sync_archive_api_depth_blocks gauge",
-                f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} {row["archiveApiDepthBlocks"]}',
-                f'gtron_nile_sync_archive_api_failures{{{labels}}} {row["archiveApiFailures"]}',
+            "# TYPE gtron_nile_sync_archive_api_failures gauge",
+            "# TYPE gtron_nile_sync_archive_api_depth_blocks gauge",
+            f'gtron_nile_sync_archive_api_depth_blocks{{{labels}}} {row["archiveApiDepthBlocks"]}',
+            f'gtron_nile_sync_archive_api_failures{{{labels}}} {row["archiveApiFailures"]}',
                 "# TYPE gtron_nile_sync_stage_stalled gauge",
                 f"gtron_nile_sync_stage_stalled{{{labels}}} 0",
             ]
@@ -545,6 +639,12 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
         with path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
     return row
+
+
+def append_event_log_index_prometheus_metrics(path, row):
+    labels = 'datadir="/tmp/nile",label="",mode="full",network="nile"'
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(event_log_index_prometheus_lines(row, labels)) + "\n")
 
 
 def add_archive_trace_evidence(row):
@@ -819,6 +919,120 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("syncLogStatePrefetchErrors=2, want <= 0", proc.stderr)
 
+    def test_accepts_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_event_log_index_evidence(clean_full_staged_sync_row())
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("event-log index evidence is missing", proc.stderr)
+            self.assertIn("eventLogIndexStatsStatus=None, want 'ok'", proc.stderr)
+            self.assertIn("eventLogIndexSegments=None, want positive integer", proc.stderr)
+
+    def test_rejects_invalid_event_log_index_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_event_log_index_evidence(
+                clean_full_staged_sync_row(),
+                segments=0,
+                address_keys=3,
+                address_postings=2,
+                address_max=0,
+                address_singleton=1,
+                address_multi=1,
+                topic_keys=0,
+                topic_postings=1,
+                topic_max=1,
+                topic_singleton=0,
+                topic_multi=0,
+            )
+            row["eventLogIndexAddressAvgPostingsMilli"] = 123
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("eventLogIndexSegments=0, want > 0", proc.stderr)
+            self.assertIn("address singleton+multi=2 must equal keys=3", proc.stderr)
+            self.assertIn("address postings=2 must be >= keys=3", proc.stderr)
+            self.assertIn("address maxPostings must be > 0 when keys=3", proc.stderr)
+            self.assertIn("address avgPostingsMilli=123, want 667", proc.stderr)
+            self.assertIn("topic postings=1 must be 0 when keys=0", proc.stderr)
+            self.assertIn("topic maxPostings=1 must be 0 when keys=0", proc.stderr)
+
+    def test_rejects_event_log_index_tail_prune_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_event_log_index_evidence(
+                clean_full_staged_sync_row(),
+                from_block=1,
+                to_block=70,
+            )
+            row["tailPrunedThroughBlock"] = 75
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "event-log index range [1,70] must cover tailPrunedThroughBlock=75",
+                proc.stderr,
+            )
+
     def test_rejects_sample_prometheus_missing_state_prefetch_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -848,6 +1062,69 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "missing gtron_nile_sync_log_state_prefetch_processed",
+                proc.stderr,
+            )
+
+    def test_accepts_sample_prometheus_event_log_index_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_event_log_index_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            append_event_log_index_prometheus_metrics(prom, row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_sample_prometheus_missing_event_log_index_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_event_log_index_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            append_event_log_index_prometheus_metrics(prom, row)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_event_log_index_address_postings{datadir="/tmp/nile",label="",mode="full",network="nile"} 6\n',
+                "",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_event_log_index_address_postings",
                 proc.stderr,
             )
 

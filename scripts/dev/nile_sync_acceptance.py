@@ -56,6 +56,69 @@ STATE_PREFETCH_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_log_state_prefetch_errors", "syncLogStatePrefetchErrors"),
 )
 
+EVENT_LOG_INDEX_RANGE_FIELDS = (
+    "eventLogIndexFromBlock",
+    "eventLogIndexToBlock",
+)
+
+EVENT_LOG_INDEX_LOOKUP_FIELDS = (
+    "eventLogIndexAddressKeys",
+    "eventLogIndexAddressPostings",
+    "eventLogIndexAddressAvgPostingsMilli",
+    "eventLogIndexAddressMaxPostings",
+    "eventLogIndexAddressSingletonKeys",
+    "eventLogIndexAddressMultiPostingKeys",
+    "eventLogIndexTopicKeys",
+    "eventLogIndexTopicPostings",
+    "eventLogIndexTopicAvgPostingsMilli",
+    "eventLogIndexTopicMaxPostings",
+    "eventLogIndexTopicSingletonKeys",
+    "eventLogIndexTopicMultiPostingKeys",
+)
+
+EVENT_LOG_INDEX_EVIDENCE_FIELDS = (
+    "eventLogIndexStatsStatus",
+    "eventLogIndexSegments",
+    *EVENT_LOG_INDEX_RANGE_FIELDS,
+    *EVENT_LOG_INDEX_LOOKUP_FIELDS,
+)
+
+EVENT_LOG_INDEX_PROMETHEUS_FIELD_METRICS = (
+    ("gtron_nile_sync_event_log_index_segments", "eventLogIndexSegments"),
+    ("gtron_nile_sync_event_log_index_from_block", "eventLogIndexFromBlock"),
+    ("gtron_nile_sync_event_log_index_to_block", "eventLogIndexToBlock"),
+    ("gtron_nile_sync_event_log_index_address_keys", "eventLogIndexAddressKeys"),
+    ("gtron_nile_sync_event_log_index_address_postings", "eventLogIndexAddressPostings"),
+    (
+        "gtron_nile_sync_event_log_index_address_avg_postings_milli",
+        "eventLogIndexAddressAvgPostingsMilli",
+    ),
+    ("gtron_nile_sync_event_log_index_address_max_postings", "eventLogIndexAddressMaxPostings"),
+    (
+        "gtron_nile_sync_event_log_index_address_singleton_keys",
+        "eventLogIndexAddressSingletonKeys",
+    ),
+    (
+        "gtron_nile_sync_event_log_index_address_multi_posting_keys",
+        "eventLogIndexAddressMultiPostingKeys",
+    ),
+    ("gtron_nile_sync_event_log_index_topic_keys", "eventLogIndexTopicKeys"),
+    ("gtron_nile_sync_event_log_index_topic_postings", "eventLogIndexTopicPostings"),
+    (
+        "gtron_nile_sync_event_log_index_topic_avg_postings_milli",
+        "eventLogIndexTopicAvgPostingsMilli",
+    ),
+    ("gtron_nile_sync_event_log_index_topic_max_postings", "eventLogIndexTopicMaxPostings"),
+    (
+        "gtron_nile_sync_event_log_index_topic_singleton_keys",
+        "eventLogIndexTopicSingletonKeys",
+    ),
+    (
+        "gtron_nile_sync_event_log_index_topic_multi_posting_keys",
+        "eventLogIndexTopicMultiPostingKeys",
+    ),
+)
+
 SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_height", "height"),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
@@ -126,6 +189,7 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
         "gtron_nile_sync_snapshot_point_event_log_index_snapshot_share_milli",
         "snapshotPointEventLogIndexSnapshotShareMilli",
     ),
+    *EVENT_LOG_INDEX_PROMETHEUS_FIELD_METRICS,
     (
         "gtron_nile_sync_snapshot_point_state_history_accessor_bytes",
         "snapshotPointStateHistoryAccessorBytes",
@@ -266,9 +330,15 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "archiveApiDepthBlocks",
     "archiveApiFailures",
     *STATE_PREFETCH_EVIDENCE_FIELDS,
+    "eventLogIndexSegments",
+    *EVENT_LOG_INDEX_RANGE_FIELDS,
+    *EVENT_LOG_INDEX_LOOKUP_FIELDS,
 }
 
-SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = set(STATE_PREFETCH_EVIDENCE_FIELDS)
+SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = {
+    *STATE_PREFETCH_EVIDENCE_FIELDS,
+    *EVENT_LOG_INDEX_RANGE_FIELDS,
+}
 
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
@@ -2612,6 +2682,131 @@ def check_archive_tx_evidence(row, require_trace_transaction=False):
     return issues
 
 
+def event_log_index_evidence_row(row):
+    if row.get("eventLogIndexStatsStatus") == "ok":
+        return True
+    segments = as_number(row, "eventLogIndexSegments")
+    return segments is not None and segments > 0
+
+
+def rounded_milli(postings, keys):
+    if keys == 0:
+        return 0
+    return (postings * 1000 + keys // 2) // keys
+
+
+def check_event_log_index_lookup_stats(row, label, prefix):
+    issues = []
+    fields = {
+        "keys": f"eventLogIndex{prefix}Keys",
+        "postings": f"eventLogIndex{prefix}Postings",
+        "avg": f"eventLogIndex{prefix}AvgPostingsMilli",
+        "max": f"eventLogIndex{prefix}MaxPostings",
+        "singleton": f"eventLogIndex{prefix}SingletonKeys",
+        "multi": f"eventLogIndex{prefix}MultiPostingKeys",
+    }
+    values = {}
+    for name, field in fields.items():
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+        values[name] = value
+    if issues:
+        return issues
+
+    keys = values["keys"]
+    postings = values["postings"]
+    avg = values["avg"]
+    max_postings = values["max"]
+    singleton = values["singleton"]
+    multi = values["multi"]
+    if singleton + multi != keys:
+        issues.append(f"{label} singleton+multi={singleton + multi} must equal keys={keys}")
+    if keys == 0:
+        if postings != 0:
+            issues.append(f"{label} postings={postings} must be 0 when keys=0")
+        if avg != 0:
+            issues.append(f"{label} avgPostingsMilli={avg} must be 0 when keys=0")
+        if max_postings != 0:
+            issues.append(f"{label} maxPostings={max_postings} must be 0 when keys=0")
+        return issues
+    if postings < keys:
+        issues.append(f"{label} postings={postings} must be >= keys={keys}")
+    if max_postings == 0:
+        issues.append(f"{label} maxPostings must be > 0 when keys={keys}")
+    if max_postings > postings:
+        issues.append(f"{label} maxPostings={max_postings} must be <= postings={postings}")
+    want_avg = rounded_milli(postings, keys)
+    if avg != want_avg:
+        issues.append(
+            f"{label} avgPostingsMilli={avg}, want {want_avg} "
+            f"for postings={postings} keys={keys}"
+        )
+    return issues
+
+
+def check_event_log_index_evidence(row, require_non_empty=False):
+    issues = []
+    if row.get("eventLogIndexStatsStatus") != "ok":
+        issues.append(f"eventLogIndexStatsStatus={row.get('eventLogIndexStatsStatus')!r}, want 'ok'")
+
+    segments = as_non_negative_int(row, "eventLogIndexSegments")
+    if segments is None:
+        issues.append(f"eventLogIndexSegments={row.get('eventLogIndexSegments')!r}, want positive integer")
+    elif segments <= 0:
+        issues.append(f"eventLogIndexSegments={segments:g}, want > 0")
+
+    from_block = as_non_negative_int(row, "eventLogIndexFromBlock")
+    to_block = as_non_negative_int(row, "eventLogIndexToBlock")
+    if from_block is None:
+        issues.append(
+            f"eventLogIndexFromBlock={row.get('eventLogIndexFromBlock')!r}, "
+            "want non-negative integer"
+        )
+    if to_block is None:
+        issues.append(
+            f"eventLogIndexToBlock={row.get('eventLogIndexToBlock')!r}, "
+            "want non-negative integer"
+        )
+    if from_block is not None and to_block is not None:
+        if from_block > to_block:
+            issues.append(f"event-log index range [{from_block},{to_block}] is inverted")
+        if field_present(row, "derivedIndexToBlock"):
+            derived_to = as_non_negative_int(row, "derivedIndexToBlock")
+            if derived_to is None:
+                issues.append(
+                    f"derivedIndexToBlock={row.get('derivedIndexToBlock')!r}, "
+                    "want non-negative integer"
+                )
+            elif derived_to != to_block:
+                issues.append(
+                    f"eventLogIndexToBlock={to_block} must match derivedIndexToBlock={derived_to}"
+                )
+        tail_pruned = None
+        if field_present(row, "tailPrunedThroughBlock"):
+            tail_pruned = as_int(row, "tailPrunedThroughBlock")
+            if tail_pruned is None:
+                issues.append(
+                    f"tailPrunedThroughBlock={row.get('tailPrunedThroughBlock')!r}, want integer"
+                )
+        if tail_pruned is not None and tail_pruned >= 0:
+            if from_block > tail_pruned or to_block < tail_pruned:
+                issues.append(
+                    f"event-log index range [{from_block},{to_block}] "
+                    f"must cover tailPrunedThroughBlock={tail_pruned:g}"
+                )
+
+    issues.extend(check_event_log_index_lookup_stats(row, "address", "Address"))
+    issues.extend(check_event_log_index_lookup_stats(row, "topic", "Topic"))
+    if require_non_empty:
+        address_postings = as_non_negative_int(row, "eventLogIndexAddressPostings")
+        if address_postings is None or address_postings <= 0:
+            issues.append(
+                f"eventLogIndexAddressPostings={row.get('eventLogIndexAddressPostings')!r}, want > 0"
+            )
+    return issues
+
+
 def snapshot_profile_evidence_row(row):
     return (
         any(field in row for field in SNAPSHOT_PROFILE_EVIDENCE_FIELDS)
@@ -2933,6 +3128,16 @@ def check_row(row, args):
             )
         )
 
+    if args.require_event_log_index_evidence or args.require_event_log_index_non_empty:
+        if not event_log_index_evidence_row(row):
+            issues.append("event-log index evidence is missing")
+        issues.extend(
+            check_event_log_index_evidence(
+                row,
+                require_non_empty=args.require_event_log_index_non_empty,
+            )
+        )
+
     if args.require_sample_prometheus_artifact:
         issues.extend(check_sample_prometheus_artifact(args.result, row))
 
@@ -3136,6 +3341,16 @@ def build_parser():
         type=parse_non_negative_int_arg,
         metavar="N",
         help="fail if syncLogStatePrefetchErrors exceeds N; also requires state-prefetch evidence",
+    )
+    parser.add_argument(
+        "--require-event-log-index-evidence",
+        action="store_true",
+        help="require selected rows to include valid eventLogIndex* sidecar coverage and lookup stats",
+    )
+    parser.add_argument(
+        "--require-event-log-index-non-empty",
+        action="store_true",
+        help="require event-log-index evidence and at least one indexed address posting",
     )
     parser.add_argument(
         "--require-sample-prometheus-artifact",

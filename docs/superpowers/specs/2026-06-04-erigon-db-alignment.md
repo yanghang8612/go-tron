@@ -1993,7 +1993,13 @@ Status:
   including average postings per key and single- versus multi-segment key
   counts, and the acceptance checker can require that evidence through
   `--require-event-log-index-evidence`, giving larger soaks a concrete
-  selectivity signal before revisiting recsplit-style accessors.
+  selectivity signal before revisiting recsplit-style accessors. The Nile
+  sync sampler now exposes the same `eventLogIndex*` counters through
+  `--event-log-index-stats`, writes matching
+  `gtron_nile_sync_event_log_index_*` Prometheus gauges, and the Nile
+  acceptance gate can require the runtime sidecar range plus address/topic
+  lookup accounting with `--require-event-log-index-evidence` and
+  `--require-event-log-index-non-empty`.
 - Event-log segment verification now also proves the segment-local address and
   positional-topic lookup maps are exact, not merely internally well-formed:
   every payload/index row must be reachable from the corresponding lookup key,

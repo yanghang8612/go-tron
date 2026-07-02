@@ -71,6 +71,7 @@ scripts/dev/nile_sync_sample.sh \
   --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
   --pid-file /Users/asuka/gtron-soak/gtron.pid \
   --debug-metrics-url 'http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/' \
+  --event-log-index-stats \
   --prometheus-output /Users/asuka/gtron-soak/logs/sync-sample.prom \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
@@ -117,7 +118,9 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `snapshotRetiredDirectoryBytes`, and `snapshotOtherBytes`, snapshot manifest
 profile counters such as `snapshotManifestProfileStatus`,
 `snapshotPayloadBytes`, `snapshotSidecarBytes`, `snapshotSidecarShareMilli`,
-and per-family `snapshot*Sidecar*` bytes/share fields, plus matching
+and per-family `snapshot*Sidecar*` bytes/share fields, and
+`eventLogIndex*` segment/range/address/topic lookup counters when
+`--event-log-index-stats` is enabled, plus matching
 `*Files` / `*BytesDelta` fields, total
 per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
@@ -445,6 +448,8 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max-cold-archive-bytes-per-block 250000 \
   --max-derived-index-bytes-per-block 40000 \
   --require-snapshot-profile-evidence \
+  --require-event-log-index-evidence \
+  --require-event-log-index-non-empty \
   --max-snapshot-point-sidecar-share-milli 1000 \
   --max-snapshot-point-snapshot-share-milli 200 \
   --max snapshotSidecarShareMilli=350
@@ -484,6 +489,16 @@ and `syncLogStatePrefetchProcessed` to equal hits plus misses plus errors. Add
 the sampled segment must prove actual queued and processed warmup work. Use
 `--max-state-prefetch-errors 0` for production soak gates unless the run is
 intentionally exercising storage-read failure paths.
+Use `--require-event-log-index-evidence` when rows were collected with
+`--event-log-index-stats`. It requires the readonly
+`gtron snapshot event-log-index-stats` probe to report `ok`, positive active
+`eventLogIndexSegments`, a non-inverted `eventLogIndexFromBlock` /
+`eventLogIndexToBlock` range, and internally consistent address/topic key,
+posting, average-fanout, max-fanout, singleton, and multi-posting counters.
+Rows that also carry `tailPrunedThroughBlock` must prove the event-log-index
+range covers that boundary. Add `--require-event-log-index-non-empty` for
+production archive/log-query runs where at least one address posting is
+expected.
 Use `--require-sample-prometheus-artifact` when rows were collected with
 `--prometheus-output`. The checker requires `samplePrometheusStatus=ok`, reads
 the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
@@ -498,6 +513,7 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
 `gtron_nile_sync_log_state_prefetch_*`,
+`gtron_nile_sync_event_log_index_*`,
 `gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,
 `gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks`, interval
 stage-throughput gauges, hot/cold/index byte gauges,
