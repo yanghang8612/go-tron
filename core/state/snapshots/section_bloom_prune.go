@@ -43,13 +43,16 @@ func PruneHotSectionBloomsWithProgress(db ethdb.KeyValueStore, dir string, manif
 	if db == nil {
 		return nil, errors.New("snapshots: nil section bloom prune database")
 	}
-	lastPrunedBlock, ok, err := readHashBoundPruneResumeBlock(db, rawdb.StageSnapshotSectionBloomPrune)
+	resume, err := readHashBoundPruneResumeBoundary(db, rawdb.StageSnapshotSectionBloomPrune)
 	if err != nil {
 		return nil, err
 	}
+	if err := verifySectionBloomPruneResumeStage(db, resume); err != nil {
+		return nil, err
+	}
 	result, err := pruneHotSectionBlooms(db, dir, manifest, sectionBloomPruneBounds{
-		lastPrunedBlock:     lastPrunedBlock,
-		hasLastPrunedBlock:  ok,
+		lastPrunedBlock:     resume.block,
+		hasLastPrunedBlock:  resume.hasHash,
 		requireProgressHash: true,
 	})
 	if err != nil {
@@ -231,6 +234,20 @@ func writeSnapshotSectionBloomPruneStage(db ethdb.KeyValueStore, blockNum uint64
 		return nil
 	}
 	return rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotSectionBloomPrune, blockNum, blockHash)
+}
+
+func verifySectionBloomPruneResumeStage(db ethdb.KeyValueReader, resume hashBoundPruneResumeBoundary) error {
+	if !resume.hasHash {
+		return nil
+	}
+	hash, err := sectionBloomPruneStageHash(db, resume.block)
+	if err != nil {
+		return fmt.Errorf("snapshots: verify %s stage block %d: %w", rawdb.StageSnapshotSectionBloomPrune, resume.block, err)
+	}
+	if hash != resume.hash {
+		return fmt.Errorf("snapshots: %s stage %d hash %x does not match canonical hash %x", rawdb.StageSnapshotSectionBloomPrune, resume.block, resume.hash, hash)
+	}
+	return nil
 }
 
 func sectionBloomPruneStageHash(db ethdb.KeyValueReader, blockNum uint64) (common.Hash, error) {

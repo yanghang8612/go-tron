@@ -175,6 +175,57 @@ func TestPruneHotSectionBloomsWithProgressUpgradesUnboundResumeStage(t *testing.
 	}
 }
 
+func TestPruneHotSectionBloomsWithProgressRejectsResumeHashMismatchBeforeDelete(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	rowA := sectionBloomTestEncodedBit(t, 5)
+	rowB := sectionBloomTestEncodedBit(t, 9)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, rowA); err != nil {
+		t.Fatalf("WriteSectionBloom 0/42: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 1, 99, rowB); err != nil {
+		t.Fatalf("WriteSectionBloom 1/99: %v", err)
+	}
+	blockA := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection-1)
+	if err := rawdb.WriteBlock(db, blockA); err != nil {
+		t.Fatalf("WriteBlock section A end: %v", err)
+	}
+	blockB := canonicalBoundaryTestBlock(t, rawdb.SectionBloomBlockPerSection*2-1)
+	if err := rawdb.WriteBlock(db, blockB); err != nil {
+		t.Fatalf("WriteBlock section B end: %v", err)
+	}
+	refA, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB A: %v", err)
+	}
+	refB, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", rawdb.SectionBloomBlockPerSection, rawdb.SectionBloomBlockPerSection*2-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB B: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{refA, refB})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	wrongHash := blockA.Hash()
+	wrongHash[0] ^= 0xff
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotSectionBloomPrune, blockA.Number(), wrongHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotSectionBloomPrune: %v", err)
+	}
+
+	_, err = PruneHotSectionBloomsWithProgress(db, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "does not match canonical hash") {
+		t.Fatalf("PruneHotSectionBloomsWithProgress resume mismatch err = %v, want canonical hash mismatch", err)
+	}
+	bitset, ok, err := rawdb.ReadSectionBloomBitSet(db, 1, 99)
+	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 9) {
+		t.Fatalf("hot section bloom after rejected resume mismatch = %x/%v/%v, want bit 9", bitset, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wrongHash {
+		t.Fatalf("section bloom prune row after rejected resume mismatch = %+v ok=%v err=%v, want original wrong hash %x", row, ok, err, wrongHash)
+	}
+}
+
 func TestSectionBloomPruneLifecycleOnePass(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"

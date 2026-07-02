@@ -46,13 +46,16 @@ func PruneHotBalanceTracesWithProgress(db ethdb.KeyValueStore, dir string, manif
 	if db == nil {
 		return nil, errors.New("snapshots: nil balance trace prune database")
 	}
-	lastPrunedBlock, ok, err := readHashBoundPruneResumeBlock(db, rawdb.StageSnapshotBalanceTracePrune)
+	resume, err := readHashBoundPruneResumeBoundary(db, rawdb.StageSnapshotBalanceTracePrune)
 	if err != nil {
 		return nil, err
 	}
+	if err := verifyBalanceTracePruneResumeStage(dir, manifest, resume); err != nil {
+		return nil, err
+	}
 	result, err := pruneHotBalanceTraces(db, dir, manifest, balanceTracePruneBounds{
-		lastPrunedBlock:     lastPrunedBlock,
-		hasLastPrunedBlock:  ok,
+		lastPrunedBlock:     resume.block,
+		hasLastPrunedBlock:  resume.hasHash,
 		requireProgressHash: true,
 	})
 	if err != nil {
@@ -290,6 +293,32 @@ func writeSnapshotBalanceTracePruneStage(db ethdb.KeyValueStore, blockNum uint64
 	return rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotBalanceTracePrune, blockNum, blockHash)
 }
 
+func verifyBalanceTracePruneResumeStage(dir string, manifest *Manifest, resume hashBoundPruneResumeBoundary) error {
+	if !resume.hasHash {
+		return nil
+	}
+	ref, ok := balanceTraceRefCoveringBlock(manifest, resume.block)
+	if !ok {
+		return nil
+	}
+	seg, err := OpenBalanceTraceSegment(dir, ref)
+	if err != nil {
+		return fmt.Errorf("snapshots: verify %s stage block %d against balance trace segment: %w", rawdb.StageSnapshotBalanceTracePrune, resume.block, err)
+	}
+	hash, hashErr := balanceTraceSegmentBlockHash(seg, resume.block)
+	closeErr := seg.Close()
+	if hashErr != nil {
+		return fmt.Errorf("snapshots: verify %s stage block %d against balance trace segment: %w", rawdb.StageSnapshotBalanceTracePrune, resume.block, hashErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("snapshots: close balance trace segment while verifying %s stage block %d: %w", rawdb.StageSnapshotBalanceTracePrune, resume.block, closeErr)
+	}
+	if hash != resume.hash {
+		return fmt.Errorf("snapshots: %s stage %d hash %x does not match balance trace segment hash %x", rawdb.StageSnapshotBalanceTracePrune, resume.block, resume.hash, hash)
+	}
+	return nil
+}
+
 func balanceTraceSegmentBlockHash(seg *BalanceTraceSegment, blockNum uint64) (common.Hash, error) {
 	if seg == nil {
 		return common.Hash{}, errors.New("snapshots: nil balance trace segment")
@@ -315,6 +344,15 @@ func balanceTraceSegmentBlockHash(seg *BalanceTraceSegment, blockNum uint64) (co
 		return common.Hash{}, fmt.Errorf("snapshots: cold balance trace segment %q stage block %d hash length %d, want %d", seg.ref.Path, blockNum, len(id.GetHash()), common.HashLength)
 	}
 	return common.BytesToHash(id.GetHash()), nil
+}
+
+func balanceTraceRefCoveringBlock(manifest *Manifest, blockNum uint64) (SegmentRef, bool) {
+	for _, ref := range balanceTraceRefs(manifest) {
+		if ref.FromTxNum <= blockNum && blockNum <= ref.ToTxNum {
+			return ref, true
+		}
+	}
+	return SegmentRef{}, false
 }
 
 func balanceTraceRefsAscending(manifest *Manifest) []SegmentRef {

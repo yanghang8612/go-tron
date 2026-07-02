@@ -237,6 +237,56 @@ func TestPruneHotBalanceTracesWithProgressUpgradesUnboundResumeStage(t *testing.
 	}
 }
 
+func TestPruneHotBalanceTracesWithProgressRejectsResumeHashMismatchBeforeDelete(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	ownerA := balanceTraceTestAddress(0xf6)
+	ownerB := balanceTraceTestAddress(0xf7)
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace 12: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 13, balanceTraceTestBlockTrace(13, 1300)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace 13: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, ownerA.Bytes(), 12, 120); err != nil {
+		t.Fatalf("WriteAccountTrace ownerA: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, ownerB.Bytes(), 13, 130); err != nil {
+		t.Fatalf("WriteAccountTrace ownerB: %v", err)
+	}
+	refA, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 12, 12)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB A: %v", err)
+	}
+	refB, err := BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 13, 13)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB B: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{refA, refB})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	wrongHash := common.Hash{0xee}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotBalanceTracePrune, 12, wrongHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotBalanceTracePrune: %v", err)
+	}
+
+	_, err = PruneHotBalanceTracesWithProgress(db, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "does not match balance trace segment hash") {
+		t.Fatalf("PruneHotBalanceTracesWithProgress resume mismatch err = %v, want balance trace segment hash mismatch", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 13); got == nil || got.GetTimestamp() != 1300 {
+		t.Fatalf("hot block trace after rejected resume mismatch = %+v, want timestamp 1300", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(db, ownerB.Bytes(), 13); !ok || balance != 130 {
+		t.Fatalf("hot account trace after rejected resume mismatch = %d/%v, want 130/true", balance, ok)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wrongHash {
+		t.Fatalf("balance trace prune row after rejected resume mismatch = %+v ok=%v err=%v, want original wrong hash %x", row, ok, err, wrongHash)
+	}
+}
+
 func TestBalanceTracePruneLifecycleOnePass(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"
