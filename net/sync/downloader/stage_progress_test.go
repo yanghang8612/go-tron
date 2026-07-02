@@ -2370,8 +2370,9 @@ func TestApplyImportResumePhasePublishFinalizationRun(t *testing.T) {
 	}
 	applier := &recordingImportResumePhasePublishApplier{
 		stageRows: map[rawdb.StageID]rawdb.StageProgress{
-			rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
-			rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageCommitment:    {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageFinish:        {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
 		},
 	}
 
@@ -2468,6 +2469,78 @@ func TestPlanImportResumePhasePublish(t *testing.T) {
 		ahead.Decisions[0].Status != ImportResumePhasePublishSyncAhead {
 		t.Fatalf("sync-ahead plan = %+v, want blocked before regression", ahead)
 	}
+	rows[rawdb.StageSyncCommitment] = rawdb.StageProgress{Stage: rawdb.StageSyncCommitment, BlockNum: 6, BlockHash: tcommon.Hash{0x06}, HasBlockHash: true}
+
+	for _, tt := range []struct {
+		name        string
+		upstream    rawdb.StageProgress
+		hasUpstream bool
+		status      ImportResumePhasePublishStatus
+	}{
+		{
+			name:   "missing",
+			status: ImportResumePhasePublishUpstreamMissing,
+		},
+		{
+			name:        "unbound",
+			upstream:    rawdb.StageProgress{Stage: rawdb.StageSyncExecution, BlockNum: 7},
+			hasUpstream: true,
+			status:      ImportResumePhasePublishUpstreamUnbound,
+		},
+		{
+			name:        "behind",
+			upstream:    rawdb.StageProgress{Stage: rawdb.StageSyncExecution, BlockNum: 6, BlockHash: tcommon.Hash{0x06}, HasBlockHash: true},
+			hasUpstream: true,
+			status:      ImportResumePhasePublishUpstreamBehind,
+		},
+		{
+			name:        "hash mismatch",
+			upstream:    rawdb.StageProgress{Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: tcommon.Hash{0xee}, HasBlockHash: true},
+			hasUpstream: true,
+			status:      ImportResumePhasePublishUpstreamHashMismatch,
+		},
+	} {
+		if tt.hasUpstream {
+			rows[rawdb.StageSyncExecution] = tt.upstream
+		} else {
+			delete(rows, rawdb.StageSyncExecution)
+		}
+		blocked := PlanImportResumePhasePublish(phases[:1], read)
+		if blocked.OK || blocked.Complete || len(blocked.Progress) != 0 ||
+			len(blocked.Decisions) != 1 ||
+			blocked.Decisions[0].Status != tt.status ||
+			blocked.Decisions[0].UpstreamStage != rawdb.StageSyncExecution {
+			t.Fatalf("%s upstream plan = %+v, want %s for %s", tt.name, blocked, tt.status, rawdb.StageSyncExecution)
+		}
+	}
+
+	bodyRows := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageBodies:          {Stage: rawdb.StageBodies, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageSyncBodiesReady: {Stage: rawdb.StageSyncBodiesReady, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	bodyRead := func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+		row, ok := bodyRows[stage]
+		return row, ok, nil
+	}
+	bodyPhase := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseBodies,
+			CanonicalStage: rawdb.StageBodies,
+			SyncStage:      rawdb.StageSyncImport,
+			Tasks:          []ImportStageTask{ImportBodyStageTask(7, hash)},
+		},
+	}
+	bodyPlan := PlanImportResumePhasePublish(bodyPhase, bodyRead)
+	if !bodyPlan.OK || len(bodyPlan.Progress) != 1 || bodyPlan.Decisions[0].Status != ImportResumePhasePublishReady {
+		t.Fatalf("body publish plan = %+v, want SyncBodiesReady-backed publish", bodyPlan)
+	}
+	delete(bodyRows, rawdb.StageSyncBodiesReady)
+	bodyBlocked := PlanImportResumePhasePublish(bodyPhase, bodyRead)
+	if bodyBlocked.OK || len(bodyBlocked.Decisions) != 1 ||
+		bodyBlocked.Decisions[0].Status != ImportResumePhasePublishUpstreamMissing ||
+		bodyBlocked.Decisions[0].UpstreamStage != rawdb.StageSyncBodiesReady {
+		t.Fatalf("body publish without ready row = %+v, want upstream-missing", bodyBlocked)
+	}
 }
 
 func TestApplyImportResumePhasePublishPlan(t *testing.T) {
@@ -2516,8 +2589,9 @@ func TestApplyImportResumePhasePublishRun(t *testing.T) {
 	}
 	applier := &recordingImportResumePhasePublishApplier{
 		stageRows: map[rawdb.StageID]rawdb.StageProgress{
-			rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
-			rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageCommitment:    {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageFinish:        {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+			rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
 		},
 	}
 	got := ApplyImportResumePhasePublishRun(phases, applier)

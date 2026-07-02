@@ -1548,6 +1548,10 @@ func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportRes
 				"syncStageBlock", decision.SyncRow.BlockNum,
 				"syncStageHash", decision.SyncRow.BlockHash,
 				"syncStageHasHash", decision.SyncRow.HasBlockHash,
+				"syncUpstreamStage", decision.UpstreamStage,
+				"syncUpstreamBlock", decision.UpstreamRow.BlockNum,
+				"syncUpstreamHash", decision.UpstreamRow.BlockHash,
+				"syncUpstreamHasHash", decision.UpstreamRow.HasBlockHash,
 				"err", decision.Err)
 			return
 		}

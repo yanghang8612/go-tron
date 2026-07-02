@@ -868,6 +868,10 @@ const (
 	ImportResumePhasePublishCanonicalMismatch
 	ImportResumePhasePublishSyncAhead
 	ImportResumePhasePublishSyncHashMismatch
+	ImportResumePhasePublishUpstreamMissing
+	ImportResumePhasePublishUpstreamUnbound
+	ImportResumePhasePublishUpstreamBehind
+	ImportResumePhasePublishUpstreamHashMismatch
 )
 
 func (s ImportResumePhasePublishStatus) String() string {
@@ -888,6 +892,14 @@ func (s ImportResumePhasePublishStatus) String() string {
 		return "sync-ahead"
 	case ImportResumePhasePublishSyncHashMismatch:
 		return "sync-hash-mismatch"
+	case ImportResumePhasePublishUpstreamMissing:
+		return "upstream-missing"
+	case ImportResumePhasePublishUpstreamUnbound:
+		return "upstream-unbound"
+	case ImportResumePhasePublishUpstreamBehind:
+		return "upstream-behind"
+	case ImportResumePhasePublishUpstreamHashMismatch:
+		return "upstream-hash-mismatch"
 	default:
 		return "unknown"
 	}
@@ -930,6 +942,9 @@ type ImportResumePhasePublishDecision struct {
 	HasCanonicalRow bool
 	SyncRow         rawdb.StageProgress
 	HasSyncRow      bool
+	UpstreamStage   rawdb.StageID
+	UpstreamRow     rawdb.StageProgress
+	HasUpstreamRow  bool
 	Status          ImportResumePhasePublishStatus
 	Err             error
 }
@@ -1340,13 +1355,15 @@ func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgr
 		return plan
 	}
 	progress := make([]rawdb.StageProgress, 0, len(phases))
+	planned := make(map[rawdb.StageID]rawdb.StageProgress, len(phases))
 	for _, phase := range phases {
-		decision, row, ok := planImportResumePhasePublishDecision(phase, read)
+		decision, row, ok := planImportResumePhasePublishDecision(phase, read, planned)
 		plan.Decisions = append(plan.Decisions, decision)
 		if !ok {
 			return plan
 		}
 		progress = append(progress, row)
+		planned[row.Stage] = row
 	}
 	plan.Progress = progress
 	plan.Complete = true
@@ -1354,7 +1371,7 @@ func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgr
 	return plan
 }
 
-func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
+func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader, planned map[rawdb.StageID]rawdb.StageProgress) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
 	decision := ImportResumePhasePublishDecision{
 		Phase:          phase.Phase,
 		CanonicalStage: phase.CanonicalStage,
@@ -1410,6 +1427,33 @@ func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read Stage
 			return decision, rawdb.StageProgress{}, false
 		}
 	}
+	if upstreamStage, hasUpstream := importResumePhasePublishUpstreamStage(phase.SyncStage); hasUpstream {
+		decision.UpstreamStage = upstreamStage
+		upstream, upstreamOK, err := readImportResumePhasePublishUpstream(upstreamStage, read, planned)
+		if err != nil {
+			decision.Status = ImportResumePhasePublishReadError
+			decision.Err = err
+			return decision, rawdb.StageProgress{}, false
+		}
+		decision.UpstreamRow = upstream
+		decision.HasUpstreamRow = upstreamOK
+		if !upstreamOK {
+			decision.Status = ImportResumePhasePublishUpstreamMissing
+			return decision, rawdb.StageProgress{}, false
+		}
+		if !upstream.HasBlockHash {
+			decision.Status = ImportResumePhasePublishUpstreamUnbound
+			return decision, rawdb.StageProgress{}, false
+		}
+		if upstream.BlockNum < target.BlockNum {
+			decision.Status = ImportResumePhasePublishUpstreamBehind
+			return decision, rawdb.StageProgress{}, false
+		}
+		if upstream.BlockNum == target.BlockNum && upstream.BlockHash != target.BlockHash {
+			decision.Status = ImportResumePhasePublishUpstreamHashMismatch
+			return decision, rawdb.StageProgress{}, false
+		}
+	}
 	row := rawdb.StageProgress{
 		Stage:        phase.SyncStage,
 		BlockNum:     target.BlockNum,
@@ -1418,6 +1462,22 @@ func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read Stage
 	}
 	decision.Status = ImportResumePhasePublishReady
 	return decision, row, true
+}
+
+func importResumePhasePublishUpstreamStage(stage rawdb.StageID) (rawdb.StageID, bool) {
+	for _, pair := range SyncPipelineProgressOrderPairs() {
+		if pair.Downstream == stage {
+			return pair.Upstream, true
+		}
+	}
+	return "", false
+}
+
+func readImportResumePhasePublishUpstream(stage rawdb.StageID, read StageProgressReader, planned map[rawdb.StageID]rawdb.StageProgress) (rawdb.StageProgress, bool, error) {
+	if row, ok := planned[stage]; ok {
+		return row, true, nil
+	}
+	return read(stage)
 }
 
 // ApplyImportResumePhasePublishPlan writes the verified sync-stage suffix for
