@@ -347,8 +347,8 @@ func TestVerifyLoadedManifestFilesRejectsLatestBinaryBTreeOrdinalMismatch(t *tes
 	}
 	binary.BigEndian.PutUint64(data[entryOffset+4:entryOffset+12], 1)
 	updateSnapshotRefFileForTest(t, dir, &btreeRef, data)
-	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
-		t.Fatalf("single-file btree check should still pass: %v", err)
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err == nil || !strings.Contains(err.Error(), "ordinal=1, want 0") {
+		t.Fatalf("single-file btree check err = %v, want ordinal mismatch", err)
 	}
 
 	manifest = NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})

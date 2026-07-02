@@ -716,18 +716,53 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 		return err
 	}
 	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	size := uint64(stat.Size())
+	payloadStart := latestBinaryBTreeHeaderSize + header.count*8
+	if payloadStart > size {
+		return fmt.Errorf("snapshots: latest btree %q payload starts at %d beyond size %d", ref.Path, payloadStart, size)
+	}
 	var prev []byte
 	var prevOrdinal uint64
+	var prevEntryOffset uint64
+	var payloadEnd = payloadStart
 	for i := uint64(0); i < header.count; i++ {
-		entry, ok, err := readLatestBinaryBTreeEntryAt(file, i)
+		entryOffset, err := readLatestBinaryBTreeEntryOffsetAt(file, i)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return fmt.Errorf("snapshots: latest btree %q missing entry %d", ref.Path, i)
+			}
+			return err
+		}
+		if entryOffset < payloadStart || entryOffset >= size {
+			return fmt.Errorf("snapshots: latest btree %q entry %d offset %d outside payload [%d,%d)", ref.Path, i, entryOffset, payloadStart, size)
+		}
+		if entryOffset != payloadEnd {
+			return fmt.Errorf("snapshots: latest btree %q entry %d offset=%d, want contiguous payload offset %d", ref.Path, i, entryOffset, payloadEnd)
+		}
+		if i > 0 && entryOffset <= prevEntryOffset {
+			return fmt.Errorf("snapshots: latest btree %q entry offsets are not increasing", ref.Path)
+		}
+		entry, err := readLatestBinaryBTreeEntryAtOffset(file, entryOffset)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			return fmt.Errorf("snapshots: latest btree %q missing entry %d", ref.Path, i)
-		}
 		if len(entry.key) == 0 {
 			return fmt.Errorf("snapshots: latest btree %q entry %d has empty key", ref.Path, i)
+		}
+		entryEnd := entryOffset + uint64(20+len(entry.key))
+		if entryEnd < entryOffset || entryEnd > size {
+			return fmt.Errorf("snapshots: latest btree %q entry %d payload ends at %d beyond size %d", ref.Path, i, entryEnd, size)
+		}
+		if entry.segmentOffset < latestBinaryHeaderSize {
+			return fmt.Errorf("snapshots: latest btree %q entry %d has invalid segment offset %d", ref.Path, i, entry.segmentOffset)
+		}
+		wantOrdinal := i * header.blockSize
+		if entry.ordinal != wantOrdinal {
+			return fmt.Errorf("snapshots: latest btree %q entry %d ordinal=%d, want %d", ref.Path, i, entry.ordinal, wantOrdinal)
 		}
 		if i > 0 {
 			if bytes.Compare(prev, entry.key) >= 0 {
@@ -739,6 +774,11 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 		}
 		prev = entry.key
 		prevOrdinal = entry.ordinal
+		prevEntryOffset = entryOffset
+		payloadEnd = entryEnd
+	}
+	if payloadEnd != size {
+		return fmt.Errorf("snapshots: latest btree %q has %d trailing payload bytes", ref.Path, size-payloadEnd)
 	}
 	return nil
 }

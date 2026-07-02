@@ -2195,7 +2195,11 @@ Status:
   floor entries must match the expected ordinal/key/offset for each block of
   segment rows, so signed fetch, bootstrap, restore, and local verify gates
   reject stale latest-state sidecars even when the sidecar file itself has a
-  valid checksum and matching segment checksum header.
+  valid checksum and matching segment checksum header. The standalone `.bt`
+  checker now also rejects non-contiguous entry payloads, trailing payload
+  bytes, invalid segment offsets, and floor ordinals that do not match
+  `entryIndex * blockSize`, so malformed latest accessors fail before any
+  manifest-level cross-check depends on them.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

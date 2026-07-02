@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -825,6 +826,38 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	badBTreeChecksum.Checksum = "sha256:bad"
 	if err := CheckLatestBTreeSegment(dir, badBTreeChecksum); err == nil {
 		t.Fatal("latest btree with bad checksum checked successfully")
+	}
+	btreeData, err := os.ReadFile(filepath.Join(dir, btreeRef.Path))
+	if err != nil {
+		t.Fatalf("read latest btree: %v", err)
+	}
+	badBTreeTrailing := btreeRef
+	badBTreeTrailing.Path = "latest/contract-storage-trailing.bt"
+	trailingData := append(append([]byte(nil), btreeData...), 0xaa)
+	badBTreeTrailing.Size, badBTreeTrailing.Checksum = latestBinaryMetadata(trailingData)
+	if err := os.WriteFile(filepath.Join(dir, badBTreeTrailing.Path), trailingData, 0o644); err != nil {
+		t.Fatalf("write trailing latest btree: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, badBTreeTrailing); err == nil || !strings.Contains(err.Error(), "trailing payload bytes") {
+		t.Fatalf("latest btree with trailing payload err = %v, want trailing payload rejection", err)
+	}
+	badBTreeOrdinal := btreeRef
+	badBTreeOrdinal.Path = "latest/contract-storage-bad-ordinal.bt"
+	ordinalData := append([]byte(nil), btreeData...)
+	if len(ordinalData) < latestBinaryBTreeHeaderSize+8 {
+		t.Fatalf("btree data length = %d, want first entry offset", len(ordinalData))
+	}
+	entryOffset := binary.BigEndian.Uint64(ordinalData[latestBinaryBTreeHeaderSize : latestBinaryBTreeHeaderSize+8])
+	if entryOffset+12 > uint64(len(ordinalData)) {
+		t.Fatalf("btree first entry offset %d outside data length %d", entryOffset, len(ordinalData))
+	}
+	binary.BigEndian.PutUint64(ordinalData[entryOffset+4:entryOffset+12], 1)
+	badBTreeOrdinal.Size, badBTreeOrdinal.Checksum = latestBinaryMetadata(ordinalData)
+	if err := os.WriteFile(filepath.Join(dir, badBTreeOrdinal.Path), ordinalData, 0o644); err != nil {
+		t.Fatalf("write bad ordinal latest btree: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, badBTreeOrdinal); err == nil || !strings.Contains(err.Error(), "ordinal=1, want 0") {
+		t.Fatalf("latest btree with bad ordinal err = %v, want ordinal rejection", err)
 	}
 	if err := PublishManifest(dir, NewManifest(1, 20, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
 		t.Fatalf("publish manifest: %v", err)
