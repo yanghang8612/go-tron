@@ -233,6 +233,19 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_snapshot_profile_verify_files", "snapshotProfileVerifyFiles"),
     ("gtron_nile_sync_snapshot_profile_verified_segments", "snapshotProfileVerifiedSegments"),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli"),
+    ("gtron_nile_sync_snapshot_state_history_bytes", "snapshotStateHistoryBytes"),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_segments",
+        "snapshotStateHistoryCompressedSegments",
+    ),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_bytes",
+        "snapshotStateHistoryCompressedBytes",
+    ),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_share_milli",
+        "snapshotStateHistoryCompressedShareMilli",
+    ),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes"),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments"),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_payload_bytes", "snapshotPointTxHashLookupPayloadBytes"),
@@ -379,6 +392,9 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "stageChainFreezerHeadLagBlocks",
     "stageSnapshotEventLogBuildHeadLagBlocks",
     "snapshotProfileVerifiedSegments",
+    "snapshotStateHistoryBytes",
+    "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes",
     "snapshotPointTxHashLookupSegments",
     "snapshotPointEventLogIndexSegments",
     "snapshotPointStateHistoryAccessorSegments",
@@ -579,6 +595,10 @@ SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotPayloadBytes",
     "snapshotSidecarBytes",
     "snapshotSidecarShareMilli",
+    "snapshotStateHistoryBytes",
+    "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes",
+    "snapshotStateHistoryCompressedShareMilli",
 )
 
 SNAPSHOT_PROFILE_FAMILY_FIELDS = (
@@ -2912,6 +2932,14 @@ def check_snapshot_profile_row(row):
     payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")
     sidecar_bytes = as_non_negative_int(row, "snapshotSidecarBytes")
     share = as_non_negative_int(row, "snapshotSidecarShareMilli")
+    state_history_bytes = as_non_negative_int(row, "snapshotStateHistoryBytes")
+    state_history_compressed_segments = as_non_negative_int(
+        row, "snapshotStateHistoryCompressedSegments"
+    )
+    state_history_compressed_bytes = as_non_negative_int(
+        row, "snapshotStateHistoryCompressedBytes"
+    )
+    state_history_compressed_share = as_number(row, "snapshotStateHistoryCompressedShareMilli")
     if total_bytes is None or total_bytes <= 0:
         issues.append(f"snapshotProfileTotalBytes={row.get('snapshotProfileTotalBytes')!r}, want > 0")
     if payload_bytes is None:
@@ -2920,6 +2948,31 @@ def check_snapshot_profile_row(row):
         issues.append(f"snapshotSidecarBytes={row.get('snapshotSidecarBytes')!r}, want non-negative integer")
     if share is None:
         issues.append(f"snapshotSidecarShareMilli={row.get('snapshotSidecarShareMilli')!r}, want non-negative integer")
+    if state_history_bytes is None:
+        issues.append(
+            f"snapshotStateHistoryBytes={row.get('snapshotStateHistoryBytes')!r}, "
+            "want non-negative integer"
+        )
+    if state_history_compressed_segments is None:
+        issues.append(
+            "snapshotStateHistoryCompressedSegments="
+            f"{row.get('snapshotStateHistoryCompressedSegments')!r}, want non-negative integer"
+        )
+    if state_history_compressed_bytes is None:
+        issues.append(
+            "snapshotStateHistoryCompressedBytes="
+            f"{row.get('snapshotStateHistoryCompressedBytes')!r}, want non-negative integer"
+        )
+    if state_history_compressed_share is None:
+        issues.append(
+            "snapshotStateHistoryCompressedShareMilli="
+            f"{row.get('snapshotStateHistoryCompressedShareMilli')!r}, want numeric value"
+        )
+    elif state_history_compressed_share < -1 or state_history_compressed_share > 1000:
+        issues.append(
+            "snapshotStateHistoryCompressedShareMilli="
+            f"{state_history_compressed_share:g}, want -1..1000"
+        )
 
     if (
         total_bytes is not None
@@ -2939,6 +2992,39 @@ def check_snapshot_profile_row(row):
             )
         if share > 1000:
             issues.append(f"snapshotSidecarShareMilli={share}, want <= 1000")
+    if (
+        state_history_bytes is not None
+        and state_history_compressed_bytes is not None
+        and state_history_compressed_bytes > state_history_bytes
+    ):
+        issues.append(
+            f"snapshotStateHistoryCompressedBytes={state_history_compressed_bytes} "
+            f"must be <= snapshotStateHistoryBytes={state_history_bytes}"
+        )
+    if (
+        state_history_compressed_bytes is not None
+        and state_history_compressed_bytes > 0
+        and state_history_compressed_segments is not None
+        and state_history_compressed_segments <= 0
+    ):
+        issues.append(
+            f"snapshotStateHistoryCompressedSegments={state_history_compressed_segments}, "
+            f"want > 0 when snapshotStateHistoryCompressedBytes={state_history_compressed_bytes}"
+        )
+    if (
+        state_history_bytes is not None
+        and state_history_compressed_bytes is not None
+        and state_history_compressed_share is not None
+        and state_history_compressed_share >= 0
+    ):
+        want_share = sidecar_share_milli(state_history_compressed_bytes, state_history_bytes)
+        if state_history_compressed_share != want_share:
+            issues.append(
+                "snapshotStateHistoryCompressedShareMilli="
+                f"{state_history_compressed_share:g}, want {want_share} "
+                f"for compressedBytes={state_history_compressed_bytes} "
+                f"stateHistoryBytes={state_history_bytes}"
+            )
 
     for prefix in SNAPSHOT_PROFILE_FAMILY_FIELDS:
         bytes_field = f"{prefix}Bytes"
@@ -3048,6 +3134,28 @@ def check_snapshot_point_thresholds(row, max_sidecar_share_milli, max_snapshot_s
                 issues.append(f"{field}={row.get(field)!r}, want numeric value")
             elif share > max_snapshot_share_milli:
                 issues.append(f"{field}={share:g} exceeds max {max_snapshot_share_milli:g}")
+    return issues
+
+
+def check_compressed_state_history_evidence(row):
+    issues = []
+    segments = as_non_negative_int(row, "snapshotStateHistoryCompressedSegments")
+    if segments is None or segments <= 0:
+        issues.append(
+            "snapshotStateHistoryCompressedSegments="
+            f"{row.get('snapshotStateHistoryCompressedSegments')!r}, want > 0"
+        )
+    compressed_bytes = as_non_negative_int(row, "snapshotStateHistoryCompressedBytes")
+    if compressed_bytes is None or compressed_bytes <= 0:
+        issues.append(
+            "snapshotStateHistoryCompressedBytes="
+            f"{row.get('snapshotStateHistoryCompressedBytes')!r}, want > 0"
+        )
+    total_bytes = as_non_negative_int(row, "snapshotStateHistoryBytes")
+    if total_bytes is None or total_bytes <= 0:
+        issues.append(
+            f"snapshotStateHistoryBytes={row.get('snapshotStateHistoryBytes')!r}, want > 0"
+        )
     return issues
 
 
@@ -3361,6 +3469,8 @@ def check_row(row, args):
             issues.append("snapshot manifest profile evidence is missing")
         else:
             issues.extend(check_snapshot_profile_row(row))
+    if args.require_compressed_state_history:
+        issues.extend(check_compressed_state_history_evidence(row))
     issues.extend(
         check_snapshot_point_thresholds(
             row,
@@ -3581,6 +3691,11 @@ def build_parser():
         "--require-snapshot-profile-evidence",
         action="store_true",
         help="require selected rows to include valid snapshot manifest payload/sidecar profile counters",
+    )
+    parser.add_argument(
+        "--require-compressed-state-history",
+        action="store_true",
+        help="require snapshot profile evidence to include at least one block-compressed state-history segment",
     )
     parser.add_argument(
         "--max-snapshot-point-sidecar-share-milli",

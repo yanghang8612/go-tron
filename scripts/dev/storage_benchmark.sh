@@ -572,6 +572,10 @@ write_storage_benchmark_prometheus() {
   local event_log_index_topic_multi_posting_keys="${88}"
   local event_log_index_from_block="${89}"
   local event_log_index_to_block="${90}"
+  local snapshot_state_history_bytes="${91}"
+  local snapshot_state_history_compressed_segments="${92}"
+  local snapshot_state_history_compressed_bytes="${93}"
+  local snapshot_state_history_compressed_share_milli="${94}"
   python3 - "$path" "$profile" "$mode" "$role" "$status" "$height" "$elapsed" "$datadir" \
     "$total" "$chain" "$ancient" "$snapshots" "$derived_index_bytes" \
     "$snapshot_sidecar_share_milli" \
@@ -609,7 +613,9 @@ write_storage_benchmark_prometheus() {
     "$event_log_index_topic_postings" "$event_log_index_topic_avg_postings_milli" \
     "$event_log_index_topic_max_postings" "$event_log_index_topic_singleton_keys" \
     "$event_log_index_topic_multi_posting_keys" "$event_log_index_from_block" \
-    "$event_log_index_to_block" <<'PY'
+    "$event_log_index_to_block" \
+    "$snapshot_state_history_bytes" "$snapshot_state_history_compressed_segments" \
+    "$snapshot_state_history_compressed_bytes" "$snapshot_state_history_compressed_share_milli" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -693,6 +699,10 @@ event_log_index_topic_singleton_keys = int(sys.argv[87])
 event_log_index_topic_multi_posting_keys = int(sys.argv[88])
 event_log_index_from_block = int(sys.argv[89])
 event_log_index_to_block = int(sys.argv[90])
+snapshot_state_history_bytes = int(sys.argv[91])
+snapshot_state_history_compressed_segments = int(sys.argv[92])
+snapshot_state_history_compressed_bytes = int(sys.argv[93])
+snapshot_state_history_compressed_share_milli = int(sys.argv[94])
 datadir_per_block = float(total) / height if height > 0 else 0.0
 hot_per_block = float(chain) / height if height > 0 else 0.0
 cold_archive_per_block = float(ancient + snapshots) / height if height > 0 else 0.0
@@ -826,6 +836,22 @@ metrics = (
     ("gtron_storage_benchmark_cold_archive_bytes_per_block", "Benchmark cold archive bytes per imported block.", cold_archive_per_block),
     ("gtron_storage_benchmark_derived_index_bytes_per_block", "Benchmark derived cold index bytes per imported block.", derived_index_per_block),
     ("gtron_storage_benchmark_snapshot_sidecar_share_milli", "Benchmark snapshot sidecar share in milli-units.", snapshot_sidecar_share_milli),
+    ("gtron_storage_benchmark_snapshot_state_history_bytes", "Benchmark state-history snapshot bytes.", snapshot_state_history_bytes),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_segments",
+        "Benchmark block-compressed state-history snapshot segment count.",
+        snapshot_state_history_compressed_segments,
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_bytes",
+        "Benchmark block-compressed state-history snapshot bytes.",
+        snapshot_state_history_compressed_bytes,
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_share_milli",
+        "Benchmark state-history bytes stored in block-compressed segments in milli-units.",
+        snapshot_state_history_compressed_share_milli,
+    ),
     *snapshot_point_metrics(
         "tx_hash_lookup",
         "tx-hash point lookup candidate",
@@ -1147,6 +1173,7 @@ snapshot_manifest_profile_default_values() {
   for _ in txHashLookup eventLogIndex stateHistoryAccessor latestBTree chainFreezerAccessor codeDomain commitmentSnapshot; do
     printf '%s\n' 0 0 0 0 "$missing_share" "$missing_share"
   done
+  printf '%s\n' 0 0 0 "$missing_share"
 }
 
 snapshot_manifest_profile_values() {
@@ -1224,6 +1251,13 @@ for candidate in (
     print(point_value(candidate, "sidecarBytes"))
     print(point_value(candidate, "sidecarShareMilli", -1))
     print(point_value(candidate, "snapshotShareMilli", -1))
+state_history = families.get("state-history", {})
+if not isinstance(state_history, dict):
+    state_history = {}
+print(family_value("state-history", "totalBytes"))
+print(family_value("state-history", "compressedSegments"))
+print(family_value("state-history", "compressedBytes"))
+print(family_value("state-history", "compressedShareMilli", -1))
 PY
 }
 
@@ -2003,6 +2037,7 @@ emit_result() {
   local snapshot_profile_status snapshot_profile_segments snapshot_profile_total_bytes snapshot_payload_bytes snapshot_sidecar_bytes snapshot_sidecar_share_milli
   local snapshot_latest_sidecar_bytes snapshot_latest_sidecar_share_milli
   local snapshot_state_history_sidecar_bytes snapshot_state_history_sidecar_share_milli
+  local snapshot_state_history_bytes snapshot_state_history_compressed_segments snapshot_state_history_compressed_bytes snapshot_state_history_compressed_share_milli
   local snapshot_chain_freezer_sidecar_bytes snapshot_chain_freezer_sidecar_share_milli
   local snapshot_event_log_sidecar_bytes snapshot_event_log_sidecar_share_milli
   local snapshot_balance_trace_sidecar_bytes snapshot_balance_trace_sidecar_share_milli
@@ -2079,6 +2114,10 @@ emit_result() {
   snapshot_point_commitment_snapshot_sidecar_bytes="$(printf '%s\n' "$profile_values" | sed -n '58p')"
   snapshot_point_commitment_snapshot_sidecar_share_milli="$(printf '%s\n' "$profile_values" | sed -n '59p')"
   snapshot_point_commitment_snapshot_share_milli="$(printf '%s\n' "$profile_values" | sed -n '60p')"
+  snapshot_state_history_bytes="$(printf '%s\n' "$profile_values" | sed -n '61p')"
+  snapshot_state_history_compressed_segments="$(printf '%s\n' "$profile_values" | sed -n '62p')"
+  snapshot_state_history_compressed_bytes="$(printf '%s\n' "$profile_values" | sed -n '63p')"
+  snapshot_state_history_compressed_share_milli="$(printf '%s\n' "$profile_values" | sed -n '64p')"
   local benchmark_prometheus="$ARTIFACT_DIR/$mode-$role-storage-benchmark.prom"
   write_storage_benchmark_prometheus "$benchmark_prometheus" "$profile" "$mode" "$role" "$status" \
     "$height" "$elapsed" "$datadir" "$total" "$chain" "$ancient" "$snapshots" \
@@ -2118,7 +2157,9 @@ emit_result() {
     "$RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI" \
     "$RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS" \
     "$RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS" "$RUN_EVENT_LOG_INDEX_FROM_BLOCK" \
-    "$RUN_EVENT_LOG_INDEX_TO_BLOCK"
+    "$RUN_EVENT_LOG_INDEX_TO_BLOCK" \
+    "$snapshot_state_history_bytes" "$snapshot_state_history_compressed_segments" \
+    "$snapshot_state_history_compressed_bytes" "$snapshot_state_history_compressed_share_milli"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$derived_index_bytes" "$derived_index_files" \
@@ -2189,6 +2230,8 @@ emit_result() {
     "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_CALL_PROBE" \
     "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_TRACE_BLOCK_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
+    "$snapshot_state_history_bytes" "$snapshot_state_history_compressed_segments" \
+    "$snapshot_state_history_compressed_bytes" "$snapshot_state_history_compressed_share_milli" \
     "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -2258,7 +2301,10 @@ keys = [
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
     "archiveApiBlock", "archiveApiDepthBlocks", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
     "archiveApiTraceBlockProbe", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
-    "archiveApiTxMethods", "storageBenchmarkPrometheus", "storageAlertPrometheus",
+    "archiveApiTxMethods",
+    "snapshotStateHistoryBytes", "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes", "snapshotStateHistoryCompressedShareMilli",
+    "storageBenchmarkPrometheus", "storageAlertPrometheus",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -2322,6 +2368,8 @@ ints = {
     "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
     "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
     "archiveApiChecks", "archiveApiFailures", "archiveApiBlock", "archiveApiDepthBlocks",
+    "snapshotStateHistoryBytes", "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes", "snapshotStateHistoryCompressedShareMilli",
 }
 bools = {
     "snapshotProfileVerifyFiles",

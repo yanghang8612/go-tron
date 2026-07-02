@@ -902,6 +902,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                             {"dataset": "chain-freezer", "kind": "chain-index", "fromTxNum": 1, "toTxNum": 2, "path": "chain/chain-index.idx", "size": 100},
                             {"dataset": "event-log", "kind": "event-log", "fromTxNum": 1, "toTxNum": 2, "path": "log/event.seg", "size": 300},
                             {"dataset": "event-log", "kind": "event-log-index", "fromTxNum": 1, "toTxNum": 2, "path": "log/event-log.idx", "size": 200},
+                            {"dataset": "state-domain-change", "kind": "history", "fromTxNum": 1, "toTxNum": 2, "path": "history/state-domain-change-1-2.seg", "size": 80},
                         ],
                     },
                     sort_keys=True,
@@ -910,10 +911,12 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             (snapshot_dir / "chain").mkdir(parents=True, exist_ok=True)
             (snapshot_dir / "log").mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "history").mkdir(parents=True, exist_ok=True)
             (snapshot_dir / "chain" / "freezer.seg").write_bytes(b"f" * 1000)
             (snapshot_dir / "chain" / "chain-index.idx").write_bytes(b"i" * 100)
             (snapshot_dir / "log" / "event.seg").write_bytes(b"e" * 300)
             (snapshot_dir / "log" / "event-log.idx").write_bytes(b"x" * 200)
+            (snapshot_dir / "history" / "state-domain-change-1-2.seg").write_bytes(b"gtcblk01" + b"h" * 72)
             output = tmpdir / "results.jsonl"
             env = dict(os.environ)
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
@@ -947,13 +950,17 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["snapshotManifestProfileStatus"], "ok")
-            self.assertEqual(row["snapshotProfileSegments"], 4)
+            self.assertEqual(row["snapshotProfileSegments"], 5)
             self.assertTrue(row["snapshotProfileVerifyFiles"])
-            self.assertEqual(row["snapshotProfileVerifiedSegments"], 4)
-            self.assertEqual(row["snapshotProfileTotalBytes"], 1600)
-            self.assertEqual(row["snapshotPayloadBytes"], 1300)
+            self.assertEqual(row["snapshotProfileVerifiedSegments"], 5)
+            self.assertEqual(row["snapshotProfileTotalBytes"], 1680)
+            self.assertEqual(row["snapshotPayloadBytes"], 1380)
             self.assertEqual(row["snapshotSidecarBytes"], 300)
-            self.assertEqual(row["snapshotSidecarShareMilli"], 188)
+            self.assertEqual(row["snapshotSidecarShareMilli"], 179)
+            self.assertEqual(row["snapshotStateHistoryBytes"], 80)
+            self.assertEqual(row["snapshotStateHistoryCompressedSegments"], 1)
+            self.assertEqual(row["snapshotStateHistoryCompressedBytes"], 80)
+            self.assertEqual(row["snapshotStateHistoryCompressedShareMilli"], 1000)
             self.assertEqual(row["snapshotChainFreezerSidecarBytes"], 100)
             self.assertEqual(row["snapshotChainFreezerSidecarShareMilli"], 91)
             self.assertEqual(row["snapshotEventLogSidecarBytes"], 200)
@@ -963,19 +970,19 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["snapshotPointTxHashLookupPayloadBytes"], 0)
             self.assertEqual(row["snapshotPointTxHashLookupSidecarBytes"], 100)
             self.assertEqual(row["snapshotPointTxHashLookupSidecarShareMilli"], 1000)
-            self.assertEqual(row["snapshotPointTxHashLookupSnapshotShareMilli"], 63)
+            self.assertEqual(row["snapshotPointTxHashLookupSnapshotShareMilli"], 60)
             self.assertEqual(row["snapshotPointEventLogIndexSegments"], 1)
             self.assertEqual(row["snapshotPointEventLogIndexBytes"], 200)
             self.assertEqual(row["snapshotPointEventLogIndexPayloadBytes"], 0)
             self.assertEqual(row["snapshotPointEventLogIndexSidecarBytes"], 200)
             self.assertEqual(row["snapshotPointEventLogIndexSidecarShareMilli"], 1000)
-            self.assertEqual(row["snapshotPointEventLogIndexSnapshotShareMilli"], 125)
-            self.assertEqual(row["snapshotPointStateHistoryAccessorSegments"], 0)
-            self.assertEqual(row["snapshotPointStateHistoryAccessorBytes"], 0)
-            self.assertEqual(row["snapshotPointStateHistoryAccessorPayloadBytes"], 0)
+            self.assertEqual(row["snapshotPointEventLogIndexSnapshotShareMilli"], 120)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorSegments"], 1)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorBytes"], 80)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorPayloadBytes"], 80)
             self.assertEqual(row["snapshotPointStateHistoryAccessorSidecarBytes"], 0)
             self.assertEqual(row["snapshotPointStateHistoryAccessorSidecarShareMilli"], 0)
-            self.assertEqual(row["snapshotPointStateHistoryAccessorSnapshotShareMilli"], 0)
+            self.assertEqual(row["snapshotPointStateHistoryAccessorSnapshotShareMilli"], 48)
             self.assertEqual(row["derivedIndexFiles"], 2)
             self.assertGreater(row["derivedIndexBytes"], 0)
             benchmark_prometheus = Path(row["storageBenchmarkPrometheus"])
@@ -998,8 +1005,11 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertRegex(
                 benchmark_metrics,
-                r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli\{[^}]*\} 63\n",
+                r"gtron_storage_benchmark_snapshot_point_tx_hash_lookup_snapshot_share_milli\{[^}]*\} 60\n",
             )
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_state_history_compressed_segments\{[^}]*\} 1\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_state_history_compressed_bytes\{[^}]*\} 80\n")
+            self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_state_history_compressed_share_milli\{[^}]*\} 1000\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_segments\{[^}]*\} 1\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_bytes\{[^}]*\} 200\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_snapshot_point_event_log_index_payload_bytes\{[^}]*\} 0\n")
@@ -1010,7 +1020,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertRegex(
                 benchmark_metrics,
-                r"gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli\{[^}]*\} 125\n",
+                r"gtron_storage_benchmark_snapshot_point_event_log_index_snapshot_share_milli\{[^}]*\} 120\n",
             )
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_event_log_index_segments\{[^}]*\} 0\n")
             self.assertRegex(benchmark_metrics, r"gtron_storage_benchmark_event_log_index_address_postings\{[^}]*\} 0\n")

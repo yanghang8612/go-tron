@@ -365,6 +365,10 @@ def add_snapshot_profile_evidence(row):
             "snapshotPayloadBytes": 1300,
             "snapshotSidecarBytes": 300,
             "snapshotSidecarShareMilli": 188,
+            "snapshotStateHistoryBytes": 0,
+            "snapshotStateHistoryCompressedSegments": 0,
+            "snapshotStateHistoryCompressedBytes": 0,
+            "snapshotStateHistoryCompressedShareMilli": -1,
             "snapshotLatestSidecarBytes": 0,
             "snapshotLatestSidecarShareMilli": -1,
             "snapshotStateHistorySidecarBytes": 0,
@@ -552,6 +556,10 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "intervalStageChainFreezerBlocksPerSecond": 0.0,
             "intervalStageSnapshotEventLogBuildBlocksPerSecond": 0.0,
             "snapshotSidecarShareMilli": 188,
+            "snapshotStateHistoryBytes": 0,
+            "snapshotStateHistoryCompressedSegments": 0,
+            "snapshotStateHistoryCompressedBytes": 0,
+            "snapshotStateHistoryCompressedShareMilli": -1,
             "signedColdPrune": 0,
             "coldFreezerToBlock": -1,
             "chainLookupPruneToBlock": -1,
@@ -676,6 +684,14 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_soak_efficiency_derived_index_bytes_per_block{{{labels}}} {row["soakEfficiencyDerivedIndexBytesPerBlock"]}',
                 "# TYPE gtron_nile_sync_snapshot_sidecar_share_milli gauge",
                 f'gtron_nile_sync_snapshot_sidecar_share_milli{{{labels}}} {row["snapshotSidecarShareMilli"]}',
+                "# TYPE gtron_nile_sync_snapshot_state_history_bytes gauge",
+                f'gtron_nile_sync_snapshot_state_history_bytes{{{labels}}} {row["snapshotStateHistoryBytes"]}',
+                "# TYPE gtron_nile_sync_snapshot_state_history_compressed_segments gauge",
+                f'gtron_nile_sync_snapshot_state_history_compressed_segments{{{labels}}} {row["snapshotStateHistoryCompressedSegments"]}',
+                "# TYPE gtron_nile_sync_snapshot_state_history_compressed_bytes gauge",
+                f'gtron_nile_sync_snapshot_state_history_compressed_bytes{{{labels}}} {row["snapshotStateHistoryCompressedBytes"]}',
+                "# TYPE gtron_nile_sync_snapshot_state_history_compressed_share_milli gauge",
+                f'gtron_nile_sync_snapshot_state_history_compressed_share_milli{{{labels}}} {row["snapshotStateHistoryCompressedShareMilli"]}',
                 *snapshot_point_prometheus_lines(row, labels),
                 "# TYPE gtron_nile_sync_signed_cold_prune gauge",
                 f'gtron_nile_sync_signed_cold_prune{{{labels}}} {row["signedColdPrune"]}',
@@ -1728,6 +1744,58 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_accepts_required_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            row = add_snapshot_profile_evidence(clean_full_staged_sync_row())
+            row.update(
+                {
+                    "snapshotStateHistoryBytes": 80,
+                    "snapshotStateHistoryCompressedSegments": 1,
+                    "snapshotStateHistoryCompressedBytes": 80,
+                    "snapshotStateHistoryCompressedShareMilli": 1000,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-snapshot-profile-evidence",
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_rejects_missing_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [add_snapshot_profile_evidence(clean_full_staged_sync_row())])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedBytes=0, want > 0", proc.stderr)
 
     def test_rejects_invalid_snapshot_point_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

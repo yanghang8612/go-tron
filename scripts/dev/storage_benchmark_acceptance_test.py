@@ -97,6 +97,10 @@ def clean_snapshot_profile_evidence_row():
         "snapshotPayloadBytes": 1300,
         "snapshotSidecarBytes": 300,
         "snapshotSidecarShareMilli": 188,
+        "snapshotStateHistoryBytes": 0,
+        "snapshotStateHistoryCompressedSegments": 0,
+        "snapshotStateHistoryCompressedBytes": 0,
+        "snapshotStateHistoryCompressedShareMilli": -1,
         "snapshotLatestSidecarBytes": 0,
         "snapshotLatestSidecarShareMilli": -1,
         "snapshotStateHistorySidecarBytes": 0,
@@ -3355,6 +3359,62 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_accepts_required_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            row.update(
+                {
+                    "snapshotStateHistoryBytes": 80,
+                    "snapshotStateHistoryCompressedSegments": 1,
+                    "snapshotStateHistoryCompressedBytes": 80,
+                    "snapshotStateHistoryCompressedShareMilli": 1000,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-evidence",
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_rejects_missing_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(result, [clean_snapshot_profile_evidence_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedBytes=0, want > 0", proc.stderr)
 
     def test_rejects_invalid_snapshot_point_profile_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

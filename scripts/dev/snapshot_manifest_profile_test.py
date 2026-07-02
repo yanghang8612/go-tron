@@ -109,6 +109,51 @@ class SnapshotManifestProfileTest(unittest.TestCase):
             self.assertEqual(profile["verifiedSegments"], len(segments))
             self.assertEqual(profile["totalBytes"], 4600)
 
+    def test_verify_files_counts_compressed_state_history_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            segments = [
+                {
+                    "dataset": "state-domain-change",
+                    "kind": "history",
+                    "fromTxNum": 1,
+                    "toTxNum": 2,
+                    "path": "history/state-domain-change-1-2.seg",
+                    "size": 16,
+                },
+                {
+                    "dataset": "state-domain-change",
+                    "kind": "inverted",
+                    "fromTxNum": 1,
+                    "toTxNum": 2,
+                    "path": "history/state-domain-change-1-2.idx",
+                    "size": 8,
+                },
+            ]
+            write_manifest(tmpdir, segments)
+            (tmpdir / "history").mkdir(parents=True)
+            (tmpdir / "history" / "state-domain-change-1-2.seg").write_bytes(b"gtcblk01payload!")
+            (tmpdir / "history" / "state-domain-change-1-2.idx").write_bytes(b"sidecar!")
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(tmpdir), "--json", "--verify-files"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            profile = json.loads(proc.stdout)
+            self.assertEqual(profile["compressedSegments"], 1)
+            self.assertEqual(profile["compressedBytes"], 16)
+            self.assertEqual(profile["compressedShareMilli"], 667)
+            state_history = profile["byFamily"]["state-history"]
+            self.assertEqual(state_history["totalBytes"], 24)
+            self.assertEqual(state_history["compressedSegments"], 1)
+            self.assertEqual(state_history["compressedBytes"], 16)
+            self.assertEqual(state_history["compressedShareMilli"], 667)
+            self.assertEqual(profile["byDataset"]["state-domain-change"]["compressedBytes"], 16)
+
     def test_verify_files_rejects_size_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

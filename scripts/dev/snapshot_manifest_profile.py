@@ -34,6 +34,8 @@ POINT_INDEX_CANDIDATES = (
     "commitmentSnapshot",
 )
 
+COMPRESSED_BLOCK_MAGIC = b"gtcblk01"
+
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
@@ -143,6 +145,12 @@ def verify_segment_file(manifest_dir, ref, source, expected_size):
             f"{source} segment {ref.get('path')} file size {actual_size} "
             f"does not match manifest size {expected_size}"
         )
+    return path
+
+
+def compressed_segment_file(path):
+    with path.open("rb") as fh:
+        return fh.read(len(COMPRESSED_BLOCK_MAGIC)) == COMPRESSED_BLOCK_MAGIC
 
 
 def is_sidecar(kind):
@@ -171,20 +179,26 @@ def empty_stats():
         "totalBytes": 0,
         "payloadBytes": 0,
         "sidecarBytes": 0,
+        "compressedSegments": 0,
+        "compressedBytes": 0,
     }
 
 
-def add_stats(stats, size, sidecar):
+def add_stats(stats, size, sidecar, compressed=False):
     stats["segments"] += 1
     stats["totalBytes"] += size
     if sidecar:
         stats["sidecarBytes"] += size
     else:
         stats["payloadBytes"] += size
+    if compressed:
+        stats["compressedSegments"] += 1
+        stats["compressedBytes"] += size
 
 
 def finalize_stats(stats):
     stats["sidecarShareMilli"] = ratio_milli(stats["sidecarBytes"], stats["totalBytes"])
+    stats["compressedShareMilli"] = ratio_milli(stats["compressedBytes"], stats["totalBytes"])
     return stats
 
 
@@ -239,19 +253,21 @@ def profile_manifest(path, include_retired=False, verify_files=False):
             kind = str(ref.get("kind", "")).strip()
             dataset = str(ref.get("dataset", "")).strip()
             size = segment_size(ref, source)
+            compressed = False
             if verify_files:
-                verify_segment_file(manifest_dir, ref, source, size)
+                path = verify_segment_file(manifest_dir, ref, source, size)
+                compressed = compressed_segment_file(path)
                 verified_segments += 1
             sidecar = is_sidecar(kind)
             family = segment_family(dataset, kind)
-            add_stats(overall, size, sidecar)
-            add_stats(by_family[family], size, sidecar)
-            add_stats(by_kind[kind or "<missing>"], size, sidecar)
-            add_stats(by_dataset[dataset or "<missing>"], size, sidecar)
+            add_stats(overall, size, sidecar, compressed)
+            add_stats(by_family[family], size, sidecar, compressed)
+            add_stats(by_kind[kind or "<missing>"], size, sidecar, compressed)
+            add_stats(by_dataset[dataset or "<missing>"], size, sidecar, compressed)
             if sidecar:
                 sidecar_kinds[kind] += 1
             for name in point_index_candidate_names(dataset, kind):
-                add_stats(point_candidates[name], size, sidecar)
+                add_stats(point_candidates[name], size, sidecar, compressed)
 
     profile = finalize_stats(overall)
     profile.update(
@@ -336,7 +352,10 @@ def print_human(profile):
         f"totalBytes={profile['totalBytes']} "
         f"payloadBytes={profile['payloadBytes']} "
         f"sidecarBytes={profile['sidecarBytes']} "
-        f"sidecarShareMilli={profile['sidecarShareMilli']}"
+        f"sidecarShareMilli={profile['sidecarShareMilli']} "
+        f"compressedSegments={profile['compressedSegments']} "
+        f"compressedBytes={profile['compressedBytes']} "
+        f"compressedShareMilli={profile['compressedShareMilli']}"
     )
     for family, stats in sorted(
         profile["byFamily"].items(),
@@ -347,7 +366,10 @@ def print_human(profile):
             f"totalBytes={stats['totalBytes']} "
             f"payloadBytes={stats['payloadBytes']} "
             f"sidecarBytes={stats['sidecarBytes']} "
-            f"sidecarShareMilli={stats['sidecarShareMilli']}"
+            f"sidecarShareMilli={stats['sidecarShareMilli']} "
+            f"compressedSegments={stats['compressedSegments']} "
+            f"compressedBytes={stats['compressedBytes']} "
+            f"compressedShareMilli={stats['compressedShareMilli']}"
         )
     candidates = {
         name: stats

@@ -2360,6 +2360,10 @@ def snapshot_manifest_profile_defaults(status):
         "snapshotPayloadBytes": 0,
         "snapshotSidecarBytes": 0,
         "snapshotSidecarShareMilli": -1,
+        "snapshotStateHistoryBytes": 0,
+        "snapshotStateHistoryCompressedSegments": 0,
+        "snapshotStateHistoryCompressedBytes": 0,
+        "snapshotStateHistoryCompressedShareMilli": -1,
     }
     for _, prefix in SNAPSHOT_PROFILE_FAMILIES:
         row[f"{prefix}Bytes"] = 0
@@ -2419,6 +2423,13 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
     families = profile.get("byFamily", {})
     if not isinstance(families, dict):
         families = {}
+    state_history = families.get("state-history", {})
+    if not isinstance(state_history, dict):
+        state_history = {}
+    row["snapshotStateHistoryBytes"] = int_field(state_history.get("totalBytes"))
+    row["snapshotStateHistoryCompressedSegments"] = int_field(state_history.get("compressedSegments"))
+    row["snapshotStateHistoryCompressedBytes"] = int_field(state_history.get("compressedBytes"))
+    row["snapshotStateHistoryCompressedShareMilli"] = int_field(state_history.get("compressedShareMilli"), -1)
     for family, prefix in SNAPSHOT_PROFILE_FAMILIES:
         stats = families.get(family, {})
         if not isinstance(stats, dict):
@@ -2597,6 +2608,22 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_snapshot_profile_verify_files", "snapshotProfileVerifyFiles", "Whether snapshot manifest profile evidence verified files on disk."),
     ("gtron_nile_sync_snapshot_profile_verified_segments", "snapshotProfileVerifiedSegments", "Snapshot segment files verified by the manifest profiler."),
     ("gtron_nile_sync_snapshot_sidecar_share_milli", "snapshotSidecarShareMilli", "Snapshot sidecar share in milli-units."),
+    ("gtron_nile_sync_snapshot_state_history_bytes", "snapshotStateHistoryBytes", "State-history snapshot bytes."),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_segments",
+        "snapshotStateHistoryCompressedSegments",
+        "Block-compressed state-history snapshot segment count.",
+    ),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_bytes",
+        "snapshotStateHistoryCompressedBytes",
+        "Block-compressed state-history snapshot bytes.",
+    ),
+    (
+        "gtron_nile_sync_snapshot_state_history_compressed_share_milli",
+        "snapshotStateHistoryCompressedShareMilli",
+        "State-history bytes stored in block-compressed segments in milli-units.",
+    ),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_bytes", "snapshotPointTxHashLookupBytes", "Snapshot bytes covered by the tx-hash point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_segments", "snapshotPointTxHashLookupSegments", "Snapshot segment count covered by the tx-hash point lookup candidate."),
     ("gtron_nile_sync_snapshot_point_tx_hash_lookup_payload_bytes", "snapshotPointTxHashLookupPayloadBytes", "Snapshot payload bytes covered by the tx-hash point lookup candidate."),

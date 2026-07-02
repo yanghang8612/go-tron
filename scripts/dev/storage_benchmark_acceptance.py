@@ -92,6 +92,19 @@ BENCHMARK_PROMETHEUS_SNAPSHOT_POINT_FIELDS = tuple(
 
 BENCHMARK_PROMETHEUS_DIRECT_FIELDS = (
     ("gtron_storage_benchmark_archive_api_depth_blocks", "archiveApiDepthBlocks"),
+    ("gtron_storage_benchmark_snapshot_state_history_bytes", "snapshotStateHistoryBytes"),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_segments",
+        "snapshotStateHistoryCompressedSegments",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_bytes",
+        "snapshotStateHistoryCompressedBytes",
+    ),
+    (
+        "gtron_storage_benchmark_snapshot_state_history_compressed_share_milli",
+        "snapshotStateHistoryCompressedShareMilli",
+    ),
     *BENCHMARK_PROMETHEUS_SNAPSHOT_POINT_FIELDS,
     ("gtron_storage_benchmark_cold_freezer_to_block", "coldFreezerToBlock"),
     ("gtron_storage_benchmark_derived_index_to_block", "derivedIndexToBlock"),
@@ -157,6 +170,9 @@ BENCHMARK_PROMETHEUS_NON_NEGATIVE_INTEGER_DIRECT_FIELDS = {
     "snapshotPointChainFreezerAccessorSegments",
     "snapshotPointCodeDomainSegments",
     "snapshotPointCommitmentSnapshotSegments",
+    "snapshotStateHistoryBytes",
+    "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes",
     "signedColdPrune",
     "tailPrunedFiles",
     "historyWindow",
@@ -1804,6 +1820,10 @@ SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotPayloadBytes",
     "snapshotSidecarBytes",
     "snapshotSidecarShareMilli",
+    "snapshotStateHistoryBytes",
+    "snapshotStateHistoryCompressedSegments",
+    "snapshotStateHistoryCompressedBytes",
+    "snapshotStateHistoryCompressedShareMilli",
 )
 
 SNAPSHOT_PROFILE_FAMILY_FIELDS = (
@@ -1870,6 +1890,14 @@ def check_snapshot_profile_row(row):
     payload_bytes = as_non_negative_int(row, "snapshotPayloadBytes")
     sidecar_bytes = as_non_negative_int(row, "snapshotSidecarBytes")
     share = as_non_negative_int(row, "snapshotSidecarShareMilli")
+    state_history_bytes = as_non_negative_int(row, "snapshotStateHistoryBytes")
+    state_history_compressed_segments = as_non_negative_int(
+        row, "snapshotStateHistoryCompressedSegments"
+    )
+    state_history_compressed_bytes = as_non_negative_int(
+        row, "snapshotStateHistoryCompressedBytes"
+    )
+    state_history_compressed_share = as_number(row, "snapshotStateHistoryCompressedShareMilli")
     if total_bytes is None or total_bytes <= 0:
         issues.append(
             f"{line_label(row)} snapshotProfileTotalBytes={row.get('snapshotProfileTotalBytes')!r}, want > 0"
@@ -1880,6 +1908,31 @@ def check_snapshot_profile_row(row):
         issues.append(f"{line_label(row)} snapshotSidecarBytes={row.get('snapshotSidecarBytes')!r}, want non-negative integer")
     if share is None:
         issues.append(f"{line_label(row)} snapshotSidecarShareMilli={row.get('snapshotSidecarShareMilli')!r}, want non-negative integer")
+    if state_history_bytes is None:
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryBytes={row.get('snapshotStateHistoryBytes')!r}, "
+            "want non-negative integer"
+        )
+    if state_history_compressed_segments is None:
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedSegments="
+            f"{row.get('snapshotStateHistoryCompressedSegments')!r}, want non-negative integer"
+        )
+    if state_history_compressed_bytes is None:
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedBytes="
+            f"{row.get('snapshotStateHistoryCompressedBytes')!r}, want non-negative integer"
+        )
+    if state_history_compressed_share is None:
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedShareMilli="
+            f"{row.get('snapshotStateHistoryCompressedShareMilli')!r}, want numeric value"
+        )
+    elif state_history_compressed_share < -1 or state_history_compressed_share > 1000:
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedShareMilli="
+            f"{state_history_compressed_share:g}, want -1..1000"
+        )
     if (
         total_bytes is not None
         and payload_bytes is not None
@@ -1899,6 +1952,39 @@ def check_snapshot_profile_row(row):
             )
         if share > 1000:
             issues.append(f"{line_label(row)} snapshotSidecarShareMilli={share}, want <= 1000")
+    if (
+        state_history_bytes is not None
+        and state_history_compressed_bytes is not None
+        and state_history_compressed_bytes > state_history_bytes
+    ):
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedBytes={state_history_compressed_bytes} "
+            f"must be <= snapshotStateHistoryBytes={state_history_bytes}"
+        )
+    if (
+        state_history_compressed_bytes is not None
+        and state_history_compressed_bytes > 0
+        and state_history_compressed_segments is not None
+        and state_history_compressed_segments <= 0
+    ):
+        issues.append(
+            f"{line_label(row)} snapshotStateHistoryCompressedSegments={state_history_compressed_segments}, "
+            f"want > 0 when snapshotStateHistoryCompressedBytes={state_history_compressed_bytes}"
+        )
+    if (
+        state_history_bytes is not None
+        and state_history_compressed_bytes is not None
+        and state_history_compressed_share is not None
+        and state_history_compressed_share >= 0
+    ):
+        want_share = sidecar_share_milli(state_history_compressed_bytes, state_history_bytes)
+        if state_history_compressed_share != want_share:
+            issues.append(
+                f"{line_label(row)} snapshotStateHistoryCompressedShareMilli="
+                f"{state_history_compressed_share:g}, want {want_share} "
+                f"for compressedBytes={state_history_compressed_bytes} "
+                f"stateHistoryBytes={state_history_bytes}"
+            )
 
     for prefix in SNAPSHOT_PROFILE_FAMILY_FIELDS:
         bytes_field = f"{prefix}Bytes"
@@ -2006,6 +2092,35 @@ def check_snapshot_profile_evidence(rows, required_modes=()):
 
     for row in evidence_rows:
         issues.extend(check_snapshot_profile_row(row))
+    return issues
+
+
+def check_compressed_state_history_evidence(rows):
+    issues = []
+    evidence_rows = [
+        row for row in latest_rows(rows).values() if snapshot_profile_evidence_row(row)
+    ]
+    if not evidence_rows:
+        return ["required compressed state-history evidence has no selected latest row"]
+    for row in evidence_rows:
+        segments = as_non_negative_int(row, "snapshotStateHistoryCompressedSegments")
+        if segments is None or segments <= 0:
+            issues.append(
+                f"{line_label(row)} snapshotStateHistoryCompressedSegments="
+                f"{row.get('snapshotStateHistoryCompressedSegments')!r}, want > 0"
+            )
+        compressed_bytes = as_non_negative_int(row, "snapshotStateHistoryCompressedBytes")
+        if compressed_bytes is None or compressed_bytes <= 0:
+            issues.append(
+                f"{line_label(row)} snapshotStateHistoryCompressedBytes="
+                f"{row.get('snapshotStateHistoryCompressedBytes')!r}, want > 0"
+            )
+        total_bytes = as_non_negative_int(row, "snapshotStateHistoryBytes")
+        if total_bytes is None or total_bytes <= 0:
+            issues.append(
+                f"{line_label(row)} snapshotStateHistoryBytes="
+                f"{row.get('snapshotStateHistoryBytes')!r}, want > 0"
+            )
     return issues
 
 
@@ -2206,6 +2321,11 @@ def build_parser():
         help="comma-separated modes whose latest selected rows must include valid snapshot manifest profile counters",
     )
     parser.add_argument(
+        "--require-compressed-state-history",
+        action="store_true",
+        help="require snapshot profile evidence to include at least one block-compressed state-history segment",
+    )
+    parser.add_argument(
         "--max-snapshot-point-sidecar-share-milli",
         type=float,
         metavar="N",
@@ -2385,6 +2505,8 @@ def main(argv=None):
     )
     if args.require_snapshot_profile_evidence or required_snapshot_profile_modes:
         issues.extend(check_snapshot_profile_evidence(rows, required_snapshot_profile_modes))
+    if args.require_compressed_state_history:
+        issues.extend(check_compressed_state_history_evidence(rows))
     issues.extend(
         check_snapshot_point_thresholds(
             rows,
@@ -2480,6 +2602,8 @@ def main(argv=None):
     if args.require_snapshot_profile_evidence:
         checks += 1
     checks += len(required_snapshot_profile_modes)
+    if args.require_compressed_state_history:
+        checks += 1
     print(
         f"storage benchmark acceptance: ok rows={len(rows)} latest={len(latest)} "
         f"modes={modes or '-'} checks={checks}"
