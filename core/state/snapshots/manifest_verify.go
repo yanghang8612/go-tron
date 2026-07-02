@@ -417,49 +417,62 @@ func verifyManifestLatestBinarySidecars(dir string, manifest *Manifest) error {
 		if !ok || ref.Kind != SegmentLatest || !cfg.HasLatest || !isLatestBinarySegmentPath(ref.Path) {
 			continue
 		}
-		if err := CheckLatestSegment(dir, ref); err != nil {
+		if err := verifyManifestLatestBinarySidecarSet(dir, manifest, cfg, ref); err != nil {
 			return err
 		}
-		path := filepath.Join(dir, ref.Path)
-		segFile, segHeader, err := openLatestBinaryReader(path, ref)
+	}
+	return nil
+}
+
+func verifyManifestLatestBinarySidecarSet(dir string, manifest *Manifest, cfg DomainCfg, ref SegmentRef) error {
+	if err := CheckLatestSegment(dir, ref); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, ref.Path)
+	segFile, segHeader, err := openLatestBinaryReader(path, ref)
+	if err != nil {
+		return err
+	}
+	defer segFile.Close()
+
+	if cfg.HasLatestAccessor {
+		accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary latest %q missing required accessor %q", ref.Path, latestBinaryAccessorPath(ref.Path))
+		}
+		if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+			return err
+		}
+		accessorFile, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
 		if err != nil {
 			return err
 		}
-		_ = segFile.Close()
-
-		if cfg.HasLatestAccessor {
-			accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
-			if !ok {
-				return fmt.Errorf("snapshots: binary latest %q missing required accessor %q", ref.Path, latestBinaryAccessorPath(ref.Path))
-			}
-			if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
-				return err
-			}
-			accessorFile, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
-			if err != nil {
-				return err
-			}
-			_ = accessorFile.Close()
-			if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
-				return err
-			}
+		defer accessorFile.Close()
+		if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
+			return err
 		}
-		if cfg.HasLatestBTree {
-			btreeRef, ok := latestBinaryBTreeRef(manifest, ref)
-			if !ok {
-				return fmt.Errorf("snapshots: binary latest %q missing required btree %q", ref.Path, latestBinaryBTreePath(ref.Path))
-			}
-			if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
-				return err
-			}
-			btreeFile, btreeHeader, err := openLatestBinaryBTreeReader(dir, btreeRef)
-			if err != nil {
-				return err
-			}
-			_ = btreeFile.Close()
-			if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
-				return err
-			}
+		if err := verifyLatestBinaryAccessorOffsetsAgainstSegment(path, segFile, segHeader, accessorFile, accessorHeader); err != nil {
+			return err
+		}
+	}
+	if cfg.HasLatestBTree {
+		btreeRef, ok := latestBinaryBTreeRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary latest %q missing required btree %q", ref.Path, latestBinaryBTreePath(ref.Path))
+		}
+		if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+			return err
+		}
+		btreeFile, btreeHeader, err := openLatestBinaryBTreeReader(dir, btreeRef)
+		if err != nil {
+			return err
+		}
+		defer btreeFile.Close()
+		if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
+			return err
+		}
+		if err := verifyLatestBinaryBTreeAgainstSegment(path, segFile, segHeader, btreeFile, btreeHeader); err != nil {
+			return err
 		}
 	}
 	return nil

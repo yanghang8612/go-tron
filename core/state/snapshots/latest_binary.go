@@ -1959,6 +1959,103 @@ func validateLatestBinaryAccessorMatchesSegment(path string, ref SegmentRef, seg
 	return nil
 }
 
+func verifyLatestBinaryAccessorOffsetsAgainstSegment(path string, segment *os.File, segmentHeader latestBinaryHeader, accessor *os.File, accessorHeader latestBinaryAccessorHeader) error {
+	if err := validateLatestBinaryAccessorMatchesSegment(path, SegmentRef{
+		Dataset:   segmentHeader.dataset,
+		Domain:    segmentHeader.domain,
+		Kind:      SegmentLatest,
+		FromTxNum: segmentHeader.fromTxNum,
+		ToTxNum:   segmentHeader.toTxNum,
+	}, segmentHeader, accessorHeader); err != nil {
+		return err
+	}
+	if _, err := segment.Seek(latestBinaryHeaderSize, io.SeekStart); err != nil {
+		return err
+	}
+	for i := uint64(0); i < segmentHeader.count; i++ {
+		pos, err := segment.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if pos < 0 {
+			return fmt.Errorf("snapshots: latest binary segment %q negative offset %d", path, pos)
+		}
+		want := uint64(pos)
+		got, err := readLatestBinaryAccessorOffsetAt(accessor, i)
+		if err != nil {
+			return fmt.Errorf("snapshots: decode latest binary accessor offset %d: %w", i, err)
+		}
+		if got != want {
+			return fmt.Errorf("snapshots: latest binary accessor for %q offset %d=%d, want segment record offset %d", path, i, got, want)
+		}
+		if _, valueLen, err := readLatestBinaryEntryKey(segment); err != nil {
+			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
+		} else if err := skipLatestBinaryValue(segment, valueLen); err != nil {
+			return fmt.Errorf("snapshots: skip latest binary value %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func verifyLatestBinaryBTreeAgainstSegment(path string, segment *os.File, segmentHeader latestBinaryHeader, btree *os.File, btreeHeader latestBinaryBTreeHeader) error {
+	if err := validateLatestBinaryCompanionMatchesSegment(path, SegmentRef{
+		Dataset:   segmentHeader.dataset,
+		Domain:    segmentHeader.domain,
+		Kind:      SegmentLatest,
+		FromTxNum: segmentHeader.fromTxNum,
+		ToTxNum:   segmentHeader.toTxNum,
+	}, segmentHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
+		return err
+	}
+	var expectedEntries uint64
+	if segmentHeader.count > 0 {
+		expectedEntries = (segmentHeader.count + btreeHeader.blockSize - 1) / btreeHeader.blockSize
+	}
+	if btreeHeader.count != expectedEntries {
+		return fmt.Errorf("snapshots: latest binary btree for %q entries=%d, want %d for %d segment records and block size %d", path, btreeHeader.count, expectedEntries, segmentHeader.count, btreeHeader.blockSize)
+	}
+	if _, err := segment.Seek(latestBinaryHeaderSize, io.SeekStart); err != nil {
+		return err
+	}
+	var btreeIndex uint64
+	for ordinal := uint64(0); ordinal < segmentHeader.count; ordinal++ {
+		pos, err := segment.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if pos < 0 {
+			return fmt.Errorf("snapshots: latest binary segment %q negative offset %d", path, pos)
+		}
+		key, valueLen, err := readLatestBinaryEntryKey(segment)
+		if err != nil {
+			return fmt.Errorf("snapshots: decode latest binary key %d: %w", ordinal, err)
+		}
+		if ordinal%btreeHeader.blockSize == 0 {
+			entry, ok, err := readLatestBinaryBTreeEntryAt(btree, btreeIndex)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("snapshots: latest binary btree for %q missing entry %d", path, btreeIndex)
+			}
+			if entry.ordinal != ordinal {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d ordinal=%d, want %d", path, btreeIndex, entry.ordinal, ordinal)
+			}
+			if entry.segmentOffset != uint64(pos) {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d offset=%d, want segment record offset %d", path, btreeIndex, entry.segmentOffset, uint64(pos))
+			}
+			if !bytes.Equal(entry.key, key) {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d key mismatch", path, btreeIndex)
+			}
+			btreeIndex++
+		}
+		if err := skipLatestBinaryValue(segment, valueLen); err != nil {
+			return fmt.Errorf("snapshots: skip latest binary value %d: %w", ordinal, err)
+		}
+	}
+	return nil
+}
+
 func validateLatestBinaryCompanionMatchesSegment(path string, ref SegmentRef, segment latestBinaryHeader, accessor latestBinaryAccessorHeader, wantKind SegmentKind) error {
 	if accessor.kind != wantKind {
 		return fmt.Errorf("snapshots: latest binary accessor for %q kind %q, want %q", path, accessor.kind, wantKind)

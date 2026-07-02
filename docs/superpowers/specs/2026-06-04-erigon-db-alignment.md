@@ -2189,6 +2189,13 @@ Status:
   `snapshotProfileVerifyFiles`/`snapshotProfileVerifiedSegments` evidence, and
   the storage/Nile acceptance gates reject snapshot-profile rows that do not
   prove every active manifest segment was verified.
+- Snapshot manifest verification now also cross-checks latest-domain binary
+  sidecar contents against their `.seg` files. Account/KV/code/commitment
+  `.kvi` accessors must point at each exact segment record offset, and `.bt`
+  floor entries must match the expected ordinal/key/offset for each block of
+  segment rows, so signed fetch, bootstrap, restore, and local verify gates
+  reject stale latest-state sidecars even when the sidecar file itself has a
+  valid checksum and matching segment checksum header.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

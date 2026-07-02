@@ -279,6 +279,36 @@ func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryAccessor(t *testing.T)
 	}
 }
 
+func TestVerifyLoadedManifestFilesRejectsLatestBinaryAccessorOffsetMismatch(t *testing.T) {
+	dir := t.TempDir()
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	manifest := NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
+	if len(data) < latestBinaryAccessorHeaderSize+3*8 {
+		t.Fatalf("accessor data length = %d, want three offsets", len(data))
+	}
+	second := binary.BigEndian.Uint64(data[latestBinaryAccessorHeaderSize+8 : latestBinaryAccessorHeaderSize+16])
+	third := binary.BigEndian.Uint64(data[latestBinaryAccessorHeaderSize+16 : latestBinaryAccessorHeaderSize+24])
+	if second+1 >= third {
+		t.Fatalf("test accessor offsets too close: second=%d third=%d", second, third)
+	}
+	binary.BigEndian.PutUint64(data[latestBinaryAccessorHeaderSize+8:latestBinaryAccessorHeaderSize+16], second+1)
+	updateSnapshotRefFileForTest(t, dir, &accessorRef, data)
+	if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+		t.Fatalf("single-file accessor check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "want segment record offset") {
+		t.Fatalf("VerifyLoadedManifestFiles stale latest accessor offset err = %v, want record offset mismatch", err)
+	}
+}
+
 func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryBTree(t *testing.T) {
 	dir := t.TempDir()
 	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
@@ -296,6 +326,35 @@ func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryBTree(t *testing.T) {
 	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
 	if err == nil || !strings.Contains(err.Error(), "segment checksum mismatch") {
 		t.Fatalf("VerifyLoadedManifestFiles stale latest btree err = %v, want segment checksum mismatch", err)
+	}
+}
+
+func TestVerifyLoadedManifestFilesRejectsLatestBinaryBTreeOrdinalMismatch(t *testing.T) {
+	dir := t.TempDir()
+	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)
+	manifest := NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles before corruption: %v", err)
+	}
+
+	data := mustReadFile(t, filepath.Join(dir, btreeRef.Path))
+	if len(data) < latestBinaryBTreeHeaderSize+8 {
+		t.Fatalf("btree data length = %d, want first entry offset", len(data))
+	}
+	entryOffset := binary.BigEndian.Uint64(data[latestBinaryBTreeHeaderSize : latestBinaryBTreeHeaderSize+8])
+	if entryOffset+12 > uint64(len(data)) {
+		t.Fatalf("btree first entry offset %d outside data length %d", entryOffset, len(data))
+	}
+	binary.BigEndian.PutUint64(data[entryOffset+4:entryOffset+12], 1)
+	updateSnapshotRefFileForTest(t, dir, &btreeRef, data)
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		t.Fatalf("single-file btree check should still pass: %v", err)
+	}
+
+	manifest = NewManifest(1, 10, []SegmentRef{segRef, accessorRef, btreeRef})
+	_, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "ordinal=1, want 0") {
+		t.Fatalf("VerifyLoadedManifestFiles stale latest btree ordinal err = %v, want ordinal mismatch", err)
 	}
 }
 
@@ -395,6 +454,16 @@ func corruptLatestBinaryCompanionSegmentChecksum(t *testing.T, dir string, ref *
 	ref.Checksum = checksum
 	if err := os.WriteFile(filepath.Join(dir, ref.Path), data, 0o644); err != nil {
 		t.Fatalf("write stale latest binary companion %q: %v", ref.Path, err)
+	}
+}
+
+func updateSnapshotRefFileForTest(t *testing.T, dir string, ref *SegmentRef, data []byte) {
+	t.Helper()
+	size, checksum := latestBinaryMetadata(data)
+	ref.Size = size
+	ref.Checksum = checksum
+	if err := os.WriteFile(filepath.Join(dir, ref.Path), data, 0o644); err != nil {
+		t.Fatalf("write snapshot ref %q: %v", ref.Path, err)
 	}
 }
 
