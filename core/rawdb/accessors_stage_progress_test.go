@@ -495,6 +495,80 @@ func TestPlanStageProgressPipelineCursor(t *testing.T) {
 	}
 }
 
+func TestPlanStageProgressPipelineCursorHoldsTailPruneUntilEventLogsCovered(t *testing.T) {
+	hash := common.Hash{0x10}
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:        StageSnapshotChainLookupPrune,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+	})
+	if task, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotChainFreezerTailPrune); ok {
+		t.Fatalf("tail-prune task = %+v, want no non-genesis task before event-log coverage exists", task)
+	}
+	if task, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotEventLogBuild); !ok || task.TargetBlock != 100 || task.Upstream != StageFinish {
+		t.Fatalf("event-log build task = %+v ok=%v, want missing task at finish boundary", task, ok)
+	}
+}
+
+func TestPlanStageProgressPipelineCursorUsesLowestTailPruneDependency(t *testing.T) {
+	hash100 := common.Hash{0x10}
+	hash90 := common.Hash{0x09}
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:        StageSnapshotChainLookupPrune,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageSnapshotEventLogBuild: {
+			Stage:        StageSnapshotEventLogBuild,
+			BlockNum:     90,
+			BlockHash:    hash90,
+			HasBlockHash: true,
+		},
+	})
+	var tailTasks []StageProgressPipelineTask
+	for _, task := range cursor.Tasks {
+		if task.Stage == StageSnapshotChainFreezerTailPrune {
+			tailTasks = append(tailTasks, task)
+		}
+	}
+	if len(tailTasks) != 1 {
+		t.Fatalf("tail-prune tasks = %+v, want one task capped by lowest upstream", tailTasks)
+	}
+	task := tailTasks[0]
+	if task.Upstream != StageSnapshotEventLogBuild || task.Status != StageProgressPipelineTaskMissing || task.TargetBlock != 90 || task.TargetHash != hash90 {
+		t.Fatalf("tail-prune task = %+v, want target event-log boundary 90/hash90", task)
+	}
+}
+
 func stageProgressCursorTask(tasks []StageProgressPipelineTask, stage StageID) (StageProgressPipelineTask, bool) {
 	for _, task := range tasks {
 		if task.Stage == stage {

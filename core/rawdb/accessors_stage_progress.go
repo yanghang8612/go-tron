@@ -195,48 +195,102 @@ func PlanStageProgressPipelineCursor(rows map[StageID]StageProgress) StageProgre
 		cursor.Complete = true
 		return cursor
 	}
-	for _, pair := range StageProgressOrderPairs() {
-		upstream, upstreamOK := rows[pair.Upstream]
-		if !upstreamOK {
-			continue
+	for _, group := range stageProgressPipelineDependencyGroups() {
+		if task, ok := planStageProgressPipelineTask(rows, group); ok {
+			cursor.Tasks = append(cursor.Tasks, task)
 		}
-		downstream, downstreamOK := rows[pair.Downstream]
-		if !downstreamOK {
-			cursor.Tasks = append(cursor.Tasks, StageProgressPipelineTask{
-				Stage:         pair.Downstream,
-				Upstream:      pair.Upstream,
-				Status:        StageProgressPipelineTaskMissing,
-				TargetBlock:   upstream.BlockNum,
-				TargetHash:    upstream.BlockHash,
-				TargetHasHash: upstream.HasBlockHash,
-			})
-			continue
-		}
-		task := StageProgressPipelineTask{
-			Stage:          pair.Downstream,
-			Upstream:       pair.Upstream,
-			TargetBlock:    upstream.BlockNum,
-			TargetHash:     upstream.BlockHash,
-			TargetHasHash:  upstream.HasBlockHash,
-			CurrentBlock:   downstream.BlockNum,
-			CurrentHash:    downstream.BlockHash,
-			CurrentHasHash: downstream.HasBlockHash,
-		}
-		switch {
-		case downstream.BlockNum < upstream.BlockNum:
-			task.Status = StageProgressPipelineTaskBehind
-		case downstream.BlockNum == upstream.BlockNum &&
-			downstream.HasBlockHash && upstream.HasBlockHash &&
-			downstream.BlockHash != upstream.BlockHash:
-			task.Status = StageProgressPipelineTaskHashMismatch
-		default:
-			continue
-		}
-		cursor.Tasks = append(cursor.Tasks, task)
 	}
 	cursor.Pending = len(cursor.Tasks)
 	cursor.Complete = cursor.Pending == 0 && len(cursor.Issues) == 0
 	return cursor
+}
+
+type stageProgressPipelineDependencyGroup struct {
+	Downstream StageID
+	Pairs      []StageProgressOrderPair
+}
+
+func stageProgressPipelineDependencyGroups() []stageProgressPipelineDependencyGroup {
+	pairs := StageProgressOrderPairs()
+	indexByDownstream := make(map[StageID]int, len(pairs))
+	groups := make([]stageProgressPipelineDependencyGroup, 0, len(pairs))
+	for _, pair := range pairs {
+		index, ok := indexByDownstream[pair.Downstream]
+		if !ok {
+			indexByDownstream[pair.Downstream] = len(groups)
+			groups = append(groups, stageProgressPipelineDependencyGroup{Downstream: pair.Downstream})
+			index = len(groups) - 1
+		}
+		groups[index].Pairs = append(groups[index].Pairs, pair)
+	}
+	return groups
+}
+
+func planStageProgressPipelineTask(rows map[StageID]StageProgress, group stageProgressPipelineDependencyGroup) (StageProgressPipelineTask, bool) {
+	downstream, downstreamOK := rows[group.Downstream]
+	var (
+		target                      StageProgress
+		targetUpstream              StageID
+		haveTarget                  bool
+		missingRequired             bool
+		missingRequiredAfterGenesis bool
+	)
+	for _, pair := range group.Pairs {
+		upstream, upstreamOK := rows[pair.Upstream]
+		if !upstreamOK {
+			if pair.RequireUpstream {
+				missingRequired = true
+			}
+			if pair.RequireUpstreamAfterGenesis {
+				missingRequiredAfterGenesis = true
+			}
+			continue
+		}
+		if !haveTarget || upstream.BlockNum < target.BlockNum {
+			target = upstream
+			targetUpstream = pair.Upstream
+			haveTarget = true
+			continue
+		}
+		if upstream.BlockNum == target.BlockNum && !target.HasBlockHash && upstream.HasBlockHash {
+			target = upstream
+			targetUpstream = pair.Upstream
+		}
+	}
+	if !haveTarget || missingRequired || (missingRequiredAfterGenesis && target.BlockNum > 0) {
+		return StageProgressPipelineTask{}, false
+	}
+	if !downstreamOK {
+		return StageProgressPipelineTask{
+			Stage:         group.Downstream,
+			Upstream:      targetUpstream,
+			Status:        StageProgressPipelineTaskMissing,
+			TargetBlock:   target.BlockNum,
+			TargetHash:    target.BlockHash,
+			TargetHasHash: target.HasBlockHash,
+		}, true
+	}
+	task := StageProgressPipelineTask{
+		Stage:          group.Downstream,
+		Upstream:       targetUpstream,
+		TargetBlock:    target.BlockNum,
+		TargetHash:     target.BlockHash,
+		TargetHasHash:  target.HasBlockHash,
+		CurrentBlock:   downstream.BlockNum,
+		CurrentHash:    downstream.BlockHash,
+		CurrentHasHash: downstream.HasBlockHash,
+	}
+	switch {
+	case downstream.BlockNum < target.BlockNum:
+		task.Status = StageProgressPipelineTaskBehind
+	case downstream.BlockNum == target.BlockNum &&
+		downstream.HasBlockHash && target.HasBlockHash &&
+		downstream.BlockHash != target.BlockHash:
+		task.Status = StageProgressPipelineTaskHashMismatch
+	default:
+		return StageProgressPipelineTask{}, false
+	}
+	return task, true
 }
 
 func CanonicalExecutionStages() []StageID {
