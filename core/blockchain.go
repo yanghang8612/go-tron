@@ -80,6 +80,8 @@ func (e *InsertBlocksError) Unwrap() error {
 //   - Persist: WriteBlock + WriteTaposRef + tx info persist + the final
 //     buffer flushBufferUpToSolidified that lands committed layers on disk.
 //   - Hooks: post-apply callback fan-out (PBFT, broadcaster, etc.).
+//   - StatePrefetch: read-only state prefetch work observed during Execute.
+//     It is diagnostic only; prefetch never changes consensus state.
 type ApplyStats struct {
 	Validate          time.Duration
 	Execute           time.Duration
@@ -89,6 +91,7 @@ type ApplyStats struct {
 	DPUpdate          time.Duration
 	Persist           time.Duration
 	Hooks             time.Duration
+	StatePrefetch     state.StatePrefetcherStats
 }
 
 // Total returns the sum of every phase.
@@ -1170,15 +1173,17 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
+	var prefetchStats state.StatePrefetcherStats
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), bc.versionPassCache, -1, nil)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), &prefetchStats, bc.versionPassCache, -1, nil)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), bc.versionPassCache, -1, nil)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), &prefetchStats, bc.versionPassCache, -1, nil)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+	stats.StatePrefetch = prefetchStats
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
 	// every block, matching java-tron Manager.processBlock. This keeps the

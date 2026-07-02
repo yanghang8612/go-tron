@@ -94,6 +94,19 @@ map so the benchmark can expose prefetch overlap without requiring a slow
 physical disk. Treat it as a tuning signal, not as a replacement for
 Nile/mainnet replay.
 
+## Sync Soak Evidence
+
+When the sync service imports a segment, the summary and detail logs include
+`statePrefetchEnqueued`, `statePrefetchDropped`, `statePrefetchProcessed`,
+`statePrefetchHits`, `statePrefetchMisses`, and `statePrefetchErrors`. These
+fields are diagnostic only; they do not affect consensus state.
+
+For Nile/mainnet soak runs, pass the gtron log to
+`scripts/dev/nile_sync_sample.sh --sync-log-file <path>`. The sampler exports
+the same counters as `syncLogStatePrefetch*` JSONL fields, so prefetch-on and
+prefetch-off runs can be compared against throughput, memory, and stage-progress
+evidence before changing defaults.
+
 ## Rollout Gate
 
 Do not flip the default until all of these hold:

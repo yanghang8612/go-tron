@@ -1580,6 +1580,12 @@ Status:
   be an actual `prefetch=on...` benchmark variant, so the `prefetch=off`
   baseline or unrelated labels cannot pass as rollout evidence even when
   thresholds are relaxed.
+- Sync import summaries and detail logs now expose state-prefetch counters
+  (`statePrefetchEnqueued`, `statePrefetchDropped`,
+  `statePrefetchProcessed`, `statePrefetchHits`, `statePrefetchMisses`, and
+  `statePrefetchErrors`). The Nile sampler carries them into
+  `syncLogStatePrefetch*` JSONL fields so production soaks can compare
+  prefetch-on/off throughput against actual warmup work and missed/error counts.
 
 Remaining:
 

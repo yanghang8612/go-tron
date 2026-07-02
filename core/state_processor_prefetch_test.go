@@ -47,6 +47,7 @@ func TestProcessBlockStatePrefetchMatchesSerialStateRoot(t *testing.T) {
 			nil,
 			cfg,
 			nil,
+			nil,
 			-1,
 			nil,
 		)

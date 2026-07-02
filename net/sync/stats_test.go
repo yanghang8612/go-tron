@@ -148,6 +148,14 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		DPUpdate: 5 * time.Millisecond,
 		Persist:  6 * time.Millisecond,
 		Hooks:    7 * time.Millisecond,
+		StatePrefetch: state.StatePrefetcherStats{
+			Enqueued:  10,
+			Dropped:   1,
+			Processed: 9,
+			Hits:      6,
+			Misses:    3,
+			Errors:    1,
+		},
 	})
 	s.AddApplyBlock(core.ApplyStats{
 		Validate:    10 * time.Millisecond,
@@ -168,6 +176,14 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		DPUpdate: 50 * time.Millisecond,
 		Persist:  60 * time.Millisecond,
 		Hooks:    70 * time.Millisecond,
+		StatePrefetch: state.StatePrefetcherStats{
+			Enqueued:  100,
+			Dropped:   10,
+			Processed: 90,
+			Hits:      60,
+			Misses:    30,
+			Errors:    10,
+		},
 	})
 	got := s.CurrentSnapshot().ApplyStats
 	want := core.ApplyStats{
@@ -192,6 +208,14 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		DPUpdate: 55 * time.Millisecond,
 		Persist:  66 * time.Millisecond,
 		Hooks:    77 * time.Millisecond,
+		StatePrefetch: state.StatePrefetcherStats{
+			Enqueued:  110,
+			Dropped:   11,
+			Processed: 99,
+			Hits:      66,
+			Misses:    33,
+			Errors:    11,
+		},
 	}
 	if got != want {
 		t.Fatalf("ApplyStats=%+v, want %+v", got, want)

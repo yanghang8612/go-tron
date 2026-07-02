@@ -241,10 +241,13 @@ distinguished from the larger attempted execution plan. These fields are
 log-derived and complement the
 `stage*` fields from `gtron db stage-status`: log fields explain what the last
 import batch planned and observed, while DB fields show the persisted recovery
-boundary. `syncLogTxTop` records the top transaction contract types in the same
-segment window, which separates contract-heavy `TriggerSmartContract` windows
-from transfer-heavy windows when throughput changes. The same log parser also
-records startup recovery fields, including
+boundary. `syncLogStatePrefetch*` records the prefetch queue, hit/miss, and
+error counters for the same import window, which lets prefetch-on/off Nile
+soaks compare throughput against actual read-warmup work. `syncLogTxTop`
+records the top transaction contract types in the same segment window, which
+separates contract-heavy `TriggerSmartContract` windows from transfer-heavy
+windows when throughput changes. The same log parser also records startup
+recovery fields, including
 `syncStartupPipelineOrderChecked`, `syncStartupPipelineOrderIssues`,
 `syncStartupPipelineOrderFirstIssue`, `syncStartupPipelineOrderReadErrors`, and
 `syncStartupPipelineOrderFirstReadErrorStage`, plus

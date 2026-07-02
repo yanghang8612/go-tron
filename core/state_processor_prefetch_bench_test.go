@@ -87,6 +87,7 @@ func benchProcessBlockPrefetchVariant(b *testing.B, txCount int, coldReadLatency
 			nil,
 			prefetch,
 			nil,
+			nil,
 			-1,
 			nil,
 		); err != nil {
