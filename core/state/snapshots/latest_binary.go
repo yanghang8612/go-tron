@@ -808,18 +808,19 @@ func openLatestBinaryReader(path string, ref SegmentRef) (*os.File, latestBinary
 	if err != nil {
 		return nil, latestBinaryHeader{}, err
 	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryHeader{}, err
+	}
+	fileSize := uint64(stat.Size())
 	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
+		if fileSize != ref.Size {
 			_ = file.Close()
 			return nil, latestBinaryHeader{}, fmt.Errorf("snapshots: segment %q size %d, want %d", path, stat.Size(), ref.Size)
 		}
 	}
-	header, err := readLatestBinaryHeader(file)
+	header, err := readLatestBinaryHeader(file, fileSize)
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryHeader{}, err
@@ -1321,7 +1322,7 @@ func decodeLatestBinaryAccessorHeaderWithMagic(data []byte, magic [8]byte, versi
 	}, data[headerSize:], nil
 }
 
-func readLatestBinaryHeader(r io.Reader) (latestBinaryHeader, error) {
+func readLatestBinaryHeader(r io.Reader, fileSize uint64) (latestBinaryHeader, error) {
 	fixed := make([]byte, latestBinaryHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryHeader{}, err
@@ -1332,6 +1333,9 @@ func readLatestBinaryHeader(r io.Reader) (latestBinaryHeader, error) {
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryHeaderSize {
 		return latestBinaryHeader{}, fmt.Errorf("snapshots: latest binary header size %d, want at least %d", headerSize, latestBinaryHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryHeader{}, fmt.Errorf("snapshots: latest binary header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryHeaderSize {
@@ -1359,18 +1363,19 @@ func openLatestBinaryAccessorReader(dir string, ref SegmentRef) (*os.File, lates
 	if err != nil {
 		return nil, latestBinaryAccessorHeader{}, err
 	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryAccessorHeader{}, err
+	}
+	fileSize := uint64(stat.Size())
 	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryAccessorHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
+		if fileSize != ref.Size {
 			_ = file.Close()
 			return nil, latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: accessor %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
 		}
 	}
-	header, err := readLatestBinaryAccessorHeader(file)
+	header, err := readLatestBinaryAccessorHeader(file, fileSize)
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryAccessorHeader{}, err
@@ -1402,18 +1407,19 @@ func openLatestBinaryBTreeReader(dir string, ref SegmentRef) (*os.File, latestBi
 	if err != nil {
 		return nil, latestBinaryBTreeHeader{}, err
 	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryBTreeHeader{}, err
+	}
+	fileSize := uint64(stat.Size())
 	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryBTreeHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
+		if fileSize != ref.Size {
 			_ = file.Close()
 			return nil, latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
 		}
 	}
-	header, err := readLatestBinaryBTreeHeader(file)
+	header, err := readLatestBinaryBTreeHeader(file, fileSize)
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryBTreeHeader{}, err
@@ -1441,7 +1447,7 @@ func openLatestBinaryBTreeReader(dir string, ref SegmentRef) (*os.File, latestBi
 	return file, header, nil
 }
 
-func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, error) {
+func readLatestBinaryAccessorHeader(r io.Reader, fileSize uint64) (latestBinaryAccessorHeader, error) {
 	fixed := make([]byte, latestBinaryAccessorHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryAccessorHeader{}, err
@@ -1449,6 +1455,9 @@ func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, er
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryAccessorHeaderSize {
 		return latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: latest binary accessor header size %d, want at least %d", headerSize, latestBinaryAccessorHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: latest binary accessor header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryAccessorHeaderSize {
@@ -1468,7 +1477,7 @@ func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, er
 	return header, nil
 }
 
-func readLatestBinaryBTreeHeader(r io.Reader) (latestBinaryBTreeHeader, error) {
+func readLatestBinaryBTreeHeader(r io.Reader, fileSize uint64) (latestBinaryBTreeHeader, error) {
 	fixed := make([]byte, latestBinaryBTreeHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryBTreeHeader{}, err
@@ -1483,6 +1492,9 @@ func readLatestBinaryBTreeHeader(r io.Reader) (latestBinaryBTreeHeader, error) {
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryBTreeHeaderSize {
 		return latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree header size %d, want at least %d", headerSize, latestBinaryBTreeHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryBTreeHeaderSize {

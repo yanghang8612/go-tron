@@ -2201,7 +2201,7 @@ Status:
   prove every active manifest segment was verified.
 - Snapshot manifest verification now also cross-checks latest-domain binary
   sidecar contents against their `.seg` files. Account/KV/code/commitment
-  `.kvi` accessors must point at each exact segment record offset, and `.bt`
+  `.lidx` accessors must point at each exact segment record offset, and `.bt`
   floor entries must match the expected ordinal/key/offset for each block of
   segment rows, so signed fetch, bootstrap, restore, and local verify gates
   reject stale latest-state sidecars even when the sidecar file itself has a
@@ -2209,7 +2209,11 @@ Status:
   checker now also rejects non-contiguous entry payloads, trailing payload
   bytes, invalid segment offsets, and floor ordinals that do not match
   `entryIndex * blockSize`, so malformed latest accessors fail before any
-  manifest-level cross-check depends on them.
+  manifest-level cross-check depends on them. The streaming latest `.seg`,
+  `.lidx`, and `.bt` header readers also bound declared header sizes by the
+  actual file length before allocating extension bytes, so truncated or
+  corrupted local/remote snapshot sidecars cannot force out-of-file header
+  reads into large allocations.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

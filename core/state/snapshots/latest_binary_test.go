@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -285,6 +286,63 @@ func TestLatestBinarySegmentCommitmentRootSingleEntryValidatedOnRead(t *testing.
 		Checksum:  checksum,
 	}); err == nil {
 		t.Fatal("invalid commitment root segment checked successfully")
+	}
+}
+
+func TestLatestBinaryHeaderReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
+	tests := []struct {
+		name      string
+		fixedSize int
+		magic     [8]byte
+		version   uint32
+		read      func([]byte) error
+	}{
+		{
+			name:      "segment",
+			fixedSize: latestBinaryHeaderSize,
+			magic:     latestBinarySegmentMagic,
+			version:   latestBinarySegmentVersion,
+			read: func(fixed []byte) error {
+				_, err := readLatestBinaryHeader(bytes.NewReader(fixed), uint64(len(fixed)))
+				return err
+			},
+		},
+		{
+			name:      "accessor",
+			fixedSize: latestBinaryAccessorHeaderSize,
+			magic:     latestBinaryAccessorMagic,
+			version:   latestBinaryAccessorVersion,
+			read: func(fixed []byte) error {
+				_, err := readLatestBinaryAccessorHeader(bytes.NewReader(fixed), uint64(len(fixed)))
+				return err
+			},
+		},
+		{
+			name:      "btree",
+			fixedSize: latestBinaryBTreeHeaderSize,
+			magic:     latestBinaryBTreeMagic,
+			version:   latestBinaryBTreeVersion,
+			read: func(fixed []byte) error {
+				_, err := readLatestBinaryBTreeHeader(bytes.NewReader(fixed), uint64(len(fixed)))
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixed := make([]byte, tt.fixedSize)
+			copy(fixed[:8], tt.magic[:])
+			binary.BigEndian.PutUint32(fixed[8:12], tt.version)
+			binary.BigEndian.PutUint32(fixed[12:16], ^uint32(0))
+
+			err := tt.read(fixed)
+			if err == nil {
+				t.Fatal("oversized latest binary header read successfully")
+			}
+			if !strings.Contains(err.Error(), "exceeds file size") {
+				t.Fatalf("error = %v, want file-size bound", err)
+			}
+		})
 	}
 }
 
