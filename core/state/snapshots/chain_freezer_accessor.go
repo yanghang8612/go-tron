@@ -202,7 +202,11 @@ func readChainFreezerSegmentRowWithAccessor(dir string, freezerRef, accessorRef 
 		return chainFreezerRow{}, false, err
 	}
 	defer file.Close()
-	row, err := readChainFreezerSegmentRowAt(file, offset, blockNum)
+	stat, err := file.Stat()
+	if err != nil {
+		return chainFreezerRow{}, false, err
+	}
+	row, err := readChainFreezerSegmentRowAt(file, offset, blockNum, uint64(stat.Size()))
 	if err != nil {
 		return chainFreezerRow{}, false, err
 	}
@@ -237,6 +241,11 @@ func VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir string, accessorRe
 		return err
 	}
 	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := uint64(stat.Size())
 	return iterateChainFreezerSegmentRows(dir, freezerRef, func(row chainFreezerRow) error {
 		if _, err := validateChainFreezerRowPayload(row, "chain-freezer accessor verification"); err != nil {
 			return err
@@ -248,7 +257,7 @@ func VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir string, accessorRe
 		if !ok {
 			return fmt.Errorf("snapshots: chain-freezer accessor segment %q missing block %d", accessorRef.Path, row.blockNum)
 		}
-		got, err := readChainFreezerSegmentRowAt(file, offset, row.blockNum)
+		got, err := readChainFreezerSegmentRowAt(file, offset, row.blockNum, fileSize)
 		if err != nil {
 			return err
 		}
@@ -360,6 +369,11 @@ func chainFreezerRowOffsets(dir string, ref SegmentRef) ([]uint64, error) {
 		return nil, err
 	}
 	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	fileSize := uint64(stat.Size())
 	fromBlock, toBlock, count, err := readChainFreezerHeader(file)
 	if err != nil {
 		return nil, err
@@ -379,20 +393,16 @@ func chainFreezerRowOffsets(dir string, ref SegmentRef) ([]uint64, error) {
 	for i := uint64(0); i < count; i++ {
 		offsets = append(offsets, offset)
 		var next uint64
-		if _, next, err = readChainFreezerBytesAt(file, offset); err != nil {
+		if _, next, err = readChainFreezerBytesAt(file, offset, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d body for accessor: %w", fromBlock+i, err)
 		}
-		if _, next, err = readChainFreezerBytesAt(file, next); err != nil {
+		if _, next, err = readChainFreezerBytesAt(file, next, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d tx infos for accessor: %w", fromBlock+i, err)
 		}
-		if _, next, err = readChainFreezerBytesAt(file, next); err != nil {
+		if _, next, err = readChainFreezerBytesAt(file, next, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d state root for accessor: %w", fromBlock+i, err)
 		}
 		offset = next
-	}
-	stat, err := file.Stat()
-	if err != nil {
-		return nil, err
 	}
 	if offset != uint64(stat.Size()) {
 		return nil, fmt.Errorf("snapshots: chain-freezer segment %q has trailing bytes", ref.Path)
@@ -400,21 +410,21 @@ func chainFreezerRowOffsets(dir string, ref SegmentRef) ([]uint64, error) {
 	return offsets, nil
 }
 
-func readChainFreezerSegmentRowAt(file io.ReaderAt, offset, blockNum uint64) (chainFreezerRow, error) {
-	row, _, err := readChainFreezerSegmentRowAtWithNext(file, offset, blockNum)
+func readChainFreezerSegmentRowAt(file io.ReaderAt, offset, blockNum, fileSize uint64) (chainFreezerRow, error) {
+	row, _, err := readChainFreezerSegmentRowAtWithNext(file, offset, blockNum, fileSize)
 	return row, err
 }
 
-func readChainFreezerSegmentRowAtWithNext(file io.ReaderAt, offset, blockNum uint64) (chainFreezerRow, uint64, error) {
-	blockRaw, next, err := readChainFreezerBytesAt(file, offset)
+func readChainFreezerSegmentRowAtWithNext(file io.ReaderAt, offset, blockNum, fileSize uint64) (chainFreezerRow, uint64, error) {
+	blockRaw, next, err := readChainFreezerBytesAt(file, offset, fileSize)
 	if err != nil {
 		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d body at offset %d: %w", blockNum, offset, err)
 	}
-	txInfosRaw, next, err := readChainFreezerBytesAt(file, next)
+	txInfosRaw, next, err := readChainFreezerBytesAt(file, next, fileSize)
 	if err != nil {
 		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d tx infos at offset %d: %w", blockNum, next, err)
 	}
-	stateRootRaw, next, err := readChainFreezerBytesAt(file, next)
+	stateRootRaw, next, err := readChainFreezerBytesAt(file, next, fileSize)
 	if err != nil {
 		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d state root at offset %d: %w", blockNum, next, err)
 	}
@@ -426,9 +436,12 @@ func readChainFreezerSegmentRowAtWithNext(file io.ReaderAt, offset, blockNum uin
 	}, next, nil
 }
 
-func readChainFreezerBytesAt(file io.ReaderAt, offset uint64) ([]byte, uint64, error) {
+func readChainFreezerBytesAt(file io.ReaderAt, offset, fileSize uint64) ([]byte, uint64, error) {
 	if offset > uint64(^uint(0)>>1) {
 		return nil, 0, fmt.Errorf("offset %d overflows int64", offset)
+	}
+	if offset > fileSize || fileSize-offset < 4 {
+		return nil, 0, io.ErrUnexpectedEOF
 	}
 	var rawLen [4]byte
 	if _, err := file.ReadAt(rawLen[:], int64(offset)); err != nil {
@@ -438,9 +451,13 @@ func readChainFreezerBytesAt(file io.ReaderAt, offset uint64) ([]byte, uint64, e
 		return nil, 0, err
 	}
 	length := uint64(binary.BigEndian.Uint32(rawLen[:]))
-	next := offset + 4 + length
-	if next < offset {
+	dataOffset := offset + 4
+	next := dataOffset + length
+	if next < dataOffset {
 		return nil, 0, fmt.Errorf("length %d at offset %d overflows", length, offset)
+	}
+	if length > fileSize-dataOffset {
+		return nil, 0, fmt.Errorf("declared length %d at offset %d exceeds remaining %d", length, offset, fileSize-dataOffset)
 	}
 	if length == 0 {
 		return nil, next, nil

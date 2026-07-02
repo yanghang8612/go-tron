@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -679,6 +680,36 @@ func TestCheckChainFreezerSegmentRejectsTrailingBytes(t *testing.T) {
 	ref.Checksum = "sha256:" + hex.EncodeToString(sum[:])
 	if err := CheckChainFreezerSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "trailing bytes") {
 		t.Fatalf("CheckChainFreezerSegment error = %v, want trailing-byte rejection", err)
+	}
+}
+
+func TestCheckChainFreezerSegmentRejectsOversizedLengthPrefixBeforeAlloc(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerTestRows(t, src, 0, 0)
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	abs := filepath.Join(snapshotDir, ref.Path)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) < chainFreezerHeaderSize+4 {
+		t.Fatalf("chain-freezer fixture too small: %d", len(data))
+	}
+	binary.BigEndian.PutUint32(data[chainFreezerHeaderSize:chainFreezerHeaderSize+4], ^uint32(0))
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ref.Size = uint64(len(data))
+	sum := sha256.Sum256(data)
+	ref.Checksum = "sha256:" + hex.EncodeToString(sum[:])
+	if err := CheckChainFreezerSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "exceeds remaining") {
+		t.Fatalf("CheckChainFreezerSegment error = %v, want bounded length rejection", err)
 	}
 }
 

@@ -1100,7 +1100,10 @@ Status:
   `chain-index` and `chain-freezer-accessor` refs, so
   `gtron snapshot verify`, fetch, bootstrap, and restore fail before trusting a
   catalog whose sidecars are format-valid but point at different freezer
-  contents.
+  contents. Chain-freezer row decoding also bounds every length-prefixed blob
+  against the remaining segment file size before allocating, so a corrupt
+  segment with an oversized length prefix is rejected as data corruption instead
+  of causing an unbounded verifier allocation.
 - Minimal-mode runtime now registers a chain-freezer tail-prune lifecycle when
   the local freezer is open. It advances the freezer's virtual tail only after
   the planner allows it and cold segment coverage is readable. When the
