@@ -517,6 +517,31 @@ func TestDomainStatePrunePolicyPreservesOperatorMode(t *testing.T) {
 	}
 }
 
+func TestDomainStatePrunePolicyUsesModeDefaultWindow(t *testing.T) {
+	tests := []struct {
+		mode string
+		want uint64
+	}{
+		{mode: params.HistoryModeFull, want: params.HistoryDefaultPruneWindow},
+		{mode: params.HistoryModeBlocks, want: params.HistoryDefaultPruneWindow},
+		{mode: params.HistoryModeSnap, want: params.HistoryDefaultPruneWindow},
+		{mode: params.HistoryModeMinimal, want: params.HistoryMinimalDefaultPruneWindow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			policy := domainStatePrunePolicy(&params.ChainConfig{
+				HistoryMode: tt.mode,
+			}, 64)
+			if policy.HistoryWindow != tt.want {
+				t.Fatalf("policy history window = %d, want %d", policy.HistoryWindow, tt.want)
+			}
+			if policy.ReorgWindow != 64 {
+				t.Fatalf("policy reorg window = %d, want 64", policy.ReorgWindow)
+			}
+		})
+	}
+}
+
 func TestDomainStatePrunePolicyCapsReorgWindow(t *testing.T) {
 	policy := domainStatePrunePolicy(&params.ChainConfig{
 		HistoryMode:        params.HistoryModeMinimal,

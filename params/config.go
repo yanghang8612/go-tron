@@ -22,19 +22,18 @@ type ChainConfig struct {
 	HistoryEnabled bool
 	// HistoryMode is the retention policy for StateDomainChange/StateTxRange
 	// rows captured by applyBlock. "full", "blocks", and "minimal" prune rows
-	// older than HistoryPruneWindow blocks (the default — recent-tip-only
-	// archive coverage); "snap" prunes only after cold snapshot coverage;
-	// "archive" keeps every row forever.
+	// older than their effective history window (recent-tip-only archive
+	// coverage); "snap" prunes only after cold snapshot coverage; "archive"
+	// keeps every row forever.
 	//
 	// Ignored when HistoryEnabled is false (no rows to prune, no archive to
 	// keep).
 	HistoryMode string
-	// HistoryPruneWindow is the number of recent blocks of state history
-	// retained in "full" mode. Temporal rows for blocks below (solidified -
-	// window) become eligible for deletion by the background pruner. The default
-	// (HistoryDefaultPruneWindow) is sized at 27 maintenance rounds × ~1K
-	// slots per round, generous enough to cover the reorg horizon and a
-	// day-or-two wallet-tx grace window. Ignored in archive mode.
+	// HistoryPruneWindow is the operator override for the number of recent
+	// blocks of state history retained in finite prune modes. Temporal rows for
+	// blocks below (solidified - window) become eligible for deletion by the
+	// background pruner. When unset, defaults are mode-specific to match
+	// Erigon's current retention policy. Ignored in archive mode.
 	HistoryPruneWindow uint64
 	// StateCommitmentCheckpoints enables optional latest-domain commitment
 	// checkpoint rows after each block. The block state root itself is already
@@ -75,11 +74,15 @@ const (
 	StateCommitmentModeLatest = "latest"
 )
 
-// HistoryDefaultPruneWindow is the default retention window for "full"
-// mode. 27_648 ≈ 27 maintenance rounds × 1024 slots per round — covers the
-// reorg horizon with a generous wallet-tx grace window. See the spec's
-// Pruning section for the sizing rationale.
-const HistoryDefaultPruneWindow uint64 = 27 * 1024
+// HistoryDefaultPruneWindow is the default finite-prune state history window
+// for full/blocks/snap modes. It follows Erigon 3.5's EIP-8252 retention
+// window for full and blocks mode: 262,144 blocks.
+const HistoryDefaultPruneWindow uint64 = 262_144
+
+// HistoryMinimalDefaultPruneWindow is the default finite-prune state history
+// window for minimal mode. Erigon 3.5 kept minimal at 100,000 blocks while
+// widening full and blocks mode.
+const HistoryMinimalDefaultPruneWindow uint64 = 100_000
 
 const StatePrefetchDefaultLookahead = 8
 
@@ -113,13 +116,27 @@ func (c *ChainConfig) EffectiveHistoryMode() string {
 	}
 }
 
-// EffectiveHistoryPruneWindow returns the active full-mode retention
-// window. Zero (the field default for unconfigured chains) falls back to
-// HistoryDefaultPruneWindow so test fixtures and dev chains get the same
-// safety margin without per-test boilerplate.
+// DefaultHistoryPruneWindowForMode returns the zero-config retention window for
+// a finite prune mode. Unknown modes intentionally fall back to full mode's
+// default, matching EffectiveHistoryMode's conservative normalisation.
+func DefaultHistoryPruneWindowForMode(mode string) uint64 {
+	if mode == HistoryModeMinimal {
+		return HistoryMinimalDefaultPruneWindow
+	}
+	return HistoryDefaultPruneWindow
+}
+
+// EffectiveHistoryPruneWindow returns the active finite-mode retention window.
+// Zero (the field default for unconfigured chains) falls back to the
+// mode-specific default so test fixtures and dev chains get the same safety
+// margin without per-test boilerplate.
 func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
 	if c == nil || c.HistoryPruneWindow == 0 {
-		return HistoryDefaultPruneWindow
+		mode := HistoryModeFull
+		if c != nil {
+			mode = c.EffectiveHistoryMode()
+		}
+		return DefaultHistoryPruneWindowForMode(mode)
 	}
 	return c.HistoryPruneWindow
 }

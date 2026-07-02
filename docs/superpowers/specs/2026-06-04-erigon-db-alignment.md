@@ -37,6 +37,14 @@ Operator documentation also says Erigon 3 datadirs are split into hot
 commitment. The same docs state Erigon 3 supports `full`, `minimal`, `blocks`,
 and `archive` prune modes, with archive retaining historical state.
 
+2026-07-02 update: Erigon v3.5.0 release notes changed the default retention
+shape again: `full` follows the EIP-8252 reorg-retention window of 262,144
+blocks for state history, `blocks` also uses 262,144 blocks for state history,
+and `minimal` stays at 100,000 blocks. go-tron's zero-config finite-state
+history defaults now mirror that split for `full`/`blocks`/`minimal`; `snap`
+uses the widened full-mode state-history window because it is the TRON-specific
+cold-snapshot-gated variant.
+
 ## Erigon Mechanisms To Preserve Conceptually
 
 Erigon's performance comes from a stack, not from one database choice.
@@ -1393,9 +1401,12 @@ Status:
   state history it advertises.
 - The runtime pruning policy now preserves distinct internal mode labels for
   `full`, `blocks`, `minimal`, `snap`, and `archive`. `blocks` and `minimal`
-  share `full`'s finite state-history retention window for hot
+  use mode-aware finite state-history retention windows for hot
   `StateDomainChange`/`StateTxRange` pruning, and the Worker/Checker paths now
   enforce and audit that retention without collapsing their mode labels.
+  The default window follows Erigon v3.5.0: `full`, `blocks`, and go-tron's
+  `snap` default to 262,144 recent blocks, while `minimal` defaults to 100,000
+  recent blocks; an explicit `prune_window` still overrides all finite modes.
   Archive/as-of state queries also apply the same local history-window gate for
   `full`, `blocks`, and `minimal`, so requests below the retained floor fail
   with `ErrArchiveHistoryPruned` instead of reconstructing from incomplete or
