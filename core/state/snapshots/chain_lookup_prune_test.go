@@ -343,6 +343,55 @@ func TestPruneHotChainLookupsWithProgressUpgradesUnboundResumeStage(t *testing.T
 	}
 }
 
+func TestPruneHotChainLookupsWithProgressRejectsResumeHashMismatchBeforeDelete(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef, indexRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	wrongResumeHash := block0.Hash()
+	wrongResumeHash[0] ^= 0xff
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageSnapshotChainLookupPrune, 0, wrongResumeHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotChainLookupPrune: %v", err)
+	}
+
+	_, err = PruneHotChainLookupsWithProgress(hot, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "SnapshotChainLookupPrune stage 0 hash") || !strings.Contains(err.Error(), "does not match chain-freezer segment hash") {
+		t.Fatalf("PruneHotChainLookupsWithProgress err = %v, want resume hash mismatch", err)
+	}
+	if num := rawdb.ReadBlockNumber(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), block0.Hash()); num == nil || *num != 0 {
+		t.Fatalf("hot block0 lookup after rejected resume mismatch = %v, want still present", num)
+	}
+	if idx := rawdb.ReadTransactionIndex(rawdb.NewChainDB(hot, rawdb.NoopAncient{}), txHash[:]); idx == nil || *idx != 1 {
+		t.Fatalf("hot tx lookup after rejected resume mismatch = %v, want still present", idx)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != wrongResumeHash {
+		t.Fatalf("resume stage after rejected mismatch = %+v ok=%v err=%v, want original wrong hash retained", row, ok, err)
+	}
+}
+
 func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, root+"/src")
