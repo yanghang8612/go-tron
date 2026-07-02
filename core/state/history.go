@@ -540,7 +540,7 @@ func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, s
 	} else if ok && len(data) > 0 {
 		var sc contractpb.SmartContract
 		if err := proto.Unmarshal(data, &sc); err != nil {
-			return tcommon.Hash{}, false, err
+			return tcommon.Hash{}, false, fmt.Errorf("decode contract metadata for storage key %s at block %d: %w", addr.Hex(), blockNum, err)
 		}
 		meta = &sc
 	}
