@@ -821,8 +821,9 @@ func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {
 
 func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 	tests := map[string]struct {
-		setup      func(t *testing.T, db ethdb.KeyValueStore, block *types.Block)
-		wantStatus syncdl.ImportResumePhasePublishStatus
+		setup           func(t *testing.T, db ethdb.KeyValueStore, block *types.Block)
+		wantStatus      syncdl.ImportResumePhasePublishStatus
+		wantExistingRow bool
 	}{
 		"canonical mismatch": {
 			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
@@ -843,7 +844,53 @@ func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 					t.Fatalf("write ahead sync commitment: %v", err)
 				}
 			},
-			wantStatus: syncdl.ImportResumePhasePublishSyncAhead,
+			wantStatus:      syncdl.ImportResumePhasePublishSyncAhead,
+			wantExistingRow: true,
+		},
+		"upstream missing": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write canonical commitment: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishUpstreamMissing,
+		},
+		"upstream unbound": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write canonical commitment: %v", err)
+				}
+				if err := rawdb.WriteStageProgress(db, rawdb.StageSyncExecution, block.Number()); err != nil {
+					t.Fatalf("write unbound sync execution: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishUpstreamUnbound,
+		},
+		"upstream behind": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write canonical commitment: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, block.Number()-1, tcommon.Hash{0x01}); err != nil {
+					t.Fatalf("write behind sync execution: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishUpstreamBehind,
+		},
+		"upstream hash mismatch": {
+			setup: func(t *testing.T, db ethdb.KeyValueStore, block *types.Block) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageCommitment, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write canonical commitment: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, block.Number(), tcommon.Hash{0xee}); err != nil {
+					t.Fatalf("write mismatched sync execution: %v", err)
+				}
+			},
+			wantStatus: syncdl.ImportResumePhasePublishUpstreamHashMismatch,
 		},
 	}
 	for name, test := range tests {
@@ -867,10 +914,10 @@ func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 			}
 			if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncCommitment); err != nil {
 				t.Fatalf("read sync commitment after rejected publish: %v", err)
-			} else if name == "canonical mismatch" && ok {
-				t.Fatalf("sync commitment after canonical mismatch = %+v, want absent", row)
-			} else if name == "sync ahead" && (!ok || row.BlockNum != block.Number()+1 || row.BlockHash != (tcommon.Hash{0x02})) {
-				t.Fatalf("sync commitment after sync-ahead rejection = %+v ok=%v, want existing ahead row retained", row, ok)
+			} else if !test.wantExistingRow && ok {
+				t.Fatalf("sync commitment after %s rejection = %+v, want absent", name, row)
+			} else if test.wantExistingRow && (!ok || row.BlockNum != block.Number()+1 || row.BlockHash != (tcommon.Hash{0x02})) {
+				t.Fatalf("sync commitment after %s rejection = %+v ok=%v, want existing ahead row retained", name, row, ok)
 			}
 		})
 	}

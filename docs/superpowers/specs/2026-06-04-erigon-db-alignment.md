@@ -804,11 +804,15 @@ Status:
   the drain exits on that handoff, `SyncService` now crosses the insert-session
   commit barrier and publishes the resume phase suffix only after each phase's
   canonical stage row is hash-bound to the expected block/hash and the matching
-  Sync* diagnostic row would not regress. This closes the async-commit gap where
-  commitment/finish hooks could complete after the initial import record had
-  already deleted staged-body proof rows; `net` package tests cover both the
-  successful barrier publish and the canonical-mismatch / sync-ahead rejection
-  paths through the `SyncService` entry point. The same read/verify/write
+  Sync* diagnostic row would not regress. The same publish gate also requires
+  the immediate upstream sync-stage row to be hash-bound and at least as far as
+  the target boundary, while accepting rows produced earlier in the same
+  suffix plan. This closes the async-commit gap where commitment/finish hooks
+  could complete after the initial import record had already deleted
+  staged-body proof rows; `net` package tests cover the successful barrier
+  publish plus canonical-mismatch, sync-ahead, upstream-missing,
+  upstream-unbound, upstream-behind, and upstream hash-mismatch rejection paths
+  through the `SyncService` entry point. The same read/verify/write
   sequence is now a downloader-owned resume-phase publish run, leaving
   `SyncService` to provide only stage-progress read/write side effects.
 - `gtron db storage-alerts` now carries the same stage pipeline cursor in JSON,
