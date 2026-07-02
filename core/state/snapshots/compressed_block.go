@@ -30,11 +30,12 @@ import (
 //	                                  compressedLen, records }
 //	data:              compressed blocks back to back (at dataOffset)
 const (
-	compressedBlockMagic       = "gtcblk01"
-	compressedBlockVersion     = uint32(1)
-	compressedBlockHeaderSize  = 8 + 4 + 4 + 8 + 8 + 8 + 8 // = 48
-	compressedBlockTableEntry  = 8 + 8 + 8 + 4             // = 28
-	CompressedBlockDefaultSize = 128                       // matches the .bt block size
+	compressedBlockMagic               = "gtcblk01"
+	compressedBlockVersion             = uint32(1)
+	compressedBlockHeaderSize          = 8 + 4 + 4 + 8 + 8 + 8 + 8 // = 48
+	compressedBlockTableEntry          = 8 + 8 + 8 + 4             // = 28
+	CompressedBlockDefaultSize         = 128                       // matches the .bt block size
+	compressedBlockMaxDecodedBlockSize = 256 << 20
 )
 
 // Shared zstd encoder/decoder. klauspost's EncodeAll/DecodeAll are documented
@@ -53,7 +54,7 @@ func cbCodec() (*zstd.Encoder, *zstd.Decoder, error) {
 		if cbInitErr != nil {
 			return
 		}
-		cbDec, cbInitErr = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+		cbDec, cbInitErr = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecodeAllCapLimit(true))
 	})
 	return cbEnc, cbDec, cbInitErr
 }
@@ -189,6 +190,7 @@ type compressedBlockReader struct {
 	recCount  uint64
 	uncSize   uint64
 	dataOff   uint64
+	fileSize  uint64
 	table     []cbBlock
 
 	mu    sync.Mutex
@@ -216,6 +218,16 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	stat, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	fileSize := uint64(stat.Size())
+	if fileSize < compressedBlockHeaderSize {
+		_ = f.Close()
+		return nil, fmt.Errorf("snapshots: compressed-block file %q size %d below header size %d", path, fileSize, compressedBlockHeaderSize)
+	}
 	hdr := make([]byte, compressedBlockHeaderSize)
 	if _, err := io.ReadFull(f, hdr); err != nil {
 		_ = f.Close()
@@ -235,14 +247,29 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 		blockSize: int(binary.BigEndian.Uint32(hdr[12:16])),
 		recCount:  binary.BigEndian.Uint64(hdr[16:24]),
 		dataOff:   binary.BigEndian.Uint64(hdr[40:48]),
+		fileSize:  fileSize,
 	}
 	blockCount := binary.BigEndian.Uint64(hdr[24:32])
 	r.uncSize = binary.BigEndian.Uint64(hdr[32:40])
-	if blockCount > (uint64(1)<<40) || blockCount*compressedBlockTableEntry > uint64(1)<<40 {
+	if r.blockSize <= 0 {
 		_ = f.Close()
-		return nil, fmt.Errorf("snapshots: implausible compressed-block count %d", blockCount)
+		return nil, errors.New("snapshots: compressed-block has zero block size")
 	}
-	tableBytes := make([]byte, blockCount*compressedBlockTableEntry)
+	tableLen, err := compressedBlockTableLen(blockCount)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	tableEnd, overflow := checkedAdd(compressedBlockHeaderSize, tableLen)
+	if overflow || tableEnd > fileSize {
+		_ = f.Close()
+		return nil, fmt.Errorf("snapshots: compressed-block table end %d outside file size %d", tableEnd, fileSize)
+	}
+	if r.dataOff != tableEnd {
+		_ = f.Close()
+		return nil, fmt.Errorf("snapshots: compressed-block data offset %d, want table end %d", r.dataOff, tableEnd)
+	}
+	tableBytes := make([]byte, int(tableLen))
 	if _, err := io.ReadFull(f, tableBytes); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -257,10 +284,117 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 			records:           binary.BigEndian.Uint32(tableBytes[o+24 : o+28]),
 		}
 	}
+	if err := validateCompressedBlockTable(r.table, r.recCount, r.uncSize, r.dataOff, fileSize); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return r, nil
 }
 
 func (r *compressedBlockReader) Close() error { return r.f.Close() }
+
+func compressedBlockMaxAlloc() uint64 {
+	return uint64(int(^uint(0) >> 1))
+}
+
+func compressedBlockTableLen(blockCount uint64) (uint64, error) {
+	if blockCount > uint64(1)<<40 {
+		return 0, fmt.Errorf("snapshots: implausible compressed-block count %d", blockCount)
+	}
+	tableLen, overflow := checkedMul(blockCount, compressedBlockTableEntry)
+	if overflow || tableLen > compressedBlockMaxAlloc() {
+		return 0, fmt.Errorf("snapshots: compressed-block table size overflows: count=%d", blockCount)
+	}
+	return tableLen, nil
+}
+
+func validateCompressedBlockTable(table []cbBlock, recCount, uncSize, dataOff, fileSize uint64) error {
+	if len(table) == 0 {
+		if recCount != 0 || uncSize != 0 {
+			return fmt.Errorf("snapshots: empty compressed-block table with records=%d uncompressed=%d", recCount, uncSize)
+		}
+		if dataOff != fileSize {
+			return fmt.Errorf("snapshots: empty compressed-block data offset %d, want file size %d", dataOff, fileSize)
+		}
+		return nil
+	}
+	if recCount == 0 || uncSize == 0 {
+		return fmt.Errorf("snapshots: compressed-block table has %d blocks with records=%d uncompressed=%d", len(table), recCount, uncSize)
+	}
+	var expectedCompStart uint64
+	var prevUncStart uint64
+	var records uint64
+	for i, block := range table {
+		if block.records == 0 {
+			return fmt.Errorf("snapshots: compressed-block table entry %d has zero records", i)
+		}
+		if i == 0 {
+			if block.uncompressedStart != 0 {
+				return fmt.Errorf("snapshots: compressed-block first uncompressed offset %d, want 0", block.uncompressedStart)
+			}
+		} else if block.uncompressedStart <= prevUncStart {
+			return fmt.Errorf("snapshots: compressed-block uncompressed offsets are not increasing at entry %d", i)
+		}
+		if block.uncompressedStart >= uncSize {
+			return fmt.Errorf("snapshots: compressed-block uncompressed offset %d outside size %d", block.uncompressedStart, uncSize)
+		}
+		if block.compressedStart != expectedCompStart {
+			return fmt.Errorf("snapshots: compressed-block entry %d compressed offset %d, want %d", i, block.compressedStart, expectedCompStart)
+		}
+		if block.compressedLen == 0 {
+			return fmt.Errorf("snapshots: compressed-block entry %d has zero compressed length", i)
+		}
+		compEnd, overflow := checkedAdd(block.compressedStart, block.compressedLen)
+		if overflow {
+			return fmt.Errorf("snapshots: compressed-block entry %d compressed range overflows", i)
+		}
+		physicalStart, overflow := checkedAdd(dataOff, block.compressedStart)
+		if overflow {
+			return fmt.Errorf("snapshots: compressed-block entry %d physical offset overflows", i)
+		}
+		physicalEnd, overflow := checkedAdd(dataOff, compEnd)
+		if overflow || physicalEnd > fileSize {
+			return fmt.Errorf("snapshots: compressed-block entry %d range [%d,%d] outside file size %d", i, physicalStart, physicalEnd, fileSize)
+		}
+		var recordsOverflow bool
+		records, recordsOverflow = checkedAdd(records, uint64(block.records))
+		if recordsOverflow {
+			return fmt.Errorf("snapshots: compressed-block record count overflows")
+		}
+		expectedCompStart = compEnd
+		prevUncStart = block.uncompressedStart
+	}
+	physicalEnd, overflow := checkedAdd(dataOff, expectedCompStart)
+	if overflow || physicalEnd != fileSize {
+		return fmt.Errorf("snapshots: compressed-block data end %d, want file size %d", physicalEnd, fileSize)
+	}
+	if records != recCount {
+		return fmt.Errorf("snapshots: compressed-block records=%d, want %d", records, recCount)
+	}
+	return nil
+}
+
+func compressedBlockExpectedLen(table []cbBlock, uncSize uint64, index int) (uint64, error) {
+	if index < 0 || index >= len(table) {
+		return 0, fmt.Errorf("snapshots: compressed-block index %d outside table", index)
+	}
+	start := table[index].uncompressedStart
+	end := uncSize
+	if index+1 < len(table) {
+		end = table[index+1].uncompressedStart
+	}
+	if end <= start {
+		return 0, fmt.Errorf("snapshots: compressed-block entry %d has invalid uncompressed range [%d,%d]", index, start, end)
+	}
+	length := end - start
+	if length > compressedBlockMaxAlloc() {
+		return 0, fmt.Errorf("snapshots: compressed-block entry %d uncompressed length %d exceeds allocation limit", index, length)
+	}
+	if length > compressedBlockMaxDecodedBlockSize {
+		return 0, fmt.Errorf("snapshots: compressed-block entry %d uncompressed length %d exceeds decoded block limit %d", index, length, compressedBlockMaxDecodedBlockSize)
+	}
+	return length, nil
+}
 
 // findBlock returns the index of the block whose uncompressed range contains
 // offset, or -1.
@@ -281,13 +415,34 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 		}
 	}
 	b := r.table[i]
-	comp := make([]byte, b.compressedLen)
-	if _, err := r.f.ReadAt(comp, int64(r.dataOff+b.compressedStart)); err != nil {
-		return nil, err
-	}
-	dst, err := r.dec.DecodeAll(comp, nil)
+	expectedLen, err := compressedBlockExpectedLen(r.table, r.uncSize, i)
 	if err != nil {
 		return nil, err
+	}
+	compStart, overflow := checkedAdd(r.dataOff, b.compressedStart)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: compressed-block entry %d physical offset overflows", i)
+	}
+	compEnd, overflow := checkedAdd(compStart, b.compressedLen)
+	if overflow || compEnd > r.fileSize {
+		return nil, fmt.Errorf("snapshots: compressed-block entry %d range [%d,%d] outside file size %d", i, compStart, compEnd, r.fileSize)
+	}
+	if compEnd > uint64(1<<63-1) {
+		return nil, fmt.Errorf("snapshots: compressed-block entry %d end %d exceeds int64", i, compEnd)
+	}
+	if b.compressedLen > compressedBlockMaxAlloc() {
+		return nil, fmt.Errorf("snapshots: compressed-block entry %d compressed length %d exceeds allocation limit", i, b.compressedLen)
+	}
+	comp := make([]byte, int(b.compressedLen))
+	if _, err := r.f.ReadAt(comp, int64(compStart)); err != nil {
+		return nil, err
+	}
+	dst, err := r.dec.DecodeAll(comp, make([]byte, 0, int(expectedLen)))
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(dst)) != expectedLen {
+		return nil, fmt.Errorf("snapshots: compressed-block entry %d decoded to %d bytes, want %d", i, len(dst), expectedLen)
 	}
 	if len(r.cache) < cbCacheBlocks {
 		r.cache = append(r.cache, cbCacheEntry{})
@@ -387,22 +542,53 @@ func decompressBlockBlob(data []byte) ([]byte, error) {
 	blockCount := binary.BigEndian.Uint64(data[24:32])
 	uncSize := binary.BigEndian.Uint64(data[32:40])
 	dataOff := binary.BigEndian.Uint64(data[40:48])
-	tableEnd := uint64(compressedBlockHeaderSize) + blockCount*compressedBlockTableEntry
-	if blockCount > (uint64(1)<<40) || tableEnd > uint64(len(data)) || dataOff < tableEnd || dataOff > uint64(len(data)) {
+	tableLen, err := compressedBlockTableLen(blockCount)
+	if err != nil {
+		return nil, err
+	}
+	tableEnd, overflow := checkedAdd(compressedBlockHeaderSize, tableLen)
+	if overflow || tableEnd > uint64(len(data)) {
 		return nil, errors.New("snapshots: corrupt compressed-block blob header")
 	}
-	out := make([]byte, 0, uncSize)
+	if dataOff != tableEnd {
+		return nil, fmt.Errorf("snapshots: compressed-block data offset %d, want table end %d", dataOff, tableEnd)
+	}
+	table := make([]cbBlock, blockCount)
 	for i := uint64(0); i < blockCount; i++ {
 		o := uint64(compressedBlockHeaderSize) + i*compressedBlockTableEntry
-		compStart := binary.BigEndian.Uint64(data[o+8 : o+16])
-		compLen := binary.BigEndian.Uint64(data[o+16 : o+24])
-		start := dataOff + compStart
-		if start > uint64(len(data)) || compLen > uint64(len(data))-start {
-			return nil, errors.New("snapshots: corrupt compressed-block blob block")
+		table[i] = cbBlock{
+			uncompressedStart: binary.BigEndian.Uint64(data[o : o+8]),
+			compressedStart:   binary.BigEndian.Uint64(data[o+8 : o+16]),
+			compressedLen:     binary.BigEndian.Uint64(data[o+16 : o+24]),
+			records:           binary.BigEndian.Uint32(data[o+24 : o+28]),
 		}
-		dst, err := dec.DecodeAll(data[start:start+compLen], nil)
+	}
+	if err := validateCompressedBlockTable(table, binary.BigEndian.Uint64(data[16:24]), uncSize, dataOff, uint64(len(data))); err != nil {
+		return nil, err
+	}
+	if uncSize > compressedBlockMaxAlloc() {
+		return nil, fmt.Errorf("snapshots: compressed-block uncompressed size %d exceeds allocation limit", uncSize)
+	}
+	out := make([]byte, 0)
+	for i := range table {
+		expectedLen, err := compressedBlockExpectedLen(table, uncSize, i)
 		if err != nil {
 			return nil, err
+		}
+		start, overflow := checkedAdd(dataOff, table[i].compressedStart)
+		if overflow {
+			return nil, fmt.Errorf("snapshots: compressed-block blob block %d offset overflows", i)
+		}
+		end, overflow := checkedAdd(start, table[i].compressedLen)
+		if overflow || end > uint64(len(data)) {
+			return nil, errors.New("snapshots: corrupt compressed-block blob block")
+		}
+		dst, err := dec.DecodeAll(data[start:end], make([]byte, 0, int(expectedLen)))
+		if err != nil {
+			return nil, err
+		}
+		if uint64(len(dst)) != expectedLen {
+			return nil, fmt.Errorf("snapshots: compressed-block blob block %d decoded to %d bytes, want %d", i, len(dst), expectedLen)
 		}
 		out = append(out, dst...)
 	}

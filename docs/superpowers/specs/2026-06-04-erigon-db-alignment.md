@@ -2222,6 +2222,11 @@ Status:
   headers can no longer declare an in-file directory with postings that only fit
   inside an inflated header length and force large row allocations before the
   missing bytes are read.
+- Seekable compressed history blocks now validate the block table against the
+  physical file size before allocating compressed payload buffers. Zstd
+  `DecodeAll` calls are capped to the table-derived uncompressed block span, and
+  whole-blob decompression no longer preallocates from the untrusted header
+  `uncompressedSize`.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
