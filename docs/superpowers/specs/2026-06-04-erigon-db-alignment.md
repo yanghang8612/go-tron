@@ -2213,7 +2213,10 @@ Status:
   `.lidx`, and `.bt` header readers also bound declared header sizes by the
   actual file length before allocating extension bytes, so truncated or
   corrupted local/remote snapshot sidecars cannot force out-of-file header
-  reads into large allocations.
+  reads into large allocations. Latest record readers now apply the same
+  file-size bound to entry keys, entry values, skipped values, and `.bt` entry
+  keys before allocating payload buffers, covering both sequential restore/check
+  scans and accessor/btree point or prefix reads.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

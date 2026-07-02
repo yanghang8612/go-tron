@@ -746,7 +746,7 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 		if i > 0 && entryOffset <= prevEntryOffset {
 			return fmt.Errorf("snapshots: latest btree %q entry offsets are not increasing", ref.Path)
 		}
-		entry, err := readLatestBinaryBTreeEntryAtOffset(file, entryOffset)
+		entry, err := readLatestBinaryBTreeEntryAtOffset(file, entryOffset, size)
 		if err != nil {
 			return err
 		}

@@ -346,6 +346,55 @@ func TestLatestBinaryHeaderReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
 	}
 }
 
+func TestLatestBinaryEntryReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
+	keyOutOfBounds := make([]byte, 8)
+	binary.BigEndian.PutUint32(keyOutOfBounds[:4], ^uint32(0))
+	if _, _, err := readLatestBinaryEntryKeyAt(bytes.NewReader(keyOutOfBounds), 0, uint64(len(keyOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry key") {
+		t.Fatalf("key reader err = %v, want key bound", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "latest-key.seg")
+	if err := os.WriteFile(keyPath, keyOutOfBounds, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	keyFile, err := os.Open(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keyFile.Close()
+	if _, _, err := readLatestBinaryEntryKey(keyFile, uint64(len(keyOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry key") {
+		t.Fatalf("streaming key reader err = %v, want key bound", err)
+	}
+
+	valueOutOfBounds := make([]byte, 8)
+	binary.BigEndian.PutUint32(valueOutOfBounds[4:8], ^uint32(0))
+	if _, _, _, err := readLatestBinaryEntryAtWithNext(bytes.NewReader(valueOutOfBounds), 0, uint64(len(valueOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry value") {
+		t.Fatalf("value reader err = %v, want value bound", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "latest-record.seg")
+	if err := os.WriteFile(path, valueOutOfBounds, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	_, valueLen, err := readLatestBinaryEntryKey(file, uint64(len(valueOutOfBounds)))
+	if err != nil {
+		t.Fatalf("read zero-key entry header: %v", err)
+	}
+	if _, err := readLatestBinaryValueBytes(file, valueLen, uint64(len(valueOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry value") {
+		t.Fatalf("streaming value reader err = %v, want value bound", err)
+	}
+
+	btreeOutOfBounds := make([]byte, 20)
+	binary.BigEndian.PutUint32(btreeOutOfBounds[:4], ^uint32(0))
+	if _, err := readLatestBinaryBTreeEntryAtOffset(bytes.NewReader(btreeOutOfBounds), 0, uint64(len(btreeOutOfBounds))); err == nil || !strings.Contains(err.Error(), "btree entry key") {
+		t.Fatalf("btree reader err = %v, want key bound", err)
+	}
+}
+
 func latestBinaryAccountSegment(entries []LatestEntry) *LatestSegment {
 	return &LatestSegment{
 		Version:   LatestSegmentVersion,
