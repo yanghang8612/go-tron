@@ -847,6 +847,7 @@ def finalize_stage_status(row):
         entry = row["stageProgress"].get(stage)
         if entry and entry.get("present"):
             row[field] = int(entry.get("value", -1))
+    row["stageSyncInventoryBodiesGapBlocks"] = lag(row["stageSyncInventory"], row["stageSyncBodies"])
     row["stageSyncBodiesReadyGapBlocks"] = lag(row["stageSyncBodies"], row["stageSyncBodiesReady"])
     row["stageSyncImportExecutionLagBlocks"] = lag(row["stageSyncImport"], row["stageSyncExecution"])
     row["stageSyncExecutionCommitmentLagBlocks"] = lag(row["stageSyncExecution"], row["stageSyncCommitment"])
@@ -1946,6 +1947,7 @@ def stage_last_progress_map(previous_row):
 
 def stage_stagnation(current, previous_row, now, previous_unix, interval_seconds, height, target_height):
     keys = [
+        "stageSyncInventory",
         "stageSyncBodies",
         "stageSyncBodiesReady",
         "stageSyncImport",
@@ -1984,8 +1986,11 @@ def stage_stagnation(current, previous_row, now, previous_unix, interval_seconds
     return last_progress, stalls
 
 def stage_stagnation_lag(current, key, height, target_height):
-    if key == "stageSyncBodies":
+    if key == "stageSyncInventory":
         return lag(target_height, current.get(key, -1))
+    if key == "stageSyncBodies":
+        inventory = current.get("stageSyncInventory", -1)
+        return lag(inventory if inventory >= 0 else target_height, current.get(key, -1))
     if key == "stageSyncBodiesReady":
         return lag(current.get("stageSyncBodies", -1), current.get(key, -1))
     if key == "stageSyncImport":
@@ -2441,9 +2446,10 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_full_staged_sync_bottleneck_lag_share", "fullStagedSyncBottleneckLagShare", "Share of full staged-sync pipeline lag owned by the current bottleneck."),
     ("gtron_nile_sync_full_staged_sync_stage_count", "fullStagedSyncStageCount", "Required full staged-sync stage count."),
     ("gtron_nile_sync_full_staged_sync_present_stage_count", "fullStagedSyncPresentStageCount", "Present full staged-sync stage count."),
-    ("gtron_nile_sync_full_staged_sync_verified_stage_count", "fullStagedSyncVerifiedStageCount", "Hash-verified full staged-sync stage count."),
+    ("gtron_nile_sync_full_staged_sync_verified_stage_count", "fullStagedSyncVerifiedStageCount", "Full staged-sync stages with acceptable verification evidence."),
     ("gtron_nile_sync_full_staged_sync_stage_coverage_ratio", "fullStagedSyncStageCoverageRatio", "Present full staged-sync stages divided by required stages."),
-    ("gtron_nile_sync_full_staged_sync_verification_ratio", "fullStagedSyncVerificationRatio", "Hash-verified full staged-sync stages divided by required stages."),
+    ("gtron_nile_sync_full_staged_sync_verification_ratio", "fullStagedSyncVerificationRatio", "Full staged-sync stages with acceptable verification evidence divided by required stages."),
+    ("gtron_nile_sync_stage_sync_inventory_bodies_gap_blocks", "stageSyncInventoryBodiesGapBlocks", "Gap between SyncInventory target and persisted SyncBodies."),
     ("gtron_nile_sync_stage_sync_bodies_ready_gap_blocks", "stageSyncBodiesReadyGapBlocks", "Gap between persisted SyncBodies and contiguous SyncBodiesReady."),
     ("gtron_nile_sync_stage_sync_import_execution_lag_blocks", "stageSyncImportExecutionLagBlocks", "Lag between SyncImport and SyncExecution."),
     ("gtron_nile_sync_stage_sync_execution_commitment_lag_blocks", "stageSyncExecutionCommitmentLagBlocks", "Lag between SyncExecution and SyncCommitment."),
@@ -2453,6 +2459,7 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_stage_sync_bottleneck_lag_blocks", "stageSyncBottleneckLagBlocks", "Lag blocks for the current staged-sync bottleneck."),
     ("gtron_nile_sync_stage_chain_freezer_head_lag_blocks", "stageChainFreezerHeadLagBlocks", "Lag between ChainFreezer stage and sampled head."),
     ("gtron_nile_sync_stage_snapshot_event_log_build_head_lag_blocks", "stageSnapshotEventLogBuildHeadLagBlocks", "Lag between SnapshotEventLogBuild stage and sampled head."),
+    ("gtron_nile_sync_interval_stage_sync_inventory_blocks_per_second", "intervalStageSyncInventoryBlocksPerSecond", "Interval SyncInventory stage throughput in blocks per second."),
     ("gtron_nile_sync_interval_stage_sync_bodies_blocks_per_second", "intervalStageSyncBodiesBlocksPerSecond", "Interval SyncBodies stage throughput in blocks per second."),
     ("gtron_nile_sync_interval_stage_sync_bodies_ready_blocks_per_second", "intervalStageSyncBodiesReadyBlocksPerSecond", "Interval SyncBodiesReady stage throughput in blocks per second."),
     ("gtron_nile_sync_interval_stage_sync_import_blocks_per_second", "intervalStageSyncImportBlocksPerSecond", "Interval SyncImport stage throughput in blocks per second."),
@@ -2931,6 +2938,7 @@ derived_index_bytes_per_interval_block = float(derived_index_bytes_delta) / inte
 replay_bytes_per_interval_block = float(replay_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 datadir_other_bytes_per_interval_block = float(datadir_other_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
+stage_sync_inventory_target_lag = lag(sync_target_height, stages.get("stageSyncInventory", -1))
 stage_sync_bodies_head_lag = lag(height, stages.get("stageSyncBodies", -1))
 stage_sync_bodies_ready_head_lag = lag(height, stages.get("stageSyncBodiesReady", -1))
 stage_sync_import_head_lag = lag(height, stages.get("stageSyncImport", -1))
@@ -2939,6 +2947,7 @@ stage_sync_commitment_head_lag = lag(height, stages.get("stageSyncCommitment", -
 stage_chain_freezer_head_lag = lag(height, stages.get("stageChainFreezer", -1))
 stage_snapshot_event_log_build_head_lag = lag(height, stages.get("stageSnapshotEventLogBuild", -1))
 stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
+    ("inventory-bodies", stages.get("stageSyncInventoryBodiesGapBlocks", -1)),
     ("bodies-ready-gap", stages.get("stageSyncBodiesReadyGapBlocks", -1)),
     ("import-execution", stages.get("stageSyncImportExecutionLagBlocks", -1)),
     ("execution-commitment", stages.get("stageSyncExecutionCommitmentLagBlocks", -1)),
@@ -2946,6 +2955,7 @@ stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
     ("finish-head", stage_sync_finish_head_lag),
 ])
 stage_sync_pipeline_lag = lag_sum([
+    stages.get("stageSyncInventoryBodiesGapBlocks", -1),
     stages.get("stageSyncBodiesReadyGapBlocks", -1),
     stages.get("stageSyncImportExecutionLagBlocks", -1),
     stages.get("stageSyncExecutionCommitmentLagBlocks", -1),
@@ -2970,6 +2980,7 @@ full_staged_sync = full_staged_sync_summary(
     stage_sync_finish_head_lag,
     height,
 )
+interval_stage_sync_inventory = interval_stage_delta(stages.get("stageSyncInventory", -1), previous, "stageSyncInventory", interval_seconds)
 interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
 interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)
 interval_stage_sync_import = interval_stage_delta(stages.get("stageSyncImport", -1), previous, "stageSyncImport", interval_seconds)
@@ -2978,6 +2989,7 @@ interval_stage_sync_commitment = interval_stage_delta(stages.get("stageSyncCommi
 interval_stage_sync_finish = interval_stage_delta(stages.get("stageSyncFinish", -1), previous, "stageSyncFinish", interval_seconds)
 interval_stage_chain_freezer = interval_stage_delta(stages.get("stageChainFreezer", -1), previous, "stageChainFreezer", interval_seconds)
 interval_stage_snapshot_event_log_build = interval_stage_delta(stages.get("stageSnapshotEventLogBuild", -1), previous, "stageSnapshotEventLogBuild", interval_seconds)
+interval_stage_sync_inventory_rate = interval_rate(interval_stage_sync_inventory, interval_seconds)
 interval_stage_sync_bodies_rate = interval_rate(interval_stage_sync_bodies, interval_seconds)
 interval_stage_sync_bodies_ready_rate = interval_rate(interval_stage_sync_bodies_ready, interval_seconds)
 interval_stage_sync_import_rate = interval_rate(interval_stage_sync_import, interval_seconds)
@@ -2986,6 +2998,7 @@ interval_stage_sync_commitment_rate = interval_rate(interval_stage_sync_commitme
 interval_stage_sync_finish_rate = interval_rate(interval_stage_sync_finish, interval_seconds)
 interval_stage_chain_freezer_rate = interval_rate(interval_stage_chain_freezer, interval_seconds)
 interval_stage_snapshot_event_log_build_rate = interval_rate(interval_stage_snapshot_event_log_build, interval_seconds)
+interval_stage_sync_inventory_per_minute = interval_stage_sync_inventory_rate * 60.0
 interval_stage_sync_bodies_per_minute = interval_stage_sync_bodies_rate * 60.0
 interval_stage_sync_bodies_ready_per_minute = interval_stage_sync_bodies_ready_rate * 60.0
 interval_stage_sync_import_per_minute = interval_stage_sync_import_rate * 60.0
@@ -2994,6 +3007,7 @@ interval_stage_sync_commitment_per_minute = interval_stage_sync_commitment_rate 
 interval_stage_sync_finish_per_minute = interval_stage_sync_finish_rate * 60.0
 interval_stage_chain_freezer_per_minute = interval_stage_chain_freezer_rate * 60.0
 interval_stage_snapshot_event_log_build_per_minute = interval_stage_snapshot_event_log_build_rate * 60.0
+stage_sync_inventory_target_eta_seconds = eta_seconds(stage_sync_inventory_target_lag, interval_stage_sync_inventory_rate)
 stage_sync_bodies_head_eta_seconds = eta_seconds(stage_sync_bodies_head_lag, interval_stage_sync_bodies_rate)
 stage_sync_bodies_ready_head_eta_seconds = eta_seconds(stage_sync_bodies_ready_head_lag, interval_stage_sync_bodies_ready_rate)
 stage_sync_import_head_eta_seconds = eta_seconds(stage_sync_import_head_lag, interval_stage_sync_import_rate)
@@ -3003,6 +3017,7 @@ stage_sync_finish_head_eta_seconds = eta_seconds(stage_sync_finish_head_lag, int
 stage_chain_freezer_head_eta_seconds = eta_seconds(stage_chain_freezer_head_lag, interval_stage_chain_freezer_rate)
 stage_snapshot_event_log_build_head_eta_seconds = eta_seconds(stage_snapshot_event_log_build_head_lag, interval_stage_snapshot_event_log_build_rate)
 stage_interval_rates = [
+    interval_stage_rate_summary("SyncInventory", "stageSyncInventory", interval_stage_sync_inventory, interval_stage_sync_inventory_rate, stage_sync_inventory_target_lag, stage_sync_inventory_target_eta_seconds),
     interval_stage_rate_summary("SyncBodies", "stageSyncBodies", interval_stage_sync_bodies, interval_stage_sync_bodies_rate, stage_sync_bodies_head_lag, stage_sync_bodies_head_eta_seconds),
     interval_stage_rate_summary("SyncBodiesReady", "stageSyncBodiesReady", interval_stage_sync_bodies_ready, interval_stage_sync_bodies_ready_rate, stage_sync_bodies_ready_head_lag, stage_sync_bodies_ready_head_eta_seconds),
     interval_stage_rate_summary("SyncImport", "stageSyncImport", interval_stage_sync_import, interval_stage_sync_import_rate, stage_sync_import_head_lag, stage_sync_import_head_eta_seconds),
@@ -3014,6 +3029,7 @@ stage_interval_rates = [
 ]
 height_regression_blocks = previous_height - height if interval_seconds > 0 and previous_height > 0 and height > 0 and height < previous_height else 0
 stage_progress_regressions = progress_regressions(stages, previous, [
+    "stageSyncInventory",
     "stageSyncBodies",
     "stageSyncBodiesReady",
     "stageSyncImport",
@@ -3031,6 +3047,7 @@ if stage_progress_regressions:
     )
 max_stage_interval_blocks = max(
     0,
+    interval_stage_sync_inventory,
     interval_stage_sync_bodies,
     interval_stage_sync_bodies_ready,
     interval_stage_sync_import,
@@ -3305,6 +3322,8 @@ row = {
     "stageChainFreezerHeadEtaSeconds": stage_chain_freezer_head_eta_seconds,
     "stageSnapshotEventLogBuildHeadLagBlocks": stage_snapshot_event_log_build_head_lag,
     "stageSnapshotEventLogBuildHeadEtaSeconds": stage_snapshot_event_log_build_head_eta_seconds,
+    "stageSyncInventoryTargetLagBlocks": stage_sync_inventory_target_lag,
+    "stageSyncInventoryTargetEtaSeconds": stage_sync_inventory_target_eta_seconds,
     "stageSyncBottleneck": stage_sync_bottleneck,
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
     "stageSyncPipelineLagBlocks": stage_sync_pipeline_lag,
@@ -3326,6 +3345,11 @@ row = {
     "stageStalledSeconds": stage_stalled_seconds,
     "stageStalledLagBlocks": stage_stalled_lag_blocks,
     "stageStalls": stage_stalls,
+    "intervalStageSyncInventoryBlocks": interval_stage_sync_inventory,
+    "intervalStageSyncInventoryBlocksPerSecond": interval_stage_sync_inventory_rate,
+    "intervalStageSyncInventoryBlocksPerMinute": interval_stage_sync_inventory_per_minute,
+    "intervalStageSyncInventoryToTargetRatio": ratio(interval_stage_sync_inventory, interval_blocks),
+    "intervalStageSyncBodiesToInventoryRatio": ratio(interval_stage_sync_bodies, interval_stage_sync_inventory),
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_stage_sync_bodies_rate,
     "intervalStageSyncBodiesBlocksPerMinute": interval_stage_sync_bodies_per_minute,

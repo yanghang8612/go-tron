@@ -1189,11 +1189,13 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageStalledSeconds"], 0)
             self.assertEqual(row["stageStalledLagBlocks"], -1)
             self.assertEqual(row["stageStalls"], [])
+            self.assertEqual(row["intervalStageSyncInventoryBlocks"], 0)
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 0)
             self.assertEqual(row["intervalStageSyncImportBlocks"], 0)
             self.assertEqual(row["intervalStageSyncExecutionBlocks"], 0)
             self.assertEqual(row["intervalStageSyncCommitmentBlocks"], 0)
             self.assertEqual(row["intervalStageSyncFinishBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncInventoryBlocksPerMinute"], 0.0)
             self.assertEqual(row["intervalStageSyncBodiesBlocksPerMinute"], 0.0)
             self.assertEqual(row["intervalStageSyncImportBlocksPerMinute"], 0.0)
             self.assertEqual(row["intervalStageSyncExecutionBlocksPerMinute"], 0.0)
@@ -1202,6 +1204,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(
                 [entry["stage"] for entry in row["stageIntervalRates"]],
                 [
+                    "SyncInventory",
                     "SyncBodies",
                     "SyncBodiesReady",
                     "SyncImport",
@@ -1212,8 +1215,10 @@ class NileSyncSampleTest(unittest.TestCase):
                     "SnapshotEventLogBuild",
                 ],
             )
-            self.assertEqual(row["stageIntervalRates"][5]["blocks"], 0)
-            self.assertEqual(row["stageIntervalRates"][5]["blocksPerMinute"], 0.0)
+            self.assertEqual(row["stageIntervalRates"][6]["blocks"], 0)
+            self.assertEqual(row["stageIntervalRates"][6]["blocksPerMinute"], 0.0)
+            self.assertEqual(row["intervalStageSyncInventoryToTargetRatio"], -1.0)
+            self.assertEqual(row["intervalStageSyncBodiesToInventoryRatio"], -1.0)
             self.assertEqual(row["intervalStageSyncBodiesReadyToBodiesRatio"], -1.0)
             self.assertEqual(row["intervalStageSyncImportToBodiesReadyRatio"], -1.0)
             self.assertEqual(row["intervalStageSyncExecutionToImportRatio"], -1.0)
@@ -1632,6 +1637,7 @@ class NileSyncSampleTest(unittest.TestCase):
                 "snapshotCommitmentBytes": 16,
                 "snapshotRetiredDirectoryBytes": 16,
                 "snapshotOtherBytes": 16,
+                "stageSyncInventory": 85,
                 "stageSyncBodies": 80,
                 "stageSyncBodiesReady": 79,
                 "stageSyncImport": 70,
@@ -1815,6 +1821,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalDerivedIndexBytesPerBlock"], row["derivedIndexBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalReplayBytesPerBlock"], row["replayBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalDatadirOtherBytesPerBlock"], row["datadirOtherBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalStageSyncInventoryBlocks"], 15)
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 20)
             self.assertEqual(row["intervalStageSyncBodiesReadyBlocks"], 19)
             self.assertEqual(row["intervalStageSyncImportBlocks"], 25)
@@ -1823,11 +1830,14 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalStageSyncFinishBlocks"], 30)
             self.assertEqual(row["intervalStageChainFreezerBlocks"], 20)
             self.assertEqual(row["intervalStageSnapshotEventLogBuildBlocks"], 48)
+            self.assertAlmostEqual(row["intervalStageSyncInventoryToTargetRatio"], 15 / 30)
+            self.assertAlmostEqual(row["intervalStageSyncBodiesToInventoryRatio"], 20 / 15)
             self.assertAlmostEqual(row["intervalStageSyncBodiesReadyToBodiesRatio"], 19 / 20)
             self.assertAlmostEqual(row["intervalStageSyncImportToBodiesReadyRatio"], 25 / 19)
             self.assertAlmostEqual(row["intervalStageSyncExecutionToImportRatio"], 24 / 25)
             self.assertAlmostEqual(row["intervalStageSyncCommitmentToExecutionRatio"], 24 / 24)
             self.assertAlmostEqual(row["intervalStageSyncFinishToCommitmentRatio"], 30 / 24)
+            self.assertAlmostEqual(row["intervalStageSyncInventoryBlocksPerMinute"], row["intervalStageSyncInventoryBlocksPerSecond"] * 60)
             self.assertAlmostEqual(row["intervalStageSyncBodiesBlocksPerMinute"], row["intervalStageSyncBodiesBlocksPerSecond"] * 60)
             self.assertAlmostEqual(row["intervalStageSyncBodiesReadyBlocksPerMinute"], row["intervalStageSyncBodiesReadyBlocksPerSecond"] * 60)
             self.assertAlmostEqual(row["intervalStageSyncImportBlocksPerMinute"], row["intervalStageSyncImportBlocksPerSecond"] * 60)
@@ -1839,6 +1849,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreater(row["intervalStageSyncFinishBlocksPerSecond"], 0)
             self.assertGreater(row["intervalStageSnapshotEventLogBuildBlocksPerSecond"], 0)
             stage_rates = {entry["stage"]: entry for entry in row["stageIntervalRates"]}
+            self.assertEqual(stage_rates["SyncInventory"]["field"], "stageSyncInventory")
+            self.assertEqual(stage_rates["SyncInventory"]["blocks"], 15)
+            self.assertAlmostEqual(stage_rates["SyncInventory"]["blocksPerSecond"], row["intervalStageSyncInventoryBlocksPerSecond"])
+            self.assertAlmostEqual(stage_rates["SyncInventory"]["blocksPerMinute"], row["intervalStageSyncInventoryBlocksPerMinute"])
+            self.assertEqual(stage_rates["SyncInventory"]["headLagBlocks"], row["stageSyncInventoryTargetLagBlocks"])
+            self.assertEqual(stage_rates["SyncInventory"]["headEtaSeconds"], row["stageSyncInventoryTargetEtaSeconds"])
             self.assertEqual(stage_rates["SyncBodies"]["field"], "stageSyncBodies")
             self.assertEqual(stage_rates["SyncBodies"]["blocks"], 20)
             self.assertAlmostEqual(stage_rates["SyncBodies"]["blocksPerSecond"], row["intervalStageSyncBodiesBlocksPerSecond"])
@@ -1869,6 +1885,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 10)
             self.assertEqual(row["stageSyncPipelineLagBlocks"], 17)
             self.assertAlmostEqual(row["stageSyncBottleneckLagShare"], 10 / 17)
+            self.assertEqual(row["stageSyncInventoryBodiesGapBlocks"], 0)
+            self.assertEqual(row["stageSyncInventoryTargetLagBlocks"], 5)
+            self.assertAlmostEqual(
+                row["stageSyncInventoryTargetEtaSeconds"],
+                5 / row["intervalStageSyncInventoryBlocksPerSecond"],
+            )
             self.assertEqual(row["stageSyncBodiesHeadLagBlocks"], 0)
             self.assertEqual(row["stageSyncBodiesHeadEtaSeconds"], 0.0)
             self.assertEqual(row["stageSyncBodiesReadyHeadLagBlocks"], 2)

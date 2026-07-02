@@ -349,11 +349,13 @@ means the current interval advanced. The row also reports
 `stageSnapshotEventLogBuildHeadEtaSeconds` when the previous sample is
 available enough to derive a per-stage rate. When the output JSONL already has
 a previous sample, rows also include interval stage throughput fields such as
+`intervalStageSyncInventoryBlocks`, `intervalStageSyncBodiesBlocks`,
 `intervalStageSyncImportBlocks`,
 `intervalStageSyncExecutionBlocks`,
 `intervalStageSyncCommitmentBlocks`,
 `intervalStageSyncFinishBlocks`, matching `*BlocksPerSecond` values, and
-adjacent-stage ratios such as `intervalStageSyncExecutionToImportRatio` and
+adjacent-stage ratios such as `intervalStageSyncBodiesToInventoryRatio`,
+`intervalStageSyncExecutionToImportRatio`, and
 `intervalStageSyncFinishToCommitmentRatio`, so long-running samples show both
 where backlog is accumulating and whether each downstream stage is keeping up.
 Rows also carry stage-stall fields derived from the previous JSONL sample:
