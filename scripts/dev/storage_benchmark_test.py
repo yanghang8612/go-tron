@@ -48,10 +48,10 @@ class StorageBenchmarkTest(unittest.TestCase):
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBlockReceipts*)
-                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab"}]}'
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","logs":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a"}]}]}'
                             ;;
                           *eth_getLogs*)
-                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a"}]}'
                             ;;
                           *debug_traceTransaction*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"failed":false,"returnValue":"","structLogs":[]}}'
@@ -151,7 +151,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(len(rows), 1, proc.stdout + proc.stderr)
             row = json.loads(rows[0])
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 23)
+            self.assertEqual(row["archiveApiChecks"], 24)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertEqual(row["archiveApiBlock"], 1)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
@@ -184,6 +184,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getTransactionByBlockNumberAndIndex",
                     "eth_getTransactionByBlockHashAndIndex",
                     "debug_traceTransaction",
+                    "eth_getLogsFiltered",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -223,6 +224,10 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertRegex(
                 benchmark_metrics,
                 r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="eth_estimateGas"[^}]*\} 1\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="eth_getLogsFiltered"[^}]*\} 1\n',
             )
             self.assertRegex(
                 benchmark_metrics,
@@ -714,7 +719,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
                             ;;
                           *eth_getBlockReceipts*)
-                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","logs":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a"}]}]}'
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","logs":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a"}]}]}'
                             ;;
                           *eth_getLogs*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
@@ -796,6 +801,142 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["archiveApiFailures"], 1)
             self.assertIn("eth_getBlockReceipts", row["archiveApiMethods"])
             self.assertNotIn("eth_getLogs", row["archiveApiMethods"])
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(
+                row["archiveApiTxHash"],
+                "0x1212121212121212121212121212121212121212121212121212121212121212",
+            )
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
+
+    def test_archive_api_probe_rejects_missing_filtered_receipt_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            bindir = tmpdir / "bin"
+            bindir.mkdir()
+            fake_curl = bindir / "curl"
+            fake_curl.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    url="${@: -1}"
+                    payload=""
+                    prev=""
+                    for arg in "$@"; do
+                      if [ "$prev" = "--data-binary" ]; then
+                        payload="$arg"
+                      fi
+                      prev="$arg"
+                    done
+                    case "$url" in
+                      */wallet/getnowblock)
+                        printf '%s\\n' '{"blockID":"0000000200000000000000000000000000000000000000000000000000000000","block_header":{"raw_data":{"number":2}}}'
+                        ;;
+                      */wallet/getnodeinfo)
+                        printf '%s\\n' '{"currentBlock":2}'
+                        ;;
+                      http://127.0.0.1:*)
+                        case "$payload" in
+                          *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockReceipts*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","logs":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a"}]}]}'
+                            ;;
+                          *eth_getLogs*address*|*eth_getLogs*topics*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
+                            ;;
+                          *eth_getLogs*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","logIndex":"0x0","address":"0x5656565656565656565656565656565656565656","topics":["0x7878787878787878787878787878787878787878787878787878787878787878"],"data":"0x9a"}]}'
+                            ;;
+                          *eth_getUncleByBlockNumberAndIndex*|*eth_getUncleByBlockHashAndIndex*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":null}'
+                            ;;
+                          *eth_getTransactionByHash*|*eth_getTransactionReceipt*|*eth_getTransactionByBlockNumberAndIndex*|*eth_getTransactionByBlockHashAndIndex*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"hash":"0x1212121212121212121212121212121212121212121212121212121212121212","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionIndex":"0x0"}}'
+                            ;;
+                          *)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":"0x0"}'
+                            ;;
+                        esac
+                        ;;
+                      *)
+                        printf '%s\\n' '{}'
+                        ;;
+                    esac
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_curl, 0o755)
+
+            fake_gtron = tmpdir / "gtron"
+            fake_gtron.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    if [ "${1:-}" = "db" ] && [ "${2:-}" = "storage-alerts" ]; then
+                      cat <<'EOF'
+                    {"datadir":"/tmp/gtron","status":"ok","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"ok","stageIssues":0,"stageVerifyDetails":[],"stagePipeline":{"complete":true,"pending":0,"issues":0,"tasks":[]},"modeStatus":"ok","modeIssues":0,"modeAlertDetails":[],"pruneMode":"full","pruneModePersisted":true,"snapshotStatus":"ok","snapshotIssues":0,"snapshotAlertDetails":[],"snapshotRetiredSegments":0,"snapshotRetiredFiles":0,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":0}
+                    EOF
+                      exit 0
+                    fi
+                    trap 'exit 0' TERM INT
+                    while true; do sleep 1; done
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_gtron, 0o755)
+
+            workdir = tmpdir / "work"
+            output = tmpdir / "results.jsonl"
+            env = dict(os.environ)
+            env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--profile",
+                    "producer",
+                    "--modes",
+                    "full",
+                    "--target-blocks",
+                    "2",
+                    "--timeout",
+                    "5",
+                    "--workdir",
+                    str(workdir),
+                    "--output",
+                    str(output),
+                    "--gtron",
+                    str(fake_gtron),
+                    "--no-build",
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 18)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertIn("eth_getBlockReceipts", row["archiveApiMethods"])
+            self.assertIn("eth_getLogs", row["archiveApiMethods"])
+            self.assertNotIn("eth_getLogsFiltered", row["archiveApiMethods"])
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(
                 row["archiveApiTxHash"],

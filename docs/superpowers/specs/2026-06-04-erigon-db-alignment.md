@@ -2147,7 +2147,11 @@ Status:
   cannot pass with an empty receipt list while per-transaction receipt lookups
   still work. When those block receipts contain logs, the probes also require
   same-block `eth_getLogs` to return the corresponding log entries, so receipt
-  archive coverage cannot mask a missing derived event-log index. JSON-RPC transaction
+  archive coverage cannot mask a missing derived event-log index. After the
+  unfiltered log proof succeeds, the same archive samplers add an
+  `eth_getLogsFiltered` method label for a second `eth_getLogs` call with a
+  receipt-derived address/topic filter, covering the event-log-index lookup
+  path rather than only full-block log scans. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different

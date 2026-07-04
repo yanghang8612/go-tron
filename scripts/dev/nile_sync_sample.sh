@@ -449,6 +449,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     selected_block_hash = ""
     selected_tx_hash = ""
     selected_receipt_log_signatures = []
+    filtered_logs_probe_added = False
 
     def trace_result_ok(result):
         return (
@@ -541,6 +542,75 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return False
         return True
 
+    def filtered_log_params(signature):
+        filter_obj = {"fromBlock": block_tag, "toBlock": block_tag}
+        address = signature.get("address")
+        if address:
+            filter_obj["address"] = address
+        topics = signature.get("topics")
+        if topics:
+            filter_obj["topics"] = [topics[0]]
+        if "address" not in filter_obj and "topics" not in filter_obj:
+            return None
+        return [filter_obj]
+
+    def log_matches_rpc_filter(log, filter_obj):
+        address_filter = filter_obj.get("address")
+        if isinstance(address_filter, str):
+            if normalize_hash(log.get("address")) != normalize_hash(address_filter):
+                return False
+        elif isinstance(address_filter, list):
+            addresses = {normalize_hash(address) for address in address_filter}
+            if normalize_hash(log.get("address")) not in addresses:
+                return False
+        topics_filter = filter_obj.get("topics")
+        if isinstance(topics_filter, list):
+            topics = log.get("topics")
+            if not isinstance(topics, list):
+                return False
+            for pos, required in enumerate(topics_filter):
+                if required is None:
+                    continue
+                if pos >= len(topics):
+                    return False
+                got = normalize_hash(topics[pos])
+                if isinstance(required, str):
+                    if got != normalize_hash(required):
+                        return False
+                elif isinstance(required, list):
+                    choices = {normalize_hash(topic) for topic in required}
+                    if got not in choices:
+                        return False
+        return True
+
+    def signature_matches_rpc_filter(signature, filter_obj):
+        address_filter = filter_obj.get("address")
+        if isinstance(address_filter, str):
+            if signature.get("address") != normalize_hash(address_filter):
+                return False
+        elif isinstance(address_filter, list):
+            addresses = {normalize_hash(address) for address in address_filter}
+            if signature.get("address") not in addresses:
+                return False
+        topics_filter = filter_obj.get("topics")
+        if isinstance(topics_filter, list):
+            topics = signature.get("topics")
+            if not isinstance(topics, tuple):
+                return False
+            for pos, required in enumerate(topics_filter):
+                if required is None:
+                    continue
+                if pos >= len(topics):
+                    return False
+                if isinstance(required, str):
+                    if topics[pos] != normalize_hash(required):
+                        return False
+                elif isinstance(required, list):
+                    choices = {normalize_hash(topic) for topic in required}
+                    if topics[pos] not in choices:
+                        return False
+        return True
+
     def archive_result_ok(method, result, params):
         if method == "eth_getBlockByNumber":
             if not isinstance(result, dict):
@@ -615,10 +685,13 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return trace_result_ok(result)
         if method in {"debug_traceBlockByNumber", "debug_traceBlockByHash"}:
             return trace_block_result_ok(result)
-        if method == "eth_getLogs":
+        if method in {"eth_getLogs", "eth_getLogsFiltered"}:
             if not isinstance(result, list):
                 return False
-            requested_number = hex_quantity(params[0].get("fromBlock") if params else None)
+            filter_obj = params[0] if params else {}
+            if not isinstance(filter_obj, dict):
+                return False
+            requested_number = hex_quantity(filter_obj.get("fromBlock"))
             for log in result:
                 if not isinstance(log, dict):
                     return False
@@ -626,6 +699,22 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                     return False
                 if selected_block_hash and normalize_hash(log.get("blockHash")) != selected_block_hash:
                     return False
+                if method == "eth_getLogsFiltered" and not log_matches_rpc_filter(log, filter_obj):
+                    return False
+            if method == "eth_getLogsFiltered":
+                if "address" not in filter_obj and "topics" not in filter_obj:
+                    return False
+                filtered_signatures = [
+                    signature
+                    for signature in selected_receipt_log_signatures
+                    if signature_matches_rpc_filter(signature, filter_obj)
+                ]
+                if not filtered_signatures:
+                    return False
+                return any(
+                    any(log_matches_signature(log, signature) for log in result)
+                    for signature in filtered_signatures
+                )
             for signature in selected_receipt_log_signatures:
                 if not any(log_matches_signature(log, signature) for log in result):
                     return False
@@ -728,7 +817,8 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     idx = 0
     while idx < len(calls):
         method, params = calls[idx]
-        result, ok = jsonrpc_call(endpoint, method, params, idx + 1)
+        rpc_method = "eth_getLogs" if method == "eth_getLogsFiltered" else method
+        result, ok = jsonrpc_call(endpoint, rpc_method, params, idx + 1)
         if not ok or not archive_result_ok(method, result, params):
             failures += 1
             idx += 1
@@ -755,6 +845,13 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 calls.append(("eth_getTransactionByBlockHashAndIndex", [selected_block_hash, "0x0"]))
                 if str(trace_transaction) == "1":
                     calls.append(("debug_traceTransaction", [tx_hash, {}]))
+        elif method == "eth_getLogs" and selected_receipt_log_signatures and not filtered_logs_probe_added:
+            for signature in selected_receipt_log_signatures:
+                filtered_params = filtered_log_params(signature)
+                if filtered_params is not None:
+                    calls.append(("eth_getLogsFiltered", filtered_params))
+                    filtered_logs_probe_added = True
+                    break
         elif method in {
             "eth_getTransactionByHash",
             "eth_getTransactionReceipt",
@@ -3014,6 +3111,10 @@ ARCHIVE_API_BASE_METHODS = (
     "eth_getLogs",
 )
 
+ARCHIVE_API_FILTERED_LOG_METHODS = (
+    "eth_getLogsFiltered",
+)
+
 ARCHIVE_API_CALL_METHODS = (
     "eth_call",
     "debug_traceCall",
@@ -3149,6 +3250,8 @@ def archive_api_method_set(row, field):
 
 def archive_api_expected_methods(row, successful_methods):
     expected = list(ARCHIVE_API_BASE_METHODS)
+    if any(method in successful_methods for method in ARCHIVE_API_FILTERED_LOG_METHODS):
+        expected.extend(ARCHIVE_API_FILTERED_LOG_METHODS)
     if row.get("archiveApiCallProbe") or any(method in successful_methods for method in ARCHIVE_API_CALL_METHODS):
         expected.extend(ARCHIVE_API_CALL_METHODS)
     if row.get("archiveApiTxProbe") or any(method in successful_methods for method in ARCHIVE_API_TX_METHODS + ARCHIVE_API_TRACE_TRANSACTION_METHODS):

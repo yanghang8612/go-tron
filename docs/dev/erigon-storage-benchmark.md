@@ -202,7 +202,9 @@ For transaction-bearing blocks, `eth_getBlockReceipts` must include the same
 selected transaction hash; an empty block-receipts result is counted as an
 archive API failure. If those block receipts include receipt logs,
 `eth_getLogs` over the same historical block must also return the corresponding
-log entries.
+log entries. Once the unfiltered log proof succeeds, the runner also records an
+`eth_getLogsFiltered` archive method label for a second `eth_getLogs` call with
+a receipt-derived address/topic filter.
 Pass `--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
 when a run needs to target a known historical contract/account. Pass
 `--archive-api-call-data` as well to include `eth_call`, `debug_traceCall`, and
@@ -489,7 +491,9 @@ same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
 `eth_getTransactionReceipt`, `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` probes. When
 `eth_getBlockReceipts` returns receipt logs, the same-row `eth_getLogs` probe
-must include those logs before the archive API evidence is accepted. Add
+must include those logs before the archive API evidence is accepted; the
+follow-up `eth_getLogsFiltered` label proves the same log can be found through
+address/topic filters. Add
 `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`, and
 `--archive-api-method eth_estimateGas` when the samples also pass
 `--archive-api-call-data` against a known historical contract. Add

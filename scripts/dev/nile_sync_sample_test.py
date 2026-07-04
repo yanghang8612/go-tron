@@ -317,6 +317,10 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                     "transactionIndex": "0x0",
                 }
         elif method == "eth_getLogs":
+            log_filter = request.get("params", [{}])[0]
+            filtered_log_query = isinstance(log_filter, dict) and (
+                "address" in log_filter or "topics" in log_filter
+            )
             if getattr(self.server, "wrong_log_block_metadata", False):
                 result = [
                     {
@@ -326,6 +330,8 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                     }
                 ]
             elif getattr(self.server, "missing_receipt_logs", False):
+                result = []
+            elif getattr(self.server, "missing_filtered_receipt_logs", False) and filtered_log_query:
                 result = []
             elif getattr(self.server, "block_receipts_with_log", False):
                 result = [event_log]
@@ -376,6 +382,7 @@ class NileSyncSampleTest(unittest.TestCase):
             prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.block_receipts_with_log = True
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.shutdown)
@@ -410,7 +417,7 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiEndpoint"], endpoint)
             self.assertEqual(row["archiveApiStatus"], "ok")
-            self.assertEqual(row["archiveApiChecks"], 23)
+            self.assertEqual(row["archiveApiChecks"], 24)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertTrue(row["archiveApiTraceBlockProbe"])
             self.assertEqual(row["archiveApiBlock"], 99)
@@ -441,6 +448,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionByBlockNumberAndIndex",
                     "eth_getTransactionByBlockHashAndIndex",
                     "debug_traceTransaction",
+                    "eth_getLogsFiltered",
                 ],
             )
             self.assertTrue(row["archiveApiTxProbe"])
@@ -910,6 +918,55 @@ class NileSyncSampleTest(unittest.TestCase):
                 ],
             )
 
+    def test_archive_api_probe_rejects_missing_filtered_receipt_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.block_receipts_with_log = True
+            server.missing_filtered_receipt_logs = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 18)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertIn("eth_getBlockReceipts", row["archiveApiMethods"])
+            self.assertIn("eth_getLogs", row["archiveApiMethods"])
+            self.assertNotIn("eth_getLogsFiltered", row["archiveApiMethods"])
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
+
     def test_archive_api_probe_rejects_non_hex_scalar_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -1265,6 +1322,7 @@ class NileSyncSampleTest(unittest.TestCase):
             write_full_stage_status(stage_status)
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.block_receipts_with_log = True
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.shutdown)
@@ -1336,10 +1394,15 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_tail_pruned_files{{{labels}}} 0', metrics)
             self.assertIn(f'gtron_nile_sync_balance_trace_prune_to_block{{{labels}}} -1', metrics)
             self.assertIn(f'gtron_nile_sync_section_bloom_prune_to_section{{{labels}}} -1', metrics)
-            self.assertIn(f'gtron_nile_sync_archive_api_checks{{{labels}}} 23', metrics)
+            self.assertIn(f'gtron_nile_sync_archive_api_checks{{{labels}}} 24', metrics)
             block_hash_labels = f'datadir="{datadir}",label="candidate",method="eth_getBlockByHash",mode="full",network="nile"'
             self.assertIn(
                 f"gtron_nile_sync_archive_api_method_success{{{block_hash_labels}}} 1",
+                metrics,
+            )
+            filtered_log_labels = f'datadir="{datadir}",label="candidate",method="eth_getLogsFiltered",mode="full",network="nile"'
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_method_success{{{filtered_log_labels}}} 1",
                 metrics,
             )
             self.assertIn(f'gtron_nile_sync_archive_api_block{{{labels}}} 99', metrics)
