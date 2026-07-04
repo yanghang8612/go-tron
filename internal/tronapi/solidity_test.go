@@ -585,6 +585,12 @@ type isolationStubBackend struct {
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
 	delegationIndexAtBlock   uint64
+	liveCanDelegateCalls     int
+	canDelegateAtBlock       uint64
+	liveCanWithdrawCalls     int
+	canWithdrawAtBlock       uint64
+	liveAvailableCalls       int
+	availableAtBlock         uint64
 }
 
 func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, error) {
@@ -895,6 +901,36 @@ func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2At(addr common.
 		Account:     hex.EncodeToString(addr.Bytes()),
 		ToAddresses: []string{hex.EncodeToString(common.Address{0x41, 0x8f}.Bytes())},
 	}, nil
+}
+
+func (s *isolationStubBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	s.liveCanDelegateCalls++
+	return &tronapi.CanDelegateInfo{MaxSize: 1, CanDelegateSize: 1, Balance: amount}, nil
+}
+
+func (s *isolationStubBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
+	s.canDelegateAtBlock = blockNum
+	return &tronapi.CanDelegateInfo{MaxSize: 900, CanDelegateSize: 700, Balance: amount}, nil
+}
+
+func (s *isolationStubBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	s.liveCanWithdrawCalls++
+	return &tronapi.CanWithdrawUnfreezeInfo{Amount: 1}, nil
+}
+
+func (s *isolationStubBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	s.canWithdrawAtBlock = blockNum
+	return &tronapi.CanWithdrawUnfreezeInfo{Amount: 5000}, nil
+}
+
+func (s *isolationStubBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	s.liveAvailableCalls++
+	return &tronapi.AvailableUnfreezeCountInfo{Count: 1}, nil
+}
+
+func (s *isolationStubBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	s.availableAtBlock = blockNum
+	return &tronapi.AvailableUnfreezeCountInfo{Count: 29}, nil
 }
 
 // TestSolidityAccount_isolation verifies the audit's P1 fix:
@@ -1895,5 +1931,96 @@ func TestPbftDelegationRoutesUsePbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveDelegatedCalls != 0 {
 		t.Fatalf("live GetDelegatedResourceV2 called %d times, want 0", stub.liveDelegatedCalls)
+	}
+}
+
+func TestSolidityStakeResourceRoutesUseSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertStakeResourceRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftStakeResourceRoutesUsePbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertStakeResourceRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertStakeResourceRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	addr := hex.EncodeToString(common.Address{0x41, 0x90}.Bytes())
+
+	resp, err := http.Post(prefix+"/candelegateresource", "application/json", strings.NewReader(`{"owner_address":"`+addr+`","balance":123,"type":0}`))
+	if err != nil {
+		t.Fatalf("candelegateresource request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("candelegateresource status: %d", resp.StatusCode)
+	}
+	var canDelegate tronapi.CanDelegateInfo
+	if err := json.NewDecoder(resp.Body).Decode(&canDelegate); err != nil {
+		t.Fatal(err)
+	}
+	if canDelegate.MaxSize != 900 || canDelegate.CanDelegateSize != 700 || canDelegate.Balance != 123 {
+		t.Fatalf("candelegateresource = %+v, want bound sentinel", canDelegate)
+	}
+	if stub.canDelegateAtBlock != wantBlock {
+		t.Fatalf("CanDelegateResourceAt block = %d, want %d", stub.canDelegateAtBlock, wantBlock)
+	}
+	if stub.liveCanDelegateCalls != 0 {
+		t.Fatalf("live CanDelegateResource called %d times, want 0", stub.liveCanDelegateCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getcanwithdrawunfreezeamount", "application/json", strings.NewReader(`{"owner_address":"`+addr+`","timestamp":12345}`))
+	if err != nil {
+		t.Fatalf("getcanwithdrawunfreezeamount request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getcanwithdrawunfreezeamount status: %d", resp.StatusCode)
+	}
+	var withdraw tronapi.CanWithdrawUnfreezeInfo
+	if err := json.NewDecoder(resp.Body).Decode(&withdraw); err != nil {
+		t.Fatal(err)
+	}
+	if withdraw.Amount != 5000 {
+		t.Fatalf("getcanwithdrawunfreezeamount = %+v, want bound sentinel", withdraw)
+	}
+	if stub.canWithdrawAtBlock != wantBlock {
+		t.Fatalf("GetCanWithdrawUnfreezeAmountAt block = %d, want %d", stub.canWithdrawAtBlock, wantBlock)
+	}
+	if stub.liveCanWithdrawCalls != 0 {
+		t.Fatalf("live GetCanWithdrawUnfreezeAmount called %d times, want 0", stub.liveCanWithdrawCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getavailableunfreezecount", "application/json", strings.NewReader(`{"owner_address":"`+addr+`"}`))
+	if err != nil {
+		t.Fatalf("getavailableunfreezecount request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getavailableunfreezecount status: %d", resp.StatusCode)
+	}
+	var available tronapi.AvailableUnfreezeCountInfo
+	if err := json.NewDecoder(resp.Body).Decode(&available); err != nil {
+		t.Fatal(err)
+	}
+	if available.Count != 29 {
+		t.Fatalf("getavailableunfreezecount = %+v, want bound sentinel", available)
+	}
+	if stub.availableAtBlock != wantBlock {
+		t.Fatalf("GetAvailableUnfreezeCountAt block = %d, want %d", stub.availableAtBlock, wantBlock)
+	}
+	if stub.liveAvailableCalls != 0 {
+		t.Fatalf("live GetAvailableUnfreezeCount called %d times, want 0", stub.liveAvailableCalls)
 	}
 }

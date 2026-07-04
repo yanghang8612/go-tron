@@ -49,6 +49,9 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
+	mux.HandleFunc("/walletsolidity/candelegateresource", api.getSolidCanDelegateResource)
+	mux.HandleFunc("/walletsolidity/getcanwithdrawunfreezeamount", api.getSolidCanWithdrawUnfreezeAmount)
+	mux.HandleFunc("/walletsolidity/getavailableunfreezecount", api.getSolidAvailableUnfreezeCount)
 	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateSolidEnergy)
 	mux.HandleFunc("/walletsolidity/triggerconstantcontract", api.triggerSolidConstantContract)
 }
@@ -87,6 +90,9 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
+	mux.HandleFunc("/walletpbft/candelegateresource", api.getPbftCanDelegateResource)
+	mux.HandleFunc("/walletpbft/getcanwithdrawunfreezeamount", api.getPbftCanWithdrawUnfreezeAmount)
+	mux.HandleFunc("/walletpbft/getavailableunfreezecount", api.getPbftAvailableUnfreezeCount)
 	mux.HandleFunc("/walletpbft/estimateenergy", api.estimatePbftEnergy)
 	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerPbftConstantContract)
 }
@@ -290,6 +296,30 @@ func (api *API) getSolidDelegatedResourceAccountIndexV2(w http.ResponseWriter, r
 
 func (api *API) getPbftDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceAccountIndexV2(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidCanDelegateResource(w http.ResponseWriter, r *http.Request) {
+	api.handleCanDelegateResource(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftCanDelegateResource(w http.ResponseWriter, r *http.Request) {
+	api.handleCanDelegateResource(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetCanWithdrawUnfreezeAmount(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetCanWithdrawUnfreezeAmount(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAvailableUnfreezeCount(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAvailableUnfreezeCount(w, r, api.pbftBoundNum)
 }
 
 func (api *API) triggerSolidConstantContract(w http.ResponseWriter, r *http.Request) {

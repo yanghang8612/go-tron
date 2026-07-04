@@ -1243,11 +1243,13 @@ Status:
   `allow_same_token_name` so pre-fork list/name reads use legacy records while
   post-fork reads use V2 records. HTTP solidity/PBFT `getchainparameters` and
   `getnextmaintenancetime` now also read historical `SystemDynamicProperty`
-  rows at the solid/PBFT bound instead of live-head dynamic properties. gRPC
-  `WalletSolidity` Stake 2.0 resource availability queries
-  (`GetCanDelegatedMaxSize`, `GetAvailableUnfreezeCount`,
-  `GetCanWithdrawUnfreezeAmount`) now use solid-bound archive account and
-  `SystemDelegation` history instead of live-head state.
+  rows at the solid/PBFT bound instead of live-head dynamic properties. HTTP
+  `/walletsolidity`/`/walletpbft` and gRPC `WalletSolidity` Stake 2.0 resource
+  availability queries (`GetCanDelegatedMaxSize`/`candelegateresource`,
+  `GetAvailableUnfreezeCount`/`getavailableunfreezecount`, and
+  `GetCanWithdrawUnfreezeAmount`/`getcanwithdrawunfreezeamount`) now use
+  solid/PBFT-bound archive account and `SystemDelegation` history instead of
+  live-head state.
   Witness/vote history reads also surface corrupt witness-capsule and pending
   vote protobuf payloads as archive data errors instead of treating them as
   missing witness/vote records.

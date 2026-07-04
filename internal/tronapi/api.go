@@ -1439,6 +1439,10 @@ func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, 
 }
 
 func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
+	api.handleCanDelegateResource(w, r, nil)
+}
+
+func (api *API) handleCanDelegateResource(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		Balance      int64  `json:"balance"`
@@ -1454,7 +1458,12 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	var info *CanDelegateInfo
+	if boundFn == nil {
+		info, err = api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	} else {
+		info, err = api.backend.CanDelegateResourceAt(addr, body.Balance, corepb.ResourceCode(body.Type), boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1465,6 +1474,10 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetCanWithdrawUnfreezeAmount(w, r, nil)
+}
+
+func (api *API) handleGetCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		Timestamp    int64  `json:"timestamp"`
@@ -1479,7 +1492,12 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
+	var info *CanWithdrawUnfreezeInfo
+	if boundFn == nil {
+		info, err = api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
+	} else {
+		info, err = api.backend.GetCanWithdrawUnfreezeAmountAt(addr, body.Timestamp, boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1490,6 +1508,10 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAvailableUnfreezeCount(w, r, nil)
+}
+
+func (api *API) handleGetAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("owner_address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1512,7 +1534,12 @@ func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.GetAvailableUnfreezeCount(addr)
+	var info *AvailableUnfreezeCountInfo
+	if boundFn == nil {
+		info, err = api.backend.GetAvailableUnfreezeCount(addr)
+	} else {
+		info, err = api.backend.GetAvailableUnfreezeCountAt(addr, boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
