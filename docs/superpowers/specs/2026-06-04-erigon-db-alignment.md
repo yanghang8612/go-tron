@@ -1970,7 +1970,9 @@ Status:
   must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
   `Call`/`CallAt`, `EstimateGas`/`EstimateGasAt`, etc.), while explicit
   constants such as TRON's nonce-less `eth_getTransactionCount` stay listed as
-  audited exceptions.
+  audited exceptions. The same audit now rejects function-value aliases of
+  those live/archive backend methods and local aliases of the JSON-RPC backend
+  receiver, so indirect calls cannot bypass the selector-based boundary check.
 - JSON-RPC `debug_traceCall`, `debug_traceTransaction`,
   `debug_traceBlockByNumber`, and `debug_traceBlockByHash` now use the same
   archive execution-state setup as `eth_call`: historical traces can run from

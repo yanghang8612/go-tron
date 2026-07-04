@@ -65,13 +65,98 @@ func TestLegacyJSONRPCHistoricalHandlersUseArchiveBackends(t *testing.T) {
 	}
 }
 
+func TestJSONRPCArchiveBackendMethodsAreOnlyDirectlyCalled(t *testing.T) {
+	var offenders []string
+	for _, sourceFile := range []string{"api.go", "ethapi.go"} {
+		fset, file := parseJSONRPCSourceWithFileSet(t, sourceFile)
+		offenders = append(offenders, archiveBackendNonDirectReferences(fset, sourceFile, file)...)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("JSON-RPC archive/live backend methods must not be aliased or passed as function values; indirect calls bypass archive-boundary audits:\n%s",
+			strings.Join(offenders, "\n"))
+	}
+}
+
+func TestJSONRPCArchiveBackendReceiverIsNotAliased(t *testing.T) {
+	var offenders []string
+	for _, sourceFile := range []string{"api.go", "ethapi.go"} {
+		fset, file := parseJSONRPCSourceWithFileSet(t, sourceFile)
+		offenders = append(offenders, jsonRPCBackendAliasAssignments(fset, sourceFile, file)...)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("JSON-RPC backend receiver must not be assigned to aliases; alias calls bypass archive-boundary selector audits:\n%s",
+			strings.Join(offenders, "\n"))
+	}
+}
+
+func TestJSONRPCArchiveBackendAuditRejectsFunctionValueAlias(t *testing.T) {
+	const sourceFile = "fixture.go"
+	const source = `package jsonrpc
+
+type API struct{ backend *backend }
+type backend struct{}
+
+func (b *backend) GetBalanceAt(addr string, block uint64) (int64, error) { return 0, nil }
+
+func (api *API) ethGetBalance(block uint64) error {
+	read := api.backend.GetBalanceAt
+	_, err := read("addr", block)
+	return err
+}
+`
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+	offenders := archiveBackendNonDirectReferences(fset, sourceFile, file)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "GetBalanceAt referenced outside a direct call") {
+		t.Fatalf("offenders = %+v, want GetBalanceAt function-value alias rejected", offenders)
+	}
+}
+
+func TestJSONRPCArchiveBackendAuditRejectsBackendAlias(t *testing.T) {
+	const sourceFile = "fixture.go"
+	const source = `package jsonrpc
+
+type API struct{ backend *backend }
+type backend struct{}
+
+func (b *backend) GetBalanceAt(addr string, block uint64) (int64, error) { return 0, nil }
+
+func (api *API) ethGetBalance(block uint64) error {
+	backend := api.backend
+	_, err := backend.GetBalanceAt("addr", block)
+	return err
+}
+`
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+	offenders := jsonRPCBackendAliasAssignments(fset, sourceFile, file)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver assigned to alias") {
+		t.Fatalf("offenders = %+v, want backend receiver alias rejected", offenders)
+	}
+}
+
 func parseJSONRPCSource(t *testing.T, path string) *ast.File {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	_, file := parseJSONRPCSourceWithFileSet(t, path)
+	return file
+}
+
+func parseJSONRPCSourceWithFileSet(t *testing.T, path string) (*token.FileSet, *ast.File) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
-	return file
+	return fset, file
 }
 
 func isJSONRPCReceiverMethod(fn *ast.FuncDecl, receiver string) bool {
@@ -105,18 +190,6 @@ func jsonRPCExprTypeName(expr ast.Expr) string {
 }
 
 func archiveBackendCalls(body *ast.BlockStmt) []string {
-	watched := map[string]struct{}{
-		"Call":              {},
-		"CallAt":            {},
-		"EstimateGas":       {},
-		"EstimateGasAt":     {},
-		"GetBalance":        {},
-		"GetBalanceAt":      {},
-		"GetCode":           {},
-		"GetCodeAt":         {},
-		"GetStorageAt":      {},
-		"GetStorageAtBlock": {},
-	}
 	seen := make(map[string]struct{})
 	ast.Inspect(body, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -130,12 +203,81 @@ func archiveBackendCalls(body *ast.BlockStmt) []string {
 		if !isBackendSelector(sel.X) {
 			return true
 		}
-		if _, ok := watched[sel.Sel.Name]; ok {
+		if _, ok := jsonRPCArchiveBackendMethods()[sel.Sel.Name]; ok {
 			seen[sel.Sel.Name] = struct{}{}
 		}
 		return true
 	})
 	return sortedJSONRPCAuditKeys(seen)
+}
+
+func archiveBackendNonDirectReferences(fset *token.FileSet, sourceFile string, file *ast.File) []string {
+	var offenders []string
+	stack := make([]ast.Node, 0, 16)
+	ast.Inspect(file, func(node ast.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		sel, ok := node.(*ast.SelectorExpr)
+		if ok && isBackendSelector(sel.X) {
+			if _, watched := jsonRPCArchiveBackendMethods()[sel.Sel.Name]; watched && !isJSONRPCDirectCallFun(parent, sel) {
+				offenders = append(offenders, fmt.Sprintf("%s:%d: %s referenced outside a direct call",
+					sourceFile, fset.Position(sel.Pos()).Line, sel.Sel.Name))
+			}
+		}
+		stack = append(stack, node)
+		return true
+	})
+	return offenders
+}
+
+func jsonRPCBackendAliasAssignments(fset *token.FileSet, sourceFile string, file *ast.File) []string {
+	var offenders []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch stmt := node.(type) {
+		case *ast.AssignStmt:
+			for _, rhs := range stmt.Rhs {
+				if isBackendSelector(rhs) {
+					offenders = append(offenders, fmt.Sprintf("%s:%d: backend receiver assigned to alias",
+						sourceFile, fset.Position(rhs.Pos()).Line))
+				}
+			}
+		case *ast.ValueSpec:
+			for _, value := range stmt.Values {
+				if isBackendSelector(value) {
+					offenders = append(offenders, fmt.Sprintf("%s:%d: backend receiver assigned to alias",
+						sourceFile, fset.Position(value.Pos()).Line))
+				}
+			}
+		}
+		return true
+	})
+	return offenders
+}
+
+func jsonRPCArchiveBackendMethods() map[string]struct{} {
+	return map[string]struct{}{
+		"Call":              {},
+		"CallAt":            {},
+		"EstimateGas":       {},
+		"EstimateGasAt":     {},
+		"GetBalance":        {},
+		"GetBalanceAt":      {},
+		"GetCode":           {},
+		"GetCodeAt":         {},
+		"GetStorageAt":      {},
+		"GetStorageAtBlock": {},
+	}
+}
+
+func isJSONRPCDirectCallFun(parent ast.Node, expr ast.Expr) bool {
+	call, ok := parent.(*ast.CallExpr)
+	return ok && call.Fun == expr
 }
 
 func isBackendSelector(expr ast.Expr) bool {
