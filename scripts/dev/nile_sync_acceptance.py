@@ -1491,6 +1491,7 @@ def check_sample_prometheus_full_staged_sync_stage_detail(path, text, row, index
 
 def expected_archive_api_method_metrics(row, successful_methods):
     expected = set(successful_methods)
+    expected.update(DEFAULT_ARCHIVE_API_METHODS)
     if as_bool(row, "archiveApiCallProbe"):
         expected.update(ARCHIVE_API_CALL_METHODS)
     if as_bool(row, "archiveApiTxProbe"):

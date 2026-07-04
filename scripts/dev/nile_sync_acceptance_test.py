@@ -1450,6 +1450,45 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_sample_prometheus_missing_default_archive_method_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            row.update(
+                {
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 1,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 999,
+                    "archiveApiDepthBlocks": 1,
+                    "archiveApiMethods": ["eth_getBalance"],
+                    "archiveApiTxProbe": False,
+                    "archiveApiTxMethods": [],
+                }
+            )
+            append_archive_trace_prometheus_metrics(prom, row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_archive_api_method_success{method='eth_getBlockByNumber'}",
+                proc.stderr,
+            )
+
     def test_rejects_sample_prometheus_archive_probe_metric_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
