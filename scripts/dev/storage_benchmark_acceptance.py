@@ -226,6 +226,11 @@ ARCHIVE_API_TRACE_BLOCK_METHODS = (
     "debug_traceBlockByNumber",
     "debug_traceBlockByHash",
 )
+ARCHIVE_API_STATE_FIXTURE_FIELDS = (
+    ("archiveApiExpectedBalance", "quantity"),
+    ("archiveApiExpectedCode", "bytes"),
+    ("archiveApiExpectedStorage", "quantity"),
+)
 
 ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_method_success"
 ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_storage_benchmark_archive_api_tx_method_success"
@@ -1347,6 +1352,27 @@ def has_archive_api_evidence(row):
     return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
 
 
+def check_archive_api_state_fixtures(row):
+    issues = []
+    for field, kind in ARCHIVE_API_STATE_FIXTURE_FIELDS:
+        value = row.get(field)
+        if not isinstance(value, str) or not value:
+            issues.append(
+                f"{line_label(row)} {field} is missing; "
+                f"run storage_benchmark.sh with --archive-api-expected-* fixtures"
+            )
+            continue
+        if re.fullmatch(r"0x[0-9a-fA-F]*", value) is None:
+            issues.append(f"{line_label(row)} {field}={value!r}, want 0x hex string")
+            continue
+        if kind == "quantity":
+            try:
+                int(value, 16)
+            except ValueError:
+                issues.append(f"{line_label(row)} {field}={value!r}, want 0x hex quantity")
+    return issues
+
+
 def check_archive_api_evidence(
     rows,
     required_methods,
@@ -1354,6 +1380,7 @@ def check_archive_api_evidence(
     min_depth_blocks=None,
     require_trace_block=False,
     require_call=False,
+    require_state_fixtures=False,
     require_post_prune=False,
 ):
     issues = []
@@ -1405,6 +1432,8 @@ def check_archive_api_evidence(
                 f"{line_label(row)} archiveApiCallProbe is not true; "
                 "run storage_benchmark.sh with --archive-api-call-data"
             )
+        if require_state_fixtures:
+            issues.extend(check_archive_api_state_fixtures(row))
 
         chain_lookup = None
         if field_present(row, "chainLookupPruneToBlock"):
@@ -2345,6 +2374,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-archive-state-fixtures",
+        action="store_true",
+        help=(
+            "require archive API evidence collected with expected balance/code/storage "
+            "fixtures for the probed historical address"
+        ),
+    )
+    parser.add_argument(
         "--require-post-prune-archive-evidence",
         action="store_true",
         help=(
@@ -2592,6 +2629,7 @@ def main(argv=None):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or args.require_archive_call_evidence
+        or args.require_archive_state_fixtures
         or args.require_post_prune_archive_evidence
         or args.require_archive_filtered_log_evidence
         or required_archive_tx_modes
@@ -2606,6 +2644,7 @@ def main(argv=None):
                 min_depth_blocks=args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
                 require_call=args.require_archive_call_evidence,
+                require_state_fixtures=args.require_archive_state_fixtures,
                 require_post_prune=args.require_post_prune_archive_evidence,
             )
         )
@@ -2730,7 +2769,11 @@ def main(argv=None):
         checks += 1
     if args.require_prune_mode_semantics:
         checks += len(latest)
-    if args.require_archive_api_evidence or args.require_archive_tx_evidence:
+    if (
+        args.require_archive_api_evidence
+        or args.require_archive_tx_evidence
+        or args.require_archive_state_fixtures
+    ):
         checks += 1
     checks += len(archive_api_required_modes)
     if args.require_archive_tx_evidence:

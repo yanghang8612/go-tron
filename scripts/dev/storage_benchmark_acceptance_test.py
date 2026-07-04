@@ -2197,6 +2197,9 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiDepthBlocks": 120,
+                    "archiveApiExpectedBalance": "0x0",
+                    "archiveApiExpectedCode": "0x",
+                    "archiveApiExpectedStorage": "0x00",
                     "archiveApiMethods": [
                         "eth_getBlockByNumber",
                         "eth_getBlockTransactionCountByNumber",
@@ -2227,6 +2230,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--require-archive-api-mode",
                     "minimal",
                     "--require-post-prune-archive-evidence",
+                    "--require-archive-state-fixtures",
                     "--min-archive-api-depth-blocks",
                     "100",
                 ],
@@ -2402,6 +2406,69 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 filtered_logs_ok.stdout + filtered_logs_ok.stderr,
             )
             self.assertIn("storage benchmark acceptance: ok", filtered_logs_ok.stdout)
+
+    def test_rejects_archive_api_evidence_missing_state_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiExpectedBalance": "0x",
+                        "archiveApiExpectedCode": "not-hex",
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-state-fixtures",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedBalance='0x', want 0x hex quantity",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedCode='not-hex', want 0x hex string",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedStorage is missing",
+                proc.stderr,
+            )
 
     def test_rejects_archive_api_depth_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

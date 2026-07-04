@@ -778,7 +778,10 @@ Status:
   `archiveApiExpectedCode`, or `archiveApiExpectedStorage`, the probe also
   compares `eth_getBalance`, `eth_getCode`, and `eth_getStorageAt` against
   those live-at-height fixtures before marking the method successful.
-  Acceptance also requires tx proof to carry same-row archive API
+  Storage benchmark and Nile acceptance can now require those fixture values
+  with `--require-archive-state-fixtures`, so production rows cannot satisfy
+  post-prune archive evidence with shape-only state reads. Acceptance also
+  requires tx proof to carry same-row archive API
   evidence and a `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars,
   `null`, wrong-log, receipt logs missing from `eth_getLogs`,
   wrong-transaction or wrong-block results, detached tx rows, or malformed
@@ -1357,7 +1360,9 @@ Status:
   `gtron_storage_prune_boundary_block{field=...}` samples in the same captured
   artifact. Nile sync acceptance can also require the latest selected sample to
   carry stage-stall diagnostics and successful historical JSON-RPC archive-read
-  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields. It
+  evidence through `stageStalled*`/`stageStalls` and `archiveApi*` fields,
+  including optional account/code/storage fixture evidence through
+  `--require-archive-state-fixtures`. It
   can now also require `--require-prune-mode-semantics`, which binds the Nile
   row's persisted `pruneMode` to the sampled `mode`, rejects incompatible
   archive/non-minimal prune progress, and checks signed cold-prune rows against

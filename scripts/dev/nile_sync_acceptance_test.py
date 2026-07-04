@@ -5558,6 +5558,9 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "archiveApiChecks": 13,
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 99,
+                        "archiveApiExpectedBalance": "0x0",
+                        "archiveApiExpectedCode": "0x",
+                        "archiveApiExpectedStorage": "0x00",
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
@@ -5586,6 +5589,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "minimal",
                     "--no-require-stage-status",
                     "--require-archive-api-evidence",
+                    "--require-archive-state-fixtures",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -5705,6 +5709,66 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 filtered_logs_ok.stdout + filtered_logs_ok.stderr,
             )
             self.assertIn("nile sync acceptance: ok", filtered_logs_ok.stdout)
+
+    def test_rejects_archive_api_evidence_missing_state_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiExpectedBalance": "0x",
+                        "archiveApiExpectedCode": "not-hex",
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-state-fixtures",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiExpectedBalance='0x', want 0x hex quantity",
+                proc.stderr,
+            )
+            self.assertIn(
+                "archiveApiExpectedCode='not-hex', want 0x hex string",
+                proc.stderr,
+            )
+            self.assertIn("archiveApiExpectedStorage is missing", proc.stderr)
 
     def test_accepts_archive_api_depth_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

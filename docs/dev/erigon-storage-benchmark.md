@@ -382,7 +382,11 @@ When the probed block has a transaction, it also emits `archiveApiTxProbe`,
 `archiveApiTxHash`, and `archiveApiTxMethods`; add `--archive-api-call-data`
 when the sample targets a known historical contract, then gate the result with
 `--require-archive-call-evidence` so `eth_call`, `debug_traceCall`, and
-`eth_estimateGas` must all succeed at the historical block. The probe counts
+`eth_estimateGas` must all succeed at the historical block. Add
+`--archive-api-expected-balance`, `--archive-api-expected-code`, and
+`--archive-api-expected-storage`, then gate with
+`--require-archive-state-fixtures` when the sample must prove historical
+account/code/storage values against live-at-height fixtures. The probe counts
 only shape-valid JSON-RPC results as
 successful:
 block reads must return an object, account/code/storage/call reads must return
@@ -425,6 +429,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-api-mode minimal \
   --min-archive-api-depth-blocks 100 \
   --require-post-prune-archive-evidence \
+  --require-archive-state-fixtures \
   --require-archive-tx-evidence \
   --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
@@ -515,6 +520,8 @@ contract. When the samples pass `--archive-api-expected-balance`,
 `--archive-api-expected-code`, or `--archive-api-expected-storage`, the archive
 probe only counts `eth_getBalance`, `eth_getCode`, or `eth_getStorageAt` as
 successful when the historical result matches that fixture. Add
+`--require-archive-state-fixtures` when the acceptance gate must reject rows
+that do not carry all three live-at-height fixture values. Add
 `--require-archive-trace-block` for runs collected with
 `--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
 and `debug_traceBlockByHash` probes. If the row also

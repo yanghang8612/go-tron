@@ -578,6 +578,11 @@ ARCHIVE_API_TRACE_BLOCK_METHODS = (
     "debug_traceBlockByNumber",
     "debug_traceBlockByHash",
 )
+ARCHIVE_API_STATE_FIXTURE_FIELDS = (
+    ("archiveApiExpectedBalance", "quantity"),
+    ("archiveApiExpectedCode", "bytes"),
+    ("archiveApiExpectedStorage", "quantity"),
+)
 
 ARCHIVE_API_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_method_success"
 ARCHIVE_API_TX_METHOD_SUCCESS_METRIC = "gtron_nile_sync_archive_api_tx_method_success"
@@ -2757,6 +2762,26 @@ def has_archive_api_evidence(row):
     return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
 
 
+def check_archive_api_state_fixtures(row):
+    issues = []
+    for field, kind in ARCHIVE_API_STATE_FIXTURE_FIELDS:
+        value = row.get(field)
+        if not isinstance(value, str) or not value:
+            issues.append(
+                f"{field} is missing; run nile_sync_sample.sh with --archive-api-expected-* fixtures"
+            )
+            continue
+        if re.fullmatch(r"0x[0-9a-fA-F]*", value) is None:
+            issues.append(f"{field}={value!r}, want 0x hex string")
+            continue
+        if kind == "quantity":
+            try:
+                int(value, 16)
+            except ValueError:
+                issues.append(f"{field}={value!r}, want 0x hex quantity")
+    return issues
+
+
 def archive_api_method_count(row):
     raw = row.get("archiveApiMethods")
     if not isinstance(raw, list):
@@ -2770,6 +2795,7 @@ def check_archive_api_evidence(
     min_depth_blocks=None,
     require_trace_block=False,
     require_call=False,
+    require_state_fixtures=False,
     require_post_prune=False,
 ):
     issues = []
@@ -2799,6 +2825,8 @@ def check_archive_api_evidence(
         issues.append(
             "archiveApiCallProbe is not true; run nile_sync_sample.sh with --archive-api-call-data"
         )
+    if require_state_fixtures:
+        issues.extend(check_archive_api_state_fixtures(row))
 
     chain_lookup = None
     if field_present(row, "chainLookupPruneToBlock"):
@@ -3618,6 +3646,7 @@ def check_row(row, args):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or args.require_archive_call_evidence
+        or args.require_archive_state_fixtures
         or args.require_post_prune_archive_evidence
         or args.require_archive_filtered_log_evidence
         or args.archive_api_methods_requested
@@ -3643,6 +3672,7 @@ def check_row(row, args):
                 args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
                 require_call=args.require_archive_call_evidence,
+                require_state_fixtures=args.require_archive_state_fixtures,
                 require_post_prune=args.require_post_prune_archive_evidence,
             )
         )
@@ -3904,6 +3934,14 @@ def build_parser():
         help=(
             "require archive API evidence collected with --archive-api-call-data, "
             "including eth_call, debug_traceCall, and eth_estimateGas"
+        ),
+    )
+    parser.add_argument(
+        "--require-archive-state-fixtures",
+        action="store_true",
+        help=(
+            "require archive API evidence collected with expected balance/code/storage "
+            "fixtures for the probed historical address"
         ),
     )
     parser.add_argument(
