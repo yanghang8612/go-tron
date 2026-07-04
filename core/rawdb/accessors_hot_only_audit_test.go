@@ -442,6 +442,21 @@ func TestProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries(t *testing.T) 
 	}
 }
 
+func TestProductionDerivedIndexWritesStayOnAuditedBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, derivedIndexWriteRawDBReferences(), map[string]map[string]struct{}{
+		"core/blockchain.go": {
+			"writeBlockMetadataBatch": {},
+		},
+		"core/state/snapshots/chain_freezer_segment.go": {
+			"restoreChainFreezerIndexesForRow": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production derived-index writes must stay in the hot execution batch or collector-backed restore boundary:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
@@ -511,6 +526,55 @@ func debugIterator(db any) {
 	})
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.IterateBlockBalanceTraceRows") {
 		t.Fatalf("offenders = %+v, want same-file non-boundary derived iterator rejected", offenders)
+	}
+}
+
+func TestDerivedIndexWriteAuditRejectsRebuildBypass(t *testing.T) {
+	root := writeAuditFixture(t, "cmd/gtron/db_cmd.go", `package main
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var writeTxInfo = rawdb.WriteTransactionInfo
+
+func rebuild(db any, tx []byte) {
+	_ = rawdb.WriteTransactionIndex(db, tx, 7)
+	_ = writeTxInfo(db, tx, nil)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, derivedIndexWriteRawDBReferences(), nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want direct and function-value derived-index writes rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.WriteTransactionInfo", "rawdb.WriteTransactionIndex"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
+	}
+}
+
+func TestDerivedIndexWriteAuditScopesAllowedBoundariesToFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "core/blockchain.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func writeBlockMetadataBatch(db any, tx []byte) {
+	_ = rawdb.WriteTransactionIndex(db, tx, 7)
+}
+
+func repair(db any, tx []byte) {
+	_ = rawdb.WriteTransactionInfo(db, tx, nil)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesOutsideAllowedFuncs(t, root, derivedIndexWriteRawDBReferences(), map[string]map[string]struct{}{
+		"core/blockchain.go": {
+			"writeBlockMetadataBatch": {},
+		},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.WriteTransactionInfo") {
+		t.Fatalf("offenders = %+v, want same-file non-boundary derived-index write rejected", offenders)
 	}
 }
 
@@ -1608,6 +1672,17 @@ func derivedHotRowIteratorReferences() map[string]struct{} {
 		"IterateAccountTraceRows":      {},
 		"IterateBlockBalanceTraceRows": {},
 		"IterateSectionBloomRows":      {},
+	}
+}
+
+func derivedIndexWriteRawDBReferences() map[string]struct{} {
+	return map[string]struct{}{
+		"WriteAccountTrace":            {},
+		"WriteBlockBalanceTrace":       {},
+		"WriteSectionBloom":            {},
+		"WriteTransactionIndex":        {},
+		"WriteTransactionInfo":         {},
+		"WriteTransactionInfosByBlock": {},
 	}
 }
 
