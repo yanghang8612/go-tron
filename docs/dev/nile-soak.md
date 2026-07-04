@@ -68,6 +68,8 @@ scripts/dev/nile_sync_sample.sh \
   --jsonrpc http://127.0.0.1:8545 \
   --mode full \
   --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
+  --stage-status-rpc \
+  --freezer-status-rpc \
   --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
   --pid-file /Users/asuka/gtron-soak/gtron.pid \
   --debug-metrics-url 'http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/' \
@@ -448,7 +450,6 @@ full-staged-sync evidence:
 scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.jsonl \
   --network nile \
   --mode full \
-  --require-offline-db-check \
   --require-prune-mode-semantics \
   --require-stage-status-source rpc \
   --require-freezer-status-rpc \
@@ -480,6 +481,27 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max snapshotSidecarShareMilli=350
 ```
 
+Run stopped-node storage verification as a separate gate, because the latest
+live sample required above needs `gtron_stageStatus` and `gtron_freezerStatus`
+from the running JSON-RPC server:
+
+```bash
+launchctl bootout gui/$(id -u)/com.tronprotocol.gtron-soak
+
+scripts/dev/nile_sync_sample.sh \
+  --datadir /Users/asuka/gtron-soak/datadir \
+  --http http://127.0.0.1:8090 \
+  --jsonrpc http://127.0.0.1:8545 \
+  --mode full \
+  --offline-db-check \
+  --output /Users/asuka/gtron-soak/logs/sync-offline-check.jsonl
+
+scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-offline-check.jsonl \
+  --network nile \
+  --mode full \
+  --offline-storage-check-only
+```
+
 By default the checker validates the latest selected row, requires stage-status
 evidence with `stageStatusFileStatus=ok`, accepts `catching-up` or `caught-up`
 staged-sync states, and requires all seven observable sync stages to be present
@@ -493,6 +515,9 @@ blocks must be integer evidence; fractional values are rejected.
 Use `--require-stage-status-source rpc` for production live-node samples
 collected with `--stage-status-rpc`; use `--require-stage-status-source file`
 only for captured offline `gtron db stage-status --json` evidence.
+Use `--offline-storage-check-only` for stopped-node samples collected with
+`--offline-db-check`; it implies `--require-offline-db-check` and skips live
+HTTP and staged-sync readiness gates.
 It cross-checks the derived staged-sync metrics too:
 `fullStagedSyncCompletionRatio` must match complete/head, pipeline lag must
 cover the finish-head lag and match `stageSyncPipelineLagBlocks`, and the

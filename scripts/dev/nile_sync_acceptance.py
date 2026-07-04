@@ -3507,25 +3507,33 @@ def check_sync_phase_cursor_evidence(row):
 
 def check_row(row, args):
     issues = []
-    if row.get("sampleStatus") != "ok":
+    if not args.offline_storage_check_only and row.get("sampleStatus") != "ok":
         issues.append(f"sampleStatus={row.get('sampleStatus')!r}, want 'ok'")
 
     health = str(row.get("soakHealthStatus", "unknown"))
-    if args.allow_warning_health:
+    if args.offline_storage_check_only:
+        pass
+    elif args.allow_warning_health:
         if health not in {"ok", "warning"}:
             issues.append(f"soakHealthStatus={health!r}, want ok/warning")
     elif health != "ok":
         issues.append(f"soakHealthStatus={health!r}, want 'ok'")
 
-    if args.require_stage_status and row.get("stageStatusFileStatus") != "ok":
+    if (
+        not args.offline_storage_check_only
+        and args.require_stage_status
+        and row.get("stageStatusFileStatus") != "ok"
+    ):
         issues.append(f"stageStatusFileStatus={row.get('stageStatusFileStatus')!r}, want 'ok'")
-    if args.require_stage_status_source:
+    if not args.offline_storage_check_only and args.require_stage_status_source:
         source = row.get("stageStatusSource")
         if source != args.require_stage_status_source:
             issues.append(
                 f"stageStatusSource={source!r}, want {args.require_stage_status_source!r}"
             )
-    if args.require_stage_status:
+    if args.offline_storage_check_only:
+        pass
+    elif args.require_stage_status:
         issues.extend(
             check_full_staged_sync_evidence(
                 row,
@@ -3536,7 +3544,9 @@ def check_row(row, args):
         issues.extend(check_full_staged_sync_stage_details(row, require=True))
 
     status = str(row.get("fullStagedSyncStatus", "unknown"))
-    if args.require_caught_up:
+    if args.offline_storage_check_only:
+        pass
+    elif args.require_caught_up:
         if (
             status != "caught-up"
             or not as_bool(row, "fullStagedSyncReady")
@@ -3764,6 +3774,14 @@ def build_parser():
         "--require-offline-db-check",
         action="store_true",
         help="require offline db check fields to report ok",
+    )
+    parser.add_argument(
+        "--offline-storage-check-only",
+        action="store_true",
+        help=(
+            "validate stopped-node storage-alert evidence only; implies "
+            "--require-offline-db-check and skips live HTTP/staged-sync readiness gates"
+        ),
     )
     parser.add_argument(
         "--require-freezer-status-rpc",
@@ -4025,6 +4043,8 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.offline_storage_check_only:
+        args.require_offline_db_check = True
     args.archive_api_methods_requested = split_csv_values(
         args.archive_api_method + args.archive_api_methods
     )

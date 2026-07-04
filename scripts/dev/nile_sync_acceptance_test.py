@@ -308,6 +308,21 @@ def add_clean_storage_alerts(row):
     return row
 
 
+def clean_offline_storage_check_row():
+    return add_clean_storage_alerts(
+        {
+            "unix": 10,
+            "network": "nile",
+            "mode": "full",
+            "sampleStatus": "http-error",
+            "soakHealthStatus": "critical",
+            "offlineDbCheck": True,
+            "offlineDbCheckStatus": "ok",
+            "offlineDbCheckPrometheusStatus": "skipped",
+        }
+    )
+
+
 def add_clean_prune_mode(row, mode=None):
     prune_mode = mode or row.get("mode", "full")
     row.update(
@@ -2922,6 +2937,58 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "--mode",
                     "full",
                     "--require-offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("freezerAlertStatus='critical', want 'ok'", proc.stderr)
+            self.assertIn("freezerAlertIssues=2, want 0", proc.stderr)
+
+    def test_accepts_offline_storage_check_only_without_live_sample_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            write_result(result, [clean_offline_storage_check_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--offline-storage-check-only",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_offline_storage_check_only_rejects_storage_alert_issues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_offline_storage_check_row()
+            row["freezerAlertStatus"] = "critical"
+            row["freezerAlertIssues"] = 2
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--offline-storage-check-only",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
