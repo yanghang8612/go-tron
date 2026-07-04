@@ -1347,7 +1347,14 @@ def has_archive_api_evidence(row):
     return any(field in row for field in ARCHIVE_API_EVIDENCE_FIELDS)
 
 
-def check_archive_api_evidence(rows, required_methods, required_modes=(), min_depth_blocks=None, require_trace_block=False):
+def check_archive_api_evidence(
+    rows,
+    required_methods,
+    required_modes=(),
+    min_depth_blocks=None,
+    require_trace_block=False,
+    require_call=False,
+):
     issues = []
     latest = list(latest_rows(rows).values())
     evidence_rows = [
@@ -1391,6 +1398,11 @@ def check_archive_api_evidence(rows, required_methods, required_modes=(), min_de
             issues.append(
                 f"{line_label(row)} archiveApiTraceBlockProbe is not true; "
                 "run storage_benchmark.sh with --archive-api-trace-block"
+            )
+        if require_call and not as_bool(row, "archiveApiCallProbe"):
+            issues.append(
+                f"{line_label(row)} archiveApiCallProbe is not true; "
+                "run storage_benchmark.sh with --archive-api-call-data"
             )
 
         chain_lookup = None
@@ -2314,6 +2326,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-archive-call-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence collected with --archive-api-call-data, "
+            "including eth_call, debug_traceCall, and eth_estimateGas"
+        ),
+    )
+    parser.add_argument(
         "--require-archive-tx-mode",
         action="append",
         default=[],
@@ -2532,6 +2552,10 @@ def main(argv=None):
         for method in ARCHIVE_API_TRACE_BLOCK_METHODS:
             if method not in archive_api_methods_required:
                 archive_api_methods_required.append(method)
+    if args.require_archive_call_evidence:
+        for method in ARCHIVE_API_CALL_METHODS:
+            if method not in archive_api_methods_required:
+                archive_api_methods_required.append(method)
     required_archive_api_modes = split_modes(
         args.require_archive_api_mode + args.require_archive_api_modes
     )
@@ -2548,6 +2572,7 @@ def main(argv=None):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
+        or args.require_archive_call_evidence
         or args.require_archive_filtered_log_evidence
         or required_archive_tx_modes
         or archive_api_methods_requested
@@ -2560,6 +2585,7 @@ def main(argv=None):
                 archive_api_required_modes,
                 min_depth_blocks=args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
+                require_call=args.require_archive_call_evidence,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction or required_archive_tx_modes:

@@ -2764,7 +2764,13 @@ def archive_api_method_count(row):
     return len(raw)
 
 
-def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, require_trace_block=False):
+def check_archive_api_evidence(
+    row,
+    required_methods,
+    min_depth_blocks=None,
+    require_trace_block=False,
+    require_call=False,
+):
     issues = []
     status = str(row.get("archiveApiStatus", "")).lower()
     if status != "ok":
@@ -2787,6 +2793,10 @@ def check_archive_api_evidence(row, required_methods, min_depth_blocks=None, req
     if require_trace_block and not as_bool(row, "archiveApiTraceBlockProbe"):
         issues.append(
             "archiveApiTraceBlockProbe is not true; run nile_sync_sample.sh with --archive-api-trace-block"
+        )
+    if require_call and not as_bool(row, "archiveApiCallProbe"):
+        issues.append(
+            "archiveApiCallProbe is not true; run nile_sync_sample.sh with --archive-api-call-data"
         )
 
     chain_lookup = None
@@ -3596,6 +3606,7 @@ def check_row(row, args):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
+        or args.require_archive_call_evidence
         or args.require_archive_filtered_log_evidence
         or args.archive_api_methods_requested
         or args.min_archive_api_depth_blocks is not None
@@ -3609,12 +3620,17 @@ def check_row(row, args):
             for method in ARCHIVE_API_TRACE_BLOCK_METHODS:
                 if method not in required_archive_methods:
                     required_archive_methods.append(method)
+        if args.require_archive_call_evidence:
+            for method in ARCHIVE_API_CALL_METHODS:
+                if method not in required_archive_methods:
+                    required_archive_methods.append(method)
         issues.extend(
             check_archive_api_evidence(
                 row,
                 required_archive_methods,
                 args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
+                require_call=args.require_archive_call_evidence,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
@@ -3867,6 +3883,14 @@ def build_parser():
         help=(
             "require archive API evidence to include successful "
             "debug_traceBlockByNumber and debug_traceBlockByHash probes"
+        ),
+    )
+    parser.add_argument(
+        "--require-archive-call-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence collected with --archive-api-call-data, "
+            "including eth_call, debug_traceCall, and eth_estimateGas"
         ),
     )
     parser.add_argument(

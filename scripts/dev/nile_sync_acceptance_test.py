@@ -1591,6 +1591,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     str(SCRIPT),
                     str(result),
                     "--require-sample-prometheus-artifact",
+                    "--require-archive-call-evidence",
                     "--require-archive-trace-transaction",
                 ],
                 cwd=REPO_ROOT,
@@ -5619,6 +5620,35 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn(
                 "archiveApiMethods missing required methods: eth_call",
                 require_call_without_evidence_flag.stderr,
+            )
+
+            require_call_probe = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-call-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_probe.returncode,
+                0,
+                require_call_probe.stdout + require_call_probe.stderr,
+            )
+            self.assertIn(
+                "archiveApiCallProbe is not true; run nile_sync_sample.sh with --archive-api-call-data",
+                require_call_probe.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: debug_traceCall,eth_call,eth_estimateGas",
+                require_call_probe.stderr,
             )
 
             require_filtered_logs = subprocess.run(

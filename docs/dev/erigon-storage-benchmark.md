@@ -373,9 +373,10 @@ including TRON-empty uncle-count and uncle-by-index probes for Ethereum client
 compatibility.
 When the probed block has a transaction, it also emits `archiveApiTxProbe`,
 `archiveApiTxHash`, and `archiveApiTxMethods`; add `--archive-api-call-data`
-plus `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,
-and `--archive-api-method eth_estimateGas` only when the sample targets a known
-historical contract. The probe counts only shape-valid JSON-RPC results as
+when the sample targets a known historical contract, then gate the result with
+`--require-archive-call-evidence` so `eth_call`, `debug_traceCall`, and
+`eth_estimateGas` must all succeed at the historical block. The probe counts
+only shape-valid JSON-RPC results as
 successful:
 block reads must return an object, account/code/storage/call reads must return
 hex strings, logs must return a list, and transaction/receipt reads must return
@@ -496,10 +497,9 @@ must include those logs before the archive API evidence is accepted; the
 follow-up `eth_getLogsFiltered` label proves the same log can be found through
 address/topic filters. Add `--require-archive-filtered-log-evidence` when the
 benchmark targets a block with receipt logs and the acceptance gate must prove
-that filtered event-log lookup path. Add
-`--archive-api-method eth_call`, `--archive-api-method debug_traceCall`, and
-`--archive-api-method eth_estimateGas` when the samples also pass
-`--archive-api-call-data` against a known historical contract. Add
+that filtered event-log lookup path. Add `--require-archive-call-evidence` when
+the samples also pass `--archive-api-call-data` against a known historical
+contract. Add
 `--require-archive-trace-block` for runs collected with
 `--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
 and `debug_traceBlockByHash` probes. If the row also

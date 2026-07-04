@@ -1372,6 +1372,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--role",
                     "producer",
                     "--require-benchmark-prometheus-artifacts",
+                    "--require-archive-call-evidence",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -2258,6 +2259,38 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 require_call.stdout + require_call.stderr,
             )
             self.assertIn("archiveApiMethods missing required methods: eth_call", require_call.stderr)
+
+            require_call_probe = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-call-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_probe.returncode,
+                0,
+                require_call_probe.stdout + require_call_probe.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiCallProbe is not true; "
+                "run storage_benchmark.sh with --archive-api-call-data",
+                require_call_probe.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiMethods missing required methods: "
+                "debug_traceCall,eth_call,eth_estimateGas",
+                require_call_probe.stderr,
+            )
 
             require_call_without_evidence_flag = subprocess.run(
                 [
