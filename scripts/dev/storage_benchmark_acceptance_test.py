@@ -1748,6 +1748,123 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_benchmark_prometheus_archive_method_metric_wrong_success_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 21,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 21,
+                "archiveApiBlock": 80,
+                "archiveApiFailures": 0,
+                "archiveApiCallProbe": True,
+                "archiveApiTraceTransactionProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
+                    "eth_estimateGas",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            prometheus_row = dict(row)
+            row["archiveApiMethods"] = [
+                method for method in row["archiveApiMethods"] if method != "debug_traceTransaction"
+            ]
+            row["archiveApiTxMethods"] = [
+                method for method in row["archiveApiTxMethods"] if method != "debug_traceTransaction"
+            ]
+            write_benchmark_prometheus(prom, datadir, values)
+            append_benchmark_archive_method_prometheus(prom, datadir, prometheus_row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_tx_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+
     def test_rejects_benchmark_prometheus_artifact_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -1450,6 +1450,46 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_sample_prometheus_archive_method_metric_wrong_success_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_archive_trace_evidence(
+                add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            )
+            prometheus_row = dict(row)
+            row["archiveApiMethods"] = [
+                method for method in row["archiveApiMethods"] if method != "debug_traceTransaction"
+            ]
+            row["archiveApiTxMethods"] = [
+                method for method in row["archiveApiTxMethods"] if method != "debug_traceTransaction"
+            ]
+            append_archive_trace_prometheus_metrics(prom, prometheus_row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_archive_api_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_nile_sync_archive_api_tx_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+
     def test_rejects_sample_prometheus_missing_default_archive_method_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
