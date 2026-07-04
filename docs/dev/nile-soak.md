@@ -445,6 +445,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --mode full \
   --require-offline-db-check \
   --require-prune-mode-semantics \
+  --require-stage-status-source rpc \
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
@@ -473,16 +474,19 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --max snapshotSidecarShareMilli=350
 ```
 
-By default the checker validates the latest selected row, requires a captured
-stage-status file, accepts `catching-up` or `caught-up` staged-sync states, and
-requires all seven observable sync stages to be present with acceptable
-verification evidence in the
+By default the checker validates the latest selected row, requires stage-status
+evidence with `stageStatusFileStatus=ok`, accepts `catching-up` or `caught-up`
+staged-sync states, and requires all seven observable sync stages to be present
+with acceptable verification evidence in the
 `fullStagedSync*` evidence fields. It also verifies that
 `fullStagedSyncHeadLagBlocks` matches
 `fullStagedSyncHeadBlock - fullStagedSyncCompleteBlock` and that
 `fullStagedSyncHeadBlock` matches the sampled `height` when both are present.
 Full staged-sync stage counts, block numbers, lag fields, and per-stage detail
 blocks must be integer evidence; fractional values are rejected.
+Use `--require-stage-status-source rpc` for production live-node samples
+collected with `--stage-status-rpc`; use `--require-stage-status-source file`
+only for captured offline `gtron db stage-status --json` evidence.
 It cross-checks the derived staged-sync metrics too:
 `fullStagedSyncCompletionRatio` must match complete/head, pipeline lag must
 cover the finish-head lag and match `stageSyncPipelineLagBlocks`, and the

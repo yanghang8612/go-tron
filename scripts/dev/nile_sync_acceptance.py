@@ -3367,6 +3367,12 @@ def check_row(row, args):
 
     if args.require_stage_status and row.get("stageStatusFileStatus") != "ok":
         issues.append(f"stageStatusFileStatus={row.get('stageStatusFileStatus')!r}, want 'ok'")
+    if args.require_stage_status_source:
+        source = row.get("stageStatusSource")
+        if source != args.require_stage_status_source:
+            issues.append(
+                f"stageStatusSource={source!r}, want {args.require_stage_status_source!r}"
+            )
     if args.require_stage_status:
         issues.extend(
             check_full_staged_sync_evidence(
@@ -3588,6 +3594,11 @@ def build_parser():
         action="store_false",
         default=True,
         help="do not require stageStatusFileStatus=ok",
+    )
+    parser.add_argument(
+        "--require-stage-status-source",
+        choices=("rpc", "file", "skipped"),
+        help="require stageStatusSource to match the expected sampler source",
     )
     parser.add_argument(
         "--require-caught-up",

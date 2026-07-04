@@ -4461,6 +4461,55 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             ):
                 self.assertIn(want, proc.stderr)
 
+    def test_requires_stage_status_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row["stageStatusSource"] = "rpc"
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-stage-status-source",
+                    "rpc",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+            row["stageStatusSource"] = "file"
+            write_result(result, [row])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-stage-status-source",
+                    "rpc",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("stageStatusSource='file', want 'rpc'", proc.stderr)
+
     def test_rejects_non_integer_zero_issue_counters(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
