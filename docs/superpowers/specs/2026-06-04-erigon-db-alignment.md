@@ -743,9 +743,12 @@ Status:
   including detail arrays for stage verification and snapshot/freezer alerts so
   `SyncBodiesReady` staged-body mismatches and structured stage-alert kinds are
   visible in the JSONL row itself.
-  The sampler also parses captured `gtron db stage-status --json` files for the
-  live-stage fields and staged-body issue details, with a legacy text fallback
-  for older diagnostics. It can also run a live JSON-RPC archive-read probe and
+  The sampler can query live `gtron_stageStatus` through `--stage-status-rpc`
+  for persisted stage rows, canonical hash verification, structured issues, and
+  the stage pipeline cursor without stopping the node. It still parses captured
+  `gtron db stage-status --json` files for stricter staged-body/snapshot-file
+  evidence, with a legacy text fallback for older diagnostics. It can also run
+  a live JSON-RPC archive-read probe and
   emit `archiveApi*` evidence for `eth_getBlockByNumber`,
   `eth_getBlockByHash`, `eth_getBlockTransactionCountByNumber`,
   `eth_getBlockTransactionCountByHash`, `eth_getUncleCountByBlockNumber`,

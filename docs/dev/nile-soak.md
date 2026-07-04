@@ -275,8 +275,23 @@ which persisted progress row failed to decode first, and which sync stage the
 next import pass should advance.
 
 To include staged-sync progress without making the sampler open a live Pebble
-datadir, pass a captured `gtron db stage-status --json` output file. The
-sampler still accepts the legacy text output for older binaries.
+datadir, prefer the online JSON-RPC path on binaries that expose
+`gtron_stageStatus`:
+
+```bash
+scripts/dev/nile_sync_sample.sh \
+  --datadir /Users/asuka/gtron-soak/datadir \
+  --http http://127.0.0.1:8090 \
+  --jsonrpc http://127.0.0.1:8545 \
+  --stage-status-rpc \
+  --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
+```
+
+The online path reports persisted stage rows, canonical hash verification,
+structured stage issues, and the stage pipeline cursor from the running node.
+For stricter file/manifest coverage checks, or older binaries without
+`gtron_stageStatus`, pass a captured `gtron db stage-status --json` output file.
+The sampler still accepts the legacy text output for older binaries.
 
 ```bash
 gtron db stage-status --json \
@@ -392,8 +407,10 @@ For a production Nile run, capture these checks:
 
 1. Start from an empty datadir and sample every few minutes with
    `nile_sync_sample.sh`.
-2. Periodically write `gtron db stage-status --json --datadir <dir>` output to
-   the `--stage-status-file` path used by the sampler.
+2. Sample stage progress through `--stage-status-rpc` while the node is live.
+   Periodically run `gtron db stage-status --json --db.stage.verify --datadir <dir>`
+   while the node is stopped or on a safe copy when you need strict
+   staged-body/snapshot-file verification evidence.
 3. Confirm `stageSyncPipelineMonotonic=true`, or manually check
    `stageSyncInventory >= stageSyncBodies >= stageSyncBodiesReady >=
    stageSyncImport >= stageSyncExecution >= stageSyncCommitment >=

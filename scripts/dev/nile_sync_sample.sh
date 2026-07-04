@@ -20,6 +20,7 @@ MODE="unknown"
 LABEL="nile-sync"
 START_UNIX=0
 STAGE_STATUS_FILE=""
+STAGE_STATUS_RPC=0
 SYNC_LOG_FILE=""
 PID_FILE=""
 DEBUG_METRICS_URL=""
@@ -52,6 +53,7 @@ Options:
   --label LABEL              Free-form sample label (default: nile-sync)
   --start-unix SECONDS       Sync start unix timestamp; emits elapsed/blocksPerSecond
   --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
+  --stage-status-rpc         Query gtron_stageStatus through --jsonrpc and emit stage* fields
   --sync-log-file FILE       Parse latest `Imported chain segment` log fields
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --debug-metrics-url URL    Fetch optional /debug/metrics JSON into the sample row
@@ -102,6 +104,7 @@ while [ "$#" -gt 0 ]; do
     --label) LABEL="${2:?}"; shift 2 ;;
     --start-unix) START_UNIX="${2:?}"; shift 2 ;;
     --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
+    --stage-status-rpc) STAGE_STATUS_RPC=1; shift ;;
     --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
@@ -277,7 +280,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$PROMETHEUS_OUTPUT" \
   "$SNAPSHOT_PROFILE_SCRIPT" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
-  "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
+  "$STAGE_STATUS_FILE" "$STAGE_STATUS_RPC" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
   "$event_log_index_stats_out" "$event_log_index_stats_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
@@ -311,6 +314,7 @@ from pathlib import Path
     nodes_path,
     storage_alerts_path,
     stage_status_path,
+    stage_status_rpc,
     sync_log_path,
     pid_file,
     debug_metrics_url,
@@ -355,6 +359,40 @@ def load_json(path):
     except Exception:
         return {}
 
+def jsonrpc_call(endpoint, method, params=None, request_id=1):
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or []},
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "-sf",
+                "--max-time",
+                "5",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                payload,
+                endpoint,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None, False
+    if result.returncode != 0:
+        return None, False
+    try:
+        response = json.loads(result.stdout)
+    except Exception:
+        return None, False
+    if response.get("error") is not None or "result" not in response:
+        return None, False
+    return response.get("result"), True
+
 def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data, trace_transaction, trace_block):
     row = {
         "archiveApiStatus": "not-run",
@@ -383,40 +421,6 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     row["archiveApiBlock"] = probe_block
     row["archiveApiDepthBlocks"] = height - probe_block if height >= probe_block else -1
     block_tag = hex(probe_block)
-
-    def rpc_call(request_id, method, params):
-        payload = json.dumps(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
-            separators=(",", ":"),
-        )
-        try:
-            result = subprocess.run(
-                [
-                    "curl",
-                    "-sf",
-                    "--max-time",
-                    "5",
-                    "-H",
-                    "Content-Type: application/json",
-                    "--data-binary",
-                    payload,
-                    endpoint,
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        except OSError:
-            return None, False
-        if result.returncode != 0:
-            return None, False
-        try:
-            response = json.loads(result.stdout)
-        except Exception:
-            return None, False
-        if response.get("error") is not None or "result" not in response:
-            return None, False
-        return response.get("result"), True
 
     def normalize_hash(value):
         if not isinstance(value, str) or not value:
@@ -623,7 +627,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
     idx = 0
     while idx < len(calls):
         method, params = calls[idx]
-        result, ok = rpc_call(idx + 1, method, params)
+        result, ok = jsonrpc_call(endpoint, method, params, idx + 1)
         if not ok or not archive_result_ok(method, result, params):
             failures += 1
             idx += 1
@@ -914,8 +918,10 @@ def parse_stage_status_json(text, row):
             continue
         if not isinstance(obj, dict) or not isinstance(obj.get("stages"), list):
             continue
-        row["stageKnown"] = int(obj.get("known", -1))
-        row["stageRows"] = int(obj.get("rows", -1))
+        stages = obj.get("stages", [])
+        stage_count = len(stages) if isinstance(stages, list) else -1
+        row["stageKnown"] = stage_status_int(obj.get("known", stage_count))
+        row["stageRows"] = stage_status_int(obj.get("rows", stage_count))
         pipeline = obj.get("pipeline", {})
         if isinstance(pipeline, dict):
             row["stagePipelineComplete"] = bool(pipeline.get("complete", False))
@@ -945,14 +951,14 @@ def parse_stage_status_json(text, row):
         for item in obj.get("stages", []):
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name", ""))
+            name = str(item.get("name", item.get("stage", "")))
             if not name:
                 continue
             present = bool(item.get("present", False))
             value = -1
             if present:
                 try:
-                    value = int(item.get("value", -1))
+                    value = int(item.get("value", item.get("blockNum", -1)))
                 except Exception:
                     value = -1
             verified = str(item.get("verified", ""))
@@ -960,7 +966,7 @@ def parse_stage_status_json(text, row):
                 "group": str(item.get("group", "")),
                 "present": present,
                 "value": value,
-                "hash": str(item.get("hash", "")),
+                "hash": str(item.get("hash", item.get("blockHash", ""))),
                 "verified": verified,
                 "canonicalHash": str(item.get("canonicalHash", "")),
                 "stagedBlock": "",
@@ -1039,9 +1045,10 @@ def parse_stage_status_json(text, row):
         return True
     return False
 
-def parse_stage_status(path):
+def parse_stage_status(path, rpc_enabled, endpoint):
     row = {
         "stageStatusFile": path,
+        "stageStatusSource": "skipped",
         "stageStatusFileStatus": "skipped" if not path else "missing",
         "stageKnown": -1,
         "stageRows": -1,
@@ -1081,8 +1088,21 @@ def parse_stage_status(path):
         "stageSyncExecutionCommitmentLagBlocks": -1,
         "stageSyncCommitmentFinishLagBlocks": -1,
     }
+    if str(rpc_enabled) == "1":
+        row["stageStatusFile"] = "jsonrpc:" + endpoint
+        row["stageStatusSource"] = "rpc"
+        row["stageStatusFileStatus"] = "rpc-error"
+        result, ok = jsonrpc_call(endpoint, "gtron_stageStatus", [], 1)
+        if not ok:
+            return row
+        row["stageStatusFileStatus"] = "ok"
+        if parse_stage_status_json(json.dumps(result, separators=(",", ":")), row):
+            return finalize_stage_status(row)
+        row["stageStatusFileStatus"] = "rpc-invalid"
+        return row
     if not path:
         return row
+    row["stageStatusSource"] = "file"
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except Exception:
@@ -2973,7 +2993,7 @@ blocks_per_second = float(height) / elapsed if elapsed > 0 and height > 0 else 0
 blocks_per_minute = blocks_per_second * 60.0
 alerts_text = Path(storage_alerts_path).read_text(encoding="utf-8", errors="replace")
 alerts = parse_alerts(alerts_text)
-stages = parse_stage_status(stage_status_path)
+stages = parse_stage_status(stage_status_path, stage_status_rpc, jsonrpc)
 sync_log = parse_sync_log(sync_log_path)
 process = read_process_stats(pid_file)
 debug_metrics = parse_debug_metrics(debug_metrics_url, debug_metrics_path, debug_metrics_status)

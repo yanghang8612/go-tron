@@ -95,7 +95,102 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         tx_hash = "0x" + "12" * 32
         wrong_tx_hash = "0x" + "34" * 32
         block_hash = "0x" + "ab" * 32
-        if method == "eth_getBlockByNumber":
+        if method == "gtron_stageStatus":
+            result = {
+                "status": "critical",
+                "complete": False,
+                "pending": 1,
+                "pipeline": {
+                    "complete": False,
+                    "pending": 1,
+                    "issues": 1,
+                    "tasks": [
+                        {
+                            "stage": "SnapshotEventLogBuild",
+                            "upstream": "Finish",
+                            "status": "missing",
+                            "targetValue": 100,
+                            "targetHash": "0x" + "11" * 32,
+                            "currentPresent": False,
+                        }
+                    ],
+                },
+                "stages": [
+                    {
+                        "stage": "SyncInventory",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 100,
+                        "hashBound": False,
+                        "verified": "unbound",
+                    },
+                    {
+                        "stage": "SyncBodies",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 100,
+                        "hashBound": True,
+                        "blockHash": "0x" + "aa" * 32,
+                        "verified": "hash-bound",
+                    },
+                    {
+                        "stage": "SyncImport",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 97,
+                        "hashBound": True,
+                        "blockHash": "0x" + "bb" * 32,
+                        "verified": "canonical",
+                    },
+                    {
+                        "stage": "SyncExecution",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 96,
+                        "hashBound": True,
+                        "blockHash": "0x" + "cc" * 32,
+                        "verified": "canonical",
+                    },
+                    {
+                        "stage": "SyncCommitment",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 96,
+                        "hashBound": True,
+                        "blockHash": "0x" + "dd" * 32,
+                        "verified": "canonical",
+                    },
+                    {
+                        "stage": "SyncFinish",
+                        "group": "sync",
+                        "present": True,
+                        "blockNum": 95,
+                        "hashBound": True,
+                        "blockHash": "0x" + "ee" * 32,
+                        "verified": "canonical",
+                    },
+                    {
+                        "stage": "Finish",
+                        "group": "canonical",
+                        "present": True,
+                        "blockNum": 100,
+                        "hashBound": True,
+                        "blockHash": "0x" + "11" * 32,
+                        "verified": "canonical",
+                        "canonicalHash": "0x" + "11" * 32,
+                    },
+                ],
+                "issueDetails": [
+                    {
+                        "kind": "stage-order",
+                        "stage": "SnapshotEventLogBuild",
+                        "upstream": "Finish",
+                        "detail": "SnapshotEventLogBuild requires Finish",
+                        "missingUpstream": True,
+                    }
+                ],
+            }
+        elif method == "eth_getBlockByNumber":
             result = {
                 "number": request.get("params", ["0x0"])[0],
                 "hash": block_hash,
@@ -1872,6 +1967,56 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn("stage-order-issue", row["soakHealthIssues"])
             self.assertIn("stage-status-issue", row["soakHealthIssues"])
             self.assertIn("stage-staged-body-issue", row["soakHealthIssues"])
+
+    def test_sample_fetches_stage_status_from_jsonrpc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--stage-status-rpc",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["stageStatusSource"], "rpc")
+            self.assertEqual(row["stageStatusFile"], "jsonrpc:" + endpoint)
+            self.assertEqual(row["stageStatusFileStatus"], "ok")
+            self.assertEqual(row["stageRows"], 7)
+            self.assertEqual(row["stageSyncInventory"], 100)
+            self.assertEqual(row["stageSyncBodies"], 100)
+            self.assertEqual(row["stageSyncImport"], 97)
+            self.assertEqual(row["stageSyncExecution"], 96)
+            self.assertEqual(row["stageSyncCommitment"], 96)
+            self.assertEqual(row["stageSyncFinish"], 95)
+            self.assertEqual(row["stageCanonicalFinish"], 100)
+            self.assertEqual(row["stagePipelinePending"], 1)
+            self.assertEqual(row["stagePipelineNext"], "SnapshotEventLogBuild")
+            self.assertEqual(row["stagePipelineNextTarget"], 100)
+            self.assertEqual(row["stageIssueRows"], 1)
+            self.assertEqual(row["stageOrderIssueRows"], 1)
+            self.assertEqual(row["stageStorageOrderIssueRows"], 1)
+            self.assertIn("stage-order-issue", row["soakHealthIssues"])
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:
