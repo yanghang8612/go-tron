@@ -221,7 +221,10 @@ account/code/storage method fail and the row keeps the fixture in
 `archiveApiExpected*`. Use
 `scripts/dev/archive_state_fixture_capture.py --jsonrpc URL --block N --address HEX --storage-slot HEX --format args`
 against a reference node or the pre-prune candidate node to generate those
-sampler/benchmark arguments.
+sampler/benchmark arguments, or save the helper's JSON output and pass
+`--archive-api-fixture-file FILE` to `storage_benchmark.sh` /
+`nile_sync_sample.sh` so the scripts load the block, address, storage slot, and
+expected state values directly.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -390,8 +393,9 @@ when the sample targets a known historical contract, then gate the result with
 `--archive-api-expected-storage`, then gate with
 `--require-archive-state-fixtures` when the sample must prove historical
 account/code/storage values against live-at-height fixtures. The
-`archive_state_fixture_capture.py` helper can emit those flags from a reference
-JSON-RPC endpoint before the post-prune sample is collected. The probe counts
+`archive_state_fixture_capture.py` helper can emit those flags, or a JSON file
+accepted by `--archive-api-fixture-file`, from a reference JSON-RPC endpoint
+before the post-prune sample is collected. The probe counts
 only shape-valid JSON-RPC results as
 successful:
 block reads must return an object, account/code/storage/call reads must return

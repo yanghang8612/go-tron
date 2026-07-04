@@ -473,6 +473,66 @@ class NileSyncSampleTest(unittest.TestCase):
                 ],
             )
 
+    def test_sample_loads_archive_api_fixture_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            fixture = tmpdir / "archive-fixture.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "archiveApiBlock": 99,
+                        "archiveApiAddress": "0x410000000000000000000000000000000000000001",
+                        "archiveApiStorageSlot": "0x01",
+                        "archiveApiExpectedBalance": "0x0",
+                        "archiveApiExpectedCode": "0x0",
+                        "archiveApiExpectedStorage": "0x0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--mode",
+                    "minimal",
+                    "--label",
+                    "fixture",
+                    "--archive-api-fixture-file",
+                    str(fixture),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "ok")
+            self.assertEqual(row["archiveApiBlock"], 99)
+            self.assertEqual(row["archiveApiDepthBlocks"], 1)
+            self.assertEqual(row["archiveApiExpectedBalance"], "0x0")
+            self.assertEqual(row["archiveApiExpectedCode"], "0x0")
+            self.assertEqual(row["archiveApiExpectedStorage"], "0x0")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 0)
+            self.assertTrue(row["archiveApiTxProbe"])
+
     def test_archive_api_probe_rejects_expected_state_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

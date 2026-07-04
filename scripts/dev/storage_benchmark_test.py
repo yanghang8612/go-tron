@@ -114,6 +114,20 @@ class StorageBenchmarkTest(unittest.TestCase):
 
             workdir = tmpdir / "work"
             output = tmpdir / "results.jsonl"
+            fixture = tmpdir / "archive-fixture.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "archiveApiBlock": 1,
+                        "archiveApiAddress": "0x410000000000000000000000000000000000000001",
+                        "archiveApiStorageSlot": "0x01",
+                        "archiveApiExpectedBalance": "0x00",
+                        "archiveApiExpectedCode": "0x0",
+                        "archiveApiExpectedStorage": "0x00",
+                    }
+                ),
+                encoding="utf-8",
+            )
             env = dict(os.environ)
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
             proc = subprocess.run(
@@ -134,17 +148,12 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "--gtron",
                     str(fake_gtron),
                     "--no-build",
-                    "--archive-api-probe",
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
                     "--archive-api-trace-block",
-                    "--archive-api-expected-balance",
-                    "0x00",
-                    "--archive-api-expected-code",
-                    "0x0",
-                    "--archive-api-expected-storage",
-                    "0x00",
+                    "--archive-api-fixture-file",
+                    str(fixture),
                 ],
                 cwd=REPO_ROOT,
                 env=env,

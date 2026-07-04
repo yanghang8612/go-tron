@@ -168,6 +168,8 @@ Options:
                                   Expected eth_getCode value for archive-api-address at the probe block
   --archive-api-expected-storage HEX
                                   Expected eth_getStorageAt value for archive-api-address/storage-slot at the probe block
+  --archive-api-fixture-file FILE
+                                  Load archiveApi* block/address/storage-slot/expected values from archive_state_fixture_capture.py JSON output
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -178,6 +180,87 @@ EOF
 die() {
   echo "error: $*" >&2
   exit 1
+}
+
+load_archive_api_fixture_file() {
+  local file="$1"
+  [ -r "$file" ] || die "--archive-api-fixture-file is not readable: $file"
+  local values
+  if ! values="$(python3 - "$file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+
+def fail(message):
+    print(f"error: invalid archive API fixture {path}: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    fail(f"cannot read JSON: {exc}")
+if not isinstance(data, dict):
+    fail("top-level value must be an object")
+
+def parse_block(value):
+    if isinstance(value, bool):
+        fail("archiveApiBlock must be a non-negative integer")
+    if isinstance(value, int):
+        block = value
+    elif isinstance(value, str):
+        try:
+            block = int(value, 16) if value.lower().startswith("0x") else int(value, 10)
+        except ValueError:
+            fail("archiveApiBlock must be a non-negative integer")
+    else:
+        fail("archiveApiBlock must be a non-negative integer")
+    if block < 0:
+        fail("archiveApiBlock must be non-negative")
+    return block
+
+def is_hex(value, allow_empty):
+    return (
+        isinstance(value, str)
+        and value.startswith("0x")
+        and (allow_empty or value != "0x")
+        and all(ch in "0123456789abcdefABCDEF" for ch in value[2:])
+    )
+
+block = parse_block(data.get("archiveApiBlock"))
+address = data.get("archiveApiAddress")
+slot = data.get("archiveApiStorageSlot")
+balance = data.get("archiveApiExpectedBalance")
+code = data.get("archiveApiExpectedCode")
+storage = data.get("archiveApiExpectedStorage")
+if not is_hex(address, False):
+    fail("archiveApiAddress must be a non-empty 0x hex string")
+if not is_hex(slot, False):
+    fail("archiveApiStorageSlot must be a non-empty 0x hex string")
+if not is_hex(balance, False):
+    fail("archiveApiExpectedBalance must be a non-empty 0x hex quantity")
+if not is_hex(code, True):
+    fail("archiveApiExpectedCode must be a 0x hex string")
+if not is_hex(storage, False):
+    fail("archiveApiExpectedStorage must be a non-empty 0x hex quantity")
+print(block)
+print(address)
+print(slot)
+print(balance)
+print(code)
+print(storage)
+PY
+)"; then
+    die "failed to load --archive-api-fixture-file: $file"
+  fi
+  ARCHIVE_API_PROBE=1
+  ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '1p')"
+  ARCHIVE_API_ADDRESS="$(printf '%s\n' "$values" | sed -n '2p')"
+  ARCHIVE_API_STORAGE_SLOT="$(printf '%s\n' "$values" | sed -n '3p')"
+  ARCHIVE_API_EXPECTED_BALANCE="$(printf '%s\n' "$values" | sed -n '4p')"
+  ARCHIVE_API_EXPECTED_CODE="$(printf '%s\n' "$values" | sed -n '5p')"
+  ARCHIVE_API_EXPECTED_STORAGE="$(printf '%s\n' "$values" | sed -n '6p')"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -211,6 +294,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-expected-balance) ARCHIVE_API_EXPECTED_BALANCE="${2:?}"; shift 2 ;;
     --archive-api-expected-code) ARCHIVE_API_EXPECTED_CODE="${2:?}"; shift 2 ;;
     --archive-api-expected-storage) ARCHIVE_API_EXPECTED_STORAGE="${2:?}"; shift 2 ;;
+    --archive-api-fixture-file) load_archive_api_fixture_file "${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
