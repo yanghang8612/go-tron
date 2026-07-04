@@ -421,6 +421,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-event-log-index-evidence \
   --require-event-log-index-mode minimal \
   --require-snapshot-profile-mode minimal \
+  --require-event-log-index-point-profile \
   --require-retired-prune-mode minimal \
   --require-minimal-tail-prune \
   --require-size-reduction minimal:full:chaindataBytes=0.40 \
@@ -547,8 +548,11 @@ and `commitmentSnapshot`; `--max-point-sidecar-share-milli` and
 is too sidecar-heavy or consumes too much of the snapshot. The acceptance script
 can apply the same gate to JSONL rows with
 `--max-snapshot-point-sidecar-share-milli` and
-`--max-snapshot-point-snapshot-share-milli`. The benchmark JSONL row exposes the
-same values as
+`--max-snapshot-point-snapshot-share-milli`. Add
+`--require-event-log-index-point-profile` when the run is expected to contain
+event logs and must prove that `snapshotPointEventLogIndex*` is present and
+non-empty before using the sample for recsplit-style address/topic index
+decisions. The benchmark JSONL row exposes the same values as
 `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`.
 Keep the compact/merged index-format decision evidence-driven: only consider
 replacing sorted `chain-index`, `event-log-index`, accessor, or btree sidecars

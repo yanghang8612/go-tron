@@ -1540,6 +1540,40 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_sample_prometheus_missing_event_log_index_point_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_snapshot_point_event_log_index_bytes'
+                '{datadir="/tmp/nile",label="",mode="full",network="nile"} 200\n',
+                "",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                    "--require-event-log-index-point-profile",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_nile_sync_snapshot_point_event_log_index_bytes",
+                proc.stderr,
+            )
+
     def test_accepts_sample_prometheus_archive_method_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
