@@ -45,6 +45,8 @@ type stubBackend struct {
 	logs              []*jsonrpc.RPCLog
 	gasPrice          int64
 	peerCount         int
+	freezerStatus     *jsonrpc.FreezerStatus
+	freezerErr        error
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -203,6 +205,15 @@ func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 }
 func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
 func (s *stubBackend) PeerCount() int  { return s.peerCount }
+func (s *stubBackend) FreezerStatus() (*jsonrpc.FreezerStatus, error) {
+	if s.freezerErr != nil {
+		return nil, s.freezerErr
+	}
+	if s.freezerStatus != nil {
+		return s.freezerStatus, nil
+	}
+	return &jsonrpc.FreezerStatus{TableCounts: map[string]uint64{}}, nil
+}
 func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error) {
 	s.liveEstimateCalls++
 	return s.estimateGas, nil
@@ -1321,6 +1332,39 @@ func TestEthAccounts(t *testing.T) {
 	accounts, ok := resp["result"].([]interface{})
 	if !ok || len(accounts) != 0 {
 		t.Fatalf("eth_accounts should return [], got %v", resp["result"])
+	}
+}
+
+func TestGtronFreezerStatus(t *testing.T) {
+	min, max := uint64(3), uint64(9)
+	srv := newTestServer(t, &stubBackend{freezerStatus: &jsonrpc.FreezerStatus{
+		Available:   true,
+		HasFrozen:   true,
+		FrozenMin:   &min,
+		FrozenMax:   &max,
+		TableCounts: map[string]uint64{"bodies": 10},
+		Stage: &jsonrpc.FreezerStageStatus{
+			BlockNum:  9,
+			HashBound: true,
+			BlockHash: "0x1234",
+		},
+	}})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "gtron_freezerStatus", []interface{}{})
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("gtron_freezerStatus result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if result["available"] != true || result["hasFrozen"] != true {
+		t.Fatalf("gtron_freezerStatus flags = %+v, want available and frozen", result)
+	}
+	if result["frozenMin"] != float64(3) || result["frozenMax"] != float64(9) {
+		t.Fatalf("gtron_freezerStatus bounds = %+v, want 3..9", result)
+	}
+	stage, ok := result["stage"].(map[string]interface{})
+	if !ok || stage["blockNum"] != float64(9) || stage["blockHash"] != "0x1234" {
+		t.Fatalf("gtron_freezerStatus stage = %+v, want block 9 hash 0x1234", result["stage"])
 	}
 }
 

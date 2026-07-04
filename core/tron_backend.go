@@ -2441,6 +2441,102 @@ func (b *TronBackend) BuildUnfreezeBalanceV1Transaction(owner tcommon.Address, r
 
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
 
+func (b *TronBackend) FreezerStatus() (*jsonrpc.FreezerStatus, error) {
+	status := &jsonrpc.FreezerStatus{
+		TableCounts: make(map[string]uint64, 3),
+	}
+	if b == nil || b.chain == nil {
+		return status, nil
+	}
+
+	chainDB := b.chain.ChainDB()
+	if chainDB != nil {
+		for _, table := range []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable} {
+			count, err := chainDB.AncientCount(table)
+			if err != nil {
+				if errors.Is(err, rawdb.ErrNotInAncient) {
+					status.TableCounts[table] = 0
+					continue
+				}
+				return nil, fmt.Errorf("read freezer table %s count: %w", table, err)
+			}
+			status.TableCounts[table] = count
+		}
+
+		if statsReader, ok := chainDB.AncientReader.(rawdb.AncientStatsReader); ok {
+			stats, err := statsReader.Stats()
+			if err != nil {
+				if !errors.Is(err, rawdb.ErrNotInAncient) {
+					return nil, fmt.Errorf("read freezer stats: %w", err)
+				}
+			} else {
+				status.Available = true
+				status.TableSizesBytes = make(map[string]uint64, len(stats.Tables))
+				status.Physical = &jsonrpc.FreezerPhysicalStatus{
+					Datadir:          stats.Datadir,
+					ReadOnly:         stats.ReadOnly,
+					Head:             stats.Head,
+					Tail:             stats.Tail,
+					RepairApplied:    stats.Repair.Applied,
+					RepairTargetHead: stats.Repair.TargetHead,
+					RepairTargetTail: stats.Repair.TargetTail,
+					RepairRecordedAt: stats.Repair.RecordedAt,
+					Tables:           make([]jsonrpc.FreezerTableStatus, 0, len(stats.Tables)),
+				}
+				for _, table := range stats.Tables {
+					status.TableSizesBytes[table.Name] = table.VisibleSize
+					status.TableCounts[table.Name] = table.Head
+					status.Physical.Tables = append(status.Physical.Tables, jsonrpc.FreezerTableStatus{
+						Name:         table.Name,
+						Head:         table.Head,
+						PhysicalTail: table.PhysicalTail,
+						HiddenTail:   table.HiddenTail,
+						Prunable:     table.Prunable,
+						NoSnappy:     table.NoSnappy,
+						VisibleSize:  table.VisibleSize,
+						HiddenSize:   table.HiddenSize,
+					})
+				}
+				if stats.Head > stats.Tail {
+					min := stats.Tail
+					max := stats.Head - 1
+					status.HasFrozen = true
+					status.FrozenMin = &min
+					status.FrozenMax = &max
+				}
+			}
+		}
+	}
+
+	if !status.HasFrozen {
+		if count := status.TableCounts[rawdb.AncientBlocksTable]; count > 0 {
+			min := uint64(0)
+			max := count - 1
+			status.Available = true
+			status.HasFrozen = true
+			status.FrozenMin = &min
+			status.FrozenMax = &max
+		}
+	}
+
+	row, ok, err := rawdb.ReadStageProgressRow(b.chain.DB(), rawdb.StageChainFreezer)
+	if err != nil {
+		return nil, fmt.Errorf("read chain freezer stage: %w", err)
+	}
+	if ok {
+		status.Available = true
+		stage := &jsonrpc.FreezerStageStatus{
+			BlockNum:  row.BlockNum,
+			HashBound: row.HasBlockHash,
+		}
+		if row.HasBlockHash {
+			stage.BlockHash = "0x" + row.BlockHash.Hex()
+		}
+		status.Stage = stage
+	}
+	return status, nil
+}
+
 func (b *TronBackend) ChainID() int64 {
 	return b.chain.Config().ChainID
 }

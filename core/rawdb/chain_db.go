@@ -400,6 +400,10 @@ func (r freezerReader) HasAncient(kind string, number uint64) (bool, error) {
 	return ok, nil
 }
 
+func (r freezerReader) Stats() (freezer.Stats, error) {
+	return r.f.Stats()
+}
+
 // translateFreezerErr maps the freezer package's internal sentinels to
 // public `core/rawdb` errors. Unknown errors pass through unchanged.
 func translateFreezerErr(err error) error {

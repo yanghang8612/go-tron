@@ -37,6 +37,7 @@ func NewServer(backend Backend, port int) *Server {
 		{"net", NewNetAPI(backend)},
 		{"eth", NewEthAPI(backend, fm)},
 		{"debug", NewDebugAPI(backend)},
+		{"gtron", NewGtronAPI(backend)},
 	} {
 		// RegisterName only fails if a service exposes no eligible methods,
 		// which is a static programming error for these fixed structs.

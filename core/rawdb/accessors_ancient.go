@@ -54,6 +54,12 @@ type AncientReader interface {
 	HasAncient(kind string, number uint64) (bool, error)
 }
 
+// AncientStatsReader is an optional diagnostic extension for AncientReader
+// implementations backed by local freezer files.
+type AncientStatsReader interface {
+	Stats() (freezer.Stats, error)
+}
+
 // AncientWriter exposes the subset of operations needed to migrate hot data
 // into the freezer. Held only by the freezing goroutine (slice 3); the
 // hot-path read code uses `AncientReader` exclusively.
@@ -205,4 +211,15 @@ func (r fallbackAncientReader) HasAncient(kind string, number uint64) (bool, err
 		}
 	}
 	return false, nil
+}
+
+func (r fallbackAncientReader) Stats() (freezer.Stats, error) {
+	for _, reader := range r.readers {
+		statsReader, ok := reader.(AncientStatsReader)
+		if !ok {
+			continue
+		}
+		return statsReader.Stats()
+	}
+	return freezer.Stats{}, ErrNotInAncient
 }

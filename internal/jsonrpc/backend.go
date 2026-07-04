@@ -38,6 +38,50 @@ type BlockTraceResult struct {
 	Error  string      `json:"error,omitempty"`
 }
 
+// FreezerStatus summarizes immutable chain data stored outside the hot KV.
+type FreezerStatus struct {
+	Available       bool                   `json:"available"`
+	HasFrozen       bool                   `json:"hasFrozen"`
+	FrozenMin       *uint64                `json:"frozenMin,omitempty"`
+	FrozenMax       *uint64                `json:"frozenMax,omitempty"`
+	TableCounts     map[string]uint64      `json:"tableCounts"`
+	TableSizesBytes map[string]uint64      `json:"tableSizesBytes,omitempty"`
+	Stage           *FreezerStageStatus    `json:"stage,omitempty"`
+	Physical        *FreezerPhysicalStatus `json:"physical,omitempty"`
+}
+
+// FreezerStageStatus reports the persisted chain-freezer stage cursor.
+type FreezerStageStatus struct {
+	BlockNum  uint64 `json:"blockNum"`
+	HashBound bool   `json:"hashBound"`
+	BlockHash string `json:"blockHash,omitempty"`
+}
+
+// FreezerPhysicalStatus mirrors the local freezer file bounds when available.
+type FreezerPhysicalStatus struct {
+	Datadir          string               `json:"datadir,omitempty"`
+	ReadOnly         bool                 `json:"readOnly"`
+	Head             uint64               `json:"head"`
+	Tail             uint64               `json:"tail"`
+	Tables           []FreezerTableStatus `json:"tables,omitempty"`
+	RepairApplied    bool                 `json:"repairApplied"`
+	RepairTargetHead uint64               `json:"repairTargetHead,omitempty"`
+	RepairTargetTail uint64               `json:"repairTargetTail,omitempty"`
+	RepairRecordedAt string               `json:"repairRecordedAt,omitempty"`
+}
+
+// FreezerTableStatus is one freezer table's physical and visible bounds.
+type FreezerTableStatus struct {
+	Name         string `json:"name"`
+	Head         uint64 `json:"head"`
+	PhysicalTail uint64 `json:"physicalTail"`
+	HiddenTail   uint64 `json:"hiddenTail"`
+	Prunable     bool   `json:"prunable"`
+	NoSnappy     bool   `json:"noSnappy"`
+	VisibleSize  uint64 `json:"visibleSize"`
+	HiddenSize   uint64 `json:"hiddenSize"`
+}
+
 // Backend is the data-access interface for the JSON-RPC API.
 // Implemented by core.TronBackend.
 type Backend interface {
@@ -91,6 +135,7 @@ type Backend interface {
 	// Node metadata
 	GasPrice() int64 // energy fee in SUN per energy unit
 	PeerCount() int
+	FreezerStatus() (*FreezerStatus, error)
 
 	// Block subscriptions for the filter subsystem
 	SubscribeBlocks(ch chan<- *types.Block)

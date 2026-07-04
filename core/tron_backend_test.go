@@ -78,6 +78,27 @@ func (a staticAncientRow) Ancient(kind string, number uint64) ([]byte, error) {
 	return nil, rawdb.ErrNotInAncient
 }
 
+type staticAncientStatus struct {
+	rawdb.NoopAncient
+	counts map[string]uint64
+	stats  rawdbfreezer.Stats
+	err    error
+}
+
+func (a staticAncientStatus) AncientCount(kind string) (uint64, error) {
+	if count, ok := a.counts[kind]; ok {
+		return count, nil
+	}
+	return 0, nil
+}
+
+func (a staticAncientStatus) Stats() (rawdbfreezer.Stats, error) {
+	if a.err != nil {
+		return rawdbfreezer.Stats{}, a.err
+	}
+	return a.stats, nil
+}
+
 // TestTronBackend_ChainID verifies ChainID returns the configured chain ID.
 func TestTronBackend_ChainID(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
@@ -98,6 +119,66 @@ func TestTronBackend_BlockNumber(t *testing.T) {
 	b := &TronBackend{chain: bc}
 	num := b.BlockNumber()
 	_ = num // genesis block number is 0 or 1; just verify no panic
+}
+
+func TestTronBackend_FreezerStatusReportsCountsStageAndStats(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	stageHash := tcommon.Hash{0xab}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 11, stageHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash: %v", err)
+	}
+	ancient := staticAncientStatus{
+		counts: map[string]uint64{
+			rawdb.AncientBlocksTable:     12,
+			rawdb.AncientTxInfosTable:    12,
+			rawdb.AncientStateRootsTable: 12,
+		},
+		stats: rawdbfreezer.Stats{
+			Datadir: "/tmp/go-tron-freezer",
+			Head:    12,
+			Tail:    4,
+			Tables: []rawdbfreezer.TableStats{{
+				Name:         rawdb.AncientBlocksTable,
+				Head:         12,
+				PhysicalTail: 2,
+				HiddenTail:   4,
+				Prunable:     true,
+				VisibleSize:  1024,
+				HiddenSize:   128,
+			}},
+			Repair: rawdbfreezer.RepairStats{
+				Applied:    true,
+				TargetHead: 12,
+				TargetTail: 4,
+				RecordedAt: "2026-07-04T00:00:00Z",
+			},
+		},
+	}
+	bc := &BlockChain{
+		db:      db,
+		chaindb: rawdb.NewChainDB(db, ancient),
+		stateDB: state.NewDatabase(db),
+	}
+
+	got, err := (&TronBackend{chain: bc}).FreezerStatus()
+	if err != nil {
+		t.Fatalf("FreezerStatus: %v", err)
+	}
+	if !got.Available || !got.HasFrozen {
+		t.Fatalf("FreezerStatus flags = %+v, want available and frozen", got)
+	}
+	if got.FrozenMin == nil || *got.FrozenMin != 4 || got.FrozenMax == nil || *got.FrozenMax != 11 {
+		t.Fatalf("FreezerStatus bounds = %+v..%+v, want 4..11", got.FrozenMin, got.FrozenMax)
+	}
+	if got.TableCounts[rawdb.AncientBlocksTable] != 12 || got.TableSizesBytes[rawdb.AncientBlocksTable] != 1024 {
+		t.Fatalf("FreezerStatus table stats = counts %+v sizes %+v, want bodies count=12 size=1024", got.TableCounts, got.TableSizesBytes)
+	}
+	if got.Stage == nil || got.Stage.BlockNum != 11 || !got.Stage.HashBound || got.Stage.BlockHash != "0x"+stageHash.Hex() {
+		t.Fatalf("FreezerStatus stage = %+v, want block 11 hash %s", got.Stage, "0x"+stageHash.Hex())
+	}
+	if got.Physical == nil || !got.Physical.RepairApplied || got.Physical.Tail != 4 || got.Physical.Head != 12 {
+		t.Fatalf("FreezerStatus physical = %+v, want repair applied tail=4 head=12", got.Physical)
+	}
 }
 
 func TestTronBackend_BlockHashReadsSurfaceColdIndexError(t *testing.T) {
