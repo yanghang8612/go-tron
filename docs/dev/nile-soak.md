@@ -144,9 +144,9 @@ sample also writes a low-cardinality Prometheus text artifact and records
 exposes sync height, target/stage lag, full-staged-sync status/ready/coverage
 and bottleneck gauges, adjacent sync-stage lag gauges, cold-builder head lag
 gauges, stage-status source and collection-status gauges, interval
-stage-throughput gauges, throughput, hot/cold/index byte gauges, snapshot
-sidecar share, archive probe checks/block/failures, and sample/soak health
-status for external scrape jobs.
+stage-throughput gauges, throughput, hot/cold/index byte gauges, live
+`gtron_freezerStatus` gauges, snapshot sidecar share, archive probe
+checks/block/failures, and sample/soak health status for external scrape jobs.
 Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -285,11 +285,15 @@ scripts/dev/nile_sync_sample.sh \
   --http http://127.0.0.1:8090 \
   --jsonrpc http://127.0.0.1:8545 \
   --stage-status-rpc \
+  --freezer-status-rpc \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
 
 The online path reports persisted stage rows, canonical hash verification,
 structured stage issues, and the stage pipeline cursor from the running node.
+`--freezer-status-rpc` adds live `gtron_freezerStatus` evidence for freezer
+availability, frozen block bounds, table counts/sizes, chain-freezer stage
+cursor, and physical table head/tail/repair state without opening the live DB.
 For stricter file/manifest coverage checks, or older binaries without
 `gtron_stageStatus`, pass a captured `gtron db stage-status --json` output file.
 The sampler still accepts the legacy text output for older binaries.
@@ -447,6 +451,7 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-offline-db-check \
   --require-prune-mode-semantics \
   --require-stage-status-source rpc \
+  --require-freezer-status-rpc \
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
@@ -530,6 +535,11 @@ Rows that also carry `tailPrunedThroughBlock` must prove the event-log-index
 range covers that boundary. Add `--require-event-log-index-non-empty` for
 production archive/log-query runs where at least one address posting is
 expected.
+Use `--require-freezer-status-rpc` when rows were collected with
+`--freezer-status-rpc`. It requires `freezerRpcStatus=ok`, an available freezer
+backend, non-negative table counts, and a non-negative chain-freezer stage
+block. `--min-chain-freezer-blocks` accepts either debug metrics or live
+`freezerRpcBodiesCount` as block evidence.
 Use `--require-sample-prometheus-artifact` when rows were collected with
 `--prometheus-output`. The checker requires `samplePrometheusStatus=ok`, reads
 the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
@@ -544,6 +554,7 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_status_source`,
 `gtron_nile_sync_stage_status_collection_status`,
+`gtron_nile_sync_freezer_rpc_*`,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
 `gtron_nile_sync_log_state_prefetch_*`,
 `gtron_nile_sync_log_phase_cursor_*`,

@@ -21,6 +21,7 @@ LABEL="nile-sync"
 START_UNIX=0
 STAGE_STATUS_FILE=""
 STAGE_STATUS_RPC=0
+FREEZER_STATUS_RPC=0
 SYNC_LOG_FILE=""
 PID_FILE=""
 DEBUG_METRICS_URL=""
@@ -54,6 +55,7 @@ Options:
   --start-unix SECONDS       Sync start unix timestamp; emits elapsed/blocksPerSecond
   --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
   --stage-status-rpc         Query gtron_stageStatus through --jsonrpc and emit stage* fields
+  --freezer-status-rpc       Query gtron_freezerStatus through --jsonrpc and emit freezerRpc* fields
   --sync-log-file FILE       Parse latest `Imported chain segment` log fields
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --debug-metrics-url URL    Fetch optional /debug/metrics JSON into the sample row
@@ -105,6 +107,7 @@ while [ "$#" -gt 0 ]; do
     --start-unix) START_UNIX="${2:?}"; shift 2 ;;
     --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
     --stage-status-rpc) STAGE_STATUS_RPC=1; shift ;;
+    --freezer-status-rpc) FREEZER_STATUS_RPC=1; shift ;;
     --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
@@ -280,7 +283,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$PROMETHEUS_OUTPUT" \
   "$SNAPSHOT_PROFILE_SCRIPT" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
-  "$STAGE_STATUS_FILE" "$STAGE_STATUS_RPC" "$SYNC_LOG_FILE" "$PID_FILE" \
+  "$STAGE_STATUS_FILE" "$STAGE_STATUS_RPC" "$FREEZER_STATUS_RPC" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
   "$event_log_index_stats_out" "$event_log_index_stats_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
@@ -315,6 +318,7 @@ from pathlib import Path
     storage_alerts_path,
     stage_status_path,
     stage_status_rpc,
+    freezer_status_rpc,
     sync_log_path,
     pid_file,
     debug_metrics_url,
@@ -1212,6 +1216,113 @@ def parse_stage_status(path, rpc_enabled, endpoint):
             row["stageStagedBodyIssueDetails"].append(detail)
 
     return finalize_stage_status(row)
+
+def freezer_table_key(name):
+    normalized = str(name).replace("-", "_").lower()
+    if normalized == "bodies":
+        return "Bodies"
+    if normalized in {"tx_infos", "txinfos"}:
+        return "TxInfos"
+    if normalized in {"state_roots", "stateroots"}:
+        return "StateRoots"
+    return "".join(part[:1].upper() + part[1:] for part in normalized.split("_") if part)
+
+def parse_freezer_status(rpc_enabled, endpoint):
+    row = {
+        "freezerRpcStatus": "skipped",
+        "freezerRpcEndpoint": endpoint,
+        "freezerRpcAvailable": False,
+        "freezerRpcHasFrozen": False,
+        "freezerRpcFrozenMin": -1,
+        "freezerRpcFrozenMax": -1,
+        "freezerRpcTableCounts": {},
+        "freezerRpcTableSizesBytes": {},
+        "freezerRpcBodiesCount": -1,
+        "freezerRpcTxInfosCount": -1,
+        "freezerRpcStateRootsCount": -1,
+        "freezerRpcBodiesSizeBytes": -1,
+        "freezerRpcTxInfosSizeBytes": -1,
+        "freezerRpcStateRootsSizeBytes": -1,
+        "freezerRpcStageBlock": -1,
+        "freezerRpcStageHashBound": False,
+        "freezerRpcStageHash": "",
+        "freezerRpcPhysicalHead": -1,
+        "freezerRpcPhysicalTail": -1,
+        "freezerRpcPhysicalReadOnly": False,
+        "freezerRpcPhysicalRepairApplied": False,
+        "freezerRpcPhysicalRepairTargetHead": -1,
+        "freezerRpcPhysicalRepairTargetTail": -1,
+        "freezerRpcPhysicalTableCount": 0,
+        "freezerRpcPhysicalVisibleSizeBytes": 0,
+        "freezerRpcPhysicalHiddenSizeBytes": 0,
+        "freezerRpcPhysicalTables": [],
+    }
+    if str(rpc_enabled) != "1":
+        return row
+    row["freezerRpcStatus"] = "rpc-error"
+    result, ok = jsonrpc_call(endpoint, "gtron_freezerStatus", [], 1)
+    if not ok:
+        return row
+    if not isinstance(result, dict):
+        row["freezerRpcStatus"] = "rpc-invalid"
+        return row
+    row["freezerRpcStatus"] = "ok"
+    row["freezerRpcAvailable"] = bool(result.get("available", False))
+    row["freezerRpcHasFrozen"] = bool(result.get("hasFrozen", False))
+    row["freezerRpcFrozenMin"] = stage_status_int(result.get("frozenMin", -1))
+    row["freezerRpcFrozenMax"] = stage_status_int(result.get("frozenMax", -1))
+
+    table_counts = result.get("tableCounts", {})
+    if isinstance(table_counts, dict):
+        for name, value in table_counts.items():
+            count = stage_status_int(value)
+            row["freezerRpcTableCounts"][str(name)] = count
+            key = freezer_table_key(name)
+            if key:
+                row[f"freezerRpc{key}Count"] = count
+
+    table_sizes = result.get("tableSizesBytes", {})
+    if isinstance(table_sizes, dict):
+        for name, value in table_sizes.items():
+            size = stage_status_int(value)
+            row["freezerRpcTableSizesBytes"][str(name)] = size
+            key = freezer_table_key(name)
+            if key:
+                row[f"freezerRpc{key}SizeBytes"] = size
+
+    stage = result.get("stage", {})
+    if isinstance(stage, dict):
+        row["freezerRpcStageBlock"] = stage_status_int(stage.get("blockNum", -1))
+        row["freezerRpcStageHashBound"] = bool(stage.get("hashBound", False))
+        row["freezerRpcStageHash"] = str(stage.get("blockHash", ""))
+
+    physical = result.get("physical", {})
+    if isinstance(physical, dict):
+        row["freezerRpcPhysicalHead"] = stage_status_int(physical.get("head", -1))
+        row["freezerRpcPhysicalTail"] = stage_status_int(physical.get("tail", -1))
+        row["freezerRpcPhysicalReadOnly"] = bool(physical.get("readOnly", False))
+        row["freezerRpcPhysicalRepairApplied"] = bool(physical.get("repairApplied", False))
+        row["freezerRpcPhysicalRepairTargetHead"] = stage_status_int(physical.get("repairTargetHead", -1))
+        row["freezerRpcPhysicalRepairTargetTail"] = stage_status_int(physical.get("repairTargetTail", -1))
+        for item in physical.get("tables", []) or []:
+            if not isinstance(item, dict):
+                continue
+            table = {
+                "name": str(item.get("name", "")),
+                "head": stage_status_int(item.get("head", -1)),
+                "physicalTail": stage_status_int(item.get("physicalTail", -1)),
+                "hiddenTail": stage_status_int(item.get("hiddenTail", -1)),
+                "visibleSize": stage_status_int(item.get("visibleSize", 0), 0),
+                "hiddenSize": stage_status_int(item.get("hiddenSize", 0), 0),
+                "prunable": bool(item.get("prunable", False)),
+                "noSnappy": bool(item.get("noSnappy", False)),
+            }
+            row["freezerRpcPhysicalTables"].append(table)
+            row["freezerRpcPhysicalVisibleSizeBytes"] += table["visibleSize"]
+            row["freezerRpcPhysicalHiddenSizeBytes"] += table["hiddenSize"]
+        row["freezerRpcPhysicalTableCount"] = len(row["freezerRpcPhysicalTables"])
+
+    return row
 
 def parse_log_value(value):
     text = str(value).strip().strip('"')
@@ -2738,6 +2849,24 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_snapshot_point_commitment_snapshot_snapshot_share_milli", "snapshotPointCommitmentSnapshotSnapshotShareMilli", "Snapshot-wide share for the commitment-snapshot point lookup candidate in milli-units."),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune", "Whether signed cold-prune evidence is present."),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock", "Highest block covered by cold freezer segments."),
+    ("gtron_nile_sync_freezer_rpc_available", "freezerRpcAvailable", "Whether gtron_freezerStatus reports an available freezer backend."),
+    ("gtron_nile_sync_freezer_rpc_has_frozen", "freezerRpcHasFrozen", "Whether gtron_freezerStatus reports frozen ancient data."),
+    ("gtron_nile_sync_freezer_rpc_frozen_min", "freezerRpcFrozenMin", "Lowest frozen block reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_frozen_max", "freezerRpcFrozenMax", "Highest frozen block reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_bodies_count", "freezerRpcBodiesCount", "Ancient freezer bodies table count reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_tx_infos_count", "freezerRpcTxInfosCount", "Ancient freezer tx_infos table count reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_state_roots_count", "freezerRpcStateRootsCount", "Ancient freezer state_roots table count reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_bodies_size_bytes", "freezerRpcBodiesSizeBytes", "Ancient freezer bodies table visible bytes reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_tx_infos_size_bytes", "freezerRpcTxInfosSizeBytes", "Ancient freezer tx_infos table visible bytes reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_state_roots_size_bytes", "freezerRpcStateRootsSizeBytes", "Ancient freezer state_roots table visible bytes reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_stage_block", "freezerRpcStageBlock", "ChainFreezer stage block reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_stage_hash_bound", "freezerRpcStageHashBound", "Whether gtron_freezerStatus reports a hash-bound ChainFreezer stage."),
+    ("gtron_nile_sync_freezer_rpc_physical_head", "freezerRpcPhysicalHead", "Physical freezer head reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_physical_tail", "freezerRpcPhysicalTail", "Physical freezer tail reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_physical_table_count", "freezerRpcPhysicalTableCount", "Physical freezer table count reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_physical_visible_size_bytes", "freezerRpcPhysicalVisibleSizeBytes", "Total visible freezer table bytes reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_physical_hidden_size_bytes", "freezerRpcPhysicalHiddenSizeBytes", "Total hidden/pruned freezer table bytes reported by gtron_freezerStatus."),
+    ("gtron_nile_sync_freezer_rpc_physical_repair_applied", "freezerRpcPhysicalRepairApplied", "Whether gtron_freezerStatus reports a freezer repair marker."),
     ("gtron_nile_sync_chain_lookup_prune_to_block", "chainLookupPruneToBlock", "Highest block whose hot chain lookup rows were pruned."),
     ("gtron_nile_sync_tail_pruned_through_block", "tailPrunedThroughBlock", "Highest active ancient block physically tail-pruned."),
     ("gtron_nile_sync_tail_pruned_files", "tailPrunedFiles", "Active ancient tail files physically pruned."),
@@ -3021,6 +3150,7 @@ archive_api = archive_api_probe_values(
     archive_api_trace_transaction,
     archive_api_trace_block,
 )
+freezer_status = parse_freezer_status(freezer_status_rpc, jsonrpc)
 now = int(time.time())
 start = int(start_unix)
 elapsed = now - start if start > 0 and now >= start else -1
@@ -3666,6 +3796,7 @@ row.update(sync_log)
 row.update(process)
 row.update(debug_metrics)
 row.update(archive_api)
+row.update(freezer_status)
 row.update(snapshot_profile)
 row.update(event_log_index_stats(event_log_index_stats_path, event_log_index_stats_status))
 if offline_status == "error":

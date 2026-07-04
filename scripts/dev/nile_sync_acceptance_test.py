@@ -568,6 +568,25 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
             "tailPrunedFiles": 0,
             "balanceTracePruneToBlock": -1,
             "sectionBloomPruneToSection": -1,
+            "freezerRpcStatus": "ok",
+            "freezerRpcAvailable": True,
+            "freezerRpcHasFrozen": True,
+            "freezerRpcFrozenMin": 5,
+            "freezerRpcFrozenMax": 1000,
+            "freezerRpcBodiesCount": 1001,
+            "freezerRpcTxInfosCount": 1001,
+            "freezerRpcStateRootsCount": 1001,
+            "freezerRpcBodiesSizeBytes": 4096,
+            "freezerRpcTxInfosSizeBytes": 2048,
+            "freezerRpcStateRootsSizeBytes": 1024,
+            "freezerRpcStageBlock": 1000,
+            "freezerRpcStageHashBound": True,
+            "freezerRpcPhysicalHead": 1001,
+            "freezerRpcPhysicalTail": 5,
+            "freezerRpcPhysicalTableCount": 3,
+            "freezerRpcPhysicalVisibleSizeBytes": 7168,
+            "freezerRpcPhysicalHiddenSizeBytes": 0,
+            "freezerRpcPhysicalRepairApplied": False,
             "archiveApiFailures": 0,
             "archiveApiDepthBlocks": 1,
             "stageStalled": False,
@@ -702,6 +721,42 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_signed_cold_prune{{{labels}}} {row["signedColdPrune"]}',
                 "# TYPE gtron_nile_sync_cold_freezer_to_block gauge",
                 f'gtron_nile_sync_cold_freezer_to_block{{{labels}}} {row["coldFreezerToBlock"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_available gauge",
+                f'gtron_nile_sync_freezer_rpc_available{{{labels}}} {1 if row["freezerRpcAvailable"] else 0}',
+                "# TYPE gtron_nile_sync_freezer_rpc_has_frozen gauge",
+                f'gtron_nile_sync_freezer_rpc_has_frozen{{{labels}}} {1 if row["freezerRpcHasFrozen"] else 0}',
+                "# TYPE gtron_nile_sync_freezer_rpc_frozen_min gauge",
+                f'gtron_nile_sync_freezer_rpc_frozen_min{{{labels}}} {row["freezerRpcFrozenMin"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_frozen_max gauge",
+                f'gtron_nile_sync_freezer_rpc_frozen_max{{{labels}}} {row["freezerRpcFrozenMax"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_bodies_count gauge",
+                f'gtron_nile_sync_freezer_rpc_bodies_count{{{labels}}} {row["freezerRpcBodiesCount"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_tx_infos_count gauge",
+                f'gtron_nile_sync_freezer_rpc_tx_infos_count{{{labels}}} {row["freezerRpcTxInfosCount"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_state_roots_count gauge",
+                f'gtron_nile_sync_freezer_rpc_state_roots_count{{{labels}}} {row["freezerRpcStateRootsCount"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_bodies_size_bytes gauge",
+                f'gtron_nile_sync_freezer_rpc_bodies_size_bytes{{{labels}}} {row["freezerRpcBodiesSizeBytes"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_tx_infos_size_bytes gauge",
+                f'gtron_nile_sync_freezer_rpc_tx_infos_size_bytes{{{labels}}} {row["freezerRpcTxInfosSizeBytes"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_state_roots_size_bytes gauge",
+                f'gtron_nile_sync_freezer_rpc_state_roots_size_bytes{{{labels}}} {row["freezerRpcStateRootsSizeBytes"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_stage_block gauge",
+                f'gtron_nile_sync_freezer_rpc_stage_block{{{labels}}} {row["freezerRpcStageBlock"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_stage_hash_bound gauge",
+                f'gtron_nile_sync_freezer_rpc_stage_hash_bound{{{labels}}} {1 if row["freezerRpcStageHashBound"] else 0}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_head gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_head{{{labels}}} {row["freezerRpcPhysicalHead"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_tail gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_tail{{{labels}}} {row["freezerRpcPhysicalTail"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_table_count gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_table_count{{{labels}}} {row["freezerRpcPhysicalTableCount"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_visible_size_bytes gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_visible_size_bytes{{{labels}}} {row["freezerRpcPhysicalVisibleSizeBytes"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_hidden_size_bytes gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_hidden_size_bytes{{{labels}}} {row["freezerRpcPhysicalHiddenSizeBytes"]}',
+                "# TYPE gtron_nile_sync_freezer_rpc_physical_repair_applied gauge",
+                f'gtron_nile_sync_freezer_rpc_physical_repair_applied{{{labels}}} {1 if row["freezerRpcPhysicalRepairApplied"] else 0}',
                 "# TYPE gtron_nile_sync_chain_lookup_prune_to_block gauge",
                 f'gtron_nile_sync_chain_lookup_prune_to_block{{{labels}}} {row["chainLookupPruneToBlock"]}',
                 "# TYPE gtron_nile_sync_tail_pruned_through_block gauge",
@@ -899,6 +954,42 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             )
             self.assertIn(
                 "missing gtron_nile_sync_stage_status_collection_status{status='ok'}",
+                proc.stderr,
+            )
+
+    def test_rejects_sample_prometheus_missing_freezer_rpc_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_freezer_rpc_bodies_count{datadir="/tmp/nile",label="",mode="full",network="nile"} 1001\n',
+                "",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "samplePrometheus artifact",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_nile_sync_freezer_rpc_bodies_count",
                 proc.stderr,
             )
 
@@ -2609,6 +2700,107 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_accepts_chain_freezer_blocks_from_freezer_rpc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "freezerRpcStatus": "ok",
+                    "freezerRpcAvailable": True,
+                    "freezerRpcBodiesCount": 12000,
+                    "freezerRpcTxInfosCount": 12000,
+                    "freezerRpcStateRootsCount": 12000,
+                    "freezerRpcStageBlock": 11999,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--min-chain-freezer-blocks",
+                    "10000",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_requires_freezer_status_rpc_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "freezerRpcStatus": "ok",
+                    "freezerRpcAvailable": True,
+                    "freezerRpcHasFrozen": True,
+                    "freezerRpcFrozenMin": 5,
+                    "freezerRpcFrozenMax": 1000,
+                    "freezerRpcBodiesCount": 1001,
+                    "freezerRpcTxInfosCount": 1001,
+                    "freezerRpcStateRootsCount": 1001,
+                    "freezerRpcStageBlock": 1000,
+                    "freezerRpcPhysicalHead": 1001,
+                    "freezerRpcPhysicalTail": 5,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-freezer-status-rpc",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+            row["freezerRpcStatus"] = "rpc-error"
+            row["freezerRpcAvailable"] = False
+            row["freezerRpcBodiesCount"] = -1
+            write_result(result, [row])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "full",
+                    "--require-freezer-status-rpc",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("freezerRpcStatus='rpc-error', want 'ok'", proc.stderr)
+            self.assertIn("freezerRpcAvailable=False, want true", proc.stderr)
+            self.assertIn("freezerRpcBodiesCount=-1, want non-negative integer", proc.stderr)
 
     def test_rejects_chain_freezer_metric_below_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:

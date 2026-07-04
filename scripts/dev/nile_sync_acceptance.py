@@ -362,6 +362,24 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune"),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock"),
+    ("gtron_nile_sync_freezer_rpc_available", "freezerRpcAvailable"),
+    ("gtron_nile_sync_freezer_rpc_has_frozen", "freezerRpcHasFrozen"),
+    ("gtron_nile_sync_freezer_rpc_frozen_min", "freezerRpcFrozenMin"),
+    ("gtron_nile_sync_freezer_rpc_frozen_max", "freezerRpcFrozenMax"),
+    ("gtron_nile_sync_freezer_rpc_bodies_count", "freezerRpcBodiesCount"),
+    ("gtron_nile_sync_freezer_rpc_tx_infos_count", "freezerRpcTxInfosCount"),
+    ("gtron_nile_sync_freezer_rpc_state_roots_count", "freezerRpcStateRootsCount"),
+    ("gtron_nile_sync_freezer_rpc_bodies_size_bytes", "freezerRpcBodiesSizeBytes"),
+    ("gtron_nile_sync_freezer_rpc_tx_infos_size_bytes", "freezerRpcTxInfosSizeBytes"),
+    ("gtron_nile_sync_freezer_rpc_state_roots_size_bytes", "freezerRpcStateRootsSizeBytes"),
+    ("gtron_nile_sync_freezer_rpc_stage_block", "freezerRpcStageBlock"),
+    ("gtron_nile_sync_freezer_rpc_stage_hash_bound", "freezerRpcStageHashBound"),
+    ("gtron_nile_sync_freezer_rpc_physical_head", "freezerRpcPhysicalHead"),
+    ("gtron_nile_sync_freezer_rpc_physical_tail", "freezerRpcPhysicalTail"),
+    ("gtron_nile_sync_freezer_rpc_physical_table_count", "freezerRpcPhysicalTableCount"),
+    ("gtron_nile_sync_freezer_rpc_physical_visible_size_bytes", "freezerRpcPhysicalVisibleSizeBytes"),
+    ("gtron_nile_sync_freezer_rpc_physical_hidden_size_bytes", "freezerRpcPhysicalHiddenSizeBytes"),
+    ("gtron_nile_sync_freezer_rpc_physical_repair_applied", "freezerRpcPhysicalRepairApplied"),
     ("gtron_nile_sync_chain_lookup_prune_to_block", "chainLookupPruneToBlock"),
     ("gtron_nile_sync_tail_pruned_through_block", "tailPrunedThroughBlock"),
     ("gtron_nile_sync_tail_pruned_files", "tailPrunedFiles"),
@@ -373,7 +391,24 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_archive_api_failures", "archiveApiFailures"),
 )
 
-SAMPLE_PROMETHEUS_SIGNED_INTEGER_FIELDS = set(PROMETHEUS_PRUNE_BOUNDARY_FIELDS)
+FREEZER_RPC_SIGNED_INTEGER_FIELDS = {
+    "freezerRpcFrozenMin",
+    "freezerRpcFrozenMax",
+    "freezerRpcBodiesCount",
+    "freezerRpcTxInfosCount",
+    "freezerRpcStateRootsCount",
+    "freezerRpcBodiesSizeBytes",
+    "freezerRpcTxInfosSizeBytes",
+    "freezerRpcStateRootsSizeBytes",
+    "freezerRpcStageBlock",
+    "freezerRpcPhysicalHead",
+    "freezerRpcPhysicalTail",
+    "freezerRpcPhysicalTableCount",
+    "freezerRpcPhysicalVisibleSizeBytes",
+    "freezerRpcPhysicalHiddenSizeBytes",
+}
+
+SAMPLE_PROMETHEUS_SIGNED_INTEGER_FIELDS = set(PROMETHEUS_PRUNE_BOUNDARY_FIELDS) | FREEZER_RPC_SIGNED_INTEGER_FIELDS
 
 SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "height",
@@ -1071,24 +1106,76 @@ def check_max_cold_stage_lag_blocks(row, maximum):
             issues.append(f"{field}={value:g} failed <= max cold stage lag {maximum:g}")
     return issues
 
+def check_freezer_status_rpc_evidence(row):
+    issues = []
+    status = row.get("freezerRpcStatus")
+    if status != "ok":
+        issues.append(f"freezerRpcStatus={status!r}, want 'ok'")
+    if not as_bool(row, "freezerRpcAvailable"):
+        issues.append(f"freezerRpcAvailable={row.get('freezerRpcAvailable')!r}, want true")
+    for field in (
+        "freezerRpcBodiesCount",
+        "freezerRpcTxInfosCount",
+        "freezerRpcStateRootsCount",
+        "freezerRpcStageBlock",
+    ):
+        value = as_non_negative_int(row, field)
+        if value is None:
+            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
+    if as_bool(row, "freezerRpcHasFrozen"):
+        frozen_min = as_non_negative_int(row, "freezerRpcFrozenMin")
+        frozen_max = as_non_negative_int(row, "freezerRpcFrozenMax")
+        if frozen_min is None:
+            issues.append(f"freezerRpcFrozenMin={row.get('freezerRpcFrozenMin')!r}, want non-negative integer")
+        if frozen_max is None:
+            issues.append(f"freezerRpcFrozenMax={row.get('freezerRpcFrozenMax')!r}, want non-negative integer")
+        if frozen_min is not None and frozen_max is not None and frozen_min > frozen_max:
+            issues.append(
+                f"freezerRpcFrozenMin={frozen_min:g} must be <= freezerRpcFrozenMax={frozen_max:g}"
+            )
+    physical_head = as_int(row, "freezerRpcPhysicalHead")
+    physical_tail = as_int(row, "freezerRpcPhysicalTail")
+    if physical_head is not None and physical_tail is not None and physical_head >= 0 and physical_tail >= 0:
+        if physical_tail > physical_head:
+            issues.append(
+                f"freezerRpcPhysicalTail={physical_tail:g} must be <= freezerRpcPhysicalHead={physical_head:g}"
+            )
+    return issues
+
 
 def check_min_chain_freezer_metrics(row, min_blocks, min_passes):
     if min_blocks is None and min_passes is None:
         return []
     issues = []
     status = row.get("debugMetricsStatus")
-    if status != "ok":
-        issues.append(
-            f"debugMetricsStatus={status!r}, want 'ok' for chain freezer metric evidence"
-        )
-    for minimum, (field, label) in zip((min_blocks, min_passes), CHAIN_FREEZER_MINIMUM_FIELDS):
-        if minimum is None:
-            continue
-        value = as_number(row, field)
+    if min_blocks is not None:
+        block_evidence = []
+        debug_value = as_number(row, "debugMetricChainFreezerBlocks")
+        if status == "ok" and debug_value is not None:
+            block_evidence.append(("debugMetricChainFreezerBlocks", debug_value))
+        freezer_value = as_number(row, "freezerRpcBodiesCount")
+        if row.get("freezerRpcStatus") == "ok" and freezer_value is not None:
+            block_evidence.append(("freezerRpcBodiesCount", freezer_value))
+        if not block_evidence:
+            issues.append(
+                "chain freezer block evidence missing: need debugMetricsStatus='ok' "
+                "with debugMetricChainFreezerBlocks or freezerRpcStatus='ok' with freezerRpcBodiesCount"
+            )
+        elif all(value < min_blocks for _, value in block_evidence):
+            evidence = ", ".join(f"{field}={value:g}" for field, value in block_evidence)
+            issues.append(
+                f"{evidence} failed >= min chain freezer blocks {min_blocks:g}"
+            )
+    if min_passes is not None:
+        if status != "ok":
+            issues.append(
+                f"debugMetricsStatus={status!r}, want 'ok' for chain freezer metric evidence"
+            )
+        value = as_number(row, "debugMetricChainFreezerPasses")
         if value is None:
-            issues.append(f"{field}={value}, want >= {minimum:g} ({label})")
-        elif value < minimum:
-            issues.append(f"{field}={value:g} failed >= {label} {minimum:g}")
+            issues.append(f"debugMetricChainFreezerPasses={value}, want >= {min_passes:g} (min chain freezer passes)")
+        elif value < min_passes:
+            issues.append(f"debugMetricChainFreezerPasses={value:g} failed >= min chain freezer passes {min_passes:g}")
     return issues
 
 
@@ -3576,6 +3663,9 @@ def check_row(row, args):
         if row.get("offlineDbCheckPrometheusStatus") == "ok":
             issues.extend(check_prometheus_artifact(args.result, row))
 
+    if args.require_freezer_status_rpc:
+        issues.extend(check_freezer_status_rpc_evidence(row))
+
     if args.min_height is not None:
         height = as_non_negative_int(row, "height")
         if height is None:
@@ -3674,6 +3764,11 @@ def build_parser():
         "--require-offline-db-check",
         action="store_true",
         help="require offline db check fields to report ok",
+    )
+    parser.add_argument(
+        "--require-freezer-status-rpc",
+        action="store_true",
+        help="require live gtron_freezerStatus evidence from the sampler",
     )
     parser.add_argument(
         "--require-stage-stall-evidence",

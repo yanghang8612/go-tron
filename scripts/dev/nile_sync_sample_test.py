@@ -95,7 +95,59 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         tx_hash = "0x" + "12" * 32
         wrong_tx_hash = "0x" + "34" * 32
         block_hash = "0x" + "ab" * 32
-        if method == "gtron_stageStatus":
+        if method == "gtron_freezerStatus":
+            result = {
+                "available": True,
+                "hasFrozen": True,
+                "frozenMin": 5,
+                "frozenMax": 99,
+                "tableCounts": {
+                    "bodies": 100,
+                    "tx_infos": 95,
+                    "state_roots": 90,
+                },
+                "tableSizesBytes": {
+                    "bodies": 4096,
+                    "tx_infos": 2048,
+                    "state_roots": 1024,
+                },
+                "stage": {
+                    "blockNum": 99,
+                    "hashBound": True,
+                    "blockHash": "0x" + "66" * 32,
+                },
+                "physical": {
+                    "readOnly": False,
+                    "head": 100,
+                    "tail": 5,
+                    "repairApplied": True,
+                    "repairTargetHead": 100,
+                    "repairTargetTail": 5,
+                    "tables": [
+                        {
+                            "name": "bodies",
+                            "head": 100,
+                            "physicalTail": 5,
+                            "hiddenTail": 5,
+                            "visibleSize": 4096,
+                            "hiddenSize": 128,
+                            "prunable": True,
+                            "noSnappy": False,
+                        },
+                        {
+                            "name": "tx_infos",
+                            "head": 95,
+                            "physicalTail": 5,
+                            "hiddenTail": 5,
+                            "visibleSize": 2048,
+                            "hiddenSize": 64,
+                            "prunable": True,
+                            "noSnappy": False,
+                        },
+                    ],
+                },
+            }
+        elif method == "gtron_stageStatus":
             result = {
                 "status": "critical",
                 "complete": False,
@@ -2028,6 +2080,70 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageOrderIssueRows"], 1)
             self.assertEqual(row["stageStorageOrderIssueRows"], 1)
             self.assertIn("stage-order-issue", row["soakHealthIssues"])
+
+    def test_sample_fetches_freezer_status_from_jsonrpc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--freezer-status-rpc",
+                    "--prometheus-output",
+                    str(prometheus),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["freezerRpcStatus"], "ok")
+            self.assertEqual(row["freezerRpcEndpoint"], endpoint)
+            self.assertTrue(row["freezerRpcAvailable"])
+            self.assertTrue(row["freezerRpcHasFrozen"])
+            self.assertEqual(row["freezerRpcFrozenMin"], 5)
+            self.assertEqual(row["freezerRpcFrozenMax"], 99)
+            self.assertEqual(row["freezerRpcBodiesCount"], 100)
+            self.assertEqual(row["freezerRpcTxInfosCount"], 95)
+            self.assertEqual(row["freezerRpcStateRootsCount"], 90)
+            self.assertEqual(row["freezerRpcBodiesSizeBytes"], 4096)
+            self.assertEqual(row["freezerRpcTxInfosSizeBytes"], 2048)
+            self.assertEqual(row["freezerRpcStateRootsSizeBytes"], 1024)
+            self.assertEqual(row["freezerRpcStageBlock"], 99)
+            self.assertTrue(row["freezerRpcStageHashBound"])
+            self.assertEqual(row["freezerRpcPhysicalHead"], 100)
+            self.assertEqual(row["freezerRpcPhysicalTail"], 5)
+            self.assertTrue(row["freezerRpcPhysicalRepairApplied"])
+            self.assertEqual(row["freezerRpcPhysicalTableCount"], 2)
+            self.assertEqual(row["freezerRpcPhysicalVisibleSizeBytes"], 6144)
+            self.assertEqual(row["freezerRpcPhysicalHiddenSizeBytes"], 192)
+            self.assertEqual(row["freezerRpcPhysicalTables"][0]["name"], "bodies")
+
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="nile-sync",mode="unknown",network="nile"'
+            self.assertIn(f"gtron_nile_sync_freezer_rpc_available{{{labels}}} 1", metrics)
+            self.assertIn(f"gtron_nile_sync_freezer_rpc_has_frozen{{{labels}}} 1", metrics)
+            self.assertIn(f"gtron_nile_sync_freezer_rpc_bodies_count{{{labels}}} 100", metrics)
+            self.assertIn(f"gtron_nile_sync_freezer_rpc_stage_block{{{labels}}} 99", metrics)
+            self.assertIn(f"gtron_nile_sync_freezer_rpc_physical_visible_size_bytes{{{labels}}} 6144", metrics)
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:
