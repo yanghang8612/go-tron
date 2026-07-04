@@ -1960,11 +1960,15 @@ Status:
   `At` backend calls, while block/transaction boundary gates remain explicit
   audited exceptions. The matching wrapper audit also requires each
   `/walletsolidity` and `/walletpbft` wrapper to forward exactly once to its
-  expected shared handler with the solid or PBFT bound.
+  expected shared handler with the solid or PBFT bound. The audit also rejects
+  local aliases of the HTTP backend receiver and function-value aliases of
+  backend methods, so selector-based coverage cannot be bypassed by indirect
+  calls.
 - WalletSolidity gRPC now has the same source-audit boundary: every direct
   `SolidityServer` backend call is enumerated, state/query methods must use the
   solid-bound `At` backend APIs with `s.solidNum()`, and block/transaction
-  lookups stay listed as explicit boundary-gate exceptions.
+  lookups stay listed as explicit boundary-gate exceptions. The gRPC audit also
+  rejects local aliases of `s.backend` and backend method function values.
 - JSON-RPC source-audit coverage now checks both the reflection `EthAPI` and the
   legacy dispatch handlers: state/execution methods with historical block tags
   must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
