@@ -448,6 +448,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
 
     selected_block_hash = ""
     selected_tx_hash = ""
+    selected_receipt_log_signatures = []
 
     def trace_result_ok(result):
         return (
@@ -470,6 +471,73 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 continue
             if "error" in entry:
                 return isinstance(entry.get("error"), str) and bool(entry.get("error"))
+            return False
+        return True
+
+    def log_signature(log, fallback_tx_hash=""):
+        if not isinstance(log, dict):
+            return None
+        signature = {}
+        block_number = hex_quantity(log.get("blockNumber"))
+        if block_number is not None:
+            signature["blockNumber"] = block_number
+        block_hash_value = normalize_hash(log.get("blockHash"))
+        if block_hash_value:
+            signature["blockHash"] = block_hash_value
+        tx_hash_value = normalize_hash(log.get("transactionHash") or log.get("hash") or fallback_tx_hash)
+        if tx_hash_value:
+            signature["transactionHash"] = tx_hash_value
+        log_index = hex_quantity(log.get("logIndex"))
+        if log_index is not None:
+            signature["logIndex"] = log_index
+        address = normalize_hash(log.get("address"))
+        if address:
+            signature["address"] = address
+        topics = log.get("topics")
+        if isinstance(topics, list):
+            normalized_topics = []
+            for topic in topics:
+                topic_value = normalize_hash(topic)
+                if not topic_value:
+                    return None
+                normalized_topics.append(topic_value)
+            signature["topics"] = tuple(normalized_topics)
+        data = normalize_hash(log.get("data"))
+        if data:
+            signature["data"] = data
+        if not any(key in signature for key in ("transactionHash", "logIndex", "address", "topics", "data")):
+            return None
+        return signature
+
+    def log_matches_signature(log, signature):
+        if not isinstance(log, dict):
+            return False
+        if "blockNumber" in signature and hex_quantity(log.get("blockNumber")) != signature["blockNumber"]:
+            return False
+        if "blockHash" in signature and normalize_hash(log.get("blockHash")) != signature["blockHash"]:
+            return False
+        if (
+            "transactionHash" in signature
+            and normalize_hash(log.get("transactionHash") or log.get("hash")) != signature["transactionHash"]
+        ):
+            return False
+        if "logIndex" in signature and hex_quantity(log.get("logIndex")) != signature["logIndex"]:
+            return False
+        if "address" in signature and normalize_hash(log.get("address")) != signature["address"]:
+            return False
+        if "topics" in signature:
+            topics = log.get("topics")
+            if not isinstance(topics, list):
+                return False
+            normalized_topics = []
+            for topic in topics:
+                topic_value = normalize_hash(topic)
+                if not topic_value:
+                    return False
+                normalized_topics.append(topic_value)
+            if tuple(normalized_topics) != signature["topics"]:
+                return False
+        if "data" in signature and normalize_hash(log.get("data")) != signature["data"]:
             return False
         return True
 
@@ -507,6 +575,7 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 return False
             requested_number = hex_quantity(params[0] if params else None)
             selected_receipt_seen = False
+            pending_log_signatures = []
             for receipt in result:
                 if not isinstance(receipt, dict):
                     return False
@@ -518,8 +587,27 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 receipt_tx_hash = normalize_hash(receipt.get("transactionHash") or receipt.get("hash"))
                 if selected_tx_hash and receipt_tx_hash == selected_tx_hash:
                     selected_receipt_seen = True
+                logs = receipt.get("logs")
+                if logs is not None:
+                    if not isinstance(logs, list):
+                        return False
+                    for log in logs:
+                        if not isinstance(log, dict):
+                            return False
+                        log_number = hex_quantity(log.get("blockNumber"))
+                        if log_number is not None and log_number != requested_number:
+                            return False
+                        log_hash = normalize_hash(log.get("blockHash"))
+                        if selected_block_hash and log_hash and log_hash != selected_block_hash:
+                            return False
+                        signature = log_signature(log, receipt_tx_hash)
+                        if signature is None:
+                            return False
+                        pending_log_signatures.append(signature)
             if selected_tx_hash and not selected_receipt_seen:
                 return False
+            selected_receipt_log_signatures.clear()
+            selected_receipt_log_signatures.extend(pending_log_signatures)
             return True
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
             return is_hex_string(result)
@@ -537,6 +625,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 if hex_quantity(log.get("blockNumber")) != requested_number:
                     return False
                 if selected_block_hash and normalize_hash(log.get("blockHash")) != selected_block_hash:
+                    return False
+            for signature in selected_receipt_log_signatures:
+                if not any(log_matches_signature(log, signature) for log in result):
                     return False
             return True
         if method == "eth_getTransactionByHash":

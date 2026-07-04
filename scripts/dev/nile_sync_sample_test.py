@@ -95,6 +95,15 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         tx_hash = "0x" + "12" * 32
         wrong_tx_hash = "0x" + "34" * 32
         block_hash = "0x" + "ab" * 32
+        event_log = {
+            "blockNumber": "0x63",
+            "blockHash": block_hash,
+            "transactionHash": tx_hash,
+            "logIndex": "0x0",
+            "address": "0x" + "56" * 20,
+            "topics": ["0x" + "78" * 32],
+            "data": "0x" + "9a" * 32,
+        }
         if method == "gtron_freezerStatus":
             result = {
                 "available": True,
@@ -262,7 +271,10 @@ class NileSampleHandler(BaseHTTPRequestHandler):
             if getattr(self.server, "empty_block_receipts", False):
                 result = []
             else:
-                result = [{"transactionHash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}]
+                receipt = {"transactionHash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}
+                if getattr(self.server, "block_receipts_with_log", False):
+                    receipt["logs"] = [event_log]
+                result = [receipt]
         elif method == "eth_getBalance" and getattr(self.server, "invalid_scalar_results", False):
             result = "not-hex"
         elif method == "eth_getTransactionByHash":
@@ -313,6 +325,10 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                         "transactionHash": tx_hash,
                     }
                 ]
+            elif getattr(self.server, "missing_receipt_logs", False):
+                result = []
+            elif getattr(self.server, "block_receipts_with_log", False):
+                result = [event_log]
             else:
                 result = []
         elif method == "debug_traceTransaction":
@@ -835,6 +851,54 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["archiveApiStatus"], "failed")
             self.assertEqual(row["archiveApiChecks"], 17)
             self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertNotIn("eth_getLogs", row["archiveApiMethods"])
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
+
+    def test_archive_api_probe_rejects_missing_receipt_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.block_receipts_with_log = True
+            server.missing_receipt_logs = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertIn("eth_getBlockReceipts", row["archiveApiMethods"])
             self.assertNotIn("eth_getLogs", row["archiveApiMethods"])
             self.assertEqual(
                 row["archiveApiTxMethods"],

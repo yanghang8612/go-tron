@@ -776,9 +776,9 @@ Status:
   must match the transaction hash, block number, and block hash selected from
   that block. Acceptance also requires tx proof to carry same-row archive API
   evidence and a `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars,
-  `null`, wrong-log, wrong-transaction or wrong-block results, detached tx
-  rows, or malformed hashes are archive-read failures instead of false-positive
-  proof.
+  `null`, wrong-log, receipt logs missing from `eth_getLogs`,
+  wrong-transaction or wrong-block results, detached tx rows, or malformed
+  hashes are archive-read failures instead of false-positive proof.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating
@@ -2141,7 +2141,9 @@ Status:
   archive probes now also require `eth_getBlockReceipts` on a transaction-bearing
   block to include the same selected transaction hash, so block-receipt coverage
   cannot pass with an empty receipt list while per-transaction receipt lookups
-  still work. JSON-RPC transaction
+  still work. When those block receipts contain logs, the probes also require
+  same-block `eth_getLogs` to return the corresponding log entries, so receipt
+  archive coverage cannot mask a missing derived event-log index. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different
