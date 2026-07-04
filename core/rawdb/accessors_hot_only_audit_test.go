@@ -653,16 +653,24 @@ func TestColdArchiveAuditRejectsStrictTransactionInfoReadOnHotStore(t *testing.T
 
 import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
 
-func query(db any) {
+func query(db any, tx []byte) {
+	_, _, _ = rawdb.ReadTransactionInfoStrict(db, tx)
 	_, _, _ = rawdb.ReadTransactionInfosByBlockStrict(db, 7)
 }
 `)
 
 	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfoStrict":         {},
 		"ReadTransactionInfosByBlockStrict": {},
 	}, nil)
-	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfosByBlockStrict") {
-		t.Fatalf("offenders = %+v, want hot-store strict transaction info read rejected", offenders)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want hot-store strict transaction info reads rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.ReadTransactionInfoStrict", "rawdb.ReadTransactionInfosByBlockStrict"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
 	}
 }
 
@@ -771,13 +779,15 @@ func TestColdArchiveAuditAllowsStrictTransactionInfoReadOnChainDBBoundary(t *tes
 
 import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
 
-func query(db *rawdb.ChainDB) {
+func query(db *rawdb.ChainDB, tx []byte) {
 	chainDB := db
+	_, _, _ = rawdb.ReadTransactionInfoStrict(chainDB, tx)
 	_, _, _ = rawdb.ReadTransactionInfosByBlockStrict(chainDB, 7)
 }
 `)
 
 	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfoStrict":         {},
 		"ReadTransactionInfosByBlockStrict": {},
 	}, nil)
 	if len(offenders) != 0 {
@@ -1499,11 +1509,31 @@ func second(chainDB coldManager) {
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
-	offenders := auditForbiddenRawDBCalls(t, snapshotRoot, map[string]struct{}{
+	offenders := auditForbiddenRawDBReferences(t, snapshotRoot, map[string]struct{}{
 		"ReadTransactionInfosByBlock": {},
 	}, nil)
 	if len(offenders) > 0 {
 		t.Fatalf("snapshot builders must use ReadTransactionInfosByBlockStrict so corrupt TransactionRet rows fail cold coverage publishing:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestSnapshotPublisherAuditRejectsTransactionInfoReaderFunctionValue(t *testing.T) {
+	root := writeAuditFixture(t, "core/state/snapshots/offender.go", `package snapshots
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTransactionInfos = rawdb.ReadTransactionInfosByBlock
+
+func publish(db any) {
+	_ = readTransactionInfos(db, 7)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, filepath.Join(root, "core", "state", "snapshots"), map[string]struct{}{
+		"ReadTransactionInfosByBlock": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfosByBlock") {
+		t.Fatalf("offenders = %+v, want non-strict transaction info reader function value rejected", offenders)
 	}
 }
 
