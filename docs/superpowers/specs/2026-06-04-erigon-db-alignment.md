@@ -1865,7 +1865,11 @@ Status:
   cold event-log index is missing or unreadable but complete `event-log`
   segments still cover the requested range, it degrades to a cold segment scan
   instead of surfacing the index-sidecar failure to `eth_getLogs`. Checker
-  failures for corrupted covered rows still surface as archive data errors. A
+  failures for corrupted covered rows still surface as archive data errors.
+  The rawdb `IterateCoveredEventLogs` boundary also applies the requested
+  address/topic filter before invoking API callbacks, so fallback cold readers
+  that over-return rows cannot leak unrelated logs after hot receipts are
+  pruned. A
   source audit now also rejects production API/business code that directly calls
   `EventLogRangeCovered*` coverage checks; archive log queries must use the
   single `IterateCoveredEventLogs` boundary so coverage and row iteration share

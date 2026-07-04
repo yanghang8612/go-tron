@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
@@ -2635,11 +2634,9 @@ func (b *TronBackend) stageStatusCanonicalHash(stage rawdb.StageID, progress raw
 	if b == nil || b.chain == nil {
 		return tcommon.Hash{}, nil
 	}
-	var canonical ethdb.KeyValueReader
-	if chainDB := b.chain.ChainDB(); chainDB != nil {
-		canonical = chainDB
-	} else {
-		canonical = b.chain.DB()
+	canonical := b.chain.ChainDB()
+	if canonical == nil {
+		return tcommon.Hash{}, []string{"canonicalError=\"chain DB unavailable\""}
 	}
 	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(canonical, progress.BlockNum)
 	if err != nil {

@@ -195,16 +195,16 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 		return false, nil
 	}
 	if reader, ok := db.eventLog.(CoveredEventLogReader); ok {
-		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, fn))
+		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, filter, fn))
 	}
 	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return covered, err
 	}
-	return true, db.IterateEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, fn))
+	return true, db.IterateEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, filter, fn))
 }
 
-func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
+func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {
 	var (
 		last        EventLog
 		hasLast     bool
@@ -216,6 +216,9 @@ func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(E
 	return func(row EventLog) (bool, error) {
 		if err := validateCoveredEventLogRow(fromBlock, toBlock, row); err != nil {
 			return false, err
+		}
+		if !coveredEventLogRowMatchesFilter(row, filter) {
+			return true, nil
 		}
 		if err := db.validateCoveredEventLogCanonicalRow(row, blocks, blockExists, infos, infoExists); err != nil {
 			return false, err
@@ -231,6 +234,42 @@ func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, fn func(E
 		last = row
 		return fn(row)
 	}
+}
+
+func coveredEventLogRowMatchesFilter(row EventLog, filter EventLogFilter) bool {
+	if len(filter.Addresses) > 0 {
+		matched := false
+		for _, address := range filter.Addresses {
+			if row.Address == address {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	topics := row.Log.GetTopics()
+	for pos, candidates := range filter.Topics {
+		if len(candidates) == 0 {
+			continue
+		}
+		if pos >= len(topics) {
+			return false
+		}
+		got := common.BytesToHash(topics[pos])
+		matched := false
+		for _, candidate := range candidates {
+			if got == candidate {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, blockCache map[uint64]*types.Block, blockOK map[uint64]bool, infoCache map[uint64][]*corepb.TransactionInfo, infoOK map[uint64]bool) error {

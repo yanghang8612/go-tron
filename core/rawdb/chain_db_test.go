@@ -268,6 +268,94 @@ func TestChainDBIterateCoveredEventLogsFallsBackToCoverageAndIteration(t *testin
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsAllowsRowsMatchingFilter(t *testing.T) {
+	t.Parallel()
+
+	address := testChainDBEventLogAddress(0x33)
+	topic := common.Hash{0x44}
+	want := EventLog{
+		BlockNum: 33,
+		Address:  address,
+		Log: &corepb.TransactionInfo_Log{
+			Address: []byte{0x33},
+			Topics:  [][]byte{topic[:]},
+		},
+	}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows:    []EventLog{want},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var got []EventLog
+	covered, err := cdb.IterateCoveredEventLogs(33, 33, EventLogFilter{
+		Addresses: []common.Address{address},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	})
+	if err != nil || !covered || len(got) != 1 || got[0].BlockNum != want.BlockNum {
+		t.Fatalf("filtered IterateCoveredEventLogs = covered %v rows %+v err %v, want one matching row", covered, got, err)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsSkipsAddressFilterMismatch(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 34,
+			Address:  testChainDBEventLogAddress(0x34),
+			Log:      &corepb.TransactionInfo_Log{Address: []byte{0x34}},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(34, 34, EventLogFilter{
+		Addresses: []common.Address{testChainDBEventLogAddress(0x35)},
+	}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for address-filter-mismatched cold event-log row")
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("address filter mismatch = covered %v err %v, want covered nil-error skip", covered, err)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsSkipsTopicFilterMismatch(t *testing.T) {
+	t.Parallel()
+
+	gotTopic := common.Hash{0x36}
+	wantTopic := common.Hash{0x37}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 36,
+			Address:  testChainDBEventLogAddress(0x36),
+			Log: &corepb.TransactionInfo_Log{
+				Address: []byte{0x36},
+				Topics:  [][]byte{gotTopic[:]},
+			},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(36, 36, EventLogFilter{
+		Topics: [][]common.Hash{{wantTopic}},
+	}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for topic-filter-mismatched cold event-log row")
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("topic filter mismatch = covered %v err %v, want covered nil-error skip", covered, err)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsSkipsIterationWhenUncovered(t *testing.T) {
 	t.Parallel()
 
