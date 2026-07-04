@@ -2122,12 +2122,16 @@ Status:
   reads use the strict tx lookup index plus strict block-body access, so
   `eth_getTransactionByHash` can return transactions after receipt rows are
   pruned and a corrupt freezer/hot block behind a valid transaction index
-  returns a data error instead of a false not-found result. Block-number TransactionInfo
-  queries use the same strict block-body read before validating retained
-  `TransactionRet` rows. JSON-RPC `eth_getTransactionReceipt` now preserves
-  those transaction/block lookup errors after the receipt row has been found
-  instead of translating cold archive corruption into a `null` receipt. TRON
-  HTTP and gRPC transaction-by-id / transaction-info-by-id handlers now keep
+  returns a data error instead of a false not-found result. JSON-RPC transaction
+  and receipt conversion re-checks that the resolved block/index exists and
+  still points at the requested transaction hash before exposing the payload,
+  so a stale or corrupt cold tx-position lookup cannot return a different
+  transaction as archive proof. Block-number TransactionInfo queries use the
+  same strict block-body read before validating retained `TransactionRet` rows.
+  JSON-RPC `eth_getTransactionReceipt` now preserves those transaction/block
+  lookup errors after the receipt row has been found instead of translating cold
+  archive corruption into a `null` receipt. TRON HTTP and gRPC
+  transaction-by-id / transaction-info-by-id handlers now keep
   java-tron-compatible empty/not-found responses only for explicit misses; cold
   lookup, block-body, or receipt corruption from the backend is surfaced as an
   internal server error instead of being disguised as a missing transaction.

@@ -408,7 +408,7 @@ func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 	if tx == nil {
 		return nil, nil
 	}
-	if err := validateTransactionLookupMetadata(hash, block, index); err != nil {
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
 		return nil, err
 	}
 	return txToRPC(tx, hash, block, index), nil
@@ -481,6 +481,9 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	}
 	if index < 0 {
 		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
+	}
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
+		return nil, err
 	}
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err

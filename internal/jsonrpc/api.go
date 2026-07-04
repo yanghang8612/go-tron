@@ -883,7 +883,7 @@ func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, er
 	if tx == nil {
 		return nil, nil // not found → null
 	}
-	if err := validateTransactionLookupMetadata(hash, block, index); err != nil {
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
 		return nil, err
 	}
 	return txToRPC(tx, hash, block, index), nil
@@ -960,6 +960,9 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 	}
 	if index < 0 {
 		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
+	}
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
+		return nil, err
 	}
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
@@ -1197,12 +1200,28 @@ func transactionReceiptLookupError(hash common.Hash) error {
 	return fmt.Errorf("transaction receipt exists for %s but transaction lookup is missing", rpcHashHex(hash))
 }
 
-func validateTransactionLookupMetadata(hash common.Hash, block *types.Block, index int) error {
+func validateTransactionLookupMetadata(hash common.Hash, tx *corepb.Transaction, block *types.Block, index int) error {
 	if block == nil {
 		return transactionLookupMetadataError(hash, "block")
 	}
 	if index < 0 {
 		return transactionLookupMetadataError(hash, "index")
+	}
+	txs := block.Transactions()
+	if index >= len(txs) {
+		return fmt.Errorf("transaction lookup for %s has index %d outside block %d transaction count %d", rpcHashHex(hash), index, block.Number(), len(txs))
+	}
+	if txs[index] == nil {
+		return fmt.Errorf("transaction lookup for %s points to nil transaction at block %d index %d", rpcHashHex(hash), block.Number(), index)
+	}
+	if txs[index].Hash() != hash {
+		return fmt.Errorf("transaction lookup for %s points to block %d index %d with hash %s", rpcHashHex(hash), block.Number(), index, rpcHashHex(txs[index].Hash()))
+	}
+	if tx == nil {
+		return transactionLookupMetadataError(hash, "transaction")
+	}
+	if txHash := types.NewTransactionFromPB(tx).Hash(); txHash != hash {
+		return fmt.Errorf("transaction lookup for %s returned transaction hash %s", rpcHashHex(hash), rpcHashHex(txHash))
 	}
 	return nil
 }

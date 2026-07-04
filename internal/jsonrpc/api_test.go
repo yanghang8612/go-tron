@@ -837,13 +837,17 @@ func TestEthGetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
 	tx := block.Transactions()[0]
 	txHash := "0x" + tx.Hash().Hex()
 
+	wrongHash := "0x" + strings.Repeat("aa", common.HashLength)
+	otherTx := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: tx.Proto().GetRawData().GetTimestamp() + 1}}
 	tests := []struct {
 		name    string
+		hash    string
 		backend *stubBackend
 		want    string
 	}{
 		{
 			name: "missing block",
+			hash: txHash,
 			backend: &stubBackend{
 				tx:      tx.Proto(),
 				txBlock: nil,
@@ -853,6 +857,7 @@ func TestEthGetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
 		},
 		{
 			name: "missing index",
+			hash: txHash,
 			backend: &stubBackend{
 				tx:      tx.Proto(),
 				txBlock: block,
@@ -860,13 +865,43 @@ func TestEthGetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
 			},
 			want: "transaction lookup for " + txHash + " is missing index metadata",
 		},
+		{
+			name: "index out of range",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: 1,
+			},
+			want: "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1",
+		},
+		{
+			name: "block index hash mismatch",
+			hash: wrongHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + wrongHash + " points to block 100 index 0 with hash " + txHash,
+		},
+		{
+			name: "returned transaction hash mismatch",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      otherTx,
+				txBlock: block,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " returned transaction hash 0x" + types.NewTransactionFromPB(otherTx).Hash().Hex(),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestServer(t, tt.backend)
 			defer srv.Close()
-			resp := rpcCallRaw(t, srv, "eth_getTransactionByHash", []interface{}{txHash})
+			resp := rpcCallRaw(t, srv, "eth_getTransactionByHash", []interface{}{tt.hash})
 			errObj, ok := resp["error"].(map[string]interface{})
 			if !ok {
 				t.Fatalf("eth_getTransactionByHash error = %v, want JSON-RPC error", resp["error"])
@@ -947,6 +982,28 @@ func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
 	}
 	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt "+txHash+" transaction info id 0x") || !strings.Contains(msg, "does not match transaction hash") {
 		t.Fatalf("eth_getTransactionReceipt error message = %v, want txInfo/hash mismatch", errObj["message"])
+	}
+}
+
+func TestEthGetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	srv := newTestServer(t, &stubBackend{
+		txInfo:  buildFreezeTxInfo(),
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 1,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if want := "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1"; errObj["message"] != want {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want %q", errObj["message"], want)
 	}
 }
 
@@ -1032,6 +1089,24 @@ func TestEthAPI_GetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
 	got, err := api.GetTransactionReceipt(txHash)
 	if err == nil || got != nil || !strings.Contains(err.Error(), "does not match transaction hash") {
 		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want txInfo/hash mismatch", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo:  buildFreezeTxInfo(),
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 1,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	want := "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1"
+	if err == nil || got != nil || err.Error() != want {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want %q", got, err, want)
 	}
 }
 
