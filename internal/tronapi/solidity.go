@@ -34,6 +34,9 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listwitnesses", api.getSolidWitnesses)
 	mux.HandleFunc("/walletsolidity/getchainparameters", api.getSolidChainParameters)
 	mux.HandleFunc("/walletsolidity/getnextmaintenancetime", api.getSolidNextMaintenanceTime)
+	mux.HandleFunc("/walletsolidity/getburntrx", api.getSolidBurnTrx)
+	mux.HandleFunc("/walletsolidity/getbandwidthprices", api.getSolidBandwidthPrices)
+	mux.HandleFunc("/walletsolidity/getenergyprices", api.getSolidEnergyPrices)
 	mux.HandleFunc("/walletsolidity/listproposals", api.getSolidProposals)
 	mux.HandleFunc("/walletsolidity/getproposalbyid", api.getSolidProposalByID)
 	mux.HandleFunc("/walletsolidity/getpaginatedproposallist", api.getSolidPaginatedProposalList)
@@ -75,6 +78,9 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listwitnesses", api.getPbftWitnesses)
 	mux.HandleFunc("/walletpbft/getchainparameters", api.getPbftChainParameters)
 	mux.HandleFunc("/walletpbft/getnextmaintenancetime", api.getPbftNextMaintenanceTime)
+	mux.HandleFunc("/walletpbft/getburntrx", api.getPbftBurnTrx)
+	mux.HandleFunc("/walletpbft/getbandwidthprices", api.getPbftBandwidthPrices)
+	mux.HandleFunc("/walletpbft/getenergyprices", api.getPbftEnergyPrices)
 	mux.HandleFunc("/walletpbft/listproposals", api.getPbftProposals)
 	mux.HandleFunc("/walletpbft/getproposalbyid", api.getPbftProposalByID)
 	mux.HandleFunc("/walletpbft/getpaginatedproposallist", api.getPbftPaginatedProposalList)
@@ -192,6 +198,30 @@ func (api *API) getSolidNextMaintenanceTime(w http.ResponseWriter, r *http.Reque
 
 func (api *API) getPbftNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
 	api.handleGetNextMaintenanceTime(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidBurnTrx(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBurnTrx(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftBurnTrx(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBurnTrx(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidBandwidthPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBandwidthPrices(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftBandwidthPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBandwidthPrices(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidEnergyPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetEnergyPrices(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftEnergyPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetEnergyPrices(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidProposals(w http.ResponseWriter, r *http.Request) {

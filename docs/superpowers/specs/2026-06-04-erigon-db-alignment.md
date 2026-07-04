@@ -1252,11 +1252,13 @@ Status:
   live-head state.
   Witness/vote history reads also surface corrupt witness-capsule and pending
   vote protobuf payloads as archive data errors instead of treating them as
-  missing witness/vote records.
-  gRPC `WalletSolidity.GetBurnTrx`, `GetBandwidthPrices`, and
-  `GetEnergyPrices` now likewise read solid-bound `SystemDynamicProperty`
-  history, including string-typed price-history rows, instead of live-head
-  dynamic properties.
+  missing witness/vote records. HTTP `/wallet/getburntrx`,
+  `/wallet/getbandwidthprices`, and `/wallet/getenergyprices` now expose the
+  java-tron pricing/tool endpoints, and their `/walletsolidity`/`/walletpbft`
+  variants plus gRPC `WalletSolidity.GetBurnTrx`, `GetBandwidthPrices`, and
+  `GetEnergyPrices` read solid/PBFT-bound `SystemDynamicProperty` history,
+  including string-typed price-history rows, instead of live-head dynamic
+  properties.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

@@ -552,6 +552,12 @@ type isolationStubBackend struct {
 	accountNetAtBlock        uint64
 	liveChainParameterCalls  int
 	chainParametersAtBlock   uint64
+	liveBurnCalls            int
+	burnAtBlock              uint64
+	liveBandwidthCalls       int
+	bandwidthAtBlock         uint64
+	liveEnergyCalls          int
+	energyAtBlock            uint64
 	liveBrokerageCalls       int
 	brokerageAtBlock         uint64
 	liveWitnessCalls         int
@@ -710,6 +716,36 @@ func (s *isolationStubBackend) NextMaintenanceTime() int64 {
 func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	s.nextMaintenanceAtBlock = blockNum
 	return 9900, nil
+}
+
+func (s *isolationStubBackend) GetBurnTrx() int64 {
+	s.liveBurnCalls++
+	return 1
+}
+
+func (s *isolationStubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	s.burnAtBlock = blockNum
+	return 123456, nil
+}
+
+func (s *isolationStubBackend) GetBandwidthPrices() string {
+	s.liveBandwidthCalls++
+	return "live-bandwidth"
+}
+
+func (s *isolationStubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	s.bandwidthAtBlock = blockNum
+	return "0:10,42:20", nil
+}
+
+func (s *isolationStubBackend) GetEnergyPrices() string {
+	s.liveEnergyCalls++
+	return "live-energy"
+}
+
+func (s *isolationStubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	s.energyAtBlock = blockNum
+	return "0:100,42:300", nil
 }
 
 func (s *isolationStubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
@@ -1558,6 +1594,78 @@ func assertDynamicPropertyRoutesUseBound(t *testing.T, prefix string, stub *isol
 	}
 	if stub.liveNextMaintenanceCalls != 0 {
 		t.Fatalf("live NextMaintenanceTime called %d times, want 0", stub.liveNextMaintenanceCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getburntrx")
+	if err != nil {
+		t.Fatalf("getburntrx request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getburntrx status: %d", resp.StatusCode)
+	}
+	var burn struct {
+		Num int64 `json:"num"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&burn); err != nil {
+		t.Fatal(err)
+	}
+	if burn.Num != 123456 {
+		t.Fatalf("burn trx = %d, want 123456", burn.Num)
+	}
+	if stub.burnAtBlock != wantBlock {
+		t.Fatalf("GetBurnTrxAt block = %d, want %d", stub.burnAtBlock, wantBlock)
+	}
+	if stub.liveBurnCalls != 0 {
+		t.Fatalf("live GetBurnTrx called %d times, want 0", stub.liveBurnCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getbandwidthprices")
+	if err != nil {
+		t.Fatalf("getbandwidthprices request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getbandwidthprices status: %d", resp.StatusCode)
+	}
+	var bandwidth struct {
+		Prices string `json:"prices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&bandwidth); err != nil {
+		t.Fatal(err)
+	}
+	if bandwidth.Prices != "0:10,42:20" {
+		t.Fatalf("bandwidth prices = %q, want bound sentinel", bandwidth.Prices)
+	}
+	if stub.bandwidthAtBlock != wantBlock {
+		t.Fatalf("GetBandwidthPricesAt block = %d, want %d", stub.bandwidthAtBlock, wantBlock)
+	}
+	if stub.liveBandwidthCalls != 0 {
+		t.Fatalf("live GetBandwidthPrices called %d times, want 0", stub.liveBandwidthCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getenergyprices")
+	if err != nil {
+		t.Fatalf("getenergyprices request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getenergyprices status: %d", resp.StatusCode)
+	}
+	var energy struct {
+		Prices string `json:"prices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&energy); err != nil {
+		t.Fatal(err)
+	}
+	if energy.Prices != "0:100,42:300" {
+		t.Fatalf("energy prices = %q, want bound sentinel", energy.Prices)
+	}
+	if stub.energyAtBlock != wantBlock {
+		t.Fatalf("GetEnergyPricesAt block = %d, want %d", stub.energyAtBlock, wantBlock)
+	}
+	if stub.liveEnergyCalls != 0 {
+		t.Fatalf("live GetEnergyPrices called %d times, want 0", stub.liveEnergyCalls)
 	}
 }
 

@@ -68,11 +68,14 @@ type stubBackend struct {
 	validateErr error
 	// Proposal output divergence test (D-4): canned proposals returned
 	// from ListProposals / ListProposalsPaginated / GetProposalByID.
-	proposals     []*tronapi.ProposalInfo
-	proposalErr   error
-	proposalAtErr error
-	assetErr      error
-	marketErr     error
+	proposals       []*tronapi.ProposalInfo
+	proposalErr     error
+	proposalAtErr   error
+	burnTrx         int64
+	bandwidthPrices string
+	energyPrices    string
+	assetErr        error
+	marketErr       error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -314,7 +317,7 @@ func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (
 	return 0, nil
 }
 func (s *stubBackend) TotalTransaction() int64 { return 0 }
-func (s *stubBackend) GetBurnTrx() int64       { return 0 }
+func (s *stubBackend) GetBurnTrx() int64       { return s.burnTrx }
 func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }
@@ -339,11 +342,11 @@ func (s *stubBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Addres
 func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
-func (s *stubBackend) GetBandwidthPrices() string { return "" }
+func (s *stubBackend) GetBandwidthPrices() string { return s.bandwidthPrices }
 func (s *stubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
-func (s *stubBackend) GetEnergyPrices() string { return "" }
+func (s *stubBackend) GetEnergyPrices() string { return s.energyPrices }
 func (s *stubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
@@ -871,6 +874,31 @@ func TestGetAvailableUnfreezeCount(t *testing.T) {
 		`{"owner_address":"4101"}`)
 	if result["count"].(float64) != 30 {
 		t.Fatalf("unexpected count: %v", result)
+	}
+}
+
+func TestGetBurnTrxAndPrices(t *testing.T) {
+	stub := &stubBackend{
+		burnTrx:         123456,
+		bandwidthPrices: "0:10,100:20",
+		energyPrices:    "0:100,200:300",
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	burn := postJSON(t, srv.URL+"/wallet/getburntrx", `{}`)
+	if burn["num"].(float64) != 123456 {
+		t.Fatalf("getburntrx = %v, want 123456", burn)
+	}
+
+	bandwidth := postJSON(t, srv.URL+"/wallet/getbandwidthprices", `{}`)
+	if bandwidth["prices"] != "0:10,100:20" {
+		t.Fatalf("getbandwidthprices = %v, want 0:10,100:20", bandwidth)
+	}
+
+	energy := postJSON(t, srv.URL+"/wallet/getenergyprices", `{}`)
+	if energy["prices"] != "0:100,200:300" {
+		t.Fatalf("getenergyprices = %v, want 0:100,200:300", energy)
 	}
 }
 

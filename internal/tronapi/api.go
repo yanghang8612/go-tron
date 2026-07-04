@@ -58,6 +58,9 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getchainparameters", api.getChainParameters)
 	mux.HandleFunc("/wallet/listwitnesses", api.listWitnesses)
 	mux.HandleFunc("/wallet/getnextmaintenancetime", api.getNextMaintenanceTime)
+	mux.HandleFunc("/wallet/getburntrx", api.getBurnTrx)
+	mux.HandleFunc("/wallet/getbandwidthprices", api.getBandwidthPrices)
+	mux.HandleFunc("/wallet/getenergyprices", api.getEnergyPrices)
 
 	// Proposal APIs
 	mux.HandleFunc("/wallet/proposalcreate", api.proposalCreate)
@@ -1240,6 +1243,75 @@ func (api *API) handleGetNextMaintenanceTime(w http.ResponseWriter, r *http.Requ
 	}
 	resp := map[string]int64{"num": t}
 	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getBurnTrx(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBurnTrx(w, r, nil)
+}
+
+func (api *API) handleGetBurnTrx(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		burned int64
+		err    error
+	)
+	if boundFn == nil {
+		burned = api.backend.GetBurnTrx()
+	} else {
+		burned, err = api.backend.GetBurnTrxAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	data, _ := json.Marshal(map[string]int64{"num": burned})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getBandwidthPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBandwidthPrices(w, r, nil)
+}
+
+func (api *API) handleGetBandwidthPrices(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		prices string
+		err    error
+	)
+	if boundFn == nil {
+		prices = api.backend.GetBandwidthPrices()
+	} else {
+		prices, err = api.backend.GetBandwidthPricesAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	data, _ := json.Marshal(map[string]string{"prices": prices})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getEnergyPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetEnergyPrices(w, r, nil)
+}
+
+func (api *API) handleGetEnergyPrices(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		prices string
+		err    error
+	)
+	if boundFn == nil {
+		prices = api.backend.GetEnergyPrices()
+	} else {
+		prices, err = api.backend.GetEnergyPricesAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	data, _ := json.Marshal(map[string]string{"prices": prices})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
