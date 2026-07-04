@@ -5375,6 +5375,34 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_archive_api_depth_gate_without_evidence_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(result, [clean_full_staged_sync_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "full",
+                    "--min-archive-api-depth-blocks",
+                    "10",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiStatus=None, want 'ok'", proc.stderr)
+            self.assertIn(
+                "archiveApiBlock=None, want non-negative integer historical block",
+                proc.stderr,
+            )
+
     def test_rejects_archive_api_depth_without_height(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

@@ -3409,6 +3409,7 @@ def check_row(row, args):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or args.archive_api_methods_requested
+        or args.min_archive_api_depth_blocks is not None
     ):
         required_archive_methods = list(args.archive_api_methods_required)
         if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
