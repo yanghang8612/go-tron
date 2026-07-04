@@ -341,6 +341,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             server.invalid_trace_transaction = True
@@ -367,6 +368,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--archive-api-call-data",
                     "0x70a08231",
                     "--archive-api-trace-transaction",
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -403,6 +406,29 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="{row["label"]}",mode="{row["mode"]}",network="nile"'
+            trace_labels = (
+                f'datadir="{datadir}",label="{row["label"]}",'
+                f'method="debug_traceTransaction",mode="{row["mode"]}",network="nile"'
+            )
+            receipt_labels = (
+                f'datadir="{datadir}",label="{row["label"]}",'
+                f'method="eth_getTransactionReceipt",mode="{row["mode"]}",network="nile"'
+            )
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_method_success{{{trace_labels}}} 0",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_tx_method_success{{{trace_labels}}} 0",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_tx_method_success{{{receipt_labels}}} 1",
+                metrics,
+            )
+            self.assertIn(f"gtron_nile_sync_archive_api_failures{{{labels}}} 1", metrics)
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
             self.assertEqual(
@@ -516,6 +542,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             server.invalid_scalar_results = True
@@ -535,6 +562,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--jsonrpc",
                     endpoint,
                     "--archive-api-probe",
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -566,6 +595,23 @@ class NileSyncSampleTest(unittest.TestCase):
                     "eth_getTransactionByBlockNumberAndIndex",
                     "eth_getTransactionByBlockHashAndIndex",
                 ],
+            )
+            metrics = prometheus.read_text(encoding="utf-8")
+            balance_labels = (
+                f'datadir="{datadir}",label="{row["label"]}",'
+                f'method="eth_getBalance",mode="{row["mode"]}",network="nile"'
+            )
+            block_labels = (
+                f'datadir="{datadir}",label="{row["label"]}",'
+                f'method="eth_getBlockByNumber",mode="{row["mode"]}",network="nile"'
+            )
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_method_success{{{balance_labels}}} 0",
+                metrics,
+            )
+            self.assertIn(
+                f"gtron_nile_sync_archive_api_method_success{{{block_labels}}} 1",
+                metrics,
             )
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
