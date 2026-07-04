@@ -1840,7 +1840,11 @@ Status:
   before streaming cold logs. Filtered manager queries now compose adjacent
   `event-log-index` sidecars across the request range, so a query that spans
   multiple immutable index passes can still skip unrelated event-log segment
-  files instead of falling back to a full cold scan. Cold coverage verification
+  files instead of falling back to a full cold scan. Legacy HTTP `eth_getLogs`,
+  reflection `EthAPI` log/filter methods, and websocket log subscriptions now
+  share one log-filter parser for block tags, `blockHash`, address arrays, and
+  topic OR/wildcard matrices, so all archive log entry points feed the cold
+  event-log/index boundary with the same filter semantics. Cold coverage verification
   and event-log iteration can now run through one `ChainDB` boundary backed by
   a single snapshot-manager manifest view, so an archive log query cannot mix a
   passing coverage check from one immutable view with rows from a later
