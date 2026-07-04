@@ -1845,6 +1845,7 @@ SNAPSHOT_PROFILE_POINT_FIELDS = (
     "snapshotPointCodeDomain",
     "snapshotPointCommitmentSnapshot",
 )
+EVENT_LOG_INDEX_POINT_PREFIX = "snapshotPointEventLogIndex"
 
 
 def snapshot_profile_evidence_row(row):
@@ -2161,6 +2162,68 @@ def check_snapshot_point_thresholds(rows, max_sidecar_share_milli, max_snapshot_
     return issues
 
 
+def check_snapshot_point_candidate(row, prefix, label):
+    issues = []
+    segments_field = f"{prefix}Segments"
+    bytes_field = f"{prefix}Bytes"
+    segments = as_non_negative_int(row, segments_field)
+    if segments is None:
+        issues.append(
+            f"{line_label(row)} {segments_field}={row.get(segments_field)!r}, "
+            f"want positive integer for {label}"
+        )
+    elif segments <= 0:
+        issues.append(
+            f"{line_label(row)} {segments_field}={segments:g}, want > 0 for {label}"
+        )
+    candidate_bytes = as_non_negative_int(row, bytes_field)
+    if candidate_bytes is None:
+        issues.append(
+            f"{line_label(row)} {bytes_field}={row.get(bytes_field)!r}, "
+            f"want positive integer for {label}"
+        )
+    elif candidate_bytes <= 0:
+        issues.append(
+            f"{line_label(row)} {bytes_field}={candidate_bytes:g}, want > 0 for {label}"
+        )
+    return issues
+
+
+def check_event_log_index_point_profile(rows, required_modes=()):
+    issues = []
+    evidence_rows = [
+        row for row in latest_rows(rows).values() if snapshot_profile_evidence_row(row)
+    ]
+    if not evidence_rows and not required_modes:
+        return ["required event-log index point profile has no selected latest snapshot profile row"]
+
+    for mode in required_modes:
+        row = latest_for(rows, mode=mode)
+        if row is None:
+            issues.append(
+                f"required event-log index point profile has no selected latest row for mode {mode!r}"
+            )
+            continue
+        if not snapshot_profile_evidence_row(row):
+            issues.append(
+                f"{line_label(row)} missing snapshot manifest profile evidence "
+                f"for required event-log index point profile mode {mode!r}"
+            )
+            continue
+        if row not in evidence_rows:
+            evidence_rows.append(row)
+
+    for row in evidence_rows:
+        issues.extend(
+            check_snapshot_point_candidate(
+                row,
+                EVENT_LOG_INDEX_POINT_PREFIX,
+                "event-log index point profile",
+            )
+        )
+    return issues
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate storage_benchmark.sh JSONL output against soak acceptance gates.",
@@ -2325,6 +2388,14 @@ def build_parser():
         "--require-compressed-state-history",
         action="store_true",
         help="require snapshot profile evidence to include at least one block-compressed state-history segment",
+    )
+    parser.add_argument(
+        "--require-event-log-index-point-profile",
+        action="store_true",
+        help=(
+            "require snapshot profile evidence to include a non-empty "
+            "snapshotPointEventLogIndex point-index candidate"
+        ),
     )
     parser.add_argument(
         "--max-snapshot-point-sidecar-share-milli",
@@ -2522,8 +2593,14 @@ def main(argv=None):
     required_snapshot_profile_modes = split_modes(
         args.require_snapshot_profile_mode + args.require_snapshot_profile_modes
     )
-    if args.require_snapshot_profile_evidence or required_snapshot_profile_modes:
+    if (
+        args.require_snapshot_profile_evidence
+        or required_snapshot_profile_modes
+        or args.require_event_log_index_point_profile
+    ):
         issues.extend(check_snapshot_profile_evidence(rows, required_snapshot_profile_modes))
+    if args.require_event_log_index_point_profile:
+        issues.extend(check_event_log_index_point_profile(rows, required_snapshot_profile_modes))
     if args.require_compressed_state_history:
         issues.extend(check_compressed_state_history_evidence(rows))
     issues.extend(

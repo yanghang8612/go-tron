@@ -1386,7 +1386,11 @@ Needed:
   the emitted overall or family-specific share fields through ordinary `--max`
   thresholds, and can now gate any present point-index candidate with
   `--max-snapshot-point-sidecar-share-milli` or
-  `--max-snapshot-point-snapshot-share-milli`. The standalone profiler can also
+  `--max-snapshot-point-snapshot-share-milli`. Both acceptance checkers can now
+  also require a non-empty `snapshotPointEventLogIndex` candidate with
+  `--require-event-log-index-point-profile`, so long Nile/storage soaks cannot
+  pass the recsplit-style event-log index profiling gate without concrete
+  event-log address/topic point-index evidence. The standalone profiler can also
   gate saved artifacts with `--max-sidecar-share-milli`,
   `--max-family-sidecar-share-milli`, `--max-point-sidecar-share-milli`, or
   `--max-point-snapshot-share-milli`; use that evidence to evaluate
@@ -2326,8 +2330,10 @@ Status:
   `nile_sync_sample.sh` surface the same candidate totals as
   `snapshotPoint*{Segments,Bytes,PayloadBytes,SidecarBytes,SidecarShareMilli,SnapshotShareMilli}`
   JSONL fields and matching `gtron_*_snapshot_point_*` Prometheus gauges. The
-  standalone profiler can fail saved manifests on point-candidate overhead with
-  `--max-point-sidecar-share-milli` and `--max-point-snapshot-share-milli`.
+  storage benchmark and Nile acceptance gates can require the event-log-index
+  candidate to be present with `--require-event-log-index-point-profile`, and
+  the standalone profiler can fail saved manifests on point-candidate overhead
+  with `--max-point-sidecar-share-milli` and `--max-point-snapshot-share-milli`.
 
 Adopt only where profiles justify it:
 

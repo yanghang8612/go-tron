@@ -676,6 +676,7 @@ SNAPSHOT_PROFILE_POINT_FIELDS = (
     "snapshotPointCodeDomain",
     "snapshotPointCommitmentSnapshot",
 )
+EVENT_LOG_INDEX_POINT_PREFIX = "snapshotPointEventLogIndex"
 
 
 def load_rows(path):
@@ -3291,6 +3292,24 @@ def check_snapshot_point_thresholds(row, max_sidecar_share_milli, max_snapshot_s
     return issues
 
 
+def check_event_log_index_point_profile(row):
+    issues = []
+    prefix = EVENT_LOG_INDEX_POINT_PREFIX
+    segments_field = f"{prefix}Segments"
+    bytes_field = f"{prefix}Bytes"
+    segments = as_non_negative_int(row, segments_field)
+    if segments is None:
+        issues.append(f"{segments_field}={row.get(segments_field)!r}, want positive integer")
+    elif segments <= 0:
+        issues.append(f"{segments_field}={segments:g}, want > 0")
+    candidate_bytes = as_non_negative_int(row, bytes_field)
+    if candidate_bytes is None:
+        issues.append(f"{bytes_field}={row.get(bytes_field)!r}, want positive integer")
+    elif candidate_bytes <= 0:
+        issues.append(f"{bytes_field}={candidate_bytes:g}, want > 0")
+    return issues
+
+
 def check_compressed_state_history_evidence(row):
     issues = []
     segments = as_non_negative_int(row, "snapshotStateHistoryCompressedSegments")
@@ -3637,11 +3656,21 @@ def check_row(row, args):
     if args.require_sample_prometheus_artifact:
         issues.extend(check_sample_prometheus_artifact(args.result, row))
 
-    if args.require_snapshot_profile_evidence:
+    require_snapshot_profile = (
+        args.require_snapshot_profile_evidence
+        or args.require_event_log_index_point_profile
+    )
+    has_snapshot_profile = snapshot_profile_evidence_row(row)
+    if require_snapshot_profile:
         if not snapshot_profile_evidence_row(row):
             issues.append("snapshot manifest profile evidence is missing")
         else:
             issues.extend(check_snapshot_profile_row(row))
+    if args.require_event_log_index_point_profile:
+        if not has_snapshot_profile:
+            issues.append("event-log index point profile requires snapshot manifest profile evidence")
+        else:
+            issues.extend(check_event_log_index_point_profile(row))
     if args.require_compressed_state_history:
         issues.extend(check_compressed_state_history_evidence(row))
     issues.extend(
@@ -3890,6 +3919,14 @@ def build_parser():
         "--require-compressed-state-history",
         action="store_true",
         help="require snapshot profile evidence to include at least one block-compressed state-history segment",
+    )
+    parser.add_argument(
+        "--require-event-log-index-point-profile",
+        action="store_true",
+        help=(
+            "require snapshot profile evidence to include a non-empty "
+            "snapshotPointEventLogIndex point-index candidate"
+        ),
     )
     parser.add_argument(
         "--max-snapshot-point-sidecar-share-milli",

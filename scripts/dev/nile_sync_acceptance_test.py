@@ -1960,6 +1960,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     str(SCRIPT),
                     str(result),
                     "--require-snapshot-profile-evidence",
+                    "--require-event-log-index-point-profile",
                     "--max-snapshot-point-sidecar-share-milli",
                     "1000",
                     "--max-snapshot-point-snapshot-share-milli",
@@ -1974,6 +1975,34 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_event_log_index_point_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            row = add_snapshot_profile_evidence(clean_full_staged_sync_row())
+            row["snapshotPointEventLogIndexSegments"] = 0
+            row["snapshotPointEventLogIndexBytes"] = 0
+            row["snapshotPointEventLogIndexSidecarBytes"] = 0
+            row["snapshotPointEventLogIndexSidecarShareMilli"] = 0
+            row["snapshotPointEventLogIndexSnapshotShareMilli"] = 0
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-point-profile",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotPointEventLogIndexSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotPointEventLogIndexBytes=0, want > 0", proc.stderr)
 
     def test_accepts_required_compressed_state_history_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
