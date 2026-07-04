@@ -964,6 +964,9 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
 		return nil, err
 	}
+	if err := validateTransactionInfoBlockNumber(block.Number(), info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
 	}
@@ -1188,6 +1191,9 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 			return nil, fmt.Errorf("block %d transaction info %d is nil", block.Number(), i)
 		}
 		hash := tx.Hash()
+		if err := validateTransactionInfoBlockNumber(block.Number(), infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
+			return nil, err
+		}
 		if err := validateTransactionInfoID(hash, infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
 			return nil, err
 		}
@@ -1243,6 +1249,16 @@ func validateTransactionInfoID(hash common.Hash, info *corepb.TransactionInfo, c
 	}
 	if !bytes.Equal(info.Id, hash[:]) {
 		return fmt.Errorf("%s transaction info id 0x%x does not match transaction hash %s", context, info.Id, rpcHashHex(hash))
+	}
+	return nil
+}
+
+func validateTransactionInfoBlockNumber(blockNum uint64, info *corepb.TransactionInfo, context string) error {
+	if info == nil || info.BlockNumber == 0 {
+		return nil
+	}
+	if info.BlockNumber != int64(blockNum) {
+		return fmt.Errorf("%s transaction info block number %d does not match block %d", context, info.BlockNumber, blockNum)
 	}
 	return nil
 }

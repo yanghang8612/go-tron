@@ -821,6 +821,28 @@ func TestEthGetBlockReceipts_RejectsMismatchedTxInfoID(t *testing.T) {
 	}
 }
 
+func TestEthGetBlockReceipts_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "block 100 transaction 0 transaction info block number 101 does not match block 100") {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want txInfo block-number mismatch", errObj["message"])
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}}, nil)
+	if got, err := api.GetBlockReceipts("0x64"); err == nil || got != nil || !strings.Contains(err.Error(), "transaction info block number 101 does not match block 100") {
+		t.Fatalf("EthAPI.GetBlockReceipts = %v/%v, want txInfo block-number mismatch", got, err)
+	}
+}
+
 func TestEthGetTransactionByHash_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{tx: nil})
 	defer srv.Close()
@@ -985,6 +1007,30 @@ func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
 	}
 }
 
+func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	srv := newTestServer(t, &stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt "+txHash+" transaction info block number 101 does not match block 100") {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want txInfo block-number mismatch", errObj["message"])
+	}
+}
+
 func TestEthGetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) {
 	block := buildFreezeBlock()
 	tx := block.Transactions()[0]
@@ -1089,6 +1135,25 @@ func TestEthAPI_GetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
 	got, err := api.GetTransactionReceipt(txHash)
 	if err == nil || got != nil || !strings.Contains(err.Error(), "does not match transaction hash") {
 		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want txInfo/hash mismatch", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "transaction info block number 101 does not match block 100") {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want txInfo block-number mismatch", got, err)
 	}
 }
 

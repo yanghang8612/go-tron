@@ -485,6 +485,9 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
 		return nil, err
 	}
+	if err := validateTransactionInfoBlockNumber(block.Number(), info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
 	}
