@@ -126,6 +126,9 @@ The output path is printed at startup. Each JSON row contains:
 - `archiveApiTxProbe`
 - `archiveApiTxHash`
 - `archiveApiTxMethods`
+- `archiveApiExpectedBalance`
+- `archiveApiExpectedCode`
+- `archiveApiExpectedStorage`
 - `storageBenchmarkPrometheus`
 - `storageAlertPrometheus`
 
@@ -211,7 +214,11 @@ when a run needs to target a known historical contract/account. Pass
 `eth_estimateGas` against that address. Pass `--archive-api-trace-block` when
 the run should also prove
 `debug_traceBlockByNumber` and `debug_traceBlockByHash` on the selected
-historical block.
+historical block. Pass `--archive-api-expected-balance`,
+`--archive-api-expected-code`, or `--archive-api-expected-storage` when the
+sample has live-at-height fixture values; a mismatch makes the corresponding
+account/code/storage method fail and the row keeps the fixture in
+`archiveApiExpected*`.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -504,7 +511,10 @@ address/topic filters. Add `--require-archive-filtered-log-evidence` when the
 benchmark targets a block with receipt logs and the acceptance gate must prove
 that filtered event-log lookup path. Add `--require-archive-call-evidence` when
 the samples also pass `--archive-api-call-data` against a known historical
-contract. Add
+contract. When the samples pass `--archive-api-expected-balance`,
+`--archive-api-expected-code`, or `--archive-api-expected-storage`, the archive
+probe only counts `eth_getBalance`, `eth_getCode`, or `eth_getStorageAt` as
+successful when the historical result matches that fixture. Add
 `--require-archive-trace-block` for runs collected with
 `--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
 and `debug_traceBlockByHash` probes. If the row also

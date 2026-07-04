@@ -407,6 +407,12 @@ class NileSyncSampleTest(unittest.TestCase):
                     "0x70a08231",
                     "--archive-api-trace-transaction",
                     "--archive-api-trace-block",
+                    "--archive-api-expected-balance",
+                    "0x00",
+                    "--archive-api-expected-code",
+                    "0x0",
+                    "--archive-api-expected-storage",
+                    "0x00",
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -416,6 +422,9 @@ class NileSyncSampleTest(unittest.TestCase):
 
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["archiveApiEndpoint"], endpoint)
+            self.assertEqual(row["archiveApiExpectedBalance"], "0x00")
+            self.assertEqual(row["archiveApiExpectedCode"], "0x0")
+            self.assertEqual(row["archiveApiExpectedStorage"], "0x00")
             self.assertEqual(row["archiveApiStatus"], "ok")
             self.assertEqual(row["archiveApiChecks"], 24)
             self.assertEqual(row["archiveApiFailures"], 0)
@@ -463,6 +472,57 @@ class NileSyncSampleTest(unittest.TestCase):
                     "debug_traceTransaction",
                 ],
             )
+
+    def test_archive_api_probe_rejects_expected_state_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--mode",
+                    "minimal",
+                    "--label",
+                    "candidate",
+                    "--archive-api-probe",
+                    "--archive-api-expected-balance",
+                    "0x1",
+                    "--archive-api-expected-code",
+                    "0x0",
+                    "--archive-api-expected-storage",
+                    "0x0",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiExpectedBalance"], "0x1")
+            self.assertEqual(row["archiveApiExpectedCode"], "0x0")
+            self.assertEqual(row["archiveApiExpectedStorage"], "0x0")
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertNotIn("eth_getBalance", row["archiveApiMethods"])
+            self.assertIn("eth_getCode", row["archiveApiMethods"])
+            self.assertIn("eth_getStorageAt", row["archiveApiMethods"])
 
     def test_archive_api_probe_rejects_invalid_trace_block_result(self):
         with tempfile.TemporaryDirectory() as tmp:

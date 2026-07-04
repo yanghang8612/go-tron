@@ -774,7 +774,11 @@ Status:
   must match the requested historical block number, non-empty log results must
   match the requested block number and hash, and transaction or receipt results
   must match the transaction hash, block number, and block hash selected from
-  that block. Acceptance also requires tx proof to carry same-row archive API
+  that block. When a run supplies `archiveApiExpectedBalance`,
+  `archiveApiExpectedCode`, or `archiveApiExpectedStorage`, the probe also
+  compares `eth_getBalance`, `eth_getCode`, and `eth_getStorageAt` against
+  those live-at-height fixtures before marking the method successful.
+  Acceptance also requires tx proof to carry same-row archive API
   evidence and a `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars,
   `null`, wrong-log, receipt logs missing from `eth_getLogs`,
   wrong-transaction or wrong-block results, detached tx rows, or malformed

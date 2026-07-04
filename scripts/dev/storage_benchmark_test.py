@@ -139,6 +139,12 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "0x70a08231",
                     "--archive-api-trace-transaction",
                     "--archive-api-trace-block",
+                    "--archive-api-expected-balance",
+                    "0x00",
+                    "--archive-api-expected-code",
+                    "0x0",
+                    "--archive-api-expected-storage",
+                    "0x00",
                 ],
                 cwd=REPO_ROOT,
                 env=env,
@@ -158,6 +164,9 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertTrue(row["archiveApiCallProbe"])
             self.assertTrue(row["archiveApiTraceTransactionProbe"])
             self.assertTrue(row["archiveApiTraceBlockProbe"])
+            self.assertEqual(row["archiveApiExpectedBalance"], "0x00")
+            self.assertEqual(row["archiveApiExpectedCode"], "0x0")
+            self.assertEqual(row["archiveApiExpectedStorage"], "0x00")
             self.assertEqual(
                 row["archiveApiMethods"],
                 [
@@ -233,6 +242,143 @@ class StorageBenchmarkTest(unittest.TestCase):
                 benchmark_metrics,
                 r'gtron_storage_benchmark_archive_api_tx_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 1\n',
             )
+
+    def test_archive_api_probe_rejects_expected_state_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            bindir = tmpdir / "bin"
+            bindir.mkdir()
+            fake_curl = bindir / "curl"
+            fake_curl.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    url="${@: -1}"
+                    payload=""
+                    prev=""
+                    for arg in "$@"; do
+                      if [ "$prev" = "--data-binary" ]; then
+                        payload="$arg"
+                      fi
+                      prev="$arg"
+                    done
+                    case "$url" in
+                      */wallet/getnowblock)
+                        printf '%s\\n' '{"blockID":"0000000200000000000000000000000000000000000000000000000000000000","block_header":{"raw_data":{"number":2}}}'
+                        ;;
+                      */wallet/getnodeinfo)
+                        printf '%s\\n' '{"currentBlock":2}'
+                        ;;
+                      http://127.0.0.1:*)
+                        case "$payload" in
+                          *eth_getBlockByNumber*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockByHash*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"number":"0x1","hash":"0xabababababababababababababababababababababababababababababababab","transactions":["0x1212121212121212121212121212121212121212121212121212121212121212"]}}'
+                            ;;
+                          *eth_getBlockReceipts*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab"}]}'
+                            ;;
+                          *eth_getLogs*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
+                            ;;
+                          *eth_getUncleByBlockNumberAndIndex*|*eth_getUncleByBlockHashAndIndex*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":null}'
+                            ;;
+                          *eth_getTransactionByHash*|*eth_getTransactionReceipt*|*eth_getTransactionByBlockNumberAndIndex*|*eth_getTransactionByBlockHashAndIndex*)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"hash":"0x1212121212121212121212121212121212121212121212121212121212121212","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab","transactionIndex":"0x0"}}'
+                            ;;
+                          *)
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":"0x0"}'
+                            ;;
+                        esac
+                        ;;
+                      *)
+                        printf '%s\\n' '{}'
+                        ;;
+                    esac
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_curl, 0o755)
+
+            fake_gtron = tmpdir / "gtron"
+            fake_gtron.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    if [ "${1:-}" = "db" ] && [ "${2:-}" = "storage-alerts" ]; then
+                      for arg in "$@"; do
+                        if [ "$arg" = "--prometheus" ]; then
+                          cat <<'EOF'
+                    # TYPE gtron_storage_alert_status gauge
+                    gtron_storage_alert_status{datadir="/tmp/gtron"} 0
+                    EOF
+                          exit 0
+                        fi
+                      done
+                      cat <<'EOF'
+                    {"datadir":"/tmp/gtron","status":"ok","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"ok","stageIssues":0,"stageVerifyDetails":[],"stagePipeline":{"complete":true,"pending":0,"issues":0,"tasks":[]},"modeStatus":"ok","modeIssues":0,"modeAlertDetails":[],"pruneMode":"full","pruneModePersisted":true,"snapshotStatus":"ok","snapshotIssues":0,"snapshotAlertDetails":[],"snapshotRetiredSegments":0,"snapshotRetiredFiles":0,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":0}
+                    EOF
+                      exit 0
+                    fi
+                    trap 'exit 0' TERM INT
+                    while true; do sleep 1; done
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(fake_gtron, 0o755)
+
+            workdir = tmpdir / "work"
+            output = tmpdir / "results.jsonl"
+            env = dict(os.environ)
+            env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--profile",
+                    "producer",
+                    "--modes",
+                    "full",
+                    "--target-blocks",
+                    "2",
+                    "--timeout",
+                    "5",
+                    "--workdir",
+                    str(workdir),
+                    "--output",
+                    str(output),
+                    "--gtron",
+                    str(fake_gtron),
+                    "--no-build",
+                    "--archive-api-probe",
+                    "--archive-api-expected-balance",
+                    "0x0",
+                    "--archive-api-expected-code",
+                    "0x0",
+                    "--archive-api-expected-storage",
+                    "0x1",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
+            self.assertEqual(row["archiveApiExpectedBalance"], "0x0")
+            self.assertEqual(row["archiveApiExpectedCode"], "0x0")
+            self.assertEqual(row["archiveApiExpectedStorage"], "0x1")
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertIn("eth_getBalance", row["archiveApiMethods"])
+            self.assertIn("eth_getCode", row["archiveApiMethods"])
+            self.assertNotIn("eth_getStorageAt", row["archiveApiMethods"])
 
     def test_archive_api_probe_rejects_invalid_trace_transaction_result(self):
         with tempfile.TemporaryDirectory() as tmp:

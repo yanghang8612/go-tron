@@ -33,6 +33,9 @@ ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
 ARCHIVE_API_TRACE_TRANSACTION=0
 ARCHIVE_API_TRACE_BLOCK=0
+ARCHIVE_API_EXPECTED_BALANCE=""
+ARCHIVE_API_EXPECTED_CODE=""
+ARCHIVE_API_EXPECTED_STORAGE=""
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -159,6 +162,12 @@ Options:
                                   Include debug_traceTransaction when archive-api-block has a transaction
   --archive-api-trace-block
                                   Include debug_traceBlockByNumber/Hash for archive-api-block
+  --archive-api-expected-balance HEX
+                                  Expected eth_getBalance value for archive-api-address at the probe block
+  --archive-api-expected-code HEX
+                                  Expected eth_getCode value for archive-api-address at the probe block
+  --archive-api-expected-storage HEX
+                                  Expected eth_getStorageAt value for archive-api-address/storage-slot at the probe block
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,snap,archive --target-blocks 80
@@ -199,6 +208,9 @@ while [ "$#" -gt 0 ]; do
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
     --archive-api-trace-block) ARCHIVE_API_TRACE_BLOCK=1; shift ;;
+    --archive-api-expected-balance) ARCHIVE_API_EXPECTED_BALANCE="${2:?}"; shift 2 ;;
+    --archive-api-expected-code) ARCHIVE_API_EXPECTED_CODE="${2:?}"; shift 2 ;;
+    --archive-api-expected-storage) ARCHIVE_API_EXPECTED_STORAGE="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -1272,7 +1284,10 @@ archive_api_probe_values() {
   local call_data="$5"
   local trace_transaction="$6"
   local trace_block="$7"
-  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" "$trace_transaction" "$trace_block" <<'PY'
+  local expected_balance="$8"
+  local expected_code="$9"
+  local expected_storage="${10}"
+  python3 - "$endpoint" "$block" "$address" "$slot" "$call_data" "$trace_transaction" "$trace_block" "$expected_balance" "$expected_code" "$expected_storage" <<'PY'
 import json
 import subprocess
 import sys
@@ -1284,6 +1299,9 @@ slot = sys.argv[4]
 call_data = sys.argv[5]
 trace_transaction = sys.argv[6] == "1"
 trace_block = sys.argv[7] == "1"
+expected_balance = sys.argv[8]
+expected_code = sys.argv[9]
+expected_storage = sys.argv[10]
 block_tag = hex(block)
 
 def rpc_call(request_id, method, params):
@@ -1339,6 +1357,28 @@ def is_hex_string(value):
         and value.startswith("0x")
         and all(ch in "0123456789abcdefABCDEF" for ch in value[2:])
     )
+
+expected_archive_values = {
+    "eth_getBalance": expected_balance,
+    "eth_getCode": expected_code,
+    "eth_getStorageAt": expected_storage,
+}
+
+def expected_archive_value_ok(method, result):
+    expected = expected_archive_values.get(method, "")
+    if not expected:
+        return True
+    if not is_hex_string(result) or not is_hex_string(expected):
+        return False
+    if method in {"eth_getBalance", "eth_getStorageAt"}:
+        result_quantity = hex_quantity(result)
+        expected_quantity = hex_quantity(expected)
+        return (
+            result_quantity is not None
+            and expected_quantity is not None
+            and result_quantity == expected_quantity
+        )
+    return result.lower() == expected.lower()
 
 selected_block_hash = ""
 selected_tx_hash = ""
@@ -1573,7 +1613,9 @@ def archive_result_ok(method, result, params):
         selected_receipt_log_signatures.clear()
         selected_receipt_log_signatures.extend(pending_log_signatures)
         return True
-    if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
+    if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt"}:
+        return is_hex_string(result) and expected_archive_value_ok(method, result)
+    if method in {"eth_call", "eth_estimateGas"}:
         return is_hex_string(result)
     if method in {"debug_traceCall", "debug_traceTransaction"}:
         return trace_result_ok(result)
@@ -1786,7 +1828,7 @@ run_archive_api_probe() {
   fi
   local values
   echo "probing archive JSON-RPC APIs at block $probe_block" >>"$log_path"
-  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" "$ARCHIVE_API_TRACE_BLOCK")"
+  values="$(archive_api_probe_values "http://127.0.0.1:$jrpc_port" "$probe_block" "$ARCHIVE_API_ADDRESS" "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" "$ARCHIVE_API_TRACE_BLOCK" "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" "$ARCHIVE_API_EXPECTED_STORAGE")"
   RUN_ARCHIVE_API_STATUS="$(printf '%s\n' "$values" | sed -n '1p')"
   RUN_ARCHIVE_API_CHECKS="$(printf '%s\n' "$values" | sed -n '2p')"
   RUN_ARCHIVE_API_FAILURES="$(printf '%s\n' "$values" | sed -n '3p')"
@@ -2446,6 +2488,7 @@ emit_result() {
     "$RUN_ARCHIVE_API_BLOCK" "$RUN_ARCHIVE_API_DEPTH_BLOCKS" "$RUN_ARCHIVE_API_CALL_PROBE" \
     "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_TRACE_BLOCK_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
+    "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" "$ARCHIVE_API_EXPECTED_STORAGE" \
     "$snapshot_state_history_bytes" "$snapshot_state_history_compressed_segments" \
     "$snapshot_state_history_compressed_bytes" "$snapshot_state_history_compressed_share_milli" \
     "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
@@ -2517,7 +2560,8 @@ keys = [
     "snapshotRetiredBytes", "archiveApiStatus", "archiveApiChecks", "archiveApiFailures",
     "archiveApiBlock", "archiveApiDepthBlocks", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
     "archiveApiTraceBlockProbe", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
-    "archiveApiTxMethods",
+    "archiveApiTxMethods", "archiveApiExpectedBalance", "archiveApiExpectedCode",
+    "archiveApiExpectedStorage",
     "snapshotStateHistoryBytes", "snapshotStateHistoryCompressedSegments",
     "snapshotStateHistoryCompressedBytes", "snapshotStateHistoryCompressedShareMilli",
     "storageBenchmarkPrometheus", "storageAlertPrometheus",

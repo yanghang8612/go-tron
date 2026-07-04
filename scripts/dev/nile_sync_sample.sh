@@ -37,6 +37,9 @@ ARCHIVE_API_STORAGE_SLOT="0x0"
 ARCHIVE_API_CALL_DATA=""
 ARCHIVE_API_TRACE_TRANSACTION=0
 ARCHIVE_API_TRACE_BLOCK=0
+ARCHIVE_API_EXPECTED_BALANCE=""
+ARCHIVE_API_EXPECTED_CODE=""
+ARCHIVE_API_EXPECTED_STORAGE=""
 
 usage() {
   cat <<'EOF'
@@ -76,6 +79,12 @@ Options:
                               Include debug_traceTransaction when archive-api-block has a transaction
   --archive-api-trace-block
                               Include debug_traceBlockByNumber/Hash for archive-api-block
+  --archive-api-expected-balance HEX
+                              Expected eth_getBalance value for archive-api-address at the probe block
+  --archive-api-expected-code HEX
+                              Expected eth_getCode value for archive-api-address at the probe block
+  --archive-api-expected-storage HEX
+                              Expected eth_getStorageAt value for archive-api-address/storage-slot at the probe block
   -h, --help                 Show this help
 
 Examples:
@@ -123,6 +132,9 @@ while [ "$#" -gt 0 ]; do
     --archive-api-call-data) ARCHIVE_API_CALL_DATA="${2:?}"; shift 2 ;;
     --archive-api-trace-transaction) ARCHIVE_API_TRACE_TRANSACTION=1; shift ;;
     --archive-api-trace-block) ARCHIVE_API_TRACE_BLOCK=1; shift ;;
+    --archive-api-expected-balance) ARCHIVE_API_EXPECTED_BALANCE="${2:?}"; shift 2 ;;
+    --archive-api-expected-code) ARCHIVE_API_EXPECTED_CODE="${2:?}"; shift 2 ;;
+    --archive-api-expected-storage) ARCHIVE_API_EXPECTED_STORAGE="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -291,7 +303,8 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$offline_prometheus_status" "$storage_alerts_prometheus_path" \
   "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
   "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" \
-  "$ARCHIVE_API_TRACE_BLOCK" \
+  "$ARCHIVE_API_TRACE_BLOCK" "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" \
+  "$ARCHIVE_API_EXPECTED_STORAGE" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -342,6 +355,9 @@ from pathlib import Path
     archive_api_call_data,
     archive_api_trace_transaction,
     archive_api_trace_block,
+    archive_api_expected_balance,
+    archive_api_expected_code,
+    archive_api_expected_storage,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -397,7 +413,20 @@ def jsonrpc_call(endpoint, method, params=None, request_id=1):
         return None, False
     return response.get("result"), True
 
-def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot, call_data, trace_transaction, trace_block):
+def archive_api_probe_values(
+    enabled,
+    endpoint,
+    height,
+    raw_block,
+    address,
+    slot,
+    call_data,
+    trace_transaction,
+    trace_block,
+    expected_balance,
+    expected_code,
+    expected_storage,
+):
     row = {
         "archiveApiStatus": "not-run",
         "archiveApiEndpoint": endpoint,
@@ -412,6 +441,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         "archiveApiTxProbe": False,
         "archiveApiTxHash": "",
         "archiveApiTxMethods": [],
+        "archiveApiExpectedBalance": expected_balance,
+        "archiveApiExpectedCode": expected_code,
+        "archiveApiExpectedStorage": expected_storage,
     }
     if str(enabled) != "1":
         return row
@@ -445,6 +477,28 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             and value.startswith("0x")
             and all(ch in "0123456789abcdefABCDEF" for ch in value[2:])
         )
+
+    expected_archive_values = {
+        "eth_getBalance": expected_balance,
+        "eth_getCode": expected_code,
+        "eth_getStorageAt": expected_storage,
+    }
+
+    def expected_archive_value_ok(method, result):
+        expected = expected_archive_values.get(method, "")
+        if not expected:
+            return True
+        if not is_hex_string(result) or not is_hex_string(expected):
+            return False
+        if method in {"eth_getBalance", "eth_getStorageAt"}:
+            result_quantity = hex_quantity(result)
+            expected_quantity = hex_quantity(expected)
+            return (
+                result_quantity is not None
+                and expected_quantity is not None
+                and result_quantity == expected_quantity
+            )
+        return result.lower() == expected.lower()
 
     selected_block_hash = ""
     selected_tx_hash = ""
@@ -679,7 +733,9 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             selected_receipt_log_signatures.clear()
             selected_receipt_log_signatures.extend(pending_log_signatures)
             return True
-        if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
+        if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt"}:
+            return is_hex_string(result) and expected_archive_value_ok(method, result)
+        if method in {"eth_call", "eth_estimateGas"}:
             return is_hex_string(result)
         if method in {"debug_traceCall", "debug_traceTransaction"}:
             return trace_result_ok(result)
@@ -3349,6 +3405,9 @@ archive_api = archive_api_probe_values(
     archive_api_call_data,
     archive_api_trace_transaction,
     archive_api_trace_block,
+    archive_api_expected_balance,
+    archive_api_expected_code,
+    archive_api_expected_storage,
 )
 freezer_status = parse_freezer_status(freezer_status_rpc, jsonrpc)
 now = int(time.time())
