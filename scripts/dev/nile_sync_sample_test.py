@@ -118,17 +118,25 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         elif method == "eth_getTransactionByHash":
             if getattr(self.server, "null_tx_results", False):
                 result = None
+            elif getattr(self.server, "wrong_tx_block_metadata", False):
+                result = {"hash": tx_hash, "blockNumber": "0x64", "blockHash": "0x" + "cd" * 32}
             elif getattr(self.server, "mismatched_tx_results", False):
-                result = {"hash": wrong_tx_hash, "blockNumber": "0x63"}
+                result = {"hash": wrong_tx_hash, "blockNumber": "0x63", "blockHash": block_hash}
             else:
-                result = {"hash": tx_hash, "blockNumber": "0x63"}
+                result = {"hash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}
         elif method == "eth_getTransactionReceipt":
             if getattr(self.server, "null_tx_results", False):
                 result = None
+            elif getattr(self.server, "wrong_tx_block_metadata", False):
+                result = {
+                    "transactionHash": tx_hash,
+                    "blockNumber": "0x64",
+                    "blockHash": "0x" + "cd" * 32,
+                }
             elif getattr(self.server, "mismatched_tx_results", False):
-                result = {"transactionHash": wrong_tx_hash, "blockNumber": "0x63"}
+                result = {"transactionHash": wrong_tx_hash, "blockNumber": "0x63", "blockHash": block_hash}
             else:
-                result = {"transactionHash": tx_hash, "blockNumber": "0x63"}
+                result = {"transactionHash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}
         elif method in {"eth_getTransactionByBlockNumberAndIndex", "eth_getTransactionByBlockHashAndIndex"}:
             if getattr(self.server, "null_tx_results", False):
                 result = None
@@ -536,6 +544,53 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
             self.assertEqual(row["archiveApiTxMethods"], [])
+
+    def test_archive_api_probe_rejects_wrong_transaction_block_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.wrong_tx_block_metadata = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 2)
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
+            self.assertNotIn("eth_getTransactionByHash", row["archiveApiMethods"])
+            self.assertNotIn("eth_getTransactionReceipt", row["archiveApiMethods"])
 
     def test_archive_api_probe_rejects_non_hex_scalar_results(self):
         with tempfile.TemporaryDirectory() as tmp:

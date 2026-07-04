@@ -502,11 +502,10 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
                 if not isinstance(receipt, dict):
                     return False
                 result_number = hex_quantity(receipt.get("blockNumber"))
-                if requested_number is not None and result_number is not None and result_number != requested_number:
+                if result_number is None or result_number != requested_number:
                     return False
-                if selected_block_hash and receipt.get("blockHash") is not None:
-                    if normalize_hash(receipt.get("blockHash")) != selected_block_hash:
-                        return False
+                if selected_block_hash and normalize_hash(receipt.get("blockHash")) != selected_block_hash:
+                    return False
             return True
         if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
             return is_hex_string(result)
@@ -520,11 +519,21 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
             return (
                 isinstance(result, dict)
                 and normalize_hash(result.get("hash") or result.get("transactionHash")) == normalize_hash(params[0])
+                and hex_quantity(result.get("blockNumber")) == hex_quantity(block_tag)
+                and (
+                    not selected_block_hash
+                    or normalize_hash(result.get("blockHash")) == selected_block_hash
+                )
             )
         if method == "eth_getTransactionReceipt":
             return (
                 isinstance(result, dict)
                 and normalize_hash(result.get("transactionHash") or result.get("hash")) == normalize_hash(params[0])
+                and hex_quantity(result.get("blockNumber")) == hex_quantity(block_tag)
+                and (
+                    not selected_block_hash
+                    or normalize_hash(result.get("blockHash")) == selected_block_hash
+                )
             )
         if method == "eth_getTransactionByBlockNumberAndIndex":
             if not isinstance(result, dict):
