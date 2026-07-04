@@ -153,6 +153,32 @@ class StatePrefetchBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_when_any_explicit_variant_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.txt"
+            write_benchmark(benchmark, complete_rows())
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(benchmark),
+                    "--variant",
+                    "prefetch=on_workers=2_lookahead=8",
+                    "--variant",
+                    "prefetch=on_workers=4_lookahead=8",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "prefetch=on_workers=4_lookahead=8 LightTRX_HeavyState overhead=3.00%",
+                proc.stderr,
+            )
+
     def test_rejects_baseline_as_explicit_variant(self):
         with tempfile.TemporaryDirectory() as tmp:
             benchmark = Path(tmp) / "benchmark.txt"

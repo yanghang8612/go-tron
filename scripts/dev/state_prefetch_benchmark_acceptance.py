@@ -300,6 +300,13 @@ def check_benchmarks(samples, args):
         )
         for variant in variants
     ]
+    if args.variant:
+        for result in results:
+            issues.extend(result["issues"])
+        if issues:
+            return None, issues, results
+        return max(results, key=lambda result: result["score"]), [], results
+
     passing = [result for result in results if not result["issues"]]
     if passing and not issues:
         return max(passing, key=lambda result: result["score"]), [], results

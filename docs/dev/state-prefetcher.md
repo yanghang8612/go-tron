@@ -60,8 +60,9 @@ scripts/dev/state_prefetch_benchmark_acceptance.py \
 
 Without `--variant`, the checker selects the `prefetch=on_*` variant that meets
 the gates and has the best heavy cold-state improvement. Use `--variant` when
-validating one proposed default worker/lookahead pair; explicit variants must
-still be `prefetch=on...` rows, so the `prefetch=off` baseline cannot pass as a
+validating proposed default worker/lookahead pairs; when repeated, every
+explicit variant must pass the gates. Explicit variants must still be
+`prefetch=on...` rows, so the `prefetch=off` baseline cannot pass as a
 candidate when thresholds are loosened. The `--max-bytes-overhead` and
 `--max-allocs-overhead` gates are optional but recommended for rollout
 decisions; they fail any selected variant whose `B/op` or `allocs/op` median
