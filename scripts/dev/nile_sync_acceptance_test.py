@@ -5558,6 +5558,61 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 require_call_without_evidence_flag.stderr,
             )
 
+            require_filtered_logs = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_filtered_logs.returncode,
+                0,
+                require_filtered_logs.stdout + require_filtered_logs.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: eth_getLogsFiltered",
+                require_filtered_logs.stderr,
+            )
+
+            filtered_log_row = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            filtered_log_row["archiveApiChecks"] = 14
+            filtered_log_row["archiveApiMethods"] = [
+                *filtered_log_row["archiveApiMethods"],
+                "eth_getLogsFiltered",
+            ]
+            write_result(result, [filtered_log_row])
+
+            filtered_logs_ok = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(
+                filtered_logs_ok.returncode,
+                0,
+                filtered_logs_ok.stdout + filtered_logs_ok.stderr,
+            )
+            self.assertIn("nile sync acceptance: ok", filtered_logs_ok.stdout)
+
     def test_accepts_archive_api_depth_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

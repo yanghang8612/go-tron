@@ -493,7 +493,9 @@ same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed
 `eth_getBlockReceipts` returns receipt logs, the same-row `eth_getLogs` probe
 must include those logs before the archive API evidence is accepted; the
 follow-up `eth_getLogsFiltered` label proves the same log can be found through
-address/topic filters. Add
+address/topic filters. Add `--require-archive-filtered-log-evidence` when the
+benchmark targets a block with receipt logs and the acceptance gate must prove
+that filtered event-log lookup path. Add
 `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`, and
 `--archive-api-method eth_estimateGas` when the samples also pass
 `--archive-api-call-data` against a known historical contract. Add

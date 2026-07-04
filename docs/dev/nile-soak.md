@@ -737,7 +737,10 @@ receipts expose receipt logs, the same-block `eth_getLogs` probe must return
 the corresponding log entries as well. After that unfiltered log proof
 succeeds, the sampler also records an `eth_getLogsFiltered` archive method
 label for a second `eth_getLogs` call using a receipt-derived address/topic
-filter, so event-log index selectivity is covered by the same sample.
+filter, so event-log index selectivity is covered by the same sample. Add
+`--require-archive-filtered-log-evidence` to the acceptance command when the
+selected archive block is known to contain receipt logs and the run must prove
+the address/topic event-log lookup path.
 Add `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,
 and `--archive-api-method eth_estimateGas` to the acceptance command only for
 samples that were collected with `--archive-api-call-data`. Add

@@ -220,6 +220,7 @@ ARCHIVE_API_TX_METHODS = (
     "eth_getTransactionByBlockHashAndIndex",
 )
 
+ARCHIVE_API_FILTERED_LOG_METHOD = "eth_getLogsFiltered"
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
 ARCHIVE_API_TRACE_BLOCK_METHODS = (
     "debug_traceBlockByNumber",
@@ -2350,6 +2351,14 @@ def build_parser():
         help="comma-separated archive API methods that must appear in archiveApiMethods",
     )
     parser.add_argument(
+        "--require-archive-filtered-log-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence to include the eth_getLogsFiltered "
+            "label produced by a receipt-derived address/topic log query"
+        ),
+    )
+    parser.add_argument(
         "--min-archive-api-depth-blocks",
         type=float,
         metavar="BLOCKS",
@@ -2441,6 +2450,11 @@ def main(argv=None):
     for method in archive_api_methods_requested:
         if method not in archive_api_methods_required:
             archive_api_methods_required.append(method)
+    if (
+        args.require_archive_filtered_log_evidence
+        and ARCHIVE_API_FILTERED_LOG_METHOD not in archive_api_methods_required
+    ):
+        archive_api_methods_required.append(ARCHIVE_API_FILTERED_LOG_METHOD)
     if args.require_archive_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in archive_api_methods_required:
         archive_api_methods_required.append(ARCHIVE_API_TRACE_TX_METHOD)
     if args.require_archive_trace_block:
@@ -2463,6 +2477,7 @@ def main(argv=None):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
+        or args.require_archive_filtered_log_evidence
         or required_archive_tx_modes
         or archive_api_methods_requested
         or args.min_archive_api_depth_blocks is not None

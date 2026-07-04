@@ -572,6 +572,7 @@ ARCHIVE_API_CALL_METHODS = (
     "eth_estimateGas",
 )
 
+ARCHIVE_API_FILTERED_LOG_METHOD = "eth_getLogsFiltered"
 ARCHIVE_API_TRACE_TX_METHOD = "debug_traceTransaction"
 ARCHIVE_API_TRACE_BLOCK_METHODS = (
     "debug_traceBlockByNumber",
@@ -3576,6 +3577,7 @@ def check_row(row, args):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
+        or args.require_archive_filtered_log_evidence
         or args.archive_api_methods_requested
         or args.min_archive_api_depth_blocks is not None
     ):
@@ -3914,6 +3916,14 @@ def build_parser():
         help="comma-separated additional archive API methods that must appear in archiveApiMethods",
     )
     parser.add_argument(
+        "--require-archive-filtered-log-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence to include the eth_getLogsFiltered "
+            "label produced by a receipt-derived address/topic log query"
+        ),
+    )
+    parser.add_argument(
         "--min-archive-api-depth-blocks",
         type=float,
         metavar="BLOCKS",
@@ -4052,6 +4062,11 @@ def main(argv=None):
     for method in args.archive_api_methods_requested:
         if method not in args.archive_api_methods_required:
             args.archive_api_methods_required.append(method)
+    if (
+        args.require_archive_filtered_log_evidence
+        and ARCHIVE_API_FILTERED_LOG_METHOD not in args.archive_api_methods_required
+    ):
+        args.archive_api_methods_required.append(ARCHIVE_API_FILTERED_LOG_METHOD)
     rows, issues = load_rows(args.result)
     selected = filter_rows(rows, args)
     if not selected:

@@ -2151,7 +2151,10 @@ Status:
   unfiltered log proof succeeds, the same archive samplers add an
   `eth_getLogsFiltered` method label for a second `eth_getLogs` call with a
   receipt-derived address/topic filter, covering the event-log-index lookup
-  path rather than only full-block log scans. JSON-RPC transaction
+  path rather than only full-block log scans. The Nile and storage acceptance
+  gates now expose `--require-archive-filtered-log-evidence` so production runs
+  against known log-bearing blocks can require that proof directly instead of
+  only recording the label. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different
