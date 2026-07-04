@@ -1354,6 +1354,7 @@ def check_archive_api_evidence(
     min_depth_blocks=None,
     require_trace_block=False,
     require_call=False,
+    require_post_prune=False,
 ):
     issues = []
     latest = list(latest_rows(rows).values())
@@ -1474,6 +1475,16 @@ def check_archive_api_evidence(
                 issues.append(
                     f"{line_label(row)} archiveApiBlock={block:g} must be <= "
                     f"tailPrunedThroughBlock={tail_pruned:g} to prove post-prune archive reads"
+                )
+        if require_post_prune:
+            has_prune_boundary = (
+                (chain_lookup is not None and chain_lookup >= 0)
+                or (tail_pruned is not None and tail_pruned >= 0)
+            )
+            if not has_prune_boundary:
+                issues.append(
+                    f"{line_label(row)} post-prune archive API evidence requires "
+                    "chainLookupPruneToBlock or tailPrunedThroughBlock >= 0"
                 )
 
         methods = archive_api_methods(row)
@@ -2334,6 +2345,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-post-prune-archive-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence to include a prune boundary and "
+            "prove the probe block is at or below that boundary"
+        ),
+    )
+    parser.add_argument(
         "--require-archive-tx-mode",
         action="append",
         default=[],
@@ -2573,6 +2592,7 @@ def main(argv=None):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or args.require_archive_call_evidence
+        or args.require_post_prune_archive_evidence
         or args.require_archive_filtered_log_evidence
         or required_archive_tx_modes
         or archive_api_methods_requested
@@ -2586,6 +2606,7 @@ def main(argv=None):
                 min_depth_blocks=args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
                 require_call=args.require_archive_call_evidence,
+                require_post_prune=args.require_post_prune_archive_evidence,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction or required_archive_tx_modes:

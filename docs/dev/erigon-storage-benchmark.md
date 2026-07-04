@@ -417,6 +417,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --require-archive-api-evidence \
   --require-archive-api-mode minimal \
   --min-archive-api-depth-blocks 100 \
+  --require-post-prune-archive-evidence \
   --require-archive-tx-evidence \
   --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
@@ -486,6 +487,10 @@ probe reached at least that far below the sampled head. Add
 instead of letting an unpruned `archive` row satisfy the run. Repeat
 `--require-archive-api-mode` or use `--require-archive-api-modes` when a run
 must prove mode-local archive reads for more modes. Add
+`--require-post-prune-archive-evidence` when the row must prove the archive API
+block is at or below a reported `chainLookupPruneToBlock` or
+`tailPrunedThroughBlock` boundary, so archive success cannot be satisfied by a
+latest-state fallback before hot history has actually been pruned. Add
 `--require-archive-tx-evidence` and `--require-archive-tx-mode minimal` when the
 selected probe block is known to contain a transaction; this requires
 same-row archive API evidence, `archiveApiTxProbe=true`, a `0x`-prefixed

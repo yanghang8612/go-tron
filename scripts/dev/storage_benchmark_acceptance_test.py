@@ -2226,6 +2226,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--require-archive-api-evidence",
                     "--require-archive-api-mode",
                     "minimal",
+                    "--require-post-prune-archive-evidence",
                     "--min-archive-api-depth-blocks",
                     "100",
                 ],
@@ -2237,6 +2238,37 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("storage benchmark acceptance: ok", proc.stdout)
 
+            without_prune = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            without_prune.pop("tailPrunedThroughBlock", None)
+            write_result(result, [without_prune])
+            missing_post_prune = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-post-prune-archive-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                missing_post_prune.returncode,
+                0,
+                missing_post_prune.stdout + missing_post_prune.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer post-prune archive API evidence requires "
+                "chainLookupPruneToBlock or tailPrunedThroughBlock >= 0",
+                missing_post_prune.stderr,
+            )
+
+            write_result(result, rows)
             require_call = subprocess.run(
                 [
                     sys.executable,

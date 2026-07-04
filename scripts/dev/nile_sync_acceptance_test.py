@@ -5728,6 +5728,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 850,
                         "archiveApiDepthBlocks": 150,
+                        "chainLookupPruneToBlock": 900,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
@@ -5756,6 +5757,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "minimal",
                     "--no-require-stage-status",
                     "--require-archive-api-evidence",
+                    "--require-post-prune-archive-evidence",
                     "--min-archive-api-depth-blocks",
                     "100",
                 ],
@@ -5766,6 +5768,68 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_archive_api_evidence_without_post_prune_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 1000,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 13,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 850,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
+                            "eth_getUncleByBlockNumberAndIndex",
+                            "eth_getBlockReceipts",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                            "eth_getBlockByHash",
+                            "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
+                            "eth_getUncleByBlockHashAndIndex",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-post-prune-archive-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "post-prune archive API evidence requires chainLookupPruneToBlock "
+                "or tailPrunedThroughBlock >= 0",
+                proc.stderr,
+            )
 
     def test_rejects_archive_api_depth_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

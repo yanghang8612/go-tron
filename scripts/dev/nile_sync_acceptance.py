@@ -2770,6 +2770,7 @@ def check_archive_api_evidence(
     min_depth_blocks=None,
     require_trace_block=False,
     require_call=False,
+    require_post_prune=False,
 ):
     issues = []
     status = str(row.get("archiveApiStatus", "")).lower()
@@ -2864,6 +2865,16 @@ def check_archive_api_evidence(
             issues.append(
                 f"archiveApiBlock={block:g} must be <= tailPrunedThroughBlock={tail_pruned:g} "
                 "to prove post-prune archive reads"
+            )
+    if require_post_prune:
+        has_prune_boundary = (
+            (chain_lookup is not None and chain_lookup >= 0)
+            or (tail_pruned is not None and tail_pruned >= 0)
+        )
+        if not has_prune_boundary:
+            issues.append(
+                "post-prune archive API evidence requires chainLookupPruneToBlock "
+                "or tailPrunedThroughBlock >= 0"
             )
 
     methods = archive_api_methods(row)
@@ -3607,6 +3618,7 @@ def check_row(row, args):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or args.require_archive_call_evidence
+        or args.require_post_prune_archive_evidence
         or args.require_archive_filtered_log_evidence
         or args.archive_api_methods_requested
         or args.min_archive_api_depth_blocks is not None
@@ -3631,6 +3643,7 @@ def check_row(row, args):
                 args.min_archive_api_depth_blocks,
                 require_trace_block=args.require_archive_trace_block,
                 require_call=args.require_archive_call_evidence,
+                require_post_prune=args.require_post_prune_archive_evidence,
             )
         )
     if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
@@ -3891,6 +3904,14 @@ def build_parser():
         help=(
             "require archive API evidence collected with --archive-api-call-data, "
             "including eth_call, debug_traceCall, and eth_estimateGas"
+        ),
+    )
+    parser.add_argument(
+        "--require-post-prune-archive-evidence",
+        action="store_true",
+        help=(
+            "require archive API evidence to include a prune boundary and "
+            "prove the probe block is at or below that boundary"
         ),
     )
     parser.add_argument(
