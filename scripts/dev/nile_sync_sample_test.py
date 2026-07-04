@@ -529,6 +529,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["archiveApiExpectedBalance"], "0x0")
             self.assertEqual(row["archiveApiExpectedCode"], "0x0")
             self.assertEqual(row["archiveApiExpectedStorage"], "0x0")
+            self.assertEqual(row["archiveApiFixtureFile"], str(fixture))
             self.assertEqual(row["archiveApiChecks"], 17)
             self.assertEqual(row["archiveApiFailures"], 0)
             self.assertTrue(row["archiveApiTxProbe"])

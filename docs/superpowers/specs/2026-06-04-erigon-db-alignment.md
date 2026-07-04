@@ -784,7 +784,9 @@ Status:
   `scripts/dev/archive_state_fixture_capture.py` standardizes collecting those
   fixture values from a reference JSON-RPC endpoint or a pre-prune candidate
   node and can emit shell-safe sampler/benchmark CLI arguments or a JSON
-  fixture consumed by `--archive-api-fixture-file`. Acceptance also
+  fixture consumed by `--archive-api-fixture-file`. Sampler rows now record
+  `archiveApiFixtureFile`, and acceptance can require that traceability with
+  `--require-archive-fixture-file`. Acceptance also
   requires tx proof to carry same-row archive API
   evidence and a `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars,
   `null`, wrong-log, receipt logs missing from `eth_getLogs`,

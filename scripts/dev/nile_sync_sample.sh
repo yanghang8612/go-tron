@@ -40,6 +40,7 @@ ARCHIVE_API_TRACE_BLOCK=0
 ARCHIVE_API_EXPECTED_BALANCE=""
 ARCHIVE_API_EXPECTED_CODE=""
 ARCHIVE_API_EXPECTED_STORAGE=""
+ARCHIVE_API_FIXTURE_FILE=""
 
 usage() {
   cat <<'EOF'
@@ -178,6 +179,7 @@ PY
     die "failed to load --archive-api-fixture-file: $file"
   fi
   ARCHIVE_API_PROBE=1
+  ARCHIVE_API_FIXTURE_FILE="$file"
   ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '1p')"
   ARCHIVE_API_ADDRESS="$(printf '%s\n' "$values" | sed -n '2p')"
   ARCHIVE_API_STORAGE_SLOT="$(printf '%s\n' "$values" | sed -n '3p')"
@@ -388,7 +390,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
   "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" \
   "$ARCHIVE_API_TRACE_BLOCK" "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" \
-  "$ARCHIVE_API_EXPECTED_STORAGE" \
+  "$ARCHIVE_API_EXPECTED_STORAGE" "$ARCHIVE_API_FIXTURE_FILE" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -442,6 +444,7 @@ from pathlib import Path
     archive_api_expected_balance,
     archive_api_expected_code,
     archive_api_expected_storage,
+    archive_api_fixture_file,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -510,6 +513,7 @@ def archive_api_probe_values(
     expected_balance,
     expected_code,
     expected_storage,
+    fixture_file,
 ):
     row = {
         "archiveApiStatus": "not-run",
@@ -528,6 +532,7 @@ def archive_api_probe_values(
         "archiveApiExpectedBalance": expected_balance,
         "archiveApiExpectedCode": expected_code,
         "archiveApiExpectedStorage": expected_storage,
+        "archiveApiFixtureFile": fixture_file,
     }
     if str(enabled) != "1":
         return row
@@ -3492,6 +3497,7 @@ archive_api = archive_api_probe_values(
     archive_api_expected_balance,
     archive_api_expected_code,
     archive_api_expected_storage,
+    archive_api_fixture_file,
 )
 freezer_status = parse_freezer_status(freezer_status_rpc, jsonrpc)
 now = int(time.time())

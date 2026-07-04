@@ -1373,6 +1373,16 @@ def check_archive_api_state_fixtures(row):
     return issues
 
 
+def check_archive_api_fixture_file(row):
+    value = row.get("archiveApiFixtureFile")
+    if not isinstance(value, str) or not value:
+        return [
+            f"{line_label(row)} archiveApiFixtureFile is missing; "
+            "run storage_benchmark.sh with --archive-api-fixture-file"
+        ]
+    return []
+
+
 def check_archive_api_evidence(
     rows,
     required_methods,
@@ -1381,6 +1391,7 @@ def check_archive_api_evidence(
     require_trace_block=False,
     require_call=False,
     require_state_fixtures=False,
+    require_fixture_file=False,
     require_post_prune=False,
 ):
     issues = []
@@ -1434,6 +1445,8 @@ def check_archive_api_evidence(
             )
         if require_state_fixtures:
             issues.extend(check_archive_api_state_fixtures(row))
+        if require_fixture_file:
+            issues.extend(check_archive_api_fixture_file(row))
 
         chain_lookup = None
         if field_present(row, "chainLookupPruneToBlock"):
@@ -2382,6 +2395,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--require-archive-fixture-file",
+        action="store_true",
+        help=(
+            "require archive API evidence rows to record the "
+            "--archive-api-fixture-file path used for expected state fixtures"
+        ),
+    )
+    parser.add_argument(
         "--require-post-prune-archive-evidence",
         action="store_true",
         help=(
@@ -2630,6 +2651,7 @@ def main(argv=None):
         or args.require_archive_trace_block
         or args.require_archive_call_evidence
         or args.require_archive_state_fixtures
+        or args.require_archive_fixture_file
         or args.require_post_prune_archive_evidence
         or args.require_archive_filtered_log_evidence
         or required_archive_tx_modes
@@ -2645,6 +2667,7 @@ def main(argv=None):
                 require_trace_block=args.require_archive_trace_block,
                 require_call=args.require_archive_call_evidence,
                 require_state_fixtures=args.require_archive_state_fixtures,
+                require_fixture_file=args.require_archive_fixture_file,
                 require_post_prune=args.require_post_prune_archive_evidence,
             )
         )

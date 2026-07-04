@@ -36,6 +36,7 @@ ARCHIVE_API_TRACE_BLOCK=0
 ARCHIVE_API_EXPECTED_BALANCE=""
 ARCHIVE_API_EXPECTED_CODE=""
 ARCHIVE_API_EXPECTED_STORAGE=""
+ARCHIVE_API_FIXTURE_FILE=""
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -255,6 +256,7 @@ PY
     die "failed to load --archive-api-fixture-file: $file"
   fi
   ARCHIVE_API_PROBE=1
+  ARCHIVE_API_FIXTURE_FILE="$file"
   ARCHIVE_API_BLOCK="$(printf '%s\n' "$values" | sed -n '1p')"
   ARCHIVE_API_ADDRESS="$(printf '%s\n' "$values" | sed -n '2p')"
   ARCHIVE_API_STORAGE_SLOT="$(printf '%s\n' "$values" | sed -n '3p')"
@@ -2573,6 +2575,7 @@ emit_result() {
     "$RUN_ARCHIVE_API_TRACE_TRANSACTION_PROBE" "$RUN_ARCHIVE_API_TRACE_BLOCK_PROBE" "$RUN_ARCHIVE_API_METHODS" \
     "$RUN_ARCHIVE_API_TX_PROBE" "$RUN_ARCHIVE_API_TX_HASH" "$RUN_ARCHIVE_API_TX_METHODS" \
     "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" "$ARCHIVE_API_EXPECTED_STORAGE" \
+    "$ARCHIVE_API_FIXTURE_FILE" \
     "$snapshot_state_history_bytes" "$snapshot_state_history_compressed_segments" \
     "$snapshot_state_history_compressed_bytes" "$snapshot_state_history_compressed_share_milli" \
     "$benchmark_prometheus" "$RUN_STORAGE_ALERT_PROMETHEUS" "$datadir" "$log_path" <<'PY'
@@ -2645,7 +2648,7 @@ keys = [
     "archiveApiBlock", "archiveApiDepthBlocks", "archiveApiCallProbe", "archiveApiTraceTransactionProbe",
     "archiveApiTraceBlockProbe", "archiveApiMethods", "archiveApiTxProbe", "archiveApiTxHash",
     "archiveApiTxMethods", "archiveApiExpectedBalance", "archiveApiExpectedCode",
-    "archiveApiExpectedStorage",
+    "archiveApiExpectedStorage", "archiveApiFixtureFile",
     "snapshotStateHistoryBytes", "snapshotStateHistoryCompressedSegments",
     "snapshotStateHistoryCompressedBytes", "snapshotStateHistoryCompressedShareMilli",
     "storageBenchmarkPrometheus", "storageAlertPrometheus",

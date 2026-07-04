@@ -5561,6 +5561,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "archiveApiExpectedBalance": "0x0",
                         "archiveApiExpectedCode": "0x",
                         "archiveApiExpectedStorage": "0x00",
+                        "archiveApiFixtureFile": "/tmp/archive-fixture.json",
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
                             "eth_getBlockTransactionCountByNumber",
@@ -5590,6 +5591,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "--no-require-stage-status",
                     "--require-archive-api-evidence",
                     "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -5753,6 +5755,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "minimal",
                     "--no-require-stage-status",
                     "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -5769,6 +5772,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
             self.assertIn("archiveApiExpectedStorage is missing", proc.stderr)
+            self.assertIn("archiveApiFixtureFile is missing", proc.stderr)
 
     def test_accepts_archive_api_depth_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

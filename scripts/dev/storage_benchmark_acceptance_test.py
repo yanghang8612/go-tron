@@ -2200,6 +2200,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "archiveApiExpectedBalance": "0x0",
                     "archiveApiExpectedCode": "0x",
                     "archiveApiExpectedStorage": "0x00",
+                    "archiveApiFixtureFile": "/tmp/archive-fixture.json",
                     "archiveApiMethods": [
                         "eth_getBlockByNumber",
                         "eth_getBlockTransactionCountByNumber",
@@ -2231,6 +2232,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "minimal",
                     "--require-post-prune-archive-evidence",
                     "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
                     "--min-archive-api-depth-blocks",
                     "100",
                 ],
@@ -2450,6 +2452,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "--role",
                     "producer",
                     "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -2467,6 +2470,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             )
             self.assertIn(
                 "line 1 minimal/producer archiveApiExpectedStorage is missing",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiFixtureFile is missing",
                 proc.stderr,
             )
 

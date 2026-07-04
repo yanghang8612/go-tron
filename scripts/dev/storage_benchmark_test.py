@@ -176,6 +176,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["archiveApiExpectedBalance"], "0x00")
             self.assertEqual(row["archiveApiExpectedCode"], "0x0")
             self.assertEqual(row["archiveApiExpectedStorage"], "0x00")
+            self.assertEqual(row["archiveApiFixtureFile"], str(fixture))
             self.assertEqual(
                 row["archiveApiMethods"],
                 [

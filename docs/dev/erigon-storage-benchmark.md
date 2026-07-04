@@ -395,7 +395,9 @@ when the sample targets a known historical contract, then gate the result with
 account/code/storage values against live-at-height fixtures. The
 `archive_state_fixture_capture.py` helper can emit those flags, or a JSON file
 accepted by `--archive-api-fixture-file`, from a reference JSON-RPC endpoint
-before the post-prune sample is collected. The probe counts
+before the post-prune sample is collected. Rows collected through that file
+record `archiveApiFixtureFile`; gate with `--require-archive-fixture-file` when
+the acceptance run must prove the fixture-file path was captured. The probe counts
 only shape-valid JSON-RPC results as
 successful:
 block reads must return an object, account/code/storage/call reads must return
@@ -439,6 +441,7 @@ scripts/dev/storage_benchmark_acceptance.py results.jsonl \
   --min-archive-api-depth-blocks 100 \
   --require-post-prune-archive-evidence \
   --require-archive-state-fixtures \
+  --require-archive-fixture-file \
   --require-archive-tx-evidence \
   --require-archive-tx-mode minimal \
   --require-event-log-index-evidence \
@@ -531,6 +534,8 @@ probe only counts `eth_getBalance`, `eth_getCode`, or `eth_getStorageAt` as
 successful when the historical result matches that fixture. Add
 `--require-archive-state-fixtures` when the acceptance gate must reject rows
 that do not carry all three live-at-height fixture values. Add
+`--require-archive-fixture-file` when rows must also record the fixture JSON
+file that supplied those values. Add
 `--require-archive-trace-block` for runs collected with
 `--archive-api-trace-block`; it requires successful `debug_traceBlockByNumber`
 and `debug_traceBlockByHash` probes. If the row also
