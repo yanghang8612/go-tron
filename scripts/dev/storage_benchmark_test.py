@@ -394,6 +394,19 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getTransactionByBlockHashAndIndex",
                 ],
             )
+            benchmark_metrics = Path(row["storageBenchmarkPrometheus"]).read_text(encoding="utf-8")
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 0\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_tx_method_success\{[^}]*method="debug_traceTransaction"[^}]*\} 0\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_tx_method_success\{[^}]*method="eth_getTransactionReceipt"[^}]*\} 1\n',
+            )
 
     def test_archive_api_probe_rejects_null_transaction_results(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -827,6 +840,15 @@ class StorageBenchmarkTest(unittest.TestCase):
                     "eth_getTransactionByBlockNumberAndIndex",
                     "eth_getTransactionByBlockHashAndIndex",
                 ],
+            )
+            benchmark_metrics = Path(row["storageBenchmarkPrometheus"]).read_text(encoding="utf-8")
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="eth_getBalance"[^}]*\} 0\n',
+            )
+            self.assertRegex(
+                benchmark_metrics,
+                r'gtron_storage_benchmark_archive_api_method_success\{[^}]*method="eth_getBlockByNumber"[^}]*\} 1\n',
             )
 
     def test_emits_snapshot_manifest_profile_fields(self):
