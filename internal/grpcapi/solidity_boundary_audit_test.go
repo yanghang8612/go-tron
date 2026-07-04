@@ -139,6 +139,7 @@ func TestSolidityServerDoesNotAliasBackend(t *testing.T) {
 			continue
 		}
 		offenders = append(offenders, grpcAPISolidityBackendAliasOffenders(source.fset, source.path, fn.Body)...)
+		offenders = append(offenders, grpcAPISolidityBackendReceiverEscapeOffenders(source.fset, source.path, fn.Body)...)
 		offenders = append(offenders, grpcAPISolidityBackendMethodAliasOffenders(source.fset, source.path, fn.Body)...)
 	}
 	if len(offenders) > 0 {
@@ -163,6 +164,24 @@ func (s *SolidityServer) GetAccount() error {
 	offenders := grpcAPISolidityBackendAliasOffenders(source.fset, source.path, onlyGRPCAPISolidityFuncBody(t, source.file, "GetAccount"))
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver assigned to alias") {
 		t.Fatalf("offenders = %+v, want backend receiver alias rejected", offenders)
+	}
+}
+
+func TestSolidityServerBackendAliasAuditRejectsBackendReceiverArgument(t *testing.T) {
+	source := parseGRPCAPISolidityAuditSource(t, "fixture.go", `package grpcapi
+
+type SolidityServer struct{ backend *backend }
+type backend struct{}
+
+func useBackend(*backend, uint64) error { return nil }
+
+func (s *SolidityServer) GetAccount() error {
+	return useBackend(s.backend, s.solidNum())
+}
+`)
+	offenders := grpcAPISolidityBackendReceiverEscapeOffenders(source.fset, source.path, onlyGRPCAPISolidityFuncBody(t, source.file, "GetAccount"))
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver referenced outside a method selector") {
+		t.Fatalf("offenders = %+v, want backend receiver argument rejected", offenders)
 	}
 }
 
@@ -298,6 +317,29 @@ func grpcAPISolidityBackendAliasOffenders(fset *token.FileSet, path string, body
 	return offenders
 }
 
+func grpcAPISolidityBackendReceiverEscapeOffenders(fset *token.FileSet, path string, body *ast.BlockStmt) []string {
+	var offenders []string
+	stack := make([]ast.Node, 0, 16)
+	ast.Inspect(body, func(node ast.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		sel, ok := node.(*ast.SelectorExpr)
+		if ok && isGRPCAPISolidityBackendSelector(sel) && !grpcAPISolidityBackendMethodReceiver(parent, sel) {
+			offenders = append(offenders, fmt.Sprintf("%s:%d: backend receiver referenced outside a method selector",
+				path, fset.Position(sel.Pos()).Line))
+		}
+		stack = append(stack, node)
+		return true
+	})
+	return offenders
+}
+
 func grpcAPISolidityBackendMethodAliasOffenders(fset *token.FileSet, path string, body *ast.BlockStmt) []string {
 	var offenders []string
 	stack := make([]ast.Node, 0, 16)
@@ -319,6 +361,11 @@ func grpcAPISolidityBackendMethodAliasOffenders(fset *token.FileSet, path string
 		return true
 	})
 	return offenders
+}
+
+func grpcAPISolidityBackendMethodReceiver(parent ast.Node, expr ast.Expr) bool {
+	sel, ok := parent.(*ast.SelectorExpr)
+	return ok && sel.X == expr
 }
 
 func grpcAPISolidityDirectCallFun(parent ast.Node, expr ast.Expr) bool {

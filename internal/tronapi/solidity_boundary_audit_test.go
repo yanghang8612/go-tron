@@ -75,6 +75,7 @@ func TestTronAPIBoundHandlersDoNotAliasBackend(t *testing.T) {
 				continue
 			}
 			offenders = append(offenders, tronAPIBackendAliasOffenders(source.fset, source.path, fn.Body)...)
+			offenders = append(offenders, tronAPIBackendReceiverEscapeOffenders(source.fset, source.path, fn.Body)...)
 			offenders = append(offenders, tronAPIBackendMethodAliasOffenders(source.fset, source.path, fn.Body)...)
 		}
 	}
@@ -100,6 +101,24 @@ func (api *API) handleGetAccount(boundFn func() uint64) error {
 	offenders := tronAPIBackendAliasOffenders(source.fset, source.path, onlyTronAPIFuncBody(t, source.file, "handleGetAccount"))
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver assigned to alias") {
 		t.Fatalf("offenders = %+v, want backend receiver alias rejected", offenders)
+	}
+}
+
+func TestTronAPIBackendAliasAuditRejectsBackendReceiverArgument(t *testing.T) {
+	source := parseTronAPIAuditSource(t, "fixture.go", `package tronapi
+
+type API struct{ backend *backend }
+type backend struct{}
+
+func useBackend(*backend, uint64) error { return nil }
+
+func (api *API) handleGetAccount(boundFn func() uint64) error {
+	return useBackend(api.backend, boundFn())
+}
+`)
+	offenders := tronAPIBackendReceiverEscapeOffenders(source.fset, source.path, onlyTronAPIFuncBody(t, source.file, "handleGetAccount"))
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver referenced outside a method selector") {
+		t.Fatalf("offenders = %+v, want backend receiver argument rejected", offenders)
 	}
 }
 
@@ -350,6 +369,29 @@ func tronAPIBackendAliasOffenders(fset *token.FileSet, path string, body *ast.Bl
 	return offenders
 }
 
+func tronAPIBackendReceiverEscapeOffenders(fset *token.FileSet, path string, body *ast.BlockStmt) []string {
+	var offenders []string
+	stack := make([]ast.Node, 0, 16)
+	ast.Inspect(body, func(node ast.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		sel, ok := node.(*ast.SelectorExpr)
+		if ok && isTronAPIBackendSelector(sel) && !isTronAPIBackendMethodReceiver(parent, sel) {
+			offenders = append(offenders, fmt.Sprintf("%s:%d: backend receiver referenced outside a method selector",
+				path, fset.Position(sel.Pos()).Line))
+		}
+		stack = append(stack, node)
+		return true
+	})
+	return offenders
+}
+
 func tronAPIBackendMethodAliasOffenders(fset *token.FileSet, path string, body *ast.BlockStmt) []string {
 	var offenders []string
 	stack := make([]ast.Node, 0, 16)
@@ -380,6 +422,11 @@ func isTronAPIBackendSelector(expr ast.Expr) bool {
 	}
 	ident, ok := sel.X.(*ast.Ident)
 	return ok && ident.Name == "api"
+}
+
+func isTronAPIBackendMethodReceiver(parent ast.Node, expr ast.Expr) bool {
+	sel, ok := parent.(*ast.SelectorExpr)
+	return ok && sel.X == expr
 }
 
 func isTronAPIDirectCallFun(parent ast.Node, expr ast.Expr) bool {

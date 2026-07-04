@@ -82,9 +82,10 @@ func TestJSONRPCArchiveBackendReceiverIsNotAliased(t *testing.T) {
 	for _, sourceFile := range []string{"api.go", "ethapi.go"} {
 		fset, file := parseJSONRPCSourceWithFileSet(t, sourceFile)
 		offenders = append(offenders, jsonRPCBackendAliasAssignments(fset, sourceFile, file)...)
+		offenders = append(offenders, jsonRPCBackendReceiverEscapes(fset, sourceFile, file)...)
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("JSON-RPC backend receiver must not be assigned to aliases; alias calls bypass archive-boundary selector audits:\n%s",
+		t.Fatalf("JSON-RPC backend receiver must not be aliased or passed through helpers; indirect calls bypass archive-boundary selector audits:\n%s",
 			strings.Join(offenders, "\n"))
 	}
 }
@@ -140,6 +141,31 @@ func (api *API) ethGetBalance(block uint64) error {
 	offenders := jsonRPCBackendAliasAssignments(fset, sourceFile, file)
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver assigned to alias") {
 		t.Fatalf("offenders = %+v, want backend receiver alias rejected", offenders)
+	}
+}
+
+func TestJSONRPCArchiveBackendAuditRejectsBackendReceiverArgument(t *testing.T) {
+	const sourceFile = "fixture.go"
+	const source = `package jsonrpc
+
+type API struct{ backend *backend }
+type backend struct{}
+
+func useBackend(*backend, uint64) error { return nil }
+
+func (api *API) ethGetBalance(block uint64) error {
+	return useBackend(api.backend, block)
+}
+`
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+	offenders := jsonRPCBackendReceiverEscapes(fset, sourceFile, file)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver referenced outside a method selector") {
+		t.Fatalf("offenders = %+v, want backend receiver argument rejected", offenders)
 	}
 }
 
@@ -260,6 +286,31 @@ func jsonRPCBackendAliasAssignments(fset *token.FileSet, sourceFile string, file
 	return offenders
 }
 
+func jsonRPCBackendReceiverEscapes(fset *token.FileSet, sourceFile string, file *ast.File) []string {
+	var offenders []string
+	stack := make([]ast.Node, 0, 16)
+	ast.Inspect(file, func(node ast.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		sel, ok := node.(*ast.SelectorExpr)
+		if ok && isBackendSelector(sel) &&
+			!isJSONRPCBackendMethodReceiver(parent, sel) &&
+			!isJSONRPCAllowedBackendHelperArgument(parent, sel) {
+			offenders = append(offenders, fmt.Sprintf("%s:%d: backend receiver referenced outside a method selector",
+				sourceFile, fset.Position(sel.Pos()).Line))
+		}
+		stack = append(stack, node)
+		return true
+	})
+	return offenders
+}
+
 func jsonRPCArchiveBackendMethods() map[string]struct{} {
 	return map[string]struct{}{
 		"Call":              {},
@@ -278,6 +329,37 @@ func jsonRPCArchiveBackendMethods() map[string]struct{} {
 func isJSONRPCDirectCallFun(parent ast.Node, expr ast.Expr) bool {
 	call, ok := parent.(*ast.CallExpr)
 	return ok && call.Fun == expr
+}
+
+func isJSONRPCBackendMethodReceiver(parent ast.Node, expr ast.Expr) bool {
+	sel, ok := parent.(*ast.SelectorExpr)
+	return ok && sel.X == expr
+}
+
+func isJSONRPCAllowedBackendHelperArgument(parent ast.Node, expr ast.Expr) bool {
+	call, ok := parent.(*ast.CallExpr)
+	if !ok || !jsonRPCExprIsCallArg(call, expr) {
+		return false
+	}
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch ident.Name {
+	case "blockByNumberOrHash", "blockReceiptsToRPC":
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonRPCExprIsCallArg(call *ast.CallExpr, expr ast.Expr) bool {
+	for _, arg := range call.Args {
+		if arg == expr {
+			return true
+		}
+	}
+	return false
 }
 
 func isBackendSelector(expr ast.Expr) bool {

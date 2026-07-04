@@ -1961,22 +1961,26 @@ Status:
   audited exceptions. The matching wrapper audit also requires each
   `/walletsolidity` and `/walletpbft` wrapper to forward exactly once to its
   expected shared handler with the solid or PBFT bound. The audit also rejects
-  local aliases of the HTTP backend receiver and function-value aliases of
-  backend methods, so selector-based coverage cannot be bypassed by indirect
-  calls.
+  local aliases or helper arguments of the HTTP backend receiver and
+  function-value aliases of backend methods, so selector-based coverage cannot
+  be bypassed by indirect calls.
 - WalletSolidity gRPC now has the same source-audit boundary: every direct
   `SolidityServer` backend call is enumerated, state/query methods must use the
   solid-bound `At` backend APIs with `s.solidNum()`, and block/transaction
   lookups stay listed as explicit boundary-gate exceptions. The gRPC audit also
-  rejects local aliases of `s.backend` and backend method function values.
+  rejects local aliases or helper arguments of `s.backend` and backend method
+  function values.
 - JSON-RPC source-audit coverage now checks both the reflection `EthAPI` and the
   legacy dispatch handlers: state/execution methods with historical block tags
   must keep paired live and archive backend calls (`GetBalance`/`GetBalanceAt`,
   `Call`/`CallAt`, `EstimateGas`/`EstimateGasAt`, etc.), while explicit
   constants such as TRON's nonce-less `eth_getTransactionCount` stay listed as
   audited exceptions. The same audit now rejects function-value aliases of
-  those live/archive backend methods and local aliases of the JSON-RPC backend
-  receiver, so indirect calls cannot bypass the selector-based boundary check.
+  those live/archive backend methods and local aliases or unaudited helper
+  arguments of the JSON-RPC backend receiver, so indirect calls cannot bypass
+  the selector-based boundary check. The only receiver-helper exceptions are
+  the explicit JSON-RPC block/receipt helpers, which do not route state
+  archive reads.
 - JSON-RPC `debug_traceCall`, `debug_traceTransaction`,
   `debug_traceBlockByNumber`, and `debug_traceBlockByHash` now use the same
   archive execution-state setup as `eth_call`: historical traces can run from
