@@ -865,6 +865,132 @@ func TestEthGetBlockReceipts_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
 	}
 }
 
+func TestEthGetBlockReceipts_UsesBlockGlobalLogIndexes(t *testing.T) {
+	block, infos := buildReceiptLogIndexBlock()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: infos})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	receipts, ok := resp["result"].([]interface{})
+	if !ok || len(receipts) != 2 {
+		t.Fatalf("eth_getBlockReceipts result = %T %v, want two receipts", resp["result"], resp["result"])
+	}
+	if got := receiptLogIndexes(t, receipts[0]); !stringSlicesEqual(got, []string{"0x0"}) {
+		t.Fatalf("first receipt log indexes = %v, want [0x0]", got)
+	}
+	if got := receiptLogIndexes(t, receipts[1]); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("second receipt log indexes = %v, want [0x1 0x2]", got)
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfos: infos}, nil)
+	got, err := api.GetBlockReceipts("0x64")
+	if err != nil {
+		t.Fatalf("EthAPI.GetBlockReceipts: %v", err)
+	}
+	apiReceipts, ok := got.([]interface{})
+	if !ok || len(apiReceipts) != 2 {
+		t.Fatalf("EthAPI.GetBlockReceipts = %T %v, want two receipts", got, got)
+	}
+	if got := receiptLogIndexes(t, apiReceipts[1]); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("EthAPI second receipt log indexes = %v, want [0x1 0x2]", got)
+	}
+}
+
+func buildReceiptLogIndexBlock() (*types.Block, []*corepb.TransactionInfo) {
+	tx1PB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  10_001,
+			Expiration: 20_001,
+			Data:       []byte{0x01},
+		},
+	}
+	tx2PB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  10_002,
+			Expiration: 20_002,
+			Data:       []byte{0x02},
+		},
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    100,
+				Timestamp: 30_000,
+			},
+		},
+		Transactions: []*corepb.Transaction{tx1PB, tx2PB},
+	})
+	txs := block.Transactions()
+	log := func(seed byte) *corepb.TransactionInfo_Log {
+		return &corepb.TransactionInfo_Log{
+			Address: bytes.Repeat([]byte{seed}, 20),
+			Topics:  [][]byte{bytes.Repeat([]byte{seed + 1}, common.HashLength)},
+			Data:    []byte{seed, seed + 2},
+		}
+	}
+	return block, []*corepb.TransactionInfo{
+		{
+			Id:          append([]byte(nil), txs[0].Hash().Bytes()...),
+			BlockNumber: int64(block.Number()),
+			Log:         []*corepb.TransactionInfo_Log{log(0x10)},
+		},
+		{
+			Id:          append([]byte(nil), txs[1].Hash().Bytes()...),
+			BlockNumber: int64(block.Number()),
+			Log:         []*corepb.TransactionInfo_Log{log(0x20), log(0x30)},
+		},
+	}
+}
+
+func receiptLogIndexes(t *testing.T, raw interface{}) []string {
+	t.Helper()
+	receipt, ok := raw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("receipt = %T %v, want object", raw, raw)
+	}
+	switch logs := receipt["logs"].(type) {
+	case []interface{}:
+		out := make([]string, 0, len(logs))
+		for _, item := range logs {
+			logObj, ok := item.(map[string]interface{})
+			if !ok {
+				t.Fatalf("receipt log = %T %v, want object", item, item)
+			}
+			index, ok := logObj["logIndex"].(string)
+			if !ok {
+				t.Fatalf("receipt log index = %T %v, want string", logObj["logIndex"], logObj["logIndex"])
+			}
+			out = append(out, index)
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]string, 0, len(logs))
+		for _, logObj := range logs {
+			index, ok := logObj["logIndex"].(string)
+			if !ok {
+				t.Fatalf("receipt log index = %T %v, want string", logObj["logIndex"], logObj["logIndex"])
+			}
+			out = append(out, index)
+		}
+		return out
+	default:
+		t.Fatalf("receipt logs = %T %v, want array", receipt["logs"], receipt["logs"])
+		return nil
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestEthGetTransactionByHash_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{tx: nil})
 	defer srv.Close()
@@ -1072,6 +1198,44 @@ func TestEthGetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) 
 	}
 	if want := "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1"; errObj["message"] != want {
 		t.Fatalf("eth_getTransactionReceipt error message = %v, want %q", errObj["message"], want)
+	}
+}
+
+func TestEthGetTransactionReceipt_UsesBlockGlobalLogIndex(t *testing.T) {
+	block, infos := buildReceiptLogIndexBlock()
+	tx := block.Transactions()[1]
+	txHash := "0x" + tx.Hash().Hex()
+	backend := &stubBackend{
+		blockNumber: block.Number(),
+		txInfo:      infos[1],
+		tx:          tx.Proto(),
+		txBlock:     block,
+		txIndex:     1,
+		txInfos:     infos,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	receipt, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt result = %T %v, want receipt", resp["result"], resp["result"])
+	}
+	if got := receiptLogIndexes(t, receipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("eth_getTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
+	}
+
+	api := jsonrpc.NewEthAPI(backend, nil)
+	got, err := api.GetTransactionReceipt(txHash)
+	if err != nil {
+		t.Fatalf("EthAPI.GetTransactionReceipt: %v", err)
+	}
+	apiReceipt, ok := got.(map[string]interface{})
+	if !ok {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %T %v, want receipt", got, got)
+	}
+	if got := receiptLogIndexes(t, apiReceipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("EthAPI.GetTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
 	}
 }
 

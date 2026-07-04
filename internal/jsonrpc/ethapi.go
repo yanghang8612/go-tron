@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // callArgs is the {from,to,data,value} object accepted by eth_call and
@@ -490,7 +492,22 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
 	}
-	return receiptToRPC(hash, tx, info, block, index), nil
+	logIndexBase, err := e.receiptLogIndexBase(block, index, info)
+	if err != nil {
+		return nil, err
+	}
+	return receiptToRPC(hash, tx, info, block, index, logIndexBase), nil
+}
+
+func (e *EthAPI) receiptLogIndexBase(block *types.Block, txIndex int, info *corepb.TransactionInfo) (uint64, error) {
+	if txIndex <= 0 || len(info.GetLog()) == 0 {
+		return 0, nil
+	}
+	infos, err := e.backend.GetTransactionInfoByBlockNum(block.Number())
+	if err != nil {
+		return 0, err
+	}
+	return receiptLogIndexBaseFromInfos(block, txIndex, infos)
 }
 
 // GetBlockReceipts serves eth_getBlockReceipts for an Ethereum-compatible block

@@ -2151,7 +2151,11 @@ Status:
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different
-  transaction as archive proof. Block-number TransactionInfo queries use the
+  transaction as archive proof. Receipt log rendering now uses block-global
+  `logIndex` values for both `eth_getBlockReceipts` and
+  `eth_getTransactionReceipt`, matching `eth_getLogs`/cold event-log rows
+  instead of restarting indexes at zero inside each transaction receipt.
+  Block-number TransactionInfo queries use the
   same strict block-body read before validating retained `TransactionRet` rows.
   JSON-RPC `eth_getTransactionReceipt` now preserves those transaction/block
   lookup errors after the receipt row has been found instead of translating cold
