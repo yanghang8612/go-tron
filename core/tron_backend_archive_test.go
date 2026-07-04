@@ -760,6 +760,13 @@ func TestArchiveQuery_ProposalsAtUsesSystemProposalHistory(t *testing.T) {
 		len(list1[0].Parameters) != 1 || list1[0].Parameters[0].Key != 3 || list1[0].Parameters[0].Value != 30 {
 		t.Fatalf("block1 proposals = %+v, want pending proposal 1", list1)
 	}
+	page1, err := b.ListProposalsPaginatedAt(0, 1, block1.Number())
+	if err != nil {
+		t.Fatalf("ListProposalsPaginatedAt(block1): %v", err)
+	}
+	if len(page1) != 1 || page1[0].ProposalID != 1 || page1[0].State != "PENDING" {
+		t.Fatalf("block1 proposal page = %+v, want pending proposal 1", page1)
+	}
 
 	got1, err := b.GetProposalByIDAt(1, block1.Number())
 	if err != nil {
@@ -783,6 +790,13 @@ func TestArchiveQuery_ProposalsAtUsesSystemProposalHistory(t *testing.T) {
 	if list2[1].ProposalID != 2 || list2[1].State != "CANCELED" ||
 		list2[1].ProposerAddress != hex.EncodeToString(proposer2.Bytes()) {
 		t.Fatalf("proposal2 at block2 = %+v, want canceled second proposal", list2[1])
+	}
+	page2, err := b.ListProposalsPaginatedAt(1, 1, block2.Number())
+	if err != nil {
+		t.Fatalf("ListProposalsPaginatedAt(block2): %v", err)
+	}
+	if len(page2) != 1 || page2[0].ProposalID != 2 || page2[0].State != "CANCELED" {
+		t.Fatalf("block2 proposal page = %+v, want second canceled proposal", page2)
 	}
 
 	got2, err := b.GetProposalByIDAt(2, block2.Number())
