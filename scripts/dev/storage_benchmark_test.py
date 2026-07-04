@@ -688,7 +688,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertEqual(row["archiveApiTxMethods"], [])
 
-    def test_archive_api_probe_rejects_wrong_transaction_block_metadata(self):
+    def test_archive_api_probe_rejects_wrong_response_block_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             bindir = tmpdir / "bin"
@@ -726,7 +726,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212","blockNumber":"0x1","blockHash":"0xabababababababababababababababababababababababababababababababab"}]}'
                             ;;
                           *eth_getLogs*)
-                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[]}'
+                            printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":[{"blockNumber":"0x2","blockHash":"0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","transactionHash":"0x1212121212121212121212121212121212121212121212121212121212121212"}]}'
                             ;;
                           *eth_getUncleByBlockNumberAndIndex*|*eth_getUncleByBlockHashAndIndex*)
                             printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":null}'
@@ -805,7 +805,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             row = json.loads(output.read_text(encoding="utf-8").strip().splitlines()[0])
             self.assertEqual(row["archiveApiStatus"], "failed")
             self.assertEqual(row["archiveApiChecks"], 17)
-            self.assertEqual(row["archiveApiFailures"], 2)
+            self.assertEqual(row["archiveApiFailures"], 3)
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(
                 row["archiveApiTxHash"],
@@ -820,6 +820,7 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertNotIn("eth_getTransactionByHash", row["archiveApiMethods"])
             self.assertNotIn("eth_getTransactionReceipt", row["archiveApiMethods"])
+            self.assertNotIn("eth_getLogs", row["archiveApiMethods"])
 
     def test_archive_api_probe_rejects_non_hex_scalar_results(self):
         with tempfile.TemporaryDirectory() as tmp:

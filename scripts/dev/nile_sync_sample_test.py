@@ -155,7 +155,16 @@ class NileSampleHandler(BaseHTTPRequestHandler):
                     "transactionIndex": "0x0",
                 }
         elif method == "eth_getLogs":
-            result = []
+            if getattr(self.server, "wrong_log_block_metadata", False):
+                result = [
+                    {
+                        "blockNumber": "0x64",
+                        "blockHash": "0x" + "cd" * 32,
+                        "transactionHash": tx_hash,
+                    }
+                ]
+            else:
+                result = []
         elif method == "debug_traceTransaction":
             if getattr(self.server, "invalid_trace_transaction", False):
                 result = "0x0"
@@ -591,6 +600,52 @@ class NileSyncSampleTest(unittest.TestCase):
             )
             self.assertNotIn("eth_getTransactionByHash", row["archiveApiMethods"])
             self.assertNotIn("eth_getTransactionReceipt", row["archiveApiMethods"])
+
+    def test_archive_api_probe_rejects_wrong_log_block_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.wrong_log_block_metadata = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertNotIn("eth_getLogs", row["archiveApiMethods"])
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
 
     def test_archive_api_probe_rejects_non_hex_scalar_results(self):
         with tempfile.TemporaryDirectory() as tmp:

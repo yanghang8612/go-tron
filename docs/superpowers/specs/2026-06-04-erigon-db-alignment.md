@@ -768,12 +768,14 @@ Status:
   now validates JSON-RPC result
   shapes and target bindings before counting a method as successful: scalar
   account/code/storage/call results must be `0x` hex strings, the block result
-  must match the requested historical block number, and transaction or receipt
-  results must match the transaction hash selected from that block. Acceptance
-  also requires tx proof to carry same-row archive API evidence and a
-  `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars, `null`,
-  wrong-transaction results, detached tx rows, or malformed hashes are
-  archive-read failures instead of false-positive proof.
+  must match the requested historical block number, non-empty log results must
+  match the requested block number and hash, and transaction or receipt results
+  must match the transaction hash, block number, and block hash selected from
+  that block. Acceptance also requires tx proof to carry same-row archive API
+  evidence and a `0x`-prefixed 32-byte `archiveApiTxHash`, so invalid scalars,
+  `null`, wrong-log, wrong-transaction or wrong-block results, detached tx
+  rows, or malformed hashes are archive-read failures instead of false-positive
+  proof.
 - Imported sync segment stats now include the top transaction contract types
   for the applied window (`txTop` in the runtime log and `syncLogTxTop` in the
   Nile sampler). This keeps staged-sync throughput soaks from conflating

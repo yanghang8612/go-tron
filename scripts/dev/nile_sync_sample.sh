@@ -514,7 +514,17 @@ def archive_api_probe_values(enabled, endpoint, height, raw_block, address, slot
         if method in {"debug_traceBlockByNumber", "debug_traceBlockByHash"}:
             return trace_block_result_ok(result)
         if method == "eth_getLogs":
-            return isinstance(result, list)
+            if not isinstance(result, list):
+                return False
+            requested_number = hex_quantity(params[0].get("fromBlock") if params else None)
+            for log in result:
+                if not isinstance(log, dict):
+                    return False
+                if hex_quantity(log.get("blockNumber")) != requested_number:
+                    return False
+                if selected_block_hash and normalize_hash(log.get("blockHash")) != selected_block_hash:
+                    return False
+            return True
         if method == "eth_getTransactionByHash":
             return (
                 isinstance(result, dict)
