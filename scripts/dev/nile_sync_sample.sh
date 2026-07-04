@@ -2576,6 +2576,22 @@ FULL_STAGED_SYNC_STATUS_VALUES = {
     "unknown": 6,
 }
 
+STAGE_STATUS_SOURCE_VALUES = {
+    "skipped": 0,
+    "file": 1,
+    "rpc": 2,
+    "unknown": 3,
+}
+
+STAGE_STATUS_COLLECTION_STATUS_VALUES = {
+    "ok": 0,
+    "skipped": 1,
+    "missing": 2,
+    "rpc-error": 3,
+    "rpc-invalid": 4,
+    "unknown": 5,
+}
+
 SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_height", "height", "Current sampled block height."),
     ("gtron_nile_sync_node_info_current_block", "nodeInfoCurrentBlock", "Current block reported by node info."),
@@ -2881,6 +2897,24 @@ def append_full_staged_sync_prometheus(lines, row):
         verified = 1 if full_staged_sync_stage_verified(stage, verification) else 0
         lines.append(f"gtron_nile_sync_full_staged_sync_stage_verified{verified_labels} {verified:g}")
 
+def append_stage_status_prometheus(lines, row):
+    source = str(row.get("stageStatusSource", "unknown")).lower()
+    append_prometheus_gauge(
+        lines,
+        "gtron_nile_sync_stage_status_source",
+        "Stage-status evidence source: 0=skipped, 1=file, 2=rpc, 3=unknown/other.",
+        prometheus_labels(row, {"source": source}),
+        STAGE_STATUS_SOURCE_VALUES.get(source, STAGE_STATUS_SOURCE_VALUES["unknown"]),
+    )
+    status = str(row.get("stageStatusFileStatus", "unknown")).lower()
+    append_prometheus_gauge(
+        lines,
+        "gtron_nile_sync_stage_status_collection_status",
+        "Stage-status collection status: 0=ok, 1=skipped, 2=missing, 3=rpc-error, 4=rpc-invalid, 5=unknown/other.",
+        prometheus_labels(row, {"status": status}),
+        STAGE_STATUS_COLLECTION_STATUS_VALUES.get(status, STAGE_STATUS_COLLECTION_STATUS_VALUES["unknown"]),
+    )
+
 def archive_api_method_set(row, field):
     values = row.get(field)
     if not isinstance(values, list):
@@ -2948,6 +2982,7 @@ def write_sample_prometheus(path, row):
         if field in SAMPLE_PROMETHEUS_SKIP_NEGATIVE_FIELDS and value < 0:
             continue
         append_prometheus_gauge(lines, metric, help_text, prometheus_labels(row), value)
+    append_stage_status_prometheus(lines, row)
     append_full_staged_sync_prometheus(lines, row)
     append_archive_api_prometheus(lines, row)
     if "stageStalled" in row:

@@ -143,9 +143,10 @@ sample also writes a low-cardinality Prometheus text artifact and records
 `samplePrometheus` plus `samplePrometheusStatus` in the JSONL row. The artifact
 exposes sync height, target/stage lag, full-staged-sync status/ready/coverage
 and bottleneck gauges, adjacent sync-stage lag gauges, cold-builder head lag
-gauges, interval stage-throughput gauges, throughput, hot/cold/index byte
-gauges, snapshot sidecar share, archive probe checks/block/failures, and
-sample/soak health status for external scrape jobs.
+gauges, stage-status source and collection-status gauges, interval
+stage-throughput gauges, throughput, hot/cold/index byte gauges, snapshot
+sidecar share, archive probe checks/block/failures, and sample/soak health
+status for external scrape jobs.
 Rows also include hot/cold interval ratios
 `intervalColdToHotGrowthRatio`, `intervalAncientToHotGrowthRatio`,
 `intervalSnapshotToHotGrowthRatio`, and
@@ -541,6 +542,8 @@ the artifact, and verifies key gauges such as `gtron_nile_sync_height`,
 `gtron_nile_sync_full_staged_sync_bottleneck`, per-stage
 `gtron_nile_sync_full_staged_sync_stage_{block,present,verified}` evidence
 when `fullStagedSyncStageDetails` is present,
+`gtron_nile_sync_stage_status_source`,
+`gtron_nile_sync_stage_status_collection_status`,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
 `gtron_nile_sync_log_state_prefetch_*`,
 `gtron_nile_sync_log_phase_cursor_*`,

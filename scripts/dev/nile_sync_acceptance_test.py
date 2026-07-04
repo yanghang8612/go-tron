@@ -243,6 +243,7 @@ def clean_full_staged_sync_row():
         "mode": "full",
         "sampleStatus": "ok",
         "soakHealthStatus": "ok",
+        "stageStatusSource": "rpc",
         "stageStatusFileStatus": "ok",
         "fullStagedSyncStatus": "caught-up",
         "fullStagedSyncReady": True,
@@ -583,6 +584,10 @@ def add_sample_prometheus_evidence(row, path, *, height=None):
                 f'gtron_nile_sync_sample_status{{{labels},status="ok"}} 0',
                 "# TYPE gtron_nile_sync_soak_health_status gauge",
                 f'gtron_nile_sync_soak_health_status{{{labels},status="ok"}} 0',
+                "# TYPE gtron_nile_sync_stage_status_source gauge",
+                f'gtron_nile_sync_stage_status_source{{{labels},source="{row["stageStatusSource"]}"}} 2',
+                "# TYPE gtron_nile_sync_stage_status_collection_status gauge",
+                f'gtron_nile_sync_stage_status_collection_status{{{labels},status="{row["stageStatusFileStatus"]}"}} 0',
                 "# TYPE gtron_nile_sync_height gauge",
                 f"gtron_nile_sync_height{{{labels}}} {metric_height}",
                 "# TYPE gtron_nile_sync_target_lag_blocks gauge",
@@ -856,6 +861,46 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_sample_prometheus_stage_status_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "sync.prom"
+            result = tmpdir / "samples.jsonl"
+            row = add_sample_prometheus_evidence(clean_full_staged_sync_row(), prom)
+            text = prom.read_text(encoding="utf-8")
+            text = text.replace(
+                'gtron_nile_sync_stage_status_source{datadir="/tmp/nile",label="",mode="full",network="nile",source="rpc"} 2',
+                'gtron_nile_sync_stage_status_source{datadir="/tmp/nile",label="",mode="full",network="nile",source="rpc"} 1',
+            )
+            text = text.replace(
+                'gtron_nile_sync_stage_status_collection_status{datadir="/tmp/nile",label="",mode="full",network="nile",status="ok"} 0\n',
+                "",
+            )
+            prom.write_text(text, encoding="utf-8")
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-sample-prometheus-artifact",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_nile_sync_stage_status_source{source='rpc'}=1, want 2",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_nile_sync_stage_status_collection_status{status='ok'}",
+                proc.stderr,
+            )
 
     def test_accepts_sample_prometheus_without_state_prefetch_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

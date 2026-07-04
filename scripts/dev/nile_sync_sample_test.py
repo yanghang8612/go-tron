@@ -302,6 +302,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1141,6 +1142,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f'gtron_nile_sync_height{{{labels}}} 100', metrics)
             self.assertIn(f'gtron_nile_sync_target_lag_blocks{{{labels}}} 5', metrics)
             self.assertIn(f'gtron_nile_sync_full_staged_sync_status{{{labels},status="caught-up"}} 0', metrics)
+            self.assertIn(f'gtron_nile_sync_stage_status_source{{{labels},source="file"}} 1', metrics)
+            self.assertIn(f'gtron_nile_sync_stage_status_collection_status{{{labels},status="ok"}} 0', metrics)
             self.assertIn(f'gtron_nile_sync_full_staged_sync_ready{{{labels}}} 1', metrics)
             self.assertIn(f'gtron_nile_sync_full_staged_sync_stage_coverage_ratio{{{labels}}} 1', metrics)
             self.assertIn(f"gtron_nile_sync_stage_sync_finish_head_lag_blocks{{{labels}}} 0", metrics)
@@ -1188,6 +1191,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
             (datadir / "gtron" / "ancient").mkdir(parents=True)
             (datadir / "gtron" / "state-snapshots" / "chain").mkdir(parents=True)
             (datadir / "gtron" / "state-snapshots" / "log").mkdir(parents=True)
@@ -1973,6 +1977,7 @@ class NileSyncSampleTest(unittest.TestCase):
             tmpdir = Path(tmp)
             datadir = tmpdir / "datadir"
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            prometheus = tmpdir / "sync.prom"
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1991,6 +1996,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "--jsonrpc",
                     endpoint,
                     "--stage-status-rpc",
+                    "--prometheus-output",
+                    str(prometheus),
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -2002,6 +2009,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageStatusSource"], "rpc")
             self.assertEqual(row["stageStatusFile"], "jsonrpc:" + endpoint)
             self.assertEqual(row["stageStatusFileStatus"], "ok")
+            metrics = prometheus.read_text(encoding="utf-8")
+            labels = f'datadir="{datadir}",label="nile-sync",mode="unknown",network="nile"'
+            self.assertIn(f'gtron_nile_sync_stage_status_source{{{labels},source="rpc"}} 2', metrics)
+            self.assertIn(f'gtron_nile_sync_stage_status_collection_status{{{labels},status="ok"}} 0', metrics)
             self.assertEqual(row["stageRows"], 7)
             self.assertEqual(row["stageSyncInventory"], 100)
             self.assertEqual(row["stageSyncBodies"], 100)

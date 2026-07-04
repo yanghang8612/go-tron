@@ -35,6 +35,11 @@ PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
 SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_nile_sync_sample_status{", "gtron_nile_sync_sample_status"),
     ("gtron_nile_sync_soak_health_status{", "gtron_nile_sync_soak_health_status"),
+    ("gtron_nile_sync_stage_status_source{", "gtron_nile_sync_stage_status_source"),
+    (
+        "gtron_nile_sync_stage_status_collection_status{",
+        "gtron_nile_sync_stage_status_collection_status",
+    ),
     ("gtron_nile_sync_height{", "gtron_nile_sync_height"),
 )
 
@@ -434,6 +439,22 @@ FULL_STAGED_SYNC_STATUS_VALUES = {
     "unverified-stage": 4,
     "pipeline-violation": 5,
     "unknown": 6,
+}
+
+STAGE_STATUS_SOURCE_VALUES = {
+    "skipped": 0,
+    "file": 1,
+    "rpc": 2,
+    "unknown": 3,
+}
+
+STAGE_STATUS_COLLECTION_STATUS_VALUES = {
+    "ok": 0,
+    "skipped": 1,
+    "missing": 2,
+    "rpc-error": 3,
+    "rpc-invalid": 4,
+    "unknown": 5,
 }
 
 FULL_STAGED_SYNC_REQUIRED_STAGES = (
@@ -1331,8 +1352,52 @@ def check_sample_prometheus_artifact(result_path, row):
             issues.append(f"samplePrometheus artifact {path} missing gtron_nile_sync_stage_stalled")
         elif got != want:
             issues.append(f"samplePrometheus artifact {path} gtron_nile_sync_stage_stalled={got:g}, want {want:g}")
+    issues.extend(check_sample_prometheus_stage_status(path, text, row))
     issues.extend(check_sample_prometheus_full_staged_sync(path, text, row))
     issues.extend(check_sample_prometheus_archive_api_methods(path, text, row))
+    return issues
+
+
+def check_sample_prometheus_enum(path, text, row, metric, label, raw_value, values):
+    value = str(raw_value or "unknown").lower()
+    want = values.get(value, values["unknown"])
+    got = sample_prometheus_metric_value(text, metric, row, {label: value})
+    if got is None:
+        return [f"samplePrometheus artifact {path} missing {metric}{{{label}={value!r}}}"]
+    if got != want:
+        return [
+            f"samplePrometheus artifact {path} {metric}{{{label}={value!r}}}={got:g}, "
+            f"want {want:g}"
+        ]
+    return []
+
+
+def check_sample_prometheus_stage_status(path, text, row):
+    issues = []
+    if "stageStatusSource" in row:
+        issues.extend(
+            check_sample_prometheus_enum(
+                path,
+                text,
+                row,
+                "gtron_nile_sync_stage_status_source",
+                "source",
+                row.get("stageStatusSource"),
+                STAGE_STATUS_SOURCE_VALUES,
+            )
+        )
+    if "stageStatusFileStatus" in row:
+        issues.extend(
+            check_sample_prometheus_enum(
+                path,
+                text,
+                row,
+                "gtron_nile_sync_stage_status_collection_status",
+                "status",
+                row.get("stageStatusFileStatus"),
+                STAGE_STATUS_COLLECTION_STATUS_VALUES,
+            )
+        )
     return issues
 
 
