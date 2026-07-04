@@ -526,6 +526,7 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	headRootBeforeBuild := bc.HeadStateRoot()
 
 	pool := txpool.New()
 	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
@@ -533,6 +534,28 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 		t.Fatalf("BuildBlock: %v", err)
 	}
 	block := result.Block
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("BuildBlock advanced current block to %d, want genesis", got)
+	}
+	if got := bc.HeadStateRoot(); got != headRootBeforeBuild {
+		t.Fatalf("BuildBlock changed head state root to %x, want %x", got, headRootBeforeBuild)
+	}
+	preInsertState, err := bc.openState(bc.HeadStateRoot())
+	if err != nil {
+		t.Fatalf("open pre-insert state: %v", err)
+	}
+	if got := preInsertState.GetAllowance(witnessAddr); got != 0 {
+		t.Fatalf("BuildBlock persisted witness allowance before InsertBlock: got %d, want 0", got)
+	}
+	if got := preInsertState.ReadCycleReward(curCycle, witnessAddr.Bytes()); got != 0 {
+		t.Fatalf("BuildBlock persisted cycleReward before InsertBlock: got %d, want 0", got)
+	}
+	if pending, ok := bc.cycleRewards.PendingCycleReward(curCycle, witnessAddr); ok || pending != 0 {
+		t.Fatalf("BuildBlock wrote pending cycleReward before InsertBlock: got ok=%v amount=%d, want absent", ok, pending)
+	}
+	if _, rewards, ok, err := rawdb.ReadCycleRewardPending(bc.BufferedDB()); err != nil || ok {
+		t.Fatalf("BuildBlock wrote cycleReward pending row before InsertBlock: ok=%v rewards=%v err=%v", ok, rewards, err)
+	}
 
 	if err := bc.InsertBlock(block); err != nil {
 		t.Fatalf("InsertBlock: %v", err)
