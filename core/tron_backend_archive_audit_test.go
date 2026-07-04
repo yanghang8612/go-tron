@@ -173,6 +173,79 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 	}
 }
 
+func TestArchiveStateAtIsOnlyDirectlyCalled(t *testing.T) {
+	const sourceFile = "tron_backend.go"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+
+	offenders := archiveStateAtNonDirectReferences(fset, sourceFile, file)
+	if len(offenders) > 0 {
+		t.Fatalf("archiveStateAt must not be aliased or passed as a function value; indirect calls bypass the close/archive-boundary audit:\n%s",
+			strings.Join(offenders, "\n"))
+	}
+}
+
+func TestArchiveStateAtAuditRejectsFunctionValueAlias(t *testing.T) {
+	const sourceFile = "fixture.go"
+	const source = `package core
+
+type TronBackend struct{}
+type session struct{}
+
+func (b *TronBackend) archiveStateAt(uint64) (*session, error) { return nil, nil }
+
+func (b *TronBackend) GetAccountAt(blockNum uint64) error {
+	open := b.archiveStateAt
+	_, err := open(blockNum)
+	return err
+}
+`
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, sourceFile, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sourceFile, err)
+	}
+	offenders := archiveStateAtNonDirectReferences(fset, sourceFile, file)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "archiveStateAt referenced outside a direct call") {
+		t.Fatalf("offenders = %+v, want archiveStateAt function-value alias rejected", offenders)
+	}
+}
+
+func archiveStateAtNonDirectReferences(fset *token.FileSet, sourceFile string, file *ast.File) []string {
+	var offenders []string
+	stack := make([]ast.Node, 0, 16)
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		switch expr := n.(type) {
+		case *ast.SelectorExpr:
+			if expr.Sel.Name == "archiveStateAt" && !isDirectCallFun(parent, expr) {
+				offenders = append(offenders, fmt.Sprintf("%s:%d: archiveStateAt referenced outside a direct call",
+					sourceFile, fset.Position(expr.Pos()).Line))
+			}
+		case *ast.Ident:
+			if expr.Name == "archiveStateAt" && !isFunctionName(parent, expr) && !isSelectorName(parent, expr) && !isDirectCallFun(parent, expr) {
+				offenders = append(offenders, fmt.Sprintf("%s:%d: archiveStateAt referenced outside a direct call",
+					sourceFile, fset.Position(expr.Pos()).Line))
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return offenders
+}
+
 func archiveStateAtCallLines(fset *token.FileSet, body *ast.BlockStmt) []int {
 	var lines []int
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -224,6 +297,21 @@ func isArchiveStateAtCall(call *ast.CallExpr) bool {
 	default:
 		return false
 	}
+}
+
+func isDirectCallFun(parent ast.Node, expr ast.Expr) bool {
+	call, ok := parent.(*ast.CallExpr)
+	return ok && call.Fun == expr
+}
+
+func isFunctionName(parent ast.Node, ident *ast.Ident) bool {
+	fn, ok := parent.(*ast.FuncDecl)
+	return ok && fn.Name == ident
+}
+
+func isSelectorName(parent ast.Node, ident *ast.Ident) bool {
+	sel, ok := parent.(*ast.SelectorExpr)
+	return ok && sel.Sel == ident
 }
 
 func hasDeferSessionClose(body *ast.BlockStmt, session string) bool {
