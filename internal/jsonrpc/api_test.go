@@ -47,6 +47,8 @@ type stubBackend struct {
 	peerCount         int
 	freezerStatus     *jsonrpc.FreezerStatus
 	freezerErr        error
+	stageStatus       *jsonrpc.StageStatus
+	stageErr          error
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -213,6 +215,15 @@ func (s *stubBackend) FreezerStatus() (*jsonrpc.FreezerStatus, error) {
 		return s.freezerStatus, nil
 	}
 	return &jsonrpc.FreezerStatus{TableCounts: map[string]uint64{}}, nil
+}
+func (s *stubBackend) StageStatus() (*jsonrpc.StageStatus, error) {
+	if s.stageErr != nil {
+		return nil, s.stageErr
+	}
+	if s.stageStatus != nil {
+		return s.stageStatus, nil
+	}
+	return &jsonrpc.StageStatus{Status: "ok", Complete: true, Pipeline: jsonrpc.StageStatusPipeline{Complete: true}}, nil
 }
 func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error) {
 	s.liveEstimateCalls++
@@ -1365,6 +1376,49 @@ func TestGtronFreezerStatus(t *testing.T) {
 	stage, ok := result["stage"].(map[string]interface{})
 	if !ok || stage["blockNum"] != float64(9) || stage["blockHash"] != "0x1234" {
 		t.Fatalf("gtron_freezerStatus stage = %+v, want block 9 hash 0x1234", result["stage"])
+	}
+}
+
+func TestGtronStageStatus(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{stageStatus: &jsonrpc.StageStatus{
+		Status:   "critical",
+		Complete: false,
+		Pending:  1,
+		Pipeline: jsonrpc.StageStatusPipeline{
+			Complete: false,
+			Pending:  1,
+			Tasks: []jsonrpc.StageStatusPipelineTask{{
+				Stage:          "Bodies",
+				Upstream:       "Headers",
+				Status:         "behind",
+				TargetValue:    9,
+				CurrentValue:   8,
+				CurrentPresent: true,
+			}},
+		},
+		Stages: []jsonrpc.StageStatusRow{{
+			Stage:     "Headers",
+			Group:     "canonical",
+			Present:   true,
+			BlockNum:  9,
+			HashBound: true,
+			Verified:  "canonical",
+		}},
+		Issues: []string{"Bodies=8 ahead of Headers=9"},
+	}})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "gtron_stageStatus", []interface{}{})
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("gtron_stageStatus result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if result["status"] != "critical" || result["pending"] != float64(1) {
+		t.Fatalf("gtron_stageStatus summary = %+v, want critical pending=1", result)
+	}
+	pipeline, ok := result["pipeline"].(map[string]interface{})
+	if !ok || pipeline["pending"] != float64(1) {
+		t.Fatalf("gtron_stageStatus pipeline = %+v, want pending=1", result["pipeline"])
 	}
 }
 

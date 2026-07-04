@@ -82,6 +82,63 @@ type FreezerTableStatus struct {
 	HiddenSize   uint64 `json:"hiddenSize"`
 }
 
+// StageStatus reports canonical, sync, snapshot, prune, and freezer stage rows.
+type StageStatus struct {
+	Status        string              `json:"status"`
+	Complete      bool                `json:"complete"`
+	Pending       int                 `json:"pending"`
+	Stages        []StageStatusRow    `json:"stages"`
+	Pipeline      StageStatusPipeline `json:"pipeline"`
+	Issues        []string            `json:"issues,omitempty"`
+	IssueDetails  []StageStatusIssue  `json:"issueDetails,omitempty"`
+	UnknownStages []string            `json:"unknownStages,omitempty"`
+}
+
+// StageStatusRow is one persisted stage-progress row plus verification data.
+type StageStatusRow struct {
+	Stage         string   `json:"stage"`
+	Group         string   `json:"group"`
+	Present       bool     `json:"present"`
+	BlockNum      uint64   `json:"blockNum,omitempty"`
+	HashBound     bool     `json:"hashBound"`
+	BlockHash     string   `json:"blockHash,omitempty"`
+	Verified      string   `json:"verified"`
+	CanonicalHash string   `json:"canonicalHash,omitempty"`
+	Details       []string `json:"details,omitempty"`
+}
+
+// StageStatusPipeline is the next schedulable stage-progress view.
+type StageStatusPipeline struct {
+	Complete bool                      `json:"complete"`
+	Pending  int                       `json:"pending"`
+	Issues   int                       `json:"issues"`
+	Tasks    []StageStatusPipelineTask `json:"tasks,omitempty"`
+}
+
+// StageStatusPipelineTask is one stage edge that can advance or needs repair.
+type StageStatusPipelineTask struct {
+	Stage          string `json:"stage"`
+	Upstream       string `json:"upstream"`
+	Status         string `json:"status"`
+	TargetValue    uint64 `json:"targetValue"`
+	TargetHash     string `json:"targetHash,omitempty"`
+	CurrentValue   uint64 `json:"currentValue,omitempty"`
+	CurrentHash    string `json:"currentHash,omitempty"`
+	CurrentPresent bool   `json:"currentPresent"`
+}
+
+// StageStatusIssue is one structured stage verification or ordering issue.
+type StageStatusIssue struct {
+	Kind            string `json:"kind"`
+	Stage           string `json:"stage,omitempty"`
+	Upstream        string `json:"upstream,omitempty"`
+	Detail          string `json:"detail"`
+	DownstreamValue uint64 `json:"downstreamValue,omitempty"`
+	UpstreamValue   uint64 `json:"upstreamValue,omitempty"`
+	HashMismatch    bool   `json:"hashMismatch,omitempty"`
+	MissingUpstream bool   `json:"missingUpstream,omitempty"`
+}
+
 // Backend is the data-access interface for the JSON-RPC API.
 // Implemented by core.TronBackend.
 type Backend interface {
@@ -136,6 +193,7 @@ type Backend interface {
 	GasPrice() int64 // energy fee in SUN per energy unit
 	PeerCount() int
 	FreezerStatus() (*FreezerStatus, error)
+	StageStatus() (*StageStatus, error)
 
 	// Block subscriptions for the filter subsystem
 	SubscribeBlocks(ch chan<- *types.Block)

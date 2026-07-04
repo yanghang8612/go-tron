@@ -46,3 +46,45 @@ func TestGtronAPI_FreezerStatusFramework(t *testing.T) {
 		t.Fatalf("gtron_freezerStatus = %+v, want bounds 5..11 and bodies=12", got)
 	}
 }
+
+func TestGtronAPI_StageStatusFramework(t *testing.T) {
+	be := newFreezeBackend()
+	be.stageStatus = &jsonrpc.StageStatus{
+		Status:   "ok",
+		Complete: true,
+		Pipeline: jsonrpc.StageStatusPipeline{Complete: true},
+		Stages: []jsonrpc.StageStatusRow{{
+			Stage:    "Finish",
+			Group:    "canonical",
+			Present:  true,
+			BlockNum: 100,
+			Verified: "canonical",
+		}},
+	}
+
+	srv := rpc.NewServer()
+	if err := srv.RegisterName("gtron", jsonrpc.NewGtronAPI(be)); err != nil {
+		t.Fatalf("RegisterName: %v", err)
+	}
+	t.Cleanup(srv.Stop)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	result, errObj := postRPC(t, ts.URL, `{"jsonrpc":"2.0","id":1,"method":"gtron_stageStatus","params":[]}`)
+	if errObj != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", errObj)
+	}
+	var got struct {
+		Status   string `json:"status"`
+		Complete bool   `json:"complete"`
+		Stages   []struct {
+			Stage string `json:"stage"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(result, &got); err != nil {
+		t.Fatalf("decode result %s: %v", result, err)
+	}
+	if got.Status != "ok" || !got.Complete || len(got.Stages) != 1 || got.Stages[0].Stage != "Finish" {
+		t.Fatalf("gtron_stageStatus = %+v, want ok complete Finish row", got)
+	}
+}

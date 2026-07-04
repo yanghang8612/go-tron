@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
@@ -2535,6 +2536,264 @@ func (b *TronBackend) FreezerStatus() (*jsonrpc.FreezerStatus, error) {
 		status.Stage = stage
 	}
 	return status, nil
+}
+
+func (b *TronBackend) StageStatus() (*jsonrpc.StageStatus, error) {
+	status := &jsonrpc.StageStatus{Status: "ok"}
+	if b == nil || b.chain == nil {
+		status.Complete = true
+		status.Pipeline.Complete = true
+		return status, nil
+	}
+
+	progress := make(map[rawdb.StageID]rawdb.StageProgress)
+	if err := rawdb.IterateStageProgress(b.chain.DB(), func(row rawdb.StageProgress) (bool, error) {
+		progress[row.Stage] = row
+		return true, nil
+	}); err != nil {
+		return nil, fmt.Errorf("read stage progress: %w", err)
+	}
+
+	known := rawdb.KnownStageProgressStages()
+	seen := make(map[rawdb.StageID]struct{}, len(known))
+	status.Stages = make([]jsonrpc.StageStatusRow, 0, len(known)+len(progress))
+	for _, stage := range known {
+		seen[stage] = struct{}{}
+		row, ok := progress[stage]
+		status.Stages = append(status.Stages, b.stageStatusRow(stage, row, ok))
+	}
+
+	unknown := make([]rawdb.StageID, 0)
+	for stage := range progress {
+		if _, ok := seen[stage]; ok {
+			continue
+		}
+		unknown = append(unknown, stage)
+	}
+	sort.Slice(unknown, func(i, j int) bool { return string(unknown[i]) < string(unknown[j]) })
+	for _, stage := range unknown {
+		status.UnknownStages = append(status.UnknownStages, string(stage))
+		status.Stages = append(status.Stages, b.stageStatusRow(stage, progress[stage], true))
+	}
+
+	pipeline := rawdb.PlanStageProgressPipelineCursor(progress)
+	status.Pipeline = stageStatusPipelineJSON(pipeline)
+	status.Complete = pipeline.Complete
+	status.Pending = pipeline.Pending
+
+	status.IssueDetails = b.stageStatusIssueDetails(status.Stages, pipeline.Issues)
+	status.Issues = make([]string, 0, len(status.IssueDetails))
+	for _, issue := range status.IssueDetails {
+		status.Issues = append(status.Issues, issue.Detail)
+	}
+	if len(status.IssueDetails) > 0 {
+		status.Status = "critical"
+	}
+	return status, nil
+}
+
+func (b *TronBackend) stageStatusRow(stage rawdb.StageID, progress rawdb.StageProgress, present bool) jsonrpc.StageStatusRow {
+	row := jsonrpc.StageStatusRow{
+		Stage:    string(stage),
+		Group:    stageStatusGroup(stage),
+		Present:  present,
+		Verified: "absent",
+	}
+	if !present {
+		return row
+	}
+	row.BlockNum = progress.BlockNum
+	row.HashBound = progress.HasBlockHash
+	if progress.HasBlockHash {
+		row.BlockHash = stageStatusHash(progress.BlockHash)
+	}
+	row.Verified, row.CanonicalHash, row.Details = b.stageStatusVerification(stage, progress)
+	return row
+}
+
+func (b *TronBackend) stageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress) (string, string, []string) {
+	if !progress.HasBlockHash {
+		return "unbound", "", nil
+	}
+	if !stageRequiresCanonicalVerification(stage) {
+		return "hash-bound", "", nil
+	}
+	canonical, details := b.stageStatusCanonicalHash(stage, progress)
+	if stageStatusDetailsHaveReadError(details) {
+		return "error", "", details
+	}
+	if canonical == (tcommon.Hash{}) {
+		return "missing-canonical", "", details
+	}
+	if canonical != progress.BlockHash {
+		return "mismatch", stageStatusHash(canonical), details
+	}
+	return "canonical", stageStatusHash(canonical), details
+}
+
+func (b *TronBackend) stageStatusCanonicalHash(stage rawdb.StageID, progress rawdb.StageProgress) (tcommon.Hash, []string) {
+	if b == nil || b.chain == nil {
+		return tcommon.Hash{}, nil
+	}
+	var canonical ethdb.KeyValueReader
+	if chainDB := b.chain.ChainDB(); chainDB != nil {
+		canonical = chainDB
+	} else {
+		canonical = b.chain.DB()
+	}
+	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(canonical, progress.BlockNum)
+	if err != nil {
+		return tcommon.Hash{}, []string{fmt.Sprintf("canonicalError=%q", err.Error())}
+	}
+	if ok && hash != (tcommon.Hash{}) {
+		return hash, nil
+	}
+	if !stageAllowsStateTxRangeHashFallback(stage) {
+		return tcommon.Hash{}, nil
+	}
+	row, ok, err := rawdb.ReadStateTxRange(canonical, progress.BlockNum)
+	if err != nil {
+		return tcommon.Hash{}, []string{fmt.Sprintf("stateTxRangeError=%q", err.Error())}
+	}
+	if !ok {
+		return tcommon.Hash{}, nil
+	}
+	return row.BlockHash, nil
+}
+
+func (b *TronBackend) stageStatusIssueDetails(rows []jsonrpc.StageStatusRow, orderIssues []rawdb.StageProgressOrderIssue) []jsonrpc.StageStatusIssue {
+	var details []jsonrpc.StageStatusIssue
+	for _, row := range rows {
+		if !row.Present || !stageRequiresCanonicalVerification(rawdb.StageID(row.Stage)) {
+			continue
+		}
+		switch row.Verified {
+		case "canonical":
+			continue
+		default:
+			detail := fmt.Sprintf("%s verified=%s", row.Stage, row.Verified)
+			if row.BlockNum > 0 || row.BlockHash != "" {
+				detail = fmt.Sprintf("%s block=%d hash=%s", detail, row.BlockNum, row.BlockHash)
+			}
+			if row.CanonicalHash != "" {
+				detail = fmt.Sprintf("%s canonical=%s", detail, row.CanonicalHash)
+			}
+			if len(row.Details) > 0 {
+				detail = fmt.Sprintf("%s %s", detail, strings.Join(row.Details, " "))
+			}
+			details = append(details, jsonrpc.StageStatusIssue{
+				Kind:   "stage-verification",
+				Stage:  row.Stage,
+				Detail: detail,
+			})
+		}
+	}
+	for _, issue := range orderIssues {
+		details = append(details, jsonrpc.StageStatusIssue{
+			Kind:            "stage-order",
+			Stage:           string(issue.Downstream),
+			Upstream:        string(issue.Upstream),
+			Detail:          issue.String(),
+			DownstreamValue: issue.DownstreamBlock,
+			UpstreamValue:   issue.UpstreamBlock,
+			HashMismatch:    issue.HashMismatch,
+			MissingUpstream: issue.MissingUpstream,
+		})
+	}
+	return details
+}
+
+func stageStatusPipelineJSON(cursor rawdb.StageProgressPipelineCursor) jsonrpc.StageStatusPipeline {
+	out := jsonrpc.StageStatusPipeline{
+		Complete: cursor.Complete,
+		Pending:  cursor.Pending,
+		Issues:   len(cursor.Issues),
+		Tasks:    make([]jsonrpc.StageStatusPipelineTask, 0, len(cursor.Tasks)),
+	}
+	for _, task := range cursor.Tasks {
+		item := jsonrpc.StageStatusPipelineTask{
+			Stage:          string(task.Stage),
+			Upstream:       string(task.Upstream),
+			Status:         string(task.Status),
+			TargetValue:    task.TargetBlock,
+			CurrentValue:   task.CurrentBlock,
+			CurrentPresent: task.Status != rawdb.StageProgressPipelineTaskMissing,
+		}
+		if task.TargetHasHash {
+			item.TargetHash = stageStatusHash(task.TargetHash)
+		}
+		if task.CurrentHasHash {
+			item.CurrentHash = stageStatusHash(task.CurrentHash)
+		}
+		out.Tasks = append(out.Tasks, item)
+	}
+	return out
+}
+
+func stageRequiresCanonicalVerification(stage rawdb.StageID) bool {
+	switch stage {
+	case rawdb.StageHeaders,
+		rawdb.StageBodies,
+		rawdb.StageExecution,
+		rawdb.StageCommitment,
+		rawdb.StageFinish,
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+		rawdb.StageSyncFinish,
+		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotBuild,
+		rawdb.StageSnapshotLatestBuild,
+		rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
+		rawdb.StageSnapshotChainFreezerTailPrune:
+		return true
+	default:
+		return false
+	}
+}
+
+func stageAllowsStateTxRangeHashFallback(stage rawdb.StageID) bool {
+	switch stage {
+	case rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune:
+		return true
+	default:
+		return false
+	}
+}
+
+func stageStatusGroup(stage rawdb.StageID) string {
+	switch stage {
+	case rawdb.StageHeaders, rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish:
+		return "canonical"
+	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
+		return "sync"
+	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotEventLogBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:
+		return "snapshot"
+	case rawdb.StageSnapshotHotPrune, rawdb.StageSnapshotPrune, rawdb.StageSnapshotChainLookupPrune, rawdb.StageSnapshotSectionBloomPrune, rawdb.StageSnapshotBalanceTracePrune, rawdb.StageSnapshotChainFreezerTailPrune:
+		return "prune"
+	case rawdb.StageChainFreezer:
+		return "freezer"
+	default:
+		return "unknown"
+	}
+}
+
+func stageStatusHash(hash tcommon.Hash) string {
+	return "0x" + hash.Hex()
+}
+
+func stageStatusDetailsHaveReadError(details []string) bool {
+	for _, detail := range details {
+		if strings.Contains(detail, "Error=") {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *TronBackend) ChainID() int64 {

@@ -195,6 +195,8 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.ethGetFilterLogs(req.Params)
 	case "gtron_freezerStatus":
 		result, err = api.gtronFreezerStatus(req.Params)
+	case "gtron_stageStatus":
+		result, err = api.gtronStageStatus(req.Params)
 	case "eth_sendRawTransaction", "eth_sendTransaction", "eth_sign", "eth_signTransaction":
 		return errResp(id, codeMethodNotFound, "the method "+req.Method+" does not exist/is not available")
 	default:
@@ -387,6 +389,10 @@ func (api *API) ethAccounts(_ json.RawMessage) (interface{}, error) {
 
 func (api *API) gtronFreezerStatus(_ json.RawMessage) (interface{}, error) {
 	return api.backend.FreezerStatus()
+}
+
+func (api *API) gtronStageStatus(_ json.RawMessage) (interface{}, error) {
+	return api.backend.StageStatus()
 }
 
 // ── Hex helpers ──────────────────────────────────────────────────────────────

@@ -12,3 +12,7 @@ func NewGtronAPI(backend Backend) *GtronAPI {
 func (api *GtronAPI) FreezerStatus() (*FreezerStatus, error) {
 	return api.backend.FreezerStatus()
 }
+
+func (api *GtronAPI) StageStatus() (*StageStatus, error) {
+	return api.backend.StageStatus()
+}

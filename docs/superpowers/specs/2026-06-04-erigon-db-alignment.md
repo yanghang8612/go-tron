@@ -833,6 +833,14 @@ Status:
   text, and Prometheus output. The Nile sampler preserves those
   `stageAlertPipeline*` fields during offline DB checks, so production soaks can
   separate storage-maintenance backlog from critical storage integrity alerts.
+- Online JSON-RPC now exposes the same raw stage-progress surface through
+  `gtron_stageStatus`: canonical/sync/snapshot/prune/freezer rows, canonical
+  hash verification, structured issues, and the scheduler-facing stage pipeline
+  cursor can be sampled from a running node without stopping it for an offline
+  DB check. Staged-body payload verification and snapshot manifest coverage
+  remain on the stricter offline `gtron db stage-status --db.stage.verify`
+  path because those checks inspect downloader staging rows and local snapshot
+  files directly.
 - `scripts/dev/storage_benchmark.sh` now preserves the same
   `stageAlertPipeline*` fields in benchmark JSONL rows, and the storage
   benchmark acceptance checker verifies matching Prometheus pipeline metrics

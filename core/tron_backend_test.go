@@ -181,6 +181,68 @@ func TestTronBackend_FreezerStatusReportsCountsStageAndStats(t *testing.T) {
 	}
 }
 
+func TestTronBackend_StageStatusReportsPipelineAndVerification(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(11)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	blockHash := block.Hash()
+	mismatchHash := tcommon.Hash{0xcd}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageHeaders, block.Number(), blockHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash Headers: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageBodies, block.Number(), mismatchHash); err != nil {
+		t.Fatalf("WriteStageProgressWithHash Bodies: %v", err)
+	}
+
+	bc := &BlockChain{
+		db:      db,
+		chaindb: rawdb.NewChainDB(db, rawdb.NoopAncient{}),
+		stateDB: state.NewDatabase(db),
+	}
+	got, err := (&TronBackend{chain: bc}).StageStatus()
+	if err != nil {
+		t.Fatalf("StageStatus: %v", err)
+	}
+	if got.Status != "critical" {
+		t.Fatalf("StageStatus status = %q, want critical: %+v", got.Status, got.IssueDetails)
+	}
+	headers := stageStatusRow(got, rawdb.StageHeaders)
+	if headers == nil || headers.Verified != "canonical" || headers.CanonicalHash != "0x"+blockHash.Hex() {
+		t.Fatalf("Headers row = %+v, want canonical hash %s", headers, "0x"+blockHash.Hex())
+	}
+	bodies := stageStatusRow(got, rawdb.StageBodies)
+	if bodies == nil || bodies.Verified != "mismatch" || bodies.CanonicalHash != "0x"+blockHash.Hex() {
+		t.Fatalf("Bodies row = %+v, want mismatch against canonical hash %s", bodies, "0x"+blockHash.Hex())
+	}
+	if got.Pipeline.Pending == 0 || len(got.Pipeline.Tasks) == 0 {
+		t.Fatalf("StageStatus pipeline = %+v, want pending task", got.Pipeline)
+	}
+	var sawOrderIssue bool
+	for _, issue := range got.IssueDetails {
+		if issue.Kind == "stage-order" && issue.Stage == string(rawdb.StageBodies) && issue.HashMismatch {
+			sawOrderIssue = true
+			break
+		}
+	}
+	if !sawOrderIssue {
+		t.Fatalf("StageStatus issues = %+v, want Bodies hash-mismatch order issue", got.IssueDetails)
+	}
+}
+
+func stageStatusRow(status *jsonrpc.StageStatus, stage rawdb.StageID) *jsonrpc.StageStatusRow {
+	if status == nil {
+		return nil
+	}
+	for i := range status.Stages {
+		if status.Stages[i].Stage == string(stage) {
+			return &status.Stages[i]
+		}
+	}
+	return nil
+}
+
 func TestTronBackend_BlockHashReadsSurfaceColdIndexError(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
