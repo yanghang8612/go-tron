@@ -259,7 +259,10 @@ class NileSampleHandler(BaseHTTPRequestHandler):
         elif method in {"eth_getUncleByBlockNumberAndIndex", "eth_getUncleByBlockHashAndIndex"}:
             result = None
         elif method == "eth_getBlockReceipts":
-            result = [{"transactionHash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}]
+            if getattr(self.server, "empty_block_receipts", False):
+                result = []
+            else:
+                result = [{"transactionHash": tx_hash, "blockNumber": "0x63", "blockHash": block_hash}]
         elif method == "eth_getBalance" and getattr(self.server, "invalid_scalar_results", False):
             result = "not-hex"
         elif method == "eth_getTransactionByHash":
@@ -662,6 +665,54 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertTrue(row["archiveApiTxProbe"])
             self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
             self.assertEqual(row["archiveApiTxMethods"], [])
+
+    def test_archive_api_probe_rejects_empty_block_receipts_for_transaction_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            server.empty_block_receipts = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    endpoint,
+                    "--jsonrpc",
+                    endpoint,
+                    "--archive-api-probe",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["archiveApiStatus"], "failed")
+            self.assertEqual(row["archiveApiChecks"], 17)
+            self.assertEqual(row["archiveApiFailures"], 1)
+            self.assertNotIn("eth_getBlockReceipts", row["archiveApiMethods"])
+            self.assertTrue(row["archiveApiTxProbe"])
+            self.assertEqual(row["archiveApiTxHash"], "0x" + "12" * 32)
+            self.assertEqual(
+                row["archiveApiTxMethods"],
+                [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                ],
+            )
 
     def test_archive_api_probe_rejects_mismatched_transaction_results(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2137,7 +2137,11 @@ Status:
   reads use the strict tx lookup index plus strict block-body access, so
   `eth_getTransactionByHash` can return transactions after receipt rows are
   pruned and a corrupt freezer/hot block behind a valid transaction index
-  returns a data error instead of a false not-found result. JSON-RPC transaction
+  returns a data error instead of a false not-found result. Nile/storage
+  archive probes now also require `eth_getBlockReceipts` on a transaction-bearing
+  block to include the same selected transaction hash, so block-receipt coverage
+  cannot pass with an empty receipt list while per-transaction receipt lookups
+  still work. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different

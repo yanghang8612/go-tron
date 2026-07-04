@@ -730,6 +730,9 @@ to report same-row archive API evidence, `archiveApiTxProbe=true`, a
 `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
 `eth_getTransactionByBlockNumberAndIndex`, and
 `eth_getTransactionByBlockHashAndIndex` probes.
+The sampler also binds `eth_getBlockReceipts` to that same selected
+transaction: a transaction-bearing archive block cannot pass the block-receipts
+probe with an empty list or a list missing `archiveApiTxHash`.
 Add `--archive-api-method eth_call`, `--archive-api-method debug_traceCall`,
 and `--archive-api-method eth_estimateGas` to the acceptance command only for
 samples that were collected with `--archive-api-call-data`. Add

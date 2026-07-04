@@ -1397,6 +1397,7 @@ def archive_result_ok(method, result, params):
         if not isinstance(result, list):
             return False
         requested_number = hex_quantity(params[0] if params else None)
+        selected_receipt_seen = False
         for receipt in result:
             if not isinstance(receipt, dict):
                 return False
@@ -1405,6 +1406,11 @@ def archive_result_ok(method, result, params):
                 return False
             if selected_block_hash and normalize_hash(receipt.get("blockHash")) != selected_block_hash:
                 return False
+            receipt_tx_hash = normalize_hash(receipt.get("transactionHash") or receipt.get("hash"))
+            if selected_tx_hash and receipt_tx_hash == selected_tx_hash:
+                selected_receipt_seen = True
+        if selected_tx_hash and not selected_receipt_seen:
+            return False
         return True
     if method in {"eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call", "eth_estimateGas"}:
         return is_hex_string(result)

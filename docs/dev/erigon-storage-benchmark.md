@@ -197,8 +197,11 @@ and `eth_getLogs`) at `height-1` by default and emits `archiveApi*` fields.
 When the probed historical block contains a transaction, the probe also adds
 `eth_getTransactionByHash`, `eth_getTransactionReceipt`,
 `eth_getTransactionByBlockNumberAndIndex`, and
-`eth_getTransactionByBlockHashAndIndex` plus `archiveApiTx*` fields. Pass
-`--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
+`eth_getTransactionByBlockHashAndIndex` plus `archiveApiTx*` fields.
+For transaction-bearing blocks, `eth_getBlockReceipts` must include the same
+selected transaction hash; an empty block-receipts result is counted as an
+archive API failure.
+Pass `--archive-api-block`, `--archive-api-address`, or `--archive-api-storage-slot`
 when a run needs to target a known historical contract/account. Pass
 `--archive-api-call-data` as well to include `eth_call`, `debug_traceCall`, and
 `eth_estimateGas` against that address. Pass `--archive-api-trace-block` when
