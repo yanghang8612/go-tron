@@ -2434,8 +2434,11 @@ def main(argv=None):
         issues.extend(check_minimal_physical_tail_prune(rows, args.role))
     if args.require_prune_mode_semantics:
         issues.extend(check_prune_mode_semantics(rows))
+    archive_api_methods_requested = split_csv_values(
+        args.archive_api_method + args.archive_api_methods
+    )
     archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
-    for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
+    for method in archive_api_methods_requested:
         if method not in archive_api_methods_required:
             archive_api_methods_required.append(method)
     if args.require_archive_trace_transaction and ARCHIVE_API_TRACE_TX_METHOD not in archive_api_methods_required:
@@ -2461,6 +2464,7 @@ def main(argv=None):
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
         or required_archive_tx_modes
+        or archive_api_methods_requested
         or args.min_archive_api_depth_blocks is not None
     ):
         issues.extend(

@@ -5178,6 +5178,33 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
 
+            require_call_without_evidence_flag = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_without_evidence_flag.returncode,
+                0,
+                require_call_without_evidence_flag.stdout
+                + require_call_without_evidence_flag.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: eth_call",
+                require_call_without_evidence_flag.stderr,
+            )
+
     def test_accepts_archive_api_depth_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

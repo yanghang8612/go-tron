@@ -2259,6 +2259,32 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             )
             self.assertIn("archiveApiMethods missing required methods: eth_call", require_call.stderr)
 
+            require_call_without_evidence_flag = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_without_evidence_flag.returncode,
+                0,
+                require_call_without_evidence_flag.stdout
+                + require_call_without_evidence_flag.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: eth_call",
+                require_call_without_evidence_flag.stderr,
+            )
+
     def test_rejects_archive_api_depth_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

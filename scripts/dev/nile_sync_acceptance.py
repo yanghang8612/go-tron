@@ -3408,6 +3408,7 @@ def check_row(row, args):
         or args.require_archive_tx_evidence
         or args.require_archive_trace_transaction
         or args.require_archive_trace_block
+        or args.archive_api_methods_requested
     ):
         required_archive_methods = list(args.archive_api_methods_required)
         if args.require_archive_tx_evidence or args.require_archive_trace_transaction:
@@ -3852,8 +3853,11 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.archive_api_methods_requested = split_csv_values(
+        args.archive_api_method + args.archive_api_methods
+    )
     args.archive_api_methods_required = list(DEFAULT_ARCHIVE_API_METHODS)
-    for method in split_csv_values(args.archive_api_method + args.archive_api_methods):
+    for method in args.archive_api_methods_requested:
         if method not in args.archive_api_methods_required:
             args.archive_api_methods_required.append(method)
     rows, issues = load_rows(args.result)
