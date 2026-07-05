@@ -1,6 +1,7 @@
 package grpcapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -25,95 +26,98 @@ import (
 // solidTestBackend wraps testBackend with controllable solid/pbft numbers.
 type solidTestBackend struct {
 	testBackend
-	solidNum           uint64
-	blockNumCalls      int
-	lastNumQueried     uint64
-	hashCalls          int
-	lastHashQueried    common.Hash
-	lastAccountAt      uint64
-	lastAccountIDAt    uint64
-	lastRewardAt       uint64
-	lastDelegatedAt    uint64
-	lastDelegIndexAt   uint64
-	lastAssetIDAt      uint64
-	lastAssetNameAt    uint64
-	lastAssetListAt    uint64
-	lastAssetPageAt    uint64
-	lastMarketOrderAt  uint64
-	lastMarketOrdersAt uint64
-	lastMarketPriceAt  uint64
-	lastMarketPairAt   uint64
-	lastExchangesAt    uint64
-	lastExchangeIDAt   uint64
-	lastCanDelegateAt  uint64
-	lastAvailableAt    uint64
-	lastCanWithdrawAt  uint64
-	lastBurnAt         uint64
-	lastBandwidthAt    uint64
-	lastEnergyAt       uint64
-	lastWitnessesAt    uint64
-	lastBrokerageAt    uint64
-	lastConstantAt     uint64
-	lastEstimateAt     uint64
-	txBlockNum         uint64
-	txBlockOK          bool
-	txBlockCalls       int
-	txCalls            int
-	txInfoCalls        int
-	liveAccountCalls   int
-	liveAccountIDCalls int
-	liveRewardCalls    int
-	liveDelegCalls     int
-	liveIndexCalls     int
-	liveAssetID        int
-	liveAssetName      int
-	liveAssetList      int
-	liveAssetPage      int
-	liveMarketOrder    int
-	liveMarketOrders   int
-	liveMarketPrice    int
-	liveMarketPair     int
-	liveExchanges      int
-	liveExchangeID     int
-	liveCanDelegate    int
-	liveAvailable      int
-	liveCanWithdraw    int
-	liveBurn           int
-	liveBandwidth      int
-	liveEnergy         int
-	liveWitnesses      int
-	liveBrokerage      int
-	liveConstant       int
-	liveEstimate       int
-	accountAt          *types.Account
-	accountIDAt        *types.Account
-	rewardAt           *tronapi.RewardInfo
-	delegatedAt        []*tronapi.DelegatedResourceInfo
-	delegIndexAt       *tronapi.DelegationIndexInfo
-	assetIDAt          *contractpb.AssetIssueContract
-	assetNameAt        *contractpb.AssetIssueContract
-	assetListAt        []*contractpb.AssetIssueContract
-	assetPageAt        []*contractpb.AssetIssueContract
-	marketOrderAt      *corepb.MarketOrder
-	marketOrdersAt     []*corepb.MarketOrder
-	marketPriceAt      *corepb.MarketPriceList
-	marketPairAt       []*corepb.MarketOrder
-	exchangesAt        []*corepb.Exchange
-	exchangeIDAt       *corepb.Exchange
-	canDelegateAt      *tronapi.CanDelegateInfo
-	availableAt        *tronapi.AvailableUnfreezeCountInfo
-	canWithdrawAt      *tronapi.CanWithdrawUnfreezeInfo
-	burnAt             int64
-	bandwidthAt        string
-	energyAt           string
-	witnessesAt        []*tronapi.WitnessInfo
-	brokerageAt        int64
-	constantAt         *tronapi.TriggerResult
-	estimateAt         int64
-	txAt               *corepb.Transaction
-	txInfoAt           *corepb.TransactionInfo
-	txErr              error
-	txInfoErr          error
+	solidNum             uint64
+	blockNumCalls        int
+	lastNumQueried       uint64
+	hashCalls            int
+	lastHashQueried      common.Hash
+	lastAccountAt        uint64
+	lastAccountIDAt      uint64
+	lastRewardAt         uint64
+	lastDelegatedAt      uint64
+	lastDelegIndexAt     uint64
+	lastAssetIDAt        uint64
+	lastAssetNameAt      uint64
+	lastAssetListAt      uint64
+	lastAssetPageAt      uint64
+	lastMarketOrderAt    uint64
+	lastMarketOrdersAt   uint64
+	lastMarketPriceAt    uint64
+	lastMarketPairAt     uint64
+	lastMarketPairListAt uint64
+	lastExchangesAt      uint64
+	lastExchangeIDAt     uint64
+	lastCanDelegateAt    uint64
+	lastAvailableAt      uint64
+	lastCanWithdrawAt    uint64
+	lastBurnAt           uint64
+	lastBandwidthAt      uint64
+	lastEnergyAt         uint64
+	lastWitnessesAt      uint64
+	lastBrokerageAt      uint64
+	lastConstantAt       uint64
+	lastEstimateAt       uint64
+	txBlockNum           uint64
+	txBlockOK            bool
+	txBlockCalls         int
+	txCalls              int
+	txInfoCalls          int
+	liveAccountCalls     int
+	liveAccountIDCalls   int
+	liveRewardCalls      int
+	liveDelegCalls       int
+	liveIndexCalls       int
+	liveAssetID          int
+	liveAssetName        int
+	liveAssetList        int
+	liveAssetPage        int
+	liveMarketOrder      int
+	liveMarketOrders     int
+	liveMarketPrice      int
+	liveMarketPair       int
+	liveMarketPairList   int
+	liveExchanges        int
+	liveExchangeID       int
+	liveCanDelegate      int
+	liveAvailable        int
+	liveCanWithdraw      int
+	liveBurn             int
+	liveBandwidth        int
+	liveEnergy           int
+	liveWitnesses        int
+	liveBrokerage        int
+	liveConstant         int
+	liveEstimate         int
+	accountAt            *types.Account
+	accountIDAt          *types.Account
+	rewardAt             *tronapi.RewardInfo
+	delegatedAt          []*tronapi.DelegatedResourceInfo
+	delegIndexAt         *tronapi.DelegationIndexInfo
+	assetIDAt            *contractpb.AssetIssueContract
+	assetNameAt          *contractpb.AssetIssueContract
+	assetListAt          []*contractpb.AssetIssueContract
+	assetPageAt          []*contractpb.AssetIssueContract
+	marketOrderAt        *corepb.MarketOrder
+	marketOrdersAt       []*corepb.MarketOrder
+	marketPriceAt        *corepb.MarketPriceList
+	marketPairAt         []*corepb.MarketOrder
+	marketPairListAt     *corepb.MarketOrderPairList
+	exchangesAt          []*corepb.Exchange
+	exchangeIDAt         *corepb.Exchange
+	canDelegateAt        *tronapi.CanDelegateInfo
+	availableAt          *tronapi.AvailableUnfreezeCountInfo
+	canWithdrawAt        *tronapi.CanWithdrawUnfreezeInfo
+	burnAt               int64
+	bandwidthAt          string
+	energyAt             string
+	witnessesAt          []*tronapi.WitnessInfo
+	brokerageAt          int64
+	constantAt           *tronapi.TriggerResult
+	estimateAt           int64
+	txAt                 *corepb.Transaction
+	txInfoAt             *corepb.TransactionInfo
+	txErr                error
+	txInfoErr            error
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -324,6 +328,19 @@ func (b *solidTestBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []
 		return b.marketPairAt, nil
 	}
 	return b.testBackend.GetMarketOrderListByPairAt(sellTokenID, buyTokenID, blockNum)
+}
+
+func (b *solidTestBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	b.liveMarketPairList++
+	return b.testBackend.GetMarketPairList()
+}
+
+func (b *solidTestBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	b.lastMarketPairListAt = blockNum
+	if b.marketPairListAt != nil {
+		return b.marketPairListAt, nil
+	}
+	return b.testBackend.GetMarketPairListAt(blockNum)
 }
 
 func (b *solidTestBackend) ListExchanges() ([]*corepb.Exchange, error) {
@@ -1299,6 +1316,10 @@ func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
 			BuyTokenId:        []byte("buy"),
 			BuyTokenQuantity:  130,
 		}},
+		marketPairListAt: &corepb.MarketOrderPairList{OrderPair: []*corepb.MarketOrderPair{{
+			SellTokenId: []byte("solid-sell"),
+			BuyTokenId:  []byte("solid-buy"),
+		}}},
 	}
 	client := newSolidityClient(t, backend)
 
@@ -1362,6 +1383,22 @@ func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveMarketPair != 0 {
 		t.Fatalf("live GetMarketOrderListByPair called %d times, want 0", backend.liveMarketPair)
+	}
+
+	pairs, err := client.GetMarketPairList(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("GetMarketPairList: %v", err)
+	}
+	if len(pairs.GetOrderPair()) != 1 ||
+		!bytes.Equal(pairs.GetOrderPair()[0].GetSellTokenId(), []byte("solid-sell")) ||
+		!bytes.Equal(pairs.GetOrderPair()[0].GetBuyTokenId(), []byte("solid-buy")) {
+		t.Fatalf("GetMarketPairList = %+v, want solid-bound sentinel", pairs.GetOrderPair())
+	}
+	if backend.lastMarketPairListAt != 91 {
+		t.Fatalf("GetMarketPairListAt block = %d, want solid block 91", backend.lastMarketPairListAt)
+	}
+	if backend.liveMarketPairList != 0 {
+		t.Fatalf("live GetMarketPairList called %d times, want 0", backend.liveMarketPairList)
 	}
 }
 

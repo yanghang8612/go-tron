@@ -1266,6 +1266,8 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 	orderID := []byte("order-1")
 	sellTokenID := []byte("sell")
 	buyTokenID := []byte("buy")
+	otherSellTokenID := []byte("sell-2")
+	otherBuyTokenID := []byte("buy-2")
 
 	parent := bc.genesisBlock.Hash()
 	var block1, block2 *types.Block
@@ -1327,6 +1329,18 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 			}},
 		}); err != nil {
 			t.Fatalf("write market price list block %d: %v", n, err)
+		}
+		if n == 2 {
+			if err := statedb.WriteMarketPriceList(otherSellTokenID, otherBuyTokenID, &corepb.MarketPriceList{
+				SellTokenId: otherSellTokenID,
+				BuyTokenId:  otherBuyTokenID,
+				Prices: []*corepb.MarketPrice{{
+					SellTokenQuantity: 2,
+					BuyTokenQuantity:  20,
+				}},
+			}); err != nil {
+				t.Fatalf("write second market price list block %d: %v", n, err)
+			}
 		}
 		pk := rawdb.PriceKey(n*100, n*1000)
 		if err := statedb.WriteMarketOrderBook(sellTokenID, buyTokenID, pk, &corepb.MarketOrderIdList{
@@ -1392,6 +1406,25 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 	}
 	if len(prices2.GetPrices()) != 1 || prices2.GetPrices()[0].GetSellTokenQuantity() != 200 {
 		t.Fatalf("block2 market prices = %+v, want block2 price", prices2.GetPrices())
+	}
+
+	pairs1, err := b.GetMarketPairListAt(block1.Number())
+	if err != nil {
+		t.Fatalf("GetMarketPairListAt(block1): %v", err)
+	}
+	if len(pairs1.GetOrderPair()) != 1 ||
+		!bytes.Equal(pairs1.GetOrderPair()[0].GetSellTokenId(), sellTokenID) ||
+		!bytes.Equal(pairs1.GetOrderPair()[0].GetBuyTokenId(), buyTokenID) {
+		t.Fatalf("block1 market pairs = %+v, want first pair only", pairs1.GetOrderPair())
+	}
+	pairs2, err := b.GetMarketPairListAt(block2.Number())
+	if err != nil {
+		t.Fatalf("GetMarketPairListAt(block2): %v", err)
+	}
+	if len(pairs2.GetOrderPair()) != 2 ||
+		!bytes.Equal(pairs2.GetOrderPair()[0].GetSellTokenId(), sellTokenID) ||
+		!bytes.Equal(pairs2.GetOrderPair()[1].GetSellTokenId(), otherSellTokenID) {
+		t.Fatalf("block2 market pairs = %+v, want both pairs", pairs2.GetOrderPair())
 	}
 
 	pairOrders1, err := b.GetMarketOrderListByPairAt(sellTokenID, buyTokenID, block1.Number())

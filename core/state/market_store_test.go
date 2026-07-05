@@ -54,9 +54,13 @@ func TestMarketStoreAbsentReads(t *testing.T) {
 	if pl == nil || !bytes.Equal(pl.SellTokenId, []byte("_")) || !bytes.Equal(pl.BuyTokenId, []byte("1000001")) || len(pl.Prices) != 0 {
 		t.Fatalf("absent price list should be zero-but-non-nil with token ids set, got %+v", pl)
 	}
+	pairs := sdb.ReadMarketPairList()
+	if pairs == nil || len(pairs.GetOrderPair()) != 0 {
+		t.Fatalf("absent pair index should be empty, got %+v", pairs)
+	}
 }
 
-// The five sub-stores share one domain but address disjoint key-spaces: a
+// The market sub-stores share one domain but address disjoint key-spaces: a
 // price-level key for (sell,buy,pk) does not collide with the pair-level
 // count/price-list key for (sell,buy), nor an order keyed by id with an account
 // keyed by the same bytes. Distinct one-byte tags guarantee separation.
@@ -100,6 +104,91 @@ func TestMarketStoreSubStoreSeparation(t *testing.T) {
 	}
 	if got := sdb.ReadMarketPriceList(sell, buy); len(got.Prices) != 1 {
 		t.Fatalf("price list readback: %+v", got)
+	}
+	if got := sdb.ReadMarketPairList(); len(got.GetOrderPair()) != 1 ||
+		!bytes.Equal(got.GetOrderPair()[0].GetSellTokenId(), sell) ||
+		!bytes.Equal(got.GetOrderPair()[0].GetBuyTokenId(), buy) {
+		t.Fatalf("pair index readback: %+v", got)
+	}
+}
+
+func TestMarketStorePairIndexTracksActivePriceLists(t *testing.T) {
+	sdb := newTestStateDB(t)
+	sell1, buy1 := []byte("_"), []byte("1000001")
+	sell2, buy2 := []byte("1000002"), []byte("_")
+	pl1 := &corepb.MarketPriceList{
+		SellTokenId: sell1,
+		BuyTokenId:  buy1,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 1, BuyTokenQuantity: 10}},
+	}
+	pl2 := &corepb.MarketPriceList{
+		SellTokenId: sell2,
+		BuyTokenId:  buy2,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 2, BuyTokenQuantity: 20}},
+	}
+
+	if err := sdb.WriteMarketPriceList(sell1, buy1, pl1); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.WriteMarketPriceList(sell1, buy1, pl1); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.ReadMarketPairList(); len(got.GetOrderPair()) != 1 {
+		t.Fatalf("pair index after duplicate active write = %+v, want one pair", got)
+	}
+	if err := sdb.WriteMarketPriceList(sell2, buy2, pl2); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.ReadMarketPairList(); len(got.GetOrderPair()) != 2 ||
+		!bytes.Equal(got.GetOrderPair()[0].GetSellTokenId(), sell1) ||
+		!bytes.Equal(got.GetOrderPair()[1].GetSellTokenId(), sell2) {
+		t.Fatalf("pair index after second active pair = %+v, want insertion order", got)
+	}
+	if err := sdb.WriteMarketPriceList(sell1, buy1, &corepb.MarketPriceList{SellTokenId: sell1, BuyTokenId: buy1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.ReadMarketPairList(); len(got.GetOrderPair()) != 1 ||
+		!bytes.Equal(got.GetOrderPair()[0].GetSellTokenId(), sell2) ||
+		!bytes.Equal(got.GetOrderPair()[0].GetBuyTokenId(), buy2) {
+		t.Fatalf("pair index after clearing first pair = %+v, want only second pair", got)
+	}
+	if err := sdb.WriteMarketPriceList(sell2, buy2, &corepb.MarketPriceList{SellTokenId: sell2, BuyTokenId: buy2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.ReadMarketPairList(); len(got.GetOrderPair()) != 0 {
+		t.Fatalf("pair index after clearing all pairs = %+v, want empty", got)
+	}
+	if raw, ok, err := sdb.SystemKVGet(kvdomains.SystemMarket, marketPairIndexKVKey()); err != nil || ok {
+		t.Fatalf("pair index row after clearing all pairs = %x ok=%v err=%v, want deleted", raw, ok, err)
+	}
+}
+
+func TestMarketStorePairIndexMalformedBlocksPriceListMutation(t *testing.T) {
+	sdb := newTestStateDB(t)
+	sell, buy := []byte("_"), []byte("1000001")
+	original := &corepb.MarketPriceList{
+		SellTokenId: sell,
+		BuyTokenId:  buy,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 1, BuyTokenQuantity: 10}},
+	}
+	if err := sdb.WriteMarketPriceList(sell, buy, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketPairIndexKVKey(), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed pair index: %v", err)
+	}
+	err := sdb.WriteMarketPriceList(sell, buy, &corepb.MarketPriceList{
+		SellTokenId: sell,
+		BuyTokenId:  buy,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 2, BuyTokenQuantity: 20}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "decode market pair index") {
+		t.Fatalf("WriteMarketPriceList malformed index err = %v, want decode error", err)
+	}
+	if got := sdb.ReadMarketPriceList(sell, buy); len(got.GetPrices()) != 1 ||
+		got.GetPrices()[0].GetSellTokenQuantity() != 1 ||
+		got.GetPrices()[0].GetBuyTokenQuantity() != 10 {
+		t.Fatalf("price list after failed pair index update = %+v, want original", got)
 	}
 }
 
@@ -247,6 +336,9 @@ func TestMarketStoreAnchorAndRewind(t *testing.T) {
 	if got := atR1.ReadMarketPriceList(sell, buy); len(got.Prices) != 0 {
 		t.Fatalf("R1-open price list should be empty: %+v", got)
 	}
+	if got := atR1.ReadMarketPairList(); len(got.GetOrderPair()) != 0 {
+		t.Fatalf("R1-open pair index should be empty: %+v", got)
+	}
 
 	// R2 keeps its own canceled/empty view.
 	atR2, err := New(r2, sdb.db)
@@ -267,6 +359,9 @@ func TestMarketStoreAnchorAndRewind(t *testing.T) {
 	}
 	if got := atR2.ReadMarketPriceList(sell, buy); len(got.Prices) != 0 {
 		t.Fatalf("R2 price list should be empty: %+v", got)
+	}
+	if got := atR2.ReadMarketPairList(); len(got.GetOrderPair()) != 0 {
+		t.Fatalf("R2 pair index should be empty: %+v", got)
 	}
 }
 
@@ -291,6 +386,9 @@ func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
 		}
 		if err := s.SystemKVPut(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk), corruptProto); err != nil {
 			t.Fatalf("write corrupt market order book: %v", err)
+		}
+		if err := s.SystemKVPut(kvdomains.SystemMarket, marketPairIndexKVKey(), corruptProto); err != nil {
+			t.Fatalf("write corrupt market pair index: %v", err)
 		}
 		if err := s.SystemKVPut(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID), []byte{0x01, 0x02, 0x03}); err != nil {
 			t.Fatalf("write corrupt market pair price count: %v", err)
@@ -340,6 +438,17 @@ func TestMarketHistoryAtSurfacesCorruptProtobuf(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decode market order book at block 1") {
 		t.Fatalf("MarketOrderBookAt corrupt protobuf error = %v, want decode market order book context", err)
+	}
+
+	pairList, err := f.reader().MarketPairListAt(1)
+	if err == nil {
+		t.Fatal("MarketPairListAt corrupt protobuf error = nil")
+	}
+	if pairList != nil {
+		t.Fatalf("MarketPairListAt corrupt protobuf pair list = %+v, want nil", pairList)
+	}
+	if !strings.Contains(err.Error(), "decode market pair list at block 1") {
+		t.Fatalf("MarketPairListAt corrupt protobuf error = %v, want decode market pair list context", err)
 	}
 
 	count, ok, err := f.reader().MarketPairPriceCountAt(sellTokenID, buyTokenID, 1)

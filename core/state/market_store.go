@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -13,7 +14,8 @@ import (
 // Market (DEX) order state is rooted into the reserved system account's
 // SystemMarket KV so the whole order book rewinds with the full state root,
 // replacing the five flat rawdb buckets that previously held it. java-tron
-// keeps these in five dedicated stores; all five are rooted here for full
+// keeps these in five dedicated stores; those flat stores plus go-tron's
+// materialized pair helpers are rooted here for full
 // parity (the locked per-cycle full-parity decision), with no derived/rooted
 // split inside the domain:
 //
@@ -28,8 +30,11 @@ import (
 //     keyed by (sellToken, buyToken). (java-tron recomputes this; that
 //     pre-existing divergence is documented at the deleted rawdb accessors and
 //     is orthogonal to this storage move.)
+//   - MarketPairIndex (mpi): go-tron's materialized MarketOrderPairList of
+//     pairs with a non-empty MarketPriceList, used for GetMarketPairList without
+//     scanning the hashed SystemMarket keys.
 //
-// All five share the one SystemMarket domain, disambiguated by a single-byte
+// All sub-stores share the one SystemMarket domain, disambiguated by a single-byte
 // sub-store tag prefixed to the logical key. The remainder of each key is the
 // composite the flat bucket used, preserved byte-for-byte so a rooted record is
 // addressed identically to its old flat key (the '|' separators between token
@@ -40,21 +45,23 @@ import (
 //	mop:   tag || sellTokenID || '|' || buyTokenID || '|' || priceKey[16]
 //	mptop: tag || sellTokenID || '|' || buyTokenID
 //	mpl:   tag || sellTokenID || '|' || buyTokenID
+//	mpi:   tag
 //
 // Values reuse the existing proto wire format (proto.Marshal) and the 8-byte
 // big-endian count verbatim — no new on-disk encoding lineage is introduced.
 //
-// There is no full-pair enumeration over the domain: point and pair-list RPCs
-// address known keys, so the Keccak256-hashed KV keys (which preclude a prefix
-// scan) are never walked. MarketOrderListByPair is reconstructed from the
-// materialized pair price list plus price-level order-book rows; MarketPairList
-// still needs an explicit pair index before it can be exposed without scanning.
+// Point and pair-order-list RPCs address known keys, so the Keccak256-hashed KV
+// keys (which preclude a prefix scan) are never walked. MarketOrderListByPair is
+// reconstructed from the materialized pair price list plus price-level
+// order-book rows. MarketPairList reads the explicit mpi row maintained alongside
+// the pair price list.
 const (
 	marketOrderTag        byte = 0x01
 	marketAccountOrderTag byte = 0x02
 	marketOrderBookTag    byte = 0x03
 	marketPairToPriceTag  byte = 0x04
 	marketPriceListTag    byte = 0x05
+	marketPairIndexTag    byte = 0x06
 )
 
 // marketTagKey builds tag || body.
@@ -98,6 +105,10 @@ func marketPriceListKVKey(sellTokenID, buyTokenID []byte) []byte {
 	return marketTagKey(marketPriceListTag, marketPairKey(sellTokenID, buyTokenID))
 }
 
+func marketPairIndexKVKey() []byte {
+	return []byte{marketPairIndexTag}
+}
+
 // MarketOrderPrefetchKey returns the latest market order row for orderID.
 func MarketOrderPrefetchKey(orderID []byte) PrefetchKey {
 	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderKVKey(orderID))
@@ -121,6 +132,11 @@ func MarketPairPriceCountPrefetchKey(sellTokenID, buyTokenID []byte) PrefetchKey
 // MarketPriceListPrefetchKey returns the latest materialized pair price-list row.
 func MarketPriceListPrefetchKey(sellTokenID, buyTokenID []byte) PrefetchKey {
 	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
+}
+
+// MarketPairIndexPrefetchKey returns the latest materialized market pair index.
+func MarketPairIndexPrefetchKey() PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPairIndexKVKey())
 }
 
 // ReadMarketOrder returns the rooted MarketOrder for orderID, or nil if absent.
@@ -356,9 +372,107 @@ func (r *PersistentHistoryReader) MarketPriceListAt(sellTokenID, buyTokenID []by
 
 // WriteMarketPriceList stages the materialized MarketPriceList for a pair.
 func (s *StateDB) WriteMarketPriceList(sellTokenID, buyTokenID []byte, pl *corepb.MarketPriceList) error {
+	if pl == nil {
+		pl = &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
+	}
+	index, indexDirty, err := s.updatedMarketPairIndex(sellTokenID, buyTokenID, len(pl.GetPrices()) > 0)
+	if err != nil {
+		return err
+	}
 	data, err := proto.Marshal(pl)
 	if err != nil {
 		return err
 	}
-	return s.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), data)
+	if err := s.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), data); err != nil {
+		return err
+	}
+	if !indexDirty {
+		return nil
+	}
+	return s.writeMarketPairListIndex(index)
+}
+
+// ReadMarketPairList returns the rooted materialized list of market pairs.
+// Absent or malformed rows are treated as an empty list, matching the legacy
+// live-reader convention used by the other market helpers.
+func (s *StateDB) ReadMarketPairList() *corepb.MarketOrderPairList {
+	list, _, err := s.ReadMarketPairListStrict()
+	if err != nil {
+		return &corepb.MarketOrderPairList{}
+	}
+	return list
+}
+
+// ReadMarketPairListStrict returns the rooted materialized list of market pairs
+// and distinguishes an absent row from unreadable or malformed rooted data.
+func (s *StateDB) ReadMarketPairListStrict() (*corepb.MarketOrderPairList, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPairIndexKVKey())
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketOrderPairList{}, false, nil
+	}
+	list := &corepb.MarketOrderPairList{}
+	if err := proto.Unmarshal(raw, list); err != nil {
+		return nil, true, fmt.Errorf("decode market pair index: %w", err)
+	}
+	return list, true, nil
+}
+
+// MarketPairListAt reconstructs the materialized pair index at the end of
+// blockNum, surfacing malformed archive payloads as data errors.
+func (r *PersistentHistoryReader) MarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPairIndexKVKey(), blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketOrderPairList{}, nil
+	}
+	list := &corepb.MarketOrderPairList{}
+	if err := proto.Unmarshal(raw, list); err != nil {
+		return nil, fmt.Errorf("decode market pair list at block %d: %w", blockNum, err)
+	}
+	return list, nil
+}
+
+func (s *StateDB) writeMarketPairListIndex(list *corepb.MarketOrderPairList) error {
+	if len(list.GetOrderPair()) == 0 {
+		return s.SystemKVDelete(kvdomains.SystemMarket, marketPairIndexKVKey())
+	}
+	data, err := proto.Marshal(list)
+	if err != nil {
+		return err
+	}
+	return s.SystemKVPut(kvdomains.SystemMarket, marketPairIndexKVKey(), data)
+}
+
+func (s *StateDB) updatedMarketPairIndex(sellTokenID, buyTokenID []byte, active bool) (*corepb.MarketOrderPairList, bool, error) {
+	list, _, err := s.ReadMarketPairListStrict()
+	if err != nil {
+		return nil, false, err
+	}
+	pairs := list.GetOrderPair()
+	found := -1
+	for i, pair := range pairs {
+		if bytes.Equal(pair.GetSellTokenId(), sellTokenID) && bytes.Equal(pair.GetBuyTokenId(), buyTokenID) {
+			found = i
+			break
+		}
+	}
+	switch {
+	case active && found >= 0:
+		return list, false, nil
+	case active:
+		list.OrderPair = append(pairs, &corepb.MarketOrderPair{
+			SellTokenId: append([]byte(nil), sellTokenID...),
+			BuyTokenId:  append([]byte(nil), buyTokenID...),
+		})
+	case found >= 0:
+		list.OrderPair = append(pairs[:found], pairs[found+1:]...)
+	default:
+		return list, false, nil
+	}
+	return list, true, nil
 }

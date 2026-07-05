@@ -98,6 +98,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getmarketordersfromaccount", api.getMarketOrdersFromAccount)
 	mux.HandleFunc("/wallet/getmarketpricebypair", api.getMarketPriceByPair)
 	mux.HandleFunc("/wallet/getmarketorderlistbypair", api.getMarketOrderListByPair)
+	mux.HandleFunc("/wallet/getmarketpairlist", api.getMarketPairList)
 
 	// M5.1 PR-1: Account / permission
 	mux.HandleFunc("/wallet/createaccount", api.createAccount)
@@ -2098,6 +2099,29 @@ func (api *API) handleGetMarketOrderListByPair(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeMarketOrderListJSON(w, orders)
+}
+
+func (api *API) getMarketPairList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketPairList(w, r, nil)
+}
+
+func (api *API) handleGetMarketPairList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var pairs *corepb.MarketOrderPairList
+	var err error
+	if boundFn == nil {
+		pairs, err = api.backend.GetMarketPairList()
+	} else {
+		blockNum := boundFn()
+		pairs, err = api.backend.GetMarketPairListAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pairs == nil {
+		pairs = &corepb.MarketOrderPairList{}
+	}
+	writeTronJSON(w, pairs)
 }
 
 func parseMarketPairRequest(w http.ResponseWriter, r *http.Request) ([]byte, []byte, bool) {

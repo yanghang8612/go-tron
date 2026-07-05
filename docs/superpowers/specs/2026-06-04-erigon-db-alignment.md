@@ -1222,15 +1222,16 @@ Status:
   archive session and reuses the same dynamic-property history boundary as
   `getaccountresource`. HTTP solidity/PBFT market queries
   (`getmarketorderbyid`, `getmarketordersfromaccount`,
-  `getmarketpricebypair`, and `getmarketorderlistbypair`) and gRPC
+  `getmarketpricebypair`, `getmarketorderlistbypair`, and
+  `getmarketpairlist`) and gRPC
   `WalletSolidity` market methods now dispatch through `SystemMarket` history
   at the solid/PBFT bound instead of live-head market rows. Backend coverage
   writes market order/account-order/price-list/order-book rows through temporal
-  `SystemMarket` history, verifies block-1/block-2 as-of reads diverge, and the
+  `SystemMarket` history, verifies block-1/block-2 as-of reads diverge, and
+  maintains an explicit materialized `MarketOrderPairList` index so
+  `GetMarketPairList` is served without scanning hashed SystemMarket keys. The
   state history reader now surfaces corrupt market order/account-order/price-list
-  protobuf payloads as archive data errors. The full `GetMarketPairList` surface
-  remains gated on adding an explicit pair index; the hashed SystemMarket domain
-  cannot be scanned safely for all pairs. HTTP
+  and pair-index protobuf payloads as archive data errors. HTTP
   solidity/PBFT `listexchanges` and gRPC
   `WalletSolidity.ListExchanges` now dispatch through `SystemExchange` history
   at the bound; HTTP `/wallet/getpaginatedexchangelist` and

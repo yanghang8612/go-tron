@@ -780,6 +780,18 @@ func (s *Server) GetMarketOrderListByPair(_ context.Context, in *corepb.MarketOr
 	return &corepb.MarketOrderList{Orders: orders}, nil
 }
 
+// GetMarketPairList returns all active market pairs.
+func (s *Server) GetMarketPairList(_ context.Context, _ *apipb.EmptyMessage) (*corepb.MarketOrderPairList, error) {
+	pairs, err := s.backend.GetMarketPairList()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if pairs == nil {
+		return &corepb.MarketOrderPairList{}, nil
+	}
+	return pairs, nil
+}
+
 // ListNodes returns connected P2P peers as a NodeList.
 func (s *Server) ListNodes(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NodeList, error) {
 	peers, err := s.backend.ListNodes()

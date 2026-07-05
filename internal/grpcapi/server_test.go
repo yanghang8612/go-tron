@@ -306,6 +306,12 @@ func (b *testBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) (
 func (b *testBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	return nil, nil
 }
+func (b *testBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	return nil, nil
+}
 func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
 func (b *testBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	return nil, nil
@@ -1127,6 +1133,10 @@ func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
 				SellTokenId: []byte("sell"),
 				BuyTokenId:  []byte("buy"),
 			})
+			return err
+		}},
+		{name: "GetMarketPairList", call: func() error {
+			_, err := client.GetMarketPairList(context.Background(), &apipb.EmptyMessage{})
 			return err
 		}},
 	}

@@ -585,6 +585,8 @@ type isolationStubBackend struct {
 	marketOrdersAtBlock      uint64
 	liveMarketOrderPairCalls int
 	marketOrderPairAtBlock   uint64
+	liveMarketPairListCalls  int
+	marketPairListAtBlock    uint64
 	liveMarketPriceCalls     int
 	marketPriceAtBlock       uint64
 	liveExchangeCalls        int
@@ -907,6 +909,22 @@ func (s *isolationStubBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenI
 		BuyTokenQuantity:  130,
 		State:             corepb.MarketOrder_ACTIVE,
 	}}, nil
+}
+
+func (s *isolationStubBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	s.liveMarketPairListCalls++
+	return &corepb.MarketOrderPairList{OrderPair: []*corepb.MarketOrderPair{{
+		SellTokenId: []byte("live-sell"),
+		BuyTokenId:  []byte("live-buy"),
+	}}}, nil
+}
+
+func (s *isolationStubBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	s.marketPairListAtBlock = blockNum
+	return &corepb.MarketOrderPairList{OrderPair: []*corepb.MarketOrderPair{{
+		SellTokenId: []byte("solid-sell"),
+		BuyTokenId:  []byte("solid-buy"),
+	}}}, nil
 }
 
 func (s *isolationStubBackend) ListExchanges() ([]*corepb.Exchange, error) {
@@ -1981,6 +1999,35 @@ func assertMarketRoutesUseBound(t *testing.T, prefix string, stub *isolationStub
 	}
 	if stub.liveMarketOrderPairCalls != 0 {
 		t.Fatalf("live GetMarketOrderListByPair called %d times, want 0", stub.liveMarketOrderPairCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getmarketpairlist", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("getmarketpairlist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getmarketpairlist status: %d", resp.StatusCode)
+	}
+	var pairs struct {
+		OrderPair []struct {
+			SellTokenID string `json:"sell_token_id"`
+			BuyTokenID  string `json:"buy_token_id"`
+		} `json:"orderPair"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pairs); err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs.OrderPair) != 1 ||
+		pairs.OrderPair[0].SellTokenID != hex.EncodeToString([]byte("solid-sell")) ||
+		pairs.OrderPair[0].BuyTokenID != hex.EncodeToString([]byte("solid-buy")) {
+		t.Fatalf("market pair list = %+v, want bound sentinel", pairs.OrderPair)
+	}
+	if stub.marketPairListAtBlock != wantBlock {
+		t.Fatalf("GetMarketPairListAt block = %d, want %d", stub.marketPairListAtBlock, wantBlock)
+	}
+	if stub.liveMarketPairListCalls != 0 {
+		t.Fatalf("live GetMarketPairList called %d times, want 0", stub.liveMarketPairListCalls)
 	}
 }
 

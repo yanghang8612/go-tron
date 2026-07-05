@@ -315,6 +315,12 @@ func (s *stubBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) (
 func (s *stubBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	return nil, nil
 }
+func (s *stubBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	return nil, s.marketErr
+}
+func (s *stubBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	return nil, nil
+}
 func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return s.exchanges, nil }
 func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	return s.exchanges, nil
@@ -1387,6 +1393,7 @@ func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
 		{name: "orders by account", path: "/wallet/getmarketordersfromaccount", body: `{"address":"4101000000000000000000000000000000000000000000"}`},
 		{name: "price by pair", path: "/wallet/getmarketpricebypair", body: `{"sell_token_id":"sell","buy_token_id":"buy","visible":true}`},
 		{name: "order list by pair", path: "/wallet/getmarketorderlistbypair", body: `{"sell_token_id":"sell","buy_token_id":"buy","visible":true}`},
+		{name: "pair list", path: "/wallet/getmarketpairlist", body: `{}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

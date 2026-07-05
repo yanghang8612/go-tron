@@ -244,6 +244,8 @@ type Backend interface {
 	GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error)
 	GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error)
 	GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error)
+	GetMarketPairList() (*corepb.MarketOrderPairList, error)
+	GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error)
 
 	// Exchange queries
 	ListExchanges() ([]*corepb.Exchange, error)

@@ -2024,6 +2024,28 @@ func (b *TronBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte,
 	)
 }
 
+func (b *TronBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
+	}
+	return sysKV.ReadMarketPairList(), nil
+}
+
+func (b *TronBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	pairs, err := session.reader.MarketPairListAt(blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read market pair list at block %d: %w", blockNum, err)
+	}
+	return pairs, nil
+}
+
 func marketOrdersFromPairPriceList(
 	priceList *corepb.MarketPriceList,
 	readBook func(*corepb.MarketPrice) (*corepb.MarketOrderIdList, error),
