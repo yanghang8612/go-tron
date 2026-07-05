@@ -669,6 +669,54 @@ func TestPbftGetTransactionReceiptByIDWithinPbftReadsBackend(t *testing.T) {
 	}
 }
 
+func TestSolidityRewardCamelAliasUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertRewardAliasUsesBound(t, srv.URL+"/walletsolidity/getReward", stub, 42)
+}
+
+func TestPbftRewardCamelAliasUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertRewardAliasUsesBound(t, srv.URL+"/walletpbft/getReward", stub, 13)
+}
+
+func assertRewardAliasUsesBound(t *testing.T, url string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(url, "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("getReward request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getReward status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Reward int64 `json:"reward"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Reward != 4242 {
+		t.Fatalf("getReward reward = %d, want bound sentinel 4242", got.Reward)
+	}
+	if stub.rewardAtBlock != wantBlock {
+		t.Fatalf("GetRewardAt block = %d, want %d", stub.rewardAtBlock, wantBlock)
+	}
+	if stub.liveRewardCalls != 0 {
+		t.Fatalf("live GetReward called %d times, want 0", stub.liveRewardCalls)
+	}
+}
+
 // TestSolidityAccount_routeExists verifies /walletsolidity/getaccount is registered.
 func TestSolidityAccount_routeExists(t *testing.T) {
 	stub := &solidStubBackend{solidNum: 0, pbftNum: -1}
@@ -714,6 +762,8 @@ type isolationStubBackend struct {
 	energyAtBlock             uint64
 	liveBrokerageCalls        int
 	brokerageAtBlock          uint64
+	liveRewardCalls           int
+	rewardAtBlock             uint64
 	liveWitnessCalls          int
 	witnessesAtBlock          uint64
 	liveNextMaintenanceCalls  int
@@ -855,6 +905,16 @@ func (s *isolationStubBackend) GetBrokerageInfo(addr common.Address) int64 {
 func (s *isolationStubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	s.brokerageAtBlock = blockNum
 	return 88, nil
+}
+
+func (s *isolationStubBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
+	s.liveRewardCalls++
+	return &tronapi.RewardInfo{Reward: 1}, nil
+}
+
+func (s *isolationStubBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
+	s.rewardAtBlock = blockNum
+	return &tronapi.RewardInfo{Reward: 4242}, nil
 }
 
 func (s *isolationStubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {

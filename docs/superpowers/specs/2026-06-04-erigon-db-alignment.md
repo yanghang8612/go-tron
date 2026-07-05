@@ -1189,7 +1189,9 @@ Status:
   live/archive boundary as the V2 routes. gRPC `WalletSolidity` account and reward
   methods now also dispatch through the solid-block `GetAccountAt`/`GetRewardAt`
   backend paths instead of live-head reads, with tests pinning that route to
-  the shared archive/as-of state session boundary. Delegation V2 solidity/PBFT
+  the shared archive/as-of state session boundary. HTTP solidity/PBFT
+  `getReward` camel-case aliases now reuse the same bound `GetRewardAt` route
+  as lowercase `getreward`. Delegation V2 solidity/PBFT
   HTTP routes and gRPC `WalletSolidity` delegation methods now use
   `GetDelegatedResourceV2At`/`GetDelegatedResourceAccountIndexV2At` at the
   solid/PBFT bound instead of live-head SystemDelegation rows. Backend archive
