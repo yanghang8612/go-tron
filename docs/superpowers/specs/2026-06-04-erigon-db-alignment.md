@@ -1201,7 +1201,10 @@ Status:
   `GetPaginatedNowWitnessList` reuse the same solid-bound `SystemAsset` and
   witness archive paths as their single-item/list peers. HTTP
   `/walletsolidity`/`/walletpbft/getassetissuelistbyname` now follows the
-  same bound `SystemAsset` history path as `getassetissuebyname`.
+  same bound `SystemAsset` history path as `getassetissuebyname`. HTTP
+  `/wallet/getpaginatednowwitnesslist` now covers the live witness page read,
+  and `/walletsolidity`/`/walletpbft` variants slice `ListWitnessesAt` results
+  at the solid/PBFT bound rather than reading live-head witness state.
   HTTP solidity/PBFT `getaccountbyid` now dispatches through
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend

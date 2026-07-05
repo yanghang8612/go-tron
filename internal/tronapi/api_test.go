@@ -72,6 +72,7 @@ type stubBackend struct {
 	proposals       []*tronapi.ProposalInfo
 	proposalErr     error
 	proposalAtErr   error
+	witnesses       []*tronapi.WitnessInfo
 	burnTrx         int64
 	bandwidthPrices string
 	energyPrices    string
@@ -190,9 +191,9 @@ func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil
 func (s *stubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
+func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return s.witnesses, nil }
 func (s *stubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
-	return nil, nil
+	return s.witnesses, nil
 }
 func (s *stubBackend) NextMaintenanceTime() int64 { return 0 }
 func (s *stubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
@@ -1585,6 +1586,55 @@ func TestGetPaginatedProposalList(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
 	if _, ok := result["proposal"]; !ok {
 		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+
+func TestGetPaginatedNowWitnessList(t *testing.T) {
+	stub := &stubBackend{
+		witnesses: []*tronapi.WitnessInfo{
+			{Address: "000000000000000000000000000000000000000001", VoteCount: 10, URL: "w1"},
+			{Address: "000000000000000000000000000000000000000002", VoteCount: 20, URL: "w2", IsJobs: true},
+			{Address: "000000000000000000000000000000000000000003", VoteCount: 30, URL: "w3"},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getpaginatednowwitnesslist", `{"offset":1,"limit":1}`)
+	witnesses, ok := result["witnesses"].([]interface{})
+	if !ok || len(witnesses) != 1 {
+		t.Fatalf("expected one witness, got %v", result["witnesses"])
+	}
+	witness := witnesses[0].(map[string]interface{})
+	if witness["url"] != "w2" || witness["voteCount"].(float64) != 20 || witness["isJobs"] != true {
+		t.Fatalf("witness = %v, want paginated witness w2", witness)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getpaginatednowwitnesslist?offset=2&limit=1")
+	if err != nil {
+		t.Fatalf("GET getpaginatednowwitnesslist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getpaginatednowwitnesslist status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		Witnesses []tronapi.WitnessInfo `json:"witnesses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getpaginatednowwitnesslist: %v", err)
+	}
+	if len(getResult.Witnesses) != 1 || getResult.Witnesses[0].URL != "w3" {
+		t.Fatalf("GET witnesses = %+v, want w3", getResult.Witnesses)
+	}
+
+	resp, err = http.Get(srv.URL + "/wallet/getpaginatednowwitnesslist?offset=-1&limit=1")
+	if err != nil {
+		t.Fatalf("GET negative offset getpaginatednowwitnesslist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
 	}
 }
 

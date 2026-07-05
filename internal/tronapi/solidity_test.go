@@ -1518,6 +1518,30 @@ func assertListWitnessesUsesBound(t *testing.T, prefix string, stub *isolationSt
 	if stub.liveWitnessCalls != 0 {
 		t.Fatalf("live ListWitnesses called %d times, want 0", stub.liveWitnessCalls)
 	}
+
+	resp, err = http.Post(prefix+"/getpaginatednowwitnesslist", "application/json", strings.NewReader(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatalf("getpaginatednowwitnesslist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getpaginatednowwitnesslist status: %d", resp.StatusCode)
+	}
+	var page struct {
+		Witnesses []tronapi.WitnessInfo `json:"witnesses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Witnesses) != 1 || page.Witnesses[0].URL != "bound-witness" || page.Witnesses[0].VoteCount != 9 {
+		t.Fatalf("paginated witnesses = %+v, want bound sentinel", page.Witnesses)
+	}
+	if stub.witnessesAtBlock != wantBlock {
+		t.Fatalf("ListWitnessesAt block after paginated call = %d, want %d", stub.witnessesAtBlock, wantBlock)
+	}
+	if stub.liveWitnessCalls != 0 {
+		t.Fatalf("live ListWitnesses called %d times after paginated call, want 0", stub.liveWitnessCalls)
+	}
 }
 
 func TestSolidityProposalRoutesUseSolidBoundArchivePath(t *testing.T) {

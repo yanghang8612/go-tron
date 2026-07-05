@@ -57,6 +57,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getblockbalancetrace", api.getBlockBalanceTrace)
 	mux.HandleFunc("/wallet/getchainparameters", api.getChainParameters)
 	mux.HandleFunc("/wallet/listwitnesses", api.listWitnesses)
+	mux.HandleFunc("/wallet/getpaginatednowwitnesslist", api.getPaginatedNowWitnessList)
 	mux.HandleFunc("/wallet/getnextmaintenancetime", api.getNextMaintenanceTime)
 	mux.HandleFunc("/wallet/getburntrx", api.getBurnTrx)
 	mux.HandleFunc("/wallet/getbandwidthprices", api.getBandwidthPrices)
@@ -1227,6 +1228,81 @@ func (api *API) handleListWitnesses(w http.ResponseWriter, r *http.Request, boun
 	data, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (api *API) getPaginatedNowWitnessList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedNowWitnessList(w, r, nil)
+}
+
+func (api *API) handleGetPaginatedNowWitnessList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var body struct {
+		Offset int `json:"offset"`
+		Limit  int `json:"limit"`
+	}
+	if r.Method == http.MethodGet {
+		if v := r.URL.Query().Get("offset"); v != "" {
+			offset, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid offset", http.StatusBadRequest)
+				return
+			}
+			body.Offset = offset
+		}
+		if v := r.URL.Query().Get("limit"); v != "" {
+			limit, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid limit", http.StatusBadRequest)
+				return
+			}
+			body.Limit = limit
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if body.Limit <= 0 {
+		body.Limit = 20
+	}
+	if body.Offset < 0 {
+		http.Error(w, "invalid offset", http.StatusBadRequest)
+		return
+	}
+	var (
+		witnesses []*WitnessInfo
+		err       error
+	)
+	if boundFn == nil {
+		witnesses, err = api.backend.ListWitnesses()
+	} else {
+		witnesses, err = api.backend.ListWitnessesAt(boundFn())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	witnesses = paginateWitnessInfos(witnesses, body.Offset, body.Limit)
+	resp := map[string]interface{}{
+		"witnesses": witnesses,
+	}
+	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func paginateWitnessInfos(witnesses []*WitnessInfo, offset, limit int) []*WitnessInfo {
+	if limit <= 0 || offset >= len(witnesses) {
+		return []*WitnessInfo{}
+	}
+	remaining := len(witnesses) - offset
+	if limit > remaining {
+		limit = remaining
+	}
+	end := offset + limit
+	out := witnesses[offset:end]
+	if out == nil {
+		return []*WitnessInfo{}
+	}
+	return out
 }
 
 func (api *API) getNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
