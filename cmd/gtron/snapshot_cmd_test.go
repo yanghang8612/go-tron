@@ -1530,6 +1530,160 @@ func TestSnapshotBuildEventLogsCmdFromColdRematerializesSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildDerivedIndexesCmdFromColdRematerializesAllDerivedSegments(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	toBlock := uint64(rawdb.SectionBloomBlockPerSection - 1)
+
+	block1, txHash, _ := snapshotCmdBlockWithTx(t, 1)
+	for blockNum := uint64(0); blockNum <= toBlock; blockNum++ {
+		block := snapshotCmdBlock(blockNum)
+		if blockNum == 1 {
+			block = block1
+		}
+		if err := rawdb.WriteBlock(source, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteBlockBalanceTrace(source, int64(blockNum), &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{Number: int64(blockNum)},
+			Timestamp:       int64(1000 + blockNum),
+		}); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", blockNum, err)
+		}
+	}
+	owner := common.BytesToAddress([]byte{0x41, 0xd1})
+	trace := &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{Number: 1},
+		Timestamp:       1000,
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{{
+			Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+				Address: owner.Bytes(),
+				Amount:  25,
+			}},
+		}},
+	}
+	if err := rawdb.WriteBlockBalanceTrace(source, 1, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace with operation: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(source, owner.Bytes(), 1, 1000); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	balanceRef, err := statesnapshots.BuildBalanceTraceSegmentFromDB(source, snapshotDir, "trace/balance-trace-0-section.seg", 0, toBlock)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+
+	bloomRow := snapshotCmdSectionBloomEncodedBit(t, 17)
+	if err := rawdb.WriteSectionBloom(source, 0, 42, bloomRow); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	sectionRef, err := statesnapshots.BuildSectionBloomSegmentFromDB(source, snapshotDir, "log/section-bloom-0.seg", 0, toBlock)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+
+	logAddress := []byte{0x41, 0xd2, 0xd3, 0xd4, 0xd5}
+	logTopic := common.Hash{0xd2}
+	if err := rawdb.WriteTransactionInfosByBlock(source, 1, []*corepb.TransactionInfo{{
+		Id:          txHash[:],
+		BlockNumber: 1,
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: logAddress,
+			Topics:  [][]byte{logTopic[:]},
+			Data:    []byte{0xd2},
+		}},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	eventRef, err := statesnapshots.BuildEventLogSegmentFromChain(source, snapshotDir, "log/event-log-0-section.seg", 0, toBlock)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	eventIndexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{eventRef}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{
+		balanceRef,
+		sectionRef,
+		eventRef,
+		eventIndexRef,
+	})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "0",
+		"--snapshot.to-block", fmt.Sprintf("%d", toBlock),
+		"--snapshot.from-cold",
+		"--snapshot.etl.buffer", "1",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	if err := snapshotBuildDerivedIndexesCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildDerivedIndexesCmd from cold: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 4 {
+		t.Fatalf("active segments = %d, want balance-trace, section-bloom, event-log, event-log-index", report.ActiveSegments)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if manifest.Generation < 4 {
+		t.Fatalf("manifest generation = %d, want rematerialized generation >= 4", manifest.Generation)
+	}
+
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if covered, err := mgr.BalanceTraceRangeCovered(0, toBlock); err != nil || !covered {
+		t.Fatalf("BalanceTraceRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	if covered, err := mgr.SectionBloomRangeCovered(0, toBlock); err != nil || !covered {
+		t.Fatalf("SectionBloomRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	if covered, err := mgr.EventLogIndexedRangeCovered(1, 1); err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	if got, ok, err := mgr.BlockBalanceTrace(1); err != nil || !ok || got.GetTimestamp() != 1000 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1000", got, ok, err)
+	}
+	if got, ok, err := mgr.SectionBloom(0, 42); err != nil || !ok || !bytes.Equal(got, bloomRow) {
+		t.Fatalf("SectionBloom = %x/%v/%v, want rematerialized row", got, ok, err)
+	}
+	var rows []rawdb.EventLog
+	if err := mgr.IterateEventLogs(1, 1, rawdb.EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(logAddress)},
+		Topics:    [][]common.Hash{{logTopic}},
+	}, func(row rawdb.EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || rows[0].TxHash != txHash || !bytes.Equal(rows[0].Log.GetData(), []byte{0xd2}) {
+		t.Fatalf("event rows = %+v, want rematerialized block 1 log", rows)
+	}
+}
+
 func TestSnapshotBuildDerivedIndexesCmdFromColdRequiresColdCoverage(t *testing.T) {
 	root := t.TempDir()
 	ctx := makeSnapshotRestoreTestContext(t, []string{
