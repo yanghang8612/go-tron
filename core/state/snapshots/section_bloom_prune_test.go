@@ -263,6 +263,49 @@ func TestPruneHotSectionBloomsWithProgressRejectsResumeHashMismatchBeforeDelete(
 	}
 }
 
+func TestPruneHotSectionBloomsWithProgressUsesAncientBlockHash(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	hot := rawdb.NewMemoryDatabase()
+	row := sectionBloomTestEncodedBit(t, 5)
+	if err := rawdb.WriteSectionBloom(hot, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection - 1)
+	block := canonicalBoundaryTestBlock(t, sectionEnd)
+	if err := rawdb.WriteBlock(hot, block); err != nil {
+		t.Fatalf("WriteBlock section end: %v", err)
+	}
+	ref, err := BuildSectionBloomSegmentFromDB(hot, snapshotDir, "", 0, sectionEnd)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	blockRaw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal block: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(hot, sectionEnd, sectionEnd); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	chainDB := rawdb.NewChainDB(hot, sectionBloomPruneAncientBlock(sectionEnd, blockRaw))
+
+	result, err := PruneHotSectionBloomsWithProgress(chainDB, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotSectionBloomsWithProgress: %v", err)
+	}
+	if !result.HasRange || result.RowsDeleted != 1 {
+		t.Fatalf("prune result = %+v, want one deleted section bloom row", result)
+	}
+	stage, ok, err := rawdb.ReadStageProgressRow(chainDB, rawdb.StageSnapshotSectionBloomPrune)
+	if err != nil || !ok || !stage.HasBlockHash || stage.BlockHash != block.Hash() {
+		t.Fatalf("section bloom prune stage row = %+v ok=%v err=%v, want ancient block hash %x", stage, ok, err, block.Hash())
+	}
+}
+
 func TestSectionBloomPruneLifecycleOnePass(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"
@@ -308,4 +351,50 @@ func TestSectionBloomPruneLifecycleNoManifestNoop(t *testing.T) {
 	if result != nil {
 		t.Fatalf("OnePass result = %+v, want nil without manifest", result)
 	}
+}
+
+type sectionBloomPruneTestAncient struct {
+	kind   string
+	number uint64
+	raw    []byte
+}
+
+func sectionBloomPruneAncientBlock(number uint64, raw []byte) *sectionBloomPruneTestAncient {
+	return &sectionBloomPruneTestAncient{
+		kind:   rawdb.AncientBlocksTable,
+		number: number,
+		raw:    append([]byte(nil), raw...),
+	}
+}
+
+func (a *sectionBloomPruneTestAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if a == nil || kind != a.kind || number != a.number {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return append([]byte(nil), a.raw...), nil
+}
+
+func (a *sectionBloomPruneTestAncient) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	if a == nil || kind != a.kind || start > a.number || a.number-start >= count {
+		return nil, rawdb.ErrNotInAncient
+	}
+	raw := append([]byte(nil), a.raw...)
+	if maxBytes > 0 && uint64(len(raw)) > maxBytes {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return [][]byte{raw}, nil
+}
+
+func (a *sectionBloomPruneTestAncient) AncientCount(kind string) (uint64, error) {
+	if a == nil || kind != a.kind {
+		return 0, nil
+	}
+	return a.number + 1, nil
+}
+
+func (a *sectionBloomPruneTestAncient) HasAncient(kind string, number uint64) (bool, error) {
+	return a != nil && kind == a.kind && number == a.number, nil
 }

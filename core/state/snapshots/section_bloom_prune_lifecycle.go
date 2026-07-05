@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 const defaultSectionBloomPruneInterval = time.Minute
@@ -16,9 +16,10 @@ type SectionBloomPruneLifecycleConfig struct {
 }
 
 // SectionBloomPruneLifecycle periodically prunes hot section-bloom rows after
-// verified local section-bloom snapshot coverage is visible.
+// verified section-bloom snapshot coverage and canonical block history are
+// visible.
 type SectionBloomPruneLifecycle struct {
-	db  ethdb.KeyValueStore
+	db  *rawdb.ChainDB
 	cfg SectionBloomPruneLifecycleConfig
 
 	quit chan struct{}
@@ -26,7 +27,7 @@ type SectionBloomPruneLifecycle struct {
 	once sync.Once
 }
 
-func NewSectionBloomPruneLifecycle(db ethdb.KeyValueStore, cfg SectionBloomPruneLifecycleConfig) *SectionBloomPruneLifecycle {
+func NewSectionBloomPruneLifecycle(db *rawdb.ChainDB, cfg SectionBloomPruneLifecycleConfig) *SectionBloomPruneLifecycle {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultSectionBloomPruneInterval
 	}

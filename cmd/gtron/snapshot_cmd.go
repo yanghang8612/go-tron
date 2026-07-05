@@ -1148,7 +1148,7 @@ func snapshotPruneSectionBloomsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("setup genesis: %w", err)
 	}
 	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
-	result, err := pruneVerifiedHotSectionBlooms(db, dir, identity, trustedKeys)
+	result, err := pruneVerifiedHotSectionBlooms(rawdb.NewChainDB(db, ancientReader), dir, identity, trustedKeys)
 	if err != nil {
 		return err
 	}
@@ -1164,7 +1164,7 @@ func snapshotPruneSectionBloomsCmd(ctx *cli.Context) error {
 	return nil
 }
 
-func pruneVerifiedHotSectionBlooms(db ethdb.KeyValueStore, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotSectionBloomResult, error) {
+func pruneVerifiedHotSectionBlooms(db *rawdb.ChainDB, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotSectionBloomResult, error) {
 	_, manifest, _, err := statesnapshots.VerifySignedSnapshotCatalogManifest(dir, identity, trustedKeys)
 	if err != nil {
 		return nil, err

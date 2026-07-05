@@ -1987,10 +1987,13 @@ Status:
   already processed segments. Snap-mode history passes can also publish
   full-section `section-bloom` sidecars once the state-history cutoff fully
   covers a bloom section, ensuring the later section-bloom prune hook has
-  verified cold coverage before deleting whole hot `sb-` rows. Section-bloom
-  payload readers now require the caller's segment size bound before allocation,
-  so malformed sidecar lengths cannot bypass the index verifier into a large
-  allocation.
+  verified cold coverage before deleting whole hot `sb-` rows. Prune stage
+  hashes are now resolved through freezer-aware `ChainDB` readers
+  in both runtime and CLI paths, so hot block-body pruning does not block
+  `SnapshotSectionBloomPrune` progress after canonical blocks are frozen.
+  Section-bloom payload readers now require the caller's segment size bound
+  before allocation, so malformed sidecar lengths cannot bypass the index
+  verifier into a large allocation.
 - `rawdb.AuditBlockBalanceTraceCoverage` and
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested

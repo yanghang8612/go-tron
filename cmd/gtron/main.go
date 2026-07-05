@@ -718,7 +718,7 @@ func gtron(ctx *cli.Context) error {
 					}
 					return nil, err
 				}
-				return statesnapshots.PruneHotSectionBloomsWithProgress(db, stateSnapshotDir, manifest)
+				return statesnapshots.PruneHotSectionBloomsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
 			},
 			BalanceTracePrune: func() (*statesnapshots.PruneHotBalanceTraceResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
@@ -768,7 +768,7 @@ func gtron(ctx *cli.Context) error {
 			"snapshotDir", stateSnapshotDir)
 	}
 	if !sectionBloomPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
-		stack.RegisterLifecycle(statesnapshots.NewSectionBloomPruneLifecycle(db, statesnapshots.SectionBloomPruneLifecycleConfig{
+		stack.RegisterLifecycle(statesnapshots.NewSectionBloomPruneLifecycle(rawdb.NewChainDB(db, ancientReader), statesnapshots.SectionBloomPruneLifecycleConfig{
 			Dir: stateSnapshotDir,
 		}))
 		log.Info("Section bloom prune lifecycle enabled",
