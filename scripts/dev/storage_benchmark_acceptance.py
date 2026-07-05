@@ -1893,6 +1893,22 @@ def check_event_log_index_evidence(rows, required_modes=(), require_non_empty=Fa
     return issues
 
 
+def check_archive_filtered_log_index_evidence(rows):
+    issues = []
+    for row in latest_rows(rows).values():
+        methods = archive_api_methods(row)
+        if methods is None or ARCHIVE_API_FILTERED_LOG_METHOD not in methods:
+            continue
+        if not event_log_index_evidence_row(row):
+            issues.append(
+                f"{line_label(row)} event-log index evidence is missing for "
+                f"{ARCHIVE_API_FILTERED_LOG_METHOD}"
+            )
+            continue
+        issues.extend(check_event_log_index_evidence([row], require_non_empty=True))
+    return issues
+
+
 SNAPSHOT_PROFILE_EVIDENCE_FIELDS = (
     "snapshotManifestProfileStatus",
     "snapshotProfileSegments",
@@ -2710,6 +2726,8 @@ def main(argv=None):
                 require_non_empty=args.require_event_log_index_non_empty,
             )
         )
+    if args.require_archive_filtered_log_evidence:
+        issues.extend(check_archive_filtered_log_index_evidence(rows))
     required_retired_prune_modes = split_modes(
         args.require_retired_prune_mode + args.require_retired_prune_modes
     )

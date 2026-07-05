@@ -2220,7 +2220,9 @@ Status:
   path rather than only full-block log scans. The Nile and storage acceptance
   gates now expose `--require-archive-filtered-log-evidence` so production runs
   against known log-bearing blocks can require that proof directly instead of
-  only recording the label. JSON-RPC transaction
+  only recording the label; that gate also requires same-row non-empty
+  `eventLogIndex*` evidence, so a filtered-log archive proof cannot pass on a
+  hot-only or full-scan-only log path. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
   so a stale or corrupt cold tx-position lookup cannot return a different

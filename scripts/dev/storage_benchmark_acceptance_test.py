@@ -2435,6 +2435,52 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             ]
             write_result(result, [filtered_log_row])
 
+            filtered_logs_without_index = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                filtered_logs_without_index.returncode,
+                0,
+                filtered_logs_without_index.stdout + filtered_logs_without_index.stderr,
+            )
+            self.assertIn(
+                "event-log index evidence is missing for eth_getLogsFiltered",
+                filtered_logs_without_index.stderr,
+            )
+
+            filtered_log_row.update(
+                {
+                    "derivedIndexToBlock": 100,
+                    "eventLogIndexSegments": 2,
+                    "eventLogIndexFromBlock": 1,
+                    "eventLogIndexToBlock": 100,
+                    "eventLogIndexAddressKeys": 3,
+                    "eventLogIndexAddressPostings": 6,
+                    "eventLogIndexAddressAvgPostingsMilli": 2000,
+                    "eventLogIndexAddressMaxPostings": 3,
+                    "eventLogIndexAddressSingletonKeys": 1,
+                    "eventLogIndexAddressMultiPostingKeys": 2,
+                    "eventLogIndexTopicKeys": 2,
+                    "eventLogIndexTopicPostings": 3,
+                    "eventLogIndexTopicAvgPostingsMilli": 1500,
+                    "eventLogIndexTopicMaxPostings": 2,
+                    "eventLogIndexTopicSingletonKeys": 1,
+                    "eventLogIndexTopicMultiPostingKeys": 1,
+                }
+            )
+            write_result(result, [filtered_log_row])
+
             filtered_logs_ok = subprocess.run(
                 [
                     sys.executable,

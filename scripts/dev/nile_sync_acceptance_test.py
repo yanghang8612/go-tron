@@ -5739,6 +5739,34 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             ]
             write_result(result, [filtered_log_row])
 
+            filtered_logs_without_index = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                filtered_logs_without_index.returncode,
+                0,
+                filtered_logs_without_index.stdout + filtered_logs_without_index.stderr,
+            )
+            self.assertIn(
+                "event-log index evidence is missing",
+                filtered_logs_without_index.stderr,
+            )
+
+            add_event_log_index_evidence(filtered_log_row)
+            write_result(result, [filtered_log_row])
+
             filtered_logs_ok = subprocess.run(
                 [
                     sys.executable,

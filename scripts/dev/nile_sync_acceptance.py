@@ -3732,13 +3732,20 @@ def check_row(row, args):
     if args.require_sync_phase_cursor_evidence:
         issues.extend(check_sync_phase_cursor_evidence(row))
 
-    if args.require_event_log_index_evidence or args.require_event_log_index_non_empty:
+    if (
+        args.require_event_log_index_evidence
+        or args.require_event_log_index_non_empty
+        or args.require_archive_filtered_log_evidence
+    ):
         if not event_log_index_evidence_row(row):
             issues.append("event-log index evidence is missing")
         issues.extend(
             check_event_log_index_evidence(
                 row,
-                require_non_empty=args.require_event_log_index_non_empty,
+                require_non_empty=(
+                    args.require_event_log_index_non_empty
+                    or args.require_archive_filtered_log_evidence
+                ),
             )
         )
 
