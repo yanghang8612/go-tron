@@ -1351,6 +1351,80 @@ func TestOpenSnapshotRestoreAncientStoreRejectsNonEmptyFreezer(t *testing.T) {
 	}
 }
 
+func TestSnapshotRestoreCmdPreflightsChainFreezerBeforeStateRestore(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	dataDir := filepath.Join(root, "datadir")
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x64}, common.AccountIDLength)...))
+	sourceDB := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateTxRange(sourceDB, 1, common.Hash{0x44}, 1, 1); err != nil {
+		t.Fatalf("WriteStateTxRange: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(sourceDB, &rawdb.StateDomainChange{
+		BlockNum:   1,
+		BlockHash:  common.Hash{0x44},
+		TxNum:      1,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      owner,
+		NextExists: true,
+		Next:       snapshotCmdAccountEnvelope(t, owner, 64, corepb.AccountType_Normal, common.Hash{}),
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange: %v", err)
+	}
+	historyRefs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(sourceDB, snapshotDir, 1, 1, "history/state-domain-change-1-1.seg")
+	if err != nil {
+		t.Fatalf("BuildStateDomainChangeHistorySegmentsFromDB: %v", err)
+	}
+	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
+	defer src.Close()
+	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
+		{block: snapshotCmdBlock(0)},
+		{block: snapshotCmdBlock(1)},
+	})
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromGenesis(params.DefaultMainnetGenesis(), "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
+	}
+	segments := append([]statesnapshots.SegmentRef{}, historyRefs...)
+	segments = append(segments, freezerRef)
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 1, segments, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", hex.EncodeToString(pub),
+	})
+
+	err = snapshotRestoreCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "requires ancient heads all 1 or all 2") {
+		t.Fatalf("snapshotRestoreCmd error = %v, want chain-freezer preflight rejection", err)
+	}
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("open db after failed restore: %v", err)
+	}
+	defer db.Close()
+	if change, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("state history after failed preflight = %+v ok=%v err=%v, want not restored", change, ok, err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotInstall); err != nil || ok {
+		t.Fatalf("SnapshotInstall progress after failed preflight = %d ok=%v err=%v, want absent", got, ok, err)
+	}
+}
+
 func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	root := t.TempDir()
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src"))

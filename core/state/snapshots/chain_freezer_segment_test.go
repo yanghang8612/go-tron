@@ -109,6 +109,61 @@ func TestRestoreChainFreezerSegmentRejectsNonContiguousHead(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFreezerRestoreTargetRejectsNonContiguousManifest(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+	})
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	manifest := NewManifestForChain(1, 1, []SegmentRef{ref}, chainFreezerTestIdentity())
+	dst := openChainFreezerTestStore(t, filepath.Join(root, "dst"))
+	defer dst.Close()
+
+	err = VerifyChainFreezerRestoreTarget(dst, snapshotDir, manifest)
+	if err == nil || !strings.Contains(err.Error(), "requires ancient heads all 1 or all 2") {
+		t.Fatalf("VerifyChainFreezerRestoreTarget error = %v, want non-contiguous head rejection", err)
+	}
+	if got, err := dst.AncientCount(rawdb.AncientBlocksTable); err != nil || got != 0 {
+		t.Fatalf("destination ancient count = %d/%v, want unchanged empty store", got, err)
+	}
+}
+
+func TestVerifyChainFreezerRestoreTargetAcceptsContiguousManifest(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+	})
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref0, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient ref0: %v", err)
+	}
+	ref1, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient ref1: %v", err)
+	}
+	manifest := NewManifestForChain(1, 1, []SegmentRef{ref1, ref0}, chainFreezerTestIdentity())
+	dst := openChainFreezerTestStore(t, filepath.Join(root, "dst"))
+	defer dst.Close()
+
+	if err := VerifyChainFreezerRestoreTarget(dst, snapshotDir, manifest); err != nil {
+		t.Fatalf("VerifyChainFreezerRestoreTarget: %v", err)
+	}
+	if got, err := dst.AncientCount(rawdb.AncientBlocksTable); err != nil || got != 0 {
+		t.Fatalf("destination ancient count = %d/%v, want dry-run to leave store empty", got, err)
+	}
+}
+
 func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))

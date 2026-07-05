@@ -88,10 +88,12 @@ gtron snapshot restore \
 ```
 
 `snapshot restore` refuses non-genesis datadirs and non-empty freezer tables. It
-restores state domains and state-domain history, installs chain-freezer rows,
-verifies the canonical boundary block, then advances canonical Headers/Bodies/
-Execution/Commitment/Finish stages only after chain data proves the boundary
-hash.
+also preflights the signed manifest's chain-freezer segments against the current
+ancient heads before restoring latest state or history, so a non-contiguous
+freezer range fails before hot state is written. After that it restores state
+domains and state-domain history, installs chain-freezer rows, verifies the
+canonical boundary block, then advances canonical Headers/Bodies/Execution/
+Commitment/Finish stages only after chain data proves the boundary hash.
 
 ## Optional Archive Trace Sidecars
 

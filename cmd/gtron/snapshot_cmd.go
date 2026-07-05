@@ -529,6 +529,11 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 	}
 	restoreOpts := snapshotRestoreVerificationOptions(db)
 	restoreOpts.ETL = etlOpts
+	if _, manifest, _, err := statesnapshots.VerifySignedSnapshotCatalogManifest(dir, identity, trustedKeys); err != nil {
+		return err
+	} else if err := statesnapshots.VerifyChainFreezerRestoreTarget(ancientReader, dir, manifest); err != nil {
+		return err
+	}
 	result, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(db, dir, identity, trustedKeys, restoreOpts)
 	if err != nil {
 		return err

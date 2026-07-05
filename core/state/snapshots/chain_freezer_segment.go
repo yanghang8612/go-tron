@@ -462,6 +462,46 @@ func RestoreChainFreezerFromVerifiedCatalogWithOptions(store ChainFreezerAncient
 	return restoreChainFreezerSegmentsFromManifest(store, dir, manifest, *report, opts)
 }
 
+// VerifyChainFreezerRestoreTarget performs the read-only installability check
+// for all chain-freezer segments in manifest. It mirrors the append-only
+// ancient-head rules used by RestoreChainFreezerSegmentToAncientWithOptions so
+// callers can fail before restoring hot latest/history state.
+func VerifyChainFreezerRestoreTarget(reader rawdb.AncientReader, dir string, manifest *Manifest) error {
+	if reader == nil {
+		return errors.New("snapshots: nil ancient reader")
+	}
+	if manifest == nil {
+		return errors.New("snapshots: nil manifest")
+	}
+	heads, err := chainFreezerAncientHeads(reader)
+	if err != nil {
+		return err
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Kind != SegmentChainFreezer {
+			continue
+		}
+		if err := CheckChainFreezerSegment(dir, ref); err != nil {
+			return err
+		}
+		expectedHead, err := chainFreezerSegmentExpectedHead(ref)
+		if err != nil {
+			return err
+		}
+		switch {
+		case chainFreezerHeadsAll(heads, ref.FromTxNum):
+			heads = chainFreezerHeads{blocks: expectedHead, txInfos: expectedHead, stateRoots: expectedHead}
+		case chainFreezerHeadsAll(heads, expectedHead):
+			if err := verifyChainFreezerSegmentAlreadyInstalled(reader, dir, ref); err != nil {
+				return err
+			}
+		default:
+			return chainFreezerInstallHeadError(ref, heads)
+		}
+	}
+	return nil
+}
+
 func restoreChainFreezerSegmentsFromManifest(store ChainFreezerAncientStore, dir string, manifest *Manifest, report ManifestVerificationReport, opts RestoreChainFreezerOptions) (*RestoreVerifiedChainFreezerResult, error) {
 	if store == nil {
 		return nil, errors.New("snapshots: nil ancient store")
@@ -517,21 +557,17 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 	if err := CheckChainFreezerSegment(dir, ref); err != nil {
 		return result, err
 	}
-	expectedHead := ref.ToTxNum + 1
-	if expectedHead == 0 {
-		return result, fmt.Errorf("snapshots: chain-freezer segment %q toBlock overflows head", ref.Path)
+	expectedHead, err := chainFreezerSegmentExpectedHead(ref)
+	if err != nil {
+		return result, err
 	}
-	heads := make([]uint64, 0, 3)
-	for _, table := range []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable} {
-		head, err := store.AncientCount(table)
-		if err != nil {
-			return result, err
-		}
-		heads = append(heads, head)
+	heads, err := chainFreezerAncientHeads(store)
+	if err != nil {
+		return result, err
 	}
 
 	switch {
-	case heads[0] == ref.FromTxNum && heads[1] == ref.FromTxNum && heads[2] == ref.FromTxNum:
+	case chainFreezerHeadsAll(heads, ref.FromTxNum):
 		expectedRows, err := chainFreezerRowCount(ref.FromTxNum, ref.ToTxNum)
 		if err != nil {
 			return result, err
@@ -574,17 +610,13 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 			return result, err
 		}
 		result.BlocksRestored = appended
-	case heads[0] == expectedHead && heads[1] == expectedHead && heads[2] == expectedHead:
+	case chainFreezerHeadsAll(heads, expectedHead):
 		if err := verifyChainFreezerSegmentAlreadyInstalled(store, dir, ref); err != nil {
 			return result, err
 		}
 		result.AlreadyInstalled = true
 	default:
-		return result, fmt.Errorf("snapshots: chain-freezer install requires ancient heads all %d or all %d, got %s=%d %s=%d %s=%d",
-			ref.FromTxNum, expectedHead,
-			rawdb.AncientBlocksTable, heads[0],
-			rawdb.AncientTxInfosTable, heads[1],
-			rawdb.AncientStateRootsTable, heads[2])
+		return result, chainFreezerInstallHeadError(ref, heads)
 	}
 	if opts.ProgressWriter != nil {
 		if err := writeChainFreezerStageProgress(opts.ProgressWriter, dir, ref); err != nil {
@@ -601,6 +633,56 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 		result.TxInfosRestored = indexes.TxInfosRestored
 	}
 	return result, nil
+}
+
+type chainFreezerHeads struct {
+	blocks     uint64
+	txInfos    uint64
+	stateRoots uint64
+}
+
+func chainFreezerAncientHeads(reader rawdb.AncientReader) (chainFreezerHeads, error) {
+	var heads chainFreezerHeads
+	tables := []struct {
+		name string
+		dst  *uint64
+	}{
+		{name: rawdb.AncientBlocksTable, dst: &heads.blocks},
+		{name: rawdb.AncientTxInfosTable, dst: &heads.txInfos},
+		{name: rawdb.AncientStateRootsTable, dst: &heads.stateRoots},
+	}
+	for _, table := range tables {
+		count, err := reader.AncientCount(table.name)
+		if err != nil {
+			return chainFreezerHeads{}, err
+		}
+		*table.dst = count
+	}
+	return heads, nil
+}
+
+func chainFreezerHeadsAll(heads chainFreezerHeads, want uint64) bool {
+	return heads.blocks == want && heads.txInfos == want && heads.stateRoots == want
+}
+
+func chainFreezerSegmentExpectedHead(ref SegmentRef) (uint64, error) {
+	expectedHead := ref.ToTxNum + 1
+	if expectedHead == 0 {
+		return 0, fmt.Errorf("snapshots: chain-freezer segment %q toBlock overflows head", ref.Path)
+	}
+	return expectedHead, nil
+}
+
+func chainFreezerInstallHeadError(ref SegmentRef, heads chainFreezerHeads) error {
+	expectedHead, err := chainFreezerSegmentExpectedHead(ref)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("snapshots: chain-freezer install requires ancient heads all %d or all %d, got %s=%d %s=%d %s=%d",
+		ref.FromTxNum, expectedHead,
+		rawdb.AncientBlocksTable, heads.blocks,
+		rawdb.AncientTxInfosTable, heads.txInfos,
+		rawdb.AncientStateRootsTable, heads.stateRoots)
 }
 
 func writeChainFreezerStageProgress(db ethdb.KeyValueWriter, dir string, ref SegmentRef) error {
