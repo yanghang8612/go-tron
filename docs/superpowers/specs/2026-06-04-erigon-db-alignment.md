@@ -168,6 +168,9 @@ Status:
 - `gtron snapshot bootstrap` is the integrated operator entry point for remote
   snapshot bootstrap: it fetches the signed remote catalog/manifest/segments
   and then runs the same signed-catalog restore path into the local datadir.
+  It now preflights the restore target before any `--snapshot.reset` fetch
+  side effect, so a non-genesis datadir or non-empty freezer fails without
+  deleting the local snapshot directory or opening remote segment requests.
   CLI regression coverage proves the command can reset a stale local snapshot
   directory, download chain-freezer plus `chain-index` and state-history files,
   restore them, advance canonical stage/head rows to the verified boundary, and

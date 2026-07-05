@@ -481,6 +481,9 @@ func snapshotVerifyCmd(ctx *cli.Context) error {
 }
 
 func snapshotBootstrapCmd(ctx *cli.Context) error {
+	if err := snapshotBootstrapPreflightRestoreTarget(ctx); err != nil {
+		return err
+	}
 	if err := snapshotFetchCmd(ctx); err != nil {
 		return err
 	}
@@ -1275,6 +1278,48 @@ func snapshotRemoteURL(ctx *cli.Context) (string, error) {
 		return "", errors.New("snapshot fetch requires --snapshot.url or GTRON_SNAPSHOT_URL")
 	}
 	return url, nil
+}
+
+func snapshotBootstrapPreflightRestoreTarget(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	genesis, err := makeGenesis(ctx)
+	if err != nil {
+		return err
+	}
+	forkConfigHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+	identity, err := snapshotExpectedChainIdentityFromGenesis(genesis, forkConfigHash)
+	if err != nil {
+		return err
+	}
+
+	dbPath := chainDataDir(cfg.DataDir)
+	if info, err := os.Stat(dbPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat database: %w", err)
+		}
+	} else {
+		if !info.IsDir() {
+			return fmt.Errorf("stat database: %s is not a directory", dbPath)
+		}
+		db, err := openPebbleDB(ctx, dbPath)
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer db.Close()
+		if err := ensureSnapshotRestoreBootstrapDatadir(db, common.HexToHash(identity.GenesisHash)); err != nil {
+			return err
+		}
+	}
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+	return ensureSnapshotRestoreEmptyFreezer(ancientReader)
 }
 
 func resetSnapshotFetchDir(dir string) error {

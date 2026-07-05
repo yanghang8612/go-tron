@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -520,6 +521,56 @@ func TestSnapshotBootstrapCmdFetchesAndRestoresCanonicalBoundary(t *testing.T) {
 	}
 	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
 		t.Fatalf("head after boundary-tail import = %v, want block2 %x", got, block2.Hash())
+	}
+}
+
+func TestSnapshotBootstrapCmdPreflightsRestoreTargetBeforeFetch(t *testing.T) {
+	root := t.TempDir()
+	destDir := filepath.Join(root, "downloaded")
+	dataDir := filepath.Join(root, "datadir")
+	stalePath := filepath.Join(destDir, "stale.seg")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("mkdir dest dir: %v", err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("NewPebbleDB: %v", err)
+	}
+	rawdb.WriteHeadBlockHash(db, common.Hash{0xee})
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "unexpected fetch", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", destDir,
+		"--snapshot.url", server.URL,
+		"--snapshot.reset",
+		"--snapshot.trusted-key", hex.EncodeToString(pub),
+	})
+
+	err = snapshotBootstrapCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "non-genesis datadir") {
+		t.Fatalf("snapshotBootstrapCmd err = %v, want non-genesis preflight failure", err)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("stale snapshot file was removed before restore preflight: %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("remote snapshot server saw %d requests before restore preflight failure, want 0", got)
 	}
 }
 
