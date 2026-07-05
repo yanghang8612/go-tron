@@ -1201,7 +1201,10 @@ Status:
   `GetPaginatedNowWitnessList` reuse the same solid-bound `SystemAsset` and
   witness archive paths as their single-item/list peers. HTTP
   `/walletsolidity`/`/walletpbft/getassetissuelistbyname` now follows the
-  same bound `SystemAsset` history path as `getassetissuebyname`. HTTP
+  same bound `SystemAsset` history path as `getassetissuebyname`, and
+  `/walletsolidity`/`/walletpbft/getassetissuebyaccount` now resolve the
+  issuer owner-index from historical `SystemAsset` rows before applying the
+  same pre-/post-`AllowSameTokenName` asset metadata selection. HTTP
   `/wallet/getpaginatednowwitnesslist` now covers the live witness page read,
   and `/walletsolidity`/`/walletpbft` variants slice `ListWitnessesAt` results
   at the solid/PBFT bound rather than reading live-head witness state.
@@ -1259,7 +1262,8 @@ Status:
   reader now surfaces corrupt V1/V2 exchange protobuf payloads instead of
   silently dropping them from point/list archive reads. HTTP solidity/PBFT
   TRC10 asset metadata routes (`getassetissuebyid`, `getassetissuebyname`,
-  `getassetissuelist`, `getpaginatedassetissuelist`) and gRPC
+  `getassetissuelist`, `getpaginatedassetissuelist`,
+  `getassetissuebyaccount`) and gRPC
   `WalletSolidity` asset methods now dispatch through `SystemAsset` history at
   the bound; the backend reads historical `token_id_num` and
   `allow_same_token_name` so pre-fork list/name reads use legacy records while

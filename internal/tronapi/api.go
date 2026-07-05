@@ -2095,6 +2095,10 @@ func (api *API) handleGetPaginatedAssetIssueList(w http.ResponseWriter, r *http.
 }
 
 func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByAccount(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByAccount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Address string `json:"address"`
 		Visible bool   `json:"visible"`
@@ -2112,7 +2116,12 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	asset, err := api.backend.GetAssetIssueByAccount(addr)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset, err = api.backend.GetAssetIssueByAccount(addr)
+	} else {
+		asset, err = api.backend.GetAssetIssueByAccountAt(addr, boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

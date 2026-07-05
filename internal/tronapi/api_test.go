@@ -303,6 +303,9 @@ func (s *stubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum u
 func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
 	return nil, s.assetErr
 }
+func (s *stubBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 
 // --- New Phase 13 methods (Market order queries) ---
 func (s *stubBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {

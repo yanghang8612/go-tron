@@ -1969,6 +1969,42 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) (*contractpb.
 	return sysKV.ReadAssetIssue(id), nil
 }
 
+func (b *TronBackend) GetAssetIssueByAccountAt(addr tcommon.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	id, ok, err := session.reader.AssetOwnerIndexAt(addr[:], blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read asset owner index for %s at block %d: %w", addr.Hex(), blockNum, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, assetDynamicPropertyKeys)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct asset dynamic properties at block %d: %w", blockNum, err)
+	}
+	asset, err := session.reader.AssetIssueAt(id, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue id %d at block %d: %w", id, blockNum, err)
+	}
+	if !dynProps.AllowSameTokenName() {
+		if asset == nil {
+			return nil, nil
+		}
+		legacy, err := session.reader.AssetIssueByNameAt(asset.Name, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy asset issue name %q at block %d: %w", string(asset.Name), blockNum, err)
+		}
+		return legacy, nil
+	}
+	return asset, nil
+}
+
 func (b *TronBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
 	sysKV, err := b.headSystemStateStrict()
 	if err != nil {

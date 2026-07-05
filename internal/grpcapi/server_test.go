@@ -300,6 +300,9 @@ func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum u
 func (b *testBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
 	return nil, b.assetErr
 }
+func (b *testBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
 func (b *testBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
 	return nil, b.marketErr
 }

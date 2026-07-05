@@ -1656,6 +1656,7 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain
 	issuer := testInsertAddr(70)
+	issuer2 := testInsertAddr(71)
 
 	parent := bc.genesisBlock.Hash()
 	var block1, block2 *types.Block
@@ -1676,10 +1677,10 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 		t.Fatal("test setup did not build both blocks")
 	}
 
-	asset := func(id int64, name string, supply int64) *contractpb.AssetIssueContract {
+	asset := func(owner tcommon.Address, id int64, name string, supply int64) *contractpb.AssetIssueContract {
 		return &contractpb.AssetIssueContract{
 			Id:           strconv.FormatInt(id, 10),
-			OwnerAddress: issuer[:],
+			OwnerAddress: owner[:],
 			Name:         []byte(name),
 			TotalSupply:  supply,
 			TrxNum:       1,
@@ -1706,8 +1707,8 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 		}
 
 		if n == 1 {
-			v2 := asset(firstAssetTokenID, "TOKEN", 101)
-			legacy := asset(firstAssetTokenID, "TOKEN", 100)
+			v2 := asset(issuer, firstAssetTokenID, "TOKEN", 101)
+			legacy := asset(issuer, firstAssetTokenID, "TOKEN", 100)
 			if err := statedb.WriteAssetIssue(firstAssetTokenID, v2); err != nil {
 				t.Fatalf("write v2 asset block %d: %v", n, err)
 			}
@@ -1717,12 +1718,21 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 			if err := statedb.WriteAssetNameIndex([]byte("TOKEN"), firstAssetTokenID); err != nil {
 				t.Fatalf("write name index block %d: %v", n, err)
 			}
+			if err := statedb.WriteAssetOwnerIndex(issuer[:], firstAssetTokenID); err != nil {
+				t.Fatalf("write owner index block %d: %v", n, err)
+			}
 		} else {
-			if err := statedb.WriteAssetIssue(firstAssetTokenID, asset(firstAssetTokenID, "TOKEN", 201)); err != nil {
+			if err := statedb.WriteAssetIssue(firstAssetTokenID, asset(issuer, firstAssetTokenID, "TOKEN", 201)); err != nil {
 				t.Fatalf("write updated v2 asset block %d: %v", n, err)
 			}
-			if err := statedb.WriteAssetIssue(firstAssetTokenID+1, asset(firstAssetTokenID+1, "TOKEN2", 300)); err != nil {
+			if err := statedb.WriteAssetIssue(firstAssetTokenID+1, asset(issuer2, firstAssetTokenID+1, "TOKEN2", 300)); err != nil {
 				t.Fatalf("write second v2 asset block %d: %v", n, err)
+			}
+			if err := statedb.WriteAssetOwnerIndex(issuer[:], firstAssetTokenID); err != nil {
+				t.Fatalf("write first owner index block %d: %v", n, err)
+			}
+			if err := statedb.WriteAssetOwnerIndex(issuer2[:], firstAssetTokenID+1); err != nil {
+				t.Fatalf("write second owner index block %d: %v", n, err)
 			}
 		}
 
@@ -1754,6 +1764,20 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 	if block1ByName == nil || block1ByName.GetTotalSupply() != 100 {
 		t.Fatalf("block1 by name = %+v, want legacy supply 100", block1ByName)
 	}
+	block1ByAccount, err := b.GetAssetIssueByAccountAt(issuer, block1.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByAccountAt(block1 issuer): %v", err)
+	}
+	if block1ByAccount == nil || block1ByAccount.GetTotalSupply() != 100 {
+		t.Fatalf("block1 by account = %+v, want legacy supply 100", block1ByAccount)
+	}
+	block1MissingAccount, err := b.GetAssetIssueByAccountAt(issuer2, block1.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByAccountAt(block1 issuer2): %v", err)
+	}
+	if block1MissingAccount != nil {
+		t.Fatalf("block1 issuer2 account = %+v, want nil", block1MissingAccount)
+	}
 	block1List, err := b.GetAssetIssueListAt(block1.Number())
 	if err != nil {
 		t.Fatalf("GetAssetIssueListAt(block1): %v", err)
@@ -1768,6 +1792,13 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 	}
 	if block2ByName == nil || block2ByName.GetId() != strconv.FormatInt(firstAssetTokenID+1, 10) || block2ByName.GetTotalSupply() != 300 {
 		t.Fatalf("block2 by name = %+v, want V2 TOKEN2", block2ByName)
+	}
+	block2ByAccount, err := b.GetAssetIssueByAccountAt(issuer2, block2.Number())
+	if err != nil {
+		t.Fatalf("GetAssetIssueByAccountAt(block2 issuer2): %v", err)
+	}
+	if block2ByAccount == nil || block2ByAccount.GetId() != strconv.FormatInt(firstAssetTokenID+1, 10) || block2ByAccount.GetTotalSupply() != 300 {
+		t.Fatalf("block2 by account = %+v, want V2 TOKEN2", block2ByAccount)
 	}
 	block2List, err := b.GetAssetIssueListAt(block2.Number())
 	if err != nil {

@@ -48,6 +48,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getassetissuelistbyname", api.getSolidAssetIssueListByName)
 	mux.HandleFunc("/walletsolidity/getassetissuelist", api.getSolidAssetIssueList)
 	mux.HandleFunc("/walletsolidity/getpaginatedassetissuelist", api.getSolidPaginatedAssetIssueList)
+	mux.HandleFunc("/walletsolidity/getassetissuebyaccount", api.getSolidAssetIssueByAccount)
 	mux.HandleFunc("/walletsolidity/getmarketorderbyid", api.getSolidMarketOrderByID)
 	mux.HandleFunc("/walletsolidity/getmarketordersfromaccount", api.getSolidMarketOrdersFromAccount)
 	mux.HandleFunc("/walletsolidity/getmarketpricebypair", api.getSolidMarketPriceByPair)
@@ -100,6 +101,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getassetissuelistbyname", api.getPbftAssetIssueListByName)
 	mux.HandleFunc("/walletpbft/getassetissuelist", api.getPbftAssetIssueList)
 	mux.HandleFunc("/walletpbft/getpaginatedassetissuelist", api.getPbftPaginatedAssetIssueList)
+	mux.HandleFunc("/walletpbft/getassetissuebyaccount", api.getPbftAssetIssueByAccount)
 	mux.HandleFunc("/walletpbft/getmarketorderbyid", api.getPbftMarketOrderByID)
 	mux.HandleFunc("/walletpbft/getmarketordersfromaccount", api.getPbftMarketOrdersFromAccount)
 	mux.HandleFunc("/walletpbft/getmarketpricebypair", api.getPbftMarketPriceByPair)
@@ -310,6 +312,14 @@ func (api *API) getSolidPaginatedAssetIssueList(w http.ResponseWriter, r *http.R
 
 func (api *API) getPbftPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request) {
 	api.handleGetPaginatedAssetIssueList(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByAccount(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByAccount(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidMarketOrderByID(w http.ResponseWriter, r *http.Request) {

@@ -186,6 +186,18 @@ func (s *StateDB) ReadAssetOwnerIndex(ownerAddr []byte) (int64, bool) {
 	return int64(binary.BigEndian.Uint64(raw[:8])), true
 }
 
+// AssetOwnerIndexAt reconstructs the issuer -> token id mapping at blockNum.
+func (r *PersistentHistoryReader) AssetOwnerIndexAt(ownerAddr []byte, blockNum uint64) (int64, bool, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return 0, false, err
+	}
+	if len(raw) < 8 {
+		return 0, false, fmt.Errorf("decode asset owner index at block %d: value length %d, want at least 8", blockNum, len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw[:8])), true, nil
+}
+
 // WriteAssetOwnerIndex stages an ownerAddr -> token id mapping, enforcing
 // java-tron's one-asset-per-account rule at the storage layer.
 func (s *StateDB) WriteAssetOwnerIndex(ownerAddr []byte, tokenID int64) error {

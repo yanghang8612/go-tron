@@ -579,6 +579,8 @@ type isolationStubBackend struct {
 	assetListAtBlock          uint64
 	liveAssetPageCalls        int
 	assetPageAtBlock          uint64
+	liveAssetAccountCalls     int
+	assetAccountAtBlock       uint64
 	liveMarketOrderCalls      int
 	marketOrderAtBlock        uint64
 	liveMarketOrdersCalls     int
@@ -842,6 +844,16 @@ func (s *isolationStubBackend) GetAssetIssueListPaginated(offset, limit int) ([]
 func (s *isolationStubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	s.assetPageAtBlock = blockNum
 	return []*contractpb.AssetIssueContract{assetSentinel("bound-page", 12)}, nil
+}
+
+func (s *isolationStubBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
+	s.liveAssetAccountCalls++
+	return assetSentinel("live-account", 5), nil
+}
+
+func (s *isolationStubBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	s.assetAccountAtBlock = blockNum
+	return assetSentinel("bound-account", 77), nil
 }
 
 func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
@@ -1960,6 +1972,31 @@ func assertAssetRoutesUseBound(t *testing.T, prefix string, stub *isolationStubB
 	}
 	if stub.liveAssetPageCalls != 0 {
 		t.Fatalf("live GetAssetIssueListPaginated called %d times, want 0", stub.liveAssetPageCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getassetissuebyaccount", "application/json", strings.NewReader(`{"address":"410000000000000000000000000000000000000071"}`))
+	if err != nil {
+		t.Fatalf("getassetissuebyaccount request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getassetissuebyaccount status: %d", resp.StatusCode)
+	}
+	var byAccount struct {
+		ID          string `json:"id"`
+		TotalSupply int64  `json:"total_supply"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&byAccount); err != nil {
+		t.Fatal(err)
+	}
+	if byAccount.ID != "bound-account" || byAccount.TotalSupply != 77 {
+		t.Fatalf("asset by account = %+v, want bound sentinel", byAccount)
+	}
+	if stub.assetAccountAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueByAccountAt block = %d, want %d", stub.assetAccountAtBlock, wantBlock)
+	}
+	if stub.liveAssetAccountCalls != 0 {
+		t.Fatalf("live GetAssetIssueByAccount called %d times, want 0", stub.liveAssetAccountCalls)
 	}
 }
 
