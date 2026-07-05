@@ -2393,6 +2393,16 @@ def check_full_staged_sync_stage_details(row, require=False):
     expected = list(FULL_STAGED_SYNC_REQUIRED_STAGES)
     if len(details) != len(expected):
         issues.append(f"fullStagedSyncStageDetails length={len(details)}, want {len(expected)}")
+    duplicate_stages = duplicate_string_entries(
+        str(detail.get("stage", ""))
+        for detail in details
+        if isinstance(detail, dict) and str(detail.get("stage", ""))
+    )
+    if duplicate_stages:
+        issues.append(
+            "fullStagedSyncStageDetails contains duplicate stages: "
+            + ",".join(duplicate_stages)
+        )
 
     missing = []
     hash_issues = []
@@ -2769,18 +2779,22 @@ def string_set_field(row, field):
     return {str(value) for value in raw}
 
 
-def duplicate_string_list_entries(row, field):
-    raw = row.get(field)
-    if not isinstance(raw, list):
-        return []
+def duplicate_string_entries(values):
     seen = set()
     duplicates = set()
-    for value in raw:
+    for value in values:
         value = str(value)
         if value in seen:
             duplicates.add(value)
         seen.add(value)
     return sorted(duplicates)
+
+
+def duplicate_string_list_entries(row, field):
+    raw = row.get(field)
+    if not isinstance(raw, list):
+        return []
+    return duplicate_string_entries(raw)
 
 
 def archive_api_methods(row):

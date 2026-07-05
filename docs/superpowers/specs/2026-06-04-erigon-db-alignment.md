@@ -911,7 +911,7 @@ Status:
   may be staged or canonical; import/execution/commitment/finish must be
   canonical), `SyncInventory` to `SyncBodies` backlog/throughput metrics,
   recomputed stage pipeline lag/bottleneck and inventory interval ratio/rate
-  consistency,
+  consistency, duplicate `fullStagedSyncStageDetails` stage entries,
   hash/staged-body/order/regression counters, optional stopped offline DB
   checks, optional required `stageStalled*`/`stageStalls` diagnostics,
   storage-alert Prometheus artifact shape, and project-specific numeric
