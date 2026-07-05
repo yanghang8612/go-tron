@@ -2399,7 +2399,8 @@ Remaining:
   lifecycle pruning now covers chain lookups, section blooms, and balance
   traces, balance-trace snapshot builds now reject incomplete source ranges,
   cold balance-trace, section-bloom, and covered event-log readers can be
-  re-materialized into new manifest-integrated segments, and isolated replay
+  re-materialized into new manifest-integrated segments through both library
+  builders and `gtron snapshot build-* --snapshot.from-cold`, and isolated replay
   backfill has replay-DB resume,
   collector-backed trace writes, signed-snapshot checkpoint starts, and
   snapshot-aware balance-trace diagnostics. Production archive completeness still

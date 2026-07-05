@@ -1439,6 +1439,114 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildEventLogsCmdFromColdRematerializesSegment(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	block7, txHash, _ := snapshotCmdBlockWithTx(t, 7)
+	logAddress := []byte{0x41, 0x87, 0x88, 0x89, 0x8a}
+	logTopic := common.Hash{0x87}
+	if err := rawdb.WriteBlock(source, block7); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(source, 7, []*corepb.TransactionInfo{{
+		Id:          txHash[:],
+		BlockNumber: 7,
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: logAddress,
+			Topics:  [][]byte{logTopic[:]},
+			Data:    []byte{0x87},
+		}},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	ref, err := statesnapshots.BuildEventLogSegmentFromChain(source, snapshotDir, "log/event-log-7-7.seg", 7, 7)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "7",
+		"--snapshot.to-block", "7",
+		"--snapshot.from-cold",
+		"--snapshot.etl.buffer", "1",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	if err := snapshotBuildEventLogsCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildEventLogsCmd from cold: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 2 {
+		t.Fatalf("active segments = %d, want event-log and event-log-index", report.ActiveSegments)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if manifest.Generation < 2 {
+		t.Fatalf("manifest generation = %d, want rematerialized generation >= 2", manifest.Generation)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if covered, err := mgr.EventLogIndexedRangeCovered(7, 7); err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var rows []rawdb.EventLog
+	if err := mgr.IterateEventLogs(7, 7, rawdb.EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(logAddress)},
+		Topics:    [][]common.Hash{{logTopic}},
+	}, func(row rawdb.EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 7 || rows[0].TxHash != txHash || !bytes.Equal(rows[0].Log.GetData(), []byte{0x87}) {
+		t.Fatalf("event rows = %+v, want rematerialized block 7 log", rows)
+	}
+}
+
+func TestSnapshotBuildDerivedIndexesCmdFromColdRequiresColdCoverage(t *testing.T) {
+	root := t.TempDir()
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", filepath.Join(root, "datadir"),
+		"--snapshot.dir", filepath.Join(root, "snapshot"),
+		"--snapshot.from-block", "0",
+		"--snapshot.to-block", "0",
+		"--snapshot.from-cold",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	err := snapshotBuildDerivedIndexesCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "cold balance-trace build requires verified cold coverage") {
+		t.Fatalf("snapshotBuildDerivedIndexesCmd from cold error = %v, want cold balance-trace coverage error", err)
+	}
+}
+
 func TestSnapshotPruneRetiredCmdDeletesRetiredSegmentFiles(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
@@ -2525,6 +2633,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotCatalogSigningKeyFileFlag,
 		snapshotFromBlockFlag,
 		snapshotToBlockFlag,
+		snapshotFromColdFlag,
 		snapshotETLTempDirFlag,
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,

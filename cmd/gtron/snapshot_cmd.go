@@ -76,6 +76,10 @@ var (
 		Name:  "snapshot.to-block",
 		Usage: "Last chain-freezer block number to snapshot, inclusive",
 	}
+	snapshotFromColdFlag = &cli.BoolFlag{
+		Name:  "snapshot.from-cold",
+		Usage: "Build derived snapshot segments from existing verified cold sidecars in --snapshot.dir instead of hot rawdb rows",
+	}
 	snapshotETLTempDirFlag = &cli.StringFlag{
 		Name:  "snapshot.etl.tempdir",
 		Usage: "Parent directory for temporary snapshot ETL run files",
@@ -224,6 +228,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
+					snapshotFromColdFlag,
 					snapshotForkConfigHashFlag,
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
@@ -250,6 +255,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
+					snapshotFromColdFlag,
 					snapshotForkConfigHashFlag,
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
@@ -276,6 +282,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
+					snapshotFromColdFlag,
 					snapshotForkConfigHashFlag,
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
@@ -302,6 +309,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
+					snapshotFromColdFlag,
 					snapshotForkConfigHashFlag,
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
@@ -703,6 +711,30 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 	if toBlock < fromBlock {
 		return fmt.Errorf("snapshot balance trace block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
+	dir := snapshotDir(ctx, cfg.DataDir)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	var result *statesnapshots.AggregatorBuildResult
+	if ctx.Bool("snapshot.from-cold") {
+		mgr, err := statesnapshots.OpenManager(dir)
+		if err != nil {
+			return err
+		}
+		if err := requireSnapshotColdCoverage("balance-trace", fromBlock, toBlock, mgr.BalanceTraceRangeCovered); err != nil {
+			return err
+		}
+		result, err = statesnapshots.NewAggregator(dir).BuildBalanceTracesFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		if err != nil {
+			return err
+		}
+		if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+			return err
+		}
+		printSnapshotBuildResult("Balance trace snapshot built", fromBlock, toBlock, result)
+		return nil
+	}
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -733,12 +765,7 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 		)
 	}
 
-	dir := snapshotDir(ctx, cfg.DataDir)
-	etlOpts, err := snapshotETLOptions(ctx)
-	if err != nil {
-		return err
-	}
-	result, err := statesnapshots.NewAggregator(dir).BuildBalanceTracesWithOptions(db, fromBlock, toBlock, etlOpts)
+	result, err = statesnapshots.NewAggregator(dir).BuildBalanceTracesWithOptions(db, fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -783,18 +810,37 @@ func snapshotBuildSectionBloomsCmd(ctx *cli.Context) error {
 	if toBlock < fromBlock {
 		return fmt.Errorf("snapshot section bloom block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
+	dir := snapshotDir(ctx, cfg.DataDir)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	var result *statesnapshots.AggregatorBuildResult
+	if ctx.Bool("snapshot.from-cold") {
+		mgr, err := statesnapshots.OpenManager(dir)
+		if err != nil {
+			return err
+		}
+		if err := requireSnapshotColdCoverage("section-bloom", fromBlock, toBlock, mgr.SectionBloomRangeCovered); err != nil {
+			return err
+		}
+		result, err = statesnapshots.NewAggregator(dir).BuildSectionBloomsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		if err != nil {
+			return err
+		}
+		if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+			return err
+		}
+		printSnapshotBuildResult("Section bloom snapshot built", fromBlock, toBlock, result)
+		return nil
+	}
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
-	dir := snapshotDir(ctx, cfg.DataDir)
-	etlOpts, err := snapshotETLOptions(ctx)
-	if err != nil {
-		return err
-	}
-	result, err := statesnapshots.NewAggregator(dir).BuildSectionBloomsWithOptions(db, fromBlock, toBlock, etlOpts)
+	result, err = statesnapshots.NewAggregator(dir).BuildSectionBloomsWithOptions(db, fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -839,6 +885,30 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 	if toBlock < fromBlock {
 		return fmt.Errorf("snapshot event log block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
+	dir := snapshotDir(ctx, cfg.DataDir)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	var result *statesnapshots.AggregatorBuildResult
+	if ctx.Bool("snapshot.from-cold") {
+		mgr, err := statesnapshots.OpenManager(dir)
+		if err != nil {
+			return err
+		}
+		if err := requireSnapshotColdCoverage("event-log", fromBlock, toBlock, mgr.EventLogRangeCovered); err != nil {
+			return err
+		}
+		result, err = statesnapshots.NewAggregator(dir).BuildEventLogsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		if err != nil {
+			return err
+		}
+		if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+			return err
+		}
+		printSnapshotBuildResult("Event log snapshot built", fromBlock, toBlock, result)
+		return nil
+	}
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -851,12 +921,7 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 	}
 	defer closeAncient()
 
-	dir := snapshotDir(ctx, cfg.DataDir)
-	etlOpts, err := snapshotETLOptions(ctx)
-	if err != nil {
-		return err
-	}
-	result, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithOptions(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock, etlOpts)
+	result, err = statesnapshots.NewAggregator(dir).BuildEventLogsWithOptions(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -901,6 +966,22 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 	if toBlock < fromBlock {
 		return fmt.Errorf("snapshot derived index block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
+	dir := snapshotDir(ctx, cfg.DataDir)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	if ctx.Bool("snapshot.from-cold") {
+		result, err := snapshotBuildDerivedIndexesFromCold(dir, fromBlock, toBlock, etlOpts)
+		if err != nil {
+			return err
+		}
+		if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+			return err
+		}
+		printSnapshotBuildResult("Derived snapshot indexes built", fromBlock, toBlock, result)
+		return nil
+	}
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -931,11 +1012,6 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 		)
 	}
 
-	dir := snapshotDir(ctx, cfg.DataDir)
-	etlOpts, err := snapshotETLOptions(ctx)
-	if err != nil {
-		return err
-	}
 	result, err := statesnapshots.NewAggregator(dir).BuildDerivedIndexes(chainDB, fromBlock, toBlock, statesnapshots.AggregatorBuildDerivedOptions{
 		BalanceTraces: true,
 		SectionBlooms: true,
@@ -966,6 +1042,79 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 		activeSegments,
 	)
 	return nil
+}
+
+func snapshotBuildDerivedIndexesFromCold(dir string, fromBlock, toBlock uint64, etlOpts statesnapshots.RestoreETLOptions) (*statesnapshots.AggregatorBuildResult, error) {
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireSnapshotColdCoverage("balance-trace", fromBlock, toBlock, mgr.BalanceTraceRangeCovered); err != nil {
+		return nil, err
+	}
+	if err := requireSnapshotColdCoverage("section-bloom", fromBlock, toBlock, mgr.SectionBloomRangeCovered); err != nil {
+		return nil, err
+	}
+	if err := requireSnapshotColdCoverage("event-log", fromBlock, toBlock, mgr.EventLogRangeCovered); err != nil {
+		return nil, err
+	}
+
+	aggregator := statesnapshots.NewAggregator(dir)
+	combined := &statesnapshots.AggregatorBuildResult{}
+	for _, build := range []func() (*statesnapshots.AggregatorBuildResult, error){
+		func() (*statesnapshots.AggregatorBuildResult, error) {
+			return aggregator.BuildBalanceTracesFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		},
+		func() (*statesnapshots.AggregatorBuildResult, error) {
+			return aggregator.BuildSectionBloomsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		},
+		func() (*statesnapshots.AggregatorBuildResult, error) {
+			return aggregator.BuildEventLogsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		},
+	} {
+		result, err := build()
+		if err != nil {
+			return nil, err
+		}
+		combined.Manifest = result.Manifest
+		combined.Segments = append(combined.Segments, result.Segments...)
+	}
+	return combined, nil
+}
+
+func requireSnapshotColdCoverage(label string, fromBlock, toBlock uint64, check func(uint64, uint64) (bool, error)) error {
+	covered, err := check(fromBlock, toBlock)
+	if err != nil {
+		return err
+	}
+	if !covered {
+		return fmt.Errorf("snapshot cold %s build requires verified cold coverage over [%d,%d]", label, fromBlock, toBlock)
+	}
+	return nil
+}
+
+func printSnapshotBuildResult(label string, fromBlock, toBlock uint64, result *statesnapshots.AggregatorBuildResult) {
+	var paths []string
+	var generation uint64
+	var activeSegments int
+	if result != nil {
+		paths = make([]string, 0, len(result.Segments))
+		for _, ref := range result.Segments {
+			paths = append(paths, ref.Path)
+		}
+		if result.Manifest != nil {
+			generation = result.Manifest.Generation
+			activeSegments = len(result.Manifest.Segments)
+		}
+	}
+	fmt.Printf("%s: blocks=[%d,%d] paths=%s manifestGeneration=%d activeSegments=%d\n",
+		label,
+		fromBlock,
+		toBlock,
+		strings.Join(paths, ","),
+		generation,
+		activeSegments,
+	)
 }
 
 func ensureSnapshotManifestChainIdentity(dir string, identity statesnapshots.ChainIdentity) error {
