@@ -1610,6 +1610,12 @@ execution has stronger java-tron ordering constraints, so this must be staged:
 
 Status:
 
+- `core/sig_prefetch.go` parallelizes transaction signer recovery and optional
+  header-signature recovery as a bounded best-effort pre-pass for sync batches.
+  The serial header/envelope validation path still owns every accept/reject
+  decision, and the pre-pass now skips nil/malformed block or transaction
+  wrappers instead of panicking before the serial validator can report the real
+  block error.
 - `core/state/prefetcher.go` now provides the first race-safe prefetch driver:
   worker goroutines warm raw latest-domain account, account-KV, contract code,
   and contract storage reads through `ethdb.KeyValueReader`, with bounded

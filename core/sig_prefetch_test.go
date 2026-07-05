@@ -81,7 +81,7 @@ func benchPrewarm(b *testing.B, minTxs int) {
 				pbTxs[j] = &corepb.Transaction{RawData: rawPB, Signature: [][]byte{rt.sig}}
 			}
 			out[blk] = types.NewBlockFromPB(&corepb.Block{
-				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(blk + 1)}},
+				BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(blk + 1)}},
 				Transactions: pbTxs,
 			})
 		}
@@ -256,6 +256,30 @@ func TestPrewarm_IdenticalAccept_OnVsOff(t *testing.T) {
 	// OFF must be a true kill switch: zero pre-pass jobs.
 	if jobsOff != 0 {
 		t.Fatalf("pre-pass OFF ran %d jobs, want 0 (kill switch)", jobsOff)
+	}
+}
+
+func TestPrewarmSkipsNilBlocksAndTransactions(t *testing.T) {
+	var jobs atomic.Int64
+	prevHook := sigPrewarmJobHook
+	sigPrewarmJobHook = func() { jobs.Add(1) }
+	defer func() { sigPrewarmJobHook = prevHook }()
+
+	withMinTxs(1, func() {
+		prewarmBlockSignatures([]*types.Block{
+			nil,
+			types.NewBlockFromPB(nil),
+			types.NewBlockFromPB(&corepb.Block{
+				Transactions: []*corepb.Transaction{
+					nil,
+					{RawData: &corepb.TransactionRaw{}},
+				},
+			}),
+		}, nil)
+	})
+
+	if jobs.Load() != 1 {
+		t.Fatalf("prewarm jobs = %d, want only the valid transaction warmed", jobs.Load())
 	}
 }
 

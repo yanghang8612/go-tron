@@ -79,15 +79,18 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 		totalTx int
 	)
 	for _, block := range blocks {
-		if block == nil {
+		if block == nil || block.Proto() == nil {
 			continue
 		}
 		if engine != nil {
 			jobs = append(jobs, job{block: block, txIndex: -1})
 		}
 		txs := block.Transactions()
-		totalTx += len(txs)
-		for i := range txs {
+		for i, tx := range txs {
+			if tx == nil || tx.Proto() == nil {
+				continue
+			}
+			totalTx++
 			jobs = append(jobs, job{txs: txs, txIndex: i})
 		}
 	}
@@ -146,6 +149,9 @@ func runSigJob(block *types.Block, txs []*types.Transaction, txIndex int, engine
 		if engine != nil && block != nil {
 			engine.PrewarmHeaderSignature(block)
 		}
+		return
+	}
+	if txIndex >= len(txs) || txs[txIndex] == nil || txs[txIndex].Proto() == nil {
 		return
 	}
 	_, _ = txs[txIndex].RecoverSigners()
