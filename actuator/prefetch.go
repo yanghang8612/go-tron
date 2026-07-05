@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -45,6 +46,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		return nil
 	}
 	var b prefetchKeyBuilder
+	b.addEnvelopeFeeKeys(tx)
 
 	switch c.Type {
 	case corepb.Transaction_Contract_TransferContract:
@@ -224,6 +226,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		}
 		b.addAccountBytes(m.GetOwnerAddress())
 		b.addAccountBytes(m.GetAccountAddress())
+		b.addLegacyBlackholeFeeAccount()
 
 	case corepb.Transaction_Contract_AssetIssueContract:
 		var m contractpb.AssetIssueContract
@@ -236,10 +239,12 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		}
 		b.add(state.AssetIssueByNamePrefetchKey(m.GetName()))
 		b.add(state.AssetNameIndexPrefetchKey(m.GetName()))
+		b.addLegacyBlackholeFeeAccount()
 	case corepb.Transaction_Contract_WitnessCreateContract:
 		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WitnessCreateContract{}); ok {
 			b.add(state.WitnessCapsulePrefetchKey(owner))
 			b.add(state.WitnessIndexPrefetchKey())
+			b.addLegacyBlackholeFeeAccount()
 		}
 	case corepb.Transaction_Contract_WitnessUpdateContract:
 		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WitnessUpdateContract{}); ok {
@@ -260,7 +265,9 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.addAccountBytes(m.GetOwnerAddress())
 		b.add(state.AccountIDIndexPrefetchKey(m.GetAccountId()))
 	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
-		prefetchOwnerOnly(c, &b, &contractpb.AccountPermissionUpdateContract{})
+		if _, ok := prefetchOwnerOnly(c, &b, &contractpb.AccountPermissionUpdateContract{}); ok {
+			b.addLegacyBlackholeFeeAccount()
+		}
 	case corepb.Transaction_Contract_UpdateBrokerageContract:
 		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UpdateBrokerageContract{}); ok {
 			b.add(state.WitnessCapsulePrefetchKey(owner))
@@ -324,6 +331,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.addMarketPairKeys(m.GetSellTokenId(), m.GetBuyTokenId(), m.GetSellTokenQuantity(), m.GetBuyTokenQuantity())
 		b.add(state.MarketPriceListPrefetchKey(m.GetBuyTokenId(), m.GetSellTokenId()))
 		b.add(state.MarketMatchOrdersPrefetchKey(m.GetSellTokenId(), m.GetBuyTokenId(), m.GetSellTokenQuantity(), m.GetBuyTokenQuantity()))
+		b.addLegacyBlackholeFeeAccount()
 	case corepb.Transaction_Contract_MarketCancelOrderContract:
 		var m contractpb.MarketCancelOrderContract
 		if !prefetchDecode(c, &m) {
@@ -334,6 +342,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			b.add(state.MarketAccountOrderPrefetchKey(owner.Bytes()))
 		}
 		b.add(state.MarketOrderPrefetchKey(m.GetOrderId()))
+		b.addLegacyBlackholeFeeAccount()
 	case corepb.Transaction_Contract_ExchangeCreateContract:
 		var m contractpb.ExchangeCreateContract
 		if !prefetchDecode(c, &m) {
@@ -342,6 +351,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		b.addAccountBytes(m.GetOwnerAddress())
 		b.addTRC10AssetKeys(m.GetFirstTokenId())
 		b.addTRC10AssetKeys(m.GetSecondTokenId())
+		b.addLegacyBlackholeFeeAccount()
 	case corepb.Transaction_Contract_ExchangeInjectContract:
 		var m contractpb.ExchangeInjectContract
 		if !prefetchDecode(c, &m) {
@@ -442,6 +452,22 @@ func (b *prefetchKeyBuilder) addPendingVotes(owner tcommon.Address) {
 func (b *prefetchKeyBuilder) addRewardCursorKeys(owner tcommon.Address) {
 	b.add(state.RewardBeginCyclePrefetchKey(owner))
 	b.add(state.RewardEndCyclePrefetchKey(owner))
+}
+
+func (b *prefetchKeyBuilder) addEnvelopeFeeKeys(tx *types.Transaction) {
+	if tx == nil || tx.Proto() == nil {
+		return
+	}
+	if len(tx.Signatures()) > 1 {
+		b.addLegacyBlackholeFeeAccount()
+	}
+	if raw := tx.Proto().GetRawData(); raw != nil && len(raw.GetData()) > 0 {
+		b.addLegacyBlackholeFeeAccount()
+	}
+}
+
+func (b *prefetchKeyBuilder) addLegacyBlackholeFeeAccount() {
+	b.add(state.AccountPrefetchKey(params.BlackholeAddress))
 }
 
 func (b *prefetchKeyBuilder) addProposal(id int64) {

@@ -1622,8 +1622,10 @@ Status:
   witness/proposal/brokerage rows, pending vote rows, `withdrawReward`
   `SystemReward` begin/end cursor rows for vote/unfreeze/withdraw-balance
   paths, TRC10 `SystemAsset` metadata/index rows, and envelope-addressable
-  `SystemMarket`/`SystemExchange` rows. It covers transfer, TRC10
-  transfer/issue/participate, TVM
+  `SystemMarket`/`SystemExchange` rows. It also warms the legacy Blackhole
+  account row for deterministic `burnFee`, memo-fee, and multi-sign-fee paths
+  while avoiding state-dependent account-creation fee over-prefetch on every
+  high-volume transfer. It covers transfer, TRC10 transfer/issue/participate, TVM
   create/trigger including the static Blackhole account-name index lookup,
   contract settings, vote witness, witness operations,
   governance proposals, Stake 1.0/2.0 including unfreeze pending-vote rows,

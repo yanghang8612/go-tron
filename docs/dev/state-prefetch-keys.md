@@ -14,6 +14,7 @@ hints and never change actuator validation behaviour.
 | Key kind | Backing read |
 | --- | --- |
 | `state.AccountPrefetchKey(addr)` | `ReadStateAccountLatest(addr)` |
+| `state.AccountPrefetchKey(params.BlackholeAddress)` | legacy pre-`AllowBlackholeOptimization` fee-credit account row for deterministic `burnFee`, memo-fee, and multi-sign-fee paths |
 | `state.ContractMetadataPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row |
 | `state.ContractCodePrefetchKey(addr)` | `ReadStateAccountLatest(addr)` envelope, then `ReadStateCode(CodeHash)` when present |
 | `state.ContractOriginAccountPrefetchKey(addr)` | `ContractMetadata/meta` account-KV row, then `ReadStateAccountLatest(origin_address)` when present |
@@ -57,6 +58,7 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Account metadata | owner account plus account-name or account-ID uniqueness index rows |
 | Owner-only actuators | owner account for witness, proposal, brokerage, freeze-v2, and withdraw contracts; withdraw-balance also warms owner reward begin/end cycle cursors |
 | Account create and participate asset issue | owner account plus the explicitly referenced counterparty account; participate also warms TRC10 metadata/name-index rows |
+| Deterministic fee paths | Blackhole account row for account-create, asset-issue, witness-create, account-permission-update, exchange-create, market sell/cancel, tx memo fee, and multi-sign fee |
 
 ## Not Yet Covered
 
@@ -80,6 +82,9 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
   not get enough overlap.
 - Dynamic-property reads. They are normally hot and not represented by the
   first raw latest-domain prefetch key set.
+- Transfer/transfer-asset account-creation fees. They depend on whether the
+  recipient account exists at execution time, so the extractor intentionally
+  avoids adding the Blackhole account row to every high-volume transfer.
 
 ## Acceptance Notes
 

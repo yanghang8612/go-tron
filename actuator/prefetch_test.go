@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -442,6 +443,103 @@ func TestPrefetchKeysForOwnerIssuedAssetRows(t *testing.T) {
 			assertPrefetchHas(t, keys, state.OwnerIssuedAssetRowsPrefetchKey(owner))
 		})
 	}
+}
+
+func TestPrefetchKeysForLegacyBlackholeFeeAccount(t *testing.T) {
+	owner := makeTestAddr(0x35)
+	other := makeTestAddr(0x36)
+	blackhole := state.AccountPrefetchKey(params.BlackholeAddress)
+
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "account create",
+			typ:  corepb.Transaction_Contract_AccountCreateContract,
+			msg: &contractpb.AccountCreateContract{
+				OwnerAddress:   owner.Bytes(),
+				AccountAddress: other.Bytes(),
+			},
+		},
+		{
+			name: "asset issue",
+			typ:  corepb.Transaction_Contract_AssetIssueContract,
+			msg: &contractpb.AssetIssueContract{
+				OwnerAddress: owner.Bytes(),
+				Name:         []byte("FEEASSET"),
+			},
+		},
+		{
+			name: "witness create",
+			typ:  corepb.Transaction_Contract_WitnessCreateContract,
+			msg: &contractpb.WitnessCreateContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "account permission update",
+			typ:  corepb.Transaction_Contract_AccountPermissionUpdateContract,
+			msg: &contractpb.AccountPermissionUpdateContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "exchange create",
+			typ:  corepb.Transaction_Contract_ExchangeCreateContract,
+			msg: &contractpb.ExchangeCreateContract{
+				OwnerAddress:  owner.Bytes(),
+				FirstTokenId:  []byte("1000010"),
+				SecondTokenId: []byte("_"),
+			},
+		},
+		{
+			name: "market sell",
+			typ:  corepb.Transaction_Contract_MarketSellAssetContract,
+			msg: &contractpb.MarketSellAssetContract{
+				OwnerAddress: owner.Bytes(),
+				SellTokenId:  []byte("1000011"),
+				BuyTokenId:   []byte("_"),
+			},
+		},
+		{
+			name: "market cancel",
+			typ:  corepb.Transaction_Contract_MarketCancelOrderContract,
+			msg: &contractpb.MarketCancelOrderContract{
+				OwnerAddress: owner.Bytes(),
+				OrderId:      []byte("order-fee"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := PrefetchKeysFor(newPrefetchTestTx(t, tt.typ, tt.msg))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, blackhole)
+		})
+	}
+
+	memoTx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	memoTx.Proto().RawData.Data = []byte("memo")
+	assertPrefetchHas(t, PrefetchKeysFor(memoTx), blackhole)
+
+	multiSigTx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	multiSigTx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	assertPrefetchHas(t, PrefetchKeysFor(multiSigTx), blackhole)
+
+	plainTransfer := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	assertPrefetchMissing(t, PrefetchKeysFor(plainTransfer), blackhole)
 }
 
 func TestPrefetchKeysForMalformedOrInvalidInputs(t *testing.T) {
