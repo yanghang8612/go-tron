@@ -149,6 +149,7 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"GetRewardAt":                          {"archiveStateAt"},
 		"GetStorageAtBlock":                    {"archiveStateAt"},
 		"ListExchangesAt":                      {"archiveStateAt"},
+		"ListExchangesPaginatedAt":             {"ListExchangesAt"},
 		"ListProposalsAt":                      {"archiveStateAt"},
 		"ListProposalsPaginatedAt":             {"ListProposalsAt"},
 		"ListWitnessesAt":                      {"archiveStateAt"},
@@ -451,6 +452,7 @@ func exprTypeName(expr ast.Expr) string {
 
 func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 	boundaries := map[string]struct{}{
+		"ListExchangesAt":           {},
 		"ListProposalsAt":           {},
 		"TriggerConstantContractAt": {},
 		"accountAtOrNil":            {},
@@ -463,7 +465,7 @@ func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 		if !ok {
 			return true
 		}
-		name := callName(call)
+		name := archiveBoundaryCallName(call)
 		if _, ok := boundaries[name]; ok {
 			seen[name] = struct{}{}
 		}
@@ -472,11 +474,14 @@ func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 	return sortedArchiveBoundaryKeys(seen)
 }
 
-func callName(call *ast.CallExpr) string {
+func archiveBoundaryCallName(call *ast.CallExpr) string {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		return fun.Name
 	case *ast.SelectorExpr:
+		if ident, ok := fun.X.(*ast.Ident); !ok || ident.Name != "b" {
+			return ""
+		}
 		return fun.Sel.Name
 	default:
 		return ""

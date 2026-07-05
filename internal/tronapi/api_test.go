@@ -74,6 +74,7 @@ type stubBackend struct {
 	burnTrx         int64
 	bandwidthPrices string
 	energyPrices    string
+	exchanges       []*corepb.Exchange
 	assetErr        error
 	marketErr       error
 }
@@ -308,9 +309,9 @@ func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*cor
 func (s *stubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
+func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return s.exchanges, nil }
 func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
-	return nil, nil
+	return s.exchanges, nil
 }
 func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
 func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
@@ -367,7 +368,20 @@ func (s *stubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint6
 	return s.ListProposalsPaginated(offset, limit)
 }
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
-	return nil, nil
+	if len(s.exchanges) == 0 {
+		return nil, nil
+	}
+	if offset >= len(s.exchanges) {
+		return []*corepb.Exchange{}, nil
+	}
+	end := offset + limit
+	if end > len(s.exchanges) {
+		end = len(s.exchanges)
+	}
+	return s.exchanges[offset:end], nil
+}
+func (s *stubBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	return s.ListExchangesPaginated(offset, limit)
 }
 
 // --- M5.1 PR-1: Account / permission ---
@@ -1486,6 +1500,56 @@ func TestGetPaginatedProposalList(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
 	if _, ok := result["proposal"]; !ok {
 		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+
+func TestGetPaginatedExchangeList(t *testing.T) {
+	stub := &stubBackend{
+		exchanges: []*corepb.Exchange{
+			{ExchangeId: 1, FirstTokenBalance: 10, SecondTokenBalance: 100},
+			{ExchangeId: 2, FirstTokenBalance: 20, SecondTokenBalance: 200},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getpaginatedexchangelist", `{"offset":1,"limit":1}`)
+	exchanges, ok := result["exchanges"].([]interface{})
+	if !ok || len(exchanges) != 1 {
+		t.Fatalf("expected one exchange, got %v", result["exchanges"])
+	}
+	exchange := exchanges[0].(map[string]interface{})
+	if exchange["exchange_id"].(float64) != 2 || exchange["first_token_balance"].(float64) != 20 {
+		t.Fatalf("exchange = %v, want paginated exchange id 2", exchange)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getpaginatedexchangelist?offset=0&limit=1")
+	if err != nil {
+		t.Fatalf("GET getpaginatedexchangelist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getpaginatedexchangelist status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		Exchanges []struct {
+			ExchangeID int64 `json:"exchange_id"`
+		} `json:"exchanges"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getpaginatedexchangelist: %v", err)
+	}
+	if len(getResult.Exchanges) != 1 || getResult.Exchanges[0].ExchangeID != 1 {
+		t.Fatalf("GET exchanges = %+v, want exchange id 1", getResult.Exchanges)
+	}
+
+	resp, err = http.Get(srv.URL + "/wallet/getpaginatedexchangelist?offset=-1&limit=1")
+	if err != nil {
+		t.Fatalf("GET negative offset getpaginatedexchangelist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
 	}
 }
 

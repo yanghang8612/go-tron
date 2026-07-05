@@ -1498,6 +1498,13 @@ func TestArchiveQuery_ListExchangesAtUsesSystemExchangeHistory(t *testing.T) {
 		block1Exchanges[0].GetFirstTokenBalance() != 100 {
 		t.Fatalf("block1 exchanges = %+v, want V1 pre-AllowSameTokenName exchange", block1Exchanges)
 	}
+	block1Page, err := b.ListExchangesPaginatedAt(0, 1, block1.Number())
+	if err != nil {
+		t.Fatalf("ListExchangesPaginatedAt(block1): %v", err)
+	}
+	if len(block1Page) != 1 || string(block1Page[0].GetFirstTokenId()) != "TOKEN" || block1Page[0].GetFirstTokenBalance() != 100 {
+		t.Fatalf("block1 exchange page = %+v, want V1 pre-AllowSameTokenName exchange", block1Page)
+	}
 
 	block2Exchanges, err := b.ListExchangesAt(block2.Number())
 	if err != nil {
@@ -1509,6 +1516,13 @@ func TestArchiveQuery_ListExchangesAtUsesSystemExchangeHistory(t *testing.T) {
 		block2Exchanges[1].GetExchangeId() != 2 ||
 		block2Exchanges[1].GetFirstTokenBalance() != 400 {
 		t.Fatalf("block2 exchanges = %+v, want V2 post-AllowSameTokenName exchanges", block2Exchanges)
+	}
+	block2Page, err := b.ListExchangesPaginatedAt(1, 1, block2.Number())
+	if err != nil {
+		t.Fatalf("ListExchangesPaginatedAt(block2): %v", err)
+	}
+	if len(block2Page) != 1 || block2Page[0].GetExchangeId() != 2 || block2Page[0].GetFirstTokenBalance() != 400 {
+		t.Fatalf("block2 exchange page = %+v, want second V2 exchange", block2Page)
 	}
 }
 

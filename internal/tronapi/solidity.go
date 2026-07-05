@@ -50,6 +50,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getmarketordersfromaccount", api.getSolidMarketOrdersFromAccount)
 	mux.HandleFunc("/walletsolidity/getmarketpricebypair", api.getSolidMarketPriceByPair)
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
+	mux.HandleFunc("/walletsolidity/getpaginatedexchangelist", api.getSolidPaginatedExchangeList)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletsolidity/candelegateresource", api.getSolidCanDelegateResource)
@@ -94,6 +95,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getmarketordersfromaccount", api.getPbftMarketOrdersFromAccount)
 	mux.HandleFunc("/walletpbft/getmarketpricebypair", api.getPbftMarketPriceByPair)
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
+	mux.HandleFunc("/walletpbft/getpaginatedexchangelist", api.getPbftPaginatedExchangeList)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletpbft/candelegateresource", api.getPbftCanDelegateResource)
@@ -310,6 +312,14 @@ func (api *API) getSolidExchanges(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getPbftExchanges(w http.ResponseWriter, r *http.Request) {
 	api.handleListExchanges(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidPaginatedExchangeList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedExchangeList(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftPaginatedExchangeList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedExchangeList(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {

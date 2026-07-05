@@ -587,6 +587,8 @@ type isolationStubBackend struct {
 	marketPriceAtBlock       uint64
 	liveExchangeCalls        int
 	exchangesAtBlock         uint64
+	liveExchangePageCalls    int
+	exchangePageAtBlock      uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -900,6 +902,23 @@ func (s *isolationStubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Excha
 		SecondTokenId:      []byte("_"),
 		SecondTokenBalance: 900,
 		CreatorAddress:     common.Address{0x41, 0x61}.Bytes(),
+	}}, nil
+}
+
+func (s *isolationStubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	s.liveExchangePageCalls++
+	return []*corepb.Exchange{{ExchangeId: 2, FirstTokenBalance: 2, SecondTokenBalance: 3}}, nil
+}
+
+func (s *isolationStubBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	s.exchangePageAtBlock = blockNum
+	return []*corepb.Exchange{{
+		ExchangeId:         10,
+		FirstTokenId:       []byte("page"),
+		FirstTokenBalance:  100,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1000,
+		CreatorAddress:     common.Address{0x41, 0x62}.Bytes(),
 	}}, nil
 }
 
@@ -1949,6 +1968,34 @@ func assertListExchangesUsesBound(t *testing.T, prefix string, stub *isolationSt
 	}
 	if stub.liveExchangeCalls != 0 {
 		t.Fatalf("live ListExchanges called %d times, want 0", stub.liveExchangeCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getpaginatedexchangelist", "application/json", strings.NewReader(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatalf("getpaginatedexchangelist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getpaginatedexchangelist status: %d", resp.StatusCode)
+	}
+	var page struct {
+		Exchanges []struct {
+			ExchangeID         int64 `json:"exchange_id"`
+			FirstTokenBalance  int64 `json:"first_token_balance"`
+			SecondTokenBalance int64 `json:"second_token_balance"`
+		} `json:"exchanges"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Exchanges) != 1 || page.Exchanges[0].ExchangeID != 10 || page.Exchanges[0].FirstTokenBalance != 100 {
+		t.Fatalf("exchange page = %+v, want bound sentinel", page.Exchanges)
+	}
+	if stub.exchangePageAtBlock != wantBlock {
+		t.Fatalf("ListExchangesPaginatedAt block = %d, want %d", stub.exchangePageAtBlock, wantBlock)
+	}
+	if stub.liveExchangePageCalls != 0 {
+		t.Fatalf("live ListExchangesPaginated called %d times, want 0", stub.liveExchangePageCalls)
 	}
 }
 

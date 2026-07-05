@@ -349,6 +349,9 @@ func (b *testBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint6
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	return nil, nil
 }
+func (b *testBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	return nil, nil
+}
 func (b *testBackend) BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error) {
 	return nil, nil
 }

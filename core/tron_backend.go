@@ -2143,17 +2143,29 @@ func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Excha
 	if err != nil {
 		return nil, err
 	}
-	if len(all) == 0 {
-		return []*corepb.Exchange{}, nil
+	return paginateExchanges(all, offset, limit), nil
+}
+
+func (b *TronBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	all, err := b.ListExchangesAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	return paginateExchanges(all, offset, limit), nil
+}
+
+func paginateExchanges(all []*corepb.Exchange, offset, limit int) []*corepb.Exchange {
+	if len(all) == 0 || offset < 0 || limit <= 0 {
+		return []*corepb.Exchange{}
 	}
 	if offset >= len(all) {
-		return []*corepb.Exchange{}, nil
+		return []*corepb.Exchange{}
 	}
 	end := offset + limit
 	if end > len(all) {
 		end = len(all)
 	}
-	return all[offset:end], nil
+	return all[offset:end]
 }
 
 // ── M5.1 PR-1: Account / Permission ─────────────────────────────────────

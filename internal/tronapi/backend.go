@@ -266,6 +266,7 @@ type Backend interface {
 	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
 	ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*ProposalInfo, error)
 	ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error)
+	ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error)
 
 	// Account / permission (M5.1 PR-1)
 	BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error)
