@@ -899,6 +899,28 @@ func query(chain chain, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsChainDBMethodHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type chain struct{}
+
+func (chain) ChainDB() any { return nil }
+
+func query(chain chain, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(chain.ChainDB(), tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want ChainDB() method with hot-store return rejected", offenders)
+	}
+}
+
 func TestColdArchiveAuditAllowsBlockChainChainDBMethodBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "app/chain.go", `package app
 
@@ -1486,6 +1508,50 @@ func query(db *rawdb.ChainDB) {
 	})
 	if len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want ChainDB alias event-log boundary accepted", offenders)
+	}
+}
+
+func TestEventLogAuditRejectsChainDBMethodHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type chain struct{}
+
+func (chain) ChainDB() any { return nil }
+
+func query(chain chain) {
+	_, _ = chain.ChainDB().EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
+		t.Fatalf("offenders = %+v, want ChainDB() method with hot-store return rejected", offenders)
+	}
+}
+
+func TestEventLogAuditAllowsTypedChainDBMethodBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type chain struct{}
+
+func (chain) ChainDB() *rawdb.ChainDB { return nil }
+
+func query(chain chain) {
+	_, _ = chain.ChainDB().EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered": {},
+	})
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want typed ChainDB() method accepted", offenders)
 	}
 }
 
@@ -2623,12 +2689,77 @@ func buildAuditTypeIndex(t *testing.T, root string) auditTypeIndex {
 				}
 			}
 		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil {
+				continue
+			}
+			recvName := auditReceiverTypeName(fn.Recv)
+			resultType, ok := auditSingleResultType(fn.Type.Results)
+			if recvName == "" || !ok {
+				continue
+			}
+			typ := auditExprTypeFromExpr(resultType, rawdbNames)
+			if typ == (auditExprType{}) {
+				continue
+			}
+			methods := index[recvName]
+			if methods == nil {
+				methods = make(map[string]auditExprType)
+				index[recvName] = methods
+			}
+			methods[auditMethodTypeKey(fn.Name.Name)] = typ
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("build audit type index: %v", err)
 	}
 	return index
+}
+
+func auditMethodTypeKey(name string) string {
+	return name + "()"
+}
+
+func auditReceiverTypeName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) != 1 {
+		return ""
+	}
+	return auditNamedTypeName(recv.List[0].Type)
+}
+
+func auditNamedTypeName(expr ast.Expr) string {
+	for {
+		switch typed := expr.(type) {
+		case *ast.ParenExpr:
+			expr = typed.X
+		case *ast.StarExpr:
+			expr = typed.X
+		default:
+			goto done
+		}
+	}
+done:
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.SelectorExpr:
+		return typed.Sel.Name
+	default:
+		return ""
+	}
+}
+
+func auditSingleResultType(results *ast.FieldList) (ast.Expr, bool) {
+	if results == nil || len(results.List) != 1 {
+		return nil, false
+	}
+	result := results.List[0]
+	if len(result.Names) > 1 {
+		return nil, false
+	}
+	return result.Type, true
 }
 
 func auditExprTypeFromExpr(expr ast.Expr, rawdbNames map[string]struct{}) auditExprType {
@@ -2845,10 +2976,8 @@ func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliase
 	if isRawDBCall(expr, rawdbNames, "NewChainDB") {
 		return true
 	}
-	if call, ok := expr.(*ast.CallExpr); ok {
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "ChainDB" {
-			return true
-		}
+	if typ, ok := resolveAuditCallReturnType(expr, varTypes, typeIndex); ok && typ.ChainDB {
+		return true
 	}
 	if typ, ok := resolveAuditSelectorType(expr, varTypes, typeIndex); ok && typ.ChainDB {
 		return true
@@ -2903,6 +3032,34 @@ func resolveAuditSelectorType(expr ast.Expr, varTypes map[string]auditExprType, 
 	default:
 		return auditExprType{}, false
 	}
+}
+
+func resolveAuditCallReturnType(expr ast.Expr, varTypes map[string]auditExprType, typeIndex auditTypeIndex) (auditExprType, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return auditExprType{}, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return auditExprType{}, false
+	}
+	base, ok := resolveAuditSelectorType(sel.X, varTypes, typeIndex)
+	if !ok || base.Named == "" {
+		return auditExprType{}, false
+	}
+	methods := typeIndex[base.Named]
+	if len(methods) == 0 {
+		return auditExprType{}, false
+	}
+	typ, ok := methods[auditMethodTypeKey(sel.Sel.Name)]
+	return typ, ok
 }
 
 func selectorPath(expr ast.Expr) []string {

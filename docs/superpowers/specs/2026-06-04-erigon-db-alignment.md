@@ -1340,8 +1340,10 @@ Status:
   integrity-preserving strict readers for block numbers, transaction indexes,
   transaction infos, state roots, section blooms, balance traces, and account
   traces, so new production code cannot call those variants on a hot-only KV
-  store and accidentally bypass registered cold sidecars. Derived hot-row
-  iterators for balance traces and section blooms are likewise pinned to
+  store and accidentally bypass registered cold sidecars. That audit now also
+  validates `.ChainDB()` method return types before treating them as cold-aware
+  boundaries, so a trusted method name cannot mask a hot-only store. Derived
+  hot-row iterators for balance traces and section blooms are likewise pinned to
   function-scoped snapshot build/prune/backfill boundaries, so an API or
   adjacent helper in the same source file cannot scan hot-only rows directly.
   State-history as-of rawdb readers are pinned the same way to
