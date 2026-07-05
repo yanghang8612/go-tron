@@ -1199,7 +1199,9 @@ Status:
   gRPC `Wallet` now covers the live TRC10 asset-name and paginated witness
   read methods, and `WalletSolidity.GetAssetIssueListByName` plus
   `GetPaginatedNowWitnessList` reuse the same solid-bound `SystemAsset` and
-  witness archive paths as their single-item/list peers.
+  witness archive paths as their single-item/list peers. HTTP
+  `/walletsolidity`/`/walletpbft/getassetissuelistbyname` now follows the
+  same bound `SystemAsset` history path as `getassetissuebyname`.
   HTTP solidity/PBFT `getaccountbyid` now dispatches through
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend

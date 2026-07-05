@@ -1857,6 +1857,33 @@ func assertAssetRoutesUseBound(t *testing.T, prefix string, stub *isolationStubB
 		t.Fatalf("live GetAssetIssueByName called %d times, want 0", stub.liveAssetNameCalls)
 	}
 
+	resp, err = http.Post(prefix+"/getassetissuelistbyname", "application/json", strings.NewReader(`{"value":"544f4b454e"}`))
+	if err != nil {
+		t.Fatalf("getassetissuelistbyname request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getassetissuelistbyname status: %d", resp.StatusCode)
+	}
+	var listByName struct {
+		AssetIssue []struct {
+			ID          string `json:"id"`
+			TotalSupply int64  `json:"total_supply"`
+		} `json:"assetIssue"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listByName); err != nil {
+		t.Fatal(err)
+	}
+	if len(listByName.AssetIssue) != 1 || listByName.AssetIssue[0].ID != "bound-name" || listByName.AssetIssue[0].TotalSupply != 99 {
+		t.Fatalf("asset list by name = %+v, want bound name sentinel", listByName.AssetIssue)
+	}
+	if stub.assetNameAtBlock != wantBlock {
+		t.Fatalf("GetAssetIssueByNameAt block after list-by-name = %d, want %d", stub.assetNameAtBlock, wantBlock)
+	}
+	if stub.liveAssetNameCalls != 0 {
+		t.Fatalf("live GetAssetIssueByName called %d times after list-by-name, want 0", stub.liveAssetNameCalls)
+	}
+
 	resp, err = http.Get(prefix + "/getassetissuelist")
 	if err != nil {
 		t.Fatalf("getassetissuelist request failed: %v", err)
