@@ -16,6 +16,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type eventLogUncoveredReader struct{}
+
+func (eventLogUncoveredReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	return false, nil
+}
+
+func (eventLogUncoveredReader) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+	return nil
+}
+
 func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -134,6 +144,105 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 	if visited != 1 {
 		t.Fatalf("short-circuit visited %d rows, want 1", visited)
+	}
+}
+
+func TestBuildEventLogSegmentFromReaderMaterializesColdRows(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	targetDir := filepath.Join(root, "target")
+	db := rawdb.NewMemoryChainDB()
+	addrA := eventLogTestAddress(0x71)
+	addrB := eventLogTestAddress(0x72)
+	topicA := common.Hash{0x7a}
+	topicB := common.Hash{0x7b}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addrA, Topics: [][]byte{topicA[:]}, Data: []byte{0x01}},
+		{Address: addrB, Topics: [][]byte{topicB[:]}, Data: []byte{0x02}},
+	})
+	block2, infos2 := eventLogTestBlock(t, 2, []*corepb.TransactionInfo_Log{
+		{Address: addrA, Topics: [][]byte{topicB[:]}, Data: []byte{0x03}},
+	})
+	for _, block := range []*coretypes.Block{block1, block2} {
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 2, infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 2: %v", err)
+	}
+	if _, err := NewAggregator(sourceDir).BuildEventLogs(db, 1, 2); err != nil {
+		t.Fatalf("BuildEventLogs source: %v", err)
+	}
+	sourceManager, err := OpenManager(sourceDir)
+	if err != nil {
+		t.Fatalf("OpenManager source: %v", err)
+	}
+
+	result, err := NewAggregator(targetDir).BuildEventLogsFromReaderWithOptions(sourceManager, 1, 2, RestoreETLOptions{
+		TempDir:     filepath.Join(root, "etl-scratch"),
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildEventLogsFromReaderWithOptions: %v", err)
+	}
+	if len(result.Segments) != 2 {
+		t.Fatalf("BuildEventLogsFromReaderWithOptions segments = %d, want event-log and event-log-index", len(result.Segments))
+	}
+	var ref, indexRef SegmentRef
+	for _, candidate := range result.Segments {
+		switch candidate.Kind {
+		case SegmentEventLog:
+			ref = candidate
+		case SegmentEventLogIndex:
+			indexRef = candidate
+		}
+	}
+	if err := CheckEventLogSegment(targetDir, ref); err != nil {
+		t.Fatalf("CheckEventLogSegment: %v", err)
+	}
+	if err := CheckEventLogIndexSegment(targetDir, indexRef); err != nil {
+		t.Fatalf("CheckEventLogIndexSegment: %v", err)
+	}
+	if _, err := VerifyManifestFiles(targetDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+
+	targetManager, err := OpenManager(targetDir)
+	if err != nil {
+		t.Fatalf("OpenManager target: %v", err)
+	}
+	if covered, err := targetManager.EventLogRangeCovered(1, 2); err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	if covered, err := targetManager.EventLogIndexedRangeCovered(1, 2); err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var rows []EventLog
+	if err := targetManager.IterateEventLogs(1, 2, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addrA)},
+		Topics:    [][]common.Hash{{topicB}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("target IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 2 || rows[0].TxIndex != 0 || rows[0].LogIndex != 0 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x03}) {
+		t.Fatalf("target rows = %+v, want block2 addrA/topicB", rows)
+	}
+	if rows[0].BlockHash != block2.Hash() || rows[0].TxHash != block2.Transactions()[0].Hash() {
+		t.Fatalf("target row hashes = block %x tx %x, want block %x tx %x", rows[0].BlockHash, rows[0].TxHash, block2.Hash(), block2.Transactions()[0].Hash())
+	}
+}
+
+func TestBuildEventLogSegmentFromReaderRequiresCoverage(t *testing.T) {
+	_, err := BuildEventLogSegmentFromReader(eventLogUncoveredReader{}, t.TempDir(), "", 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "does not cover") {
+		t.Fatalf("BuildEventLogSegmentFromReader coverage error = %v, want coverage error", err)
 	}
 }
 

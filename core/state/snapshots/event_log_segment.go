@@ -167,6 +167,52 @@ func BuildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath
 	return writeEventLogSegmentFromETL(dir, ref, collector, rowCount)
 }
 
+func BuildEventLogSegmentFromReader(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return BuildEventLogSegmentFromReaderWithOptions(reader, dir, relPath, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func BuildEventLogSegmentFromReaderWithOptions(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
+	if reader == nil {
+		return SegmentRef{}, errors.New("snapshots: nil event log reader")
+	}
+	if dir == "" {
+		return SegmentRef{}, errors.New("snapshots: event log segment directory is empty")
+	}
+	if toBlock < fromBlock {
+		return SegmentRef{}, fmt.Errorf("snapshots: event log range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	covered, err := reader.EventLogRangeCovered(fromBlock, toBlock)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	if !covered {
+		return SegmentRef{}, fmt.Errorf("snapshots: event log reader does not cover range [%d,%d]", fromBlock, toBlock)
+	}
+	if relPath == "" {
+		relPath = EventLogSegmentPath(fromBlock, toBlock)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLog,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      filepath.ToSlash(relPath),
+	}
+	if err := validateSegmentRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	defer collector.Close()
+	rowCount, err := collectEventLogRowsFromReaderToETL(reader, fromBlock, toBlock, collector)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	return writeEventLogSegmentFromETL(dir, ref, collector, rowCount)
+}
+
 func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []SegmentRef, relPath string) (SegmentRef, error) {
 	return BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(dir, eventRefs, relPath, RestoreETLOptions{})
 }
@@ -1273,6 +1319,39 @@ func collectEventLogRowsToETL(chain *rawdb.ChainDB, fromBlock, toBlock uint64, c
 		if blockNum == toBlock {
 			break
 		}
+	}
+	return rowCount, nil
+}
+
+func collectEventLogRowsFromReaderToETL(reader rawdb.EventLogReader, fromBlock, toBlock uint64, collector *etl.Collector) (uint64, error) {
+	var rowCount uint64
+	if err := reader.IterateEventLogs(fromBlock, toBlock, EventLogFilter{}, func(row EventLog) (bool, error) {
+		if row.BlockNum < fromBlock || row.BlockNum > toBlock {
+			return false, fmt.Errorf("snapshots: event log reader returned block %d outside range [%d,%d]", row.BlockNum, fromBlock, toBlock)
+		}
+		if row.Log == nil {
+			return false, fmt.Errorf("snapshots: event log reader returned nil log at block=%d tx=%d log=%d", row.BlockNum, row.TxIndex, row.LogIndex)
+		}
+		address := eventLogAddress(row.Log.GetAddress())
+		entry := eventLogIndexEntry{
+			blockNum:  row.BlockNum,
+			txIndex:   row.TxIndex,
+			logIndex:  row.LogIndex,
+			txHash:    row.TxHash,
+			blockHash: row.BlockHash,
+			address:   address,
+		}
+		raw, err := proto.Marshal(row.Log)
+		if err != nil {
+			return false, err
+		}
+		if err := collector.Put(eventLogETLKey(entry), eventLogETLValue(entry, raw)); err != nil {
+			return false, err
+		}
+		rowCount++
+		return true, nil
+	}); err != nil {
+		return 0, err
 	}
 	return rowCount, nil
 }

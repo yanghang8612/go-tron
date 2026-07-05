@@ -299,6 +299,41 @@ func (a *Aggregator) BuildEventLogsWithOptions(chain *rawdb.ChainDB, fromBlock, 
 	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
 }
 
+func (a *Aggregator) BuildEventLogsFromReader(reader rawdb.EventLogReader, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	return a.BuildEventLogsFromReaderWithOptions(reader, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func (a *Aggregator) BuildEventLogsFromReaderWithOptions(reader rawdb.EventLogReader, fromBlock, toBlock uint64, opts RestoreETLOptions) (*AggregatorBuildResult, error) {
+	if a == nil || a.dir == "" {
+		return nil, errors.New("snapshots: nil aggregator or empty directory")
+	}
+	ref, err := BuildEventLogSegmentFromReaderWithOptions(reader, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
+	if err != nil {
+		return nil, err
+	}
+	eventRefs, err := a.eventLogRefsAfterIntegrating([]SegmentRef{ref})
+	if err != nil {
+		return nil, err
+	}
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts)
+	if err != nil {
+		return nil, err
+	}
+	visibleStart, visibleEnd := uint64(0), uint64(0)
+	if old, err := LoadProductionManifest(a.dir); err == nil {
+		visibleStart = old.VisibleTxStart
+		visibleEnd = old.VisibleTxEnd
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	refs := []SegmentRef{ref, indexRef}
+	manifest, err := a.Integrate(visibleStart, visibleEnd, refs)
+	if err != nil {
+		return nil, err
+	}
+	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
+}
+
 func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uint64, opts AggregatorBuildDerivedOptions) (*AggregatorBuildResult, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
