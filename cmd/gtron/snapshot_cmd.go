@@ -1495,8 +1495,33 @@ func openSnapshotRestoreAncientStore(dataDir string) (statesnapshots.ChainFreeze
 	if err != nil {
 		return nil, nil, func() {}, fmt.Errorf("open freezer: %w", err)
 	}
+	reader := rawdb.NewFreezerReader(fz)
+	if err := ensureSnapshotRestoreEmptyFreezer(reader); err != nil {
+		_ = fz.Close()
+		return nil, nil, func() {}, err
+	}
 	store := newFreezerStore(fz)
-	return store, rawdb.NewFreezerReader(fz), func() { _ = fz.Close() }, nil
+	return store, reader, func() { _ = fz.Close() }, nil
+}
+
+func ensureSnapshotRestoreEmptyFreezer(reader rawdb.AncientReader) error {
+	if reader == nil {
+		return nil
+	}
+	var nonEmpty []string
+	for _, table := range []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable} {
+		count, err := reader.AncientCount(table)
+		if err != nil {
+			return fmt.Errorf("inspect freezer %s count: %w", table, err)
+		}
+		if count != 0 {
+			nonEmpty = append(nonEmpty, fmt.Sprintf("%s=%d", table, count))
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return nil
+	}
+	return fmt.Errorf("snapshot restore refuses non-empty freezer: %s; use a fresh datadir or an explicit reset workflow", strings.Join(nonEmpty, " "))
 }
 
 func openSnapshotPruneAncientReader(dataDir string) (rawdb.AncientReader, func(), error) {

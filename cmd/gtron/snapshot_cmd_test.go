@@ -1333,6 +1333,24 @@ func TestEnsureSnapshotRestoreBootstrapDatadirRejectsNonGenesisHead(t *testing.T
 	}
 }
 
+func TestOpenSnapshotRestoreAncientStoreRejectsNonEmptyFreezer(t *testing.T) {
+	dataDir := t.TempDir()
+	fz := openSnapshotCmdFreezer(t, ancientDataDir(dataDir))
+	appendSnapshotCmdFreezerRows(t, fz, []snapshotCmdFreezerRow{{block: snapshotCmdBlock(0)}})
+	if err := fz.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+
+	store, reader, closeAncient, err := openSnapshotRestoreAncientStore(dataDir)
+	if err == nil {
+		closeAncient()
+		t.Fatalf("openSnapshotRestoreAncientStore store=%v reader=%v succeeded, want non-empty freezer rejection", store, reader)
+	}
+	if !strings.Contains(err.Error(), "non-empty freezer") {
+		t.Fatalf("openSnapshotRestoreAncientStore error = %v, want non-empty freezer", err)
+	}
+}
+
 func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	root := t.TempDir()
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src"))

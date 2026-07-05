@@ -138,9 +138,9 @@ Status:
   `gtron snapshot verify` preflights a local signed catalog/manifest/segment
   set before any install. `gtron snapshot restore` restores from a local signed
   catalog after the operator supplies trusted Ed25519 catalog public keys. The
-  restore command is bootstrap-only: it refuses non-genesis datadirs and only
-  advances canonical chain stages after chain-freezer data proves the boundary
-  block hash.
+  restore command is bootstrap-only: it refuses non-genesis datadirs or
+  non-empty freezer tables and only advances canonical chain stages after
+  chain-freezer data proves the boundary block hash.
 - Snapshot catalog trust can now be supplied by `--snapshot.trusted-key-file`
   or `GTRON_SNAPSHOT_TRUSTED_KEY_FILE` across fetch, verify, bootstrap,
   restore, and chain-lookup prune commands. Inline trusted keys can also be

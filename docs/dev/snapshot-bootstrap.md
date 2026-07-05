@@ -87,10 +87,11 @@ gtron snapshot restore \
   --snapshot.etl.tempdir /path/to/fast/tmp
 ```
 
-`snapshot restore` refuses non-genesis datadirs. It restores state domains and
-state-domain history, installs chain-freezer rows, verifies the canonical
-boundary block, then advances canonical Headers/Bodies/Execution/Commitment/
-Finish stages only after chain data proves the boundary hash.
+`snapshot restore` refuses non-genesis datadirs and non-empty freezer tables. It
+restores state domains and state-domain history, installs chain-freezer rows,
+verifies the canonical boundary block, then advances canonical Headers/Bodies/
+Execution/Commitment/Finish stages only after chain data proves the boundary
+hash.
 
 ## Optional Archive Trace Sidecars
 
