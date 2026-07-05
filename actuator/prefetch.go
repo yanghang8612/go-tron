@@ -292,7 +292,10 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 			b.addPendingVotes(owner)
 		}
 	case corepb.Transaction_Contract_WithdrawBalanceContract:
-		prefetchOwnerOnly(c, &b, &contractpb.WithdrawBalanceContract{})
+		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WithdrawBalanceContract{}); ok {
+			b.add(state.RewardBeginCyclePrefetchKey(owner))
+			b.add(state.RewardEndCyclePrefetchKey(owner))
+		}
 	case corepb.Transaction_Contract_WithdrawExpireUnfreezeContract:
 		prefetchOwnerOnly(c, &b, &contractpb.WithdrawExpireUnfreezeContract{})
 	case corepb.Transaction_Contract_CancelAllUnfreezeV2Contract:

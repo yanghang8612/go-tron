@@ -303,6 +303,18 @@ func TestPrefetchKeysForUnfreezeVoteRows(t *testing.T) {
 	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesIndexPrefetchKey())
 }
 
+func TestPrefetchKeysForWithdrawBalanceRewardCursorRows(t *testing.T) {
+	owner := makeTestAddr(0x34)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_WithdrawBalanceContract, &contractpb.WithdrawBalanceContract{
+		OwnerAddress: owner.Bytes(),
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.RewardEndCyclePrefetchKey(owner))
+}
+
 func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
 	owner := makeTestAddr(0x24)
 	sellToken := []byte("1000002")

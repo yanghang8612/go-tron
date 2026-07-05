@@ -21,6 +21,7 @@ hints and never change actuator validation behaviour.
 | `state.AccountKVPrefetchKey(SystemAccount, SystemWitnessSchedule, key)` | witness index row |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemProposal, key)` | proposal record/index rows keyed by proposal id |
 | `state.AccountKVPrefetchKey(SystemAccount, WitnessVoteState, key)` | pending VotesStore record/index rows keyed by voter |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemReward, key)` | voter reward begin/end cycle cursor rows keyed by owner |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAccountIndex, key)` | account name and account ID uniqueness index rows |
@@ -54,7 +55,7 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | Exchange token operations | owner account, TRC10 token metadata/name-index hints derivable from the envelope, both V1/V2 exchange rows when an exchange id is present, and metadata-derived TRC10 asset rows for both exchange token legs |
 | Asset update/unfreeze | owner account plus metadata-derived TRC10 asset rows for the asset recorded on the owner account |
 | Account metadata | owner account plus account-name or account-ID uniqueness index rows |
-| Owner-only actuators | owner account for witness, proposal, brokerage, freeze-v2, and withdraw contracts |
+| Owner-only actuators | owner account for witness, proposal, brokerage, freeze-v2, and withdraw contracts; withdraw-balance also warms owner reward begin/end cycle cursors |
 | Account create and participate asset issue | owner account plus the explicitly referenced counterparty account; participate also warms TRC10 metadata/name-index rows |
 
 ## Not Yet Covered
@@ -62,8 +63,11 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 - Per-account TRC10 balances beyond the owner/recipient account rows already
   warmed above. Balances live inside the account proto, so there is no separate
   asset-balance KV hint to enqueue yet.
-- Reward-cycle witness VI and cycle-brokerage rows. Those require maintenance
-  cycle context and are not directly encoded in transaction envelopes.
+- Reward-cycle witness VI, cycle-vote, cycle-reward, cycle-account-vote, and
+  cycle-brokerage rows. Those require maintenance cycle context and/or the
+  voter's current account vote set, so they are not directly encoded in
+  transaction envelopes. Withdraw-balance now covers only the owner begin/end
+  cycle cursor rows that are derivable from the envelope.
 - Deep market linked-list rows beyond the current match prefetch caps. The
   executor itself caps successful matching at 20 maker orders; the prefetch
   hint mirrors that order cap and also caps compatible price-level probes to

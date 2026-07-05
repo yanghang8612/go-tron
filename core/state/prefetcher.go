@@ -129,6 +129,14 @@ func PendingVotesIndexPrefetchKey() PrefetchKey {
 	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, votesStoreIndexKey)
 }
 
+func RewardBeginCyclePrefetchKey(voter tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.BeginCycleStateKey(voter.Bytes()))
+}
+
+func RewardEndCyclePrefetchKey(voter tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.EndCycleStateKey(voter.Bytes()))
+}
+
 func ExchangeTokenAssetsPrefetchKey(exchangeID int64) PrefetchKey {
 	if exchangeID <= 0 {
 		return PrefetchKey{}

@@ -194,6 +194,8 @@ func TestStatePrefetcherWarmsGovernanceWitnessRows(t *testing.T) {
 		ProposalIndexPrefetchKey(),
 		PendingVotesPrefetchKey(voter),
 		PendingVotesIndexPrefetchKey(),
+		RewardBeginCyclePrefetchKey(voter),
+		RewardEndCyclePrefetchKey(voter),
 	}
 	for i, key := range keys {
 		if err := rawdb.WriteStateKVLatest(db, key.Owner, 0, key.Domain, key.Key, []byte{byte(i + 1)}); err != nil {
