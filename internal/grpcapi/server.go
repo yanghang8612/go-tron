@@ -549,6 +549,21 @@ func (s *Server) GetAccountResource(_ context.Context, in *corepb.Account) (*api
 }
 
 // GetDelegatedResourceV2 returns the delegation record from one address to another.
+func (s *Server) GetDelegatedResource(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	from := common.BytesToAddress(in.FromAddress)
+	to := common.BytesToAddress(in.ToAddress)
+	infos, err := s.backend.GetDelegatedResource(from, to)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.DelegatedResourceList{
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
+	}, nil
+}
+
 func (s *Server) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
@@ -559,28 +574,45 @@ func (s *Server) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedRe
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if len(infos) == 0 {
-		return &apipb.DelegatedResourceList{}, nil
-	}
-	resources := make([]*corepb.DelegatedResource, 0, len(infos))
-	for range infos {
-		resources = append(resources, &corepb.DelegatedResource{
-			From: in.FromAddress,
-			To:   in.ToAddress,
-		})
-	}
-	for i, info := range infos {
-		resources[i].FrozenBalanceForBandwidth = info.FrozenBalanceForBandwidth
-		resources[i].FrozenBalanceForEnergy = info.FrozenBalanceForEnergy
-		resources[i].ExpireTimeForBandwidth = info.ExpireTimeForBandwidth
-		resources[i].ExpireTimeForEnergy = info.ExpireTimeForEnergy
-	}
 	return &apipb.DelegatedResourceList{
-		DelegatedResource: resources,
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
 	}, nil
 }
 
+func delegatedResourcesFromInfos(from, to []byte, infos []*tronapi.DelegatedResourceInfo) []*corepb.DelegatedResource {
+	if len(infos) == 0 {
+		return nil
+	}
+	resources := make([]*corepb.DelegatedResource, len(infos))
+	for i, info := range infos {
+		resources[i] = &corepb.DelegatedResource{
+			From:                      from,
+			To:                        to,
+			FrozenBalanceForBandwidth: info.FrozenBalanceForBandwidth,
+			FrozenBalanceForEnergy:    info.FrozenBalanceForEnergy,
+			ExpireTimeForBandwidth:    info.ExpireTimeForBandwidth,
+			ExpireTimeForEnergy:       info.ExpireTimeForEnergy,
+		}
+	}
+	return resources
+}
+
 // GetDelegatedResourceAccountIndexV2 returns the delegation index for an address.
+func (s *Server) GetDelegatedResourceAccountIndex(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "address required")
+	}
+	addr := common.BytesToAddress(in.Value)
+	idx, err := s.backend.GetDelegatedResourceAccountIndex(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: in.Value}, nil
+	}
+	return idx, nil
+}
+
 func (s *Server) GetDelegatedResourceAccountIndexV2(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "address required")

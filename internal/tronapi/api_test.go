@@ -28,6 +28,7 @@ import (
 // All pre-existing methods return zero/nil values.
 type stubBackend struct {
 	delegatedResources []*tronapi.DelegatedResourceInfo
+	legacyDelegIndex   *corepb.DelegatedResourceAccountIndex
 	delegationIndex    *tronapi.DelegationIndexInfo
 	canDelegate        *tronapi.CanDelegateInfo
 	canWithdraw        *tronapi.CanWithdrawUnfreezeInfo
@@ -212,6 +213,18 @@ func (s *stubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo,
 }
 
 // --- New Phase 10 methods ---
+func (s *stubBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
+func (s *stubBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	return s.legacyDelegIndex, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	return s.legacyDelegIndex, nil
+}
 func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	return s.delegatedResources, nil
 }
@@ -811,6 +824,28 @@ func assertHTTPEmptyArray(t *testing.T, resp *http.Response) {
 
 // --- Tests: delegation group ---
 
+func TestGetDelegatedResourceWithData(t *testing.T) {
+	stub := &stubBackend{
+		delegatedResources: []*tronapi.DelegatedResourceInfo{
+			{
+				FromAddress:               "4101",
+				ToAddress:                 "4102",
+				FrozenBalanceForBandwidth: 1000000,
+				ExpireTimeForBandwidth:    123,
+			},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresource",
+		`{"fromAddress":"4101","toAddress":"4102"}`)
+	list, ok := result["delegatedResource"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("expected delegatedResource=[1 entry], got %v", result)
+	}
+}
+
 func TestGetDelegatedResourceV2WithData(t *testing.T) {
 	stub := &stubBackend{
 		delegatedResources: []*tronapi.DelegatedResourceInfo{
@@ -849,6 +884,31 @@ func TestGetDelegatedResourceV2Empty(t *testing.T) {
 	list, ok := result["delegatedResource"].([]interface{})
 	if !ok || len(list) != 0 {
 		t.Fatalf("expected delegatedResource=[], got %v", result)
+	}
+}
+
+func TestGetDelegatedResourceAccountIndex(t *testing.T) {
+	to := common.Address{0x41, 0x02}
+	from := common.Address{0x41, 0x03}
+	stub := &stubBackend{
+		legacyDelegIndex: &corepb.DelegatedResourceAccountIndex{
+			Account:      common.Address{0x41, 0x01}.Bytes(),
+			ToAccounts:   [][]byte{to.Bytes()},
+			FromAccounts: [][]byte{from.Bytes()},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourceaccountindex",
+		`{"value":"4101"}`)
+	toAccounts, ok := result["toAccounts"].([]interface{})
+	if !ok || len(toAccounts) != 1 || toAccounts[0] != hex.EncodeToString(to.Bytes()) {
+		t.Fatalf("expected legacy toAccounts %x, got %v", to.Bytes(), result)
+	}
+	fromAccounts, ok := result["fromAccounts"].([]interface{})
+	if !ok || len(fromAccounts) != 1 || fromAccounts[0] != hex.EncodeToString(from.Bytes()) {
+		t.Fatalf("expected legacy fromAccounts %x, got %v", from.Bytes(), result)
 	}
 }
 

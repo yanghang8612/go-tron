@@ -200,6 +200,10 @@ type Backend interface {
 	ListProposalsAt(blockNum uint64) ([]*ProposalInfo, error)
 
 	// Delegation/resource queries (Stake 2.0)
+	GetDelegatedResource(from, to common.Address) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error)
+	GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error)
 	GetDelegatedResourceV2(from, to common.Address) ([]*DelegatedResourceInfo, error)
 	GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*DelegatedResourceInfo, error)
 	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)

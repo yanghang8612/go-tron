@@ -1182,15 +1182,20 @@ Status:
   The same restored backend now also starts the real TRON HTTP and JSON-RPC
   server lifecycles on port `0`, discovers their bound addresses, and sends
   archive API requests through those listeners instead of only through
-  in-memory `httptest` handlers. gRPC `WalletSolidity` account and reward
+  in-memory `httptest` handlers. Legacy `/wallet/getdelegatedresource` and
+  `/wallet/getdelegatedresourceaccountindex` plus the matching
+  `/walletsolidity`/`/walletpbft` and gRPC `Wallet{,Solidity}` methods now read
+  legacy `SystemDelegation` buckets and aggregate indexes through the same
+  live/archive boundary as the V2 routes. gRPC `WalletSolidity` account and reward
   methods now also dispatch through the solid-block `GetAccountAt`/`GetRewardAt`
   backend paths instead of live-head reads, with tests pinning that route to
   the shared archive/as-of state session boundary. Delegation V2 solidity/PBFT
   HTTP routes and gRPC `WalletSolidity` delegation methods now use
   `GetDelegatedResourceV2At`/`GetDelegatedResourceAccountIndexV2At` at the
   solid/PBFT bound instead of live-head SystemDelegation rows. Backend archive
-  coverage writes V2 delegation buckets and delegation indexes through temporal
-  SystemDelegation history and verifies block-1/block-2 as-of reads diverge.
+  coverage writes legacy and V2 delegation buckets plus delegation indexes
+  through temporal SystemDelegation history and verifies block-1/block-2 as-of
+  reads diverge.
   HTTP solidity/PBFT `getaccountbyid` now dispatches through
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend

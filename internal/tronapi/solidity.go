@@ -54,7 +54,9 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getpaginatedexchangelist", api.getSolidPaginatedExchangeList)
 	mux.HandleFunc("/walletsolidity/getexchangebyid", api.getSolidExchangeByID)
+	mux.HandleFunc("/walletsolidity/getdelegatedresource", api.getSolidDelegatedResource)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
+	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindex", api.getSolidDelegatedResourceAccountIndex)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletsolidity/candelegateresource", api.getSolidCanDelegateResource)
 	mux.HandleFunc("/walletsolidity/getcanwithdrawunfreezeamount", api.getSolidCanWithdrawUnfreezeAmount)
@@ -102,7 +104,9 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getpaginatedexchangelist", api.getPbftPaginatedExchangeList)
 	mux.HandleFunc("/walletpbft/getexchangebyid", api.getPbftExchangeByID)
+	mux.HandleFunc("/walletpbft/getdelegatedresource", api.getPbftDelegatedResource)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
+	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindex", api.getPbftDelegatedResourceAccountIndex)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletpbft/candelegateresource", api.getPbftCanDelegateResource)
 	mux.HandleFunc("/walletpbft/getcanwithdrawunfreezeamount", api.getPbftCanWithdrawUnfreezeAmount)
@@ -352,12 +356,28 @@ func (api *API) getPbftExchangeByID(w http.ResponseWriter, r *http.Request) {
 	api.handleGetExchangeByID(w, r, api.pbftBoundNum)
 }
 
+func (api *API) getSolidDelegatedResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResource(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftDelegatedResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResource(w, r, api.pbftBoundNum)
+}
+
 func (api *API) getSolidDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceV2(w, r, api.solidBoundNum)
 }
 
 func (api *API) getPbftDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceV2(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndex(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndex(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {

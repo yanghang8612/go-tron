@@ -69,7 +69,9 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/listproposals", api.listProposals)
 
 	// Phase 10: delegation/resource queries
+	mux.HandleFunc("/wallet/getdelegatedresource", api.getDelegatedResource)
 	mux.HandleFunc("/wallet/getdelegatedresourcev2", api.getDelegatedResourceV2)
+	mux.HandleFunc("/wallet/getdelegatedresourceaccountindex", api.getDelegatedResourceAccountIndex)
 	mux.HandleFunc("/wallet/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/wallet/candelegateresource", api.canDelegateResource)
 
@@ -1439,27 +1441,43 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceV2(w, r, nil)
 }
 
+func (api *API) getDelegatedResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResource(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResource(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	from, to, ok := parseDelegatedResourceRequest(w, r)
+	if !ok {
+		return
+	}
+	var (
+		list []*DelegatedResourceInfo
+		err  error
+	)
+	if boundFn != nil {
+		list, err = api.backend.GetDelegatedResourceAt(from, to, boundFn())
+	} else {
+		list, err = api.backend.GetDelegatedResource(from, to)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []*DelegatedResourceInfo{}
+	}
+	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
 func (api *API) handleGetDelegatedResourceV2(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
-	var body struct {
-		FromAddress string `json:"fromAddress"`
-		ToAddress   string `json:"toAddress"`
-		Visible     bool   `json:"visible"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
-		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
-		return
-	}
-	from, err := parseAddress(body.FromAddress, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "fromAddress", err)
-		return
-	}
-	to, err := parseAddress(body.ToAddress, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "toAddress", err)
+	from, to, ok := parseDelegatedResourceRequest(w, r)
+	if !ok {
 		return
 	}
 	var list []*DelegatedResourceInfo
+	var err error
 	if boundFn != nil {
 		list, err = api.backend.GetDelegatedResourceV2At(from, to, boundFn())
 	} else {
@@ -1477,29 +1495,68 @@ func (api *API) handleGetDelegatedResourceV2(w http.ResponseWriter, r *http.Requ
 	w.Write(data)
 }
 
+func parseDelegatedResourceRequest(w http.ResponseWriter, r *http.Request) (common.Address, common.Address, bool) {
+	var body struct {
+		FromAddress string `json:"fromAddress"`
+		ToAddress   string `json:"toAddress"`
+		Visible     bool   `json:"visible"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
+		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
+		return common.Address{}, common.Address{}, false
+	}
+	from, err := parseAddress(body.FromAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "fromAddress", err)
+		return common.Address{}, common.Address{}, false
+	}
+	to, err := parseAddress(body.ToAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "toAddress", err)
+		return common.Address{}, common.Address{}, false
+	}
+	return from, to, true
+}
+
 func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
 	api.handleGetDelegatedResourceAccountIndexV2(w, r, nil)
 }
 
-func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
-	var body struct {
-		Value   string `json:"value"`
-		Visible bool   `json:"visible"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if body.Value == "" {
-		body.Value = r.URL.Query().Get("value")
-	}
-	if body.Value == "" {
-		http.Error(w, "value required", http.StatusBadRequest)
+func (api *API) getDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndex(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	addr, ok := parseDelegatedResourceAccountIndexRequest(w, r)
+	if !ok {
 		return
 	}
-	addr, err := parseAddress(body.Value, body.Visible)
+	var (
+		info *corepb.DelegatedResourceAccountIndex
+		err  error
+	)
+	if boundFn != nil {
+		info, err = api.backend.GetDelegatedResourceAccountIndexAt(addr, boundFn())
+	} else {
+		info, err = api.backend.GetDelegatedResourceAccountIndex(addr)
+	}
 	if err != nil {
-		httpFieldErr(w, "value", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		info = &corepb.DelegatedResourceAccountIndex{Account: addr.Bytes()}
+	}
+	writeTronJSON(w, info)
+}
+
+func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	addr, ok := parseDelegatedResourceAccountIndexRequest(w, r)
+	if !ok {
 		return
 	}
 	var info *DelegationIndexInfo
+	var err error
 	if boundFn != nil {
 		info, err = api.backend.GetDelegatedResourceAccountIndexV2At(addr, boundFn())
 	} else {
@@ -1512,6 +1569,27 @@ func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, 
 	data, _ := json.Marshal(info)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func parseDelegatedResourceAccountIndexRequest(w http.ResponseWriter, r *http.Request) (common.Address, bool) {
+	var body struct {
+		Value   string `json:"value"`
+		Visible bool   `json:"visible"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return common.Address{}, false
+	}
+	addr, err := parseAddress(body.Value, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return common.Address{}, false
+	}
+	return addr, true
 }
 
 func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {

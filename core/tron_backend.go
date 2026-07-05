@@ -1316,6 +1316,35 @@ func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) ([]*trona
 	return resources, nil
 }
 
+func (b *TronBackend) GetDelegatedResource(from, to tcommon.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	statedb, err := b.chain.openCurrentState()
+	if err != nil {
+		return nil, fmt.Errorf("open head state: %w", err)
+	}
+	dr := statedb.ReadDelegatedResourceLegacy(from, to)
+	if !nonEmptyDelegatedResource(dr) {
+		return nil, nil
+	}
+	return []*tronapi.DelegatedResourceInfo{delegatedResourceInfo(from, to, dr)}, nil
+}
+
+func (b *TronBackend) GetDelegatedResourceAt(from, to tcommon.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dr, err := readDelegatedResourceLegacyAt(session.reader, from, to, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read delegated resource at block %d: %w", blockNum, err)
+	}
+	if !nonEmptyDelegatedResource(dr) {
+		return nil, nil
+	}
+	return []*tronapi.DelegatedResourceInfo{delegatedResourceInfo(from, to, dr)}, nil
+}
+
 func (b *TronBackend) GetDelegatedResourceV2At(from, to tcommon.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	session, err := b.archiveStateAt(blockNum)
 	if err != nil {
@@ -1339,6 +1368,19 @@ func (b *TronBackend) GetDelegatedResourceV2At(from, to tcommon.Address, blockNu
 
 func readDelegatedResourceV2At(reader *state.PersistentHistoryReader, from, to tcommon.Address, locked bool, blockNum uint64) (*rawdb.DelegatedResource, error) {
 	key := rawdb.DelegatedResourceV2StateKey(from, to, locked)
+	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	dr := &rawdb.DelegatedResource{}
+	if err := json.Unmarshal(data, dr); err != nil {
+		return nil, err
+	}
+	return dr, nil
+}
+
+func readDelegatedResourceLegacyAt(reader *state.PersistentHistoryReader, from, to tcommon.Address, blockNum uint64) (*rawdb.DelegatedResource, error) {
+	key := rawdb.DelegatedResourceStateKey(from, to)
 	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
 	if err != nil || !ok || len(data) == 0 {
 		return nil, err
@@ -1424,6 +1466,35 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 	}, nil
 }
 
+func (b *TronBackend) GetDelegatedResourceAccountIndex(addr tcommon.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	statedb, err := b.chain.openCurrentState()
+	if err != nil {
+		return nil, fmt.Errorf("open head state: %w", err)
+	}
+	idx := statedb.ReadDrAccountIndexLegacy(addr.Bytes())
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), addr.Bytes()...)}, nil
+	}
+	return idx, nil
+}
+
+func (b *TronBackend) GetDelegatedResourceAccountIndexAt(addr tcommon.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	idx, err := readDelegatedResourceAccountIndexAt(session.reader, addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read delegated resource account index at block %d: %w", blockNum, err)
+	}
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), addr.Bytes()...)}, nil
+	}
+	return idx, nil
+}
+
 func (b *TronBackend) GetDelegatedResourceAccountIndexV2At(addr tcommon.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
 	session, err := b.archiveStateAt(blockNum)
 	if err != nil {
@@ -1443,6 +1514,19 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2At(addr tcommon.Address,
 		Account:     hex.EncodeToString(addr[:]),
 		ToAddresses: toAddresses,
 	}, nil
+}
+
+func readDelegatedResourceAccountIndexAt(reader *state.PersistentHistoryReader, addr tcommon.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	key := rawdb.DrAccountIndexLegacyStateKey(addr.Bytes())
+	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	idx := &corepb.DelegatedResourceAccountIndex{}
+	if err := proto.Unmarshal(data, idx); err != nil {
+		return nil, err
+	}
+	return idx, nil
 }
 
 func readDelegationIndexAt(reader *state.PersistentHistoryReader, addr tcommon.Address, blockNum uint64) ([]tcommon.Address, error) {

@@ -536,75 +536,79 @@ func TestSolidityAccount_routeExists(t *testing.T) {
 // inspect the JSON response and verify routing.
 type isolationStubBackend struct {
 	solidStubBackend
-	liveAddr                 common.Address
-	solidAddr                common.Address
-	gotAt                    uint64 // last blockNum passed to GetAccountAt
-	liveContractCalls        int
-	contractAtBlock          uint64
-	contractAtErr            error
-	liveConstantCalls        int
-	constantAtBlock          uint64
-	liveEstimateCalls        int
-	estimateAtBlock          uint64
-	liveAccountIDCalls       int
-	accountIDAtBlock         uint64
-	liveAccountNetCalls      int
-	accountNetAtBlock        uint64
-	liveChainParameterCalls  int
-	chainParametersAtBlock   uint64
-	liveBurnCalls            int
-	burnAtBlock              uint64
-	liveBandwidthCalls       int
-	bandwidthAtBlock         uint64
-	liveEnergyCalls          int
-	energyAtBlock            uint64
-	liveBrokerageCalls       int
-	brokerageAtBlock         uint64
-	liveWitnessCalls         int
-	witnessesAtBlock         uint64
-	liveNextMaintenanceCalls int
-	nextMaintenanceAtBlock   uint64
-	liveProposalCalls        int
-	proposalsAtBlock         uint64
-	liveProposalIDCalls      int
-	proposalIDAtBlock        uint64
-	proposalIDAtErr          error
-	liveProposalPageCalls    int
-	proposalPageAtBlock      uint64
-	liveAssetIDCalls         int
-	assetIDAtBlock           uint64
-	liveAssetNameCalls       int
-	assetNameAtBlock         uint64
-	liveAssetListCalls       int
-	assetListAtBlock         uint64
-	liveAssetPageCalls       int
-	assetPageAtBlock         uint64
-	liveMarketOrderCalls     int
-	marketOrderAtBlock       uint64
-	liveMarketOrdersCalls    int
-	marketOrdersAtBlock      uint64
-	liveMarketOrderPairCalls int
-	marketOrderPairAtBlock   uint64
-	liveMarketPairListCalls  int
-	marketPairListAtBlock    uint64
-	liveMarketPriceCalls     int
-	marketPriceAtBlock       uint64
-	liveExchangeCalls        int
-	exchangesAtBlock         uint64
-	liveExchangePageCalls    int
-	exchangePageAtBlock      uint64
-	liveExchangeIDCalls      int
-	exchangeIDAtBlock        uint64
-	liveDelegatedCalls       int
-	liveDelegationIndexCalls int
-	delegatedAtBlock         uint64
-	delegationIndexAtBlock   uint64
-	liveCanDelegateCalls     int
-	canDelegateAtBlock       uint64
-	liveCanWithdrawCalls     int
-	canWithdrawAtBlock       uint64
-	liveAvailableCalls       int
-	availableAtBlock         uint64
+	liveAddr                  common.Address
+	solidAddr                 common.Address
+	gotAt                     uint64 // last blockNum passed to GetAccountAt
+	liveContractCalls         int
+	contractAtBlock           uint64
+	contractAtErr             error
+	liveConstantCalls         int
+	constantAtBlock           uint64
+	liveEstimateCalls         int
+	estimateAtBlock           uint64
+	liveAccountIDCalls        int
+	accountIDAtBlock          uint64
+	liveAccountNetCalls       int
+	accountNetAtBlock         uint64
+	liveChainParameterCalls   int
+	chainParametersAtBlock    uint64
+	liveBurnCalls             int
+	burnAtBlock               uint64
+	liveBandwidthCalls        int
+	bandwidthAtBlock          uint64
+	liveEnergyCalls           int
+	energyAtBlock             uint64
+	liveBrokerageCalls        int
+	brokerageAtBlock          uint64
+	liveWitnessCalls          int
+	witnessesAtBlock          uint64
+	liveNextMaintenanceCalls  int
+	nextMaintenanceAtBlock    uint64
+	liveProposalCalls         int
+	proposalsAtBlock          uint64
+	liveProposalIDCalls       int
+	proposalIDAtBlock         uint64
+	proposalIDAtErr           error
+	liveProposalPageCalls     int
+	proposalPageAtBlock       uint64
+	liveAssetIDCalls          int
+	assetIDAtBlock            uint64
+	liveAssetNameCalls        int
+	assetNameAtBlock          uint64
+	liveAssetListCalls        int
+	assetListAtBlock          uint64
+	liveAssetPageCalls        int
+	assetPageAtBlock          uint64
+	liveMarketOrderCalls      int
+	marketOrderAtBlock        uint64
+	liveMarketOrdersCalls     int
+	marketOrdersAtBlock       uint64
+	liveMarketOrderPairCalls  int
+	marketOrderPairAtBlock    uint64
+	liveMarketPairListCalls   int
+	marketPairListAtBlock     uint64
+	liveMarketPriceCalls      int
+	marketPriceAtBlock        uint64
+	liveExchangeCalls         int
+	exchangesAtBlock          uint64
+	liveExchangePageCalls     int
+	exchangePageAtBlock       uint64
+	liveExchangeIDCalls       int
+	exchangeIDAtBlock         uint64
+	liveDelegatedCalls        int
+	liveLegacyDelegatedCalls  int
+	liveDelegationIndexCalls  int
+	liveLegacyDelegIndexCalls int
+	delegatedAtBlock          uint64
+	legacyDelegatedAtBlock    uint64
+	delegationIndexAtBlock    uint64
+	legacyDelegIndexAtBlock   uint64
+	liveCanDelegateCalls      int
+	canDelegateAtBlock        uint64
+	liveCanWithdrawCalls      int
+	canWithdrawAtBlock        uint64
+	liveAvailableCalls        int
+	availableAtBlock          uint64
 }
 
 func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, error) {
@@ -978,6 +982,25 @@ func (s *isolationStubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*co
 	}, nil
 }
 
+func (s *isolationStubBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	s.liveLegacyDelegatedCalls++
+	return []*tronapi.DelegatedResourceInfo{{
+		FromAddress:               hex.EncodeToString(from.Bytes()),
+		ToAddress:                 hex.EncodeToString(to.Bytes()),
+		FrozenBalanceForBandwidth: 2,
+	}}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	s.legacyDelegatedAtBlock = blockNum
+	return []*tronapi.DelegatedResourceInfo{{
+		FromAddress:               hex.EncodeToString(from.Bytes()),
+		ToAddress:                 hex.EncodeToString(to.Bytes()),
+		FrozenBalanceForBandwidth: 7,
+		ExpireTimeForBandwidth:    77,
+	}}, nil
+}
+
 func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	s.liveDelegatedCalls++
 	return []*tronapi.DelegatedResourceInfo{{
@@ -996,6 +1019,23 @@ func (s *isolationStubBackend) GetDelegatedResourceV2At(from, to common.Address,
 		ExpireTimeForEnergy:    99,
 		ExpireTimeForBandwidth: 88,
 	}}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	s.liveLegacyDelegIndexCalls++
+	return &corepb.DelegatedResourceAccountIndex{
+		Account:    addr.Bytes(),
+		ToAccounts: [][]byte{common.Address{0x41, 0x6f}.Bytes()},
+	}, nil
+}
+
+func (s *isolationStubBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	s.legacyDelegIndexAtBlock = blockNum
+	return &corepb.DelegatedResourceAccountIndex{
+		Account:      addr.Bytes(),
+		ToAccounts:   [][]byte{common.Address{0x41, 0x9f}.Bytes()},
+		FromAccounts: [][]byte{common.Address{0x41, 0xaf}.Bytes()},
+	}, nil
 }
 
 func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
@@ -2147,7 +2187,7 @@ func TestSolidityDelegationRoutesUseSolidBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	body := `{"fromAddress":"` + hex.EncodeToString(from.Bytes()) + `","toAddress":"` + hex.EncodeToString(to.Bytes()) + `"}`
-	resp, err := http.Post(srv.URL+"/walletsolidity/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	resp, err := http.Post(srv.URL+"/walletsolidity/getdelegatedresource", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -2158,6 +2198,30 @@ func TestSolidityDelegationRoutesUseSolidBoundArchivePath(t *testing.T) {
 	var got struct {
 		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
 	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DelegatedResource) != 1 || got.DelegatedResource[0].FrozenBalanceForBandwidth != 7 {
+		t.Fatalf("legacy delegatedResource = %+v, want solid-bound sentinel", got.DelegatedResource)
+	}
+	if stub.legacyDelegatedAtBlock != 42 {
+		t.Fatalf("GetDelegatedResourceAt block = %d, want solidNum=42", stub.legacyDelegatedAtBlock)
+	}
+	if stub.liveLegacyDelegatedCalls != 0 {
+		t.Fatalf("live GetDelegatedResource called %d times, want 0", stub.liveLegacyDelegatedCalls)
+	}
+
+	resp, err = http.Post(srv.URL+"/walletsolidity/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("v2 request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 status: %d", resp.StatusCode)
+	}
+	got = struct {
+		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
+	}{}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -2172,9 +2236,32 @@ func TestSolidityDelegationRoutesUseSolidBoundArchivePath(t *testing.T) {
 	}
 
 	indexBody := `{"value":"` + hex.EncodeToString(from.Bytes()) + `"}`
-	resp, err = http.Post(srv.URL+"/walletsolidity/getdelegatedresourceaccountindexv2", "application/json", strings.NewReader(indexBody))
+	resp, err = http.Post(srv.URL+"/walletsolidity/getdelegatedresourceaccountindex", "application/json", strings.NewReader(indexBody))
 	if err != nil {
 		t.Fatalf("index request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var legacyIdx struct {
+		ToAccounts   []string `json:"toAccounts"`
+		FromAccounts []string `json:"fromAccounts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&legacyIdx); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyIdx.ToAccounts) != 1 || !strings.EqualFold(legacyIdx.ToAccounts[0], hex.EncodeToString(common.Address{0x41, 0x9f}.Bytes())) ||
+		len(legacyIdx.FromAccounts) != 1 || !strings.EqualFold(legacyIdx.FromAccounts[0], hex.EncodeToString(common.Address{0x41, 0xaf}.Bytes())) {
+		t.Fatalf("legacy delegation index = %+v, want solid-bound sentinel", legacyIdx)
+	}
+	if stub.legacyDelegIndexAtBlock != 42 {
+		t.Fatalf("GetDelegatedResourceAccountIndexAt block = %d, want solidNum=42", stub.legacyDelegIndexAtBlock)
+	}
+	if stub.liveLegacyDelegIndexCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceAccountIndex called %d times, want 0", stub.liveLegacyDelegIndexCalls)
+	}
+
+	resp, err = http.Post(srv.URL+"/walletsolidity/getdelegatedresourceaccountindexv2", "application/json", strings.NewReader(indexBody))
+	if err != nil {
+		t.Fatalf("v2 index request failed: %v", err)
 	}
 	defer resp.Body.Close()
 	var idx tronapi.DelegationIndexInfo
@@ -2202,7 +2289,7 @@ func TestPbftDelegationRoutesUsePbftBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	body := `{"fromAddress":"` + hex.EncodeToString(from.Bytes()) + `","toAddress":"` + hex.EncodeToString(to.Bytes()) + `"}`
-	resp, err := http.Post(srv.URL+"/walletpbft/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	resp, err := http.Post(srv.URL+"/walletpbft/getdelegatedresource", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -2213,6 +2300,30 @@ func TestPbftDelegationRoutesUsePbftBoundArchivePath(t *testing.T) {
 	var got struct {
 		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
 	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DelegatedResource) != 1 || got.DelegatedResource[0].FrozenBalanceForBandwidth != 7 {
+		t.Fatalf("legacy delegatedResource = %+v, want pbft-bound sentinel", got.DelegatedResource)
+	}
+	if stub.legacyDelegatedAtBlock != 13 {
+		t.Fatalf("GetDelegatedResourceAt block = %d, want pbftNum=13", stub.legacyDelegatedAtBlock)
+	}
+	if stub.liveLegacyDelegatedCalls != 0 {
+		t.Fatalf("live GetDelegatedResource called %d times, want 0", stub.liveLegacyDelegatedCalls)
+	}
+
+	resp, err = http.Post(srv.URL+"/walletpbft/getdelegatedresourcev2", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("v2 request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 status: %d", resp.StatusCode)
+	}
+	got = struct {
+		DelegatedResource []tronapi.DelegatedResourceInfo `json:"delegatedResource"`
+	}{}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}

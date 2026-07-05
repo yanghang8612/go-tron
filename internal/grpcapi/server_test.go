@@ -1,6 +1,7 @@
 package grpcapi_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -55,6 +56,7 @@ type testBackend struct {
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
 	delegatedResources      []*tronapi.DelegatedResourceInfo
+	legacyDelegIndex        *corepb.DelegatedResourceAccountIndex
 	accountBalanceResp      *contractpb.AccountBalanceResponse
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
@@ -218,6 +220,18 @@ func (b *testBackend) BuildProposalDeleteTransaction(owner common.Address, propo
 func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
 func (b *testBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
 	return nil, nil
+}
+func (b *testBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
+func (b *testBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
+func (b *testBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	return b.legacyDelegIndex, nil
+}
+func (b *testBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	return b.legacyDelegIndex, nil
 }
 func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	return b.delegatedResources, nil
@@ -1028,6 +1042,42 @@ func TestGetDelegatedResourceV2_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetDelegatedResource_Legacy(t *testing.T) {
+	client := newTestClient(t, &testBackend{
+		delegatedResources: []*tronapi.DelegatedResourceInfo{{
+			FrozenBalanceForBandwidth: 123,
+			ExpireTimeForBandwidth:    456,
+		}},
+	})
+	resp, err := client.GetDelegatedResource(context.Background(), &apipb.DelegatedResourceMessage{
+		FromAddress: make([]byte, 21),
+		ToAddress:   make([]byte, 21),
+	})
+	if err != nil {
+		t.Fatalf("GetDelegatedResource: %v", err)
+	}
+	if len(resp.GetDelegatedResource()) != 1 || resp.GetDelegatedResource()[0].GetFrozenBalanceForBandwidth() != 123 {
+		t.Fatalf("GetDelegatedResource = %+v, want legacy resource", resp.GetDelegatedResource())
+	}
+}
+
+func TestGetDelegatedResourceAccountIndex_Legacy(t *testing.T) {
+	to := grpcTestBytes(common.AddressLength, 0x33)
+	client := newTestClient(t, &testBackend{
+		legacyDelegIndex: &corepb.DelegatedResourceAccountIndex{
+			Account:    grpcTestBytes(common.AddressLength, 0x22),
+			ToAccounts: [][]byte{to},
+		},
+	})
+	resp, err := client.GetDelegatedResourceAccountIndex(context.Background(), &apipb.BytesMessage{Value: grpcTestBytes(common.AddressLength, 0x22)})
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndex: %v", err)
+	}
+	if len(resp.GetToAccounts()) != 1 || !bytes.Equal(resp.GetToAccounts()[0], to) {
+		t.Fatalf("GetDelegatedResourceAccountIndex = %+v, want %x", resp.GetToAccounts(), to)
 	}
 }
 

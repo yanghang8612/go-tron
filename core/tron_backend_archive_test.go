@@ -1051,6 +1051,14 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 			t.Fatalf("open state block %d: %v", n, err)
 		}
 		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+		if err := statedb.WriteDelegatedResourceLegacy(from, to1, &rawdb.DelegatedResource{
+			From:                      from,
+			To:                        to1,
+			FrozenBalanceForBandwidth: n * 10,
+			ExpireTimeForBandwidth:    n * 100,
+		}); err != nil {
+			t.Fatalf("write legacy delegation block %d: %v", n, err)
+		}
 		if err := statedb.WriteDelegatedResourceV2(from, to1, false, &rawdb.DelegatedResource{
 			From:                      from,
 			To:                        to1,
@@ -1074,6 +1082,14 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 		if err := statedb.WriteDelegationIndex(from, receivers); err != nil {
 			t.Fatalf("write delegation index block %d: %v", n, err)
 		}
+		if err := statedb.WriteDrAccountIndexLegacyDelegate(from.Bytes(), to1.Bytes()); err != nil {
+			t.Fatalf("write legacy delegation index block %d: %v", n, err)
+		}
+		if n == 2 {
+			if err := statedb.WriteDrAccountIndexLegacyDelegate(from.Bytes(), to2.Bytes()); err != nil {
+				t.Fatalf("write legacy delegation index second receiver block %d: %v", n, err)
+			}
+		}
 		root, err := statedb.Commit()
 		if err != nil {
 			t.Fatalf("commit delegation block %d: %v", n, err)
@@ -1088,6 +1104,21 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 	root = commitDelegation(block1, 1)
 	root = commitDelegation(block2, 2)
 
+	block1LegacyResources, err := b.GetDelegatedResourceAt(from, to1, block1.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAt(block1): %v", err)
+	}
+	if len(block1LegacyResources) != 1 || block1LegacyResources[0].FrozenBalanceForBandwidth != 10 {
+		t.Fatalf("block1 legacy delegated resources = %+v, want block1 bandwidth record", block1LegacyResources)
+	}
+	block2LegacyResources, err := b.GetDelegatedResourceAt(from, to1, block2.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAt(block2): %v", err)
+	}
+	if len(block2LegacyResources) != 1 || block2LegacyResources[0].FrozenBalanceForBandwidth != 20 {
+		t.Fatalf("block2 legacy delegated resources = %+v, want block2 bandwidth record", block2LegacyResources)
+	}
+
 	block1Resources, err := b.GetDelegatedResourceV2At(from, to1, block1.Number())
 	if err != nil {
 		t.Fatalf("GetDelegatedResourceV2At(block1): %v", err)
@@ -1101,6 +1132,23 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 	}
 	if len(block2Resources) != 2 || block2Resources[0].FrozenBalanceForBandwidth != 200 || block2Resources[1].FrozenBalanceForEnergy != 222 {
 		t.Fatalf("block2 delegated resources = %+v, want updated unlocked plus locked record", block2Resources)
+	}
+
+	block1LegacyIndex, err := b.GetDelegatedResourceAccountIndexAt(from, block1.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexAt(block1): %v", err)
+	}
+	if len(block1LegacyIndex.GetToAccounts()) != 1 || !bytes.Equal(block1LegacyIndex.GetToAccounts()[0], to1.Bytes()) {
+		t.Fatalf("block1 legacy delegation index = %+v, want only %x", block1LegacyIndex, to1[:])
+	}
+	block2LegacyIndex, err := b.GetDelegatedResourceAccountIndexAt(from, block2.Number())
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexAt(block2): %v", err)
+	}
+	if len(block2LegacyIndex.GetToAccounts()) != 2 ||
+		!bytes.Equal(block2LegacyIndex.GetToAccounts()[0], to1.Bytes()) ||
+		!bytes.Equal(block2LegacyIndex.GetToAccounts()[1], to2.Bytes()) {
+		t.Fatalf("block2 legacy delegation index = %+v, want %x,%x", block2LegacyIndex, to1[:], to2[:])
 	}
 
 	block1Index, err := b.GetDelegatedResourceAccountIndexV2At(from, block1.Number())
@@ -1133,6 +1181,15 @@ func TestArchiveQuery_DelegationIndexRejectsMalformedHistory(t *testing.T) {
 	_, err := readDelegationIndexAt(reader, from, 1)
 	if err == nil || !strings.Contains(err.Error(), "malformed length") {
 		t.Fatalf("readDelegationIndexAt malformed error = %v, want malformed length", err)
+	}
+
+	legacyKey := rawdb.DrAccountIndexLegacyStateKey(from.Bytes())
+	if err := rawdb.WriteStateKVLatest(db, tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, legacyKey, []byte{0x80}); err != nil {
+		t.Fatalf("WriteStateKVLatest malformed legacy delegation index: %v", err)
+	}
+	_, err = readDelegatedResourceAccountIndexAt(reader, from, 1)
+	if err == nil || !strings.Contains(err.Error(), "cannot parse invalid wire-format data") {
+		t.Fatalf("readDelegatedResourceAccountIndexAt malformed error = %v, want proto decode error", err)
 	}
 }
 

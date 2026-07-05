@@ -26,98 +26,104 @@ import (
 // solidTestBackend wraps testBackend with controllable solid/pbft numbers.
 type solidTestBackend struct {
 	testBackend
-	solidNum             uint64
-	blockNumCalls        int
-	lastNumQueried       uint64
-	hashCalls            int
-	lastHashQueried      common.Hash
-	lastAccountAt        uint64
-	lastAccountIDAt      uint64
-	lastRewardAt         uint64
-	lastDelegatedAt      uint64
-	lastDelegIndexAt     uint64
-	lastAssetIDAt        uint64
-	lastAssetNameAt      uint64
-	lastAssetListAt      uint64
-	lastAssetPageAt      uint64
-	lastMarketOrderAt    uint64
-	lastMarketOrdersAt   uint64
-	lastMarketPriceAt    uint64
-	lastMarketPairAt     uint64
-	lastMarketPairListAt uint64
-	lastExchangesAt      uint64
-	lastExchangeIDAt     uint64
-	lastCanDelegateAt    uint64
-	lastAvailableAt      uint64
-	lastCanWithdrawAt    uint64
-	lastBurnAt           uint64
-	lastBandwidthAt      uint64
-	lastEnergyAt         uint64
-	lastWitnessesAt      uint64
-	lastBrokerageAt      uint64
-	lastConstantAt       uint64
-	lastEstimateAt       uint64
-	txBlockNum           uint64
-	txBlockOK            bool
-	txBlockCalls         int
-	txCalls              int
-	txInfoCalls          int
-	liveAccountCalls     int
-	liveAccountIDCalls   int
-	liveRewardCalls      int
-	liveDelegCalls       int
-	liveIndexCalls       int
-	liveAssetID          int
-	liveAssetName        int
-	liveAssetList        int
-	liveAssetPage        int
-	liveMarketOrder      int
-	liveMarketOrders     int
-	liveMarketPrice      int
-	liveMarketPair       int
-	liveMarketPairList   int
-	liveExchanges        int
-	liveExchangeID       int
-	liveCanDelegate      int
-	liveAvailable        int
-	liveCanWithdraw      int
-	liveBurn             int
-	liveBandwidth        int
-	liveEnergy           int
-	liveWitnesses        int
-	liveBrokerage        int
-	liveConstant         int
-	liveEstimate         int
-	accountAt            *types.Account
-	accountIDAt          *types.Account
-	rewardAt             *tronapi.RewardInfo
-	delegatedAt          []*tronapi.DelegatedResourceInfo
-	delegIndexAt         *tronapi.DelegationIndexInfo
-	assetIDAt            *contractpb.AssetIssueContract
-	assetNameAt          *contractpb.AssetIssueContract
-	assetListAt          []*contractpb.AssetIssueContract
-	assetPageAt          []*contractpb.AssetIssueContract
-	marketOrderAt        *corepb.MarketOrder
-	marketOrdersAt       []*corepb.MarketOrder
-	marketPriceAt        *corepb.MarketPriceList
-	marketPairAt         []*corepb.MarketOrder
-	marketPairListAt     *corepb.MarketOrderPairList
-	exchangesAt          []*corepb.Exchange
-	exchangeIDAt         *corepb.Exchange
-	canDelegateAt        *tronapi.CanDelegateInfo
-	availableAt          *tronapi.AvailableUnfreezeCountInfo
-	canWithdrawAt        *tronapi.CanWithdrawUnfreezeInfo
-	burnAt               int64
-	bandwidthAt          string
-	energyAt             string
-	witnessesAt          []*tronapi.WitnessInfo
-	brokerageAt          int64
-	constantAt           *tronapi.TriggerResult
-	estimateAt           int64
-	txAt                 *corepb.Transaction
-	txInfoAt             *corepb.TransactionInfo
-	txErr                error
-	txInfoErr            error
+	solidNum               uint64
+	blockNumCalls          int
+	lastNumQueried         uint64
+	hashCalls              int
+	lastHashQueried        common.Hash
+	lastAccountAt          uint64
+	lastAccountIDAt        uint64
+	lastRewardAt           uint64
+	lastDelegatedAt        uint64
+	lastLegacyDelegatedAt  uint64
+	lastDelegIndexAt       uint64
+	lastLegacyDelegIndexAt uint64
+	lastAssetIDAt          uint64
+	lastAssetNameAt        uint64
+	lastAssetListAt        uint64
+	lastAssetPageAt        uint64
+	lastMarketOrderAt      uint64
+	lastMarketOrdersAt     uint64
+	lastMarketPriceAt      uint64
+	lastMarketPairAt       uint64
+	lastMarketPairListAt   uint64
+	lastExchangesAt        uint64
+	lastExchangeIDAt       uint64
+	lastCanDelegateAt      uint64
+	lastAvailableAt        uint64
+	lastCanWithdrawAt      uint64
+	lastBurnAt             uint64
+	lastBandwidthAt        uint64
+	lastEnergyAt           uint64
+	lastWitnessesAt        uint64
+	lastBrokerageAt        uint64
+	lastConstantAt         uint64
+	lastEstimateAt         uint64
+	txBlockNum             uint64
+	txBlockOK              bool
+	txBlockCalls           int
+	txCalls                int
+	txInfoCalls            int
+	liveAccountCalls       int
+	liveAccountIDCalls     int
+	liveRewardCalls        int
+	liveDelegCalls         int
+	liveLegacyDelegCalls   int
+	liveIndexCalls         int
+	liveLegacyIndexCalls   int
+	liveAssetID            int
+	liveAssetName          int
+	liveAssetList          int
+	liveAssetPage          int
+	liveMarketOrder        int
+	liveMarketOrders       int
+	liveMarketPrice        int
+	liveMarketPair         int
+	liveMarketPairList     int
+	liveExchanges          int
+	liveExchangeID         int
+	liveCanDelegate        int
+	liveAvailable          int
+	liveCanWithdraw        int
+	liveBurn               int
+	liveBandwidth          int
+	liveEnergy             int
+	liveWitnesses          int
+	liveBrokerage          int
+	liveConstant           int
+	liveEstimate           int
+	accountAt              *types.Account
+	accountIDAt            *types.Account
+	rewardAt               *tronapi.RewardInfo
+	delegatedAt            []*tronapi.DelegatedResourceInfo
+	legacyDelegatedAt      []*tronapi.DelegatedResourceInfo
+	delegIndexAt           *tronapi.DelegationIndexInfo
+	legacyDelegIndexAt     *corepb.DelegatedResourceAccountIndex
+	assetIDAt              *contractpb.AssetIssueContract
+	assetNameAt            *contractpb.AssetIssueContract
+	assetListAt            []*contractpb.AssetIssueContract
+	assetPageAt            []*contractpb.AssetIssueContract
+	marketOrderAt          *corepb.MarketOrder
+	marketOrdersAt         []*corepb.MarketOrder
+	marketPriceAt          *corepb.MarketPriceList
+	marketPairAt           []*corepb.MarketOrder
+	marketPairListAt       *corepb.MarketOrderPairList
+	exchangesAt            []*corepb.Exchange
+	exchangeIDAt           *corepb.Exchange
+	canDelegateAt          *tronapi.CanDelegateInfo
+	availableAt            *tronapi.AvailableUnfreezeCountInfo
+	canWithdrawAt          *tronapi.CanWithdrawUnfreezeInfo
+	burnAt                 int64
+	bandwidthAt            string
+	energyAt               string
+	witnessesAt            []*tronapi.WitnessInfo
+	brokerageAt            int64
+	constantAt             *tronapi.TriggerResult
+	estimateAt             int64
+	txAt                   *corepb.Transaction
+	txInfoAt               *corepb.TransactionInfo
+	txErr                  error
+	txInfoErr              error
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -200,6 +206,19 @@ func (b *solidTestBackend) GetRewardAt(addr common.Address, blockNum uint64) (*t
 	return b.testBackend.GetRewardAt(addr, blockNum)
 }
 
+func (b *solidTestBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	b.liveLegacyDelegCalls++
+	return b.testBackend.GetDelegatedResource(from, to)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	b.lastLegacyDelegatedAt = blockNum
+	if b.legacyDelegatedAt != nil {
+		return b.legacyDelegatedAt, nil
+	}
+	return b.testBackend.GetDelegatedResourceAt(from, to, blockNum)
+}
+
 func (b *solidTestBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	b.liveDelegCalls++
 	return b.testBackend.GetDelegatedResourceV2(from, to)
@@ -211,6 +230,19 @@ func (b *solidTestBackend) GetDelegatedResourceV2At(from, to common.Address, blo
 		return b.delegatedAt, nil
 	}
 	return b.testBackend.GetDelegatedResourceV2At(from, to, blockNum)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	b.liveLegacyIndexCalls++
+	return b.testBackend.GetDelegatedResourceAccountIndex(addr)
+}
+
+func (b *solidTestBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	b.lastLegacyDelegIndexAt = blockNum
+	if b.legacyDelegIndexAt != nil {
+		return b.legacyDelegIndexAt, nil
+	}
+	return b.testBackend.GetDelegatedResourceAccountIndexAt(addr, blockNum)
 }
 
 func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
@@ -1123,6 +1155,36 @@ func TestSolidity_GetDelegatedResourceV2UsesSolidBoundArchivePath(t *testing.T) 
 	}
 }
 
+func TestSolidity_GetDelegatedResourceUsesSolidBoundArchivePath(t *testing.T) {
+	from := solidityTestAddress(0x41)
+	to := solidityTestAddress(0x42)
+	backend := &solidTestBackend{
+		solidNum: 65,
+		legacyDelegatedAt: []*tronapi.DelegatedResourceInfo{{
+			FrozenBalanceForBandwidth: 333,
+			ExpireTimeForBandwidth:    444,
+		}},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetDelegatedResource(context.Background(), &apipb.DelegatedResourceMessage{
+		FromAddress: from,
+		ToAddress:   to,
+	})
+	if err != nil {
+		t.Fatalf("GetDelegatedResource: %v", err)
+	}
+	if len(resp.GetDelegatedResource()) != 1 || resp.GetDelegatedResource()[0].GetFrozenBalanceForBandwidth() != 333 {
+		t.Fatalf("GetDelegatedResource = %+v, want solid-bound legacy sentinel", resp.GetDelegatedResource())
+	}
+	if backend.lastLegacyDelegatedAt != 65 {
+		t.Fatalf("GetDelegatedResourceAt block = %d, want solid block 65", backend.lastLegacyDelegatedAt)
+	}
+	if backend.liveLegacyDelegCalls != 0 {
+		t.Fatalf("live GetDelegatedResource called %d times, want 0", backend.liveLegacyDelegCalls)
+	}
+}
+
 func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t *testing.T) {
 	addr := solidityTestAddress(0x66)
 	to := solidityTestAddress(0x77)
@@ -1146,6 +1208,36 @@ func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t 
 	}
 	if backend.liveIndexCalls != 0 {
 		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", backend.liveIndexCalls)
+	}
+}
+
+func TestSolidity_GetDelegatedResourceAccountIndexUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x61)
+	from := solidityTestAddress(0x62)
+	to := solidityTestAddress(0x63)
+	backend := &solidTestBackend{
+		solidNum: 76,
+		legacyDelegIndexAt: &corepb.DelegatedResourceAccountIndex{
+			Account:      addr,
+			FromAccounts: [][]byte{from},
+			ToAccounts:   [][]byte{to},
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetDelegatedResourceAccountIndex(context.Background(), &apipb.BytesMessage{Value: addr})
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndex: %v", err)
+	}
+	if len(resp.GetFromAccounts()) != 1 || !bytes.Equal(resp.GetFromAccounts()[0], from) ||
+		len(resp.GetToAccounts()) != 1 || !bytes.Equal(resp.GetToAccounts()[0], to) {
+		t.Fatalf("GetDelegatedResourceAccountIndex = from %x to %x, want %x/%x", resp.GetFromAccounts(), resp.GetToAccounts(), from, to)
+	}
+	if backend.lastLegacyDelegIndexAt != 76 {
+		t.Fatalf("GetDelegatedResourceAccountIndexAt block = %d, want solid block 76", backend.lastLegacyDelegIndexAt)
+	}
+	if backend.liveLegacyIndexCalls != 0 {
+		t.Fatalf("live GetDelegatedResourceAccountIndex called %d times, want 0", backend.liveLegacyIndexCalls)
 	}
 }
 

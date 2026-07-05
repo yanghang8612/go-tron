@@ -369,6 +369,21 @@ func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMes
 
 // ── Delegation queries ─────────────────────────────────────────────────────────
 
+func (s *SolidityServer) GetDelegatedResource(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	from := common.BytesToAddress(in.FromAddress)
+	to := common.BytesToAddress(in.ToAddress)
+	infos, err := s.backend.GetDelegatedResourceAt(from, to, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.DelegatedResourceList{
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
+	}, nil
+}
+
 func (s *SolidityServer) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
@@ -379,25 +394,24 @@ func (s *SolidityServer) GetDelegatedResourceV2(_ context.Context, in *apipb.Del
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if len(infos) == 0 {
-		return &apipb.DelegatedResourceList{}, nil
-	}
-	resources := make([]*corepb.DelegatedResource, 0, len(infos))
-	for range infos {
-		resources = append(resources, &corepb.DelegatedResource{
-			From: in.FromAddress,
-			To:   in.ToAddress,
-		})
-	}
-	for i, info := range infos {
-		resources[i].FrozenBalanceForBandwidth = info.FrozenBalanceForBandwidth
-		resources[i].FrozenBalanceForEnergy = info.FrozenBalanceForEnergy
-		resources[i].ExpireTimeForBandwidth = info.ExpireTimeForBandwidth
-		resources[i].ExpireTimeForEnergy = info.ExpireTimeForEnergy
-	}
 	return &apipb.DelegatedResourceList{
-		DelegatedResource: resources,
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
 	}, nil
+}
+
+func (s *SolidityServer) GetDelegatedResourceAccountIndex(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "address required")
+	}
+	addr := common.BytesToAddress(in.Value)
+	idx, err := s.backend.GetDelegatedResourceAccountIndexAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: in.Value}, nil
+	}
+	return idx, nil
 }
 
 func (s *SolidityServer) GetDelegatedResourceAccountIndexV2(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
