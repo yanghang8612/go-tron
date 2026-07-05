@@ -426,6 +426,10 @@ func snapshotFetchCmd(ctx *cli.Context) error {
 	if err := statesnapshots.ValidateRemoteSnapshotBaseURL(baseURL); err != nil {
 		return err
 	}
+	concurrency := ctx.Int("snapshot.fetch.concurrency")
+	if err := statesnapshots.ValidateRemoteSnapshotFetchConcurrency(concurrency); err != nil {
+		return err
+	}
 	if ctx.Bool("snapshot.reset") {
 		if err := resetSnapshotFetchDir(dir); err != nil {
 			return err
@@ -436,7 +440,7 @@ func snapshotFetchCmd(ctx *cli.Context) error {
 		Dir:                    dir,
 		Expected:               identity,
 		TrustedKeys:            trustedKeys,
-		MaxConcurrentDownloads: ctx.Int("snapshot.fetch.concurrency"),
+		MaxConcurrentDownloads: concurrency,
 	})
 	if err != nil {
 		return err

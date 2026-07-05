@@ -353,6 +353,48 @@ func TestSnapshotFetchCmdPreflightsRemoteURLBeforeReset(t *testing.T) {
 	}
 }
 
+func TestSnapshotFetchCmdPreflightsConcurrencyBeforeReset(t *testing.T) {
+	root := t.TempDir()
+	destDir := filepath.Join(root, "downloaded")
+	dataDir := filepath.Join(root, "datadir")
+	stalePath := filepath.Join(destDir, "history", "stale.seg")
+	if err := os.MkdirAll(filepath.Dir(stalePath), 0o755); err != nil {
+		t.Fatalf("mkdir stale dir: %v", err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "unexpected fetch", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", destDir,
+		"--snapshot.url", server.URL,
+		"--snapshot.reset",
+		"--snapshot.fetch.concurrency", "-1",
+		"--snapshot.trusted-key", hex.EncodeToString(pub),
+	})
+
+	err = snapshotFetchCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "fetch concurrency -1 must be non-negative") {
+		t.Fatalf("snapshotFetchCmd err = %v, want concurrency preflight error", err)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("stale snapshot file was removed before concurrency preflight: %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("remote snapshot server saw %d requests before concurrency preflight failure, want 0", got)
+	}
+}
+
 func TestSnapshotVerifyCmdChecksSignedLocalSnapshot(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")

@@ -278,6 +278,33 @@ func TestNormaliseSnapshotFetchConcurrency(t *testing.T) {
 	}
 }
 
+func TestValidateRemoteSnapshotFetchConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		wantErr     string
+	}{
+		{name: "default", concurrency: 0},
+		{name: "explicit", concurrency: 2},
+		{name: "negative", concurrency: -1, wantErr: "must be non-negative"},
+		{name: "too high", concurrency: snapshotFetchMaxConcurrencyLimit + 1, wantErr: "exceeds maximum"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRemoteSnapshotFetchConcurrency(tt.concurrency)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRemoteSnapshotFetchConcurrency(%d): %v", tt.concurrency, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateRemoteSnapshotFetchConcurrency(%d) err = %v, want %q", tt.concurrency, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSnapshotRemoteURLRejectsUnsafePath(t *testing.T) {
 	for _, rel := range []string{"../manifest.json", "/manifest.json", "a/../manifest.json"} {
 		if _, err := snapshotRemoteURL("https://example.invalid/snapshots", rel); err == nil {

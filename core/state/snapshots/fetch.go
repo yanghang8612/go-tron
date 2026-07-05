@@ -49,6 +49,13 @@ func ValidateRemoteSnapshotBaseURL(baseURL string) error {
 	return err
 }
 
+// ValidateRemoteSnapshotFetchConcurrency applies the same bounded worker-count
+// rules used by FetchRemoteSnapshot before callers perform local side effects.
+func ValidateRemoteSnapshotFetchConcurrency(concurrency int) error {
+	_, err := normaliseSnapshotFetchConcurrency(concurrency)
+	return err
+}
+
 // FetchRemoteSnapshot downloads a signed snapshot catalog, its manifest, and
 // every active segment referenced by the verified manifest. The manifest's
 // segment paths are not trusted until the catalog signature and manifest

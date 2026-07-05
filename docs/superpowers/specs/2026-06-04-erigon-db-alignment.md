@@ -160,13 +160,13 @@ Status:
   registered-segment/checksum verification on the local snapshot directory.
   `--snapshot.reset` deletes the target local snapshot directory first so an
   operator can discard stale local views and resync from the latest remote
-  catalog, but only after local option parsing and the remote base URL have
-  passed the same HTTP(S)/host/query validation used by the downloader. The
-  remote URL can be supplied by `--snapshot.url` or the
-  `GTRON_SNAPSHOT_URL` environment variable. Trusted catalog keys and optional
-  fork config hashes have matching `GTRON_SNAPSHOT_*` environment defaults,
-  giving operators one default bootstrap surface without hard-coding unofficial
-  production URL or key material.
+  catalog, but only after local option parsing, bounded fetch worker-count
+  validation, and the remote base URL have passed the same HTTP(S)/host/query
+  validation used by the downloader. The remote URL can be supplied by
+  `--snapshot.url` or the `GTRON_SNAPSHOT_URL` environment variable. Trusted
+  catalog keys and optional fork config hashes have matching `GTRON_SNAPSHOT_*`
+  environment defaults, giving operators one default bootstrap surface without
+  hard-coding unofficial production URL or key material.
 - `gtron snapshot bootstrap` is the integrated operator entry point for remote
   snapshot bootstrap: it fetches the signed remote catalog/manifest/segments
   and then runs the same signed-catalog restore path into the local datadir.
