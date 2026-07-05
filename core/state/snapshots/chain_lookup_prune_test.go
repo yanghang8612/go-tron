@@ -505,7 +505,7 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 }
 
 func TestChainLookupPruneLifecycleNoManifestNoop(t *testing.T) {
-	lifecycle := NewChainLookupPruneLifecycle(rawdb.NewMemoryDatabase(), ChainLookupPruneLifecycleConfig{Dir: t.TempDir()})
+	lifecycle := NewChainLookupPruneLifecycle(rawdb.NewMemoryChainDB(), ChainLookupPruneLifecycleConfig{Dir: t.TempDir()})
 	result, err := lifecycle.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
@@ -566,7 +566,7 @@ func TestChainLookupPruneLifecycleOnePassPrunesCoveredLookups(t *testing.T) {
 	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageChainFreezer, 1, block1.Hash()); err != nil {
 		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
 	}
-	lifecycle := NewChainLookupPruneLifecycle(hot, ChainLookupPruneLifecycleConfig{Dir: snapshotDir})
+	lifecycle := NewChainLookupPruneLifecycle(rawdb.NewChainDB(hot, rawdb.NewFreezerReader(src)), ChainLookupPruneLifecycleConfig{Dir: snapshotDir})
 	result, err := lifecycle.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)

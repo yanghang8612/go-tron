@@ -1017,7 +1017,9 @@ Status:
   newly published freezer blocks.
 - Nodes without the domain-state prune lifecycle now register a standalone
   chain-lookup prune lifecycle under `full`, `snap`, `blocks`, and `minimal`
-  modes. `archive` keeps the hot lookup rows.
+  modes. That standalone lifecycle is wired with a freezer-aware `ChainDB`, so
+  its `ChainFreezer` stage gate checks readable ancient/fallback coverage
+  before hot lookup rows are deleted. `archive` keeps the hot lookup rows.
 - TVM `BLOCKHASH` and pre-optimized `CHAINID` paths now remain compatible after
   hot block-body rows are frozen/pruned: `BLOCKHASH` tries the execution buffer
   first and then a cold `BlockHashByNumber` hook wired to `ChainDB`; `CHAINID`
@@ -1532,8 +1534,9 @@ Status:
   with hot-prune/lookup-prune/tail-prune progress or non-`minimal` datadirs
   with freezer-tail prune progress.
 - Chain lookup pruning is already wired for `full`, `blocks`, `minimal`, and
-  `snap` once verified chain-freezer/index snapshot coverage exists; `archive`
-  keeps hot lookup rows.
+  `snap` once verified chain-freezer/index snapshot coverage exists; both the
+  domain lifecycle hook and the standalone lifecycle enforce readable
+  ancient/fallback coverage before deletion. `archive` keeps hot lookup rows.
 - `scripts/dev/storage_benchmark.sh` is now the repeatable measurement harness
   for producer-time, follower sync catch-up, and datadir size split by hot
   Pebble, ancient freezer, and state snapshots across prune modes. Its default

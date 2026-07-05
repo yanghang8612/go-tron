@@ -15,10 +15,17 @@ type ChainLookupPruneLifecycleConfig struct {
 	Interval time.Duration
 }
 
+// ChainLookupPruneLifecycleDB is the database boundary required by the
+// standalone chain lookup pruner: hot KV writes plus readable ancient coverage.
+type ChainLookupPruneLifecycleDB interface {
+	ethdb.KeyValueStore
+	AncientCount(kind string) (uint64, error)
+}
+
 // ChainLookupPruneLifecycle periodically prunes hot hash-keyed block/tx lookup
-// rows after verified local chain-freezer + chain-index coverage is visible.
+// rows after verified readable chain-freezer + chain-index coverage is visible.
 type ChainLookupPruneLifecycle struct {
-	db  ethdb.KeyValueStore
+	db  ChainLookupPruneLifecycleDB
 	cfg ChainLookupPruneLifecycleConfig
 
 	quit chan struct{}
@@ -26,7 +33,7 @@ type ChainLookupPruneLifecycle struct {
 	once sync.Once
 }
 
-func NewChainLookupPruneLifecycle(db ethdb.KeyValueStore, cfg ChainLookupPruneLifecycleConfig) *ChainLookupPruneLifecycle {
+func NewChainLookupPruneLifecycle(db ChainLookupPruneLifecycleDB, cfg ChainLookupPruneLifecycleConfig) *ChainLookupPruneLifecycle {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultChainLookupPruneInterval
 	}

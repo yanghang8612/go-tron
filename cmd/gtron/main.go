@@ -760,7 +760,7 @@ func gtron(ctx *cli.Context) error {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
 	}
 	if !chainLookupPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
-		stack.RegisterLifecycle(statesnapshots.NewChainLookupPruneLifecycle(db, statesnapshots.ChainLookupPruneLifecycleConfig{
+		stack.RegisterLifecycle(statesnapshots.NewChainLookupPruneLifecycle(rawdb.NewChainDB(db, ancientReader), statesnapshots.ChainLookupPruneLifecycleConfig{
 			Dir: stateSnapshotDir,
 		}))
 		log.Info("Chain lookup prune lifecycle enabled",
