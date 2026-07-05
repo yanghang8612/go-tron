@@ -1914,7 +1914,10 @@ Status:
   event-log builders now advance a hash-bound `SnapshotEventLogBuild` stage
   only when indexed cold log coverage exists as a continuous prefix from block
   1, so operators can audit it against the verified `Finish` boundary without
-  trusting a height-only cold coverage row across forks. Snapshot
+  trusting a height-only cold coverage row across forks. The production builder
+  writes that stage through the same freezer-aware `ChainDB` used for event-log
+  segment reads, so stage progress can still be hash-bound after the canonical
+  block body has moved out of hot Pebble. Snapshot
   restore/bootstrap also derives that stage from verified manifest `event-log`
   plus `event-log-index` coverage, combining adjacent indexed sidecars into one
   continuous block-1 prefix, so restored nodes can continue minimal-mode tail

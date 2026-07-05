@@ -979,6 +979,53 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	}
 }
 
+func TestColdBuilderWritesEventLogStageFromAncientBlock(t *testing.T) {
+	dir := t.TempDir()
+	hot := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x43)
+	writeColdBuilderChange(t, hot, owner, 1, 1, "next")
+	addr := eventLogTestAddress(0x67)
+	topic := common.Hash{0xbb}
+	block, infos := coldBuilderEventLogBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x02}},
+	})
+	if err := rawdb.WriteBlock(hot, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(hot, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	blockRaw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal block: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(hot, 1, 1); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(hot, 1, infos); err != nil {
+		t.Fatalf("restore hot tx infos for event-log build: %v", err)
+	}
+	db := rawdb.NewChainDB(hot, sectionBloomPruneAncientBlock(1, blockRaw))
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:            dir,
+		Enabled:        true,
+		HistoryWindow:  1,
+		BuildEventLogs: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || !result.EventLogBuilt || result.ToBlock != 1 {
+		t.Fatalf("result = %+v, want event-log build through ancient block 1", result)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild)
+	if err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
+		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want ancient block hash %x", row, ok, err, block.Hash())
+	}
+}
+
 func TestColdBuilderBuildsBalanceTracesWithHistorySegment(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

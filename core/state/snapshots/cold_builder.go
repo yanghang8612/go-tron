@@ -473,7 +473,7 @@ func (r *Runner) onePass() (PassResult, error) {
 			return PassResult{}, err
 		}
 		if eventLogBuilt {
-			if err := writeEventLogBuildStage(db, manifest); err != nil {
+			if err := writeEventLogBuildStage(chainDB, manifest); err != nil {
 				return PassResult{}, err
 			}
 		}
