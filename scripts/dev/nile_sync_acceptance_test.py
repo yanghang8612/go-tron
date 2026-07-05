@@ -6864,6 +6864,81 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_malformed_archive_tx_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 17,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 99,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBlockTransactionCountByNumber",
+                            "eth_getUncleCountByBlockNumber",
+                            "eth_getUncleByBlockNumberAndIndex",
+                            "eth_getBlockReceipts",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                            "eth_getBlockByHash",
+                            "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockHash",
+                            "eth_getUncleByBlockHashAndIndex",
+                            "eth_getTransactionByHash",
+                            "eth_getTransactionReceipt",
+                            "eth_getTransactionByBlockNumberAndIndex",
+                            "eth_getTransactionByBlockHashAndIndex",
+                        ],
+                        "archiveApiTxProbe": True,
+                        "archiveApiTxHash": "0x" + "ab" * 32,
+                        "archiveApiTxMethods": [
+                            "eth_getTransactionByHash",
+                            "eth_getTransactionReceipt",
+                            "eth_getTransactionByBlockNumberAndIndex",
+                            "eth_getTransactionByBlockHashAndIndex",
+                            "",
+                            123,
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiTxMethods contains non-string or empty entries: 4:'',5:123",
+                proc.stderr,
+            )
+
     def test_rejects_invalid_archive_api_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -7093,6 +7168,70 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "archiveApiMethods contains duplicate methods: eth_getBalance",
+                proc.stderr,
+            )
+
+    def test_rejects_malformed_archive_api_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            methods = [
+                "eth_getBlockByNumber",
+                "eth_getBlockByHash",
+                "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockTransactionCountByHash",
+                "eth_getUncleCountByBlockNumber",
+                "eth_getUncleCountByBlockHash",
+                "eth_getUncleByBlockNumberAndIndex",
+                "eth_getUncleByBlockHashAndIndex",
+                "eth_getBlockReceipts",
+                "eth_getBalance",
+                "eth_getCode",
+                "eth_getStorageAt",
+                "eth_getLogs",
+                "",
+                123,
+            ]
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "network": "nile",
+                        "mode": "minimal",
+                        "sampleStatus": "ok",
+                        "soakHealthStatus": "ok",
+                        "fullStagedSyncStatus": "caught-up",
+                        "fullStagedSyncReady": True,
+                        "fullStagedSyncCompleteAtHead": True,
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": len(methods),
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 99,
+                        "archiveApiMethods": methods,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods contains non-string or empty entries: 13:'',14:123",
                 proc.stderr,
             )
 

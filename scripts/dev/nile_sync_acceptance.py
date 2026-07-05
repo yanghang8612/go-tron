@@ -2797,6 +2797,17 @@ def duplicate_string_list_entries(row, field):
     return duplicate_string_entries(raw)
 
 
+def malformed_string_list_entries(row, field):
+    raw = row.get(field)
+    if not isinstance(raw, list):
+        return []
+    return [
+        f"{index}:{value!r}"
+        for index, value in enumerate(raw)
+        if not isinstance(value, str) or not value
+    ]
+
+
 def archive_api_methods(row):
     return string_set_field(row, "archiveApiMethods")
 
@@ -2979,6 +2990,12 @@ def check_archive_api_evidence(
     elif not methods:
         issues.append("archiveApiMethods must be a non-empty list")
     else:
+        malformed = malformed_string_list_entries(row, "archiveApiMethods")
+        if malformed:
+            issues.append(
+                "archiveApiMethods contains non-string or empty entries: "
+                + ",".join(malformed)
+            )
         duplicates = duplicate_string_list_entries(row, "archiveApiMethods")
         if duplicates:
             issues.append(
@@ -3036,6 +3053,12 @@ def check_archive_tx_evidence(row, require_trace_transaction=False):
     elif not tx_methods:
         issues.append("archiveApiTxMethods must be a non-empty list")
     else:
+        malformed = malformed_string_list_entries(row, "archiveApiTxMethods")
+        if malformed:
+            issues.append(
+                "archiveApiTxMethods contains non-string or empty entries: "
+                + ",".join(malformed)
+            )
         duplicates = duplicate_string_list_entries(row, "archiveApiTxMethods")
         if duplicates:
             issues.append(

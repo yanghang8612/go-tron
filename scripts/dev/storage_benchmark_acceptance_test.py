@@ -3165,6 +3165,80 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
+    def test_rejects_malformed_archive_tx_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 17,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockHashAndIndex",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0x" + "ab" * 32,
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                        "",
+                        123,
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiTxMethods contains non-string or empty entries: 4:'',5:123",
+                proc.stderr,
+            )
+
     def test_rejects_archive_tx_evidence_short_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -3495,6 +3569,66 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "archiveApiMethods contains duplicate methods: eth_getBalance",
+                proc.stderr,
+            )
+
+    def test_rejects_malformed_archive_api_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            methods = [
+                "eth_getBlockByNumber",
+                "eth_getBlockByHash",
+                "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockTransactionCountByHash",
+                "eth_getUncleCountByBlockNumber",
+                "eth_getUncleCountByBlockHash",
+                "eth_getUncleByBlockNumberAndIndex",
+                "eth_getUncleByBlockHashAndIndex",
+                "eth_getBlockReceipts",
+                "eth_getBalance",
+                "eth_getCode",
+                "eth_getStorageAt",
+                "eth_getLogs",
+                "",
+                123,
+            ]
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": len(methods),
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": methods,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods contains non-string or empty entries: 13:'',14:123",
                 proc.stderr,
             )
 
