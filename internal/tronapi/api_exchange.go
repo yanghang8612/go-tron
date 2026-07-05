@@ -17,6 +17,10 @@ func (api *API) getPaginatedExchangeList(w http.ResponseWriter, r *http.Request)
 	api.handleGetPaginatedExchangeList(w, r, nil)
 }
 
+func (api *API) getExchangeByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetExchangeByID(w, r, nil)
+}
+
 func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var (
 		exchanges []*corepb.Exchange
@@ -41,6 +45,47 @@ func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boun
 	data, _ := json.Marshal(map[string]any{"exchanges": list})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		idStr = r.URL.Query().Get("value")
+	}
+	if idStr == "" {
+		var body struct {
+			ID    int64  `json:"id"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			if body.ID != 0 {
+				idStr = strconv.FormatInt(body.ID, 10)
+			} else {
+				idStr = body.Value
+			}
+		}
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid exchange id", http.StatusBadRequest)
+		return
+	}
+	var exchange *corepb.Exchange
+	if boundFn == nil {
+		exchange, err = api.backend.GetExchangeByID(id)
+	} else {
+		exchange, err = api.backend.GetExchangeByIDAt(id, boundFn())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if exchange == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, exchange)
 }
 
 func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {

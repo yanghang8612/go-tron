@@ -2,8 +2,10 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -829,6 +831,21 @@ func (s *Server) ListExchanges(_ context.Context, _ *apipb.EmptyMessage) (*apipb
 	return &apipb.ExchangeList{Exchanges: exchanges}, nil
 }
 
+func (s *Server) GetExchangeById(_ context.Context, in *apipb.BytesMessage) (*corepb.Exchange, error) {
+	id, err := parseExchangeIDMessage(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	exchange, err := s.backend.GetExchangeByID(id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if exchange == nil {
+		return nil, status.Error(codes.NotFound, "exchange not found")
+	}
+	return exchange, nil
+}
+
 // GetTransactionInfoById returns the receipt and log for the given transaction hash.
 func (s *Server) GetTransactionInfoById(_ context.Context, in *apipb.BytesMessage) (*corepb.TransactionInfo, error) {
 	if in == nil || len(in.Value) == 0 {
@@ -866,6 +883,38 @@ func accountLookupNotFound(err error) bool {
 
 func contractLookupNotFound(err error) bool {
 	return readLookupMiss(err)
+}
+
+func parseExchangeIDMessage(in *apipb.BytesMessage) (int64, error) {
+	if in == nil || len(in.Value) == 0 {
+		return 0, fmt.Errorf("exchange id required")
+	}
+	if exchangeIDValueLooksText(in.Value) {
+		id, err := strconv.ParseInt(strings.TrimSpace(string(in.Value)), 10, 64)
+		if err != nil || id <= 0 {
+			return 0, fmt.Errorf("exchange id must be numeric")
+		}
+		return id, nil
+	}
+	if len(in.Value) > 8 {
+		return 0, fmt.Errorf("exchange id must be numeric")
+	}
+	var buf [8]byte
+	copy(buf[8-len(in.Value):], in.Value)
+	id := int64(binary.BigEndian.Uint64(buf[:]))
+	if id <= 0 {
+		return 0, fmt.Errorf("exchange id must be positive")
+	}
+	return id, nil
+}
+
+func exchangeIDValueLooksText(value []byte) bool {
+	for _, b := range value {
+		if b != '\t' && b != '\n' && b != '\r' && (b < ' ' || b > '~') {
+			return false
+		}
+	}
+	return true
 }
 
 func readLookupMiss(err error) bool {

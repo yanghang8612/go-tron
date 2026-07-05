@@ -1990,6 +1990,20 @@ func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
 	return b.listExchangesAtHead()
 }
 
+func (b *TronBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	if id <= 0 {
+		return nil, nil
+	}
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
+	}
+	if b.chain.DynProps().AllowSameTokenName() {
+		return sysKV.ReadExchangeV2(id), nil
+	}
+	return sysKV.ReadExchange(id), nil
+}
+
 func (b *TronBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	session, err := b.archiveStateAt(blockNum)
 	if err != nil {
@@ -2013,6 +2027,34 @@ func (b *TronBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, erro
 		return nil, fmt.Errorf("read exchange list at block %d: %w", blockNum, err)
 	}
 	return exchanges, nil
+}
+
+func (b *TronBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	if id <= 0 {
+		return nil, nil
+	}
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, exchangeDynamicPropertyKeys)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct exchange dynamic properties at block %d: %w", blockNum, err)
+	}
+	if dynProps.AllowSameTokenName() {
+		exchange, err := session.reader.ExchangeV2At(id, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read exchange v2 %d at block %d: %w", id, blockNum, err)
+		}
+		return exchange, nil
+	}
+	exchange, err := session.reader.ExchangeAt(id, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read exchange %d at block %d: %w", id, blockNum, err)
+	}
+	return exchange, nil
 }
 
 func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {

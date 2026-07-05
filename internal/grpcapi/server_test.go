@@ -43,6 +43,8 @@ type testBackend struct {
 	accountIDAtErr          error
 	assetErr                error
 	marketErr               error
+	exchange                *corepb.Exchange
+	exchangeErr             error
 	tx                      *corepb.Transaction
 	txErr                   error
 	txInfoErr               error
@@ -301,6 +303,18 @@ func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blo
 func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
 func (b *testBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	return nil, nil
+}
+func (b *testBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return b.exchange, nil
+}
+func (b *testBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return b.exchange, nil
 }
 func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
 func (b *testBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
@@ -1152,6 +1166,31 @@ func TestListExchanges_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetExchangeById_Found(t *testing.T) {
+	client := newTestClient(t, &testBackend{
+		exchange: &corepb.Exchange{
+			ExchangeId:         7,
+			FirstTokenBalance:  70,
+			SecondTokenBalance: 700,
+		},
+	})
+	resp, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+	if err != nil {
+		t.Fatalf("GetExchangeById: %v", err)
+	}
+	if resp.GetExchangeId() != 7 || resp.GetFirstTokenBalance() != 70 {
+		t.Fatalf("GetExchangeById = %+v, want exchange 7", resp)
+	}
+}
+
+func TestGetExchangeById_NotFound(t *testing.T) {
+	client := newTestClient(t, &testBackend{})
+	_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
 	}
 }
 

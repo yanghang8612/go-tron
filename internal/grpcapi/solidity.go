@@ -474,6 +474,21 @@ func (s *SolidityServer) ListExchanges(_ context.Context, _ *apipb.EmptyMessage)
 	return &apipb.ExchangeList{Exchanges: exchanges}, nil
 }
 
+func (s *SolidityServer) GetExchangeById(_ context.Context, in *apipb.BytesMessage) (*corepb.Exchange, error) {
+	id, err := parseExchangeIDMessage(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	exchange, err := s.backend.GetExchangeByIDAt(id, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if exchange == nil {
+		return nil, status.Error(codes.NotFound, "exchange not found")
+	}
+	return exchange, nil
+}
+
 // ── Transaction queries ────────────────────────────────────────────────────────
 
 func (s *SolidityServer) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (*corepb.Transaction, error) {

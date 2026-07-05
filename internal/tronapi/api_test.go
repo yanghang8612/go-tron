@@ -313,6 +313,17 @@ func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return s.exc
 func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	return s.exchanges, nil
 }
+func (s *stubBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	for _, exchange := range s.exchanges {
+		if exchange.GetExchangeId() == id {
+			return exchange, nil
+		}
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return s.GetExchangeByID(id)
+}
 func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
 func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	return 0, nil
@@ -1550,6 +1561,44 @@ func TestGetPaginatedExchangeList(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestGetExchangeByID(t *testing.T) {
+	stub := &stubBackend{
+		exchanges: []*corepb.Exchange{
+			{ExchangeId: 7, FirstTokenBalance: 70, SecondTokenBalance: 700},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getexchangebyid", `{"id":7}`)
+	if result["exchange_id"].(float64) != 7 || result["first_token_balance"].(float64) != 70 {
+		t.Fatalf("exchange = %v, want exchange 7", result)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getexchangebyid?value=7")
+	if err != nil {
+		t.Fatalf("GET getexchangebyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getexchangebyid status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		ExchangeID int64 `json:"exchange_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getexchangebyid: %v", err)
+	}
+	if getResult.ExchangeID != 7 {
+		t.Fatalf("GET exchange id = %d, want 7", getResult.ExchangeID)
+	}
+
+	result = postJSON(t, srv.URL+"/wallet/getexchangebyid", `{"id":99}`)
+	if len(result) != 0 {
+		t.Fatalf("missing exchange result = %v, want empty object", result)
 	}
 }
 

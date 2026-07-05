@@ -51,6 +51,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getmarketpricebypair", api.getSolidMarketPriceByPair)
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getpaginatedexchangelist", api.getSolidPaginatedExchangeList)
+	mux.HandleFunc("/walletsolidity/getexchangebyid", api.getSolidExchangeByID)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletsolidity/candelegateresource", api.getSolidCanDelegateResource)
@@ -96,6 +97,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getmarketpricebypair", api.getPbftMarketPriceByPair)
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getpaginatedexchangelist", api.getPbftPaginatedExchangeList)
+	mux.HandleFunc("/walletpbft/getexchangebyid", api.getPbftExchangeByID)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletpbft/candelegateresource", api.getPbftCanDelegateResource)
@@ -320,6 +322,14 @@ func (api *API) getSolidPaginatedExchangeList(w http.ResponseWriter, r *http.Req
 
 func (api *API) getPbftPaginatedExchangeList(w http.ResponseWriter, r *http.Request) {
 	api.handleGetPaginatedExchangeList(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidExchangeByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetExchangeByID(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftExchangeByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetExchangeByID(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {

@@ -43,6 +43,7 @@ type solidTestBackend struct {
 	lastMarketOrdersAt uint64
 	lastMarketPriceAt  uint64
 	lastExchangesAt    uint64
+	lastExchangeIDAt   uint64
 	lastCanDelegateAt  uint64
 	lastAvailableAt    uint64
 	lastCanWithdrawAt  uint64
@@ -71,6 +72,7 @@ type solidTestBackend struct {
 	liveMarketOrders   int
 	liveMarketPrice    int
 	liveExchanges      int
+	liveExchangeID     int
 	liveCanDelegate    int
 	liveAvailable      int
 	liveCanWithdraw    int
@@ -94,6 +96,7 @@ type solidTestBackend struct {
 	marketOrdersAt     []*corepb.MarketOrder
 	marketPriceAt      *corepb.MarketPriceList
 	exchangesAt        []*corepb.Exchange
+	exchangeIDAt       *corepb.Exchange
 	canDelegateAt      *tronapi.CanDelegateInfo
 	availableAt        *tronapi.AvailableUnfreezeCountInfo
 	canWithdrawAt      *tronapi.CanWithdrawUnfreezeInfo
@@ -318,6 +321,19 @@ func (b *solidTestBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange,
 		return b.exchangesAt, nil
 	}
 	return b.testBackend.ListExchangesAt(blockNum)
+}
+
+func (b *solidTestBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	b.liveExchangeID++
+	return b.testBackend.GetExchangeByID(id)
+}
+
+func (b *solidTestBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	b.lastExchangeIDAt = blockNum
+	if b.exchangeIDAt != nil {
+		return b.exchangeIDAt, nil
+	}
+	return b.testBackend.GetExchangeByIDAt(id, blockNum)
 }
 
 func (b *solidTestBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
@@ -1334,6 +1350,34 @@ func TestSolidity_ListExchangesUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveExchanges != 0 {
 		t.Fatalf("live ListExchanges called %d times, want 0", backend.liveExchanges)
+	}
+}
+
+func TestSolidity_GetExchangeByIdUsesSolidBoundArchivePath(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum: 94,
+		exchangeIDAt: &corepb.Exchange{
+			ExchangeId:         8,
+			FirstTokenId:       []byte("solid"),
+			FirstTokenBalance:  80,
+			SecondTokenId:      []byte("_"),
+			SecondTokenBalance: 800,
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("8")})
+	if err != nil {
+		t.Fatalf("GetExchangeById: %v", err)
+	}
+	if resp.GetExchangeId() != 8 || resp.GetFirstTokenBalance() != 80 {
+		t.Fatalf("GetExchangeById = %+v, want solid-bound sentinel", resp)
+	}
+	if backend.lastExchangeIDAt != 94 {
+		t.Fatalf("GetExchangeByIDAt block = %d, want solid block 94", backend.lastExchangeIDAt)
+	}
+	if backend.liveExchangeID != 0 {
+		t.Fatalf("live GetExchangeByID called %d times, want 0", backend.liveExchangeID)
 	}
 }
 

@@ -589,6 +589,8 @@ type isolationStubBackend struct {
 	exchangesAtBlock         uint64
 	liveExchangePageCalls    int
 	exchangePageAtBlock      uint64
+	liveExchangeIDCalls      int
+	exchangeIDAtBlock        uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -920,6 +922,23 @@ func (s *isolationStubBackend) ListExchangesPaginatedAt(offset, limit int, block
 		SecondTokenBalance: 1000,
 		CreatorAddress:     common.Address{0x41, 0x62}.Bytes(),
 	}}, nil
+}
+
+func (s *isolationStubBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	s.liveExchangeIDCalls++
+	return &corepb.Exchange{ExchangeId: id, FirstTokenBalance: 3, SecondTokenBalance: 4}, nil
+}
+
+func (s *isolationStubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	s.exchangeIDAtBlock = blockNum
+	return &corepb.Exchange{
+		ExchangeId:         id,
+		FirstTokenId:       []byte("one"),
+		FirstTokenBalance:  110,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1100,
+		CreatorAddress:     common.Address{0x41, 0x63}.Bytes(),
+	}, nil
 }
 
 func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -1996,6 +2015,32 @@ func assertListExchangesUsesBound(t *testing.T, prefix string, stub *isolationSt
 	}
 	if stub.liveExchangePageCalls != 0 {
 		t.Fatalf("live ListExchangesPaginated called %d times, want 0", stub.liveExchangePageCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getexchangebyid", "application/json", strings.NewReader(`{"id":11}`))
+	if err != nil {
+		t.Fatalf("getexchangebyid request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getexchangebyid status: %d", resp.StatusCode)
+	}
+	var one struct {
+		ExchangeID         int64 `json:"exchange_id"`
+		FirstTokenBalance  int64 `json:"first_token_balance"`
+		SecondTokenBalance int64 `json:"second_token_balance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&one); err != nil {
+		t.Fatal(err)
+	}
+	if one.ExchangeID != 11 || one.FirstTokenBalance != 110 {
+		t.Fatalf("exchange by id = %+v, want bound sentinel", one)
+	}
+	if stub.exchangeIDAtBlock != wantBlock {
+		t.Fatalf("GetExchangeByIDAt block = %d, want %d", stub.exchangeIDAtBlock, wantBlock)
+	}
+	if stub.liveExchangeIDCalls != 0 {
+		t.Fatalf("live GetExchangeByID called %d times, want 0", stub.liveExchangeIDCalls)
 	}
 }
 

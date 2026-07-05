@@ -1230,9 +1230,11 @@ Status:
   order/account-order/price-list protobuf payloads as archive data errors. HTTP
   solidity/PBFT `listexchanges` and gRPC
   `WalletSolidity.ListExchanges` now dispatch through `SystemExchange` history
-  at the bound; HTTP `/wallet/getpaginatedexchangelist` is registered, and
-  the `/walletsolidity`/`/walletpbft` paginated exchange-list variants use the
-  same bound archive path. The backend reads `latest_exchange_num` and
+  at the bound; HTTP `/wallet/getpaginatedexchangelist` and
+  `/wallet/getexchangebyid` are registered, and the
+  `/walletsolidity`/`/walletpbft` paginated and by-id exchange variants plus
+  gRPC `Wallet{,Solidity}.GetExchangeById` use the same bound archive path.
+  The backend reads `latest_exchange_num` and
   `allow_same_token_name` from the same historical dynamic-property snapshot so
   pre-fork reads enumerate V1 exchanges and post-fork reads enumerate V2
   exchanges, matching java-tron's final-store selection. The state history

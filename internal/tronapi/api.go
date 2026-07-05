@@ -139,6 +139,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	// M5.1 PR-5: Exchange / Market
 	mux.HandleFunc("/wallet/listexchanges", api.listExchanges)
 	mux.HandleFunc("/wallet/getpaginatedexchangelist", api.getPaginatedExchangeList)
+	mux.HandleFunc("/wallet/getexchangebyid", api.getExchangeByID)
 	mux.HandleFunc("/wallet/exchangecreate", api.exchangeCreate)
 	mux.HandleFunc("/wallet/exchangeinject", api.exchangeInject)
 	mux.HandleFunc("/wallet/exchangetransaction", api.exchangeTransaction)
