@@ -1619,10 +1619,11 @@ Status:
 - `actuator.PrefetchKeysFor(tx)` now extracts deterministic envelope-derived
   hints for account latest rows, contract metadata and trigger-contract code
   rows, metadata-derived contract-origin account rows, system delegation rows,
-  witness/proposal/brokerage rows, pending vote rows, withdraw-balance
-  `SystemReward` begin/end cursor rows, TRC10 `SystemAsset` metadata/index
-  rows, and envelope-addressable `SystemMarket`/`SystemExchange` rows. It covers
-  transfer, TRC10 transfer/issue/participate, TVM
+  witness/proposal/brokerage rows, pending vote rows, `withdrawReward`
+  `SystemReward` begin/end cursor rows for vote/unfreeze/withdraw-balance
+  paths, TRC10 `SystemAsset` metadata/index rows, and envelope-addressable
+  `SystemMarket`/`SystemExchange` rows. It covers transfer, TRC10
+  transfer/issue/participate, TVM
   create/trigger including the static Blackhole account-name index lookup,
   contract settings, vote witness, witness operations,
   governance proposals, Stake 1.0/2.0 including unfreeze pending-vote rows,

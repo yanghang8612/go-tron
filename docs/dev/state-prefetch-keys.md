@@ -21,7 +21,7 @@ hints and never change actuator validation behaviour.
 | `state.AccountKVPrefetchKey(SystemAccount, SystemWitnessSchedule, key)` | witness index row |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemProposal, key)` | proposal record/index rows keyed by proposal id |
 | `state.AccountKVPrefetchKey(SystemAccount, WitnessVoteState, key)` | pending VotesStore record/index rows keyed by voter |
-| `state.AccountKVPrefetchKey(SystemAccount, SystemReward, key)` | voter reward begin/end cycle cursor rows keyed by owner |
+| `state.AccountKVPrefetchKey(SystemAccount, SystemReward, key)` | voter reward begin/end cycle cursor rows keyed by owner for envelope-visible `withdrawReward` paths |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemDelegation, key)` | delegation resource/index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAsset, key)` | TRC10 asset metadata/name/owner-index rows |
 | `state.AccountKVPrefetchKey(SystemAccount, SystemAccountIndex, key)` | account name and account ID uniqueness index rows |
@@ -44,11 +44,11 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 | TVM create | owner account, declared origin account, deterministic new contract account, new contract metadata, Blackhole account-name index |
 | TVM runtime | nested CALL/CALLTOKEN/STATICCALL/DELEGATECALL target code and contract metadata rows; EXTCODE* target code/metadata rows; SLOAD/SSTORE contract-storage rows once the slot is on the VM stack |
 | Contract settings | owner account, target contract account, target contract metadata, target contract origin account from metadata |
-| Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index |
+| Vote witness | voter account, each voted witness account, each voted witness capsule, pending-vote record, pending-vote index, voter reward begin/end cycle cursors |
 | Witness operations | owner account, owner witness capsule, witness index for creation, current brokerage row for brokerage updates |
 | Proposal operations | owner account, owner witness capsule where validation requires it, proposal record by id, proposal index for creation |
-| Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows; unfreeze also warms pending-vote record/index rows |
-| Stake 2.0 delegate/undelegate/unfreeze | owner account, receiver account for delegation, locked/unlocked delegated-resource rows, owner delegation-index row; unfreeze also warms pending-vote record/index rows |
+| Stake 1.0 freeze/unfreeze | owner account, optional receiver account, legacy delegated-resource and account-index rows; unfreeze also warms pending-vote record/index rows and owner reward begin/end cycle cursors |
+| Stake 2.0 delegate/undelegate/unfreeze | owner account, receiver account for delegation, locked/unlocked delegated-resource rows, owner delegation-index row; unfreeze also warms pending-vote record/index rows and owner reward begin/end cycle cursors |
 | Shielded transfer | transparent from/to accounts when present and valid, proof-result cache row, spend anchor/nullifier rows, note-commitment count row for receiving transfers |
 | Asset issue | owner account, owner-index row, legacy name metadata, name index |
 | Market sell/cancel | owner account, TRC10 token metadata/name-index hints derivable from the envelope, owner market-account row, cancel order row, current pair price-list/price-count/current price-level order-book, reverse pair price-list, compatible reverse price-level order-book rows, and maker order rows reachable from those levels; `_` TRX token legs are skipped for TRC10 metadata |
@@ -66,8 +66,9 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 - Reward-cycle witness VI, cycle-vote, cycle-reward, cycle-account-vote, and
   cycle-brokerage rows. Those require maintenance cycle context and/or the
   voter's current account vote set, so they are not directly encoded in
-  transaction envelopes. Withdraw-balance now covers only the owner begin/end
-  cycle cursor rows that are derivable from the envelope.
+  transaction envelopes. The envelope extractor covers only the owner
+  begin/end cycle cursor rows that are derivable for `withdrawReward` call
+  paths.
 - Deep market linked-list rows beyond the current match prefetch caps. The
   executor itself caps successful matching at 20 maker orders; the prefetch
   hint mirrors that order cap and also caps compatible price-level probes to

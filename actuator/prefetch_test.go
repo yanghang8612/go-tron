@@ -213,6 +213,8 @@ func TestPrefetchKeysForWitnessGovernanceRows(t *testing.T) {
 	assertPrefetchHas(t, voteKeys, state.WitnessCapsulePrefetchKey(witness))
 	assertPrefetchHas(t, voteKeys, state.PendingVotesPrefetchKey(owner))
 	assertPrefetchHas(t, voteKeys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, voteKeys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.RewardEndCyclePrefetchKey(owner))
 
 	createTx := newPrefetchTestTx(t, corepb.Transaction_Contract_WitnessCreateContract, &contractpb.WitnessCreateContract{
 		OwnerAddress: owner.Bytes(),
@@ -293,6 +295,8 @@ func TestPrefetchKeysForUnfreezeVoteRows(t *testing.T) {
 	assertPrefetchHas(t, unfreezeKeys, systemDelegationPrefetchKey(rawdb.DelegatedResourceStateKey(owner, receiver)))
 	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesPrefetchKey(owner))
 	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, unfreezeKeys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.RewardEndCyclePrefetchKey(owner))
 
 	unfreezeV2Tx := newPrefetchTestTx(t, corepb.Transaction_Contract_UnfreezeBalanceV2Contract, &contractpb.UnfreezeBalanceV2Contract{
 		OwnerAddress: owner.Bytes(),
@@ -301,6 +305,8 @@ func TestPrefetchKeysForUnfreezeVoteRows(t *testing.T) {
 	assertPrefetchHas(t, unfreezeV2Keys, state.AccountPrefetchKey(owner))
 	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesPrefetchKey(owner))
 	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, unfreezeV2Keys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.RewardEndCyclePrefetchKey(owner))
 }
 
 func TestPrefetchKeysForWithdrawBalanceRewardCursorRows(t *testing.T) {

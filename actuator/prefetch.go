@@ -133,6 +133,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		owner, ownerOK := b.addAccountBytes(m.GetOwnerAddress())
 		if ownerOK {
 			b.addPendingVotes(owner)
+			b.addRewardCursorKeys(owner)
 		}
 		for _, vote := range m.GetVotes() {
 			if vote != nil {
@@ -161,6 +162,7 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 		owner, ownerOK := b.addAccountBytes(m.GetOwnerAddress())
 		if ownerOK {
 			b.addPendingVotes(owner)
+			b.addRewardCursorKeys(owner)
 		}
 		receiver, receiverOK := b.addAccountBytes(m.GetReceiverAddress())
 		if ownerOK && receiverOK {
@@ -290,11 +292,11 @@ func PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey {
 	case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
 		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.UnfreezeBalanceV2Contract{}); ok {
 			b.addPendingVotes(owner)
+			b.addRewardCursorKeys(owner)
 		}
 	case corepb.Transaction_Contract_WithdrawBalanceContract:
 		if owner, ok := prefetchOwnerOnly(c, &b, &contractpb.WithdrawBalanceContract{}); ok {
-			b.add(state.RewardBeginCyclePrefetchKey(owner))
-			b.add(state.RewardEndCyclePrefetchKey(owner))
+			b.addRewardCursorKeys(owner)
 		}
 	case corepb.Transaction_Contract_WithdrawExpireUnfreezeContract:
 		prefetchOwnerOnly(c, &b, &contractpb.WithdrawExpireUnfreezeContract{})
@@ -435,6 +437,11 @@ func (b *prefetchKeyBuilder) addSystemDelegationKey(key []byte) {
 func (b *prefetchKeyBuilder) addPendingVotes(owner tcommon.Address) {
 	b.add(state.PendingVotesPrefetchKey(owner))
 	b.add(state.PendingVotesIndexPrefetchKey())
+}
+
+func (b *prefetchKeyBuilder) addRewardCursorKeys(owner tcommon.Address) {
+	b.add(state.RewardBeginCyclePrefetchKey(owner))
+	b.add(state.RewardEndCyclePrefetchKey(owner))
 }
 
 func (b *prefetchKeyBuilder) addProposal(id int64) {
