@@ -1177,6 +1177,9 @@ func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRef
 // PlanPostInventorySettlement decides how the service should settle a sync
 // session after accepting an inventory response and refilling fetch slots.
 func PlanPostInventorySettlement(in PostInventorySettlementInput) PostInventorySettlementPlan {
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}.withSteps()
+	}
 	if in.OutboundRequests == 0 && in.Progress.ShouldRestartForStalledRetries() {
 		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}.withSteps()
 	}

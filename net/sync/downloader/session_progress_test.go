@@ -1256,6 +1256,27 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 		input PostInventorySettlementInput
 		want  PostInventorySettlementPlan
 	}{
+		"not syncing resets without mirroring": {
+			input: PostInventorySettlementInput{},
+			want: PostInventorySettlementPlan{
+				Reset:              true,
+				TryFindPeer:        true,
+				LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+				AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+			},
+		},
+		"paused resets without mirroring": {
+			input: PostInventorySettlementInput{Progress: SessionProgress{
+				Syncing: true,
+				Paused:  true,
+			}},
+			want: PostInventorySettlementPlan{
+				Reset:              true,
+				TryFindPeer:        true,
+				LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+				AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+			},
+		},
 		"stalled retries with no outbound resets": {
 			input: PostInventorySettlementInput{Progress: SessionProgress{
 				Syncing:      true,
@@ -1298,7 +1319,11 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 			},
 		},
 		"incomplete session mirrors legacy queues": {
-			input: PostInventorySettlementInput{},
+			input: PostInventorySettlementInput{Progress: SessionProgress{
+				Syncing:     true,
+				CurrentHead: 5,
+				TargetHead:  9,
+			}},
 			want: PostInventorySettlementPlan{
 				Mirror:      true,
 				LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
@@ -1345,6 +1370,22 @@ func TestPlanPostInventoryRun(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stalled retry run = %+v, want %+v", got, want)
+	}
+
+	got = PlanPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: 3,
+		Progress:         SessionProgress{Syncing: true, Paused: true},
+	})
+	want = PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Reset:              true,
+			TryFindPeer:        true,
+			LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+			AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paused outbound run = %+v, want reset without dispatch %+v", got, want)
 	}
 
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
@@ -1471,6 +1512,45 @@ func TestApplyPostInventoryRunBuildsPlanForPostLockDispatch(t *testing.T) {
 	}
 	if !reflect.DeepEqual(postLock.Plan, result.Plan) {
 		t.Fatalf("post-lock plan = %+v, want original plan %+v", postLock.Plan, result.Plan)
+	}
+}
+
+func TestApplyPostInventoryRunResetsPausedSessionWithoutDispatch(t *testing.T) {
+	settlementApplier := new(recordingPostInventorySettlementApplier)
+	result := ApplyPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: 2,
+		Progress:         SessionProgress{Syncing: true, Paused: true, CurrentHead: 5, TargetHead: 9},
+	}, settlementApplier)
+
+	if !reflect.DeepEqual(settlementApplier.calls, []PostInventorySettlementStepAction{PostInventoryReset}) {
+		t.Fatalf("paused post-inventory locked calls = %+v, want reset only", settlementApplier.calls)
+	}
+	if !reflect.DeepEqual(result.LockedSettlement.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryReset}) ||
+		len(result.Dispatch.AppliedSteps) != 0 ||
+		len(result.AfterDispatchSettlement.AppliedSteps) != 0 {
+		t.Fatalf("paused post-inventory locked result = %+v, want reset with no dispatch/after steps", result)
+	}
+	wantPlan := PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Reset:              true,
+			TryFindPeer:        true,
+			LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+			AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+		},
+	}
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("paused post-inventory plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+
+	dispatchApplier := new(recordingFetchRefillDispatchApplier)
+	settlementApplier.calls = nil
+	postLock := ApplyPostInventoryRunPostLockPlan(result.Plan, dispatchApplier, settlementApplier)
+	if dispatchApplier.sent != 0 ||
+		!reflect.DeepEqual(settlementApplier.calls, []PostInventorySettlementStepAction{PostInventoryTryFindPeer}) ||
+		len(postLock.Dispatch.AppliedSteps) != 0 ||
+		!reflect.DeepEqual(postLock.AfterDispatchSettlement.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryTryFindPeer}) {
+		t.Fatalf("paused post-lock result = %+v sent=%d calls=%+v, want try-find without dispatch",
+			postLock, dispatchApplier.sent, settlementApplier.calls)
 	}
 }
 
