@@ -97,6 +97,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getmarketorderbyid", api.getMarketOrderByID)
 	mux.HandleFunc("/wallet/getmarketordersfromaccount", api.getMarketOrdersFromAccount)
 	mux.HandleFunc("/wallet/getmarketpricebypair", api.getMarketPriceByPair)
+	mux.HandleFunc("/wallet/getmarketorderlistbypair", api.getMarketOrderListByPair)
 
 	// M5.1 PR-1: Account / permission
 	mux.HandleFunc("/wallet/createaccount", api.createAccount)
@@ -2043,16 +2044,7 @@ func (api *API) handleGetMarketOrdersFromAccount(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var list []map[string]any
-	for _, o := range orders {
-		list = append(list, marshalMessage(o.ProtoReflect()))
-	}
-	if list == nil {
-		list = []map[string]any{}
-	}
-	data, _ := json.Marshal(map[string]any{"orders": list})
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	writeMarketOrderListJSON(w, orders)
 }
 
 func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
@@ -2060,27 +2052,12 @@ func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) handleGetMarketPriceByPair(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
-	var body struct {
-		SellTokenId string `json:"sell_token_id"`
-		BuyTokenId  string `json:"buy_token_id"`
-		Visible     bool   `json:"visible"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if body.SellTokenId == "" || body.BuyTokenId == "" {
-		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
-		return
-	}
-	sell, err := parseBytes(body.SellTokenId, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "sell_token_id", err)
-		return
-	}
-	buy, err := parseBytes(body.BuyTokenId, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "buy_token_id", err)
+	sell, buy, ok := parseMarketPairRequest(w, r)
+	if !ok {
 		return
 	}
 	var pl *corepb.MarketPriceList
+	var err error
 	if boundFn == nil {
 		pl, err = api.backend.GetMarketPriceByPair(sell, buy)
 	} else {
@@ -2097,4 +2074,68 @@ func (api *API) handleGetMarketPriceByPair(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeTronJSON(w, pl)
+}
+
+func (api *API) getMarketOrderListByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderListByPair(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrderListByPair(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	sell, buy, ok := parseMarketPairRequest(w, r)
+	if !ok {
+		return
+	}
+	var orders []*corepb.MarketOrder
+	var err error
+	if boundFn == nil {
+		orders, err = api.backend.GetMarketOrderListByPair(sell, buy)
+	} else {
+		blockNum := boundFn()
+		orders, err = api.backend.GetMarketOrderListByPairAt(sell, buy, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeMarketOrderListJSON(w, orders)
+}
+
+func parseMarketPairRequest(w http.ResponseWriter, r *http.Request) ([]byte, []byte, bool) {
+	var body struct {
+		SellTokenId string `json:"sell_token_id"`
+		BuyTokenId  string `json:"buy_token_id"`
+		Visible     bool   `json:"visible"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.SellTokenId == "" || body.BuyTokenId == "" {
+		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
+		return nil, nil, false
+	}
+	sell, err := parseBytes(body.SellTokenId, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "sell_token_id", err)
+		return nil, nil, false
+	}
+	buy, err := parseBytes(body.BuyTokenId, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "buy_token_id", err)
+		return nil, nil, false
+	}
+	return sell, buy, true
+}
+
+func writeMarketOrderListJSON(w http.ResponseWriter, orders []*corepb.MarketOrder) {
+	var list []map[string]any
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		list = append(list, marshalMessage(o.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	data, _ := json.Marshal(map[string]any{"orders": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }

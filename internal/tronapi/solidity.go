@@ -49,6 +49,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getmarketorderbyid", api.getSolidMarketOrderByID)
 	mux.HandleFunc("/walletsolidity/getmarketordersfromaccount", api.getSolidMarketOrdersFromAccount)
 	mux.HandleFunc("/walletsolidity/getmarketpricebypair", api.getSolidMarketPriceByPair)
+	mux.HandleFunc("/walletsolidity/getmarketorderlistbypair", api.getSolidMarketOrderListByPair)
 	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getpaginatedexchangelist", api.getSolidPaginatedExchangeList)
 	mux.HandleFunc("/walletsolidity/getexchangebyid", api.getSolidExchangeByID)
@@ -95,6 +96,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getmarketorderbyid", api.getPbftMarketOrderByID)
 	mux.HandleFunc("/walletpbft/getmarketordersfromaccount", api.getPbftMarketOrdersFromAccount)
 	mux.HandleFunc("/walletpbft/getmarketpricebypair", api.getPbftMarketPriceByPair)
+	mux.HandleFunc("/walletpbft/getmarketorderlistbypair", api.getPbftMarketOrderListByPair)
 	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getpaginatedexchangelist", api.getPbftPaginatedExchangeList)
 	mux.HandleFunc("/walletpbft/getexchangebyid", api.getPbftExchangeByID)
@@ -306,6 +308,14 @@ func (api *API) getSolidMarketPriceByPair(w http.ResponseWriter, r *http.Request
 
 func (api *API) getPbftMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 	api.handleGetMarketPriceByPair(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidMarketOrderListByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderListByPair(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftMarketOrderListByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderListByPair(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidExchanges(w http.ResponseWriter, r *http.Request) {

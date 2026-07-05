@@ -583,6 +583,8 @@ type isolationStubBackend struct {
 	marketOrderAtBlock       uint64
 	liveMarketOrdersCalls    int
 	marketOrdersAtBlock      uint64
+	liveMarketOrderPairCalls int
+	marketOrderPairAtBlock   uint64
 	liveMarketPriceCalls     int
 	marketPriceAtBlock       uint64
 	liveExchangeCalls        int
@@ -888,6 +890,23 @@ func (s *isolationStubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []
 		BuyTokenId:  buyTokenID,
 		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 12, BuyTokenQuantity: 120}},
 	}, nil
+}
+
+func (s *isolationStubBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error) {
+	s.liveMarketOrderPairCalls++
+	return []*corepb.MarketOrder{{OrderId: []byte("live-pair-order"), SellTokenQuantity: 6}}, nil
+}
+
+func (s *isolationStubBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	s.marketOrderPairAtBlock = blockNum
+	return []*corepb.MarketOrder{{
+		OrderId:           []byte("bound-pair-order"),
+		SellTokenId:       sellTokenID,
+		SellTokenQuantity: 13,
+		BuyTokenId:        buyTokenID,
+		BuyTokenQuantity:  130,
+		State:             corepb.MarketOrder_ACTIVE,
+	}}, nil
 }
 
 func (s *isolationStubBackend) ListExchanges() ([]*corepb.Exchange, error) {
@@ -1935,6 +1954,33 @@ func assertMarketRoutesUseBound(t *testing.T, prefix string, stub *isolationStub
 	}
 	if stub.liveMarketPriceCalls != 0 {
 		t.Fatalf("live GetMarketPriceByPair called %d times, want 0", stub.liveMarketPriceCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getmarketorderlistbypair", "application/json", strings.NewReader(`{"sell_token_id":"73656c6c","buy_token_id":"627579"}`))
+	if err != nil {
+		t.Fatalf("getmarketorderlistbypair request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getmarketorderlistbypair status: %d", resp.StatusCode)
+	}
+	var pairOrders struct {
+		Orders []struct {
+			SellTokenQuantity int64 `json:"sell_token_quantity"`
+			BuyTokenQuantity  int64 `json:"buy_token_quantity"`
+		} `json:"orders"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pairOrders); err != nil {
+		t.Fatal(err)
+	}
+	if len(pairOrders.Orders) != 1 || pairOrders.Orders[0].SellTokenQuantity != 13 || pairOrders.Orders[0].BuyTokenQuantity != 130 {
+		t.Fatalf("market pair orders = %+v, want bound sentinel", pairOrders.Orders)
+	}
+	if stub.marketOrderPairAtBlock != wantBlock {
+		t.Fatalf("GetMarketOrderListByPairAt block = %d, want %d", stub.marketOrderPairAtBlock, wantBlock)
+	}
+	if stub.liveMarketOrderPairCalls != 0 {
+		t.Fatalf("live GetMarketOrderListByPair called %d times, want 0", stub.liveMarketOrderPairCalls)
 	}
 }
 

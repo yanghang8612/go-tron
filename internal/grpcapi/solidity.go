@@ -659,6 +659,17 @@ func (s *SolidityServer) GetMarketPriceByPair(_ context.Context, in *corepb.Mark
 	return pl, nil
 }
 
+func (s *SolidityServer) GetMarketOrderListByPair(_ context.Context, in *corepb.MarketOrderPair) (*corepb.MarketOrderList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	orders, err := s.backend.GetMarketOrderListByPairAt(in.SellTokenId, in.BuyTokenId, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &corepb.MarketOrderList{Orders: orders}, nil
+}
+
 // ── Price history ──────────────────────────────────────────────────────────────
 
 func (s *SolidityServer) GetBandwidthPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {

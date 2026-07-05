@@ -44,10 +44,11 @@ import (
 // Values reuse the existing proto wire format (proto.Marshal) and the 8-byte
 // big-endian count verbatim — no new on-disk encoding lineage is introduced.
 //
-// There is no enumeration over the domain: the three live RPCs (GetMarketOrderByID,
-// GetMarketOrdersByAccount, GetMarketPriceByPair) all address known keys, so the
-// Keccak256-hashed KV keys (which preclude a prefix scan) are never walked. No
-// MarketPairList / MarketOrderListByPair RPC exists in go-tron.
+// There is no full-pair enumeration over the domain: point and pair-list RPCs
+// address known keys, so the Keccak256-hashed KV keys (which preclude a prefix
+// scan) are never walked. MarketOrderListByPair is reconstructed from the
+// materialized pair price list plus price-level order-book rows; MarketPairList
+// still needs an explicit pair index before it can be exposed without scanning.
 const (
 	marketOrderTag        byte = 0x01
 	marketAccountOrderTag byte = 0x02

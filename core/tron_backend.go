@@ -1968,6 +1968,111 @@ func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blo
 	return priceList, nil
 }
 
+func (b *TronBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error) {
+	sysKV, err := b.headSystemStateStrict()
+	if err != nil {
+		return nil, err
+	}
+	priceList := sysKV.ReadMarketPriceList(sellTokenID, buyTokenID)
+	return marketOrdersFromPairPriceList(priceList,
+		func(price *corepb.MarketPrice) (*corepb.MarketOrderIdList, error) {
+			pk := rawdb.PriceKey(price.GetSellTokenQuantity(), price.GetBuyTokenQuantity())
+			return sysKV.ReadMarketOrderBook(sellTokenID, buyTokenID, pk), nil
+		},
+		func(orderID []byte) (*corepb.MarketOrder, error) {
+			return sysKV.ReadMarketOrder(orderID), nil
+		},
+		nil,
+		nil,
+	)
+}
+
+func (b *TronBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	priceList, err := session.reader.MarketPriceListAt(sellTokenID, buyTokenID, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read market price list at block %d: %w", blockNum, err)
+	}
+	return marketOrdersFromPairPriceList(priceList,
+		func(price *corepb.MarketPrice) (*corepb.MarketOrderIdList, error) {
+			pk := rawdb.PriceKey(price.GetSellTokenQuantity(), price.GetBuyTokenQuantity())
+			book, err := session.reader.MarketOrderBookAt(sellTokenID, buyTokenID, pk, blockNum)
+			if err != nil {
+				return nil, fmt.Errorf("read market order book at block %d: %w", blockNum, err)
+			}
+			return book, nil
+		},
+		func(orderID []byte) (*corepb.MarketOrder, error) {
+			order, err := session.reader.MarketOrderAt(orderID, blockNum)
+			if err != nil {
+				return nil, fmt.Errorf("read market order %x at block %d: %w", orderID, blockNum, err)
+			}
+			return order, nil
+		},
+		func(price *corepb.MarketPrice) error {
+			return fmt.Errorf("market price %d/%d at block %d references missing order book",
+				price.GetSellTokenQuantity(), price.GetBuyTokenQuantity(), blockNum)
+		},
+		func(orderID []byte) error {
+			return fmt.Errorf("market order book at block %d references missing order %x", blockNum, orderID)
+		},
+	)
+}
+
+func marketOrdersFromPairPriceList(
+	priceList *corepb.MarketPriceList,
+	readBook func(*corepb.MarketPrice) (*corepb.MarketOrderIdList, error),
+	readOrder func([]byte) (*corepb.MarketOrder, error),
+	missingBookErr func(*corepb.MarketPrice) error,
+	missingOrderErr func([]byte) error,
+) ([]*corepb.MarketOrder, error) {
+	if priceList == nil {
+		return nil, nil
+	}
+	var orders []*corepb.MarketOrder
+	seen := make(map[string]struct{})
+	for _, price := range priceList.GetPrices() {
+		if price == nil {
+			continue
+		}
+		book, err := readBook(price)
+		if err != nil {
+			return nil, err
+		}
+		if len(book.GetHead()) == 0 {
+			if missingBookErr != nil {
+				return nil, missingBookErr(price)
+			}
+			continue
+		}
+		for orderID := book.GetHead(); len(orderID) != 0; {
+			key := string(orderID)
+			if _, ok := seen[key]; ok {
+				break
+			}
+			seen[key] = struct{}{}
+			order, err := readOrder(orderID)
+			if err != nil {
+				return nil, err
+			}
+			if order == nil {
+				if missingOrderErr != nil {
+					return nil, missingOrderErr(orderID)
+				}
+				break
+			}
+			orders = append(orders, order)
+			orderID = order.GetNext()
+		}
+	}
+	return orders, nil
+}
+
 // listExchangesAtHead enumerates the rooted exchange set at the head state root,
 // walking ids 1..latest_exchange_num as RpcApiService.getExchangeList does. The
 // V1/V2 bucket is selected through the same AllowSameTokenName final-store gate

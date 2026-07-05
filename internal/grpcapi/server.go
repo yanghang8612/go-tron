@@ -768,6 +768,18 @@ func (s *Server) GetMarketPriceByPair(_ context.Context, in *corepb.MarketOrderP
 	return pl, nil
 }
 
+// GetMarketOrderListByPair returns all active orders for a sell/buy token pair.
+func (s *Server) GetMarketOrderListByPair(_ context.Context, in *corepb.MarketOrderPair) (*corepb.MarketOrderList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	orders, err := s.backend.GetMarketOrderListByPair(in.SellTokenId, in.BuyTokenId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &corepb.MarketOrderList{Orders: orders}, nil
+}
+
 // ListNodes returns connected P2P peers as a NodeList.
 func (s *Server) ListNodes(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NodeList, error) {
 	peers, err := s.backend.ListNodes()

@@ -1328,6 +1328,13 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("write market price list block %d: %v", n, err)
 		}
+		pk := rawdb.PriceKey(n*100, n*1000)
+		if err := statedb.WriteMarketOrderBook(sellTokenID, buyTokenID, pk, &corepb.MarketOrderIdList{
+			Head: orderID,
+			Tail: orderID,
+		}); err != nil {
+			t.Fatalf("write market order book block %d: %v", n, err)
+		}
 		root, err = statedb.Commit()
 		if err != nil {
 			t.Fatalf("commit market block %d: %v", n, err)
@@ -1385,6 +1392,21 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 	}
 	if len(prices2.GetPrices()) != 1 || prices2.GetPrices()[0].GetSellTokenQuantity() != 200 {
 		t.Fatalf("block2 market prices = %+v, want block2 price", prices2.GetPrices())
+	}
+
+	pairOrders1, err := b.GetMarketOrderListByPairAt(sellTokenID, buyTokenID, block1.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrderListByPairAt(block1): %v", err)
+	}
+	if len(pairOrders1) != 1 || pairOrders1[0].GetSellTokenQuantity() != 100 || pairOrders1[0].GetBuyTokenQuantity() != 1000 {
+		t.Fatalf("block1 market pair orders = %+v, want block1 order", pairOrders1)
+	}
+	pairOrders2, err := b.GetMarketOrderListByPairAt(sellTokenID, buyTokenID, block2.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrderListByPairAt(block2): %v", err)
+	}
+	if len(pairOrders2) != 1 || pairOrders2[0].GetSellTokenQuantity() != 200 || pairOrders2[0].GetBuyTokenQuantity() != 2000 {
+		t.Fatalf("block2 market pair orders = %+v, want block2 order", pairOrders2)
 	}
 }
 
