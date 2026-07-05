@@ -1617,7 +1617,7 @@ func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pruneVerifiedHotChainLookups: %v", err)
 	}
-	if result.ColdIndexSegments != 1 || result.BlockIndexesDeleted != 2 || result.StateRootsDeleted != 2 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 1 {
+	if result.ColdIndexSegments != 1 || result.MissingIndexSegments != 0 || result.BlockIndexesDeleted != 2 || result.StateRootsDeleted != 2 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 1 {
 		t.Fatalf("prune result = %+v, want one segment, 2 block/state roots, 1 tx index/info", result)
 	}
 	if num := rawdb.ReadBlockNumber(hotOnly, block1.Hash()); num != nil {

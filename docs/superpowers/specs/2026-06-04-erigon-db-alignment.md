@@ -1001,7 +1001,9 @@ Status:
   `ChainFreezer` upstream boundary before deleting hot lookup rows, repairs
   legacy unbound `SnapshotChainLookupPrune` rows by reprocessing the covered
   cold range, and rejects same-height hash conflicts before any hot lookup
-  row is deleted.
+  row is deleted. Prune results now also report freezer segments skipped
+  because the manifest lacked matching `chain-index` coverage, so operators
+  can distinguish "nothing to prune" from "cold lookup sidecar missing".
 - `gtron snapshot prune-chain-lookups` now exposes that verified prune path to
   operators. It derives the local chain identity, verifies the signed snapshot
   catalog with trusted Ed25519 keys, cross-checks freezer/index sidecars, and

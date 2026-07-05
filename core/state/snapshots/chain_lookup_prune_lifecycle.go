@@ -75,15 +75,20 @@ func (l *ChainLookupPruneLifecycle) OnePass() (*PruneHotChainLookupResult, error
 	return PruneHotChainLookupsWithProgress(l.db, l.cfg.Dir, manifest)
 }
 
+func shouldLogChainLookupPruneResult(result *PruneHotChainLookupResult) bool {
+	return result != nil && (result.HasRange || result.MissingIndexSegments > 0)
+}
+
 func (l *ChainLookupPruneLifecycle) loop() {
 	defer close(l.done)
 	if result, err := l.OnePass(); err != nil {
 		coldSnapshotLog.Warn("Chain lookup prune initial pass failed", "err", err)
-	} else if result != nil && result.HasRange {
+	} else if shouldLogChainLookupPruneResult(result) {
 		coldSnapshotLog.Info("Chain lookup prune initial pass completed",
 			"fromBlock", result.FromBlock,
 			"toBlock", result.ToBlock,
 			"coldIndexSegments", result.ColdIndexSegments,
+			"missingIndexSegments", result.MissingIndexSegments,
 			"blockIndexes", result.BlockIndexesDeleted,
 			"txIndexes", result.TxIndexesDeleted)
 	}
@@ -96,11 +101,12 @@ func (l *ChainLookupPruneLifecycle) loop() {
 			result, err := l.OnePass()
 			if err != nil {
 				coldSnapshotLog.Warn("Chain lookup prune pass failed", "err", err)
-			} else if result != nil && result.HasRange {
+			} else if shouldLogChainLookupPruneResult(result) {
 				coldSnapshotLog.Info("Chain lookup prune pass completed",
 					"fromBlock", result.FromBlock,
 					"toBlock", result.ToBlock,
 					"coldIndexSegments", result.ColdIndexSegments,
+					"missingIndexSegments", result.MissingIndexSegments,
 					"blockIndexes", result.BlockIndexesDeleted,
 					"txIndexes", result.TxIndexesDeleted)
 			}

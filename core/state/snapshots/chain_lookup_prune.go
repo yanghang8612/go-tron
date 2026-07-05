@@ -10,16 +10,17 @@ import (
 )
 
 type PruneHotChainLookupResult struct {
-	HasRange            bool
-	FromBlock           uint64
-	ToBlock             uint64
-	BlockIndexesDeleted uint64
-	StateRootsDeleted   uint64
-	TxIndexesDeleted    uint64
-	TxInfosDeleted      uint64
-	ColdIndexSegments   uint64
-	ToBlockHash         common.Hash
-	HasToBlockHash      bool
+	HasRange             bool
+	FromBlock            uint64
+	ToBlock              uint64
+	BlockIndexesDeleted  uint64
+	StateRootsDeleted    uint64
+	TxIndexesDeleted     uint64
+	TxInfosDeleted       uint64
+	ColdIndexSegments    uint64
+	MissingIndexSegments uint64
+	ToBlockHash          common.Hash
+	HasToBlockHash       bool
 }
 
 type chainLookupPruneBounds struct {
@@ -203,6 +204,7 @@ func pruneHotChainLookups(db ethdb.KeyValueWriter, dir string, manifest *Manifes
 		}
 		indexRef, ok := chainIndexRefForFreezer(manifest, freezerRef)
 		if !ok {
+			result.MissingIndexSegments++
 			continue
 		}
 		if err := VerifyChainIndexSegmentAgainstChainFreezer(dir, indexRef, freezerRef); err != nil {

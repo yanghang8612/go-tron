@@ -153,6 +153,44 @@ func TestPruneHotChainLookupsWithProgressSkipsProcessedBlocks(t *testing.T) {
 	}
 }
 
+func TestPruneHotChainLookupsReportsMissingChainIndexCoverage(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, root+"/src")
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, txHash, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := root + "/snapshot"
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{freezerRef})
+	hot := rawdb.NewMemoryDatabase()
+	if _, err := RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+
+	result, err := PruneHotChainLookups(hot, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotChainLookups: %v", err)
+	}
+	if result.HasRange || result.ColdIndexSegments != 0 || result.MissingIndexSegments != 1 || result.BlockIndexesDeleted != 0 || result.TxIndexesDeleted != 0 {
+		t.Fatalf("prune result = %+v, want one missing index segment and no deletes", result)
+	}
+	hotOnly := rawdb.NewChainDB(hot, rawdb.NoopAncient{})
+	if num := rawdb.ReadBlockNumber(hotOnly, block1.Hash()); num == nil || *num != 1 {
+		t.Fatalf("hot block lookup without chain-index coverage = %v, want 1", num)
+	}
+	if idx := rawdb.ReadTransactionIndex(hotOnly, txHash[:]); idx == nil || *idx != 1 {
+		t.Fatalf("hot tx lookup without chain-index coverage = %v, want 1", idx)
+	}
+}
+
 func TestWriteSnapshotChainLookupPruneStageHashRules(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	wantHash := common.Hash{0x11}
@@ -474,6 +512,26 @@ func TestChainLookupPruneLifecycleNoManifestNoop(t *testing.T) {
 	}
 	if result != nil {
 		t.Fatalf("OnePass result = %+v, want nil without manifest", result)
+	}
+}
+
+func TestShouldLogChainLookupPruneResultReportsMissingIndexCoverage(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *PruneHotChainLookupResult
+		want   bool
+	}{
+		{name: "nil", result: nil, want: false},
+		{name: "empty", result: &PruneHotChainLookupResult{}, want: false},
+		{name: "range", result: &PruneHotChainLookupResult{HasRange: true}, want: true},
+		{name: "missing index", result: &PruneHotChainLookupResult{MissingIndexSegments: 1}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldLogChainLookupPruneResult(tt.result); got != tt.want {
+				t.Fatalf("shouldLogChainLookupPruneResult() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
