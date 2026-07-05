@@ -2169,6 +2169,7 @@ run_storage_alert_gate() {
     echo "warning: storage-alerts prometheus metrics failed; see $alert_prometheus" >>"$log_path"
   fi
   local alert_status freezer_status freezer_issues hidden stage_status stage_issues mode_status mode_issues prune_mode prune_mode_persisted snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
+  local signed_cold_prune cold_freezer_to_block derived_index_to_block chain_lookup_prune_to_block tail_pruned_through_block balance_trace_prune_to_block section_bloom_prune_to_section
   alert_status="$(storage_alert_field "$alert_out" status 'status=([^ ]+)')"
   freezer_status="$(storage_alert_field "$alert_out" freezerStatus 'freezerStatus=([^ ]+)')"
   freezer_issues="$(storage_alert_field "$alert_out" freezerIssues 'freezerIssues=([0-9]+)')"
@@ -2186,6 +2187,13 @@ run_storage_alert_gate() {
   retired_missing="$(storage_alert_field "$alert_out" snapshotRetiredMissing 'retiredMissing=([0-9]+)')"
   retired_skipped="$(storage_alert_field "$alert_out" snapshotRetiredSkippedActive 'retiredSkippedActive=([0-9]+)')"
   retired_bytes="$(storage_alert_field "$alert_out" snapshotRetiredBytes 'retiredBytes=([0-9]+)')"
+  signed_cold_prune="$(storage_alert_field "$alert_out" signedColdPrune 'signedColdPrune=([^ ]+)')"
+  cold_freezer_to_block="$(storage_alert_field "$alert_out" coldFreezerToBlock 'coldFreezerToBlock=(-?[0-9]+)')"
+  derived_index_to_block="$(storage_alert_field "$alert_out" derivedIndexToBlock 'derivedIndexToBlock=(-?[0-9]+)')"
+  chain_lookup_prune_to_block="$(storage_alert_field "$alert_out" chainLookupPruneToBlock 'chainLookupPruneToBlock=(-?[0-9]+)')"
+  tail_pruned_through_block="$(storage_alert_field "$alert_out" tailPrunedThroughBlock 'tailPrunedThroughBlock=(-?[0-9]+)')"
+  balance_trace_prune_to_block="$(storage_alert_field "$alert_out" balanceTracePruneToBlock 'balanceTracePruneToBlock=(-?[0-9]+)')"
+  section_bloom_prune_to_section="$(storage_alert_field "$alert_out" sectionBloomPruneToSection 'sectionBloomPruneToSection=(-?[0-9]+)')"
   RUN_STORAGE_ALERT_STATUS="${alert_status:-unknown}"
   RUN_FREEZER_ALERT_STATUS="${freezer_status:-unknown}"
   RUN_FREEZER_ALERT_ISSUES="${freezer_issues:--1}"
@@ -2204,6 +2212,16 @@ run_storage_alert_gate() {
   RUN_SNAPSHOT_RETIRED_MISSING="${retired_missing:--1}"
   RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE="${retired_skipped:--1}"
   RUN_SNAPSHOT_RETIRED_BYTES="${retired_bytes:--1}"
+  case "$(printf '%s' "$signed_cold_prune" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) RUN_SIGNED_COLD_PRUNE=1 ;;
+    0|false|no) RUN_SIGNED_COLD_PRUNE=0 ;;
+  esac
+  [ -n "$cold_freezer_to_block" ] && RUN_COLD_FREEZER_TO_BLOCK="$cold_freezer_to_block"
+  [ -n "$derived_index_to_block" ] && RUN_DERIVED_INDEX_TO_BLOCK="$derived_index_to_block"
+  [ -n "$chain_lookup_prune_to_block" ] && RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK="$chain_lookup_prune_to_block"
+  [ -n "$tail_pruned_through_block" ] && RUN_TAIL_PRUNED_THROUGH_BLOCK="$tail_pruned_through_block"
+  [ -n "$balance_trace_prune_to_block" ] && RUN_BALANCE_TRACE_PRUNE_TO_BLOCK="$balance_trace_prune_to_block"
+  [ -n "$section_bloom_prune_to_section" ] && RUN_SECTION_BLOOM_PRUNE_TO_SECTION="$section_bloom_prune_to_section"
   local detail_json
   detail_json="$(storage_alert_detail_json "$alert_out")"
   RUN_FREEZER_ALERT_DETAILS="$(printf '%s\n' "$detail_json" | sed -n '1p')"

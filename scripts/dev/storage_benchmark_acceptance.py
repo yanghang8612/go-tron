@@ -29,6 +29,11 @@ PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
     "sectionBloomPruneToSection",
 )
 
+STORAGE_ALERT_PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
+    *PROMETHEUS_PRUNE_BOUNDARY_FIELDS,
+    "derivedIndexToBlock",
+)
+
 PROMETHEUS_STATUS_VALUES = {
     "ok": 0,
     "warning": 1,
@@ -661,7 +666,7 @@ def check_prometheus_prune_boundaries(label, path, text, row):
                 row,
             )
         )
-    for field in PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
+    for field in STORAGE_ALERT_PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
         want = as_int(row, field)
         if want is None:
             if field_present(row, field):
@@ -1147,7 +1152,10 @@ def check_minimal_tail_prune(rows, role):
 
     issues = []
     issues.extend(
-        check_integer_fields(row, ("chainLookupPruneToBlock", "tailPrunedThroughBlock"))
+        check_integer_fields(
+            row,
+            ("derivedIndexToBlock", "chainLookupPruneToBlock", "tailPrunedThroughBlock"),
+        )
     )
     if as_number(row, "signedColdPrune") != 1.0:
         issues.append(f"{line_label(row)} signedColdPrune must be true")
@@ -1161,6 +1169,14 @@ def check_minimal_tail_prune(rows, role):
         issues.append(
             f"{line_label(row)} tailPrunedThroughBlock={tail_pruned:g} exceeds "
             f"chainLookupPruneToBlock={chain_lookup:g}"
+        )
+    derived_index = as_number(row, "derivedIndexToBlock")
+    if tail_pruned is not None and tail_pruned > 0 and (
+        derived_index is None or derived_index < tail_pruned
+    ):
+        issues.append(
+            f"{line_label(row)} derivedIndexToBlock={derived_index} must cover "
+            f"tailPrunedThroughBlock={tail_pruned:g}"
         )
     return issues
 

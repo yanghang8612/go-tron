@@ -1793,6 +1793,13 @@ class StorageBenchmarkTest(unittest.TestCase):
                     gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1
                     gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 12
                     gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 9
+                    gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="coldFreezerToBlock"} 12
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 11
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 10
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 8
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="balanceTracePruneToBlock"} 7
+                    gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="sectionBloomPruneToSection"} 6
                     # TYPE gtron_storage_alert_issue gauge
                     gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1
                     EOF
@@ -1800,7 +1807,7 @@ class StorageBenchmarkTest(unittest.TestCase):
                         fi
                       done
                       cat <<'EOF'
-                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"stagePipeline":{"complete":false,"pending":2,"issues":1,"tasks":[{"stage":"ChainFreezer","upstream":"Finish","status":"behind","targetValue":12,"targetHash":"aa","currentValue":9,"currentHash":"bb"},{"stage":"SnapshotEventLogBuild","upstream":"Finish","status":"missing","targetValue":12,"targetHash":"aa"}]},"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
+                    {"datadir":"/tmp/gtron","status":"critical","freezerStatus":"ok","freezerIssues":0,"freezerAlertHiddenBytes":0,"freezerAlertDetails":[],"stageStatus":"critical","stageIssues":1,"stageVerifyDetails":[{"severity":"critical","kind":"stage-verification","detail":"SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa"}],"stagePipeline":{"complete":false,"pending":2,"issues":1,"tasks":[{"stage":"ChainFreezer","upstream":"Finish","status":"behind","targetValue":12,"targetHash":"aa","currentValue":9,"currentHash":"bb"},{"stage":"SnapshotEventLogBuild","upstream":"Finish","status":"missing","targetValue":12,"targetHash":"aa"}]},"modeStatus":"critical","modeIssues":1,"modeAlertDetails":[{"severity":"critical","kind":"archive-prune-stage","detail":"archive mode must not have SnapshotHotPrune progress at block 7"}],"pruneMode":"archive","pruneModePersisted":true,"signedColdPrune":true,"coldFreezerToBlock":12,"derivedIndexToBlock":11,"chainLookupPruneToBlock":10,"tailPrunedThroughBlock":8,"balanceTracePruneToBlock":7,"sectionBloomPruneToSection":6,"snapshotStatus":"warning","snapshotIssues":1,"snapshotAlertDetails":[{"severity":"warning","kind":"retired-prune-pending","detail":"retired segment still present"}],"snapshotRetiredSegments":1,"snapshotRetiredFiles":1,"snapshotRetiredMissing":0,"snapshotRetiredSkippedActive":0,"snapshotRetiredBytes":123}
                     EOF
                       exit 1
                     fi
@@ -1883,6 +1890,13 @@ class StorageBenchmarkTest(unittest.TestCase):
             self.assertEqual(row["modeAlertIssues"], 1)
             self.assertEqual(row["pruneMode"], "archive")
             self.assertTrue(row["pruneModePersisted"])
+            self.assertEqual(row["signedColdPrune"], 1)
+            self.assertEqual(row["coldFreezerToBlock"], 12)
+            self.assertEqual(row["derivedIndexToBlock"], 11)
+            self.assertEqual(row["chainLookupPruneToBlock"], 10)
+            self.assertEqual(row["tailPrunedThroughBlock"], 8)
+            self.assertEqual(row["balanceTracePruneToBlock"], 7)
+            self.assertEqual(row["sectionBloomPruneToSection"], 6)
             self.assertEqual(
                 row["modeAlertDetails"],
                 [
@@ -1925,6 +1939,11 @@ class StorageBenchmarkTest(unittest.TestCase):
             )
             self.assertIn(
                 'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="ChainFreezer",status="behind",upstream="Finish"} 9',
+                metrics,
+            )
+            self.assertIn('gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1', metrics)
+            self.assertIn(
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 11',
                 metrics,
             )
 

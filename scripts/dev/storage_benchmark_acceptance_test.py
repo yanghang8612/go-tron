@@ -167,6 +167,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                             "# TYPE gtron_storage_signed_cold_prune gauge",
                             'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1',
                             "# TYPE gtron_storage_prune_boundary_block gauge",
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 46',
                             'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50',
                             'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45',
                         ]
@@ -204,6 +205,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "mode": "minimal",
                     "storageAlertPrometheus": str(tmpdir / "minimal.prom"),
                     "signedColdPrune": 1,
+                    "derivedIndexToBlock": 46,
                     "chainLookupPruneToBlock": 50,
                     "tailPrunedThroughBlock": 45,
                 },
@@ -265,6 +267,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "snapshotAlertStatus": "ok",
                     "storageAlertPrometheus": str(tmpdir / "also-missing.prom"),
                     "signedColdPrune": 0,
+                    "derivedIndexToBlock": -1,
                     "chainLookupPruneToBlock": -1,
                     "tailPrunedThroughBlock": -1,
                 },
@@ -295,6 +298,48 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertIn("signedColdPrune must be true", proc.stderr)
             self.assertIn("tailPrunedThroughBlock must be >= 0", proc.stderr)
 
+    def test_rejects_minimal_tail_prune_without_derived_index_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "signedColdPrune": 1,
+                        "coldFreezerToBlock": 50,
+                        "derivedIndexToBlock": 44,
+                        "chainLookupPruneToBlock": 50,
+                        "tailPrunedThroughBlock": 45,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "derivedIndexToBlock=44.0 must cover tailPrunedThroughBlock=45",
+                proc.stderr,
+            )
+
     def test_accepts_minimal_physical_tail_prune_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -311,6 +356,8 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "modeAlertStatus": "ok",
                     "snapshotAlertStatus": "ok",
                     "signedColdPrune": 1,
+                    "coldFreezerToBlock": 100,
+                    "derivedIndexToBlock": 100,
                     "chainLookupPruneToBlock": 100,
                     "tailPrunedThroughBlock": 95,
                     "tailPrunedFiles": 2,
@@ -4175,6 +4222,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "modeAlertStatus": "ok",
                         "snapshotAlertStatus": "ok",
                         "signedColdPrune": 1,
+                        "derivedIndexToBlock": 44,
                         "chainLookupPruneToBlock": 50,
                         "tailPrunedThroughBlock": 45,
                         "storageAlertPrometheus": str(prom),
@@ -4203,6 +4251,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "missing gtron_storage_prune_boundary_block field='tailPrunedThroughBlock'",
                 proc.stderr,
             )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='derivedIndexToBlock'",
+                proc.stderr,
+            )
 
     def test_rejects_fractional_prometheus_prune_boundary_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4215,6 +4267,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 '# TYPE gtron_storage_prune_boundary_block gauge\n'
                 'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
                 'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 44.5\n'
                 'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50.5\n'
                 'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45.5\n',
                 encoding="utf-8",
@@ -4236,6 +4289,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                         "modeAlertStatus": "ok",
                         "snapshotAlertStatus": "ok",
                         "signedColdPrune": 1,
+                        "derivedIndexToBlock": 44.5,
                         "chainLookupPruneToBlock": 50.5,
                         "tailPrunedThroughBlock": 45.5,
                         "storageAlertPrometheus": str(prom),
@@ -4258,6 +4312,10 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "chainLookupPruneToBlock=50.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "derivedIndexToBlock=44.5, want integer for prometheus prune boundary evidence",
                 proc.stderr,
             )
             self.assertIn(
