@@ -321,6 +321,38 @@ func TestSnapshotFetchCmdResetRemovesLocalSnapshotDir(t *testing.T) {
 	}
 }
 
+func TestSnapshotFetchCmdPreflightsRemoteURLBeforeReset(t *testing.T) {
+	root := t.TempDir()
+	destDir := filepath.Join(root, "downloaded")
+	dataDir := filepath.Join(root, "datadir")
+	stalePath := filepath.Join(destDir, "history", "stale.seg")
+	if err := os.MkdirAll(filepath.Dir(stalePath), 0o755); err != nil {
+		t.Fatalf("mkdir stale dir: %v", err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", destDir,
+		"--snapshot.url", "file:///tmp/go-tron-snapshot",
+		"--snapshot.reset",
+		"--snapshot.trusted-key", hex.EncodeToString(pub),
+	})
+
+	err = snapshotFetchCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "unsupported snapshot URL scheme") {
+		t.Fatalf("snapshotFetchCmd err = %v, want unsupported URL scheme", err)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("stale snapshot file was removed before URL preflight: %v", err)
+	}
+}
+
 func TestSnapshotVerifyCmdChecksSignedLocalSnapshot(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")

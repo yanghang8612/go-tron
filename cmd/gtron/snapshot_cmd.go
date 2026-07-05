@@ -419,14 +419,17 @@ func snapshotFetchCmd(ctx *cli.Context) error {
 		return err
 	}
 	dir := snapshotDir(ctx, cfg.DataDir)
+	baseURL, err := snapshotRemoteURL(ctx)
+	if err != nil {
+		return err
+	}
+	if err := statesnapshots.ValidateRemoteSnapshotBaseURL(baseURL); err != nil {
+		return err
+	}
 	if ctx.Bool("snapshot.reset") {
 		if err := resetSnapshotFetchDir(dir); err != nil {
 			return err
 		}
-	}
-	baseURL, err := snapshotRemoteURL(ctx)
-	if err != nil {
-		return err
 	}
 	result, err := statesnapshots.FetchRemoteSnapshot(contextOrBackground(ctx), statesnapshots.FetchRemoteSnapshotOptions{
 		BaseURL:                baseURL,

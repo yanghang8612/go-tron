@@ -41,6 +41,14 @@ type FetchRemoteSnapshotResult struct {
 	BytesDownloaded uint64
 }
 
+// ValidateRemoteSnapshotBaseURL applies the same URL rules used by the remote
+// fetcher before callers perform local side effects such as resetting a target
+// snapshot directory.
+func ValidateRemoteSnapshotBaseURL(baseURL string) error {
+	_, err := snapshotRemoteURL(baseURL, SnapshotCatalogFile)
+	return err
+}
+
 // FetchRemoteSnapshot downloads a signed snapshot catalog, its manifest, and
 // every active segment referenced by the verified manifest. The manifest's
 // segment paths are not trusted until the catalog signature and manifest

@@ -292,3 +292,31 @@ func TestSnapshotRemoteURLRejectsUnsafePath(t *testing.T) {
 		t.Fatalf("url = %q", got)
 	}
 }
+
+func TestValidateRemoteSnapshotBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		wantErr string
+	}{
+		{name: "http", baseURL: "http://example.invalid/snapshots"},
+		{name: "https", baseURL: "https://example.invalid/snapshots"},
+		{name: "file", baseURL: "file:///tmp/snapshots", wantErr: "unsupported snapshot URL scheme"},
+		{name: "missing host", baseURL: "https:///snapshots", wantErr: "snapshot URL host is required"},
+		{name: "query", baseURL: "https://example.invalid/snapshots?token=secret", wantErr: "must not contain query or fragment"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRemoteSnapshotBaseURL(tt.baseURL)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRemoteSnapshotBaseURL(%q): %v", tt.baseURL, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateRemoteSnapshotBaseURL(%q) err = %v, want %q", tt.baseURL, err, tt.wantErr)
+			}
+		})
+	}
+}
