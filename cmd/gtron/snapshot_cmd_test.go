@@ -937,6 +937,67 @@ func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildBalanceTracesCmdAuditsAncientBlocks(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "12",
+		"--snapshot.to-block", "12",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+
+	fz := openSnapshotCmdFreezer(t, ancientDataDir(dataDir))
+	rows := make([]snapshotCmdFreezerRow, 13)
+	for blockNum := range rows {
+		rows[blockNum] = snapshotCmdFreezerRow{block: snapshotCmdBlock(uint64(blockNum))}
+	}
+	appendSnapshotCmdFreezerRows(t, fz, rows)
+	if err := fz.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	owner := common.Address{0x41, 0xab}
+	block12 := snapshotCmdBlock(12)
+	if got := rawdb.ReadBlock(rawdb.NewChainDB(db, rawdb.NoopAncient{}), 12); got != nil {
+		t.Fatalf("hot block 12 = %+v, want nil so coverage must use ancient", got)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block12.Hash().Bytes()...),
+			Number: 12,
+		},
+		Timestamp: 1212,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 912); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if err := snapshotBuildBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildBalanceTracesCmd: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(12)
+	if err != nil || !ok || trace.GetTimestamp() != 1212 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1212", trace, ok, err)
+	}
+}
+
 func TestSnapshotBuildBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
