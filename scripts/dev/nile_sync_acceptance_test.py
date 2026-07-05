@@ -2507,6 +2507,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 {
                     "network": "nile",
                     "signedColdPrune": 1,
+                    "derivedIndexToBlock": 45.5,
                     "chainLookupPruneToBlock": 50.5,
                     "coldFreezerToBlock": 50.5,
                     "tailPrunedThroughBlock": 45.5,
@@ -2536,6 +2537,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("chainLookupPruneToBlock=50.5, want integer", proc.stderr)
             self.assertIn("coldFreezerToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("derivedIndexToBlock=45.5, want integer", proc.stderr)
             self.assertIn("tailPrunedThroughBlock=45.5, want integer", proc.stderr)
             self.assertIn("tailPrunedFiles=1.5, want non-negative integer", proc.stderr)
             self.assertIn("balanceTracePruneToBlock=44.5, want integer", proc.stderr)
@@ -5168,6 +5170,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "offlineDbCheckPrometheus": str(prom),
                     "datadir": "/tmp/nile",
                     "signedColdPrune": 1,
+                    "derivedIndexToBlock": 44,
                     "chainLookupPruneToBlock": 50,
                     "tailPrunedThroughBlock": 45,
                 }
@@ -5195,6 +5198,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 "missing gtron_storage_prune_boundary_block field='tailPrunedThroughBlock'",
                 proc.stderr,
             )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='derivedIndexToBlock'",
+                proc.stderr,
+            )
 
     def test_rejects_fractional_offline_prometheus_prune_boundary_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5207,6 +5214,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 '# TYPE gtron_storage_prune_boundary_block gauge\n'
                 'gtron_storage_alert_status{datadir="/tmp/nile"} 0\n'
                 'gtron_storage_signed_cold_prune{datadir="/tmp/nile"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="derivedIndexToBlock"} 44.5\n'
                 'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="chainLookupPruneToBlock"} 50.5\n'
                 'gtron_storage_prune_boundary_block{datadir="/tmp/nile",field="tailPrunedThroughBlock"} 45.5\n',
                 encoding="utf-8",
@@ -5221,6 +5229,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "offlineDbCheckPrometheus": str(prom),
                     "datadir": "/tmp/nile",
                     "signedColdPrune": 1,
+                    "derivedIndexToBlock": 44.5,
                     "chainLookupPruneToBlock": 50.5,
                     "tailPrunedThroughBlock": 45.5,
                 }
@@ -5242,6 +5251,10 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(
                 "chainLookupPruneToBlock=50.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "derivedIndexToBlock=44.5, want integer for prometheus prune boundary evidence",
                 proc.stderr,
             )
             self.assertIn(

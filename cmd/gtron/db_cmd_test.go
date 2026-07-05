@@ -998,6 +998,7 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"pruneModePersisted=false",
 		"signedColdPrune=false",
 		"coldFreezerToBlock=4",
+		"derivedIndexToBlock=-1",
 		"chainLookupPruneToBlock=-1",
 		"tailPrunedThroughBlock=-1",
 		"balanceTracePruneToBlock=-1",
@@ -1021,6 +1022,14 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 			progress: rawdb.StageProgress{
 				Stage:    rawdb.StageChainFreezer,
 				BlockNum: 20,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 17,
 			},
 		},
 		{
@@ -1061,6 +1070,7 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 		t.Fatalf("SignedColdPrune = false, want true")
 	}
 	if got.ColdFreezerToBlock != 20 ||
+		got.DerivedIndexToBlock != 17 ||
 		got.ChainLookupPruneToBlock != 18 ||
 		got.TailPrunedThroughBlock != 12 ||
 		got.BalanceTracePruneToBlock != 16 ||
@@ -1071,6 +1081,7 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 	got = dbStoragePruneEvidenceFromStageRows(nil)
 	if got.SignedColdPrune ||
 		got.ColdFreezerToBlock != -1 ||
+		got.DerivedIndexToBlock != -1 ||
 		got.ChainLookupPruneToBlock != -1 ||
 		got.TailPrunedThroughBlock != -1 ||
 		got.BalanceTracePruneToBlock != -1 ||
@@ -1105,6 +1116,7 @@ func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_signed_cold_prune{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="coldFreezerToBlock"} 4`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="derivedIndexToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="chainLookupPruneToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="tailPrunedThroughBlock"} -1`, dbPrometheusLabelValue(dataDir)),
 	} {
@@ -1458,7 +1470,7 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	if report.ModeStatus != "ok" || report.ModeIssues != 0 || report.PruneMode != "unknown" || report.PruneModePersisted {
 		t.Fatalf("unexpected mode alert fields: %+v", report)
 	}
-	if report.SignedColdPrune || report.ColdFreezerToBlock != 4 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
+	if report.SignedColdPrune || report.ColdFreezerToBlock != 4 || report.DerivedIndexToBlock != -1 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
 		t.Fatalf("unexpected prune evidence fields: %+v", report)
 	}
 	if len(report.StageVerifyDetails) != report.StageIssues {

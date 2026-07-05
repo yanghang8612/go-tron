@@ -1039,6 +1039,7 @@ def parse_alerts(text):
         "pruneModePersisted": False,
         "signedColdPrune": 0,
         "coldFreezerToBlock": -1,
+        "derivedIndexToBlock": -1,
         "chainLookupPruneToBlock": -1,
         "tailPrunedThroughBlock": -1,
         "tailPrunedFiles": 0,
@@ -1074,6 +1075,7 @@ def parse_alerts(text):
             "pruneModePersisted": "pruneModePersisted",
             "signedColdPrune": "signedColdPrune",
             "coldFreezerToBlock": "coldFreezerToBlock",
+            "derivedIndexToBlock": "derivedIndexToBlock",
             "chainLookupPruneToBlock": "chainLookupPruneToBlock",
             "tailPrunedThroughBlock": "tailPrunedThroughBlock",
             "tailPrunedFiles": "tailPrunedFiles",
@@ -1145,6 +1147,7 @@ def parse_alerts(text):
         "pruneModePersisted": r"pruneModePersisted=([^ ]+)",
         "signedColdPrune": r"signedColdPrune=([^ ]+)",
         "coldFreezerToBlock": r"coldFreezerToBlock=(-?[0-9]+)",
+        "derivedIndexToBlock": r"derivedIndexToBlock=(-?[0-9]+)",
         "chainLookupPruneToBlock": r"chainLookupPruneToBlock=(-?[0-9]+)",
         "tailPrunedThroughBlock": r"tailPrunedThroughBlock=(-?[0-9]+)",
         "tailPrunedFiles": r"(?:tailPrunedFiles|prunedTailFiles)[= ]([0-9]+)",
@@ -4152,7 +4155,10 @@ row.update(debug_metrics)
 row.update(archive_api)
 row.update(freezer_status)
 row.update(snapshot_profile)
-row.update(event_log_index_stats(event_log_index_stats_path, event_log_index_stats_status))
+event_log_stats = event_log_index_stats(event_log_index_stats_path, event_log_index_stats_status)
+if event_log_stats.get("derivedIndexToBlock", -1) < 0 and row.get("derivedIndexToBlock", -1) >= 0:
+    event_log_stats["derivedIndexToBlock"] = row["derivedIndexToBlock"]
+row.update(event_log_stats)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 row["samplePrometheus"] = prometheus_output

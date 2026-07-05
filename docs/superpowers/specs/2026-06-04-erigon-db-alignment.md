@@ -1358,8 +1358,9 @@ Status:
   hot-prune, lookup-prune, or tail-prune progress, or non-`minimal` datadirs
   with freezer-tail prune progress. The report now also exports prune-boundary
   evidence from stage rows (`signedColdPrune`, `coldFreezerToBlock`,
-  `chainLookupPruneToBlock`, `tailPrunedThroughBlock`,
-  `balanceTracePruneToBlock`, and `sectionBloomPruneToSection`) so production
+  `derivedIndexToBlock`, `chainLookupPruneToBlock`,
+  `tailPrunedThroughBlock`, `balanceTracePruneToBlock`, and
+  `sectionBloomPruneToSection`) so production
   Nile rows can prove the same mode/prune coverage relationships as storage
   benchmark rows. The Nile sampler and storage benchmark harness request the
   JSON form while retaining a legacy text parser fallback.
@@ -1411,7 +1412,8 @@ Status:
   can now also require `--require-prune-mode-semantics`, which binds the Nile
   row's persisted `pruneMode` to the sampled `mode`, rejects incompatible
   archive/non-minimal prune progress, and checks signed cold-prune rows against
-  `chainLookupPruneToBlock`/`coldFreezerToBlock` coverage. The storage
+  `chainLookupPruneToBlock`/`coldFreezerToBlock` coverage while binding
+  `tailPrunedThroughBlock` to the sampled `derivedIndexToBlock`. The storage
   benchmark acceptance checker can now require the same historical transaction
   and receipt archive proof with `archiveApiTx*` fields and
   `--require-archive-tx-evidence`; the sampler/benchmark probes count `null`

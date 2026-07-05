@@ -32,6 +32,11 @@ PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
     "sectionBloomPruneToSection",
 )
 
+STORAGE_ALERT_PROMETHEUS_PRUNE_BOUNDARY_FIELDS = (
+    *PROMETHEUS_PRUNE_BOUNDARY_FIELDS,
+    "derivedIndexToBlock",
+)
+
 SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_nile_sync_sample_status{", "gtron_nile_sync_sample_status"),
     ("gtron_nile_sync_soak_health_status{", "gtron_nile_sync_soak_health_status"),
@@ -1841,7 +1846,7 @@ def check_prometheus_prune_boundaries(path, text, row):
                 row,
             )
         )
-    for field in PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
+    for field in STORAGE_ALERT_PROMETHEUS_PRUNE_BOUNDARY_FIELDS:
         want = as_int(row, field)
         if want is None:
             if field_present(row, field):
@@ -2646,6 +2651,7 @@ def check_positive_forbidden(row, field, reason):
 
 PRUNE_BOUNDARY_INTEGER_FIELDS = (
     "coldFreezerToBlock",
+    "derivedIndexToBlock",
     "chainLookupPruneToBlock",
     "tailPrunedThroughBlock",
     "balanceTracePruneToBlock",

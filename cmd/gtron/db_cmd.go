@@ -304,6 +304,7 @@ type dbStorageAlertsJSON struct {
 	PruneModePersisted           bool                      `json:"pruneModePersisted"`
 	SignedColdPrune              bool                      `json:"signedColdPrune"`
 	ColdFreezerToBlock           int64                     `json:"coldFreezerToBlock"`
+	DerivedIndexToBlock          int64                     `json:"derivedIndexToBlock"`
 	ChainLookupPruneToBlock      int64                     `json:"chainLookupPruneToBlock"`
 	TailPrunedThroughBlock       int64                     `json:"tailPrunedThroughBlock"`
 	BalanceTracePruneToBlock     int64                     `json:"balanceTracePruneToBlock"`
@@ -321,6 +322,7 @@ type dbStorageAlertsJSON struct {
 type dbStoragePruneEvidence struct {
 	SignedColdPrune            bool
 	ColdFreezerToBlock         int64
+	DerivedIndexToBlock        int64
 	ChainLookupPruneToBlock    int64
 	TailPrunedThroughBlock     int64
 	BalanceTracePruneToBlock   int64
@@ -330,6 +332,7 @@ type dbStoragePruneEvidence struct {
 func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePruneEvidence {
 	evidence := dbStoragePruneEvidence{
 		ColdFreezerToBlock:         -1,
+		DerivedIndexToBlock:        -1,
 		ChainLookupPruneToBlock:    -1,
 		TailPrunedThroughBlock:     -1,
 		BalanceTracePruneToBlock:   -1,
@@ -343,6 +346,8 @@ func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePrune
 		switch row.stage {
 		case rawdb.StageChainFreezer:
 			evidence.ColdFreezerToBlock = value
+		case rawdb.StageSnapshotEventLogBuild:
+			evidence.DerivedIndexToBlock = value
 		case rawdb.StageSnapshotChainLookupPrune:
 			evidence.ChainLookupPruneToBlock = value
 			evidence.SignedColdPrune = true
@@ -490,6 +495,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		PruneModePersisted:           pruneModePersisted,
 		SignedColdPrune:              pruneEvidence.SignedColdPrune,
 		ColdFreezerToBlock:           pruneEvidence.ColdFreezerToBlock,
+		DerivedIndexToBlock:          pruneEvidence.DerivedIndexToBlock,
 		ChainLookupPruneToBlock:      pruneEvidence.ChainLookupPruneToBlock,
 		TailPrunedThroughBlock:       pruneEvidence.TailPrunedThroughBlock,
 		BalanceTracePruneToBlock:     pruneEvidence.BalanceTracePruneToBlock,
@@ -531,10 +537,11 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d stagePipelineNextUpstream=%s stagePipelineNextCurrent=%d",
 			next.Stage, next.Status, next.TargetBlock, next.Upstream, next.CurrentBlock)
 	}
-	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t signedColdPrune=%t coldFreezerToBlock=%d chainLookupPruneToBlock=%d tailPrunedThroughBlock=%d balanceTracePruneToBlock=%d sectionBloomPruneToSection=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t signedColdPrune=%t coldFreezerToBlock=%d derivedIndexToBlock=%d chainLookupPruneToBlock=%d tailPrunedThroughBlock=%d balanceTracePruneToBlock=%d sectionBloomPruneToSection=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,
-		pruneEvidence.SignedColdPrune, pruneEvidence.ColdFreezerToBlock, pruneEvidence.ChainLookupPruneToBlock,
-		pruneEvidence.TailPrunedThroughBlock, pruneEvidence.BalanceTracePruneToBlock, pruneEvidence.SectionBloomPruneToSection,
+		pruneEvidence.SignedColdPrune, pruneEvidence.ColdFreezerToBlock, pruneEvidence.DerivedIndexToBlock,
+		pruneEvidence.ChainLookupPruneToBlock, pruneEvidence.TailPrunedThroughBlock, pruneEvidence.BalanceTracePruneToBlock,
+		pruneEvidence.SectionBloomPruneToSection,
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
 		snapshotInspection.FilesMissing, snapshotInspection.FilesSkippedActive, snapshotInspection.BytesPresent,
 		dbFreezerHiddenSize(stats))
@@ -639,6 +646,7 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 		value int64
 	}{
 		{field: "coldFreezerToBlock", value: report.ColdFreezerToBlock},
+		{field: "derivedIndexToBlock", value: report.DerivedIndexToBlock},
 		{field: "chainLookupPruneToBlock", value: report.ChainLookupPruneToBlock},
 		{field: "tailPrunedThroughBlock", value: report.TailPrunedThroughBlock},
 		{field: "balanceTracePruneToBlock", value: report.BalanceTracePruneToBlock},
