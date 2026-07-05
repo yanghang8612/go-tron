@@ -1412,6 +1412,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["eventLogIndexSegments"], 2)
             self.assertEqual(row["eventLogIndexFromBlock"], 1)
             self.assertEqual(row["eventLogIndexToBlock"], 80)
+            self.assertEqual(row["derivedIndexToBlock"], 80)
             self.assertEqual(row["eventLogIndexAddressKeys"], 3)
             self.assertEqual(row["eventLogIndexAddressPostings"], 6)
             self.assertEqual(row["eventLogIndexAddressAvgPostingsMilli"], 2000)
@@ -1430,6 +1431,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertIn(f"gtron_nile_sync_event_log_index_segments{{{labels}}} 2", metrics)
             self.assertIn(f"gtron_nile_sync_event_log_index_from_block{{{labels}}} 1", metrics)
             self.assertIn(f"gtron_nile_sync_event_log_index_to_block{{{labels}}} 80", metrics)
+            self.assertIn(f"gtron_nile_sync_derived_index_to_block{{{labels}}} 80", metrics)
             self.assertIn(f"gtron_nile_sync_event_log_index_address_postings{{{labels}}} 6", metrics)
             self.assertIn(f"gtron_nile_sync_event_log_index_topic_postings{{{labels}}} 3", metrics)
 

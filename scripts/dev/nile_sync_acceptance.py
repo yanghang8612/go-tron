@@ -362,6 +362,7 @@ SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune"),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock"),
+    ("gtron_nile_sync_derived_index_to_block", "derivedIndexToBlock"),
     ("gtron_nile_sync_freezer_rpc_available", "freezerRpcAvailable"),
     ("gtron_nile_sync_freezer_rpc_has_frozen", "freezerRpcHasFrozen"),
     ("gtron_nile_sync_freezer_rpc_frozen_min", "freezerRpcFrozenMin"),
@@ -449,6 +450,7 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "archiveApiFailures",
     *STATE_PREFETCH_EVIDENCE_FIELDS,
     *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
+    "derivedIndexToBlock",
     "eventLogIndexSegments",
     *EVENT_LOG_INDEX_RANGE_FIELDS,
     *EVENT_LOG_INDEX_LOOKUP_FIELDS,
@@ -457,6 +459,7 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
 SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = {
     *STATE_PREFETCH_EVIDENCE_FIELDS,
     *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
+    "derivedIndexToBlock",
     *EVENT_LOG_INDEX_RANGE_FIELDS,
 }
 
@@ -2739,6 +2742,12 @@ def check_prune_mode_semantics(row):
         if cold_freezer is None or cold_freezer < tail_pruned:
             issues.append(
                 f"coldFreezerToBlock={cold_freezer} must cover "
+                f"tailPrunedThroughBlock={tail_pruned:g}"
+            )
+        derived_index = as_number(row, "derivedIndexToBlock")
+        if tail_pruned > 0 and (derived_index is None or derived_index < tail_pruned):
+            issues.append(
+                f"derivedIndexToBlock={derived_index} must cover "
                 f"tailPrunedThroughBlock={tail_pruned:g}"
             )
 

@@ -2941,6 +2941,7 @@ def snapshot_manifest_profile_stats(datadir_path, profile_script):
     return row
 
 EVENT_LOG_INDEX_STAT_DEFAULTS = {
+    "derivedIndexToBlock": -1,
     "eventLogIndexSegments": 0,
     "eventLogIndexFromBlock": -1,
     "eventLogIndexToBlock": -1,
@@ -3000,6 +3001,8 @@ def event_log_index_stats(path, status):
         return event_log_index_stats_defaults("error")
     for source, dest in EVENT_LOG_INDEX_STAT_FIELDS.items():
         row[dest] = int_field(fields.get(source), EVENT_LOG_INDEX_STAT_DEFAULTS[dest])
+    if row["eventLogIndexSegments"] > 0:
+        row["derivedIndexToBlock"] = row["eventLogIndexToBlock"]
     return row
 
 SAMPLE_STATUS_VALUES = {
@@ -3188,6 +3191,7 @@ SAMPLE_PROMETHEUS_NUMERIC_FIELDS = (
     ("gtron_nile_sync_snapshot_point_commitment_snapshot_snapshot_share_milli", "snapshotPointCommitmentSnapshotSnapshotShareMilli", "Snapshot-wide share for the commitment-snapshot point lookup candidate in milli-units."),
     ("gtron_nile_sync_signed_cold_prune", "signedColdPrune", "Whether signed cold-prune evidence is present."),
     ("gtron_nile_sync_cold_freezer_to_block", "coldFreezerToBlock", "Highest block covered by cold freezer segments."),
+    ("gtron_nile_sync_derived_index_to_block", "derivedIndexToBlock", "Highest block covered by sampled cold derived-index sidecars."),
     ("gtron_nile_sync_freezer_rpc_available", "freezerRpcAvailable", "Whether gtron_freezerStatus reports an available freezer backend."),
     ("gtron_nile_sync_freezer_rpc_has_frozen", "freezerRpcHasFrozen", "Whether gtron_freezerStatus reports frozen ancient data."),
     ("gtron_nile_sync_freezer_rpc_frozen_min", "freezerRpcFrozenMin", "Lowest frozen block reported by gtron_freezerStatus."),
@@ -3236,6 +3240,7 @@ SAMPLE_PROMETHEUS_SKIP_NEGATIVE_FIELDS = {
     "syncLogPhaseCursorCurrentFromBlock",
     "syncLogPhaseCursorCurrentToBlock",
     "syncLogPhaseCursorNextBlock",
+    "derivedIndexToBlock",
     "eventLogIndexFromBlock",
     "eventLogIndexToBlock",
 }

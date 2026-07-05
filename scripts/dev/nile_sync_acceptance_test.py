@@ -125,6 +125,7 @@ SYNC_PHASE_CURSOR_METRIC_FIELDS = (
 )
 
 EVENT_LOG_INDEX_METRIC_FIELDS = (
+    ("derivedIndexToBlock", "gtron_nile_sync_derived_index_to_block"),
     ("eventLogIndexSegments", "gtron_nile_sync_event_log_index_segments"),
     ("eventLogIndexFromBlock", "gtron_nile_sync_event_log_index_from_block"),
     ("eventLogIndexToBlock", "gtron_nile_sync_event_log_index_to_block"),
@@ -505,6 +506,7 @@ def add_event_log_index_evidence(
     row.update(
         {
             "eventLogIndexStatsStatus": "ok",
+            "derivedIndexToBlock": to_block if segments > 0 else -1,
             "eventLogIndexSegments": segments,
             "eventLogIndexFromBlock": from_block,
             "eventLogIndexToBlock": to_block,
@@ -2626,6 +2628,40 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
+
+    def test_rejects_minimal_tail_prune_without_derived_index_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_clean_prune_mode(clean_full_staged_sync_row(), "minimal")
+            row.update(
+                {
+                    "signedColdPrune": 1,
+                    "coldFreezerToBlock": 50,
+                    "chainLookupPruneToBlock": 50,
+                    "derivedIndexToBlock": 9,
+                    "tailPrunedThroughBlock": 12,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--network",
+                    "nile",
+                    "--mode",
+                    "minimal",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("derivedIndexToBlock=9.0 must cover tailPrunedThroughBlock=12", proc.stderr)
 
     def test_accepts_max_cold_stage_lag_blocks_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -152,9 +152,10 @@ counts for the event-log-index sidecars. These counters are the first profiling
 signal for whether the sorted sidecar is selective enough or needs a
 recsplit-style accessor.
 The Nile sampler records the same `eventLogIndex*` counters when
-`scripts/dev/nile_sync_sample.sh` runs with `--event-log-index-stats`, so
-production soak evidence can be checked against the same lookup-selectivity
-rules as benchmark artifacts.
+`scripts/dev/nile_sync_sample.sh` runs with `--event-log-index-stats`. It also
+sets `derivedIndexToBlock` from the event-log-index coverage end so production
+soak evidence can be checked against the same lookup-selectivity and
+minimal-mode tail-prune coverage rules as benchmark artifacts.
 
 Cold state-domain history segments are block-compressed by default when the
 producer lifecycle emits them. For A/B storage measurements or an emergency
