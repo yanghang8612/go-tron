@@ -496,17 +496,57 @@ func (s *Server) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage) (*apipb
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	result := make([]*corepb.Witness, len(witnesses))
-	for i, w := range witnesses {
-		addrBytes := common.FromHex(w.Address)
-		result[i] = &corepb.Witness{
-			Address:   addrBytes,
+	return witnessListFromInfos(witnesses), nil
+}
+
+func (s *Server) GetPaginatedNowWitnessList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.WitnessList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	witnesses, err := s.backend.ListWitnesses()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return witnessListFromInfos(page), nil
+}
+
+func witnessListFromInfos(witnesses []*tronapi.WitnessInfo) *apipb.WitnessList {
+	result := make([]*corepb.Witness, 0, len(witnesses))
+	for _, w := range witnesses {
+		if w == nil {
+			continue
+		}
+		result = append(result, &corepb.Witness{
+			Address:   common.FromHex(w.Address),
 			VoteCount: w.VoteCount,
 			Url:       w.URL,
 			IsJobs:    w.IsJobs,
-		}
+		})
 	}
-	return &apipb.WitnessList{Witnesses: result}, nil
+	return &apipb.WitnessList{Witnesses: result}
+}
+
+func paginateWitnessInfos(witnesses []*tronapi.WitnessInfo, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be non-negative")
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be non-negative")
+	}
+	if limit == 0 || offset >= int64(len(witnesses)) {
+		return nil, nil
+	}
+	remaining := int64(len(witnesses)) - offset
+	if limit > remaining {
+		limit = remaining
+	}
+	start := int(offset)
+	end := int(offset + limit)
+	return witnesses[start:end], nil
 }
 
 // GetNextMaintenanceTime returns the timestamp of the next maintenance window.
@@ -730,6 +770,34 @@ func (s *Server) GetAssetIssueById(_ context.Context, in *apipb.BytesMessage) (*
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
 	return ac, nil
+}
+
+func (s *Server) GetAssetIssueByName(_ context.Context, in *apipb.BytesMessage) (*contractpb.AssetIssueContract, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByName(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return nil, status.Error(codes.NotFound, "asset not found")
+	}
+	return ac, nil
+}
+
+func (s *Server) GetAssetIssueListByName(_ context.Context, in *apipb.BytesMessage) (*apipb.AssetIssueList, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByName(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return &apipb.AssetIssueList{}, nil
+	}
+	return &apipb.AssetIssueList{AssetIssue: []*contractpb.AssetIssueContract{ac}}, nil
 }
 
 // GetAssetIssueByAccount returns the TRC10 token created by the given account.

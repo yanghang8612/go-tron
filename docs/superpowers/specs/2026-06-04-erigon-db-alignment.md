@@ -1196,6 +1196,10 @@ Status:
   coverage writes legacy and V2 delegation buckets plus delegation indexes
   through temporal SystemDelegation history and verifies block-1/block-2 as-of
   reads diverge.
+  gRPC `Wallet` now covers the live TRC10 asset-name and paginated witness
+  read methods, and `WalletSolidity.GetAssetIssueListByName` plus
+  `GetPaginatedNowWitnessList` reuse the same solid-bound `SystemAsset` and
+  witness archive paths as their single-item/list peers.
   HTTP solidity/PBFT `getaccountbyid` now dispatches through
   `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
   `account_id` path through the same solid-block archive session. Backend

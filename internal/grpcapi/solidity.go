@@ -301,16 +301,22 @@ func (s *SolidityServer) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	result := make([]*corepb.Witness, len(witnesses))
-	for i, w := range witnesses {
-		result[i] = &corepb.Witness{
-			Address:   common.FromHex(w.Address),
-			VoteCount: w.VoteCount,
-			Url:       w.URL,
-			IsJobs:    w.IsJobs,
-		}
+	return witnessListFromInfos(witnesses), nil
+}
+
+func (s *SolidityServer) GetPaginatedNowWitnessList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.WitnessList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	return &apipb.WitnessList{Witnesses: result}, nil
+	witnesses, err := s.backend.ListWitnessesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return witnessListFromInfos(page), nil
 }
 
 func (s *SolidityServer) GetAssetIssueList(_ context.Context, _ *apipb.EmptyMessage) (*apipb.AssetIssueList, error) {
@@ -344,6 +350,20 @@ func (s *SolidityServer) GetAssetIssueByName(_ context.Context, in *apipb.BytesM
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
 	return ac, nil
+}
+
+func (s *SolidityServer) GetAssetIssueListByName(_ context.Context, in *apipb.BytesMessage) (*apipb.AssetIssueList, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByNameAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return &apipb.AssetIssueList{}, nil
+	}
+	return &apipb.AssetIssueList{AssetIssue: []*contractpb.AssetIssueContract{ac}}, nil
 }
 
 func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMessage) (*contractpb.AssetIssueContract, error) {

@@ -1352,6 +1352,20 @@ func TestSolidity_AssetQueriesUseSolidBoundArchivePath(t *testing.T) {
 		t.Fatalf("live GetAssetIssueByName called %d times, want 0", backend.liveAssetName)
 	}
 
+	listByName, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueListByName: %v", err)
+	}
+	if len(listByName.GetAssetIssue()) != 1 || listByName.GetAssetIssue()[0].GetId() != "bound-name" {
+		t.Fatalf("GetAssetIssueListByName = %+v, want solid-bound name sentinel", listByName.GetAssetIssue())
+	}
+	if backend.lastAssetNameAt != 89 {
+		t.Fatalf("GetAssetIssueByNameAt block after list-by-name = %d, want solid block 89", backend.lastAssetNameAt)
+	}
+	if backend.liveAssetName != 0 {
+		t.Fatalf("live GetAssetIssueByName called %d times after list-by-name, want 0", backend.liveAssetName)
+	}
+
 	list, err := client.GetAssetIssueList(context.Background(), &apipb.EmptyMessage{})
 	if err != nil {
 		t.Fatalf("GetAssetIssueList: %v", err)
@@ -1647,6 +1661,20 @@ func TestSolidity_ListWitnessesUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveWitnesses != 0 {
 		t.Fatalf("live ListWitnesses called %d times, want 0", backend.liveWitnesses)
+	}
+
+	page, err := client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 1})
+	if err != nil {
+		t.Fatalf("GetPaginatedNowWitnessList: %v", err)
+	}
+	if len(page.GetWitnesses()) != 1 || string(page.GetWitnesses()[0].GetUrl()) != "solid-witness" {
+		t.Fatalf("GetPaginatedNowWitnessList = %+v, want solid-bound witness", page.GetWitnesses())
+	}
+	if backend.lastWitnessesAt != 97 {
+		t.Fatalf("ListWitnessesAt block after paginated call = %d, want solid block 97", backend.lastWitnessesAt)
+	}
+	if backend.liveWitnesses != 0 {
+		t.Fatalf("live ListWitnesses called %d times after paginated call, want 0", backend.liveWitnesses)
 	}
 }
 

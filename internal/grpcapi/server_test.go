@@ -43,6 +43,7 @@ type testBackend struct {
 	accountIDErr            error
 	accountIDAtErr          error
 	assetErr                error
+	assetByName             *contractpb.AssetIssueContract
 	marketErr               error
 	exchange                *corepb.Exchange
 	exchangeErr             error
@@ -276,7 +277,10 @@ func (b *testBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractp
 	return nil, nil
 }
 func (b *testBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
-	return nil, b.assetErr
+	if b.assetErr != nil {
+		return nil, b.assetErr
+	}
+	return b.assetByName, nil
 }
 func (b *testBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	return nil, nil
@@ -1007,6 +1011,27 @@ func TestListWitnesses(t *testing.T) {
 	}
 }
 
+func TestGetPaginatedNowWitnessList(t *testing.T) {
+	ws := []*tronapi.WitnessInfo{
+		{Address: "000000000000000000000000000000000000000001", VoteCount: 100, URL: "w1", IsJobs: true},
+		{Address: "000000000000000000000000000000000000000002", VoteCount: 200, URL: "w2", IsJobs: false},
+		{Address: "000000000000000000000000000000000000000003", VoteCount: 300, URL: "w3", IsJobs: true},
+	}
+	client := newTestClient(t, &testBackend{witnesses: ws})
+	resp, err := client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: 1, Limit: 1})
+	if err != nil {
+		t.Fatalf("GetPaginatedNowWitnessList: %v", err)
+	}
+	if len(resp.GetWitnesses()) != 1 || string(resp.GetWitnesses()[0].GetUrl()) != "w2" {
+		t.Fatalf("page = %+v, want second witness", resp.GetWitnesses())
+	}
+
+	_, err = client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: -1, Limit: 1})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("negative offset error = %v, want InvalidArgument", err)
+	}
+}
+
 func TestGetNextMaintenanceTime(t *testing.T) {
 	client := newTestClient(t, &testBackend{nextMaint: 1234567890000})
 	resp, err := client.GetNextMaintenanceTime(context.Background(), &apipb.EmptyMessage{})
@@ -1434,6 +1459,47 @@ func TestGetPaginatedAssetIssueList(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetAssetIssueByNameAndListByName(t *testing.T) {
+	asset := &contractpb.AssetIssueContract{
+		Id:          "1000001",
+		Name:        []byte("TOKEN"),
+		TotalSupply: 99,
+	}
+	client := newTestClient(t, &testBackend{assetByName: asset})
+
+	byName, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueByName: %v", err)
+	}
+	if byName.GetId() != "1000001" || byName.GetTotalSupply() != 99 {
+		t.Fatalf("GetAssetIssueByName = %+v, want asset", byName)
+	}
+
+	list, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueListByName: %v", err)
+	}
+	if len(list.GetAssetIssue()) != 1 || list.GetAssetIssue()[0].GetId() != "1000001" {
+		t.Fatalf("GetAssetIssueListByName = %+v, want one asset", list.GetAssetIssue())
+	}
+}
+
+func TestGetAssetIssueByNameNotFound(t *testing.T) {
+	client := newTestClient(t, &testBackend{})
+	_, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("MISSING")})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetAssetIssueByName error = %v, want NotFound", err)
+	}
+
+	list, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("MISSING")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueListByName missing: %v", err)
+	}
+	if len(list.GetAssetIssue()) != 0 {
+		t.Fatalf("missing list has %d assets, want 0", len(list.GetAssetIssue()))
 	}
 }
 
