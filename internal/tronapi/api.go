@@ -988,9 +988,16 @@ func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAccountBalance(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountBalance(w, r, nil, "")
+}
+
+func (api *API) handleGetAccountBalance(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
 	req, err := parseAccountBalanceRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !balanceTraceIdentifierWithinBound(w, req.GetBlockIdentifier(), boundFn, notReadyMessage) {
 		return
 	}
 	resp, err := api.backend.GetAccountBalanceTrace(req)
@@ -1002,9 +1009,16 @@ func (api *API) getAccountBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockBalanceTrace(w, r, nil, "")
+}
+
+func (api *API) handleGetBlockBalanceTrace(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
 	id, err := parseBlockBalanceIdentifierRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !balanceTraceIdentifierWithinBound(w, id, boundFn, notReadyMessage) {
 		return
 	}
 	trace, err := api.backend.GetBlockBalanceTrace(id)
@@ -1013,6 +1027,17 @@ func (api *API) getBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeTronJSON(w, trace)
+}
+
+func balanceTraceIdentifierWithinBound(w http.ResponseWriter, id *contractpb.BlockBalanceTrace_BlockIdentifier, boundFn func() uint64, notReadyMessage string) bool {
+	if boundFn == nil || id == nil || id.GetNumber() < 0 {
+		return true
+	}
+	if uint64(id.GetNumber()) > boundFn() {
+		http.Error(w, notReadyMessage, http.StatusNotFound)
+		return false
+	}
+	return true
 }
 
 type balanceTraceBlockIDJSON struct {

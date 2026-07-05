@@ -25,6 +25,8 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	// response reflects the post-solidified state, not live head.
 	mux.HandleFunc("/walletsolidity/getaccount", api.getSolidAccount)
 	mux.HandleFunc("/walletsolidity/getaccountresource", api.getSolidAccountResource)
+	mux.HandleFunc("/walletsolidity/getaccountbalance", api.getSolidAccountBalance)
+	mux.HandleFunc("/walletsolidity/getblockbalancetrace", api.getSolidBlockBalanceTrace)
 	mux.HandleFunc("/walletsolidity/getcontract", api.getSolidContract)
 	mux.HandleFunc("/walletsolidity/getreward", api.getSolidReward)
 	mux.HandleFunc("/walletsolidity/getbrokerage", api.getSolidBrokerage)
@@ -78,6 +80,8 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getPbftBlockByLimitNext)
 	mux.HandleFunc("/walletpbft/getaccount", api.getPbftAccount)
 	mux.HandleFunc("/walletpbft/getaccountresource", api.getPbftAccountResource)
+	mux.HandleFunc("/walletpbft/getaccountbalance", api.getPbftAccountBalance)
+	mux.HandleFunc("/walletpbft/getblockbalancetrace", api.getPbftBlockBalanceTrace)
 	mux.HandleFunc("/walletpbft/getcontract", api.getPbftContract)
 	mux.HandleFunc("/walletpbft/getreward", api.getPbftReward)
 	mux.HandleFunc("/walletpbft/getbrokerage", api.getPbftBrokerage)
@@ -152,6 +156,22 @@ func (api *API) getSolidAccountResource(w http.ResponseWriter, r *http.Request) 
 
 func (api *API) getPbftAccountResource(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountResource(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidAccountBalance(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountBalance(w, r, api.solidBoundNum, "block not yet solidified")
+}
+
+func (api *API) getPbftAccountBalance(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountBalance(w, r, api.pbftBoundNum, "block not yet pbft-confirmed")
+}
+
+func (api *API) getSolidBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockBalanceTrace(w, r, api.solidBoundNum, "block not yet solidified")
+}
+
+func (api *API) getPbftBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockBalanceTrace(w, r, api.pbftBoundNum, "block not yet pbft-confirmed")
 }
 
 func (api *API) getSolidContract(w http.ResponseWriter, r *http.Request) {

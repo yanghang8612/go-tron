@@ -1754,7 +1754,10 @@ Status:
   balance lookup follows java-tron's `getPrevBalance` ordering: if the request
   block has no exact account trace, the response reports the newest trace block
   at or before the requested height; if no prior row exists, it returns the
-  requested block identifier and zero balance.
+  requested block identifier and zero balance. HTTP `/walletsolidity` and
+  `/walletpbft` now expose the same two trace endpoints but gate the explicit
+  request block identifier at the solid/PBFT boundary before reading hot/cold
+  trace rows.
 - History-enabled canonical block replay now records java-tron-compatible
   `BlockBalanceTrace` transaction operations from actual StateDB balance
   mutations and writes final `AccountTrace` rows for every account whose

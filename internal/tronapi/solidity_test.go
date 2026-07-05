@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -186,6 +187,107 @@ func TestSolidityGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	assertHTTPEmptyObject(t, resp)
+}
+
+func TestSolidityBalanceTraceRoutesUseSolidBoundGate(t *testing.T) {
+	stub := &solidStubBackend{solidNum: 42, pbftNum: -1}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBalanceTraceRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftBalanceTraceRoutesUsePbftBoundGate(t *testing.T) {
+	stub := &solidStubBackend{solidNum: 42, pbftNum: 13}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBalanceTraceRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertBalanceTraceRoutesUseBound(t *testing.T, prefix string, stub *solidStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	hashHex := strings.Repeat("11", common.HashLength)
+	hashBytes, err := hex.DecodeString(hashHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub.accountBalanceResp = &contractpb.AccountBalanceResponse{
+		Balance: 123,
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Number: int64(wantBlock),
+			Hash:   hashBytes,
+		},
+	}
+	stub.blockBalanceTrace = &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Number: int64(wantBlock),
+			Hash:   hashBytes,
+		},
+		Timestamp: 456,
+	}
+
+	accountBody := balanceTraceAccountBody(wantBlock, hashHex)
+	resp, err := http.Post(prefix+"/getaccountbalance", "application/json", strings.NewReader(accountBody))
+	if err != nil {
+		t.Fatalf("getaccountbalance request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getaccountbalance status = %d, want 200", resp.StatusCode)
+	}
+	if stub.lastAccountBalanceReq == nil || stub.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != int64(wantBlock) {
+		t.Fatalf("GetAccountBalanceTrace request = %+v, want block %d", stub.lastAccountBalanceReq, wantBlock)
+	}
+
+	stub.lastAccountBalanceReq = nil
+	resp, err = http.Post(prefix+"/getaccountbalance", "application/json", strings.NewReader(balanceTraceAccountBody(wantBlock+1, hashHex)))
+	if err != nil {
+		t.Fatalf("future getaccountbalance request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("future getaccountbalance status = %d, want 404", resp.StatusCode)
+	}
+	if stub.lastAccountBalanceReq != nil {
+		t.Fatalf("future getaccountbalance called backend with request %+v", stub.lastAccountBalanceReq)
+	}
+
+	blockBody := balanceTraceBlockBody(wantBlock, hashHex)
+	resp, err = http.Post(prefix+"/getblockbalancetrace", "application/json", strings.NewReader(blockBody))
+	if err != nil {
+		t.Fatalf("getblockbalancetrace request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getblockbalancetrace status = %d, want 200", resp.StatusCode)
+	}
+	if stub.lastBlockBalanceTraceID == nil || stub.lastBlockBalanceTraceID.GetNumber() != int64(wantBlock) {
+		t.Fatalf("GetBlockBalanceTrace id = %+v, want block %d", stub.lastBlockBalanceTraceID, wantBlock)
+	}
+
+	stub.lastBlockBalanceTraceID = nil
+	resp, err = http.Post(prefix+"/getblockbalancetrace", "application/json", strings.NewReader(balanceTraceBlockBody(wantBlock+1, hashHex)))
+	if err != nil {
+		t.Fatalf("future getblockbalancetrace request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("future getblockbalancetrace status = %d, want 404", resp.StatusCode)
+	}
+	if stub.lastBlockBalanceTraceID != nil {
+		t.Fatalf("future getblockbalancetrace called backend with id %+v", stub.lastBlockBalanceTraceID)
+	}
+}
+
+func balanceTraceAccountBody(blockNum uint64, hash string) string {
+	return `{"account_identifier":{"address":"4100000000000000000000000000000000000000aa"},"block_identifier":{"number":` +
+		strconv.FormatUint(blockNum, 10) + `,"hash":"` + hash + `"}}`
+}
+
+func balanceTraceBlockBody(blockNum uint64, hash string) string {
+	return `{"number":` + strconv.FormatUint(blockNum, 10) + `,"hash":"` + hash + `"}`
 }
 
 func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
