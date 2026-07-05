@@ -2769,6 +2769,20 @@ def string_set_field(row, field):
     return {str(value) for value in raw}
 
 
+def duplicate_string_list_entries(row, field):
+    raw = row.get(field)
+    if not isinstance(raw, list):
+        return []
+    seen = set()
+    duplicates = set()
+    for value in raw:
+        value = str(value)
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return sorted(duplicates)
+
+
 def archive_api_methods(row):
     return string_set_field(row, "archiveApiMethods")
 
@@ -2951,6 +2965,11 @@ def check_archive_api_evidence(
     elif not methods:
         issues.append("archiveApiMethods must be a non-empty list")
     else:
+        duplicates = duplicate_string_list_entries(row, "archiveApiMethods")
+        if duplicates:
+            issues.append(
+                "archiveApiMethods contains duplicate methods: " + ",".join(duplicates)
+            )
         method_count = archive_api_method_count(row)
         if (
             failures == 0
@@ -3003,6 +3022,11 @@ def check_archive_tx_evidence(row, require_trace_transaction=False):
     elif not tx_methods:
         issues.append("archiveApiTxMethods must be a non-empty list")
     else:
+        duplicates = duplicate_string_list_entries(row, "archiveApiTxMethods")
+        if duplicates:
+            issues.append(
+                "archiveApiTxMethods contains duplicate methods: " + ",".join(duplicates)
+            )
         missing = sorted(set(required_methods) - tx_methods)
         if missing:
             issues.append("archiveApiTxMethods missing required methods: " + ",".join(missing))

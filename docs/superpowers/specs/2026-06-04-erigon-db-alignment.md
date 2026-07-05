@@ -1420,7 +1420,9 @@ Status:
   and receipt archive proof with `archiveApiTx*` fields and
   `--require-archive-tx-evidence`; the sampler/benchmark probes count `null`
   or wrong-transaction JSON-RPC results as failures rather than successful
-  methods, and acceptance rejects detached tx-only rows or malformed tx hashes.
+  methods, and acceptance rejects detached tx-only rows, malformed tx hashes,
+  or duplicate `archiveApiMethods`/`archiveApiTxMethods` entries that would
+  otherwise inflate the reported successful check count.
 
 Needed:
 
