@@ -111,6 +111,84 @@ func TestBalanceTraceSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestBuildBalanceTraceSegmentFromReaderMaterializesColdRows(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	targetDir := filepath.Join(root, "target")
+	source := rawdb.NewMemoryChainDB()
+	owner := balanceTraceTestAddress(0xc3)
+	trace := balanceTraceTestBlockTrace(10, 1000)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: owner.Bytes(),
+			Amount:  25,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(source, 10, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace 10: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(source, owner.Bytes(), 10, 1000); err != nil {
+		t.Fatalf("WriteAccountTrace owner 10: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(source, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace 12: %v", err)
+	}
+	sourceRef, err := BuildBalanceTraceSegmentFromDB(source, sourceDir, "", 10, 12)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := PublishManifest(sourceDir, NewManifest(0, 0, []SegmentRef{sourceRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(sourceDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	result, err := NewAggregator(targetDir).BuildBalanceTracesFromReaderWithOptions(mgr, 10, 12, RestoreETLOptions{BufferLimit: 1})
+	if err != nil {
+		t.Fatalf("BuildBalanceTracesFromReaderWithOptions: %v", err)
+	}
+	if result.Manifest == nil || len(result.Manifest.Segments) != 1 || len(result.Segments) != 1 {
+		t.Fatalf("BuildBalanceTracesFromReaderWithOptions result = %+v, want one manifest segment", result)
+	}
+	ref := result.Segments[0]
+	if err := CheckBalanceTraceSegment(targetDir, ref); err != nil {
+		t.Fatalf("CheckBalanceTraceSegment: %v", err)
+	}
+	if _, err := VerifyManifestFiles(targetDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	seg, err := OpenBalanceTraceSegment(targetDir, ref)
+	if err != nil {
+		t.Fatalf("OpenBalanceTraceSegment: %v", err)
+	}
+	defer seg.Close()
+	gotTrace, ok, err := seg.BlockBalanceTrace(10)
+	if err != nil || !ok || gotTrace.GetTimestamp() != 1000 {
+		t.Fatalf("BlockBalanceTrace 10 = %+v/%v/%v, want timestamp 1000", gotTrace, ok, err)
+	}
+	block, balance, ok, err := seg.AccountTraceAtOrBefore(owner.Bytes(), 10)
+	if err != nil || !ok || block != 10 || balance != 1000 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%d/%v/%v, want 10/1000/true/nil", block, balance, ok, err)
+	}
+}
+
+func TestBuildBalanceTraceSegmentFromReaderRequiresExactAccountRows(t *testing.T) {
+	owner := balanceTraceTestAddress(0xc4)
+	trace := balanceTraceTestBlockTrace(10, 1000)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: owner.Bytes(),
+			Amount:  25,
+		}},
+	}}
+	_, err := BuildBalanceTraceSegmentFromReader(balanceTraceMissingAccountReader{trace: trace}, t.TempDir(), "", 10, 10)
+	if err == nil || !strings.Contains(err.Error(), "missing exact AccountTrace") {
+		t.Fatalf("BuildBalanceTraceSegmentFromReader missing account err = %v, want missing exact AccountTrace", err)
+	}
+}
+
 func TestBalanceTracePayloadReadRejectsOutOfBoundsBeforeAlloc(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "balance-trace-payload.bin")
 	if err := os.WriteFile(path, []byte{0x01, 0x02, 0x03, 0x04}, 0o644); err != nil {
@@ -356,6 +434,21 @@ func balanceTraceTestBlockTrace(blockNum int64, timestamp int64) *contractpb.Blo
 		},
 		Timestamp: timestamp,
 	}
+}
+
+type balanceTraceMissingAccountReader struct {
+	trace *contractpb.BlockBalanceTrace
+}
+
+func (r balanceTraceMissingAccountReader) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	if r.trace != nil && r.trace.GetBlockIdentifier().GetNumber() == blockNum {
+		return r.trace, true, nil
+	}
+	return nil, false, nil
+}
+
+func (balanceTraceMissingAccountReader) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	return 0, 0, false, nil
 }
 
 func rewriteBalanceTracePayloadNumber(t *testing.T, dir string, ref SegmentRef, blockNum, payloadNumber int64) {

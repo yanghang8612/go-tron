@@ -108,6 +108,80 @@ func BuildBalanceTraceSegmentFromDBWithOptions(db ethdb.Iteratee, dir, relPath s
 	return writeBalanceTraceSegmentFromDB(db, dir, ref, blockCount, accountCount, collector)
 }
 
+func BuildBalanceTraceSegmentFromReader(reader rawdb.BalanceTraceReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return BuildBalanceTraceSegmentFromReaderWithOptions(reader, dir, relPath, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func BuildBalanceTraceSegmentFromReaderWithOptions(reader rawdb.BalanceTraceReader, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
+	if reader == nil {
+		return SegmentRef{}, errors.New("snapshots: nil balance trace reader")
+	}
+	if dir == "" {
+		return SegmentRef{}, errors.New("snapshots: balance trace segment directory is empty")
+	}
+	if toBlock < fromBlock {
+		return SegmentRef{}, fmt.Errorf("snapshots: balance trace range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	if toBlock > math.MaxInt64 {
+		return SegmentRef{}, fmt.Errorf("snapshots: balance trace to-block %d exceeds int64 block number range", toBlock)
+	}
+	if relPath == "" {
+		relPath = BalanceTraceSegmentPath(fromBlock, toBlock)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetBalanceTrace,
+		Kind:      SegmentBalanceTrace,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      filepath.ToSlash(relPath),
+	}
+	if err := validateSegmentRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	defer collector.Close()
+
+	var blockCount uint64
+	var accountCount uint64
+	for blockNum := fromBlock; ; blockNum++ {
+		trace, ok, err := reader.BlockBalanceTrace(int64(blockNum))
+		if err != nil {
+			return SegmentRef{}, err
+		}
+		if ok {
+			if err := validateBalanceTracePayloadBlockNumber(int64(blockNum), trace); err != nil {
+				return SegmentRef{}, err
+			}
+			blockCount++
+			touched, err := balanceTraceTouchedAccounts(trace)
+			if err != nil {
+				return SegmentRef{}, err
+			}
+			for _, owner := range touched {
+				traceBlock, balance, ok, err := reader.AccountTraceAtOrBefore(owner[:], int64(blockNum))
+				if err != nil {
+					return SegmentRef{}, err
+				}
+				if !ok || traceBlock != int64(blockNum) {
+					return SegmentRef{}, fmt.Errorf("snapshots: missing exact AccountTrace owner=%x block=%d for balance trace reader build", owner[:], blockNum)
+				}
+				if err := collector.Put(balanceTraceAccountETLKey(owner[:], blockNum), balanceTraceAccountETLValue(balance)); err != nil {
+					return SegmentRef{}, err
+				}
+				accountCount++
+			}
+		}
+		if blockNum == toBlock {
+			break
+		}
+	}
+	return writeBalanceTraceSegmentFromReader(reader, dir, ref, blockCount, accountCount, collector)
+}
+
 func CheckBalanceTraceSegment(dir string, ref SegmentRef) error {
 	if err := validateBalanceTraceRef(ref); err != nil {
 		return err
@@ -337,8 +411,52 @@ func collectBalanceTraceAccountRowsToETL(db ethdb.Iteratee, fromBlock, toBlock u
 }
 
 func writeBalanceTraceSegmentFromDB(db ethdb.Iteratee, dir string, ref SegmentRef, blockCount, accountCount uint64, accountCollector *etl.Collector) (SegmentRef, error) {
+	return writeBalanceTraceSegment(dir, ref, blockCount, accountCount, accountCollector, func(fn func(uint64, []byte) error) error {
+		return rawdb.IterateBlockBalanceTraceRows(db, int64(ref.FromTxNum), int64(ref.ToTxNum), func(blockNum int64, raw []byte) (bool, error) {
+			if blockNum < 0 {
+				return false, fmt.Errorf("snapshots: negative balance trace block %d", blockNum)
+			}
+			if err := fn(uint64(blockNum), raw); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+	})
+}
+
+func writeBalanceTraceSegmentFromReader(reader rawdb.BalanceTraceReader, dir string, ref SegmentRef, blockCount, accountCount uint64, accountCollector *etl.Collector) (SegmentRef, error) {
+	return writeBalanceTraceSegment(dir, ref, blockCount, accountCount, accountCollector, func(fn func(uint64, []byte) error) error {
+		for blockNum := ref.FromTxNum; ; blockNum++ {
+			trace, ok, err := reader.BlockBalanceTrace(int64(blockNum))
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := validateBalanceTracePayloadBlockNumber(int64(blockNum), trace); err != nil {
+					return err
+				}
+				raw, err := proto.Marshal(trace)
+				if err != nil {
+					return fmt.Errorf("snapshots: marshal balance trace block %d: %w", blockNum, err)
+				}
+				if err := fn(blockNum, raw); err != nil {
+					return err
+				}
+			}
+			if blockNum == ref.ToTxNum {
+				break
+			}
+		}
+		return nil
+	})
+}
+
+func writeBalanceTraceSegment(dir string, ref SegmentRef, blockCount, accountCount uint64, accountCollector *etl.Collector, iterateBlocks func(func(uint64, []byte) error) error) (SegmentRef, error) {
 	if accountCollector == nil {
 		return SegmentRef{}, errors.New("snapshots: nil balance trace account ETL collector")
+	}
+	if iterateBlocks == nil {
+		return SegmentRef{}, errors.New("snapshots: nil balance trace block iterator")
 	}
 	blockIndexBytes, overflow := checkedMul(blockCount, balanceTraceBlockIndexEntrySize)
 	if overflow {
@@ -376,20 +494,19 @@ func writeBalanceTraceSegmentFromDB(db ethdb.Iteratee, dir string, ref SegmentRe
 	}
 	var blockOrdinal uint64
 	var prevBlock uint64
-	if err := rawdb.IterateBlockBalanceTraceRows(db, int64(ref.FromTxNum), int64(ref.ToTxNum), func(blockNum int64, raw []byte) (bool, error) {
-		if blockNum < 0 {
-			return false, fmt.Errorf("snapshots: negative balance trace block %d", blockNum)
-		}
-		num := uint64(blockNum)
+	if err := iterateBlocks(func(num uint64, raw []byte) error {
 		if blockOrdinal > 0 && num <= prevBlock {
-			return false, fmt.Errorf("snapshots: balance trace blocks are not strictly increasing")
+			return fmt.Errorf("snapshots: balance trace blocks are not strictly increasing")
+		}
+		if num < ref.FromTxNum || num > ref.ToTxNum {
+			return fmt.Errorf("snapshots: balance trace block %d outside [%d,%d]", num, ref.FromTxNum, ref.ToTxNum)
 		}
 		offset, err := tmp.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if _, err := tmp.Write(raw); err != nil {
-			return false, err
+			return err
 		}
 		entry := balanceTraceBlockIndexEntry{
 			blockNum: num,
@@ -397,11 +514,11 @@ func writeBalanceTraceSegmentFromDB(db ethdb.Iteratee, dir string, ref SegmentRe
 			length:   uint64(len(raw)),
 		}
 		if err := writeBalanceTraceBlockIndexEntryAt(tmp, header.blockIndexOffset+blockOrdinal*balanceTraceBlockIndexEntrySize, entry); err != nil {
-			return false, err
+			return err
 		}
 		prevBlock = num
 		blockOrdinal++
-		return true, nil
+		return nil
 	}); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
@@ -460,6 +577,36 @@ func writeBalanceTraceSegmentFromDB(db ethdb.Iteratee, dir string, ref SegmentRe
 		return SegmentRef{}, err
 	}
 	return ref, nil
+}
+
+func balanceTraceTouchedAccounts(trace *contractpb.BlockBalanceTrace) ([]common.Address, error) {
+	if trace == nil {
+		return nil, nil
+	}
+	touched := make(map[common.Address]struct{})
+	for _, txTrace := range trace.GetTransactionBalanceTrace() {
+		if txTrace == nil {
+			continue
+		}
+		for _, op := range txTrace.GetOperation() {
+			if op == nil {
+				continue
+			}
+			addr := op.GetAddress()
+			if len(addr) != common.AddressLength {
+				return nil, fmt.Errorf("snapshots: malformed balance trace address length %d, want %d", len(addr), common.AddressLength)
+			}
+			touched[common.BytesToAddress(addr)] = struct{}{}
+		}
+	}
+	out := make([]common.Address, 0, len(touched))
+	for owner := range touched {
+		out = append(out, owner)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i][:], out[j][:]) < 0
+	})
+	return out, nil
 }
 
 type balanceTraceAccountIndexETLWriter struct {
