@@ -11,6 +11,17 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
+type sectionBloomMalformedReader struct {
+	raw []byte
+}
+
+func (r sectionBloomMalformedReader) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	if section == 0 && bitIndex == 42 {
+		return r.raw, true, nil
+	}
+	return nil, false, nil
+}
+
 func TestSectionBloomSegmentBuildVerifyLookup(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
@@ -76,6 +87,82 @@ func TestSectionBloomSegmentBuildVerifyLookup(t *testing.T) {
 	bitset, ok, err := rawdb.ReadSectionBloomBitSet(coldOnly, 1, 99)
 	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 3) {
 		t.Fatalf("rawdb cold ReadSectionBloomBitSet = %x/%v/%v, want bit 3", bitset, ok, err)
+	}
+}
+
+func TestBuildSectionBloomSegmentFromReaderMaterializesColdRows(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	targetDir := filepath.Join(root, "target")
+	source := rawdb.NewMemoryChainDB()
+
+	rowA := sectionBloomTestEncodedBit(t, 5)
+	rowB := sectionBloomTestEncodedBit(t, 3)
+	rowOutside := sectionBloomTestEncodedBit(t, 11)
+	if err := rawdb.WriteSectionBloom(source, 0, 42, rowA); err != nil {
+		t.Fatalf("WriteSectionBloom 0/42: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(source, 1, 99, rowB); err != nil {
+		t.Fatalf("WriteSectionBloom 1/99: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(source, 2, 100, rowOutside); err != nil {
+		t.Fatalf("WriteSectionBloom outside: %v", err)
+	}
+	if _, err := NewAggregator(sourceDir).BuildSectionBlooms(source, 0, rawdb.SectionBloomBlockPerSection*3-1); err != nil {
+		t.Fatalf("BuildSectionBlooms source: %v", err)
+	}
+	sourceManager, err := OpenManager(sourceDir)
+	if err != nil {
+		t.Fatalf("OpenManager source: %v", err)
+	}
+
+	result, err := NewAggregator(targetDir).BuildSectionBloomsFromReaderWithOptions(sourceManager, 0, rawdb.SectionBloomBlockPerSection*2-1, RestoreETLOptions{
+		TempDir:     filepath.Join(root, "etl-scratch"),
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildSectionBloomsFromReaderWithOptions: %v", err)
+	}
+	if len(result.Segments) != 1 {
+		t.Fatalf("BuildSectionBloomsFromReaderWithOptions segments = %d, want 1", len(result.Segments))
+	}
+	ref := result.Segments[0]
+	if err := CheckSectionBloomSegment(targetDir, ref); err != nil {
+		t.Fatalf("CheckSectionBloomSegment: %v", err)
+	}
+	if _, err := VerifyManifestFiles(targetDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+
+	seg, err := OpenSectionBloomSegment(targetDir, ref)
+	if err != nil {
+		t.Fatalf("OpenSectionBloomSegment target: %v", err)
+	}
+	defer seg.Close()
+	raw, ok, err := seg.SectionBloom(1, 99)
+	if err != nil || !ok || !bytes.Equal(raw, rowB) {
+		t.Fatalf("SectionBloom 1/99 = %x/%v/%v, want rowB", raw, ok, err)
+	}
+	if raw, ok, err := seg.SectionBloom(2, 100); err != nil || ok || raw != nil {
+		t.Fatalf("SectionBloom outside = %x/%v/%v, want nil/false/nil", raw, ok, err)
+	}
+
+	targetManager, err := OpenManager(targetDir)
+	if err != nil {
+		t.Fatalf("OpenManager target: %v", err)
+	}
+	coldOnly := rawdb.NewMemoryChainDB()
+	coldOnly.SetSectionBloomReader(targetManager)
+	bitset, ok, err := rawdb.ReadSectionBloomBitSet(coldOnly, 0, 42)
+	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 5) {
+		t.Fatalf("rawdb cold ReadSectionBloomBitSet = %x/%v/%v, want bit 5", bitset, ok, err)
+	}
+}
+
+func TestBuildSectionBloomSegmentFromReaderRejectsMalformedPayload(t *testing.T) {
+	_, err := BuildSectionBloomSegmentFromReader(sectionBloomMalformedReader{raw: []byte{0x01}}, t.TempDir(), "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err == nil || !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("BuildSectionBloomSegmentFromReader error = %v, want decode error", err)
 	}
 }
 

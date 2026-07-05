@@ -229,6 +229,32 @@ func (a *Aggregator) BuildSectionBloomsWithOptions(db AggregatorDB, fromBlock, t
 	return a.BuildDerivedIndexes(db, fromBlock, toBlock, AggregatorBuildDerivedOptions{SectionBlooms: true, ETL: opts})
 }
 
+func (a *Aggregator) BuildSectionBloomsFromReader(reader rawdb.SectionBloomReader, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	return a.BuildSectionBloomsFromReaderWithOptions(reader, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func (a *Aggregator) BuildSectionBloomsFromReaderWithOptions(reader rawdb.SectionBloomReader, fromBlock, toBlock uint64, opts RestoreETLOptions) (*AggregatorBuildResult, error) {
+	if a == nil || a.dir == "" {
+		return nil, errors.New("snapshots: nil aggregator or empty directory")
+	}
+	ref, err := BuildSectionBloomSegmentFromReaderWithOptions(reader, a.dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
+	if err != nil {
+		return nil, err
+	}
+	visibleStart, visibleEnd := uint64(0), uint64(0)
+	if old, err := LoadProductionManifest(a.dir); err == nil {
+		visibleStart = old.VisibleTxStart
+		visibleEnd = old.VisibleTxEnd
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	manifest, err := a.Integrate(visibleStart, visibleEnd, []SegmentRef{ref})
+	if err != nil {
+		return nil, err
+	}
+	return &AggregatorBuildResult{Manifest: manifest, Segments: []SegmentRef{ref}}, nil
+}
+
 func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
 	return a.BuildEventLogsWithOptions(chain, fromBlock, toBlock, RestoreETLOptions{})
 }

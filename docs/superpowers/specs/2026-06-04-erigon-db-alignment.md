@@ -2398,8 +2398,8 @@ Remaining:
   and section-bloom segments after verified hot pruning, progress-aware
   lifecycle pruning now covers chain lookups, section blooms, and balance
   traces, balance-trace snapshot builds now reject incomplete source ranges,
-  cold balance-trace readers can be re-materialized into new manifest-integrated
-  segments, and isolated replay backfill has replay-DB resume,
+  cold balance-trace and section-bloom readers can be re-materialized into new
+  manifest-integrated segments, and isolated replay backfill has replay-DB resume,
   collector-backed trace writes, signed-snapshot checkpoint starts, and
   snapshot-aware balance-trace diagnostics. Production archive completeness still
   needs larger-datadir soak, recsplit-style event-log address/topic profiling

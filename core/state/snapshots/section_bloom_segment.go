@@ -47,6 +47,10 @@ type sectionBloomIndexEntry struct {
 	length   uint64
 }
 
+type sectionBloomRowIterator interface {
+	IterateSectionBloomRows(fromSection, toSection uint64, fn func(section, bitIndex uint64, raw []byte) error) error
+}
+
 func SectionBloomSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("log/section-bloom-%d-%d.seg", fromBlock, toBlock)
 }
@@ -84,6 +88,45 @@ func BuildSectionBloomSegmentFromDBWithOptions(db ethdb.Iteratee, dir, relPath s
 	}
 	defer collector.Close()
 	rowCount, err := collectSectionBloomRowsToETL(db, fromBlock, toBlock, collector)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	return writeSectionBloomSegmentFromETL(dir, ref, collector, rowCount)
+}
+
+func BuildSectionBloomSegmentFromReader(reader rawdb.SectionBloomReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return BuildSectionBloomSegmentFromReaderWithOptions(reader, dir, relPath, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func BuildSectionBloomSegmentFromReaderWithOptions(reader rawdb.SectionBloomReader, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
+	if reader == nil {
+		return SegmentRef{}, errors.New("snapshots: nil section bloom reader")
+	}
+	if dir == "" {
+		return SegmentRef{}, errors.New("snapshots: section bloom segment directory is empty")
+	}
+	if toBlock < fromBlock {
+		return SegmentRef{}, fmt.Errorf("snapshots: section bloom range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	if relPath == "" {
+		relPath = SectionBloomSegmentPath(fromBlock, toBlock)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetSectionBloom,
+		Kind:      SegmentSectionBloom,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      filepath.ToSlash(relPath),
+	}
+	if err := validateSectionBloomRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	defer collector.Close()
+	rowCount, err := collectSectionBloomRowsFromReaderToETL(reader, fromBlock, toBlock, collector)
 	if err != nil {
 		return SegmentRef{}, err
 	}
@@ -288,6 +331,44 @@ func (m *Manager) SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, er
 	return nil, false, nil
 }
 
+func (m *Manager) IterateSectionBloomRows(fromSection, toSection uint64, fn func(section, bitIndex uint64, raw []byte) error) error {
+	if m == nil || fn == nil {
+		return nil
+	}
+	if toSection < fromSection {
+		return fmt.Errorf("snapshots: section bloom section range [%d,%d] is inverted", fromSection, toSection)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return err
+	}
+	for _, ref := range sectionBloomRefs(manifest) {
+		refFromSection := ref.FromTxNum / rawdb.SectionBloomBlockPerSection
+		refToSection := ref.ToTxNum / rawdb.SectionBloomBlockPerSection
+		if refToSection < fromSection || refFromSection > toSection {
+			continue
+		}
+		seg, err := OpenSectionBloomSegment(m.dir, ref)
+		if err != nil {
+			return err
+		}
+		iterateErr := seg.IterateRows(func(section, bitIndex uint64, raw []byte) error {
+			if section < fromSection || section > toSection {
+				return nil
+			}
+			return fn(section, bitIndex, raw)
+		})
+		closeErr := seg.Close()
+		if iterateErr != nil {
+			return iterateErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
 func sectionBloomRefs(manifest *Manifest) []SegmentRef {
 	if manifest == nil {
 		return nil
@@ -331,6 +412,61 @@ func collectSectionBloomRowsToETL(db ethdb.Iteratee, fromBlock, toBlock uint64, 
 		return 0, err
 	}
 	return rowCount, nil
+}
+
+func collectSectionBloomRowsFromReaderToETL(reader rawdb.SectionBloomReader, fromBlock, toBlock uint64, collector *etl.Collector) (uint64, error) {
+	fromSection := fromBlock / rawdb.SectionBloomBlockPerSection
+	toSection := toBlock / rawdb.SectionBloomBlockPerSection
+	if iterator, ok := reader.(sectionBloomRowIterator); ok {
+		return collectSectionBloomRowsFromIteratorToETL(iterator, fromSection, toSection, collector)
+	}
+	var rowCount uint64
+	for section := fromSection; ; section++ {
+		for bitIndex := uint64(0); bitIndex < rawdb.SectionBloomBitSize; bitIndex++ {
+			value, ok, err := reader.SectionBloom(section, bitIndex)
+			if err != nil {
+				return 0, err
+			}
+			if !ok {
+				continue
+			}
+			if err := putSectionBloomRowToETL(collector, section, bitIndex, value); err != nil {
+				return 0, err
+			}
+			rowCount++
+		}
+		if section == toSection {
+			break
+		}
+	}
+	return rowCount, nil
+}
+
+func collectSectionBloomRowsFromIteratorToETL(iterator sectionBloomRowIterator, fromSection, toSection uint64, collector *etl.Collector) (uint64, error) {
+	var rowCount uint64
+	if err := iterator.IterateSectionBloomRows(fromSection, toSection, func(section, bitIndex uint64, value []byte) error {
+		if section < fromSection || section > toSection {
+			return nil
+		}
+		if err := putSectionBloomRowToETL(collector, section, bitIndex, value); err != nil {
+			return err
+		}
+		rowCount++
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return rowCount, nil
+}
+
+func putSectionBloomRowToETL(collector *etl.Collector, section, bitIndex uint64, value []byte) error {
+	if bitIndex >= rawdb.SectionBloomBitSize {
+		return fmt.Errorf("snapshots: section bloom row %d/%d exceeds bit index %d", section, bitIndex, rawdb.SectionBloomBitSize-1)
+	}
+	if _, err := rawdb.DecodeSectionBloomBitSet(value); err != nil {
+		return fmt.Errorf("snapshots: section bloom row %d/%d: decode: %w", section, bitIndex, err)
+	}
+	return collector.Put(sectionBloomETLKey(section, bitIndex), append([]byte(nil), value...))
 }
 
 func writeSectionBloomSegmentFromETL(dir string, ref SegmentRef, collector *etl.Collector, rowCount uint64) (SegmentRef, error) {
