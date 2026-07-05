@@ -75,6 +75,40 @@ func TestSectionBloom_ColdFallback(t *testing.T) {
 	}
 }
 
+func TestReadHotSectionBloomStrictIgnoresColdFallback(t *testing.T) {
+	coldEncoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, 7))
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet cold: %v", err)
+	}
+	hotEncoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, 9))
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet hot: %v", err)
+	}
+
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomReader{
+		rows: map[[2]uint64][]byte{
+			{3, 42}: coldEncoded,
+		},
+	})
+	if got, ok, err := ReadHotSectionBloomStrict(db, 3, 42); err != nil || ok || got != nil {
+		t.Fatalf("cold-only ReadHotSectionBloomStrict = %x/%v/%v, want missing hot row", got, ok, err)
+	}
+
+	if err := WriteSectionBloom(db, 3, 42, hotEncoded); err != nil {
+		t.Fatalf("WriteSectionBloom hot: %v", err)
+	}
+	got, ok, err := ReadHotSectionBloomStrict(db, 3, 42)
+	if err != nil || !ok || !bytes.Equal(got, hotEncoded) {
+		t.Fatalf("hot ReadHotSectionBloomStrict = %x/%v/%v, want hot row", got, ok, err)
+	}
+	got[0] ^= 0xff
+	again, ok, err := ReadHotSectionBloomStrict(db, 3, 42)
+	if err != nil || !ok || !bytes.Equal(again, hotEncoded) {
+		t.Fatalf("mutated ReadHotSectionBloomStrict result changed stored row = %x/%v/%v", again, ok, err)
+	}
+}
+
 func TestSectionBloomBitSetStrictUsesDecodedColdReader(t *testing.T) {
 	coldBitset := setSectionBloomBit(nil, 7)
 	hotBitset := setSectionBloomBit(nil, 9)

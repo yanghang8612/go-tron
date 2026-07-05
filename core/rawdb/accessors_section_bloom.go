@@ -73,6 +73,34 @@ func ReadSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) (
 	return nil, false, nil
 }
 
+// ReadHotSectionBloomStrict returns only the raw hot KV row for (section,
+// bitIndex). It intentionally does not consult cold snapshot sidecars, so
+// snapshot prune code can distinguish rows that still occupy Pebble space from
+// rows already served only by cold storage.
+func ReadHotSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read hot section bloom")
+	}
+	if err := validateSectionBloomBitIndex(bitIndex, "read hot section bloom"); err != nil {
+		return nil, false, err
+	}
+	key := sectionBloomKey(section, bitIndex)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, true, err
+	}
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out, true, nil
+}
+
 // DeleteSectionBloom removes the (section, bitIndex) entry.
 func DeleteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64) error {
 	if err := validateSectionBloomBitIndex(bitIndex, "delete section bloom"); err != nil {

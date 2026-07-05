@@ -51,6 +51,43 @@ func TestPruneHotSectionBloomsKeepsColdReads(t *testing.T) {
 	}
 }
 
+func TestPruneHotSectionBloomsCountsOnlyHotRowsDeleted(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := root + "/snapshot"
+	db := rawdb.NewMemoryChainDB()
+	rowA := sectionBloomTestEncodedBit(t, 5)
+	rowB := sectionBloomTestEncodedBit(t, 9)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, rowA); err != nil {
+		t.Fatalf("WriteSectionBloom 0/42: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 0, 99, rowB); err != nil {
+		t.Fatalf("WriteSectionBloom 0/99: %v", err)
+	}
+	ref, err := BuildSectionBloomSegmentFromDB(db, snapshotDir, "", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDB: %v", err)
+	}
+	manifest := NewManifest(0, 0, []SegmentRef{ref})
+	if err := PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := rawdb.DeleteSectionBloom(db, 0, 99); err != nil {
+		t.Fatalf("DeleteSectionBloom 0/99: %v", err)
+	}
+
+	result, err := PruneHotSectionBlooms(db, snapshotDir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotSectionBlooms: %v", err)
+	}
+	if !result.HasRange || result.FromSection != 0 || result.ToSection != 0 ||
+		result.ColdBloomSegments != 1 || result.RowsDeleted != 1 {
+		t.Fatalf("prune result = %+v, want one actual hot row deleted", result)
+	}
+	if got := rawdb.ReadSectionBloom(db, 0, 42); got != nil {
+		t.Fatalf("hot ReadSectionBloom 0/42 after prune = %x, want nil", got)
+	}
+}
+
 func TestPruneHotSectionBloomsRejectsColdMismatchBeforeDeleting(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := root + "/snapshot"

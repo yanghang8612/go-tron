@@ -1948,7 +1948,9 @@ Status:
 - `gtron snapshot prune-section-blooms` verifies the signed catalog and cold
   segment format, compares every hot `sb-` row in the covered section range
   byte-for-byte against the cold segment, and deletes the hot rows only after
-  that preflight succeeds.
+  that preflight succeeds. The prune result now counts only hot KV rows that
+  actually existed and were deleted, not extra rows that exist only in the cold
+  segment, so storage reclaim metrics match the live Pebble cleanup.
 - Production snapshot/prune lifecycle now runs section-bloom hot-row pruning
   with a persisted `SnapshotSectionBloomPrune` stage, so snap/full/block/minimal
   modes can keep reclaiming covered `sb-` rows across restarts without rescanning

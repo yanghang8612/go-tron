@@ -155,14 +155,24 @@ func verifyHotSectionBloomRowsCovered(db ethdb.Iteratee, seg *SectionBloomSegmen
 	return out, nil
 }
 
-func pruneHotSectionBloomRowsForSegment(db ethdb.KeyValueWriter, seg *SectionBloomSegment, ref SegmentRef, result *PruneHotSectionBloomResult, bounds sectionBloomPruneBounds) (bool, error) {
+func pruneHotSectionBloomRowsForSegment(db ethdb.KeyValueStore, seg *SectionBloomSegment, ref SegmentRef, result *PruneHotSectionBloomResult, bounds sectionBloomPruneBounds) (bool, error) {
 	var pruned bool
-	if err := seg.IterateRows(func(section, bitIndex uint64, _ []byte) error {
+	if err := seg.IterateRows(func(section, bitIndex uint64, coldRaw []byte) error {
 		if !sectionBloomRefCoversSection(ref, section) {
 			return fmt.Errorf("snapshots: section bloom segment %q section %d outside block range [%d,%d]", ref.Path, section, ref.FromTxNum, ref.ToTxNum)
 		}
 		if bounds.skipSection(section) {
 			return nil
+		}
+		hotRaw, ok, err := rawdb.ReadHotSectionBloomStrict(db, section, bitIndex)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if !bytes.Equal(hotRaw, coldRaw) {
+			return fmt.Errorf("snapshots: hot section bloom row section=%d bit=%d changed after cold verification", section, bitIndex)
 		}
 		if err := rawdb.DeleteSectionBloom(db, section, bitIndex); err != nil {
 			return err
