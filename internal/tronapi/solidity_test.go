@@ -617,6 +617,58 @@ func TestPbftGetTransactionInfoByIDWithinPbftReadsBackend(t *testing.T) {
 	}
 }
 
+func TestSolidityGetTransactionReceiptByIDRejectsAboveSolidBeforeBackend(t *testing.T) {
+	hash := testTransactionHash(0x05)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: -1},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		txInfo:           &corepb.TransactionInfo{Id: hash[:], BlockNumber: 10},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/gettransactionreceiptbyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with empty JSON for receipt above solid, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txInfoCalls != 0 {
+		t.Fatalf("GetTransactionInfoByID called %d times for unsolidified receipt, want 0", stub.txInfoCalls)
+	}
+}
+
+func TestPbftGetTransactionReceiptByIDWithinPbftReadsBackend(t *testing.T) {
+	hash := testTransactionHash(0x06)
+	stub := &boundBlockStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 20, pbftNum: 10},
+		txBlockNum:       10,
+		txBlockOK:        true,
+		txInfo:           &corepb.TransactionInfo{Id: hash[:], BlockNumber: 10},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/gettransactionreceiptbyid", "application/json", strings.NewReader(`{"value":"`+hash.Hex()+`"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for receipt within pbft, got %d", resp.StatusCode)
+	}
+	if stub.txBlockCalls != 1 {
+		t.Fatalf("GetTransactionBlockNumByID called %d times, want 1", stub.txBlockCalls)
+	}
+	if stub.txInfoCalls != 1 {
+		t.Fatalf("GetTransactionInfoByID called %d times, want 1", stub.txInfoCalls)
+	}
+}
+
 // TestSolidityAccount_routeExists verifies /walletsolidity/getaccount is registered.
 func TestSolidityAccount_routeExists(t *testing.T) {
 	stub := &solidStubBackend{solidNum: 0, pbftNum: -1}

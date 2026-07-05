@@ -2223,6 +2223,10 @@ Status:
   java-tron-compatible empty/not-found responses only for explicit misses; cold
   lookup, block-body, or receipt corruption from the backend is surfaced as an
   internal server error instead of being disguised as a missing transaction.
+  HTTP `/walletsolidity` and `/walletpbft/gettransactionreceiptbyid` now reuse
+  the same transaction-info-by-id bound gate as the canonical
+  `gettransactioninfobyid` route, so receipt aliases cannot read transactions
+  above the solid/PBFT boundary.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
   `TransactionRet` reader too. For non-genesis blocks, missing per-block
   tx-info rows on tx-bearing blocks now fail the query instead of producing a

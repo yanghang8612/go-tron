@@ -45,6 +45,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getpaginatedproposallist", api.getSolidPaginatedProposalList)
 	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getSolidTransactionByID)
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyid", api.getSolidTransactionInfoByID)
+	mux.HandleFunc("/walletsolidity/gettransactionreceiptbyid", api.getSolidTransactionReceiptByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyid", api.getSolidAssetIssueByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyname", api.getSolidAssetIssueByName)
 	mux.HandleFunc("/walletsolidity/getassetissuelistbyname", api.getSolidAssetIssueListByName)
@@ -100,6 +101,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getpaginatedproposallist", api.getPbftPaginatedProposalList)
 	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getPbftTransactionByID)
 	mux.HandleFunc("/walletpbft/gettransactioninfobyid", api.getPbftTransactionInfoByID)
+	mux.HandleFunc("/walletpbft/gettransactionreceiptbyid", api.getPbftTransactionReceiptByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyid", api.getPbftAssetIssueByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyname", api.getPbftAssetIssueByName)
 	mux.HandleFunc("/walletpbft/getassetissuelistbyname", api.getPbftAssetIssueListByName)
@@ -540,6 +542,10 @@ func (api *API) getSolidTransactionInfoByID(w http.ResponseWriter, r *http.Reque
 	api.handleGetTransactionInfoByIDAtBound(w, r, api.solidBoundNum)
 }
 
+func (api *API) getSolidTransactionReceiptByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionInfoByIDAtBound(w, r, api.solidBoundNum)
+}
+
 func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
 	numStr := r.URL.Query().Get("num")
 	if numStr == "" {
@@ -622,6 +628,10 @@ func (api *API) getPbftTransactionByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getPbftTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionInfoByIDAtBound(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getPbftTransactionReceiptByID(w http.ResponseWriter, r *http.Request) {
 	api.handleGetTransactionInfoByIDAtBound(w, r, api.pbftBoundNum)
 }
 
