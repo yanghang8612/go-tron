@@ -5902,6 +5902,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                         "archiveApiFailures": 0,
                         "archiveApiBlock": 850,
                         "archiveApiDepthBlocks": 150,
+                        "coldFreezerToBlock": 900,
                         "chainLookupPruneToBlock": 900,
                         "archiveApiMethods": [
                             "eth_getBlockByNumber",
@@ -5942,6 +5943,65 @@ class NileSyncAcceptanceTest(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
+
+    def test_rejects_post_prune_archive_evidence_without_cold_freezer_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "samples.jsonl"
+            row = clean_full_staged_sync_row()
+            row.update(
+                {
+                    "unix": 10,
+                    "network": "nile",
+                    "mode": "minimal",
+                    "height": 1000,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 13,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 850,
+                    "archiveApiDepthBlocks": 150,
+                    "coldFreezerToBlock": 849,
+                    "chainLookupPruneToBlock": 900,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getUncleByBlockHashAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--mode",
+                    "minimal",
+                    "--no-require-stage-status",
+                    "--require-post-prune-archive-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "coldFreezerToBlock=849 must cover archiveApiBlock=850 "
+                "for post-prune archive API evidence",
+                proc.stderr,
+            )
 
     def test_rejects_archive_api_evidence_without_post_prune_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:

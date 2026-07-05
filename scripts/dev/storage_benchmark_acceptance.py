@@ -1464,6 +1464,14 @@ def check_archive_api_evidence(
         if require_fixture_file:
             issues.extend(check_archive_api_fixture_file(row))
 
+        cold_freezer = None
+        if field_present(row, "coldFreezerToBlock"):
+            cold_freezer = as_int(row, "coldFreezerToBlock")
+            if cold_freezer is None:
+                issues.append(
+                    f"{line_label(row)} coldFreezerToBlock="
+                    f"{row.get('coldFreezerToBlock')!r}, want integer"
+                )
         chain_lookup = None
         if field_present(row, "chainLookupPruneToBlock"):
             chain_lookup = as_int(row, "chainLookupPruneToBlock")
@@ -1543,6 +1551,11 @@ def check_archive_api_evidence(
                 issues.append(
                     f"{line_label(row)} post-prune archive API evidence requires "
                     "chainLookupPruneToBlock or tailPrunedThroughBlock >= 0"
+                )
+            elif block is not None and (cold_freezer is None or cold_freezer < block):
+                issues.append(
+                    f"{line_label(row)} coldFreezerToBlock={row.get('coldFreezerToBlock')!r} "
+                    f"must cover archiveApiBlock={block:g} for post-prune archive API evidence"
                 )
 
         methods = archive_api_methods(row)

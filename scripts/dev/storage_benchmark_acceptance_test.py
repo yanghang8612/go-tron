@@ -2244,6 +2244,7 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                     "archiveApiFailures": 0,
                     "archiveApiBlock": 80,
                     "archiveApiDepthBlocks": 120,
+                    "coldFreezerToBlock": 90,
                     "archiveApiExpectedBalance": "0x0",
                     "archiveApiExpectedCode": "0x",
                     "archiveApiExpectedStorage": "0x00",
@@ -2319,6 +2320,37 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
                 "line 1 minimal/producer post-prune archive API evidence requires "
                 "chainLookupPruneToBlock or tailPrunedThroughBlock >= 0",
                 missing_post_prune.stderr,
+            )
+
+            missing_cold = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            missing_cold["tailPrunedThroughBlock"] = 90
+            missing_cold["coldFreezerToBlock"] = 79
+            write_result(result, [missing_cold])
+            missing_cold_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-post-prune-archive-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                missing_cold_proc.returncode,
+                0,
+                missing_cold_proc.stdout + missing_cold_proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer coldFreezerToBlock=79 must cover "
+                "archiveApiBlock=80 for post-prune archive API evidence",
+                missing_cold_proc.stderr,
             )
 
             write_result(result, rows)

@@ -2232,6 +2232,10 @@ Status:
   `logIndex` values for both `eth_getBlockReceipts` and
   `eth_getTransactionReceipt`, matching `eth_getLogs`/cold event-log rows
   instead of restarting indexes at zero inside each transaction receipt.
+  Post-prune archive evidence now also requires `coldFreezerToBlock` to cover
+  the probed `archiveApiBlock`, so a sample cannot claim archive reads after
+  hot lookup/tail pruning unless the frozen block rows needed by block/receipt
+  RPCs are independently covered.
   Block-number TransactionInfo queries use the
   same strict block-body read before validating retained `TransactionRet` rows.
   JSON-RPC `eth_getTransactionReceipt` now preserves those transaction/block
