@@ -133,6 +133,9 @@ surface used for block execution, normally `bc.buffer`, so prefetch reads see
 already-buffered previous-block writes without touching `StateDB` caches. The
 public test helpers keep prefetch disabled; production `BlockChain.applyBlock`
 uses `params.ChainConfig.StatePrefetchEnabled`.
+Accepted keys are deduplicated for the worker lifetime. This keeps repeated
+hot hints from consuming queue capacity; only keys that could not fit in the
+queue are counted as `Dropped`.
 
 ```go
 prefetcher := state.NewStatePrefetcher(db, state.StatePrefetcherConfig{

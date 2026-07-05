@@ -194,6 +194,7 @@ type StatePrefetcher struct {
 
 	mu        sync.RWMutex
 	stopped   bool
+	seen      map[string]struct{}
 	startOnce sync.Once
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
@@ -233,6 +234,7 @@ func NewStatePrefetcher(db ethdb.KeyValueReader, cfg StatePrefetcherConfig) *Sta
 		db:      db,
 		workers: workers,
 		workCh:  make(chan PrefetchKey, queue),
+		seen:    make(map[string]struct{}),
 	}
 }
 
@@ -267,16 +269,22 @@ func (p *StatePrefetcher) Enqueue(keys []PrefetchKey) int {
 	if p == nil || len(keys) == 0 {
 		return 0
 	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.stopped {
 		p.dropped.Add(uint64(len(keys)))
 		return 0
 	}
 	var accepted int
 	for _, key := range keys {
+		key = normalizePrefetchKey(key)
+		id := prefetchKeyFingerprint(key)
+		if _, ok := p.seen[id]; ok {
+			continue
+		}
 		select {
-		case p.workCh <- normalizePrefetchKey(key):
+		case p.workCh <- key:
+			p.seen[id] = struct{}{}
 			accepted++
 			p.enqueued.Add(1)
 		default:
@@ -322,6 +330,18 @@ func normalizePrefetchKey(key PrefetchKey) PrefetchKey {
 		key.Key = append([]byte(nil), key.Key...)
 	}
 	return key
+}
+
+func prefetchKeyFingerprint(key PrefetchKey) string {
+	return fmt.Sprintf("%d:%x:%04x:%x:%x:%d:%t",
+		key.Kind,
+		key.Owner[:],
+		uint16(key.Domain),
+		key.Key,
+		key.Slot[:],
+		key.Generation,
+		key.HasGeneration,
+	)
 }
 
 func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {

@@ -62,6 +62,30 @@ func TestStatePrefetcherWarmsRawLatestRows(t *testing.T) {
 	}
 }
 
+func TestStatePrefetcherDeduplicatesAcceptedKeys(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := testAddr(0x4a)
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account")); err != nil {
+		t.Fatalf("WriteStateAccountLatest: %v", err)
+	}
+
+	p := NewStatePrefetcher(db, StatePrefetcherConfig{Workers: 1, Queue: 4})
+	p.Start()
+	key := AccountPrefetchKey(owner)
+	if accepted := p.Enqueue([]PrefetchKey{key, key, key}); accepted != 1 {
+		t.Fatalf("accepted duplicate keys = %d, want 1", accepted)
+	}
+	if accepted := p.Enqueue([]PrefetchKey{key}); accepted != 0 {
+		t.Fatalf("accepted duplicate key after first enqueue = %d, want 0", accepted)
+	}
+	p.Stop()
+
+	stats := p.Stats()
+	if stats.Enqueued != 1 || stats.Processed != 1 || stats.Hits != 1 || stats.Dropped != 0 {
+		t.Fatalf("stats = %+v, want one processed hit and no duplicate drops", stats)
+	}
+}
+
 func TestStatePrefetcherWarmsContractCodeFromAccountEnvelope(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := testAddr(0x49)

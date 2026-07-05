@@ -1613,8 +1613,10 @@ Status:
 - `core/state/prefetcher.go` now provides the first race-safe prefetch driver:
   worker goroutines warm raw latest-domain account, account-KV, contract code,
   and contract storage reads through `ethdb.KeyValueReader`, with bounded
-  non-blocking enqueue and hit/miss/drop/error stats. It deliberately avoids
-  mutating `StateDB` object caches because those maps do not yet have a
+  non-blocking enqueue and hit/miss/drop/error stats. It deduplicates accepted
+  keys for the worker lifetime so repeated Blackhole, reward-cursor, and other
+  hot hints do not consume background reads or queue slots. It deliberately
+  avoids mutating `StateDB` object caches because those maps do not yet have a
   concurrent access model.
 - `actuator.PrefetchKeysFor(tx)` now extracts deterministic envelope-derived
   hints for account latest rows, contract metadata and trigger-contract code

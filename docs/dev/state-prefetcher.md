@@ -101,6 +101,10 @@ When the sync service imports a segment, the summary and detail logs include
 `statePrefetchEnqueued`, `statePrefetchDropped`, `statePrefetchProcessed`,
 `statePrefetchHits`, `statePrefetchMisses`, and `statePrefetchErrors`. These
 fields are diagnostic only; they do not affect consensus state.
+`Enqueued` and `Processed` count unique accepted warmup keys for the prefetcher
+lifetime; repeated keys are skipped without being counted as queue drops, so a
+run with heavy Blackhole/reward-cursor reuse can show lower enqueue counts than
+the raw number of extracted hints.
 
 For Nile/mainnet soak runs, pass the gtron log to
 `scripts/dev/nile_sync_sample.sh --sync-log-file <path>`. The sampler exports
