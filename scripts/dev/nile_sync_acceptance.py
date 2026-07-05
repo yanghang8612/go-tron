@@ -3120,6 +3120,11 @@ def check_event_log_index_evidence(row, require_non_empty=False):
             issues.append(
                 f"eventLogIndexAddressPostings={row.get('eventLogIndexAddressPostings')!r}, want > 0"
             )
+        topic_postings = as_non_negative_int(row, "eventLogIndexTopicPostings")
+        if topic_postings is None or topic_postings <= 0:
+            issues.append(
+                f"eventLogIndexTopicPostings={row.get('eventLogIndexTopicPostings')!r}, want > 0"
+            )
     return issues
 
 

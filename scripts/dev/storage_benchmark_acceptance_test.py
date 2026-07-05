@@ -3686,6 +3686,41 @@ class StorageBenchmarkAcceptanceTest(unittest.TestCase):
             self.assertNotEqual(empty.returncode, 0, empty.stdout + empty.stderr)
             self.assertIn("eventLogIndexAddressPostings=0, want > 0", empty.stderr)
 
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexTopicKeys": 0,
+                        "eventLogIndexTopicPostings": 0,
+                        "eventLogIndexTopicAvgPostingsMilli": 0,
+                        "eventLogIndexTopicMaxPostings": 0,
+                        "eventLogIndexTopicSingletonKeys": 0,
+                        "eventLogIndexTopicMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            empty_topic = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(empty_topic.returncode, 0, empty_topic.stdout + empty_topic.stderr)
+            self.assertIn("eventLogIndexTopicPostings=0, want > 0", empty_topic.stderr)
+
     def test_rejects_event_log_index_evidence_missing_required_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

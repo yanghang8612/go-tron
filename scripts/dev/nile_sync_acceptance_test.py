@@ -1355,6 +1355,35 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("nile sync acceptance: ok", proc.stdout)
 
+    def test_rejects_empty_event_log_index_topic_postings_when_non_empty_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "samples.jsonl"
+            row = add_event_log_index_evidence(
+                clean_full_staged_sync_row(),
+                topic_keys=0,
+                topic_postings=0,
+                topic_max=0,
+                topic_singleton=0,
+                topic_multi=0,
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("eventLogIndexTopicPostings=0, want > 0", proc.stderr)
+
     def test_rejects_missing_event_log_index_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"

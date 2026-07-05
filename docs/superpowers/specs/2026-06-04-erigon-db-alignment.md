@@ -2114,7 +2114,9 @@ Status:
   `gtron_nile_sync_event_log_index_*` Prometheus gauges, and the Nile
   acceptance gate can require the runtime sidecar range plus address/topic
   lookup accounting with `--require-event-log-index-evidence` and
-  `--require-event-log-index-non-empty`.
+  `--require-event-log-index-non-empty`; the non-empty gate now requires both
+  address and topic postings so a single half-populated lookup map cannot pass
+  filtered-log evidence.
 - Event-log segment verification now also proves the segment-local address and
   positional-topic lookup maps are exact, not merely internally well-formed:
   every payload/index row must be reachable from the corresponding lookup key,
@@ -2221,7 +2223,7 @@ Status:
   gates now expose `--require-archive-filtered-log-evidence` so production runs
   against known log-bearing blocks can require that proof directly instead of
   only recording the label; that gate also requires same-row non-empty
-  `eventLogIndex*` evidence, so a filtered-log archive proof cannot pass on a
+  `eventLogIndex*` address/topic postings, so a filtered-log archive proof cannot pass on a
   hot-only or full-scan-only log path. JSON-RPC transaction
   and receipt conversion re-checks that the resolved block/index exists and
   still points at the requested transaction hash before exposing the payload,
