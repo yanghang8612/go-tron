@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -38,8 +39,14 @@ func (a *AccountUpdateActuator) Validate(ctx *Context) error {
 	if ctx.State.GetAccountName(ownerAddr) != "" && !ctx.DynProps.AllowUpdateAccountName() {
 		return errors.New("account name already set")
 	}
-	if ctx.State != nil && ctx.State.HasAccountNameIndex(c.AccountName) && !ctx.DynProps.AllowUpdateAccountName() {
-		return errors.New("account name already exists")
+	if ctx.State != nil && !ctx.DynProps.AllowUpdateAccountName() {
+		exists, err := ctx.State.HasAccountNameIndexStrict(c.AccountName)
+		if err != nil {
+			return fmt.Errorf("read account name index: %w", err)
+		}
+		if exists {
+			return errors.New("account name already exists")
+		}
 	}
 	return nil
 }

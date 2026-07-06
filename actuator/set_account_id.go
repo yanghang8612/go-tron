@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -46,8 +47,14 @@ func (a *SetAccountIdActuator) Validate(ctx *Context) error {
 	if ctx.State.GetAccountId(ownerAddr) != "" {
 		return errors.New("account id already set")
 	}
-	if ctx.State != nil && ctx.State.HasAccountIdIndex(c.AccountId) {
-		return errors.New("account id already exists")
+	if ctx.State != nil {
+		exists, err := ctx.State.HasAccountIdIndexStrict(c.AccountId)
+		if err != nil {
+			return fmt.Errorf("read account id index: %w", err)
+		}
+		if exists {
+			return errors.New("account id already exists")
+		}
 	}
 	return nil
 }

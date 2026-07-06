@@ -70,6 +70,18 @@ func validateAccountIndexAddress(label string, raw []byte) ([]byte, error) {
 	return raw, nil
 }
 
+func (s *StateDB) readAccountIndexAddressStrict(key []byte, label string) ([]byte, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, key)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	raw, err = validateAccountIndexAddress(label, raw)
+	if err != nil {
+		return nil, true, err
+	}
+	return raw, true, nil
+}
+
 // ReadAccountNameIndex returns the owner address registered for accountName, or
 // nil if none. A KV error is swallowed to nil, matching the prior rawdb reader.
 func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
@@ -83,12 +95,24 @@ func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 	return raw
 }
 
+func (s *StateDB) ReadAccountNameIndexStrict(accountName []byte) ([]byte, bool, error) {
+	return s.readAccountIndexAddressStrict(accountNameIndexKVKey(accountName), "account name index")
+}
+
 // HasAccountNameIndex reports whether accountName is registered. Mirrors
 // java-tron AccountIndexStore.has, used by AccountUpdateActuator's uniqueness
 // precheck.
 func (s *StateDB) HasAccountNameIndex(accountName []byte) bool {
 	_, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
 	return err == nil && ok
+}
+
+func (s *StateDB) HasAccountNameIndexStrict(accountName []byte) (bool, error) {
+	_, ok, err := s.ReadAccountNameIndexStrict(accountName)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 // WriteAccountNameIndex stages a name->owner mapping. The error is non-nil only
@@ -117,15 +141,7 @@ func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 }
 
 func (s *StateDB) ReadAccountIdIndexStrict(accountID []byte) ([]byte, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	raw, err = validateAccountIndexAddress("account id index", raw)
-	if err != nil {
-		return nil, false, err
-	}
-	return raw, true, nil
+	return s.readAccountIndexAddressStrict(accountIdIndexKVKey(accountID), "account id index")
 }
 
 // AccountIdIndexAt returns the owner address registered for accountID at the
@@ -151,6 +167,14 @@ func (r *PersistentHistoryReader) AccountIdIndexAt(accountID []byte, blockNum ui
 func (s *StateDB) HasAccountIdIndex(accountID []byte) bool {
 	_, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
 	return err == nil && ok
+}
+
+func (s *StateDB) HasAccountIdIndexStrict(accountID []byte) (bool, error) {
+	_, ok, err := s.ReadAccountIdIndexStrict(accountID)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 // WriteAccountIdIndex stages an id->owner mapping (id lower-cased internally).

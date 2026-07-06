@@ -22,6 +22,9 @@ func TestAccountNameIndexRoundTrip(t *testing.T) {
 	if got := sdb.ReadAccountNameIndex([]byte("alice")); got != nil {
 		t.Fatalf("absent: got %x, want nil", got)
 	}
+	if got, ok, err := sdb.ReadAccountNameIndexStrict([]byte("alice")); got != nil || ok || err != nil {
+		t.Fatalf("strict absent name: got %x ok=%v err=%v, want nil false nil", got, ok, err)
+	}
 
 	if err := sdb.WriteAccountNameIndex([]byte("alice"), owner); err != nil {
 		t.Fatal(err)
@@ -32,9 +35,18 @@ func TestAccountNameIndexRoundTrip(t *testing.T) {
 	if got := sdb.ReadAccountNameIndex([]byte("alice")); !bytes.Equal(got, owner.Bytes()) {
 		t.Fatalf("read: got %x, want %x", got, owner.Bytes())
 	}
+	if got, ok, err := sdb.ReadAccountNameIndexStrict([]byte("alice")); err != nil || !ok || !bytes.Equal(got, owner.Bytes()) {
+		t.Fatalf("strict read: got %x ok=%v err=%v, want %x true nil", got, ok, err, owner.Bytes())
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("alice")); err != nil || !ok {
+		t.Fatalf("strict has: got %v err=%v, want true nil", ok, err)
+	}
 	// Case-sensitive: "Alice" is a distinct key from "alice".
 	if sdb.HasAccountNameIndex([]byte("Alice")) {
 		t.Fatal("name index must be case-sensitive")
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("Alice")); err != nil || ok {
+		t.Fatalf("strict has mixed case: got %v err=%v, want false nil", ok, err)
 	}
 
 	if err := sdb.DeleteAccountNameIndex([]byte("alice")); err != nil {
@@ -61,6 +73,12 @@ func TestAccountIdIndexCaseInsensitive(t *testing.T) {
 	if got := sdb.ReadAccountIdIndex([]byte("ALICEID1")); !bytes.Equal(got, owner.Bytes()) {
 		t.Fatalf("upper-case lookup: got %x, want %x", got, owner.Bytes())
 	}
+	if got, ok, err := sdb.ReadAccountIdIndexStrict([]byte("ALICEID1")); err != nil || !ok || !bytes.Equal(got, owner.Bytes()) {
+		t.Fatalf("strict upper-case lookup: got %x ok=%v err=%v, want %x true nil", got, ok, err, owner.Bytes())
+	}
+	if ok, err := sdb.HasAccountIdIndexStrict([]byte("ALICEID1")); err != nil || !ok {
+		t.Fatalf("strict has account id: got %v err=%v, want true nil", ok, err)
+	}
 	if err := sdb.DeleteAccountIdIndex([]byte("aLiCeId1")); err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +99,22 @@ func TestAccountIndexRejectsMalformedAddressValues(t *testing.T) {
 	if got := sdb.ReadAccountNameIndex([]byte("alice")); got != nil {
 		t.Fatalf("ReadAccountNameIndex malformed = %x, want nil", got)
 	}
+	gotName, nameOK, nameErr := sdb.ReadAccountNameIndexStrict([]byte("alice"))
+	if nameErr == nil || !nameOK || gotName != nil || !strings.Contains(nameErr.Error(), "account name index") {
+		t.Fatalf("ReadAccountNameIndexStrict malformed = %x ok=%v err=%v, want nil true malformed length", gotName, nameOK, nameErr)
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("alice")); err == nil || ok || !strings.Contains(err.Error(), "account name index") {
+		t.Fatalf("HasAccountNameIndexStrict malformed = %v err=%v, want false malformed length", ok, err)
+	}
 	if got := sdb.ReadAccountIdIndex([]byte("aliceid1")); got != nil {
 		t.Fatalf("ReadAccountIdIndex malformed = %x, want nil", got)
 	}
 	got, ok, err := sdb.ReadAccountIdIndexStrict([]byte("aliceid1"))
-	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "malformed length") {
-		t.Fatalf("ReadAccountIdIndexStrict malformed = %x ok=%v err=%v, want nil false malformed length", got, ok, err)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("ReadAccountIdIndexStrict malformed = %x ok=%v err=%v, want nil true malformed length", got, ok, err)
+	}
+	if ok, err := sdb.HasAccountIdIndexStrict([]byte("aliceid1")); err == nil || ok || !strings.Contains(err.Error(), "account id index") {
+		t.Fatalf("HasAccountIdIndexStrict malformed = %v err=%v, want false malformed length", ok, err)
 	}
 }
 
