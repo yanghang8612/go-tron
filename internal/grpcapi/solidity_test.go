@@ -95,6 +95,7 @@ type solidTestBackend struct {
 	accountAt              *types.Account
 	accountIDAt            *types.Account
 	rewardAt               *tronapi.RewardInfo
+	rewardAtErr            error
 	delegatedAt            []*tronapi.DelegatedResourceInfo
 	legacyDelegatedAt      []*tronapi.DelegatedResourceInfo
 	delegIndexAt           *tronapi.DelegationIndexInfo
@@ -114,10 +115,15 @@ type solidTestBackend struct {
 	availableAt            *tronapi.AvailableUnfreezeCountInfo
 	canWithdrawAt          *tronapi.CanWithdrawUnfreezeInfo
 	burnAt                 int64
+	burnAtErr              error
 	bandwidthAt            string
+	bandwidthAtErr         error
 	energyAt               string
+	energyAtErr            error
 	witnessesAt            []*tronapi.WitnessInfo
+	witnessesAtErr         error
 	brokerageAt            int64
+	brokerageAtErr         error
 	constantAt             *tronapi.TriggerResult
 	estimateAt             int64
 	txAt                   *corepb.Transaction
@@ -200,6 +206,9 @@ func (b *solidTestBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, 
 
 func (b *solidTestBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
 	b.lastRewardAt = blockNum
+	if b.rewardAtErr != nil {
+		return nil, b.rewardAtErr
+	}
 	if b.rewardAt != nil {
 		return b.rewardAt, nil
 	}
@@ -447,6 +456,9 @@ func (b *solidTestBackend) GetBurnTrx() int64 {
 
 func (b *solidTestBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	b.lastBurnAt = blockNum
+	if b.burnAtErr != nil {
+		return 0, b.burnAtErr
+	}
 	if b.burnAt != 0 {
 		return b.burnAt, nil
 	}
@@ -460,6 +472,9 @@ func (b *solidTestBackend) GetBandwidthPrices() string {
 
 func (b *solidTestBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	b.lastBandwidthAt = blockNum
+	if b.bandwidthAtErr != nil {
+		return "", b.bandwidthAtErr
+	}
 	if b.bandwidthAt != "" {
 		return b.bandwidthAt, nil
 	}
@@ -473,6 +488,9 @@ func (b *solidTestBackend) GetEnergyPrices() string {
 
 func (b *solidTestBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	b.lastEnergyAt = blockNum
+	if b.energyAtErr != nil {
+		return "", b.energyAtErr
+	}
 	if b.energyAt != "" {
 		return b.energyAt, nil
 	}
@@ -486,6 +504,9 @@ func (b *solidTestBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 
 func (b *solidTestBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
 	b.lastWitnessesAt = blockNum
+	if b.witnessesAtErr != nil {
+		return nil, b.witnessesAtErr
+	}
 	if b.witnessesAt != nil {
 		return b.witnessesAt, nil
 	}
@@ -499,6 +520,9 @@ func (b *solidTestBackend) GetBrokerageInfo(addr common.Address) int64 {
 
 func (b *solidTestBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	b.lastBrokerageAt = blockNum
+	if b.brokerageAtErr != nil {
+		return 0, b.brokerageAtErr
+	}
 	if b.brokerageAt != 0 {
 		return b.brokerageAt, nil
 	}
@@ -1063,6 +1087,42 @@ func TestSolidity_GetBrokerageInfoUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveBrokerage != 0 {
 		t.Fatalf("live GetBrokerageInfo called %d times, want 0", backend.liveBrokerage)
+	}
+}
+
+func TestSolidity_RewardBrokerageQueriesSurfaceBackendError(t *testing.T) {
+	addr := solidityTestAddress(0x33)
+	backend := &solidTestBackend{
+		solidNum:       90,
+		rewardAtErr:    errors.New("cold solid reward state corrupt"),
+		brokerageAtErr: errors.New("cold solid brokerage state corrupt"),
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetRewardInfo", call: func() error {
+			_, err := client.GetRewardInfo(context.Background(), &apipb.BytesMessage{Value: addr})
+			return err
+		}},
+		{name: "GetBrokerageInfo", call: func() error {
+			_, err := client.GetBrokerageInfo(context.Background(), &apipb.BytesMessage{Value: addr})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.lastRewardAt != 90 || backend.lastBrokerageAt != 90 {
+		t.Fatalf("solid reward/brokerage blocks = reward:%d brokerage:%d, want 90", backend.lastRewardAt, backend.lastBrokerageAt)
+	}
+	if backend.liveRewardCalls != 0 || backend.liveBrokerage != 0 {
+		t.Fatalf("live reward/brokerage calls = reward:%d brokerage:%d, want 0", backend.liveRewardCalls, backend.liveBrokerage)
 	}
 }
 
@@ -1744,6 +1804,48 @@ func TestSolidity_DynamicPropertyQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidity_DynamicPropertyQueriesSurfaceBackendError(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:       96,
+		burnAtErr:      errors.New("cold solid burn counter corrupt"),
+		bandwidthAtErr: errors.New("cold solid bandwidth prices corrupt"),
+		energyAtErr:    errors.New("cold solid energy prices corrupt"),
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetBurnTrx", call: func() error {
+			_, err := client.GetBurnTrx(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetBandwidthPrices", call: func() error {
+			_, err := client.GetBandwidthPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetEnergyPrices", call: func() error {
+			_, err := client.GetEnergyPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.lastBurnAt != 96 || backend.lastBandwidthAt != 96 || backend.lastEnergyAt != 96 {
+		t.Fatalf("solid dynamic property blocks = burn:%d bandwidth:%d energy:%d, want 96",
+			backend.lastBurnAt, backend.lastBandwidthAt, backend.lastEnergyAt)
+	}
+	if backend.liveBurn != 0 || backend.liveBandwidth != 0 || backend.liveEnergy != 0 {
+		t.Fatalf("live dynamic property calls = burn:%d bandwidth:%d energy:%d, want 0",
+			backend.liveBurn, backend.liveBandwidth, backend.liveEnergy)
+	}
+}
+
 // TestSolidity_ListWitnesses_Empty checks ListWitnesses with an empty stub.
 func TestSolidity_ListWitnesses_Empty(t *testing.T) {
 	client := newSolidityClient(t, &solidTestBackend{})
@@ -1803,6 +1905,40 @@ func TestSolidity_ListWitnessesUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveWitnesses != 0 {
 		t.Fatalf("live ListWitnesses called %d times after paginated call, want 0", backend.liveWitnesses)
+	}
+}
+
+func TestSolidity_WitnessQueriesSurfaceBackendError(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:       97,
+		witnessesAtErr: errors.New("cold solid witness list corrupt"),
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListWitnesses", call: func() error {
+			_, err := client.ListWitnesses(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedNowWitnessList", call: func() error {
+			_, err := client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 1})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.lastWitnessesAt != 97 {
+		t.Fatalf("ListWitnessesAt block = %d, want solid block 97", backend.lastWitnessesAt)
+	}
+	if backend.liveWitnesses != 0 {
+		t.Fatalf("live ListWitnesses called %d times, want 0", backend.liveWitnesses)
 	}
 }
 
