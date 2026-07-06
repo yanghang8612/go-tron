@@ -77,6 +77,18 @@ func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
 	return ex
 }
 
+func (s *StateDB) readExchangeStrict(discriminator byte, id int64) (*corepb.Exchange, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	ex := &corepb.Exchange{}
+	if err := proto.Unmarshal(raw, ex); err != nil {
+		return nil, true, fmt.Errorf("decode exchange %d: %w", id, err)
+	}
+	return ex, true, nil
+}
+
 // writeExchange stages one exchange leg into the system-KV. The error is non-nil
 // only for a proto marshal failure or an unregistered domain (a programmer
 // error), since SystemExchange is registered at init.
@@ -93,9 +105,21 @@ func (s *StateDB) ReadExchange(id int64) *corepb.Exchange {
 	return s.readExchange(exchangeKVDiscriminatorV1, id)
 }
 
+// ReadExchangeStrict returns the rooted V1 exchange with id and surfaces
+// storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadExchangeStrict(id int64) (*corepb.Exchange, bool, error) {
+	return s.readExchangeStrict(exchangeKVDiscriminatorV1, id)
+}
+
 // ReadExchangeV2 returns the rooted V2 exchange with id, or nil if absent.
 func (s *StateDB) ReadExchangeV2(id int64) *corepb.Exchange {
 	return s.readExchange(exchangeKVDiscriminatorV2, id)
+}
+
+// ReadExchangeV2Strict returns the rooted V2 exchange with id and surfaces
+// storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadExchangeV2Strict(id int64) (*corepb.Exchange, bool, error) {
+	return s.readExchangeStrict(exchangeKVDiscriminatorV2, id)
 }
 
 func (r *PersistentHistoryReader) readExchangeAt(discriminator byte, id int64, blockNum uint64) (*corepb.Exchange, error) {
@@ -147,9 +171,21 @@ func (s *StateDB) ListExchanges(latestID int64) []*corepb.Exchange {
 	return s.listExchanges(exchangeKVDiscriminatorV1, latestID)
 }
 
+// ListExchangesStrict enumerates the V1 bucket over ids 1..latestID and
+// surfaces storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListExchangesStrict(latestID int64) ([]*corepb.Exchange, error) {
+	return s.listExchangesStrict(exchangeKVDiscriminatorV1, latestID)
+}
+
 // ListExchangesV2 enumerates the V2 bucket over ids 1..latestID.
 func (s *StateDB) ListExchangesV2(latestID int64) []*corepb.Exchange {
 	return s.listExchanges(exchangeKVDiscriminatorV2, latestID)
+}
+
+// ListExchangesV2Strict enumerates the V2 bucket over ids 1..latestID and
+// surfaces storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListExchangesV2Strict(latestID int64) ([]*corepb.Exchange, error) {
+	return s.listExchangesStrict(exchangeKVDiscriminatorV2, latestID)
 }
 
 // ListExchangesAt enumerates the V1 bucket over ids 1..latestID at blockNum.
@@ -170,6 +206,20 @@ func (s *StateDB) listExchanges(discriminator byte, latestID int64) []*corepb.Ex
 		}
 	}
 	return out
+}
+
+func (s *StateDB) listExchangesStrict(discriminator byte, latestID int64) ([]*corepb.Exchange, error) {
+	var out []*corepb.Exchange
+	for id := int64(1); id <= latestID; id++ {
+		ex, ok, err := s.readExchangeStrict(discriminator, id)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, ex)
+		}
+	}
+	return out, nil
 }
 
 func (r *PersistentHistoryReader) listExchangesAt(discriminator byte, latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {

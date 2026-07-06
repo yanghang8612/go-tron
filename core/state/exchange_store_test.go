@@ -60,6 +60,14 @@ func TestExchangeStoreV1V2SeparateBuckets(t *testing.T) {
 	if got := sdb.ReadExchangeV2(1); !sameExchange(got, v2) {
 		t.Fatalf("V2 readback mismatch: %+v", got)
 	}
+	strictLegacy, ok, err := sdb.ReadExchangeStrict(1)
+	if err != nil || !ok || !sameExchange(strictLegacy, legacy) {
+		t.Fatalf("strict V1 readback mismatch: %+v/%v/%v", strictLegacy, ok, err)
+	}
+	strictV2, ok, err := sdb.ReadExchangeV2Strict(1)
+	if err != nil || !ok || !sameExchange(strictV2, v2) {
+		t.Fatalf("strict V2 readback mismatch: %+v/%v/%v", strictV2, ok, err)
+	}
 
 	// Deleting V2 must not touch V1.
 	if err := sdb.DeleteExchangeV2(1); err != nil {
@@ -81,6 +89,12 @@ func TestExchangeStoreAbsent(t *testing.T) {
 	}
 	if got := sdb.ReadExchangeV2(7); got != nil {
 		t.Fatalf("absent V2 should be nil, got %+v", got)
+	}
+	if got, ok, err := sdb.ReadExchangeStrict(7); got != nil || ok || err != nil {
+		t.Fatalf("strict absent V1 = %+v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if got, ok, err := sdb.ReadExchangeV2Strict(7); got != nil || ok || err != nil {
+		t.Fatalf("strict absent V2 = %+v/%v/%v, want nil/false/nil", got, ok, err)
 	}
 }
 
@@ -118,6 +132,20 @@ func TestExchangeStoreList(t *testing.T) {
 	// Empty ceiling → nil.
 	if got := sdb.ListExchanges(0); got != nil {
 		t.Fatalf("V1 list ceiling=0: want nil, got %+v", got)
+	}
+	strictV1, err := sdb.ListExchangesStrict(3)
+	if err != nil {
+		t.Fatalf("ListExchangesStrict: %v", err)
+	}
+	if len(strictV1) != 2 || strictV1[0].ExchangeId != 1 || strictV1[1].ExchangeId != 3 {
+		t.Fatalf("strict V1 list: want ids [1 3], got %+v", strictV1)
+	}
+	strictV2, err := sdb.ListExchangesV2Strict(3)
+	if err != nil {
+		t.Fatalf("ListExchangesV2Strict: %v", err)
+	}
+	if len(strictV2) != 2 || strictV2[0].ExchangeId != 1 || strictV2[1].ExchangeId != 2 {
+		t.Fatalf("strict V2 list: want ids [1 2], got %+v", strictV2)
 	}
 }
 
@@ -258,5 +286,36 @@ func TestExchangeAtSurfacesCorruptProtobuf(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decode exchange 2 at block 1") {
 		t.Fatalf("ExchangeV2At corrupt protobuf error = %v, want decode exchange context", err)
+	}
+}
+
+func TestExchangeStoreStrictSurfacesCorruptProtobuf(t *testing.T) {
+	sdb := newTestStateDB(t)
+	corruptProto := []byte{0x80}
+	if err := sdb.SystemKVPut(kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV1, 1), corruptProto); err != nil {
+		t.Fatalf("write corrupt V1 exchange: %v", err)
+	}
+	if err := sdb.SystemKVPut(kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, 2), corruptProto); err != nil {
+		t.Fatalf("write corrupt V2 exchange: %v", err)
+	}
+
+	if got := sdb.ReadExchange(1); got != nil {
+		t.Fatalf("compat ReadExchange corrupt protobuf = %+v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadExchangeStrict(1); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode exchange 1") {
+		t.Fatalf("strict ReadExchange corrupt protobuf = %+v/%v/%v, want decode error", got, ok, err)
+	}
+	if _, err := sdb.ListExchangesStrict(1); err == nil || !strings.Contains(err.Error(), "decode exchange 1") {
+		t.Fatalf("ListExchangesStrict corrupt protobuf error = %v, want decode exchange 1", err)
+	}
+
+	if got := sdb.ReadExchangeV2(2); got != nil {
+		t.Fatalf("compat ReadExchangeV2 corrupt protobuf = %+v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadExchangeV2Strict(2); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode exchange 2") {
+		t.Fatalf("strict ReadExchangeV2 corrupt protobuf = %+v/%v/%v, want decode error", got, ok, err)
+	}
+	if _, err := sdb.ListExchangesV2Strict(2); err == nil || !strings.Contains(err.Error(), "decode exchange 2") {
+		t.Fatalf("ListExchangesV2Strict corrupt protobuf error = %v, want decode exchange 2", err)
 	}
 }

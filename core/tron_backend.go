@@ -2228,9 +2228,17 @@ func (b *TronBackend) listExchangesAtHead() ([]*corepb.Exchange, error) {
 	// head this opens sysKV at; both are head-only, so they stay in sync.
 	dynProps := b.chain.DynProps()
 	if dynProps.AllowSameTokenName() {
-		return sysKV.ListExchangesV2(dynProps.LatestExchangeNum()), nil
+		exchanges, err := sysKV.ListExchangesV2Strict(dynProps.LatestExchangeNum())
+		if err != nil {
+			return nil, fmt.Errorf("read exchange v2 list at head: %w", err)
+		}
+		return exchanges, nil
 	}
-	return sysKV.ListExchanges(dynProps.LatestExchangeNum()), nil
+	exchanges, err := sysKV.ListExchangesStrict(dynProps.LatestExchangeNum())
+	if err != nil {
+		return nil, fmt.Errorf("read exchange list at head: %w", err)
+	}
+	return exchanges, nil
 }
 
 func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
@@ -2246,9 +2254,17 @@ func (b *TronBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
 		return nil, err
 	}
 	if b.chain.DynProps().AllowSameTokenName() {
-		return sysKV.ReadExchangeV2(id), nil
+		exchange, _, err := sysKV.ReadExchangeV2Strict(id)
+		if err != nil {
+			return nil, fmt.Errorf("read exchange v2 %d at head: %w", id, err)
+		}
+		return exchange, nil
 	}
-	return sysKV.ReadExchange(id), nil
+	exchange, _, err := sysKV.ReadExchangeStrict(id)
+	if err != nil {
+		return nil, fmt.Errorf("read exchange %d at head: %w", id, err)
+	}
+	return exchange, nil
 }
 
 func (b *TronBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
