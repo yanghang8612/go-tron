@@ -13,7 +13,10 @@ func recordPendingVotes(ctx *Context, owner common.Address, oldVotes, newVotes [
 	if ctx.State == nil {
 		return nil
 	}
-	votes := ctx.State.ReadVotes(owner)
+	votes, _, err := ctx.State.ReadVotesStrict(owner)
+	if err != nil {
+		return err
+	}
 	if votes == nil {
 		votes = &corepb.Votes{
 			Address:  owner.Bytes(),

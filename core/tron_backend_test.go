@@ -457,6 +457,83 @@ func commitHeadStateForBackendTest(t *testing.T, bc *BlockChain, mutate func(*st
 	}
 }
 
+func testTransferTransactionForBackend(t *testing.T, owner, to tcommon.Address) *types.Transaction {
+	t.Helper()
+
+	transferParam, err := anypb.New(&contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    to.Bytes(),
+		Amount:       1,
+	})
+	if err != nil {
+		t.Fatalf("pack transfer contract: %v", err)
+	}
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: transferParam,
+			}},
+		},
+	})
+}
+
+func TestTronBackend_LiveWitnessReadsSurfaceCorruptRootedIndexes(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	backend := &TronBackend{chain: bc}
+	truncated := []byte{0, 0, 0, 2, 0x41}
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		key := state.WitnessIndexPrefetchKey()
+		if err := statedb.SystemKVPut(key.Domain, key.Key, truncated); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if _, err := backend.ListWitnesses(); err == nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("ListWitnesses corrupt witness index error = %v, want witness index decode error", err)
+	}
+
+	tx := testTransferTransactionForBackend(t, testCoreAddr(1), testCoreAddr(2))
+	if err := backend.ValidateTransaction(tx); err == nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("ValidateTransaction corrupt witness index error = %v, want witness index decode error", err)
+	}
+}
+
+func TestTronBackend_LiveWitnessReadsSurfaceCorruptPendingVotes(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	backend := &TronBackend{chain: bc}
+	voter := testCoreAddr(3)
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
+			t.Fatal(err)
+		}
+		key := state.PendingVotesPrefetchKey(voter)
+		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if _, err := backend.ListWitnesses(); err == nil || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("ListWitnesses corrupt pending votes error = %v, want decode votes error", err)
+	}
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		key := state.PendingVotesIndexPrefetchKey()
+		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0, 0, 0, 2, 0x41}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := backend.ListWitnesses(); err == nil || !strings.Contains(err.Error(), "votes index") {
+		t.Fatalf("ListWitnesses corrupt pending votes index error = %v, want votes index decode error", err)
+	}
+}
+
 func TestTronBackend_LiveMarketReadsSurfaceCorruptRows(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()

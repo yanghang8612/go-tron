@@ -1,9 +1,11 @@
 package state
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 func wsAddr(tag byte) tcommon.Address {
@@ -67,6 +69,41 @@ func TestWitnessIndexAppendDedup(t *testing.T) {
 	}
 	if got := sdb.ReadWitnessIndex(); !sameAddrs(got, []tcommon.Address{wsAddr(1), wsAddr(2)}) {
 		t.Fatalf("dedup failed: got %v", got)
+	}
+}
+
+func TestWitnessScheduleStrictSurfacesMalformedIndexes(t *testing.T) {
+	sdb := newTestStateDB(t)
+
+	if got, ok, err := sdb.ReadWitnessIndexStrict(); err != nil || ok || got != nil {
+		t.Fatalf("strict absent witness index = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+	if got, ok, err := sdb.ReadActiveWitnessesStrict(); err != nil || ok || got != nil {
+		t.Fatalf("strict absent active witnesses = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+
+	truncated := []byte{0, 0, 0, 2, 0x41}
+	if err := sdb.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleIndexKey, truncated); err != nil {
+		t.Fatalf("write malformed witness index: %v", err)
+	}
+	if got := sdb.ReadWitnessIndex(); got != nil {
+		t.Fatalf("compat malformed witness index = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadWitnessIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("strict malformed witness index = %v ok=%v err=%v, want decode error", got, ok, err)
+	}
+	if err := sdb.AppendWitnessIndex(wsAddr(4)); err == nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("AppendWitnessIndex malformed index err = %v, want decode error", err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleActiveKey, truncated); err != nil {
+		t.Fatalf("write malformed active witnesses: %v", err)
+	}
+	if got := sdb.ReadActiveWitnesses(); got != nil {
+		t.Fatalf("compat malformed active witnesses = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadActiveWitnessesStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "active witness list") {
+		t.Fatalf("strict malformed active witnesses = %v ok=%v err=%v, want decode error", got, ok, err)
 	}
 }
 

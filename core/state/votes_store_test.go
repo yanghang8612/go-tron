@@ -1,9 +1,11 @@
 package state
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -67,6 +69,42 @@ func TestVotesStoreFillsAddress(t *testing.T) {
 	got := sdb.ReadVotes(v)
 	if got == nil || tcommon.BytesToAddress(got.Address) != v {
 		t.Fatalf("Address not auto-filled: %+v", got)
+	}
+}
+
+func TestVotesStoreStrictSurfacesMalformedRows(t *testing.T) {
+	sdb := newTestStateDB(t)
+	voter := wsAddr(4)
+
+	if got, ok, err := sdb.ReadVotesStrict(voter); err != nil || ok || got != nil {
+		t.Fatalf("strict absent votes = %+v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+	if got, ok, err := sdb.ReadVotesIndexStrict(); err != nil || ok || got != nil {
+		t.Fatalf("strict absent votes index = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.WitnessVoteState, votesStoreKey(voter), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed votes: %v", err)
+	}
+	if got := sdb.ReadVotes(voter); got != nil {
+		t.Fatalf("compat malformed votes = %+v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadVotesStrict(voter); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("strict malformed votes = %+v ok=%v err=%v, want decode error", got, ok, err)
+	}
+
+	truncated := []byte{0, 0, 0, 2, 0x41}
+	if err := sdb.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, truncated); err != nil {
+		t.Fatalf("write malformed votes index: %v", err)
+	}
+	if got := sdb.ReadVotesIndex(); got != nil {
+		t.Fatalf("compat malformed votes index = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadVotesIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "votes index") {
+		t.Fatalf("strict malformed votes index = %v ok=%v err=%v, want decode error", got, ok, err)
+	}
+	if err := sdb.AppendVotesIndex(wsAddr(5)); err == nil || !strings.Contains(err.Error(), "votes index") {
+		t.Fatalf("AppendVotesIndex malformed index err = %v, want decode error", err)
 	}
 }
 

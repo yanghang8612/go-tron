@@ -357,6 +357,12 @@ Status:
 - The current-cycle reward pending accumulator also probes presence before
   decoding, so startup and reorg reloads stop on unreadable accumulator storage
   instead of silently resetting in-memory pending rewards to empty.
+- Rooted witness schedule and pending vote readers now expose strict live
+  variants for API and maintenance paths. Live `ListWitnesses` and transaction
+  validation surface malformed witness indexes or pending vote rows, and the
+  maintenance drain aborts without clearing `VotesStore` when a pending vote
+  record or voter index is unreadable or malformed. The legacy compatibility
+  readers remain for existing no-error call sites.
 - Sync staged body reads now follow the same rule: `ReadSyncStagedBlock` and
   `ReadSyncStagedBlockRaw` separate a missing staged body row from `Has`/`Get`
   storage errors, so downloader restart and ready-frontier validation stop on

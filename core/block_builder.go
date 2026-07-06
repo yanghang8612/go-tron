@@ -155,7 +155,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
 		applyRewardVI(buildBuf, statedb, dynProps)
-		hasPendingVotes := applyPendingVotes(statedb)
+		hasPendingVotes, err := applyPendingVotes(statedb)
+		if err != nil {
+			return nil, fmt.Errorf("apply pending votes: %w", err)
+		}
 		if hasPendingVotes {
 			allWitnesses = bc.gatherWitnessVotes(statedb)
 			sorted := dpos.SortWitnessesByVotesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())

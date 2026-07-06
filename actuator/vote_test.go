@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/state"
@@ -129,6 +130,24 @@ func TestVoteWitnessExecute(t *testing.T) {
 	pending := statedb.ReadVotes(owner)
 	if pending == nil || len(pending.OldVotes) != 0 || len(pending.NewVotes) != 1 || pending.NewVotes[0].VoteCount != 50 {
 		t.Fatalf("pending votes not recorded like java-tron VotesStore: %+v", pending)
+	}
+}
+
+func TestRecordPendingVotesSurfacesCorruptExistingRecord(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(10)
+	witness := makeTestAddr(20)
+	key := state.PendingVotesPrefetchKey(owner)
+	if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := recordPendingVotes(&Context{State: statedb}, owner, nil, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 1}})
+	if err == nil || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("recordPendingVotes corrupt existing record err = %v, want decode votes", err)
+	}
+	if raw, ok, err := statedb.SystemKVGet(key.Domain, key.Key); err != nil || !ok || len(raw) != 1 || raw[0] != 0x80 {
+		t.Fatalf("corrupt pending votes row after failed record = %x ok=%v err=%v, want preserved", raw, ok, err)
 	}
 }
 

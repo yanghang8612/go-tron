@@ -1290,7 +1290,10 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 				}
 			}
 			applyRewardVI(bc.buffer, statedb, dynProps)
-			hasPendingVotes := applyPendingVotes(statedb)
+			hasPendingVotes, err := applyPendingVotes(statedb)
+			if err != nil {
+				return fmt.Errorf("apply pending votes: %w", err)
+			}
 			statedb.FlushWitnesses()
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {

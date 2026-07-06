@@ -1015,8 +1015,14 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	witnessAddrs := statedb.ReadWitnessIndex()
-	pendingDeltas, _ := pendingVoteDeltas(statedb)
+	witnessAddrs, _, err := statedb.ReadWitnessIndexStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read witness index at head: %w", err)
+	}
+	pendingDeltas, _, err := pendingVoteDeltasStrict(statedb)
+	if err != nil {
+		return nil, fmt.Errorf("read pending vote deltas at head: %w", err)
+	}
 	activeMap := activeWitnessMap(b.chain.ActiveWitnesses())
 
 	var result []*tronapi.WitnessInfo
@@ -4053,7 +4059,10 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 
 	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing
 	// step. Witness index and capsules are rooted at the head state.
-	witnessAddrs := statedb.ReadWitnessIndex()
+	witnessAddrs, _, err := statedb.ReadWitnessIndexStrict()
+	if err != nil {
+		return fmt.Errorf("read witness index at head: %w", err)
+	}
 	for _, addr := range witnessAddrs {
 		_ = statedb.GetWitness(addr)
 	}
