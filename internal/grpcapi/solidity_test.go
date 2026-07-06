@@ -97,6 +97,7 @@ type solidTestBackend struct {
 	rewardAt               *tronapi.RewardInfo
 	rewardAtErr            error
 	delegatedAt            []*tronapi.DelegatedResourceInfo
+	delegationAtErr        error
 	legacyDelegatedAt      []*tronapi.DelegatedResourceInfo
 	delegIndexAt           *tronapi.DelegationIndexInfo
 	legacyDelegIndexAt     *corepb.DelegatedResourceAccountIndex
@@ -114,6 +115,7 @@ type solidTestBackend struct {
 	canDelegateAt          *tronapi.CanDelegateInfo
 	availableAt            *tronapi.AvailableUnfreezeCountInfo
 	canWithdrawAt          *tronapi.CanWithdrawUnfreezeInfo
+	stakeResourceAtErr     error
 	burnAt                 int64
 	burnAtErr              error
 	bandwidthAt            string
@@ -222,6 +224,9 @@ func (b *solidTestBackend) GetDelegatedResource(from, to common.Address) ([]*tro
 
 func (b *solidTestBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	b.lastLegacyDelegatedAt = blockNum
+	if b.delegationAtErr != nil {
+		return nil, b.delegationAtErr
+	}
 	if b.legacyDelegatedAt != nil {
 		return b.legacyDelegatedAt, nil
 	}
@@ -235,6 +240,9 @@ func (b *solidTestBackend) GetDelegatedResourceV2(from, to common.Address) ([]*t
 
 func (b *solidTestBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	b.lastDelegatedAt = blockNum
+	if b.delegationAtErr != nil {
+		return nil, b.delegationAtErr
+	}
 	if b.delegatedAt != nil {
 		return b.delegatedAt, nil
 	}
@@ -248,6 +256,9 @@ func (b *solidTestBackend) GetDelegatedResourceAccountIndex(addr common.Address)
 
 func (b *solidTestBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
 	b.lastLegacyDelegIndexAt = blockNum
+	if b.delegationAtErr != nil {
+		return nil, b.delegationAtErr
+	}
 	if b.legacyDelegIndexAt != nil {
 		return b.legacyDelegIndexAt, nil
 	}
@@ -261,6 +272,9 @@ func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2(addr common.Addres
 
 func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
 	b.lastDelegIndexAt = blockNum
+	if b.delegationAtErr != nil {
+		return nil, b.delegationAtErr
+	}
 	if b.delegIndexAt != nil {
 		return b.delegIndexAt, nil
 	}
@@ -417,6 +431,9 @@ func (b *solidTestBackend) CanDelegateResource(addr common.Address, amount int64
 
 func (b *solidTestBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
 	b.lastCanDelegateAt = blockNum
+	if b.stakeResourceAtErr != nil {
+		return nil, b.stakeResourceAtErr
+	}
 	if b.canDelegateAt != nil {
 		return b.canDelegateAt, nil
 	}
@@ -430,6 +447,9 @@ func (b *solidTestBackend) GetAvailableUnfreezeCount(addr common.Address) (*tron
 
 func (b *solidTestBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	b.lastAvailableAt = blockNum
+	if b.stakeResourceAtErr != nil {
+		return nil, b.stakeResourceAtErr
+	}
 	if b.availableAt != nil {
 		return b.availableAt, nil
 	}
@@ -443,6 +463,9 @@ func (b *solidTestBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, tim
 
 func (b *solidTestBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	b.lastCanWithdrawAt = blockNum
+	if b.stakeResourceAtErr != nil {
+		return nil, b.stakeResourceAtErr
+	}
 	if b.canWithdrawAt != nil {
 		return b.canWithdrawAt, nil
 	}
@@ -1295,6 +1318,54 @@ func TestSolidity_GetDelegatedResourceAccountIndexUsesSolidBoundArchivePath(t *t
 	}
 }
 
+func TestSolidity_DelegationQueriesSurfaceBackendError(t *testing.T) {
+	addr := solidityTestAddress(0x41)
+	to := solidityTestAddress(0x42)
+	backend := &solidTestBackend{
+		solidNum:        78,
+		delegationAtErr: errors.New("cold solid delegation state corrupt"),
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetDelegatedResource", call: func() error {
+			_, err := client.GetDelegatedResource(context.Background(), &apipb.DelegatedResourceMessage{FromAddress: addr, ToAddress: to})
+			return err
+		}},
+		{name: "GetDelegatedResourceV2", call: func() error {
+			_, err := client.GetDelegatedResourceV2(context.Background(), &apipb.DelegatedResourceMessage{FromAddress: addr, ToAddress: to})
+			return err
+		}},
+		{name: "GetDelegatedResourceAccountIndex", call: func() error {
+			_, err := client.GetDelegatedResourceAccountIndex(context.Background(), &apipb.BytesMessage{Value: addr})
+			return err
+		}},
+		{name: "GetDelegatedResourceAccountIndexV2", call: func() error {
+			_, err := client.GetDelegatedResourceAccountIndexV2(context.Background(), &apipb.BytesMessage{Value: addr})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.lastLegacyDelegatedAt != 78 || backend.lastDelegatedAt != 78 ||
+		backend.lastLegacyDelegIndexAt != 78 || backend.lastDelegIndexAt != 78 {
+		t.Fatalf("solid delegation blocks = legacy:%d v2:%d legacyIndex:%d indexV2:%d, want 78",
+			backend.lastLegacyDelegatedAt, backend.lastDelegatedAt, backend.lastLegacyDelegIndexAt, backend.lastDelegIndexAt)
+	}
+	if backend.liveLegacyDelegCalls != 0 || backend.liveDelegCalls != 0 ||
+		backend.liveLegacyIndexCalls != 0 || backend.liveIndexCalls != 0 {
+		t.Fatalf("live delegation calls = legacy:%d v2:%d legacyIndex:%d indexV2:%d, want 0",
+			backend.liveLegacyDelegCalls, backend.liveDelegCalls, backend.liveLegacyIndexCalls, backend.liveIndexCalls)
+	}
+}
+
 func TestSolidity_StakeResourceQueriesUseSolidBoundArchivePath(t *testing.T) {
 	addr := solidityTestAddress(0x78)
 	backend := &solidTestBackend{
@@ -1353,6 +1424,55 @@ func TestSolidity_StakeResourceQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveCanWithdraw != 0 {
 		t.Fatalf("live GetCanWithdrawUnfreezeAmount called %d times, want 0", backend.liveCanWithdraw)
+	}
+}
+
+func TestSolidity_StakeResourceQueriesSurfaceBackendError(t *testing.T) {
+	addr := solidityTestAddress(0x78)
+	backend := &solidTestBackend{
+		solidNum:           88,
+		stakeResourceAtErr: errors.New("cold solid stake resource state corrupt"),
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetCanDelegatedMaxSize", call: func() error {
+			_, err := client.GetCanDelegatedMaxSize(context.Background(), &apipb.CanDelegatedMaxSizeRequestMessage{
+				OwnerAddress: addr,
+				Type:         int32(corepb.ResourceCode_BANDWIDTH),
+			})
+			return err
+		}},
+		{name: "GetAvailableUnfreezeCount", call: func() error {
+			_, err := client.GetAvailableUnfreezeCount(context.Background(), &apipb.GetAvailableUnfreezeCountRequestMessage{
+				OwnerAddress: addr,
+			})
+			return err
+		}},
+		{name: "GetCanWithdrawUnfreezeAmount", call: func() error {
+			_, err := client.GetCanWithdrawUnfreezeAmount(context.Background(), &apipb.CanWithdrawUnfreezeAmountRequestMessage{
+				OwnerAddress: addr,
+				Timestamp:    12345,
+			})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.lastCanDelegateAt != 88 || backend.lastAvailableAt != 88 || backend.lastCanWithdrawAt != 88 {
+		t.Fatalf("solid stake resource blocks = delegate:%d available:%d withdraw:%d, want 88",
+			backend.lastCanDelegateAt, backend.lastAvailableAt, backend.lastCanWithdrawAt)
+	}
+	if backend.liveCanDelegate != 0 || backend.liveAvailable != 0 || backend.liveCanWithdraw != 0 {
+		t.Fatalf("live stake resource calls = delegate:%d available:%d withdraw:%d, want 0",
+			backend.liveCanDelegate, backend.liveAvailable, backend.liveCanWithdraw)
 	}
 }
 
