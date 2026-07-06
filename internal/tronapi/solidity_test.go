@@ -801,6 +801,9 @@ type isolationStubBackend struct {
 	accountIDAtBlock          uint64
 	liveAccountNetCalls       int
 	accountNetAtBlock         uint64
+	liveAccountResourceCalls  int
+	accountResourceAtBlock    uint64
+	accountResourceAtErr      error
 	liveChainParameterCalls   int
 	chainParametersAtBlock    uint64
 	chainParametersAtErr      error
@@ -955,6 +958,19 @@ func (s *isolationStubBackend) GetAccountNet(addr common.Address) (*apipb.Accoun
 func (s *isolationStubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
 	s.accountNetAtBlock = blockNum
 	return &apipb.AccountNetMessage{FreeNetUsed: 9, NetUsed: 99}, nil
+}
+
+func (s *isolationStubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
+	s.liveAccountResourceCalls++
+	return &tronapi.AccountResource{EnergyUsed: 1, EnergyLimit: 2}, nil
+}
+
+func (s *isolationStubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
+	s.accountResourceAtBlock = blockNum
+	if s.accountResourceAtErr != nil {
+		return nil, s.accountResourceAtErr
+	}
+	return &tronapi.AccountResource{EnergyUsed: 9, EnergyLimit: 99, NetUsed: 7, NetLimit: 77}, nil
 }
 
 func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
@@ -1606,6 +1622,94 @@ func TestPbftAccountByIdUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountIDCalls != 0 {
 		t.Fatalf("live GetAccountById called %d times, want 0", stub.liveAccountIDCalls)
+	}
+}
+
+func TestSolidityAccountResourceUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAccountResourceUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftAccountResourceUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAccountResourceUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertAccountResourceUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/getaccountresource", "application/json", strings.NewReader(`{"address":"411234567890"}`))
+	if err != nil {
+		t.Fatalf("getaccountresource request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getaccountresource status = %d, want 200", resp.StatusCode)
+	}
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["EnergyUsed"] != float64(9) || got["EnergyLimit"] != float64(99) ||
+		got["NetUsed"] != float64(7) || got["NetLimit"] != float64(77) {
+		t.Fatalf("getaccountresource = %+v, want bound resource sentinel", got)
+	}
+	if stub.accountResourceAtBlock != wantBlock {
+		t.Fatalf("GetAccountResourceAt block = %d, want %d", stub.accountResourceAtBlock, wantBlock)
+	}
+	if stub.liveAccountResourceCalls != 0 {
+		t.Fatalf("live GetAccountResource called %d times, want 0", stub.liveAccountResourceCalls)
+	}
+}
+
+func TestSolidityAccountResourceSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:     solidStubBackend{solidNum: 42, pbftNum: -1},
+		accountResourceAtErr: errors.New("state history: cold account resource state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAccountResourceErrorUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftAccountResourceSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:     solidStubBackend{solidNum: 5, pbftNum: 13},
+		accountResourceAtErr: errors.New("state history: cold pbft account resource state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAccountResourceErrorUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertAccountResourceErrorUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/getaccountresource", "application/json", strings.NewReader(`{"address":"411234567890"}`))
+	if err != nil {
+		t.Fatalf("getaccountresource request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountresource status = %d, want 500", resp.StatusCode)
+	}
+	if stub.accountResourceAtBlock != wantBlock {
+		t.Fatalf("GetAccountResourceAt block = %d, want %d", stub.accountResourceAtBlock, wantBlock)
+	}
+	if stub.liveAccountResourceCalls != 0 {
+		t.Fatalf("live GetAccountResource called %d times, want 0", stub.liveAccountResourceCalls)
 	}
 }
 
