@@ -793,8 +793,10 @@ type isolationStubBackend struct {
 	contractAtErr             error
 	liveConstantCalls         int
 	constantAtBlock           uint64
+	constantAtErr             error
 	liveEstimateCalls         int
 	estimateAtBlock           uint64
+	estimateAtErr             error
 	liveAccountIDCalls        int
 	accountIDAtBlock          uint64
 	liveAccountNetCalls       int
@@ -916,6 +918,9 @@ func (s *isolationStubBackend) TriggerConstantContract(owner, contract common.Ad
 
 func (s *isolationStubBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
 	s.constantAtBlock = blockNum
+	if s.constantAtErr != nil {
+		return nil, s.constantAtErr
+	}
 	return &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 99}, nil
 }
 
@@ -926,6 +931,9 @@ func (s *isolationStubBackend) EstimateEnergy(owner, contract common.Address, da
 
 func (s *isolationStubBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
 	s.estimateAtBlock = blockNum
+	if s.estimateAtErr != nil {
+		return 0, s.estimateAtErr
+	}
 	return 88, nil
 }
 
@@ -1745,6 +1753,30 @@ func TestPbftConstantExecutionUsesPbftBoundArchivePath(t *testing.T) {
 	assertConstantExecutionUsesBound(t, srv.URL+"/walletpbft", stub, 13)
 }
 
+func TestSolidityConstantExecutionSurfacesBoundArchiveErrors(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		constantAtErr:    errors.New("solid constant archive unavailable"),
+		estimateAtErr:    errors.New("solid estimate archive unavailable"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertConstantExecutionBoundErrors(t, srv.URL+"/walletsolidity", stub, 42, "solid constant archive unavailable", "solid estimate archive unavailable")
+}
+
+func TestPbftConstantExecutionSurfacesBoundArchiveErrors(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		constantAtErr:    errors.New("pbft constant archive unavailable"),
+		estimateAtErr:    errors.New("pbft estimate archive unavailable"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertConstantExecutionBoundErrors(t, srv.URL+"/walletpbft", stub, 13, "pbft constant archive unavailable", "pbft estimate archive unavailable")
+}
+
 func assertConstantExecutionUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
 	t.Helper()
 
@@ -1796,6 +1828,67 @@ func assertConstantExecutionUsesBound(t *testing.T, prefix string, stub *isolati
 	}
 	if stub.liveEstimateCalls != 0 {
 		t.Fatalf("live EstimateEnergy called %d times, want 0", stub.liveEstimateCalls)
+	}
+}
+
+func assertConstantExecutionBoundErrors(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64, wantConstantErr, wantEstimateErr string) {
+	t.Helper()
+
+	body := `{"owner_address":"411111111111111111111111111111111111111111","contract_address":"412222222222222222222222222222222222222222","data":"00"}`
+	resp, err := http.Post(prefix+"/triggerconstantcontract", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("triggerconstantcontract request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("triggerconstantcontract status: %d", resp.StatusCode)
+	}
+	assertJSONResultError(t, resp, wantConstantErr)
+	if stub.constantAtBlock != wantBlock {
+		t.Fatalf("TriggerConstantContractAt block = %d, want %d", stub.constantAtBlock, wantBlock)
+	}
+	if stub.liveConstantCalls != 0 {
+		t.Fatalf("live TriggerConstantContract called %d times, want 0", stub.liveConstantCalls)
+	}
+
+	resp, err = http.Post(prefix+"/estimateenergy", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("estimateenergy request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("estimateenergy status: %d", resp.StatusCode)
+	}
+	assertJSONResultError(t, resp, wantEstimateErr)
+	if stub.estimateAtBlock != wantBlock {
+		t.Fatalf("EstimateEnergyAt block = %d, want %d", stub.estimateAtBlock, wantBlock)
+	}
+	if stub.liveEstimateCalls != 0 {
+		t.Fatalf("live EstimateEnergy called %d times, want 0", stub.liveEstimateCalls)
+	}
+}
+
+func assertJSONResultError(t *testing.T, resp *http.Response, wantErr string) {
+	t.Helper()
+
+	var got struct {
+		Result struct {
+			Result  bool   `json:"result"`
+			Message string `json:"message"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Result.Result {
+		t.Fatalf("result.result = true, want false")
+	}
+	message, err := hex.DecodeString(got.Result.Message)
+	if err != nil {
+		t.Fatalf("result.message is not hex: %q", got.Result.Message)
+	}
+	if string(message) != wantErr {
+		t.Fatalf("result.message = %q, want %q", string(message), wantErr)
 	}
 }
 

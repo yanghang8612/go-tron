@@ -127,7 +127,9 @@ type solidTestBackend struct {
 	brokerageAt            int64
 	brokerageAtErr         error
 	constantAt             *tronapi.TriggerResult
+	constantAtErr          error
 	estimateAt             int64
+	estimateAtErr          error
 	txAt                   *corepb.Transaction
 	txInfoAt               *corepb.TransactionInfo
 	txErr                  error
@@ -559,6 +561,9 @@ func (b *solidTestBackend) TriggerConstantContract(owner, contract common.Addres
 
 func (b *solidTestBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
 	b.lastConstantAt = blockNum
+	if b.constantAtErr != nil {
+		return nil, b.constantAtErr
+	}
 	if b.constantAt != nil {
 		return b.constantAt, nil
 	}
@@ -572,6 +577,9 @@ func (b *solidTestBackend) EstimateEnergy(owner, contract common.Address, data [
 
 func (b *solidTestBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
 	b.lastEstimateAt = blockNum
+	if b.estimateAtErr != nil {
+		return 0, b.estimateAtErr
+	}
 	if b.estimateAt != 0 {
 		return b.estimateAt, nil
 	}
@@ -1195,6 +1203,57 @@ func TestSolidity_EstimateEnergyUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.lastEstimateAt != 92 {
 		t.Fatalf("EstimateEnergyAt block = %d, want solid block 92", backend.lastEstimateAt)
+	}
+	if backend.liveEstimate != 0 {
+		t.Fatalf("live EstimateEnergy called %d times, want 0", backend.liveEstimate)
+	}
+}
+
+func TestSolidity_ConstantExecutionSurfacesBoundArchiveErrors(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:      93,
+		constantAtErr: errors.New("solid constant execution state unavailable"),
+		estimateAtErr: errors.New("solid estimate energy state unavailable"),
+	}
+	client := newSolidityClient(t, backend)
+
+	constantResp, err := client.TriggerConstantContract(context.Background(), &contractpb.TriggerSmartContract{
+		OwnerAddress:    solidityTestAddress(0x39),
+		ContractAddress: solidityTestAddress(0x3a),
+		Data:            []byte{0x03},
+	})
+	if err != nil {
+		t.Fatalf("TriggerConstantContract returned gRPC error: %v", err)
+	}
+	if constantResp.GetResult().GetResult() {
+		t.Fatalf("TriggerConstantContract result = true, want false")
+	}
+	if got := string(constantResp.GetResult().GetMessage()); got != "solid constant execution state unavailable" {
+		t.Fatalf("TriggerConstantContract message = %q", got)
+	}
+	if backend.lastConstantAt != 93 {
+		t.Fatalf("TriggerConstantContractAt block = %d, want solid block 93", backend.lastConstantAt)
+	}
+	if backend.liveConstant != 0 {
+		t.Fatalf("live TriggerConstantContract called %d times, want 0", backend.liveConstant)
+	}
+
+	estimateResp, err := client.EstimateEnergy(context.Background(), &contractpb.TriggerSmartContract{
+		OwnerAddress:    solidityTestAddress(0x3b),
+		ContractAddress: solidityTestAddress(0x3c),
+		Data:            []byte{0x04},
+	})
+	if err != nil {
+		t.Fatalf("EstimateEnergy returned gRPC error: %v", err)
+	}
+	if estimateResp.GetResult().GetResult() {
+		t.Fatalf("EstimateEnergy result = true, want false")
+	}
+	if got := string(estimateResp.GetResult().GetMessage()); got != "solid estimate energy state unavailable" {
+		t.Fatalf("EstimateEnergy message = %q", got)
+	}
+	if backend.lastEstimateAt != 93 {
+		t.Fatalf("EstimateEnergyAt block = %d, want solid block 93", backend.lastEstimateAt)
 	}
 	if backend.liveEstimate != 0 {
 		t.Fatalf("live EstimateEnergy called %d times, want 0", backend.liveEstimate)
