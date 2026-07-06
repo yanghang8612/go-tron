@@ -856,6 +856,7 @@ type isolationStubBackend struct {
 	marketPriceAtBlock        uint64
 	liveExchangeCalls         int
 	exchangesAtBlock          uint64
+	exchangeAtErr             error
 	liveExchangePageCalls     int
 	exchangePageAtBlock       uint64
 	liveExchangeIDCalls       int
@@ -1283,6 +1284,9 @@ func (s *isolationStubBackend) ListExchanges() ([]*corepb.Exchange, error) {
 
 func (s *isolationStubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
 	s.exchangesAtBlock = blockNum
+	if s.exchangeAtErr != nil {
+		return nil, s.exchangeAtErr
+	}
 	return []*corepb.Exchange{{
 		ExchangeId:         9,
 		FirstTokenId:       []byte("solid"),
@@ -1300,6 +1304,9 @@ func (s *isolationStubBackend) ListExchangesPaginated(offset, limit int) ([]*cor
 
 func (s *isolationStubBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
 	s.exchangePageAtBlock = blockNum
+	if s.exchangeAtErr != nil {
+		return nil, s.exchangeAtErr
+	}
 	return []*corepb.Exchange{{
 		ExchangeId:         10,
 		FirstTokenId:       []byte("page"),
@@ -1317,6 +1324,9 @@ func (s *isolationStubBackend) GetExchangeByID(id int64) (*corepb.Exchange, erro
 
 func (s *isolationStubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
 	s.exchangeIDAtBlock = blockNum
+	if s.exchangeAtErr != nil {
+		return nil, s.exchangeAtErr
+	}
 	return &corepb.Exchange{
 		ExchangeId:         id,
 		FirstTokenId:       []byte("one"),
@@ -2844,6 +2854,61 @@ func TestPbftListExchangesUsesPbftBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	assertListExchangesUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func TestSolidityExchangeRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		exchangeAtErr:    errors.New("state history: cold exchange state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertExchangeRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftExchangeRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		exchangeAtErr:    errors.New("state history: cold pbft exchange state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertExchangeRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertExchangeRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "listexchanges", path: "/listexchanges", body: `{}`},
+		{name: "getpaginatedexchangelist", path: "/getpaginatedexchangelist", body: `{"offset":0,"limit":1}`},
+		{name: "getexchangebyid", path: "/getexchangebyid", body: `{"id":11}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(prefix+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.exchangesAtBlock != wantBlock || stub.exchangePageAtBlock != wantBlock || stub.exchangeIDAtBlock != wantBlock {
+		t.Fatalf("exchange bound blocks = list:%d page:%d id:%d, want %d",
+			stub.exchangesAtBlock, stub.exchangePageAtBlock, stub.exchangeIDAtBlock, wantBlock)
+	}
+	if stub.liveExchangeCalls != 0 || stub.liveExchangePageCalls != 0 || stub.liveExchangeIDCalls != 0 {
+		t.Fatalf("live exchange calls = list:%d page:%d id:%d, want 0",
+			stub.liveExchangeCalls, stub.liveExchangePageCalls, stub.liveExchangeIDCalls)
+	}
 }
 
 func assertListExchangesUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
