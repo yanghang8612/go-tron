@@ -56,12 +56,56 @@ func (s *StateDB) ReadDelegatedResource(from, to tcommon.Address) *rawdb.Delegat
 	return out
 }
 
+func (s *StateDB) ReadDelegatedResourceStrict(from, to tcommon.Address) (*rawdb.DelegatedResource, bool, error) {
+	var out *rawdb.DelegatedResource
+	seen := false
+	merge := func(dr *rawdb.DelegatedResource, ok bool, err error) (bool, error) {
+		if err != nil {
+			return ok, err
+		}
+		if !ok || dr == nil {
+			return false, nil
+		}
+		seen = true
+		if out == nil {
+			out = &rawdb.DelegatedResource{From: from, To: to}
+		}
+		out.FrozenBalanceForBandwidth += dr.FrozenBalanceForBandwidth
+		out.FrozenBalanceForEnergy += dr.FrozenBalanceForEnergy
+		if dr.ExpireTimeForBandwidth > out.ExpireTimeForBandwidth {
+			out.ExpireTimeForBandwidth = dr.ExpireTimeForBandwidth
+		}
+		if dr.ExpireTimeForEnergy > out.ExpireTimeForEnergy {
+			out.ExpireTimeForEnergy = dr.ExpireTimeForEnergy
+		}
+		return true, nil
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceLegacyStrict(from, to)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceV2Strict(from, to, false)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceV2Strict(from, to, true)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	return out, seen, nil
+}
+
 func (s *StateDB) ReadDelegatedResourceLegacy(from, to tcommon.Address) *rawdb.DelegatedResource {
 	return s.readDelegatedResourceByKey(rawdb.DelegatedResourceStateKey(from, to))
 }
 
+func (s *StateDB) ReadDelegatedResourceLegacyStrict(from, to tcommon.Address) (*rawdb.DelegatedResource, bool, error) {
+	return s.readDelegatedResourceByKeyStrict(rawdb.DelegatedResourceStateKey(from, to), "delegated resource legacy")
+}
+
 func (s *StateDB) ReadDelegatedResourceV2(from, to tcommon.Address, locked bool) *rawdb.DelegatedResource {
 	return s.readDelegatedResourceByKey(rawdb.DelegatedResourceV2StateKey(from, to, locked))
+}
+
+func (s *StateDB) ReadDelegatedResourceV2Strict(from, to tcommon.Address, locked bool) (*rawdb.DelegatedResource, bool, error) {
+	return s.readDelegatedResourceByKeyStrict(rawdb.DelegatedResourceV2StateKey(from, to, locked), fmt.Sprintf("delegated resource v2 locked=%v", locked))
 }
 
 func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResource {
@@ -74,6 +118,18 @@ func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResourc
 		return nil
 	}
 	return dr
+}
+
+func (s *StateDB) readDelegatedResourceByKeyStrict(key []byte, context string) (*rawdb.DelegatedResource, bool, error) {
+	data, ok, err := s.readSystemDelegationWithError(key)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	dr := &rawdb.DelegatedResource{}
+	if err := json.Unmarshal(data, dr); err != nil {
+		return nil, true, fmt.Errorf("decode %s: %w", context, err)
+	}
+	return dr, true, nil
 }
 
 func (s *StateDB) WriteDelegatedResourceLegacy(from, to tcommon.Address, dr *rawdb.DelegatedResource) error {

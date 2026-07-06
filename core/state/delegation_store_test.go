@@ -52,6 +52,19 @@ func TestDelegationStoreRoundTripAcrossRoot(t *testing.T) {
 		agg.ExpireTimeForBandwidth != 100 || agg.ExpireTimeForEnergy != 200 {
 		t.Fatalf("aggregate delegation mismatch: %+v", agg)
 	}
+	strict, ok, err := reopened.ReadDelegatedResourceStrict(from, to)
+	if err != nil || !ok || strict == nil || strict.FrozenBalanceForBandwidth != 10 || strict.FrozenBalanceForEnergy != 20 ||
+		strict.ExpireTimeForBandwidth != 100 || strict.ExpireTimeForEnergy != 200 {
+		t.Fatalf("strict aggregate delegation mismatch: %+v/%v/%v", strict, ok, err)
+	}
+	unlocked, ok, err := reopened.ReadDelegatedResourceV2Strict(from, to, false)
+	if err != nil || !ok || unlocked == nil || unlocked.FrozenBalanceForEnergy != 20 {
+		t.Fatalf("strict v2 delegation mismatch: %+v/%v/%v", unlocked, ok, err)
+	}
+	locked, ok, err := reopened.ReadDelegatedResourceV2Strict(from, to, true)
+	if err != nil || ok || locked != nil {
+		t.Fatalf("strict missing locked delegation = %+v/%v/%v, want nil/false/nil", locked, ok, err)
+	}
 }
 
 func TestDelegationStoreUnlockExpired(t *testing.T) {
@@ -133,5 +146,37 @@ func TestDelegationIndexStrictRejectsMalformedBytes(t *testing.T) {
 	_, err := statedb.ReadDelegationIndexStrict(from)
 	if err == nil || !strings.Contains(err.Error(), "malformed length") {
 		t.Fatalf("strict delegation index error = %v, want malformed length", err)
+	}
+}
+
+func TestDelegatedResourceStrictRejectsMalformedJSON(t *testing.T) {
+	statedb := newTestStateDB(t)
+	from := testAddr(0x51)
+	to := testAddr(0x52)
+
+	if err := statedb.SystemKVPut(kvdomains.SystemDelegation, rawdb.DelegatedResourceStateKey(from, to), []byte("{")); err != nil {
+		t.Fatalf("write malformed legacy delegation: %v", err)
+	}
+	if got := statedb.ReadDelegatedResourceLegacy(from, to); got != nil {
+		t.Fatalf("compat legacy delegation = %+v, want nil for malformed JSON", got)
+	}
+	if got, ok, err := statedb.ReadDelegatedResourceLegacyStrict(from, to); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource legacy") {
+		t.Fatalf("strict legacy delegation = %+v/%v/%v, want decode error", got, ok, err)
+	}
+	if got, ok, err := statedb.ReadDelegatedResourceStrict(from, to); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource legacy") {
+		t.Fatalf("strict aggregate delegation = %+v/%v/%v, want decode error", got, ok, err)
+	}
+
+	if err := statedb.DeleteDelegatedResourceLegacy(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.SystemKVPut(kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(from, to, true), []byte("{")); err != nil {
+		t.Fatalf("write malformed v2 delegation: %v", err)
+	}
+	if got := statedb.ReadDelegatedResourceV2(from, to, true); got != nil {
+		t.Fatalf("compat v2 delegation = %+v, want nil for malformed JSON", got)
+	}
+	if got, ok, err := statedb.ReadDelegatedResourceV2Strict(from, to, true); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource v2") {
+		t.Fatalf("strict v2 delegation = %+v/%v/%v, want decode error", got, ok, err)
 	}
 }

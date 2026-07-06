@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -56,12 +57,65 @@ func ReadDelegatedResource(db ethdb.KeyValueReader, from, to common.Address) *De
 	return out
 }
 
+// ReadDelegatedResourceStrict returns the aggregate legacy+V2 delegation row
+// for (from,to) and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func ReadDelegatedResourceStrict(db ethdb.KeyValueReader, from, to common.Address) (*DelegatedResource, bool, error) {
+	var out *DelegatedResource
+	seen := false
+	merge := func(dr *DelegatedResource, ok bool, err error) (bool, error) {
+		if err != nil {
+			return ok, err
+		}
+		if !ok || dr == nil {
+			return false, nil
+		}
+		seen = true
+		if out == nil {
+			out = &DelegatedResource{From: from, To: to}
+		}
+		out.FrozenBalanceForBandwidth += dr.FrozenBalanceForBandwidth
+		out.FrozenBalanceForEnergy += dr.FrozenBalanceForEnergy
+		if dr.ExpireTimeForBandwidth > out.ExpireTimeForBandwidth {
+			out.ExpireTimeForBandwidth = dr.ExpireTimeForBandwidth
+		}
+		if dr.ExpireTimeForEnergy > out.ExpireTimeForEnergy {
+			out.ExpireTimeForEnergy = dr.ExpireTimeForEnergy
+		}
+		return true, nil
+	}
+	if rowOK, err := merge(readDelegatedResourceByKeyStrict(db, delegationKey(from[:], to[:]), "delegated resource legacy")); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(ReadDelegatedResourceV2Strict(db, from, to, false)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(ReadDelegatedResourceV2Strict(db, from, to, true)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	return out, seen, nil
+}
+
 func ReadDelegatedResourceLegacy(db ethdb.KeyValueReader, from, to common.Address) *DelegatedResource {
 	return readDelegatedResourceByKey(db, delegationKey(from[:], to[:]))
 }
 
+// ReadDelegatedResourceLegacyStrict returns the legacy delegation row for
+// (from,to) and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func ReadDelegatedResourceLegacyStrict(db ethdb.KeyValueReader, from, to common.Address) (*DelegatedResource, bool, error) {
+	return readDelegatedResourceByKeyStrict(db, delegationKey(from[:], to[:]), "delegated resource legacy")
+}
+
 func ReadDelegatedResourceV2(db ethdb.KeyValueReader, from, to common.Address, locked bool) *DelegatedResource {
 	return readDelegatedResourceByKey(db, delegationKeyV2(from[:], to[:], locked))
+}
+
+// ReadDelegatedResourceV2Strict returns the V2 delegation row for (from,to)
+// and the locked bucket and surfaces storage/corruption errors. Missing rows
+// return (nil, false, nil).
+func ReadDelegatedResourceV2Strict(db ethdb.KeyValueReader, from, to common.Address, locked bool) (*DelegatedResource, bool, error) {
+	return readDelegatedResourceByKeyStrict(db, delegationKeyV2(from[:], to[:], locked), fmt.Sprintf("delegated resource v2 locked=%v", locked))
 }
 
 func readDelegatedResourceByKey(db ethdb.KeyValueReader, key []byte) *DelegatedResource {
@@ -74,6 +128,18 @@ func readDelegatedResourceByKey(db ethdb.KeyValueReader, key []byte) *DelegatedR
 		return nil
 	}
 	return dr
+}
+
+func readDelegatedResourceByKeyStrict(db ethdb.KeyValueReader, key []byte, context string) (*DelegatedResource, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	dr := &DelegatedResource{}
+	if err := json.Unmarshal(data, dr); err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode %s: %w", context, err)
+	}
+	return dr, true, nil
 }
 
 func DeleteDelegatedResource(db ethdb.KeyValueWriter, from, to common.Address) error {
@@ -140,15 +206,38 @@ func ReadDelegationIndex(db ethdb.KeyValueReader, from common.Address) []common.
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	if len(data)%common.AddressLength != 0 {
+	addrs, err := decodeDelegationIndex(data)
+	if err != nil {
 		return nil
+	}
+	return addrs
+}
+
+// ReadDelegationIndexStrict returns the flat receiver index for a delegating
+// account and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil). A present empty index returns an empty slice with ok=true.
+func ReadDelegationIndexStrict(db ethdb.KeyValueReader, from common.Address) ([]common.Address, bool, error) {
+	data, ok, err := readPresentValue(db, delegationIndexKey(from[:]), fmt.Sprintf("delegation index %s", from.Hex()))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	addrs, err := decodeDelegationIndex(data)
+	if err != nil {
+		return nil, true, err
+	}
+	return addrs, true, nil
+}
+
+func decodeDelegationIndex(data []byte) ([]common.Address, error) {
+	if len(data)%common.AddressLength != 0 {
+		return nil, fmt.Errorf("rawdb: decode delegation index: length %d, want multiple of %d", len(data), common.AddressLength)
 	}
 	count := len(data) / common.AddressLength
 	addrs := make([]common.Address, count)
 	for i := range addrs {
 		copy(addrs[i][:], data[i*common.AddressLength:])
 	}
-	return addrs
+	return addrs, nil
 }
 
 func DelegatedResourceStateKey(from, to common.Address) []byte {
