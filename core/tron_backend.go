@@ -1771,7 +1771,11 @@ func (b *TronBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContrac
 	if err != nil {
 		return nil, err
 	}
-	return sysKV.ReadAssetIssue(id), nil
+	asset, _, err := sysKV.ReadAssetIssueStrict(id)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue id %d at head: %w", id, err)
+	}
+	return asset, nil
 }
 
 func (b *TronBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -1795,10 +1799,18 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueCo
 	}
 	dp := b.chain.DynProps()
 	if !dp.AllowSameTokenName() {
-		return sysKV.ReadAssetIssueByName(name), nil
+		asset, _, err := sysKV.ReadAssetIssueByNameStrict(name)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy asset issue name %q at head: %w", string(name), err)
+		}
+		return asset, nil
 	}
 	var match *contractpb.AssetIssueContract
-	for _, asset := range sysKV.ListAssetsV2(firstAssetTokenID, dp.TokenIdNum()) {
+	assets, err := sysKV.ListAssetsV2Strict(firstAssetTokenID, dp.TokenIdNum())
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue v2 list at head: %w", err)
+	}
+	for _, asset := range assets {
 		if string(asset.Name) != string(name) {
 			continue
 		}
@@ -1808,7 +1820,11 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueCo
 		match = asset
 	}
 	if id, err := strconv.ParseInt(string(name), 10, 64); err == nil {
-		if asset := sysKV.ReadAssetIssue(id); asset != nil {
+		asset, _, err := sysKV.ReadAssetIssueStrict(id)
+		if err != nil {
+			return nil, fmt.Errorf("read asset issue id %d at head: %w", id, err)
+		}
+		if asset != nil {
 			if match != nil && match.Id != asset.Id {
 				return nil, nil
 			}
@@ -1922,9 +1938,17 @@ func (b *TronBackend) listAssetsAtHead() ([]*contractpb.AssetIssueContract, erro
 	}
 	latest := b.chain.DynProps().TokenIdNum()
 	if !b.chain.DynProps().AllowSameTokenName() {
-		return sysKV.ListAssetsLegacy(firstAssetTokenID, latest), nil
+		assets, err := sysKV.ListAssetsLegacyStrict(firstAssetTokenID, latest)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy asset issue list at head: %w", err)
+		}
+		return assets, nil
 	}
-	return sysKV.ListAssetsV2(firstAssetTokenID, latest), nil
+	assets, err := sysKV.ListAssetsV2Strict(firstAssetTokenID, latest)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue v2 list at head: %w", err)
+	}
+	return assets, nil
 }
 
 func (b *TronBackend) listAssetsAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
@@ -1957,16 +1981,31 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) (*contractpb.
 	if err != nil {
 		return nil, err
 	}
-	id, ok := sysKV.ReadAssetOwnerIndex(addr[:])
+	id, ok, err := sysKV.ReadAssetOwnerIndexStrict(addr[:])
+	if err != nil {
+		return nil, fmt.Errorf("read asset owner index for %s at head: %w", addr.Hex(), err)
+	}
 	if !ok {
 		return nil, nil
 	}
 	if !b.chain.DynProps().AllowSameTokenName() {
-		if asset := sysKV.ReadAssetIssue(id); asset != nil {
-			return sysKV.ReadAssetIssueByName(asset.Name), nil
+		asset, _, err := sysKV.ReadAssetIssueStrict(id)
+		if err != nil {
+			return nil, fmt.Errorf("read asset issue id %d at head: %w", id, err)
+		}
+		if asset != nil {
+			legacy, _, err := sysKV.ReadAssetIssueByNameStrict(asset.Name)
+			if err != nil {
+				return nil, fmt.Errorf("read legacy asset issue name %q at head: %w", string(asset.Name), err)
+			}
+			return legacy, nil
 		}
 	}
-	return sysKV.ReadAssetIssue(id), nil
+	asset, _, err := sysKV.ReadAssetIssueStrict(id)
+	if err != nil {
+		return nil, fmt.Errorf("read asset issue id %d at head: %w", id, err)
+	}
+	return asset, nil
 }
 
 func (b *TronBackend) GetAssetIssueByAccountAt(addr tcommon.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {

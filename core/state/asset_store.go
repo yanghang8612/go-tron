@@ -102,6 +102,18 @@ func (s *StateDB) readAssetMeta(key []byte) *contractpb.AssetIssueContract {
 	return c
 }
 
+func (s *StateDB) readAssetMetaStrict(key []byte, context string) (*contractpb.AssetIssueContract, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, key)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	c := &contractpb.AssetIssueContract{}
+	if err := proto.Unmarshal(raw, c); err != nil {
+		return nil, true, fmt.Errorf("decode %s: %w", context, err)
+	}
+	return c, true, nil
+}
+
 // writeAssetMeta stages one AssetIssueContract leg into the system-KV. The error
 // is non-nil only for a proto marshal failure or an unregistered domain (a
 // programmer error), since SystemAsset is registered at init.
@@ -117,6 +129,13 @@ func (s *StateDB) writeAssetMeta(key []byte, c *contractpb.AssetIssueContract) e
 // tokenID, or nil if absent. Mirrors java-tron AssetIssueV2Store.
 func (s *StateDB) ReadAssetIssue(tokenID int64) *contractpb.AssetIssueContract {
 	return s.readAssetMeta(assetIDKey(assetV2Tag, tokenID))
+}
+
+// ReadAssetIssueStrict returns the rooted V2 (ID-keyed) AssetIssueContract for
+// tokenID and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func (s *StateDB) ReadAssetIssueStrict(tokenID int64) (*contractpb.AssetIssueContract, bool, error) {
+	return s.readAssetMetaStrict(assetIDKey(assetV2Tag, tokenID), fmt.Sprintf("asset issue id %d", tokenID))
 }
 
 func (r *PersistentHistoryReader) readAssetMetaAt(key []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -147,6 +166,13 @@ func (s *StateDB) ReadAssetIssueByName(name []byte) *contractpb.AssetIssueContra
 	return s.readAssetMeta(assetBytesKey(assetLegacyTag, name))
 }
 
+// ReadAssetIssueByNameStrict returns the rooted legacy (name-keyed)
+// AssetIssueContract and surfaces storage/corruption errors. Missing rows
+// return (nil, false, nil).
+func (s *StateDB) ReadAssetIssueByNameStrict(name []byte) (*contractpb.AssetIssueContract, bool, error) {
+	return s.readAssetMetaStrict(assetBytesKey(assetLegacyTag, name), fmt.Sprintf("legacy asset issue name %q", string(name)))
+}
+
 // AssetIssueByNameAt reconstructs the rooted legacy AssetIssueContract at
 // blockNum.
 func (r *PersistentHistoryReader) AssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
@@ -169,6 +195,12 @@ func (s *StateDB) ReadAssetNameIndex(name []byte) (int64, bool) {
 	return int64(binary.BigEndian.Uint64(raw[:8])), true
 }
 
+// ReadAssetNameIndexStrict returns the token id registered for name and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func (s *StateDB) ReadAssetNameIndexStrict(name []byte) (int64, bool, error) {
+	return s.readAssetScalarStrict(assetBytesKey(assetNameIndexTag, name), fmt.Sprintf("asset name index %q", string(name)))
+}
+
 // WriteAssetNameIndex stages a name -> token id mapping.
 func (s *StateDB) WriteAssetNameIndex(name []byte, tokenID int64) error {
 	buf := make([]byte, 8)
@@ -184,6 +216,12 @@ func (s *StateDB) ReadAssetOwnerIndex(ownerAddr []byte) (int64, bool) {
 		return 0, false
 	}
 	return int64(binary.BigEndian.Uint64(raw[:8])), true
+}
+
+// ReadAssetOwnerIndexStrict returns the token id issued by ownerAddr and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func (s *StateDB) ReadAssetOwnerIndexStrict(ownerAddr []byte) (int64, bool, error) {
+	return s.readAssetScalarStrict(assetBytesKey(assetOwnerIndexTag, ownerAddr), fmt.Sprintf("asset owner index %x", ownerAddr))
 }
 
 // AssetOwnerIndexAt reconstructs the issuer -> token id mapping at blockNum.
@@ -216,6 +254,23 @@ func (s *StateDB) ReadAssetIssueTime(tokenID int64) int64 {
 	return int64(binary.BigEndian.Uint64(raw[:8]))
 }
 
+// ReadAssetIssueTimeStrict returns the issuance block timestamp for tokenID and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func (s *StateDB) ReadAssetIssueTimeStrict(tokenID int64) (int64, bool, error) {
+	return s.readAssetScalarStrict(assetIDKey(assetIssueTimeTag, tokenID), fmt.Sprintf("asset issue time %d", tokenID))
+}
+
+func (s *StateDB) readAssetScalarStrict(key []byte, context string) (int64, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, key)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	if len(raw) < 8 {
+		return 0, true, fmt.Errorf("decode %s: value length %d, want at least 8", context, len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw[:8])), true, nil
+}
+
 // WriteAssetIssueTime stages the issuance block timestamp (ms) for tokenID.
 func (s *StateDB) WriteAssetIssueTime(tokenID int64, issueTimeMs int64) error {
 	buf := make([]byte, 8)
@@ -242,6 +297,22 @@ func (s *StateDB) ListAssetsV2(firstTokenID, latestTokenID int64) []*contractpb.
 		}
 	}
 	return out
+}
+
+// ListAssetsV2Strict enumerates the V2 bucket and surfaces
+// storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListAssetsV2Strict(firstTokenID, latestTokenID int64) ([]*contractpb.AssetIssueContract, error) {
+	var out []*contractpb.AssetIssueContract
+	for id := firstTokenID; id <= latestTokenID; id++ {
+		c, ok, err := s.ReadAssetIssueStrict(id)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // ListAssetsV2At enumerates the V2 bucket over ids firstTokenID..latestTokenID
@@ -277,6 +348,29 @@ func (s *StateDB) ListAssetsLegacy(firstTokenID, latestTokenID int64) []*contrac
 		}
 	}
 	return out
+}
+
+// ListAssetsLegacyStrict enumerates the legacy name-keyed bucket and surfaces
+// storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListAssetsLegacyStrict(firstTokenID, latestTokenID int64) ([]*contractpb.AssetIssueContract, error) {
+	var out []*contractpb.AssetIssueContract
+	for id := firstTokenID; id <= latestTokenID; id++ {
+		v2, ok, err := s.ReadAssetIssueStrict(id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		legacy, legacyOK, err := s.ReadAssetIssueByNameStrict(v2.Name)
+		if err != nil {
+			return nil, err
+		}
+		if legacyOK {
+			out = append(out, legacy)
+		}
+	}
+	return out, nil
 }
 
 // ListAssetsLegacyAt enumerates the legacy bucket at blockNum.
