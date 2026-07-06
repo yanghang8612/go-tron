@@ -785,6 +785,7 @@ type isolationStubBackend struct {
 	proposalPageAtErr         error
 	liveAssetIDCalls          int
 	assetIDAtBlock            uint64
+	assetAtErr                error
 	liveAssetNameCalls        int
 	assetNameAtBlock          uint64
 	liveAssetListCalls        int
@@ -795,6 +796,7 @@ type isolationStubBackend struct {
 	assetAccountAtBlock       uint64
 	liveMarketOrderCalls      int
 	marketOrderAtBlock        uint64
+	marketAtErr               error
 	liveMarketOrdersCalls     int
 	marketOrdersAtBlock       uint64
 	liveMarketOrderPairCalls  int
@@ -1041,6 +1043,9 @@ func (s *isolationStubBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIss
 
 func (s *isolationStubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	s.assetIDAtBlock = blockNum
+	if s.assetAtErr != nil {
+		return nil, s.assetAtErr
+	}
 	return assetSentinel("bound-id", 9), nil
 }
 
@@ -1051,6 +1056,9 @@ func (s *isolationStubBackend) GetAssetIssueByName(name []byte) (*contractpb.Ass
 
 func (s *isolationStubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	s.assetNameAtBlock = blockNum
+	if s.assetAtErr != nil {
+		return nil, s.assetAtErr
+	}
 	return assetSentinel("bound-name", 99), nil
 }
 
@@ -1061,6 +1069,9 @@ func (s *isolationStubBackend) GetAssetIssueList() ([]*contractpb.AssetIssueCont
 
 func (s *isolationStubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	s.assetListAtBlock = blockNum
+	if s.assetAtErr != nil {
+		return nil, s.assetAtErr
+	}
 	return []*contractpb.AssetIssueContract{assetSentinel("bound-list", 11)}, nil
 }
 
@@ -1071,6 +1082,9 @@ func (s *isolationStubBackend) GetAssetIssueListPaginated(offset, limit int) ([]
 
 func (s *isolationStubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
 	s.assetPageAtBlock = blockNum
+	if s.assetAtErr != nil {
+		return nil, s.assetAtErr
+	}
 	return []*contractpb.AssetIssueContract{assetSentinel("bound-page", 12)}, nil
 }
 
@@ -1081,6 +1095,9 @@ func (s *isolationStubBackend) GetAssetIssueByAccount(addr common.Address) (*con
 
 func (s *isolationStubBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
 	s.assetAccountAtBlock = blockNum
+	if s.assetAtErr != nil {
+		return nil, s.assetAtErr
+	}
 	return assetSentinel("bound-account", 77), nil
 }
 
@@ -1091,6 +1108,9 @@ func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) (*corepb.Marke
 
 func (s *isolationStubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
 	s.marketOrderAtBlock = blockNum
+	if s.marketAtErr != nil {
+		return nil, s.marketAtErr
+	}
 	return &corepb.MarketOrder{
 		OrderId:           []byte("bound-order"),
 		OwnerAddress:      common.Address{0x41, 0x51}.Bytes(),
@@ -1109,6 +1129,9 @@ func (s *isolationStubBackend) GetMarketOrdersByAccount(addr common.Address) ([]
 
 func (s *isolationStubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	s.marketOrdersAtBlock = blockNum
+	if s.marketAtErr != nil {
+		return nil, s.marketAtErr
+	}
 	return []*corepb.MarketOrder{{
 		OrderId:           []byte("bound-account-order"),
 		OwnerAddress:      addr.Bytes(),
@@ -1131,6 +1154,9 @@ func (s *isolationStubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []by
 
 func (s *isolationStubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
 	s.marketPriceAtBlock = blockNum
+	if s.marketAtErr != nil {
+		return nil, s.marketAtErr
+	}
 	return &corepb.MarketPriceList{
 		SellTokenId: sellTokenID,
 		BuyTokenId:  buyTokenID,
@@ -1145,6 +1171,9 @@ func (s *isolationStubBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID 
 
 func (s *isolationStubBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
 	s.marketOrderPairAtBlock = blockNum
+	if s.marketAtErr != nil {
+		return nil, s.marketAtErr
+	}
 	return []*corepb.MarketOrder{{
 		OrderId:           []byte("bound-pair-order"),
 		SellTokenId:       sellTokenID,
@@ -1165,6 +1194,9 @@ func (s *isolationStubBackend) GetMarketPairList() (*corepb.MarketOrderPairList,
 
 func (s *isolationStubBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
 	s.marketPairListAtBlock = blockNum
+	if s.marketAtErr != nil {
+		return nil, s.marketAtErr
+	}
 	return &corepb.MarketOrderPairList{OrderPair: []*corepb.MarketOrderPair{{
 		SellTokenId: []byte("solid-sell"),
 		BuyTokenId:  []byte("solid-buy"),
@@ -2286,6 +2318,66 @@ func assertAssetRoutesUseBound(t *testing.T, prefix string, stub *isolationStubB
 	}
 }
 
+func TestSolidityAssetRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		assetAtErr:       errors.New("state history: cold asset state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAssetRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftAssetRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		assetAtErr:       errors.New("state history: cold pbft asset state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertAssetRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertAssetRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "getassetissuebyid", path: "/getassetissuebyid", body: `{"value":1000001}`},
+		{name: "getassetissuebyname", path: "/getassetissuebyname", body: `{"value":"544f4b454e"}`},
+		{name: "getassetissuelistbyname", path: "/getassetissuelistbyname", body: `{"value":"544f4b454e"}`},
+		{name: "getassetissuelist", path: "/getassetissuelist", body: `{}`},
+		{name: "getpaginatedassetissuelist", path: "/getpaginatedassetissuelist", body: `{"offset":0,"limit":10}`},
+		{name: "getassetissuebyaccount", path: "/getassetissuebyaccount", body: `{"address":"410000000000000000000000000000000000000071"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(prefix+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.assetIDAtBlock != wantBlock || stub.assetNameAtBlock != wantBlock || stub.assetListAtBlock != wantBlock ||
+		stub.assetPageAtBlock != wantBlock || stub.assetAccountAtBlock != wantBlock {
+		t.Fatalf("asset bound blocks = id:%d name:%d list:%d page:%d account:%d, want %d",
+			stub.assetIDAtBlock, stub.assetNameAtBlock, stub.assetListAtBlock, stub.assetPageAtBlock, stub.assetAccountAtBlock, wantBlock)
+	}
+	if stub.liveAssetIDCalls != 0 || stub.liveAssetNameCalls != 0 || stub.liveAssetListCalls != 0 ||
+		stub.liveAssetPageCalls != 0 || stub.liveAssetAccountCalls != 0 {
+		t.Fatalf("live asset calls = id:%d name:%d list:%d page:%d account:%d, want 0",
+			stub.liveAssetIDCalls, stub.liveAssetNameCalls, stub.liveAssetListCalls, stub.liveAssetPageCalls, stub.liveAssetAccountCalls)
+	}
+}
+
 func TestSolidityMarketRoutesUseSolidBoundArchivePath(t *testing.T) {
 	stub := &isolationStubBackend{
 		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
@@ -2442,6 +2534,65 @@ func assertMarketRoutesUseBound(t *testing.T, prefix string, stub *isolationStub
 	}
 	if stub.liveMarketPairListCalls != 0 {
 		t.Fatalf("live GetMarketPairList called %d times, want 0", stub.liveMarketPairListCalls)
+	}
+}
+
+func TestSolidityMarketRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		marketAtErr:      errors.New("state history: cold market state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertMarketRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftMarketRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		marketAtErr:      errors.New("state history: cold pbft market state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertMarketRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertMarketRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "getmarketorderbyid", path: "/getmarketorderbyid", body: `{"value":"6f72646572"}`},
+		{name: "getmarketordersfromaccount", path: "/getmarketordersfromaccount", body: `{"address":"411234567890"}`},
+		{name: "getmarketpricebypair", path: "/getmarketpricebypair", body: `{"sell_token_id":"73656c6c","buy_token_id":"627579"}`},
+		{name: "getmarketorderlistbypair", path: "/getmarketorderlistbypair", body: `{"sell_token_id":"73656c6c","buy_token_id":"627579"}`},
+		{name: "getmarketpairlist", path: "/getmarketpairlist", body: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(prefix+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.marketOrderAtBlock != wantBlock || stub.marketOrdersAtBlock != wantBlock || stub.marketPriceAtBlock != wantBlock ||
+		stub.marketOrderPairAtBlock != wantBlock || stub.marketPairListAtBlock != wantBlock {
+		t.Fatalf("market bound blocks = order:%d orders:%d price:%d pair:%d pairList:%d, want %d",
+			stub.marketOrderAtBlock, stub.marketOrdersAtBlock, stub.marketPriceAtBlock, stub.marketOrderPairAtBlock, stub.marketPairListAtBlock, wantBlock)
+	}
+	if stub.liveMarketOrderCalls != 0 || stub.liveMarketOrdersCalls != 0 || stub.liveMarketPriceCalls != 0 ||
+		stub.liveMarketOrderPairCalls != 0 || stub.liveMarketPairListCalls != 0 {
+		t.Fatalf("live market calls = order:%d orders:%d price:%d pair:%d pairList:%d, want 0",
+			stub.liveMarketOrderCalls, stub.liveMarketOrdersCalls, stub.liveMarketPriceCalls, stub.liveMarketOrderPairCalls, stub.liveMarketPairListCalls)
 	}
 }
 
