@@ -1224,11 +1224,17 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := sysKV.ReadProposalIndex()
+	ids, _, err := sysKV.ReadProposalIndexStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read proposal index at head: %w", err)
+	}
 	result := make([]*tronapi.ProposalInfo, 0, len(ids))
 	for _, id := range ids {
-		p := sysKV.ReadProposal(id)
-		if p == nil {
+		p, ok, err := sysKV.ReadProposalStrict(id)
+		if err != nil {
+			return nil, fmt.Errorf("read proposal %d at head: %w", id, err)
+		}
+		if !ok {
 			continue
 		}
 		result = append(result, proposalInfoFromRaw(p))
@@ -2673,8 +2679,11 @@ func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := sysKV.ReadProposal(id)
-	if p == nil {
+	p, ok, err := sysKV.ReadProposalStrict(id)
+	if err != nil {
+		return nil, fmt.Errorf("read proposal %d at head: %w", id, err)
+	}
+	if !ok {
 		return nil, fmt.Errorf("proposal %d not found", id)
 	}
 	return proposalInfoFromRaw(p), nil

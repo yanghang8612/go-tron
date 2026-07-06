@@ -88,6 +88,20 @@ func (s *StateDB) ReadProposal(id int64) *rawdb.Proposal {
 	return p
 }
 
+// ReadProposalStrict resolves a proposal record from the rooted system-KV and
+// surfaces storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadProposalStrict(id int64) (*rawdb.Proposal, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreKey(id))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	p := &rawdb.Proposal{}
+	if err := json.Unmarshal(raw, p); err != nil {
+		return nil, true, fmt.Errorf("decode proposal %d: %w", id, err)
+	}
+	return p, true, nil
+}
+
 // ProposalAt reconstructs a rooted proposal record at the end of blockNum.
 func (r *PersistentHistoryReader) ProposalAt(id int64, blockNum uint64) (*rawdb.Proposal, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreKey(id), blockNum)
@@ -120,6 +134,20 @@ func (s *StateDB) ReadProposalIndex() []int64 {
 		return nil
 	}
 	return decodeProposalIndex(raw)
+}
+
+// ReadProposalIndexStrict returns the rooted proposal id index and surfaces
+// storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadProposalIndexStrict() ([]int64, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreIndexKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	ids, err := decodeProposalIndexStrict(raw)
+	if err != nil {
+		return nil, true, err
+	}
+	return ids, true, nil
 }
 
 // ProposalIndexAt reconstructs the rooted proposal id index at the end of blockNum.
