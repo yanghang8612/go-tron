@@ -209,6 +209,36 @@ func TestPbftBalanceTraceRoutesUsePbftBoundGate(t *testing.T) {
 	assertBalanceTraceRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
 }
 
+func TestSolidityBalanceTraceRoutesSurfaceBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{
+			accountBalanceErr:    errors.New("state history: cold account balance trace corrupt"),
+			blockBalanceTraceErr: errors.New("state history: cold block balance trace corrupt"),
+		},
+		solidNum: 42,
+		pbftNum:  -1,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBalanceTraceRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftBalanceTraceRoutesSurfaceBackendError(t *testing.T) {
+	stub := &solidStubBackend{
+		stubBackend: stubBackend{
+			accountBalanceErr:    errors.New("state history: cold pbft account balance trace corrupt"),
+			blockBalanceTraceErr: errors.New("state history: cold pbft block balance trace corrupt"),
+		},
+		solidNum: 5,
+		pbftNum:  13,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBalanceTraceRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
 func assertBalanceTraceRoutesUseBound(t *testing.T, prefix string, stub *solidStubBackend, wantBlock uint64) {
 	t.Helper()
 
@@ -282,6 +312,37 @@ func assertBalanceTraceRoutesUseBound(t *testing.T, prefix string, stub *solidSt
 	}
 	if stub.lastBlockBalanceTraceID != nil {
 		t.Fatalf("future getblockbalancetrace called backend with id %+v", stub.lastBlockBalanceTraceID)
+	}
+}
+
+func assertBalanceTraceRouteErrorsUseBound(t *testing.T, prefix string, stub *solidStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	hashHex := strings.Repeat("11", common.HashLength)
+	accountBody := balanceTraceAccountBody(wantBlock, hashHex)
+	resp, err := http.Post(prefix+"/getaccountbalance", "application/json", strings.NewReader(accountBody))
+	if err != nil {
+		t.Fatalf("getaccountbalance request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbalance status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastAccountBalanceReq == nil || stub.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != int64(wantBlock) {
+		t.Fatalf("GetAccountBalanceTrace request = %+v, want block %d", stub.lastAccountBalanceReq, wantBlock)
+	}
+
+	blockBody := balanceTraceBlockBody(wantBlock, hashHex)
+	resp, err = http.Post(prefix+"/getblockbalancetrace", "application/json", strings.NewReader(blockBody))
+	if err != nil {
+		t.Fatalf("getblockbalancetrace request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getblockbalancetrace status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastBlockBalanceTraceID == nil || stub.lastBlockBalanceTraceID.GetNumber() != int64(wantBlock) {
+		t.Fatalf("GetBlockBalanceTrace id = %+v, want block %d", stub.lastBlockBalanceTraceID, wantBlock)
 	}
 }
 

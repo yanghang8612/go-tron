@@ -44,7 +44,9 @@ type stubBackend struct {
 	accountNetAtErr         error
 	accountResource         *tronapi.AccountResource
 	accountBalanceResp      *contractpb.AccountBalanceResponse
+	accountBalanceErr       error
 	blockBalanceTrace       *contractpb.BlockBalanceTrace
+	blockBalanceTraceErr    error
 	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
 	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
 	accountErr              error
@@ -182,10 +184,16 @@ func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64)
 }
 func (s *stubBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
 	s.lastAccountBalanceReq = req
+	if s.accountBalanceErr != nil {
+		return nil, s.accountBalanceErr
+	}
 	return s.accountBalanceResp, nil
 }
 func (s *stubBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
 	s.lastBlockBalanceTraceID = id
+	if s.blockBalanceTraceErr != nil {
+		return nil, s.blockBalanceTraceErr
+	}
 	return s.blockBalanceTrace, nil
 }
 func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
@@ -806,6 +814,29 @@ func TestGetAccountBalanceTrace(t *testing.T) {
 	}
 }
 
+func TestGetAccountBalanceTraceBackendErrorReturnsInternal(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x80)
+	stub := &stubBackend{
+		accountBalanceErr: errors.New("read account balance trace segment"),
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"account_identifier":{"address":"4100000000000000000000000000000000000000aa"},"block_identifier":{"number":7,"hash":"%s"}}`,
+		hex.EncodeToString(hash))
+	resp, err := http.Post(srv.URL+"/wallet/getaccountbalance", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST getaccountbalance: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbalance status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastAccountBalanceReq == nil {
+		t.Fatal("backend was not called")
+	}
+}
+
 func TestGetBlockBalanceTrace(t *testing.T) {
 	hash := testBytes(common.HashLength, 0x33)
 	stub := &stubBackend{
@@ -831,6 +862,28 @@ func TestGetBlockBalanceTrace(t *testing.T) {
 	if stub.lastBlockBalanceTraceID.GetNumber() != 8 ||
 		hex.EncodeToString(stub.lastBlockBalanceTraceID.GetHash()) != hex.EncodeToString(hash) {
 		t.Fatalf("backend block id = %+v", stub.lastBlockBalanceTraceID)
+	}
+}
+
+func TestGetBlockBalanceTraceBackendErrorReturnsInternal(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x33)
+	stub := &stubBackend{
+		blockBalanceTraceErr: errors.New("read block balance trace segment"),
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"number":8,"hash":"%s"}`, hex.EncodeToString(hash))
+	resp, err := http.Post(srv.URL+"/wallet/getblockbalancetrace", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST getblockbalancetrace: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getblockbalancetrace status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastBlockBalanceTraceID == nil {
+		t.Fatal("backend was not called")
 	}
 }
 

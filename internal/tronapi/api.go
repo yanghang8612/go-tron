@@ -1010,7 +1010,7 @@ func (api *API) handleGetAccountBalance(w http.ResponseWriter, r *http.Request, 
 	}
 	resp, err := api.backend.GetAccountBalanceTrace(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeTronJSON(w, resp)
@@ -1031,7 +1031,7 @@ func (api *API) handleGetBlockBalanceTrace(w http.ResponseWriter, r *http.Reques
 	}
 	trace, err := api.backend.GetBlockBalanceTrace(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeTronJSON(w, trace)
