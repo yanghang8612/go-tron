@@ -1002,7 +1002,7 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"chainLookupPruneToBlock=-1",
 		"tailPrunedThroughBlock=-1",
 		"balanceTracePruneToBlock=-1",
-		"sectionBloomPruneToSection=-1",
+		"sectionBloomPruneToBlock=-1",
 		"snapshotStatus=ok",
 		"snapshotIssues=0",
 		"retiredSegments=0",
@@ -1074,7 +1074,7 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 		got.ChainLookupPruneToBlock != 18 ||
 		got.TailPrunedThroughBlock != 12 ||
 		got.BalanceTracePruneToBlock != 16 ||
-		got.SectionBloomPruneToSection != 14 {
+		got.SectionBloomPruneToBlock != 14 {
 		t.Fatalf("prune evidence = %+v, want exported stage boundaries", got)
 	}
 
@@ -1085,7 +1085,7 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 		got.ChainLookupPruneToBlock != -1 ||
 		got.TailPrunedThroughBlock != -1 ||
 		got.BalanceTracePruneToBlock != -1 ||
-		got.SectionBloomPruneToSection != -1 {
+		got.SectionBloomPruneToBlock != -1 {
 		t.Fatalf("empty prune evidence = %+v, want absent sentinels", got)
 	}
 }
