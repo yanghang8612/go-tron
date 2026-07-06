@@ -45,6 +45,7 @@ type testBackend struct {
 	assetErr                error
 	assetByName             *contractpb.AssetIssueContract
 	marketErr               error
+	proposalErr             error
 	exchange                *corepb.Exchange
 	exchangeErr             error
 	tx                      *corepb.Transaction
@@ -218,8 +219,16 @@ func (b *testBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (b *testBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
+func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
+	return nil, nil
+}
 func (b *testBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -396,9 +405,15 @@ func (b *testBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
 func (b *testBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
 	return nil, nil
 }
 func (b *testBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
 	return nil, nil
 }
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
@@ -1275,6 +1290,30 @@ func TestListProposals_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestProposalListQueriesSurfaceBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{proposalErr: errors.New("cold proposal state corrupt")})
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListProposals", call: func() error {
+			_, err := client.ListProposals(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedProposalList", call: func() error {
+			_, err := client.GetPaginatedProposalList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
 	}
 }
 

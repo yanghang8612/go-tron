@@ -209,8 +209,16 @@ func (s *stubBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return s.proposals, nil }
+func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
+	return s.proposals, nil
+}
 func (s *stubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
 	return s.proposals, nil
 }
 
@@ -404,6 +412,9 @@ func (s *stubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
 func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
 	if len(s.proposals) == 0 {
 		return nil, nil
 	}
@@ -1622,6 +1633,32 @@ func TestGetPaginatedProposalList(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
 	if _, ok := result["proposal"]; !ok {
 		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+
+func TestProposalListQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold proposal index corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "list", path: "/wallet/listproposals", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedproposallist", body: `{"offset":0,"limit":10}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{proposalErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
 	}
 }
 
