@@ -77,6 +77,7 @@ type stubBackend struct {
 	bandwidthPrices string
 	energyPrices    string
 	exchanges       []*corepb.Exchange
+	exchangeErr     error
 	assetErr        error
 	marketErr       error
 }
@@ -338,11 +339,22 @@ func (s *stubBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
 func (s *stubBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return s.exchanges, nil }
+func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
+	return s.exchanges, nil
+}
 func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
 	return s.exchanges, nil
 }
 func (s *stubBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
 	for _, exchange := range s.exchanges {
 		if exchange.GetExchangeId() == id {
 			return exchange, nil
@@ -408,6 +420,9 @@ func (s *stubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint6
 	return s.ListProposalsPaginated(offset, limit)
 }
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
 	if len(s.exchanges) == 0 {
 		return nil, nil
 	}
@@ -1744,6 +1759,33 @@ func TestGetExchangeByID(t *testing.T) {
 	result = postJSON(t, srv.URL+"/wallet/getexchangebyid", `{"id":99}`)
 	if len(result) != 0 {
 		t.Fatalf("missing exchange result = %v, want empty object", result)
+	}
+}
+
+func TestExchangeLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head exchange state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "list", path: "/wallet/listexchanges", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedexchangelist", body: `{"offset":0,"limit":10}`},
+		{name: "by id", path: "/wallet/getexchangebyid", body: `{"id":7}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{exchangeErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
 	}
 }
 
