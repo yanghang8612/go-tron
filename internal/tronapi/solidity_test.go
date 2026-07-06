@@ -869,12 +869,14 @@ type isolationStubBackend struct {
 	legacyDelegatedAtBlock    uint64
 	delegationIndexAtBlock    uint64
 	legacyDelegIndexAtBlock   uint64
+	delegationAtErr           error
 	liveCanDelegateCalls      int
 	canDelegateAtBlock        uint64
 	liveCanWithdrawCalls      int
 	canWithdrawAtBlock        uint64
 	liveAvailableCalls        int
 	availableAtBlock          uint64
+	stakeResourceAtErr        error
 }
 
 func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, error) {
@@ -1348,6 +1350,9 @@ func (s *isolationStubBackend) GetDelegatedResource(from, to common.Address) ([]
 
 func (s *isolationStubBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	s.legacyDelegatedAtBlock = blockNum
+	if s.delegationAtErr != nil {
+		return nil, s.delegationAtErr
+	}
 	return []*tronapi.DelegatedResourceInfo{{
 		FromAddress:               hex.EncodeToString(from.Bytes()),
 		ToAddress:                 hex.EncodeToString(to.Bytes()),
@@ -1367,6 +1372,9 @@ func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) (
 
 func (s *isolationStubBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	s.delegatedAtBlock = blockNum
+	if s.delegationAtErr != nil {
+		return nil, s.delegationAtErr
+	}
 	return []*tronapi.DelegatedResourceInfo{{
 		FromAddress:            hex.EncodeToString(from.Bytes()),
 		ToAddress:              hex.EncodeToString(to.Bytes()),
@@ -1386,6 +1394,9 @@ func (s *isolationStubBackend) GetDelegatedResourceAccountIndex(addr common.Addr
 
 func (s *isolationStubBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
 	s.legacyDelegIndexAtBlock = blockNum
+	if s.delegationAtErr != nil {
+		return nil, s.delegationAtErr
+	}
 	return &corepb.DelegatedResourceAccountIndex{
 		Account:      addr.Bytes(),
 		ToAccounts:   [][]byte{common.Address{0x41, 0x9f}.Bytes()},
@@ -1403,6 +1414,9 @@ func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2(addr common.Ad
 
 func (s *isolationStubBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
 	s.delegationIndexAtBlock = blockNum
+	if s.delegationAtErr != nil {
+		return nil, s.delegationAtErr
+	}
 	return &tronapi.DelegationIndexInfo{
 		Account:     hex.EncodeToString(addr.Bytes()),
 		ToAddresses: []string{hex.EncodeToString(common.Address{0x41, 0x8f}.Bytes())},
@@ -1416,6 +1430,9 @@ func (s *isolationStubBackend) CanDelegateResource(addr common.Address, amount i
 
 func (s *isolationStubBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
 	s.canDelegateAtBlock = blockNum
+	if s.stakeResourceAtErr != nil {
+		return nil, s.stakeResourceAtErr
+	}
 	return &tronapi.CanDelegateInfo{MaxSize: 900, CanDelegateSize: 700, Balance: amount}, nil
 }
 
@@ -1426,6 +1443,9 @@ func (s *isolationStubBackend) GetCanWithdrawUnfreezeAmount(addr common.Address,
 
 func (s *isolationStubBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	s.canWithdrawAtBlock = blockNum
+	if s.stakeResourceAtErr != nil {
+		return nil, s.stakeResourceAtErr
+	}
 	return &tronapi.CanWithdrawUnfreezeInfo{Amount: 5000}, nil
 }
 
@@ -1436,6 +1456,9 @@ func (s *isolationStubBackend) GetAvailableUnfreezeCount(addr common.Address) (*
 
 func (s *isolationStubBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	s.availableAtBlock = blockNum
+	if s.stakeResourceAtErr != nil {
+		return nil, s.stakeResourceAtErr
+	}
 	return &tronapi.AvailableUnfreezeCountInfo{Count: 29}, nil
 }
 
@@ -3158,6 +3181,68 @@ func TestPbftDelegationRoutesUsePbftBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidityDelegationRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		delegationAtErr:  errors.New("state history: cold delegation state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDelegationRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftDelegationRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		delegationAtErr:  errors.New("state history: cold pbft delegation state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDelegationRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertDelegationRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	from := hex.EncodeToString(common.Address{0x41, 0x10}.Bytes())
+	to := hex.EncodeToString(common.Address{0x41, 0x20}.Bytes())
+	delegatedBody := `{"fromAddress":"` + from + `","toAddress":"` + to + `"}`
+	indexBody := `{"value":"` + from + `"}`
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "getdelegatedresource", path: "/getdelegatedresource", body: delegatedBody},
+		{name: "getdelegatedresourcev2", path: "/getdelegatedresourcev2", body: delegatedBody},
+		{name: "getdelegatedresourceaccountindex", path: "/getdelegatedresourceaccountindex", body: indexBody},
+		{name: "getdelegatedresourceaccountindexv2", path: "/getdelegatedresourceaccountindexv2", body: indexBody},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(prefix+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.legacyDelegatedAtBlock != wantBlock || stub.delegatedAtBlock != wantBlock ||
+		stub.legacyDelegIndexAtBlock != wantBlock || stub.delegationIndexAtBlock != wantBlock {
+		t.Fatalf("delegation bound blocks = legacy:%d v2:%d legacyIndex:%d indexV2:%d, want %d",
+			stub.legacyDelegatedAtBlock, stub.delegatedAtBlock, stub.legacyDelegIndexAtBlock, stub.delegationIndexAtBlock, wantBlock)
+	}
+	if stub.liveLegacyDelegatedCalls != 0 || stub.liveDelegatedCalls != 0 ||
+		stub.liveLegacyDelegIndexCalls != 0 || stub.liveDelegationIndexCalls != 0 {
+		t.Fatalf("live delegation calls = legacy:%d v2:%d legacyIndex:%d indexV2:%d, want 0",
+			stub.liveLegacyDelegatedCalls, stub.liveDelegatedCalls, stub.liveLegacyDelegIndexCalls, stub.liveDelegationIndexCalls)
+	}
+}
+
 func TestSolidityStakeResourceRoutesUseSolidBoundArchivePath(t *testing.T) {
 	stub := &isolationStubBackend{
 		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
@@ -3176,6 +3261,62 @@ func TestPbftStakeResourceRoutesUsePbftBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	assertStakeResourceRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func TestSolidityStakeResourceRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:   solidStubBackend{solidNum: 42, pbftNum: -1},
+		stakeResourceAtErr: errors.New("state history: cold stake resource state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertStakeResourceRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftStakeResourceRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:   solidStubBackend{solidNum: 5, pbftNum: 13},
+		stakeResourceAtErr: errors.New("state history: cold pbft stake resource state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertStakeResourceRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertStakeResourceRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	addr := hex.EncodeToString(common.Address{0x41, 0x90}.Bytes())
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "candelegateresource", path: "/candelegateresource", body: `{"owner_address":"` + addr + `","balance":123,"type":0}`},
+		{name: "getcanwithdrawunfreezeamount", path: "/getcanwithdrawunfreezeamount", body: `{"owner_address":"` + addr + `","timestamp":12345}`},
+		{name: "getavailableunfreezecount", path: "/getavailableunfreezecount", body: `{"owner_address":"` + addr + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(prefix+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.canDelegateAtBlock != wantBlock || stub.canWithdrawAtBlock != wantBlock || stub.availableAtBlock != wantBlock {
+		t.Fatalf("stake resource bound blocks = delegate:%d withdraw:%d available:%d, want %d",
+			stub.canDelegateAtBlock, stub.canWithdrawAtBlock, stub.availableAtBlock, wantBlock)
+	}
+	if stub.liveCanDelegateCalls != 0 || stub.liveCanWithdrawCalls != 0 || stub.liveAvailableCalls != 0 {
+		t.Fatalf("live stake resource calls = delegate:%d withdraw:%d available:%d, want 0",
+			stub.liveCanDelegateCalls, stub.liveCanWithdrawCalls, stub.liveAvailableCalls)
+	}
 }
 
 func assertStakeResourceRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
