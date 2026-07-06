@@ -235,7 +235,11 @@ func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, bou
 		acc, err = api.backend.GetAccountById([]byte(accountID))
 	}
 	if err != nil {
-		writeEmptyJSON(w)
+		if accountLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if acc == nil {

@@ -933,7 +933,7 @@ func TestSolidity_GetAccountUsesSolidBoundArchivePath(t *testing.T) {
 	}
 }
 
-func TestSolidity_GetAccountBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidity_GetAccountBackendErrorReturnsInternal(t *testing.T) {
 	addr := solidityTestAddress(0x15)
 	backendErr := errors.New("state history: cold account segment corrupt")
 	backend := &solidTestBackend{
@@ -942,12 +942,9 @@ func TestSolidity_GetAccountBackendErrorReturnsEmpty(t *testing.T) {
 	}
 	client := newSolidityClient(t, backend)
 
-	resp, err := client.GetAccount(context.Background(), &corepb.Account{Address: addr})
-	if err != nil {
-		t.Fatalf("GetAccount: %v", err)
-	}
-	if resp == nil || len(resp.GetAddress()) != 0 {
-		t.Fatalf("GetAccount = %+v, want empty account", resp)
+	_, err := client.GetAccount(context.Background(), &corepb.Account{Address: addr})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 	if backend.lastAccountAt != 42 {
 		t.Fatalf("GetAccountAt block = %d, want solid block 42", backend.lastAccountAt)
@@ -1004,7 +1001,7 @@ func TestSolidity_GetAccountByIdAccountIDUsesSolidBoundArchivePath(t *testing.T)
 	}
 }
 
-func TestSolidity_GetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidity_GetAccountByIdBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state history: cold account-id index corrupt")
 	backend := &solidTestBackend{
 		testBackend: testBackend{accountIDAtErr: backendErr},
@@ -1012,12 +1009,9 @@ func TestSolidity_GetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 	}
 	client := newSolidityClient(t, backend)
 
-	resp, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
-	if err != nil {
-		t.Fatalf("GetAccountById: %v", err)
-	}
-	if resp == nil || len(resp.GetAddress()) != 0 {
-		t.Fatalf("GetAccountById = %+v, want empty account", resp)
+	_, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 	if backend.lastAccountIDAt != 79 {
 		t.Fatalf("GetAccountByIdAt block = %d, want solid block 79", backend.lastAccountIDAt)

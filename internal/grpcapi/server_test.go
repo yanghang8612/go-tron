@@ -544,9 +544,17 @@ func TestGetAccount_Empty(t *testing.T) {
 	}
 }
 
-func TestGetAccount_BackendErrorReturnsEmpty(t *testing.T) {
+func TestGetAccount_BackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state history: cold account segment corrupt")
 	client := newTestClient(t, &testBackend{accountErr: backendErr})
+	_, err := client.GetAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetAccount_PreservesNotFoundErrorAsEmpty(t *testing.T) {
+	client := newTestClient(t, &testBackend{accountErr: errors.New("account not found")})
 	resp, err := client.GetAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
 	if err != nil {
 		t.Fatalf("GetAccount: %v", err)
@@ -556,15 +564,12 @@ func TestGetAccount_BackendErrorReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestGetAccountById_BackendErrorReturnsEmpty(t *testing.T) {
+func TestGetAccountById_BackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state history: cold account-id index corrupt")
 	client := newTestClient(t, &testBackend{accountIDErr: backendErr})
-	resp, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
-	if err != nil {
-		t.Fatalf("GetAccountById: %v", err)
-	}
-	if resp == nil || len(resp.GetAddress()) != 0 {
-		t.Fatalf("GetAccountById = %+v, want empty account", resp)
+	_, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -944,12 +949,12 @@ func TestGetContract_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetContract_BackendErrorReturnsNotFound(t *testing.T) {
+func TestGetContract_BackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state latest: contract metadata corrupt")
 	client := newTestClient(t, &testBackend{contractErr: backendErr})
 	_, err := client.GetContract(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("want NotFound, got %v", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -973,12 +978,12 @@ func TestGetContract_Found(t *testing.T) {
 	}
 }
 
-func TestGetContractInfo_BackendErrorReturnsNotFound(t *testing.T) {
+func TestGetContractInfo_BackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state latest: contract bytecode corrupt")
 	client := newTestClient(t, &testBackend{contractErr: backendErr})
 	_, err := client.GetContractInfo(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("want NotFound, got %v", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 

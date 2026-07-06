@@ -155,7 +155,7 @@ func TestSolidityGetBlockByNumBackendErrorReturnsEmpty(t *testing.T) {
 	assertHTTPEmptyObject(t, resp)
 }
 
-func TestSolidityGetAccountBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidityGetAccountBackendErrorReturnsInternal(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{accountAtErr: errors.New("state history: cold account segment corrupt")},
 		solidNum:    3,
@@ -169,10 +169,12 @@ func TestSolidityGetAccountBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
+	}
 }
 
-func TestSolidityGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidityGetAccountByIdBackendErrorReturnsInternal(t *testing.T) {
 	stub := &solidStubBackend{
 		stubBackend: stubBackend{accountIDAtErr: errors.New("state history: cold account-id index corrupt")},
 		solidNum:    3,
@@ -186,7 +188,9 @@ func TestSolidityGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
+	}
 }
 
 func TestSolidityBalanceTraceRoutesUseSolidBoundGate(t *testing.T) {
@@ -290,7 +294,7 @@ func balanceTraceBlockBody(blockNum uint64, hash string) string {
 	return `{"number":` + strconv.FormatUint(blockNum, 10) + `,"hash":"` + hash + `"}`
 }
 
-func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
+func TestSolidityGetContractBackendErrorReturnsInternal(t *testing.T) {
 	stub := &isolationStubBackend{
 		solidStubBackend: solidStubBackend{solidNum: 3, pbftNum: -1},
 		contractAtErr:    errors.New("state history: cold contract metadata corrupt"),
@@ -303,7 +307,9 @@ func TestSolidityGetContractBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getcontract status = %d, want 500", resp.StatusCode)
+	}
 	if stub.contractAtBlock != 3 {
 		t.Fatalf("GetContractAt block = %d, want solid block 3", stub.contractAtBlock)
 	}

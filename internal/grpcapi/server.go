@@ -1002,11 +1002,18 @@ func blockLookupNotFound(err error) bool {
 }
 
 func accountLookupNotFound(err error) bool {
-	return readLookupMiss(err)
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "account not found" || strings.HasPrefix(msg, "account not found at block ")
 }
 
 func contractLookupNotFound(err error) bool {
-	return readLookupMiss(err)
+	if err == nil {
+		return false
+	}
+	return strings.TrimSpace(err.Error()) == "contract not found"
 }
 
 func parseExchangeIDMessage(in *apipb.BytesMessage) (int64, error) {
@@ -1042,8 +1049,9 @@ func exchangeIDValueLooksText(value []byte) bool {
 }
 
 func readLookupMiss(err error) bool {
-	// java-tron read APIs collapse storage/decode failures for block,
-	// account, and contract lookups into the same empty/not-found surface.
+	// Block lookup APIs keep the legacy java-tron-style empty/not-found
+	// surface. Account and contract archive reads use narrower helpers so cold
+	// reconstruction failures remain visible.
 	return err != nil
 }
 

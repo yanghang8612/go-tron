@@ -661,9 +661,23 @@ func TestGetBlockByIdBackendErrorReturnsEmpty(t *testing.T) {
 	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetAccountBackendErrorReturnsEmpty(t *testing.T) {
+func TestGetAccountBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state history: cold account segment corrupt")
 	srv := newTestServer(t, &stubBackend{accountErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccount: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountPreservesNotFoundErrorAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{accountErr: errors.New("account not found")})
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/wallet/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
@@ -674,7 +688,7 @@ func TestGetAccountBackendErrorReturnsEmpty(t *testing.T) {
 	assertHTTPEmptyObject(t, resp)
 }
 
-func TestGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
+func TestGetAccountByIdBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state history: cold account-id index corrupt")
 	srv := newTestServer(t, &stubBackend{accountIDErr: backendErr})
 	defer srv.Close()
@@ -684,10 +698,12 @@ func TestGetAccountByIdBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("POST getaccountbyid: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
+	}
 }
 
-func TestGetContractBackendErrorReturnsEmpty(t *testing.T) {
+func TestGetContractBackendErrorReturnsInternal(t *testing.T) {
 	backendErr := errors.New("state latest: contract metadata corrupt")
 	srv := newTestServer(t, &stubBackend{contractErr: backendErr})
 	defer srv.Close()
@@ -697,7 +713,9 @@ func TestGetContractBackendErrorReturnsEmpty(t *testing.T) {
 		t.Fatalf("POST getcontract: %v", err)
 	}
 	defer resp.Body.Close()
-	assertHTTPEmptyObject(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getcontract status = %d, want 500", resp.StatusCode)
+	}
 }
 
 func TestGetContractPreservesNotFoundErrorAsEmpty(t *testing.T) {

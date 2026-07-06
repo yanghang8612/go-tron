@@ -242,7 +242,11 @@ func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn
 		acc, err = api.backend.GetAccount(addr)
 	}
 	if err != nil {
-		writeEmptyJSON(w)
+		if accountLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if acc == nil {
@@ -417,7 +421,11 @@ func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundF
 		sc, err = api.backend.GetContractAt(addr, boundFn())
 	}
 	if err != nil {
-		writeEmptyJSON(w)
+		if contractLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if sc == nil {
