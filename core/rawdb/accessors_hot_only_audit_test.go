@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1672,6 +1673,25 @@ func publish(db any) {
 	}
 }
 
+func TestAuditHotOnlyReadsScriptCoversSourceAuditFixtures(t *testing.T) {
+	root := findRepoRoot(t)
+	scriptPath := filepath.Join(root, "scripts", "dev", "audit_hot_only_reads.sh")
+	pattern := auditHotOnlyReadsScriptPattern(t, scriptPath)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("compile %s pattern %q: %v", scriptPath, pattern, err)
+	}
+	var missing []string
+	for _, name := range rawdbPackageTestNames(t, filepath.Join(root, "core", "rawdb")) {
+		if auditHotOnlyReadsScriptShouldCover(name) && !re.MatchString(name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("%s does not cover rawdb source-audit tests:\n%s", scriptPath, strings.Join(missing, "\n"))
+	}
+}
+
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -1704,6 +1724,93 @@ func writeAuditFixture(t *testing.T, rel, body string) string {
 		t.Fatalf("write fixture source: %v", err)
 	}
 	return root
+}
+
+func auditHotOnlyReadsScriptPattern(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "pattern='") && strings.HasSuffix(line, "'") {
+			return strings.TrimSuffix(strings.TrimPrefix(line, "pattern='"), "'")
+		}
+	}
+	t.Fatalf("%s: pattern='...' assignment not found", path)
+	return ""
+}
+
+func rawdbPackageTestNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	var names []string
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && strings.HasPrefix(fn.Name.Name, "Test") {
+				names = append(names, fn.Name.Name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func auditHotOnlyReadsScriptShouldCover(name string) bool {
+	exact := map[string]struct{}{
+		"TestNoProductionHotBlockKVReadReferences":                           {},
+		"TestNoUnexpectedProductionRawFreezerReadReferences":                 {},
+		"TestNoActuatorDirectHotBlockHashReads":                              {},
+		"TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries":        {},
+		"TestVMBlockHashReadsUseStrictBoundary":                              {},
+		"TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries":    {},
+		"TestProductionColdArchiveReadersUseChainDBBoundary":                 {},
+		"TestProductionDerivedHotRowIteratorsStayOnSnapshotBoundaries":       {},
+		"TestProductionDerivedIndexWritesStayOnAuditedBoundaries":            {},
+		"TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries":     {},
+		"TestProductionStateLatestReadsStayBehindStateBoundaries":            {},
+		"TestProductionEventLogQueriesUseChainDBBoundary":                    {},
+		"TestProductionEventLogCoverageChecksStayOnAuditedBoundaries":        {},
+		"TestProductionEventLogIndexedCoverageChecksStayOnAuditedBoundaries": {},
+		"TestSnapshotPublishersUseStrictTransactionInfoReads":                {},
+	}
+	if _, ok := exact[name]; ok {
+		return true
+	}
+	for _, prefix := range []string{
+		"TestHotBlockKVAudit",
+		"TestRawFreezerReadAudit",
+		"TestBlockHashByNumberAudit",
+		"TestHotOnlyChainDBAudit",
+		"TestColdArchiveAudit",
+		"TestDerivedHotRowIteratorAudit",
+		"TestDerivedIndexWriteAudit",
+		"TestStateHistoryAsOfAudit",
+		"TestStateLatestAudit",
+		"TestEventLogAudit",
+		"TestEventLogCoverageAudit",
+		"TestEventLogIndexedCoverageAudit",
+		"TestSnapshotPublisherAudit",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func stateHistoryAsOfRawDBReferences() map[string]struct{} {
