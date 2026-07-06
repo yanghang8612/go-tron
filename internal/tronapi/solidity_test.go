@@ -695,6 +695,47 @@ func TestPbftRewardCamelAliasUsesPbftBoundArchivePath(t *testing.T) {
 	assertRewardAliasUsesBound(t, srv.URL+"/walletpbft/getReward", stub, 13)
 }
 
+func TestSolidityRewardRouteSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		rewardAtErr:      errors.New("state history: cold reward state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertRewardRouteErrorUsesBound(t, srv.URL+"/walletsolidity/getReward", stub, 42)
+}
+
+func TestPbftRewardRouteSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		rewardAtErr:      errors.New("state history: cold pbft reward state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertRewardRouteErrorUsesBound(t, srv.URL+"/walletpbft/getReward", stub, 13)
+}
+
+func assertRewardRouteErrorUsesBound(t *testing.T, url string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(url, "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("getReward request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getReward status = %d, want 500", resp.StatusCode)
+	}
+	if stub.rewardAtBlock != wantBlock {
+		t.Fatalf("GetRewardAt block = %d, want %d", stub.rewardAtBlock, wantBlock)
+	}
+	if stub.liveRewardCalls != 0 {
+		t.Fatalf("live GetReward called %d times, want 0", stub.liveRewardCalls)
+	}
+}
+
 func assertRewardAliasUsesBound(t *testing.T, url string, stub *isolationStubBackend, wantBlock uint64) {
 	t.Helper()
 
@@ -772,10 +813,13 @@ type isolationStubBackend struct {
 	energyAtErr               error
 	liveBrokerageCalls        int
 	brokerageAtBlock          uint64
+	brokerageAtErr            error
 	liveRewardCalls           int
 	rewardAtBlock             uint64
+	rewardAtErr               error
 	liveWitnessCalls          int
 	witnessesAtBlock          uint64
+	witnessesAtErr            error
 	liveNextMaintenanceCalls  int
 	nextMaintenanceAtBlock    uint64
 	nextMaintenanceAtErr      error
@@ -922,6 +966,9 @@ func (s *isolationStubBackend) GetBrokerageInfo(addr common.Address) int64 {
 
 func (s *isolationStubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	s.brokerageAtBlock = blockNum
+	if s.brokerageAtErr != nil {
+		return 0, s.brokerageAtErr
+	}
 	return 88, nil
 }
 
@@ -932,6 +979,9 @@ func (s *isolationStubBackend) GetReward(addr common.Address) (*tronapi.RewardIn
 
 func (s *isolationStubBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
 	s.rewardAtBlock = blockNum
+	if s.rewardAtErr != nil {
+		return nil, s.rewardAtErr
+	}
 	return &tronapi.RewardInfo{Reward: 4242}, nil
 }
 
@@ -946,6 +996,9 @@ func (s *isolationStubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 
 func (s *isolationStubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
 	s.witnessesAtBlock = blockNum
+	if s.witnessesAtErr != nil {
+		return nil, s.witnessesAtErr
+	}
 	return []*tronapi.WitnessInfo{{
 		Address:   hex.EncodeToString(common.Address{0x41, 0x32}.Bytes()),
 		VoteCount: 9,
@@ -1733,6 +1786,47 @@ func TestPbftBrokerageUsesPbftBoundArchivePath(t *testing.T) {
 	assertBrokerageUsesBound(t, srv.URL+"/walletpbft", stub, 13)
 }
 
+func TestSolidityBrokerageSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		brokerageAtErr:   errors.New("state history: cold brokerage state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBrokerageErrorUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftBrokerageSurfacesBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		brokerageAtErr:   errors.New("state history: cold pbft brokerage state corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBrokerageErrorUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertBrokerageErrorUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/getbrokerage?address=411234567890")
+	if err != nil {
+		t.Fatalf("getbrokerage request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getbrokerage status = %d, want 500", resp.StatusCode)
+	}
+	if stub.brokerageAtBlock != wantBlock {
+		t.Fatalf("GetBrokerageInfoAt block = %d, want %d", stub.brokerageAtBlock, wantBlock)
+	}
+	if stub.liveBrokerageCalls != 0 {
+		t.Fatalf("live GetBrokerageInfo called %d times, want 0", stub.liveBrokerageCalls)
+	}
+}
+
 func assertBrokerageUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
 	t.Helper()
 
@@ -1779,6 +1873,56 @@ func TestPbftListWitnessesUsesPbftBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	assertListWitnessesUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func TestSolidityWitnessRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		witnessesAtErr:   errors.New("state history: cold witness list corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertWitnessRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftWitnessRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		witnessesAtErr:   errors.New("state history: cold pbft witness list corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertWitnessRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertWitnessRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/listwitnesses")
+	if err != nil {
+		t.Fatalf("listwitnesses request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("listwitnesses status = %d, want 500", resp.StatusCode)
+	}
+
+	resp, err = http.Post(prefix+"/getpaginatednowwitnesslist", "application/json", strings.NewReader(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatalf("getpaginatednowwitnesslist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getpaginatednowwitnesslist status = %d, want 500", resp.StatusCode)
+	}
+	if stub.witnessesAtBlock != wantBlock {
+		t.Fatalf("ListWitnessesAt block = %d, want %d", stub.witnessesAtBlock, wantBlock)
+	}
+	if stub.liveWitnessCalls != 0 {
+		t.Fatalf("live ListWitnesses called %d times, want 0", stub.liveWitnessCalls)
+	}
 }
 
 func assertListWitnessesUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
