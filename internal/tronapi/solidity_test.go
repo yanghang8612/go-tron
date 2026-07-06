@@ -776,11 +776,13 @@ type isolationStubBackend struct {
 	nextMaintenanceAtBlock    uint64
 	liveProposalCalls         int
 	proposalsAtBlock          uint64
+	proposalsAtErr            error
 	liveProposalIDCalls       int
 	proposalIDAtBlock         uint64
 	proposalIDAtErr           error
 	liveProposalPageCalls     int
 	proposalPageAtBlock       uint64
+	proposalPageAtErr         error
 	liveAssetIDCalls          int
 	assetIDAtBlock            uint64
 	liveAssetNameCalls        int
@@ -989,6 +991,9 @@ func (s *isolationStubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) 
 
 func (s *isolationStubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
 	s.proposalsAtBlock = blockNum
+	if s.proposalsAtErr != nil {
+		return nil, s.proposalsAtErr
+	}
 	return []*tronapi.ProposalInfo{{ProposalID: 42, State: "APPROVED"}}, nil
 }
 
@@ -1012,6 +1017,9 @@ func (s *isolationStubBackend) ListProposalsPaginated(offset, limit int) ([]*tro
 
 func (s *isolationStubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
 	s.proposalPageAtBlock = blockNum
+	if s.proposalPageAtErr != nil {
+		return nil, s.proposalPageAtErr
+	}
 	return []*tronapi.ProposalInfo{{ProposalID: 43, State: "PAGED"}}, nil
 }
 
@@ -1891,6 +1899,64 @@ func TestSolidityGetProposalByIdSurfacesBackendError(t *testing.T) {
 	}
 	if stub.liveProposalIDCalls != 0 {
 		t.Fatalf("live GetProposalByID called %d times, want 0", stub.liveProposalIDCalls)
+	}
+}
+
+func TestSolidityProposalListRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:  solidStubBackend{solidNum: 42, pbftNum: -1},
+		proposalsAtErr:    errors.New("state history: cold proposal list corrupt"),
+		proposalPageAtErr: errors.New("state history: cold proposal page corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertProposalListErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftProposalListRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:  solidStubBackend{solidNum: 5, pbftNum: 13},
+		proposalsAtErr:    errors.New("state history: cold pbft proposal list corrupt"),
+		proposalPageAtErr: errors.New("state history: cold pbft proposal page corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertProposalListErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertProposalListErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/listproposals", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("listproposals request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("listproposals status = %d, want 500", resp.StatusCode)
+	}
+	if stub.proposalsAtBlock != wantBlock {
+		t.Fatalf("ListProposalsAt block = %d, want %d", stub.proposalsAtBlock, wantBlock)
+	}
+	if stub.liveProposalCalls != 0 {
+		t.Fatalf("live ListProposals called %d times, want 0", stub.liveProposalCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getpaginatedproposallist", "application/json", strings.NewReader(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatalf("getpaginatedproposallist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getpaginatedproposallist status = %d, want 500", resp.StatusCode)
+	}
+	if stub.proposalPageAtBlock != wantBlock {
+		t.Fatalf("ListProposalsPaginatedAt block = %d, want %d", stub.proposalPageAtBlock, wantBlock)
+	}
+	if stub.liveProposalPageCalls != 0 {
+		t.Fatalf("live ListProposalsPaginated called %d times, want 0", stub.liveProposalPageCalls)
 	}
 }
 
