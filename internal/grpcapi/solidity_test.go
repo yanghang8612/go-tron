@@ -1558,6 +1558,42 @@ func TestSolidity_GetExchangeByIdUsesSolidBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidity_ExchangeQueriesSurfaceBackendError(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum: 95,
+		testBackend: testBackend{
+			exchangeErr: errors.New("cold solid exchange state corrupt"),
+		},
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListExchanges", call: func() error {
+			_, err := client.ListExchanges(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetExchangeById", call: func() error {
+			_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("8")})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.liveExchanges != 0 || backend.liveExchangeID != 0 {
+		t.Fatalf("live exchange calls = list:%d byID:%d, want 0", backend.liveExchanges, backend.liveExchangeID)
+	}
+	if backend.lastExchangesAt != 95 || backend.lastExchangeIDAt != 95 {
+		t.Fatalf("solid exchange blocks = list:%d byID:%d, want 95", backend.lastExchangesAt, backend.lastExchangeIDAt)
+	}
+}
+
 func TestSolidity_DynamicPropertyQueriesUseSolidBoundArchivePath(t *testing.T) {
 	backend := &solidTestBackend{
 		solidNum:    95,

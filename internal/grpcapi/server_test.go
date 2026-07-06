@@ -333,8 +333,16 @@ func (b *testBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
 func (b *testBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
 	return nil, nil
 }
-func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
+func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return nil, nil
+}
 func (b *testBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
@@ -394,9 +402,15 @@ func (b *testBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint6
 	return nil, nil
 }
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
 	return nil, nil
 }
 func (b *testBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
 	return nil, nil
 }
 func (b *testBackend) BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error) {
@@ -1297,6 +1311,34 @@ func TestGetExchangeById_NotFound(t *testing.T) {
 	_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestExchangeLiveQueriesSurfaceBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{exchangeErr: errors.New("cold exchange state corrupt")})
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListExchanges", call: func() error {
+			_, err := client.ListExchanges(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetExchangeById", call: func() error {
+			_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+			return err
+		}},
+		{name: "GetPaginatedExchangeList", call: func() error {
+			_, err := client.GetPaginatedExchangeList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
 	}
 }
 
