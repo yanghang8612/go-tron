@@ -411,6 +411,14 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetMarketPriceByPair([]byte("sell"), []byte("buy"))
 			return err
 		}},
+		{name: "GetMarketOrderListByPair", call: func() error {
+			_, err := backend.GetMarketOrderListByPair([]byte("sell"), []byte("buy"))
+			return err
+		}},
+		{name: "GetMarketPairList", call: func() error {
+			_, err := backend.GetMarketPairList()
+			return err
+		}},
 		{name: "ListExchanges", call: func() error {
 			_, err := backend.ListExchanges()
 			return err
@@ -428,6 +436,125 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 		if err := check.call(); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
 			t.Fatalf("%s error = %v, want cold state-root error", check.name, err)
 		}
+	}
+}
+
+func commitHeadStateForBackendTest(t *testing.T, bc *BlockChain, mutate func(*state.StateDB)) {
+	t.Helper()
+
+	statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(statedb)
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawdb.WriteGenesisStateRoot(bc.db, root)
+	if err := rawdb.WriteBlockStateRoot(bc.db, bc.CurrentBlock().Hash(), root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTronBackend_LiveMarketReadsSurfaceCorruptRows(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	backend := &TronBackend{chain: bc}
+	owner := testCoreAddr(1)
+	orderID := []byte("order-1")
+	sell, buy := []byte("_"), []byte("1000001")
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		for _, key := range []state.PrefetchKey{
+			state.MarketOrderPrefetchKey(orderID),
+			state.MarketAccountOrderPrefetchKey(owner[:]),
+			state.MarketPriceListPrefetchKey(sell, buy),
+			state.MarketPairIndexPrefetchKey(),
+		} {
+			if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	checks := []struct {
+		name string
+		want string
+		call func() error
+	}{
+		{name: "GetMarketOrderByID", want: "decode market order", call: func() error {
+			_, err := backend.GetMarketOrderByID(orderID)
+			return err
+		}},
+		{name: "GetMarketOrdersByAccount", want: "decode market account order", call: func() error {
+			_, err := backend.GetMarketOrdersByAccount(owner)
+			return err
+		}},
+		{name: "GetMarketPriceByPair", want: "decode market price list", call: func() error {
+			_, err := backend.GetMarketPriceByPair(sell, buy)
+			return err
+		}},
+		{name: "GetMarketOrderListByPair", want: "decode market price list", call: func() error {
+			_, err := backend.GetMarketOrderListByPair(sell, buy)
+			return err
+		}},
+		{name: "GetMarketPairList", want: "decode market pair index", call: func() error {
+			_, err := backend.GetMarketPairList()
+			return err
+		}},
+	}
+	for _, check := range checks {
+		if err := check.call(); err == nil || !strings.Contains(err.Error(), check.want) {
+			t.Fatalf("%s error = %v, want %q", check.name, err, check.want)
+		}
+	}
+}
+
+func TestTronBackend_LiveMarketOrderListSurfacesCorruptLinkedRows(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	backend := &TronBackend{chain: bc}
+	orderID := []byte("order-1")
+	sell, buy := []byte("_"), []byte("1000001")
+	pk := rawdb.PriceKey(7, 3)
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		if err := statedb.WriteMarketPriceList(sell, buy, &corepb.MarketPriceList{
+			SellTokenId: sell,
+			BuyTokenId:  buy,
+			Prices: []*corepb.MarketPrice{{
+				SellTokenQuantity: 7,
+				BuyTokenQuantity:  3,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		key := state.MarketOrderBookPrefetchKey(sell, buy, pk)
+		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := backend.GetMarketOrderListByPair(sell, buy); err == nil || !strings.Contains(err.Error(), "decode market order book") {
+		t.Fatalf("GetMarketOrderListByPair corrupt book error = %v, want decode market order book", err)
+	}
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		if err := statedb.WriteMarketOrderBook(sell, buy, pk, &corepb.MarketOrderIdList{
+			Head: orderID,
+			Tail: orderID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		key := state.MarketOrderPrefetchKey(orderID)
+		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := backend.GetMarketOrderListByPair(sell, buy); err == nil || !strings.Contains(err.Error(), "decode market order") {
+		t.Fatalf("GetMarketOrderListByPair corrupt order error = %v, want decode market order", err)
 	}
 }
 

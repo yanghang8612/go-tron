@@ -154,6 +154,20 @@ func (s *StateDB) ReadMarketOrder(orderID []byte) *corepb.MarketOrder {
 	return o
 }
 
+// ReadMarketOrderStrict returns the rooted MarketOrder for orderID and
+// distinguishes missing rows from unreadable or malformed rooted data.
+func (s *StateDB) ReadMarketOrderStrict(orderID []byte) (*corepb.MarketOrder, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderKVKey(orderID))
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, ok, err
+	}
+	o := &corepb.MarketOrder{}
+	if err := proto.Unmarshal(raw, o); err != nil {
+		return nil, true, fmt.Errorf("decode market order: %w", err)
+	}
+	return o, true, nil
+}
+
 // MarketOrderAt reconstructs a rooted MarketOrder at the end of blockNum.
 func (r *PersistentHistoryReader) MarketOrderAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderKVKey(orderID), blockNum)
@@ -192,6 +206,24 @@ func (s *StateDB) ReadMarketAccountOrder(ownerAddr []byte) *corepb.MarketAccount
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}
 	}
 	return mao
+}
+
+// ReadMarketAccountOrderStrict returns the rooted MarketAccountOrder for owner
+// and distinguishes an absent row from unreadable or malformed rooted data. The
+// absent case mirrors ReadMarketAccountOrder's zero-but-non-nil result.
+func (s *StateDB) ReadMarketAccountOrderStrict(ownerAddr []byte) (*corepb.MarketAccountOrder, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr))
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, ok, nil
+	}
+	mao := &corepb.MarketAccountOrder{}
+	if err := proto.Unmarshal(raw, mao); err != nil {
+		return nil, true, fmt.Errorf("decode market account order: %w", err)
+	}
+	return mao, true, nil
 }
 
 // MarketAccountOrderAt reconstructs a rooted MarketAccountOrder at the end of
@@ -233,6 +265,20 @@ func (s *StateDB) ReadMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byt
 		return nil
 	}
 	return list
+}
+
+// ReadMarketOrderBookStrict returns the rooted price-level order id list and
+// distinguishes missing rows from unreadable or malformed rooted data.
+func (s *StateDB) ReadMarketOrderBookStrict(sellTokenID, buyTokenID []byte, pk [16]byte) (*corepb.MarketOrderIdList, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, ok, err
+	}
+	list := &corepb.MarketOrderIdList{}
+	if err := proto.Unmarshal(raw, list); err != nil {
+		return nil, true, fmt.Errorf("decode market order book: %w", err)
+	}
+	return list, true, nil
 }
 
 // MarketOrderBookAt reconstructs a rooted price-level order id list at the end
@@ -350,6 +396,24 @@ func (s *StateDB) ReadMarketPriceList(sellTokenID, buyTokenID []byte) *corepb.Ma
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
 	}
 	return pl
+}
+
+// ReadMarketPriceListStrict returns the rooted MarketPriceList for a pair and
+// distinguishes an absent row from unreadable or malformed rooted data. The
+// absent case mirrors ReadMarketPriceList's zero-but-non-nil result.
+func (s *StateDB) ReadMarketPriceListStrict(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, ok, nil
+	}
+	pl := &corepb.MarketPriceList{}
+	if err := proto.Unmarshal(raw, pl); err != nil {
+		return nil, true, fmt.Errorf("decode market price list: %w", err)
+	}
+	return pl, true, nil
 }
 
 // MarketPriceListAt reconstructs a rooted MarketPriceList at the end of

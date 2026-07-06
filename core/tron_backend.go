@@ -2055,7 +2055,11 @@ func (b *TronBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, e
 	if err != nil {
 		return nil, err
 	}
-	return sysKV.ReadMarketOrder(orderID), nil
+	order, _, err := sysKV.ReadMarketOrderStrict(orderID)
+	if err != nil {
+		return nil, fmt.Errorf("read market order at head: %w", err)
+	}
+	return order, nil
 }
 
 func (b *TronBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
@@ -2077,10 +2081,17 @@ func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) ([]*corepb.
 	if err != nil {
 		return nil, err
 	}
-	mao := sysKV.ReadMarketAccountOrder(addr[:])
+	mao, _, err := sysKV.ReadMarketAccountOrderStrict(addr[:])
+	if err != nil {
+		return nil, fmt.Errorf("read market account order at head: %w", err)
+	}
 	var orders []*corepb.MarketOrder
 	for _, id := range mao.Orders {
-		if o := sysKV.ReadMarketOrder(id); o != nil {
+		o, _, err := sysKV.ReadMarketOrderStrict(id)
+		if err != nil {
+			return nil, fmt.Errorf("read market order %x at head: %w", id, err)
+		}
+		if o != nil {
 			orders = append(orders, o)
 		}
 	}
@@ -2116,7 +2127,11 @@ func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*cor
 	if err != nil {
 		return nil, err
 	}
-	return sysKV.ReadMarketPriceList(sellTokenID, buyTokenID), nil
+	priceList, _, err := sysKV.ReadMarketPriceListStrict(sellTokenID, buyTokenID)
+	if err != nil {
+		return nil, fmt.Errorf("read market price list at head: %w", err)
+	}
+	return priceList, nil
 }
 
 func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
@@ -2138,14 +2153,25 @@ func (b *TronBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) (
 	if err != nil {
 		return nil, err
 	}
-	priceList := sysKV.ReadMarketPriceList(sellTokenID, buyTokenID)
+	priceList, _, err := sysKV.ReadMarketPriceListStrict(sellTokenID, buyTokenID)
+	if err != nil {
+		return nil, fmt.Errorf("read market price list at head: %w", err)
+	}
 	return marketOrdersFromPairPriceList(priceList,
 		func(price *corepb.MarketPrice) (*corepb.MarketOrderIdList, error) {
 			pk := rawdb.PriceKey(price.GetSellTokenQuantity(), price.GetBuyTokenQuantity())
-			return sysKV.ReadMarketOrderBook(sellTokenID, buyTokenID, pk), nil
+			book, _, err := sysKV.ReadMarketOrderBookStrict(sellTokenID, buyTokenID, pk)
+			if err != nil {
+				return nil, fmt.Errorf("read market order book at head: %w", err)
+			}
+			return book, nil
 		},
 		func(orderID []byte) (*corepb.MarketOrder, error) {
-			return sysKV.ReadMarketOrder(orderID), nil
+			order, _, err := sysKV.ReadMarketOrderStrict(orderID)
+			if err != nil {
+				return nil, fmt.Errorf("read market order %x at head: %w", orderID, err)
+			}
+			return order, nil
 		},
 		nil,
 		nil,
@@ -2194,7 +2220,11 @@ func (b *TronBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sysKV.ReadMarketPairList(), nil
+	pairs, _, err := sysKV.ReadMarketPairListStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read market pair list at head: %w", err)
+	}
+	return pairs, nil
 }
 
 func (b *TronBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {

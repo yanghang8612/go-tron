@@ -37,9 +37,15 @@ func TestMarketStoreAbsentReads(t *testing.T) {
 	if got := sdb.ReadMarketOrder([]byte("nope")); got != nil {
 		t.Fatalf("absent order should be nil, got %+v", got)
 	}
+	if got, ok, err := sdb.ReadMarketOrderStrict([]byte("nope")); err != nil || ok || got != nil {
+		t.Fatalf("strict absent order = %+v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
 	pk := rawdb.PriceKey(2, 1)
 	if got := sdb.ReadMarketOrderBook([]byte("_"), []byte("1000001"), pk); got != nil {
 		t.Fatalf("absent order book should be nil, got %+v", got)
+	}
+	if got, ok, err := sdb.ReadMarketOrderBookStrict([]byte("_"), []byte("1000001"), pk); err != nil || ok || got != nil {
+		t.Fatalf("strict absent order book = %+v ok=%v err=%v, want nil false nil", got, ok, err)
 	}
 	if got := sdb.ReadMarketPairPriceCount([]byte("_"), []byte("1000001")); got != 0 {
 		t.Fatalf("absent price count should be 0, got %d", got)
@@ -50,13 +56,23 @@ func TestMarketStoreAbsentReads(t *testing.T) {
 	if mao == nil || !bytes.Equal(mao.OwnerAddress, owner) || len(mao.Orders) != 0 {
 		t.Fatalf("absent account order should be zero-but-non-nil with owner set, got %+v", mao)
 	}
+	if got, ok, err := sdb.ReadMarketAccountOrderStrict(owner); err != nil || ok || got == nil || !bytes.Equal(got.OwnerAddress, owner) || len(got.Orders) != 0 {
+		t.Fatalf("strict absent account order = %+v ok=%v err=%v, want zero owner false nil", got, ok, err)
+	}
 	pl := sdb.ReadMarketPriceList([]byte("_"), []byte("1000001"))
 	if pl == nil || !bytes.Equal(pl.SellTokenId, []byte("_")) || !bytes.Equal(pl.BuyTokenId, []byte("1000001")) || len(pl.Prices) != 0 {
 		t.Fatalf("absent price list should be zero-but-non-nil with token ids set, got %+v", pl)
 	}
+	if got, ok, err := sdb.ReadMarketPriceListStrict([]byte("_"), []byte("1000001")); err != nil || ok || got == nil ||
+		!bytes.Equal(got.SellTokenId, []byte("_")) || !bytes.Equal(got.BuyTokenId, []byte("1000001")) || len(got.Prices) != 0 {
+		t.Fatalf("strict absent price list = %+v ok=%v err=%v, want zero token ids false nil", got, ok, err)
+	}
 	pairs := sdb.ReadMarketPairList()
 	if pairs == nil || len(pairs.GetOrderPair()) != 0 {
 		t.Fatalf("absent pair index should be empty, got %+v", pairs)
+	}
+	if got, ok, err := sdb.ReadMarketPairListStrict(); err != nil || ok || got == nil || len(got.GetOrderPair()) != 0 {
+		t.Fatalf("strict absent pair index = %+v ok=%v err=%v, want empty false nil", got, ok, err)
 	}
 }
 
@@ -189,6 +205,57 @@ func TestMarketStorePairIndexMalformedBlocksPriceListMutation(t *testing.T) {
 		got.GetPrices()[0].GetSellTokenQuantity() != 1 ||
 		got.GetPrices()[0].GetBuyTokenQuantity() != 10 {
 		t.Fatalf("price list after failed pair index update = %+v, want original", got)
+	}
+	if got, ok, err := sdb.ReadMarketPairListStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market pair index") {
+		t.Fatalf("strict malformed pair index = %+v ok=%v err=%v, want decode error", got, ok, err)
+	}
+}
+
+func TestMarketStoreStrictSurfacesMalformedProtobuf(t *testing.T) {
+	sdb := newTestStateDB(t)
+	owner := []byte{0x41, 0x01}
+	orderID := []byte("order-1")
+	sell, buy := []byte("_"), []byte("1000001")
+	pk := rawdb.PriceKey(7, 3)
+
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketOrderKVKey(orderID), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed order: %v", err)
+	}
+	if got := sdb.ReadMarketOrder(orderID); got != nil {
+		t.Fatalf("compat malformed order = %+v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadMarketOrderStrict(orderID); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market order") {
+		t.Fatalf("strict malformed order = %+v ok=%v err=%v, want decode error", got, ok, err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketAccountOrderKVKey(owner), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed account order: %v", err)
+	}
+	if got := sdb.ReadMarketAccountOrder(owner); got == nil || !bytes.Equal(got.OwnerAddress, owner) || len(got.GetOrders()) != 0 {
+		t.Fatalf("compat malformed account order = %+v, want zero owner", got)
+	}
+	if got, ok, err := sdb.ReadMarketAccountOrderStrict(owner); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market account order") {
+		t.Fatalf("strict malformed account order = %+v ok=%v err=%v, want decode error", got, ok, err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketOrderBookKVKey(sell, buy, pk), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed order book: %v", err)
+	}
+	if got := sdb.ReadMarketOrderBook(sell, buy, pk); got != nil {
+		t.Fatalf("compat malformed order book = %+v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadMarketOrderBookStrict(sell, buy, pk); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market order book") {
+		t.Fatalf("strict malformed order book = %+v ok=%v err=%v, want decode error", got, ok, err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sell, buy), []byte{0x80}); err != nil {
+		t.Fatalf("write malformed price list: %v", err)
+	}
+	if got := sdb.ReadMarketPriceList(sell, buy); got == nil || !bytes.Equal(got.SellTokenId, sell) || !bytes.Equal(got.BuyTokenId, buy) || len(got.GetPrices()) != 0 {
+		t.Fatalf("compat malformed price list = %+v, want zero token ids", got)
+	}
+	if got, ok, err := sdb.ReadMarketPriceListStrict(sell, buy); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market price list") {
+		t.Fatalf("strict malformed price list = %+v ok=%v err=%v, want decode error", got, ok, err)
 	}
 }
 
