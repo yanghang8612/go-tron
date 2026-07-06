@@ -760,12 +760,16 @@ type isolationStubBackend struct {
 	accountNetAtBlock         uint64
 	liveChainParameterCalls   int
 	chainParametersAtBlock    uint64
+	chainParametersAtErr      error
 	liveBurnCalls             int
 	burnAtBlock               uint64
+	burnAtErr                 error
 	liveBandwidthCalls        int
 	bandwidthAtBlock          uint64
+	bandwidthAtErr            error
 	liveEnergyCalls           int
 	energyAtBlock             uint64
+	energyAtErr               error
 	liveBrokerageCalls        int
 	brokerageAtBlock          uint64
 	liveRewardCalls           int
@@ -774,6 +778,7 @@ type isolationStubBackend struct {
 	witnessesAtBlock          uint64
 	liveNextMaintenanceCalls  int
 	nextMaintenanceAtBlock    uint64
+	nextMaintenanceAtErr      error
 	liveProposalCalls         int
 	proposalsAtBlock          uint64
 	proposalsAtErr            error
@@ -904,6 +909,9 @@ func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
 
 func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	s.chainParametersAtBlock = blockNum
+	if s.chainParametersAtErr != nil {
+		return nil, s.chainParametersAtErr
+	}
 	return []tronapi.ChainParameter{{Key: "bound_param", Value: 99}}, nil
 }
 
@@ -953,6 +961,9 @@ func (s *isolationStubBackend) NextMaintenanceTime() int64 {
 
 func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	s.nextMaintenanceAtBlock = blockNum
+	if s.nextMaintenanceAtErr != nil {
+		return 0, s.nextMaintenanceAtErr
+	}
 	return 9900, nil
 }
 
@@ -963,6 +974,9 @@ func (s *isolationStubBackend) GetBurnTrx() int64 {
 
 func (s *isolationStubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	s.burnAtBlock = blockNum
+	if s.burnAtErr != nil {
+		return 0, s.burnAtErr
+	}
 	return 123456, nil
 }
 
@@ -973,6 +987,9 @@ func (s *isolationStubBackend) GetBandwidthPrices() string {
 
 func (s *isolationStubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	s.bandwidthAtBlock = blockNum
+	if s.bandwidthAtErr != nil {
+		return "", s.bandwidthAtErr
+	}
 	return "0:10,42:20", nil
 }
 
@@ -983,6 +1000,9 @@ func (s *isolationStubBackend) GetEnergyPrices() string {
 
 func (s *isolationStubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	s.energyAtBlock = blockNum
+	if s.energyAtErr != nil {
+		return "", s.energyAtErr
+	}
 	return "0:100,42:300", nil
 }
 
@@ -2010,6 +2030,72 @@ func TestPbftDynamicPropertyRoutesUsePbftBoundArchivePath(t *testing.T) {
 	defer srv.Close()
 
 	assertDynamicPropertyRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func TestSolidityDynamicPropertyRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:     solidStubBackend{solidNum: 42, pbftNum: -1},
+		chainParametersAtErr: errors.New("state history: cold chain parameters corrupt"),
+		nextMaintenanceAtErr: errors.New("state history: cold next-maintenance corrupt"),
+		burnAtErr:            errors.New("state history: cold burn counter corrupt"),
+		bandwidthAtErr:       errors.New("state history: cold bandwidth prices corrupt"),
+		energyAtErr:          errors.New("state history: cold energy prices corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDynamicPropertyRouteErrorsUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftDynamicPropertyRoutesSurfaceBackendError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend:     solidStubBackend{solidNum: 5, pbftNum: 13},
+		chainParametersAtErr: errors.New("state history: cold pbft chain parameters corrupt"),
+		nextMaintenanceAtErr: errors.New("state history: cold pbft next-maintenance corrupt"),
+		burnAtErr:            errors.New("state history: cold pbft burn counter corrupt"),
+		bandwidthAtErr:       errors.New("state history: cold pbft bandwidth prices corrupt"),
+		energyAtErr:          errors.New("state history: cold pbft energy prices corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDynamicPropertyRouteErrorsUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertDynamicPropertyRouteErrorsUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "getchainparameters", path: "/getchainparameters"},
+		{name: "getnextmaintenancetime", path: "/getnextmaintenancetime"},
+		{name: "getburntrx", path: "/getburntrx"},
+		{name: "getbandwidthprices", path: "/getbandwidthprices"},
+		{name: "getenergyprices", path: "/getenergyprices"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Get(prefix + tt.path)
+			if err != nil {
+				t.Fatalf("%s request failed: %v", tt.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.name, resp.StatusCode)
+			}
+		})
+	}
+	if stub.chainParametersAtBlock != wantBlock || stub.nextMaintenanceAtBlock != wantBlock || stub.burnAtBlock != wantBlock ||
+		stub.bandwidthAtBlock != wantBlock || stub.energyAtBlock != wantBlock {
+		t.Fatalf("dynamic property bound blocks = params:%d next:%d burn:%d bandwidth:%d energy:%d, want %d",
+			stub.chainParametersAtBlock, stub.nextMaintenanceAtBlock, stub.burnAtBlock, stub.bandwidthAtBlock, stub.energyAtBlock, wantBlock)
+	}
+	if stub.liveChainParameterCalls != 0 || stub.liveNextMaintenanceCalls != 0 || stub.liveBurnCalls != 0 ||
+		stub.liveBandwidthCalls != 0 || stub.liveEnergyCalls != 0 {
+		t.Fatalf("live dynamic property calls = params:%d next:%d burn:%d bandwidth:%d energy:%d, want 0",
+			stub.liveChainParameterCalls, stub.liveNextMaintenanceCalls, stub.liveBurnCalls, stub.liveBandwidthCalls, stub.liveEnergyCalls)
+	}
 }
 
 func assertDynamicPropertyRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
