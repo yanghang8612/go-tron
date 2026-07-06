@@ -1772,6 +1772,7 @@ func rawdbPackageTestNames(t *testing.T, dir string) []string {
 
 func auditHotOnlyReadsScriptShouldCover(name string) bool {
 	exact := map[string]struct{}{
+		"TestAuditHotOnlyReadsScriptCoversSourceAuditFixtures":               {},
 		"TestNoProductionHotBlockKVReadReferences":                           {},
 		"TestNoUnexpectedProductionRawFreezerReadReferences":                 {},
 		"TestNoActuatorDirectHotBlockHashReads":                              {},
