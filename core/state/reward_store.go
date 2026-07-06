@@ -25,14 +25,6 @@ func (s *StateDB) SetCycleRewardSink(sink CycleRewardSink) {
 	s.cycleRewardSink = sink
 }
 
-func (s *StateDB) readSystemReward(key []byte) ([]byte, bool) {
-	raw, ok, err := s.readSystemRewardWithError(key)
-	if err != nil || !ok {
-		return nil, false
-	}
-	return raw, true
-}
-
 func (s *StateDB) readSystemRewardWithError(key []byte) ([]byte, bool, error) {
 	return s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key)
 }
@@ -42,22 +34,36 @@ func (s *StateDB) writeSystemReward(key, value []byte) error {
 }
 
 func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
-	raw, ok := s.readSystemReward(rawdb.CycleRewardStateKey(cycle, addr))
-	base := int64(0)
-	if !ok || len(raw) != 8 {
-		base = 0
-	} else {
-		base = int64(binary.BigEndian.Uint64(raw))
+	base, _, err := s.ReadCycleRewardStrict(cycle, addr)
+	if err != nil {
+		return 0
+	}
+	return base
+}
+
+func (s *StateDB) ReadCycleRewardStrict(cycle int64, addr []byte) (int64, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.CycleRewardStateKey(cycle, addr))
+	base, present, err := decodeSystemRewardInt64(raw, ok, err, 0, "cycle reward")
+	if err != nil {
+		return 0, present, err
 	}
 	if s.cycleRewardSink != nil {
 		if pending, ok := s.cycleRewardSink.PendingCycleReward(cycle, tcommon.BytesToAddress(addr)); ok {
 			base += pending
 		}
 	}
-	return base
+	return base, present, nil
 }
 
 func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tcommon.Address]int64 {
+	out, err := s.ReadCycleRewardsStrict(cycle, addrs)
+	if err != nil {
+		return make(map[tcommon.Address]int64, len(addrs))
+	}
+	return out
+}
+
+func (s *StateDB) ReadCycleRewardsStrict(cycle int64, addrs []tcommon.Address) (map[tcommon.Address]int64, error) {
 	keys := make([][]byte, 0, len(addrs))
 	for _, addr := range addrs {
 		keys = append(keys, rawdb.CycleRewardStateKey(cycle, addr.Bytes()))
@@ -65,11 +71,14 @@ func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tco
 	values, err := s.GetAccountKVBatch(tcommon.SystemAccountAddress, kvdomains.SystemReward, keys)
 	out := make(map[tcommon.Address]int64, len(addrs))
 	if err != nil {
-		return out
+		return out, err
 	}
 	for i, addr := range addrs {
-		raw := values[string(keys[i])]
-		if len(raw) == 8 {
+		raw, exists := values[string(keys[i])]
+		if exists {
+			if len(raw) != 8 {
+				return out, fmt.Errorf("state: decode cycle reward: length %d, want 8", len(raw))
+			}
 			out[addr] = int64(binary.BigEndian.Uint64(raw))
 		}
 		if s.cycleRewardSink != nil {
@@ -78,7 +87,7 @@ func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tco
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *StateDB) WriteCycleReward(cycle int64, addr []byte, value int64) error {
@@ -184,11 +193,16 @@ func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64,
 }
 
 func (s *StateDB) ReadCycleVote(cycle int64, addr []byte) int64 {
-	raw, ok := s.readSystemReward(rawdb.CycleVoteStateKey(cycle, addr))
-	if !ok || len(raw) != 8 {
+	value, ok, err := s.ReadCycleVoteStrict(cycle, addr)
+	if err != nil || !ok {
 		return rawdb.RewardRemark
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	return value
+}
+
+func (s *StateDB) ReadCycleVoteStrict(cycle int64, addr []byte) (int64, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.CycleVoteStateKey(cycle, addr))
+	return decodeSystemRewardInt64(raw, ok, err, rawdb.RewardRemark, "cycle vote")
 }
 
 func (s *StateDB) WriteCycleVote(cycle int64, addr []byte, value int64) error {
@@ -198,11 +212,19 @@ func (s *StateDB) WriteCycleVote(cycle int64, addr []byte, value int64) error {
 }
 
 func (s *StateDB) ReadWitnessVI(cycle int64, addr []byte) *big.Int {
-	raw, ok := s.readSystemReward(rawdb.WitnessVIStateKey(cycle, addr))
-	if !ok || len(raw) == 0 {
+	value, ok, err := s.ReadWitnessVIStrict(cycle, addr)
+	if err != nil || !ok {
 		return new(big.Int)
 	}
-	return new(big.Int).SetBytes(raw)
+	return value
+}
+
+func (s *StateDB) ReadWitnessVIStrict(cycle int64, addr []byte) (*big.Int, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.WitnessVIStateKey(cycle, addr))
+	if err != nil || !ok || len(raw) == 0 {
+		return new(big.Int), ok, err
+	}
+	return new(big.Int).SetBytes(raw), true, nil
 }
 
 func (s *StateDB) WriteWitnessVI(cycle int64, addr []byte, vi *big.Int) error {
@@ -213,11 +235,22 @@ func (s *StateDB) WriteWitnessVI(cycle int64, addr []byte, vi *big.Int) error {
 }
 
 func (s *StateDB) ReadCycleBrokerage(cycle int64, addr []byte) int {
-	raw, ok := s.readSystemReward(rawdb.CycleBrokerageStateKey(cycle, addr))
-	if !ok || len(raw) != 4 {
+	value, ok, err := s.ReadCycleBrokerageStrict(cycle, addr)
+	if err != nil || !ok {
 		return rawdb.DefaultBrokerage
 	}
-	return int(int32(binary.BigEndian.Uint32(raw)))
+	return value
+}
+
+func (s *StateDB) ReadCycleBrokerageStrict(cycle int64, addr []byte) (int, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.CycleBrokerageStateKey(cycle, addr))
+	if err != nil || !ok {
+		return rawdb.DefaultBrokerage, ok, err
+	}
+	if len(raw) != 4 {
+		return rawdb.DefaultBrokerage, false, fmt.Errorf("state: decode cycle brokerage: length %d, want 4", len(raw))
+	}
+	return int(int32(binary.BigEndian.Uint32(raw))), true, nil
 }
 
 // CycleBrokerageAt reconstructs a witness brokerage snapshot for cycle at the
@@ -244,11 +277,15 @@ func (s *StateDB) WriteCycleBrokerage(cycle int64, addr []byte, rate int) error 
 }
 
 func (s *StateDB) ReadCycleAccountVote(cycle int64, addr []byte) []byte {
-	raw, ok := s.readSystemReward(rawdb.CycleAccountVoteStateKey(cycle, addr))
-	if !ok || len(raw) == 0 {
+	raw, ok, err := s.ReadCycleAccountVoteStrict(cycle, addr)
+	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
 	return raw
+}
+
+func (s *StateDB) ReadCycleAccountVoteStrict(cycle int64, addr []byte) ([]byte, bool, error) {
+	return s.readSystemRewardWithError(rawdb.CycleAccountVoteStateKey(cycle, addr))
 }
 
 func (s *StateDB) WriteCycleAccountVote(cycle int64, addr, proto []byte) error {
@@ -256,11 +293,16 @@ func (s *StateDB) WriteCycleAccountVote(cycle int64, addr, proto []byte) error {
 }
 
 func (s *StateDB) ReadBeginCycle(addr []byte) int64 {
-	raw, ok := s.readSystemReward(rawdb.BeginCycleStateKey(addr))
-	if !ok || len(raw) != 8 {
+	value, ok, err := s.ReadBeginCycleStrict(addr)
+	if err != nil || !ok {
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	return value
+}
+
+func (s *StateDB) ReadBeginCycleStrict(addr []byte) (int64, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.BeginCycleStateKey(addr))
+	return decodeSystemRewardInt64(raw, ok, err, 0, "begin cycle")
 }
 
 func (s *StateDB) WriteBeginCycle(addr []byte, cycle int64) error {
@@ -270,15 +312,30 @@ func (s *StateDB) WriteBeginCycle(addr []byte, cycle int64) error {
 }
 
 func (s *StateDB) ReadEndCycle(addr []byte) int64 {
-	raw, ok := s.readSystemReward(rawdb.EndCycleStateKey(addr))
-	if !ok || len(raw) != 8 {
+	value, ok, err := s.ReadEndCycleStrict(addr)
+	if err != nil || !ok {
 		return rawdb.RewardRemark
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	return value
+}
+
+func (s *StateDB) ReadEndCycleStrict(addr []byte) (int64, bool, error) {
+	raw, ok, err := s.readSystemRewardWithError(rawdb.EndCycleStateKey(addr))
+	return decodeSystemRewardInt64(raw, ok, err, rawdb.RewardRemark, "end cycle")
 }
 
 func (s *StateDB) WriteEndCycle(addr []byte, cycle int64) error {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(cycle))
 	return s.writeSystemReward(rawdb.EndCycleStateKey(addr), buf[:])
+}
+
+func decodeSystemRewardInt64(raw []byte, ok bool, err error, missing int64, context string) (int64, bool, error) {
+	if err != nil || !ok {
+		return missing, ok, err
+	}
+	if len(raw) != 8 {
+		return missing, false, fmt.Errorf("state: decode %s: length %d, want 8", context, len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw)), true, nil
 }

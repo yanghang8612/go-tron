@@ -1047,9 +1047,9 @@ func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.
 	return []tronapi.ChainParameter{{Key: "bound_param", Value: 99}}, nil
 }
 
-func (s *isolationStubBackend) GetBrokerageInfo(addr common.Address) int64 {
+func (s *isolationStubBackend) GetBrokerageInfo(addr common.Address) (int64, error) {
 	s.liveBrokerageCalls++
-	return 1
+	return 1, nil
 }
 
 func (s *isolationStubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {

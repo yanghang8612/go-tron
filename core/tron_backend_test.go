@@ -19,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
@@ -363,6 +364,10 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetReward(addr)
 			return err
 		}},
+		{name: "GetBrokerageInfo", call: func() error {
+			_, err := backend.GetBrokerageInfo(addr)
+			return err
+		}},
 		{name: "GetAccountNet", call: func() error {
 			_, err := backend.GetAccountNet(addr)
 			return err
@@ -436,6 +441,28 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 		if err := check.call(); err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
 			t.Fatalf("%s error = %v, want cold state-root error", check.name, err)
 		}
+	}
+}
+
+func TestTronBackend_GetBrokerageInfoSurfacesMalformedLiveRow(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	backend := &TronBackend{chain: bc}
+	addr := testCoreAddr(2)
+	cycle := bc.DynProps().CurrentCycleNumber()
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		if err := statedb.SystemKVPut(kvdomains.SystemReward, rawdb.CycleBrokerageStateKey(cycle, addr.Bytes()), []byte{0x01, 0x02, 0x03}); err != nil {
+			t.Fatalf("write malformed brokerage: %v", err)
+		}
+	})
+
+	got, err := backend.GetBrokerageInfo(addr)
+	if err == nil {
+		t.Fatalf("GetBrokerageInfo malformed row error = nil, got %d", got)
+	}
+	if !strings.Contains(err.Error(), "read cycle brokerage") || !strings.Contains(err.Error(), "length 3, want 4") {
+		t.Fatalf("GetBrokerageInfo malformed row error = %v, want brokerage decode context", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
@@ -2401,19 +2402,33 @@ func (b *TronBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exch
 	return exchange, nil
 }
 
-func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
+func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) (int64, error) {
 	// java-tron's RpcApiService.getBrokerageInfoCommon reads at
 	// currentCycle, NOT at the base key (-1). Right after an UpdateBrokerage
 	// tx the rate is only visible to readers who consult the snapshot at
 	// the next maintenance — until then the cycle key holds the previous
 	// rate. Mirror that semantic here so cross-impl byte-equal holds.
-	dp := b.chain.DynProps()
-	cycle := dp.CurrentCycleNumber()
-	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
-	if sysKV == nil {
-		return int64(rawdb.DefaultBrokerage)
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return 0, fmt.Errorf("read head state root: %w", err)
 	}
-	return int64(sysKV.ReadCycleBrokerage(cycle, addr.Bytes()))
+	statedb, err := b.chain.openState(root)
+	if err != nil {
+		return 0, fmt.Errorf("open head state: %w", err)
+	}
+	var dpReader ethdb.KeyValueReader
+	if b.chain.buffer != nil {
+		dpReader = b.chain.buffer
+	} else {
+		dpReader = b.chain.db
+	}
+	dp := state.LoadDynamicProperties(dpReader, statedb)
+	cycle := dp.CurrentCycleNumber()
+	rate, _, err := statedb.ReadCycleBrokerageStrict(cycle, addr.Bytes())
+	if err != nil {
+		return 0, fmt.Errorf("read cycle brokerage: %w", err)
+	}
+	return int64(rate), nil
 }
 
 func (b *TronBackend) GetBrokerageInfoAt(addr tcommon.Address, blockNum uint64) (int64, error) {

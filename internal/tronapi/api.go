@@ -1886,13 +1886,13 @@ func (api *API) handleGetBrokerage(w http.ResponseWriter, r *http.Request, bound
 	}
 	var rate int64
 	if boundFn == nil {
-		rate = api.backend.GetBrokerageInfo(addr)
+		rate, err = api.backend.GetBrokerageInfo(addr)
 	} else {
 		rate, err = api.backend.GetBrokerageInfoAt(addr, boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	data, _ := json.Marshal(map[string]int64{"brokerage": rate})
 	w.Header().Set("Content-Type", "application/json")

@@ -357,6 +357,13 @@ Status:
 - The current-cycle reward pending accumulator also probes presence before
   decoding, so startup and reorg reloads stop on unreadable accumulator storage
   instead of silently resetting in-memory pending rewards to empty.
+- Rooted reward snapshot/cursor readers now expose strict live variants for
+  cycle rewards, vote snapshots, VI values, brokerage snapshots, account-vote
+  snapshots, and begin/end cycle cursors. The legacy no-error readers keep
+  java-compatible defaults for consensus call sites, while live brokerage API
+  reads use the strict current-cycle snapshot and return malformed or
+  unreadable SystemReward rows as backend errors instead of silently defaulting
+  to 20%.
 - Rooted witness schedule and pending vote readers now expose strict live
   variants for API and maintenance paths. Live `ListWitnesses` and transaction
   validation surface malformed witness indexes or pending vote rows, and the

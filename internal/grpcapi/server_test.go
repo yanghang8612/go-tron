@@ -369,7 +369,7 @@ func (b *testBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exch
 	}
 	return b.exchange, nil
 }
-func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
+func (b *testBackend) GetBrokerageInfo(addr common.Address) (int64, error) { return 0, nil }
 func (b *testBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	return 0, nil
 }

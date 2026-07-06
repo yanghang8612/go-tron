@@ -259,7 +259,7 @@ type Backend interface {
 	GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error)
 
 	// Brokerage
-	GetBrokerageInfo(addr common.Address) int64
+	GetBrokerageInfo(addr common.Address) (int64, error)
 	GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error)
 
 	// Chain-level counters (stubs until dynamic-properties tracking is wired)

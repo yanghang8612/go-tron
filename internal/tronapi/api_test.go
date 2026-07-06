@@ -381,7 +381,7 @@ func (s *stubBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
 func (s *stubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
 	return s.GetExchangeByID(id)
 }
-func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
+func (s *stubBackend) GetBrokerageInfo(addr common.Address) (int64, error) { return 0, nil }
 func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	return 0, nil
 }

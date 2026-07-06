@@ -538,7 +538,7 @@ func (b *solidTestBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessI
 	return b.testBackend.ListWitnessesAt(blockNum)
 }
 
-func (b *solidTestBackend) GetBrokerageInfo(addr common.Address) int64 {
+func (b *solidTestBackend) GetBrokerageInfo(addr common.Address) (int64, error) {
 	b.liveBrokerage++
 	return b.testBackend.GetBrokerageInfo(addr)
 }
