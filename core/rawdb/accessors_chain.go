@@ -25,6 +25,12 @@ func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 	return hash
 }
 
+// ReadHeadBlockHashStrict returns the canonical head hash and surfaces
+// storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadHeadBlockHashStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, headBlockKey, "head block hash")
+}
+
 func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headSolidBlockKey, hash.Bytes())
 }
@@ -41,6 +47,12 @@ func ReadHeadSolidBlockHash(db ethdb.KeyValueReader) common.Hash {
 	return hash
 }
 
+// ReadHeadSolidBlockHashStrict returns the latest solid block hash and
+// surfaces storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadHeadSolidBlockHashStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, headSolidBlockKey, "head solid block hash")
+}
+
 func WriteDynamicProperty(db ethdb.KeyValueWriter, name string, value []byte) {
 	db.Put(dynPropKey(name), value)
 }
@@ -51,6 +63,12 @@ func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 		return nil
 	}
 	return data
+}
+
+// ReadDynamicPropertyStrict returns a dynamic property value and surfaces
+// storage errors. Missing rows return (nil, false, nil).
+func ReadDynamicPropertyStrict(db ethdb.KeyValueReader, name string) ([]byte, bool, error) {
+	return readPresentValue(db, dynPropKey(name), fmt.Sprintf("dynamic property %s", name))
 }
 
 // IterateDynamicProperties invokes fn for every persisted DynamicProperties
@@ -101,9 +119,39 @@ func ReadGenesisWitnesses(db ethdb.KeyValueReader) []GenesisWitness {
 	if err != nil || len(data) < 4 {
 		return nil
 	}
-	count := int(binary.BigEndian.Uint32(data[:4]))
-	if len(data) < 4+count*genesisWitnessRecordLen {
+	out, ok, err := decodeGenesisWitnesses(data, true)
+	if err != nil || !ok {
 		return nil
+	}
+	return out
+}
+
+// ReadGenesisWitnessesStrict returns the immutable genesis witness vote set
+// and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func ReadGenesisWitnessesStrict(db ethdb.KeyValueReader) ([]GenesisWitness, bool, error) {
+	data, ok, err := readPresentValue(db, genesisWitnessesKey, "genesis witnesses")
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	out, valid, err := decodeGenesisWitnesses(data, false)
+	if err != nil {
+		return nil, true, err
+	}
+	if !valid {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func decodeGenesisWitnesses(data []byte, allowTrailing bool) ([]GenesisWitness, bool, error) {
+	if len(data) < 4 {
+		return nil, false, fmt.Errorf("rawdb: decode genesis witnesses: length %d, want at least 4", len(data))
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	wantLen := 4 + count*genesisWitnessRecordLen
+	if len(data) < wantLen || !allowTrailing && len(data) != wantLen {
+		return nil, false, fmt.Errorf("rawdb: decode genesis witnesses: length %d, want %d", len(data), wantLen)
 	}
 	out := make([]GenesisWitness, count)
 	for i := 0; i < count; i++ {
@@ -111,7 +159,7 @@ func ReadGenesisWitnesses(db ethdb.KeyValueReader) []GenesisWitness {
 		out[i].Address = common.BytesToAddress(data[off : off+common.AddressLength])
 		out[i].VoteCount = int64(binary.BigEndian.Uint64(data[off+common.AddressLength : off+genesisWitnessRecordLen]))
 	}
-	return out
+	return out, true, nil
 }
 
 // ReadTotalTransactionCount returns the cumulative number of transactions ever
@@ -123,6 +171,19 @@ func ReadTotalTransactionCount(db ethdb.KeyValueReader) int64 {
 		return 0
 	}
 	return int64(binary.BigEndian.Uint64(data))
+}
+
+// ReadTotalTransactionCountStrict returns the cumulative transaction count and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func ReadTotalTransactionCountStrict(db ethdb.KeyValueReader) (int64, bool, error) {
+	data, ok, err := readPresentValue(db, totalTransactionCountKey, "total transaction count")
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	if len(data) != 8 {
+		return 0, false, fmt.Errorf("rawdb: decode total transaction count: length %d, want 8", len(data))
+	}
+	return int64(binary.BigEndian.Uint64(data)), true, nil
 }
 
 // WriteTotalTransactionCount persists the cumulative transaction count.
@@ -151,6 +212,12 @@ func ReadGenesisStateRoot(db ethdb.KeyValueReader) common.Hash {
 		return common.Hash{}
 	}
 	return root
+}
+
+// ReadGenesisStateRootStrict returns the post-genesis StateDB root and
+// surfaces storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadGenesisStateRootStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, genesisStateRootKey, "genesis state root")
 }
 
 // WriteBlockStateRoot persists the post-apply state root for the given
@@ -231,4 +298,16 @@ func decodeHashRow(data []byte) (common.Hash, bool) {
 		return common.Hash{}, false
 	}
 	return common.BytesToHash(data), true
+}
+
+func readHashRowStrict(db ethdb.KeyValueReader, key []byte, context string) (common.Hash, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	hash, valid := decodeHashRow(data)
+	if !valid {
+		return common.Hash{}, false, fmt.Errorf("rawdb: decode %s: length %d, want %d", context, len(data), common.HashLength)
+	}
+	return hash, true, nil
 }
