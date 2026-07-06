@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -49,6 +51,9 @@ func TestContractABI_Absent(t *testing.T) {
 	if got := ReadContractABI(db, addr); got != nil {
 		t.Fatalf("expected nil for absent key, got %v", got)
 	}
+	if got, ok, err := ReadContractABIStrict(db, addr); got != nil || ok || err != nil {
+		t.Fatalf("ReadContractABIStrict absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
 }
 
 func TestContractABI_Delete(t *testing.T) {
@@ -89,5 +94,44 @@ func TestContractABI_MultipleContracts(t *testing.T) {
 		if len(got.Entrys) != 1 || got.Entrys[0].Name != want {
 			t.Errorf("addr %d: expected entry name %s, got %v", i, want, got.Entrys)
 		}
+	}
+}
+
+func TestContractABIStrictSurfacesStorageErrors(t *testing.T) {
+	db := memorydb.New()
+	addr := make([]byte, 21)
+	addr[0] = 0x41
+	addr[20] = 0x44
+	if err := WriteContractABI(db, addr, &contractpb.SmartContract_ABI{
+		Entrys: []*contractpb.SmartContract_ABI_Entry{{Name: "transfer"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, ok, err := ReadContractABIStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, addr); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadContractABIStrict has error = %v/%v/%v, want presence error", got, ok, err)
+	}
+	if got, ok, err := ReadContractABIStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, addr); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadContractABIStrict get error = %v/%v/%v, want get error", got, ok, err)
+	}
+	if ReadContractABI(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, addr) != nil {
+		t.Fatal("legacy ReadContractABI should keep nil default on storage error")
+	}
+}
+
+func TestContractABIStrictSurfacesCorruptPayload(t *testing.T) {
+	db := memorydb.New()
+	addr := make([]byte, 21)
+	addr[0] = 0x41
+	addr[20] = 0x45
+	if err := db.Put(abiKey(addr), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadContractABI(db, addr); got != nil {
+		t.Fatalf("legacy ReadContractABI corrupt payload = %v, want nil", got)
+	}
+	got, ok, err := ReadContractABIStrict(db, addr)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode contract abi") {
+		t.Fatalf("ReadContractABIStrict corrupt payload = %v/%v/%v, want decode error", got, ok, err)
 	}
 }

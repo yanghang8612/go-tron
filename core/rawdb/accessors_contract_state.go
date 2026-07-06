@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -19,6 +21,22 @@ func ReadContractState(db ethdb.KeyValueReader, addr tcommon.Address) *types.Con
 		return nil
 	}
 	return cs
+}
+
+// ReadContractStateStrict loads a per-contract dynamic-energy state and
+// surfaces storage/corruption errors. Missing rows return (nil, false, nil).
+// A present zero-byte protobuf is decoded as an empty ContractState with
+// ok=true.
+func ReadContractStateStrict(db ethdb.KeyValueReader, addr tcommon.Address) (*types.ContractState, bool, error) {
+	data, ok, err := readPresentValue(db, contractStateKey(addr.Bytes()), fmt.Sprintf("contract state %s", addr.Hex()))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	cs, err := types.NewContractStateFromBytes(data)
+	if err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode contract state %s: %w", addr.Hex(), err)
+	}
+	return cs, true, nil
 }
 
 // WriteContractState persists a per-contract dynamic-energy state.

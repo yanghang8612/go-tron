@@ -2565,6 +2565,25 @@ func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
 	return cs
 }
 
+// ReadContractStateStrict loads the per-contract dynamic-energy runtime state
+// and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func (s *StateDB) ReadContractStateStrict(addr tcommon.Address) (*types.ContractState, bool, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, false, nil
+	}
+	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	cs, err := types.NewContractStateFromBytes(data)
+	if err != nil {
+		return nil, true, fmt.Errorf("decode contract state %s: %w", addr.Hex(), err)
+	}
+	return cs, true, nil
+}
+
 // WriteContractState stores the per-contract dynamic-energy runtime state.
 func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractState) error {
 	if cs == nil {
@@ -2592,6 +2611,24 @@ func (s *StateDB) ReadContractABI(addr tcommon.Address) *contractpb.SmartContrac
 		return nil
 	}
 	return &abi
+}
+
+// ReadContractABIStrict loads the dedicated ABI store entry for a contract and
+// surfaces storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadContractABIStrict(addr tcommon.Address) (*contractpb.SmartContract_ABI, bool, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, false, nil
+	}
+	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractABI, contractABIKVKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var abi contractpb.SmartContract_ABI
+	if err := proto.Unmarshal(data, &abi); err != nil {
+		return nil, true, fmt.Errorf("decode contract abi %s: %w", addr.Hex(), err)
+	}
+	return &abi, true, nil
 }
 
 // WriteContractABI stores a dedicated ABI entry for a contract.
