@@ -283,7 +283,7 @@ func (b *testBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContrac
 	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
-	return nil, nil
+	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
 	if b.assetErr != nil {
@@ -292,55 +292,58 @@ func (b *testBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueCo
 	return b.assetByName, nil
 }
 func (b *testBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
-	return nil, nil
+	if b.assetErr != nil {
+		return nil, b.assetErr
+	}
+	return b.assetByName, nil
 }
 func (b *testBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
 	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
-	return nil, nil
+	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
 	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
-	return nil, nil
+	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
 	return nil, b.assetErr
 }
 func (b *testBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
-	return nil, nil
+	return nil, b.assetErr
 }
 func (b *testBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
 	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
-	return nil, nil
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
 	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
-	return nil, nil
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
 	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
-	return nil, nil
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error) {
 	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
-	return nil, nil
+	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
 	return nil, b.marketErr
 }
 func (b *testBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
-	return nil, nil
+	return nil, b.marketErr
 }
 func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) {
 	if b.exchangeErr != nil {

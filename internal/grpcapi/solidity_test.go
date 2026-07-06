@@ -1389,6 +1389,54 @@ func TestSolidity_AssetQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 }
 
+func TestSolidity_AssetQueriesSurfaceBackendError(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum: 89,
+		testBackend: testBackend{
+			assetErr: errors.New("cold solid asset state corrupt"),
+		},
+	}
+	client := newSolidityClient(t, backend)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetAssetIssueById", call: func() error {
+			_, err := client.GetAssetIssueById(context.Background(), &apipb.BytesMessage{Value: []byte("1000001")})
+			return err
+		}},
+		{name: "GetAssetIssueByName", call: func() error {
+			_, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+			return err
+		}},
+		{name: "GetAssetIssueListByName", call: func() error {
+			_, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+			return err
+		}},
+		{name: "GetAssetIssueList", call: func() error {
+			_, err := client.GetAssetIssueList(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedAssetIssueList", call: func() error {
+			_, err := client.GetPaginatedAssetIssueList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.liveAssetID != 0 || backend.liveAssetName != 0 || backend.liveAssetList != 0 || backend.liveAssetPage != 0 {
+		t.Fatalf("live asset calls = id:%d name:%d list:%d page:%d, want 0", backend.liveAssetID, backend.liveAssetName, backend.liveAssetList, backend.liveAssetPage)
+	}
+	if backend.lastAssetIDAt != 89 || backend.lastAssetNameAt != 89 || backend.lastAssetListAt != 89 || backend.lastAssetPageAt != 89 {
+		t.Fatalf("solid asset blocks = id:%d name:%d list:%d page:%d, want 89", backend.lastAssetIDAt, backend.lastAssetNameAt, backend.lastAssetListAt, backend.lastAssetPageAt)
+	}
+}
+
 func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
 	addr := solidityTestAddress(0x88)
 	backend := &solidTestBackend{
@@ -1499,6 +1547,56 @@ func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveMarketPairList != 0 {
 		t.Fatalf("live GetMarketPairList called %d times, want 0", backend.liveMarketPairList)
+	}
+}
+
+func TestSolidity_MarketQueriesSurfaceBackendError(t *testing.T) {
+	addr := solidityTestAddress(0x88)
+	backend := &solidTestBackend{
+		solidNum: 91,
+		testBackend: testBackend{
+			marketErr: errors.New("cold solid market state corrupt"),
+		},
+	}
+	client := newSolidityClient(t, backend)
+	pair := &corepb.MarketOrderPair{SellTokenId: []byte("sell"), BuyTokenId: []byte("buy")}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetMarketOrderById", call: func() error {
+			_, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: []byte("order")})
+			return err
+		}},
+		{name: "GetMarketOrderByAccount", call: func() error {
+			_, err := client.GetMarketOrderByAccount(context.Background(), &apipb.BytesMessage{Value: addr})
+			return err
+		}},
+		{name: "GetMarketPriceByPair", call: func() error {
+			_, err := client.GetMarketPriceByPair(context.Background(), pair)
+			return err
+		}},
+		{name: "GetMarketOrderListByPair", call: func() error {
+			_, err := client.GetMarketOrderListByPair(context.Background(), pair)
+			return err
+		}},
+		{name: "GetMarketPairList", call: func() error {
+			_, err := client.GetMarketPairList(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+	if backend.liveMarketOrder != 0 || backend.liveMarketOrders != 0 || backend.liveMarketPrice != 0 || backend.liveMarketPair != 0 || backend.liveMarketPairList != 0 {
+		t.Fatalf("live market calls = order:%d orders:%d price:%d pair:%d pairList:%d, want 0", backend.liveMarketOrder, backend.liveMarketOrders, backend.liveMarketPrice, backend.liveMarketPair, backend.liveMarketPairList)
+	}
+	if backend.lastMarketOrderAt != 91 || backend.lastMarketOrdersAt != 91 || backend.lastMarketPriceAt != 91 || backend.lastMarketPairAt != 91 || backend.lastMarketPairListAt != 91 {
+		t.Fatalf("solid market blocks = order:%d orders:%d price:%d pair:%d pairList:%d, want 91", backend.lastMarketOrderAt, backend.lastMarketOrdersAt, backend.lastMarketPriceAt, backend.lastMarketPairAt, backend.lastMarketPairListAt)
 	}
 }
 
