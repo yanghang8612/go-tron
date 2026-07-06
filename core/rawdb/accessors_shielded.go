@@ -15,6 +15,12 @@ func HasNullifier(db ethdb.KeyValueReader, nullifier []byte) bool {
 	return err == nil && has
 }
 
+// HasNullifierStrict reports whether the nullifier has already been spent and
+// surfaces storage errors.
+func HasNullifierStrict(db ethdb.KeyValueReader, nullifier []byte) (bool, error) {
+	return readKeyPresence(db, nullifierKey(nullifier), fmt.Sprintf("shielded nullifier %x", nullifier))
+}
+
 // WriteNullifier marks a nullifier as spent (double-spend prevention).
 func WriteNullifier(db ethdb.KeyValueWriter, nullifier []byte) error {
 	return db.Put(nullifierKey(nullifier), []byte{1})
@@ -27,6 +33,19 @@ func NoteCommitmentCount(db ethdb.KeyValueReader) int64 {
 		return 0
 	}
 	return int64(binary.BigEndian.Uint64(data))
+}
+
+// NoteCommitmentCountStrict returns the total note commitment count and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func NoteCommitmentCountStrict(db ethdb.KeyValueReader) (int64, bool, error) {
+	data, ok, err := readPresentValue(db, noteCommitmentCountKey, "note commitment count")
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	if len(data) != 8 {
+		return 0, false, fmt.Errorf("rawdb: decode note commitment count: length %d, want 8", len(data))
+	}
+	return int64(binary.BigEndian.Uint64(data)), true, nil
 }
 
 // AppendNoteCommitment stores a note commitment at the next sequential index.
@@ -57,11 +76,23 @@ func ReadNoteCommitment(db ethdb.KeyValueReader, index int64) []byte {
 	return data
 }
 
+// ReadNoteCommitmentStrict returns the note commitment at index and surfaces
+// storage errors. Missing rows return (nil, false, nil).
+func ReadNoteCommitmentStrict(db ethdb.KeyValueReader, index int64) ([]byte, bool, error) {
+	return readPresentValue(db, noteCommitmentKey(index), fmt.Sprintf("note commitment %d", index))
+}
+
 // HasZKProof returns true if this shielded transaction has a cached proof
 // result. Mirrors java-tron ZKProofStore.has.
 func HasZKProof(db ethdb.KeyValueReader, txID []byte) bool {
 	ok, _ := db.Has(zkProofKey(txID))
 	return ok
+}
+
+// HasZKProofStrict reports whether this shielded transaction has a cached
+// proof result and surfaces storage errors.
+func HasZKProofStrict(db ethdb.KeyValueReader, txID []byte) (bool, error) {
+	return readKeyPresence(db, zkProofKey(txID), fmt.Sprintf("zk proof result %x", txID))
 }
 
 // ReadZKProofResult returns the cached proof-verification result for a
@@ -72,6 +103,20 @@ func ReadZKProofResult(db ethdb.KeyValueReader, txID []byte) (bool, bool) {
 		return false, false
 	}
 	return data[0] == 0x01, true
+}
+
+// ReadZKProofResultStrict returns the cached proof-verification result for a
+// shielded transaction and surfaces storage/corruption errors. Missing rows
+// return (false, false, nil).
+func ReadZKProofResultStrict(db ethdb.KeyValueReader, txID []byte) (bool, bool, error) {
+	data, ok, err := readPresentValue(db, zkProofKey(txID), fmt.Sprintf("zk proof result %x", txID))
+	if err != nil || !ok {
+		return false, ok, err
+	}
+	if len(data) != 1 {
+		return false, false, fmt.Errorf("rawdb: decode zk proof result %x: length %d, want 1", txID, len(data))
+	}
+	return data[0] == 0x01, true, nil
 }
 
 // WriteZKProofResult stores the proof-verification result for a shielded
@@ -126,7 +171,7 @@ func ReadIncrMerkleTree(db ethdb.KeyValueReader, root []byte) *shieldpb.Incremen
 // payload is a valid empty IncrementalMerkleTree proto and returns a non-nil
 // zero-value tree with ok=true.
 func ReadIncrMerkleTreeStrict(db ethdb.KeyValueReader, root []byte) (*shieldpb.IncrementalMerkleTree, bool, error) {
-	data, ok, err := readValueThenVerifyMiss(db, incrMerkleTreeKey(root), fmt.Sprintf("incremental merkle tree %x", root), nil)
+	data, ok, err := readPresentValue(db, incrMerkleTreeKey(root), fmt.Sprintf("incremental merkle tree %x", root))
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -141,6 +186,12 @@ func ReadIncrMerkleTreeStrict(db ethdb.KeyValueReader, root []byte) (*shieldpb.I
 func HasIncrMerkleTree(db ethdb.KeyValueReader, root []byte) bool {
 	ok, _ := db.Has(incrMerkleTreeKey(root))
 	return ok
+}
+
+// HasIncrMerkleTreeStrict reports whether a tree state is stored for root and
+// surfaces storage errors.
+func HasIncrMerkleTreeStrict(db ethdb.KeyValueReader, root []byte) (bool, error) {
+	return readKeyPresence(db, incrMerkleTreeKey(root), fmt.Sprintf("incremental merkle tree %x", root))
 }
 
 // DeleteIncrMerkleTree removes the tree state for root (state rollback).
@@ -162,6 +213,13 @@ func ReadLastMerkleTree(db ethdb.KeyValueReader) *shieldpb.IncrementalMerkleTree
 		return nil
 	}
 	return &tree
+}
+
+// ReadLastMerkleTreeStrict returns the best IncrementalMerkleTree sentinel and
+// surfaces storage/corruption errors. Missing rows return (nil, false, nil).
+// A present zero-byte protobuf is decoded as an empty tree with ok=true.
+func ReadLastMerkleTreeStrict(db ethdb.KeyValueReader) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	return readShieldedMerkleTreeStrict(db, incrMerkleLastTreeKey, "last incremental merkle tree")
 }
 
 // WriteLastMerkleTree persists the best tree under the "LAST_TREE" sentinel.
@@ -190,6 +248,14 @@ func ReadCurrentMerkleTree(db ethdb.KeyValueReader) *shieldpb.IncrementalMerkleT
 	return &tree
 }
 
+// ReadCurrentMerkleTreeStrict returns the working IncrementalMerkleTree
+// sentinel and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil). A present zero-byte protobuf is decoded as an empty tree
+// with ok=true.
+func ReadCurrentMerkleTreeStrict(db ethdb.KeyValueReader) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	return readShieldedMerkleTreeStrict(db, incrMerkleCurrentTreeKey, "current incremental merkle tree")
+}
+
 // WriteCurrentMerkleTree persists the working tree under the "CURRENT_TREE"
 // sentinel. Reset at block start (copy of best) and advanced per shielded
 // receive.
@@ -216,6 +282,20 @@ func ReadMerkleTreeRootByBlock(db ethdb.KeyValueReader, blockNum int64) []byte {
 		return nil
 	}
 	return data
+}
+
+// ReadMerkleTreeRootByBlockStrict returns the 32-byte tree root indexed at
+// blockNum and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func ReadMerkleTreeRootByBlockStrict(db ethdb.KeyValueReader, blockNum int64) ([]byte, bool, error) {
+	data, ok, err := readPresentValue(db, merkleTreeIndexKey(blockNum), fmt.Sprintf("merkle tree root by block %d", blockNum))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if len(data) != 32 {
+		return nil, true, fmt.Errorf("rawdb: decode merkle tree root by block %d: length %d, want 32", blockNum, len(data))
+	}
+	return data, true, nil
 }
 
 // WriteMerkleTreeRootByBlock indexes blockNum → tree root. Called after a
@@ -260,4 +340,16 @@ func IncrMerkleCurrentTreeStateKey() []byte {
 
 func MerkleTreeIndexStateKey(blockNum int64) []byte {
 	return merkleTreeIndexKey(blockNum)
+}
+
+func readShieldedMerkleTreeStrict(db ethdb.KeyValueReader, key []byte, context string) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var tree shieldpb.IncrementalMerkleTree
+	if err := proto.Unmarshal(data, &tree); err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode %s: %w", context, err)
+	}
+	return &tree, true, nil
 }

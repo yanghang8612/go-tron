@@ -7,12 +7,9 @@ import (
 )
 
 func readPresentValue(db ethdb.KeyValueReader, key []byte, context string) ([]byte, bool, error) {
-	if db == nil {
-		return nil, false, fmt.Errorf("rawdb: nil database while reading %s", context)
-	}
-	exists, err := db.Has(key)
+	exists, err := readKeyPresence(db, key, context)
 	if err != nil {
-		return nil, false, fmt.Errorf("rawdb: read %s presence: %w", context, err)
+		return nil, false, err
 	}
 	if !exists {
 		return nil, false, nil
@@ -22,6 +19,17 @@ func readPresentValue(db ethdb.KeyValueReader, key []byte, context string) ([]by
 		return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+func readKeyPresence(db ethdb.KeyValueReader, key []byte, context string) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("rawdb: nil database while reading %s", context)
+	}
+	exists, err := db.Has(key)
+	if err != nil {
+		return false, fmt.Errorf("rawdb: read %s presence: %w", context, err)
+	}
+	return exists, nil
 }
 
 func readValueThenVerifyMiss(db ethdb.KeyValueReader, key []byte, context string, read func([]byte) ([]byte, error)) ([]byte, bool, error) {

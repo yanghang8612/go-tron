@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -68,6 +69,33 @@ func TestZKProof_FailedResultIsCached(t *testing.T) {
 	}
 }
 
+func TestZKProofStrictSurfacesStorageAndMalformedRows(t *testing.T) {
+	db := memorydb.New()
+	txID := []byte("strict-shielded-tx")
+	if err := WriteZKProofResult(db, txID, true); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := HasZKProofStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, txID); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("HasZKProofStrict has error = %v/%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadZKProofResultStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, txID); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadZKProofResultStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadZKProofResultStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, txID); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadZKProofResultStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+
+	if err := db.Put(ZKProofStateKey(txID), []byte{0x01, 0x02}); err != nil {
+		t.Fatal(err)
+	}
+	if result, ok := ReadZKProofResult(db, txID); !ok || !result {
+		t.Fatalf("compat ReadZKProofResult malformed row = %v/%v, want first-byte result", result, ok)
+	}
+	if _, ok, err := ReadZKProofResultStrict(db, txID); err == nil || ok || !strings.Contains(err.Error(), "length 2, want 1") {
+		t.Fatalf("ReadZKProofResultStrict malformed ok=%v err=%v, want length error", ok, err)
+	}
+}
+
 // ---- IncrementalMerkleTree tests ------------------------------------------
 
 func TestIncrMerkleTree_RoundTrip(t *testing.T) {
@@ -130,6 +158,24 @@ func TestIncrMerkleTree_StrictSurfacesCorruptPayload(t *testing.T) {
 	got, ok, err := ReadIncrMerkleTreeStrict(db, root)
 	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode incremental merkle tree") {
 		t.Fatalf("strict corrupt tree = %v ok=%v err=%v, want decode error", got, ok, err)
+	}
+}
+
+func TestIncrMerkleTreeStrictSurfacesStorageErrors(t *testing.T) {
+	db := memorydb.New()
+	root := make([]byte, 32)
+	root[0] = 0xc1
+	if err := WriteIncrMerkleTree(db, root, &shieldpb.IncrementalMerkleTree{}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := HasIncrMerkleTreeStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, root); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("HasIncrMerkleTreeStrict has error = %v/%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadIncrMerkleTreeStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, root); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadIncrMerkleTreeStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadIncrMerkleTreeStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, root); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadIncrMerkleTreeStrict get error ok=%v err=%v, want get error", ok, err)
 	}
 }
 
@@ -251,6 +297,129 @@ func TestMerkleTreeRootByBlock_RoundTrip(t *testing.T) {
 	}
 	if got := ReadMerkleTreeRootByBlock(db, blockNum); got != nil {
 		t.Fatalf("expected nil after delete, got %x", got)
+	}
+}
+
+func TestShieldedNoteCommitmentStrictReaders(t *testing.T) {
+	db := memorydb.New()
+	commitment := []byte("commitment")
+	if got, ok, err := NoteCommitmentCountStrict(db); err != nil || ok || got != 0 {
+		t.Fatalf("NoteCommitmentCountStrict absent = %d/%v/%v, want 0/false/nil", got, ok, err)
+	}
+	if got, ok, err := ReadNoteCommitmentStrict(db, 0); err != nil || ok || got != nil {
+		t.Fatalf("ReadNoteCommitmentStrict absent = %x/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if err := AppendNoteCommitment(db, commitment); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := NoteCommitmentCountStrict(db); err != nil || !ok || got != 1 {
+		t.Fatalf("NoteCommitmentCountStrict = %d/%v/%v, want 1/true/nil", got, ok, err)
+	}
+	if got, ok, err := ReadNoteCommitmentStrict(db, 0); err != nil || !ok || string(got) != string(commitment) {
+		t.Fatalf("ReadNoteCommitmentStrict = %x/%v/%v, want commitment/true/nil", got, ok, err)
+	}
+	if _, ok, err := NoteCommitmentCountStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("NoteCommitmentCountStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := NoteCommitmentCountStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("NoteCommitmentCountStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+	if _, ok, err := ReadNoteCommitmentStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, 0); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadNoteCommitmentStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadNoteCommitmentStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, 0); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadNoteCommitmentStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+
+	if err := db.Put(NoteCommitmentCountStateKey(), []byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	if got := NoteCommitmentCount(db); got != 0 {
+		t.Fatalf("compat NoteCommitmentCount malformed = %d, want 0", got)
+	}
+	if _, ok, err := NoteCommitmentCountStrict(db); err == nil || ok || !strings.Contains(err.Error(), "length 1, want 8") {
+		t.Fatalf("NoteCommitmentCountStrict malformed ok=%v err=%v, want length error", ok, err)
+	}
+}
+
+func TestMerkleSentinelStrictReaders(t *testing.T) {
+	db := memorydb.New()
+	tree := &shieldpb.IncrementalMerkleTree{
+		Left: &shieldpb.PedersenHash{Content: []byte("left")},
+	}
+	if got, ok, err := ReadLastMerkleTreeStrict(db); err != nil || ok || got != nil {
+		t.Fatalf("ReadLastMerkleTreeStrict absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if got, ok, err := ReadCurrentMerkleTreeStrict(db); err != nil || ok || got != nil {
+		t.Fatalf("ReadCurrentMerkleTreeStrict absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if err := WriteLastMerkleTree(db, tree); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCurrentMerkleTree(db, tree); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := ReadLastMerkleTreeStrict(db); err != nil || !ok || got == nil || got.Left == nil || string(got.Left.Content) != "left" {
+		t.Fatalf("ReadLastMerkleTreeStrict = %v/%v/%v, want tree/true/nil", got, ok, err)
+	}
+	if got, ok, err := ReadCurrentMerkleTreeStrict(db); err != nil || !ok || got == nil || got.Left == nil || string(got.Left.Content) != "left" {
+		t.Fatalf("ReadCurrentMerkleTreeStrict = %v/%v/%v, want tree/true/nil", got, ok, err)
+	}
+	if _, ok, err := ReadLastMerkleTreeStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadLastMerkleTreeStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadCurrentMerkleTreeStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadCurrentMerkleTreeStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+
+	if err := db.Put(IncrMerkleLastTreeStateKey(), []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadLastMerkleTree(db); got != nil {
+		t.Fatalf("compat ReadLastMerkleTree corrupt payload = %v, want nil", got)
+	}
+	if got, ok, err := ReadLastMerkleTreeStrict(db); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode last incremental merkle tree") {
+		t.Fatalf("ReadLastMerkleTreeStrict corrupt = %v/%v/%v, want decode error", got, ok, err)
+	}
+	if err := db.Put(IncrMerkleCurrentTreeStateKey(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadCurrentMerkleTree(db); got != nil {
+		t.Fatalf("compat ReadCurrentMerkleTree empty payload = %v, want nil", got)
+	}
+	if got, ok, err := ReadCurrentMerkleTreeStrict(db); err != nil || !ok || got == nil {
+		t.Fatalf("ReadCurrentMerkleTreeStrict empty payload = %v/%v/%v, want empty tree/true/nil", got, ok, err)
+	}
+}
+
+func TestMerkleTreeRootByBlockStrict(t *testing.T) {
+	db := memorydb.New()
+	const blockNum = int64(77)
+	root := make([]byte, 32)
+	root[31] = 0x77
+	if got, ok, err := ReadMerkleTreeRootByBlockStrict(db, blockNum); err != nil || ok || got != nil {
+		t.Fatalf("ReadMerkleTreeRootByBlockStrict absent = %x/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if err := WriteMerkleTreeRootByBlock(db, blockNum, root); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := ReadMerkleTreeRootByBlockStrict(db, blockNum); err != nil || !ok || string(got) != string(root) {
+		t.Fatalf("ReadMerkleTreeRootByBlockStrict = %x/%v/%v, want root/true/nil", got, ok, err)
+	}
+	if _, ok, err := ReadMerkleTreeRootByBlockStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, blockNum); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadMerkleTreeRootByBlockStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadMerkleTreeRootByBlockStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, blockNum); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadMerkleTreeRootByBlockStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+	if err := db.Put(MerkleTreeIndexStateKey(blockNum), []byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadMerkleTreeRootByBlock(db, blockNum); string(got) != string([]byte{0x01}) {
+		t.Fatalf("compat ReadMerkleTreeRootByBlock malformed = %x, want raw", got)
+	}
+	if got, ok, err := ReadMerkleTreeRootByBlockStrict(db, blockNum); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "length 1, want 32") {
+		t.Fatalf("ReadMerkleTreeRootByBlockStrict malformed = %x/%v/%v, want length error", got, ok, err)
 	}
 }
 
