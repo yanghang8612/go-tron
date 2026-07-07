@@ -68,6 +68,117 @@ func TestChainDBNilAncient(t *testing.T) {
 	}
 }
 
+func TestChainDBChainIndexReaderPrefersHotRows(t *testing.T) {
+	t.Parallel()
+
+	cdb := NewMemoryChainDB()
+	block, txHashes := testChainDBEventLogBlockWithTransactions(21, 2)
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionIndex(cdb, txHashes[1][:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blocks: map[common.Hash]uint64{block.Hash(): 99},
+		txs:    map[common.Hash]uint64{txHashes[1]: 99},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			txHashes[1]: {BlockNum: 99, TxIndex: 0},
+		},
+	})
+
+	var numberReader ChainIndexReader = cdb
+	blockNum, ok, err := numberReader.BlockNumberByHash(block.Hash())
+	if err != nil || !ok || blockNum != block.Number() {
+		t.Fatalf("BlockNumberByHash = %d/%v/%v, want %d/true/nil", blockNum, ok, err, block.Number())
+	}
+	txBlockNum, ok, err := numberReader.TransactionBlockNumberByHash(txHashes[1])
+	if err != nil || !ok || txBlockNum != block.Number() {
+		t.Fatalf("TransactionBlockNumberByHash = %d/%v/%v, want %d/true/nil", txBlockNum, ok, err, block.Number())
+	}
+
+	var positionReader ChainIndexTxPositionReader = cdb
+	lookup, ok, err := positionReader.TransactionIndexByHash(txHashes[1])
+	if err != nil || !ok || lookup.BlockNum != block.Number() || lookup.TxIndex != 1 {
+		t.Fatalf("TransactionIndexByHash = %+v/%v/%v, want block %d tx 1", lookup, ok, err, block.Number())
+	}
+}
+
+func TestChainDBChainIndexReaderFallsBackToColdRows(t *testing.T) {
+	t.Parallel()
+
+	blockHash := common.Hash{0x22}
+	txHash := common.Hash{0x23}
+	cdb := NewMemoryChainDB()
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blocks: map[common.Hash]uint64{blockHash: 88},
+		txs:    map[common.Hash]uint64{txHash: 88},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			txHash: {BlockNum: 88, TxIndex: 2},
+		},
+	})
+
+	var numberReader ChainIndexReader = cdb
+	blockNum, ok, err := numberReader.BlockNumberByHash(blockHash)
+	if err != nil || !ok || blockNum != 88 {
+		t.Fatalf("BlockNumberByHash cold = %d/%v/%v, want 88/true/nil", blockNum, ok, err)
+	}
+	txBlockNum, ok, err := numberReader.TransactionBlockNumberByHash(txHash)
+	if err != nil || !ok || txBlockNum != 88 {
+		t.Fatalf("TransactionBlockNumberByHash cold = %d/%v/%v, want 88/true/nil", txBlockNum, ok, err)
+	}
+
+	var positionReader ChainIndexTxPositionReader = cdb
+	lookup, ok, err := positionReader.TransactionIndexByHash(txHash)
+	if err != nil || !ok || lookup.BlockNum != 88 || lookup.TxIndex != 2 {
+		t.Fatalf("TransactionIndexByHash cold = %+v/%v/%v, want block 88 tx 2", lookup, ok, err)
+	}
+
+	blockOnlyTxHash := common.Hash{0x24}
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{blockOnlyTxHash: 89},
+	})
+	lookup, ok, err = positionReader.TransactionIndexByHash(blockOnlyTxHash)
+	if err != nil || ok || lookup != (ChainIndexTxLookup{}) {
+		t.Fatalf("TransactionIndexByHash block-only cold = %+v/%v/%v, want missing precise position", lookup, ok, err)
+	}
+}
+
+func TestChainDBChainIndexReaderSurfacesColdErrors(t *testing.T) {
+	t.Parallel()
+
+	blockHash := common.Hash{0x31}
+	txHash := common.Hash{0x32}
+	wantBlockErr := errors.New("cold block index corrupt")
+	cdb := NewMemoryChainDB()
+	cdb.SetChainIndexReader(&fakeChainIndex{blockErr: wantBlockErr})
+
+	var numberReader ChainIndexReader = cdb
+	blockNum, ok, err := numberReader.BlockNumberByHash(blockHash)
+	if !errors.Is(err, wantBlockErr) || ok || blockNum != 0 {
+		t.Fatalf("BlockNumberByHash cold error = %d/%v/%v, want block error", blockNum, ok, err)
+	}
+
+	wantTxErr := errors.New("cold tx index corrupt")
+	cdb.SetChainIndexReader(failingTxChainIndex{err: wantTxErr})
+	txBlockNum, ok, err := numberReader.TransactionBlockNumberByHash(txHash)
+	if !errors.Is(err, wantTxErr) || ok || txBlockNum != 0 {
+		t.Fatalf("TransactionBlockNumberByHash cold error = %d/%v/%v, want tx error", txBlockNum, ok, err)
+	}
+
+	wantPosErr := errors.New("cold tx position corrupt")
+	cdb.SetChainIndexReader(failingTxPositionChainIndex{
+		tx:     txHash,
+		block:  77,
+		posErr: wantPosErr,
+	})
+	var positionReader ChainIndexTxPositionReader = cdb
+	lookup, ok, err := positionReader.TransactionIndexByHash(txHash)
+	if !errors.Is(err, wantPosErr) || ok || lookup != (ChainIndexTxLookup{}) {
+		t.Fatalf("TransactionIndexByHash cold position error = %+v/%v/%v, want position error", lookup, ok, err)
+	}
+}
+
 func TestFallbackAncientReaderUsesLaterSourceOnMiss(t *testing.T) {
 	t.Parallel()
 

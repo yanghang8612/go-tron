@@ -43,6 +43,8 @@ type ChainIndexReader interface {
 	TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error)
 }
 
+var _ ChainIndexReader = (*ChainDB)(nil)
+
 // ChainIndexTxLookup is the block-local transaction position returned by cold
 // chain-index sidecars.
 type ChainIndexTxLookup struct {
@@ -56,6 +58,8 @@ type ChainIndexTxLookup struct {
 type ChainIndexTxPositionReader interface {
 	TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, bool, error)
 }
+
+var _ ChainIndexTxPositionReader = (*ChainDB)(nil)
 
 // BalanceTraceReader is an optional cold trace sidecar. It lets archive APIs
 // keep account/balance trace reads working after hot rawdb trace rows are
@@ -146,6 +150,63 @@ func (db *ChainDB) SetChainIndexReader(reader ChainIndexReader) {
 		return
 	}
 	db.chainIndex = reader
+}
+
+// BlockNumberByHash implements ChainIndexReader over the composed ChainDB view:
+// hot rows are preferred and the attached cold sidecar is consulted only on a
+// miss.
+func (db *ChainDB) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read block number")
+	}
+	return ReadBlockNumberStrict(db, hash)
+}
+
+// TransactionBlockNumberByHash implements ChainIndexReader over the composed
+// ChainDB view: hot rows are preferred and the attached cold sidecar is
+// consulted only on a miss.
+func (db *ChainDB) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read transaction index")
+	}
+	return ReadTransactionIndexStrict(db, hash[:])
+}
+
+// TransactionIndexByHash implements ChainIndexTxPositionReader over the
+// composed ChainDB view. If only a block-number lookup exists, the block-local
+// transaction index is derived from the readable canonical block body.
+func (db *ChainDB) TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, bool, error) {
+	var zero ChainIndexTxLookup
+	if db == nil {
+		return zero, false, fmt.Errorf("rawdb: nil database during read transaction index")
+	}
+	txHash := hash[:]
+	blockNum, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if err != nil || !ok {
+		return zero, ok, err
+	}
+	lookup, hasPosition, err := readColdTransactionIndexByHash(db, txHash)
+	if err != nil {
+		return zero, false, err
+	}
+	if hasPosition && lookup.BlockNum == blockNum {
+		matchesBlock, err := coldTransactionPositionMatchesReadableBlock(db, txHash, lookup)
+		if err != nil {
+			return zero, true, err
+		}
+		if !matchesBlock {
+			return zero, true, fmt.Errorf("rawdb: cold transaction index position block %d tx %d does not match transaction %x", lookup.BlockNum, lookup.TxIndex, txHash)
+		}
+		return lookup, true, nil
+	}
+	txIndex, hasReadablePosition, err := transactionIndexInReadableBlock(db, txHash, blockNum)
+	if err != nil {
+		return zero, true, err
+	}
+	if !hasReadablePosition {
+		return zero, false, nil
+	}
+	return ChainIndexTxLookup{BlockNum: blockNum, TxIndex: txIndex}, true, nil
 }
 
 // SetBalanceTraceReader attaches a cold account/balance trace sidecar. Passing

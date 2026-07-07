@@ -266,6 +266,10 @@ Status:
   matching block body remains readable through hot KV, ancient freezer, or cold
   freezer fallback, the lookup cross-checks that the sidecar position names the
   requested transaction hash before trusting the block-local receipt row.
+  `ChainDB` itself now satisfies the chain-index reader and block-local
+  transaction-position reader interfaces over that same hot/cold composed view,
+  deriving tx positions from readable block bodies when only a block-number
+  lookup row exists.
   Strict transaction-info reads are now exported for backend/API callers: they
   surface malformed hot rows, corrupt per-block `TransactionRet` payloads, and
   block-body/index mismatches as archive data errors, while still using readable

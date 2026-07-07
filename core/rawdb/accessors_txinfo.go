@@ -180,6 +180,30 @@ func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, looku
 	return bytes.Equal(txHash[:], txID), nil
 }
 
+func transactionIndexInReadableBlock(db *ChainDB, txID []byte, blockNum uint64) (uint32, bool, error) {
+	block, ok, err := ReadBlockStrict(db, blockNum)
+	if err != nil {
+		return 0, true, err
+	}
+	if !ok {
+		return 0, false, nil
+	}
+	for txIndex, tx := range block.Transactions() {
+		if tx == nil {
+			continue
+		}
+		txHash := tx.Hash()
+		if !bytes.Equal(txHash[:], txID) {
+			continue
+		}
+		if uint64(txIndex) > uint64(^uint32(0)) {
+			return 0, true, fmt.Errorf("rawdb: transaction index %d exceeds uint32 for block %d", txIndex, blockNum)
+		}
+		return uint32(txIndex), true, nil
+	}
+	return 0, true, fmt.Errorf("rawdb: transaction index points to block %d but transaction %x is not in the readable block body", blockNum, txID)
+}
+
 func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
 	block, ok, err := ReadBlockStrict(db, blockNum)
 	if err != nil {
