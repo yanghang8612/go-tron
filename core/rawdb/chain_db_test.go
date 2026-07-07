@@ -104,6 +104,30 @@ func TestChainDBChainIndexReaderPrefersHotRows(t *testing.T) {
 	}
 }
 
+func TestChainDBTransactionIndexByHashIgnoresColdPositionErrorWhenHotPositionReadable(t *testing.T) {
+	t.Parallel()
+
+	cdb := NewMemoryChainDB()
+	block, txHashes := testChainDBEventLogBlockWithTransactions(22, 2)
+	if err := WriteBlock(cdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionIndex(cdb, txHashes[1][:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	cdb.SetChainIndexReader(failingTxPositionChainIndex{
+		tx:     txHashes[1],
+		block:  block.Number(),
+		posErr: errors.New("cold tx position corrupt"),
+	})
+
+	var positionReader ChainIndexTxPositionReader = cdb
+	lookup, ok, err := positionReader.TransactionIndexByHash(txHashes[1])
+	if err != nil || !ok || lookup.BlockNum != block.Number() || lookup.TxIndex != 1 {
+		t.Fatalf("TransactionIndexByHash hot readable = %+v/%v/%v, want block %d tx 1", lookup, ok, err, block.Number())
+	}
+}
+
 func TestChainDBChainIndexReaderFallsBackToColdRows(t *testing.T) {
 	t.Parallel()
 

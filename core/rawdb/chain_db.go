@@ -181,9 +181,23 @@ func (db *ChainDB) TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup,
 		return zero, false, fmt.Errorf("rawdb: nil database during read transaction index")
 	}
 	txHash := hash[:]
-	blockNum, ok, err := ReadTransactionIndexStrict(db, txHash)
-	if err != nil || !ok {
+	blockNum, ok, err := readHotTransactionIndexStrict(db, txHash)
+	if err != nil {
 		return zero, ok, err
+	}
+	if ok {
+		txIndex, hasReadablePosition, err := transactionIndexInReadableBlock(db, txHash, blockNum)
+		if err != nil {
+			return zero, true, err
+		}
+		if hasReadablePosition {
+			return ChainIndexTxLookup{BlockNum: blockNum, TxIndex: txIndex}, true, nil
+		}
+	} else {
+		blockNum, ok, err = ReadTransactionIndexStrict(db, txHash)
+		if err != nil || !ok {
+			return zero, ok, err
+		}
 	}
 	lookup, hasPosition, err := readColdTransactionIndexByHash(db, txHash)
 	if err != nil {

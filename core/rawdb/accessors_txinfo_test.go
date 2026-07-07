@@ -226,6 +226,41 @@ func TestReadTransactionInfoUsesReadableBlockPositionWhenInfoIDMissing(t *testin
 	}
 }
 
+func TestReadTransactionInfoHotReadablePositionIgnoresColdPositionError(t *testing.T) {
+	db := NewMemoryChainDB()
+	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7061, Expiration: 8061, Data: []byte{0x61}}}
+	txPB2 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7062, Expiration: 8062, Data: []byte{0x62}}}
+	txHash2 := types.NewTransactionFromPB(txPB2).Hash()
+	blockPB := newBlockProto(7, 7060)
+	blockPB.Transactions = []*corepb.Transaction{txPB1, txPB2}
+	block := types.NewBlockFromPB(blockPB)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionIndex(db, txHash2[:], 7); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 100, BlockNumber: 7, BlockTimeStamp: 7060},
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7060},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	db.SetChainIndexReader(failingTxPositionChainIndex{
+		tx:     txHash2,
+		block:  7,
+		posErr: errors.New("cold tx position corrupt"),
+	})
+
+	got, ok, err := ReadTransactionInfoStrict(db, txHash2[:])
+	if err != nil || !ok || got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfoStrict hot readable = %+v ok %v err %v, want fee 200", got, ok, err)
+	}
+	if got := ReadTransactionInfo(db, txHash2[:]); got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfo hot readable = %+v, want fee 200", got)
+	}
+}
+
 func TestReadTransactionInfoReadableBlockPositionRejectsCorruptBlockBody(t *testing.T) {
 	ancient := newFakeAncient()
 	ancient.put(ancientBlocks, 7, []byte("not-a-valid-block"))

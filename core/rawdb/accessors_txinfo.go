@@ -62,13 +62,25 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		}
 		return info, true, nil
 	}
-	blockNum, hasIndex, err := ReadTransactionIndexStrict(db, txID)
-	if err != nil || !hasIndex {
+	blockNum, hasIndex, err := readHotTransactionIndexStrict(db, txID)
+	if err != nil {
 		return nil, hasIndex, err
+	}
+	hasHotIndex := hasIndex
+	if !hasIndex {
+		blockNum, hasIndex, err = ReadTransactionIndexStrict(db, txID)
+		if err != nil || !hasIndex {
+			return nil, hasIndex, err
+		}
 	}
 	infos, hasInfos, err := ReadTransactionInfosByBlockStrict(db, blockNum)
 	if err != nil || !hasInfos {
 		return nil, hasInfos, err
+	}
+	if hasHotIndex {
+		if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
+			return info, ok, err
+		}
 	}
 	lookup, ok, err := readColdTransactionIndexByHash(db, txID)
 	if err != nil {
@@ -375,23 +387,8 @@ func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error
 	if err := validateTransactionHashKey(txHash, "read transaction index"); err != nil {
 		return 0, false, err
 	}
-	if db == nil {
-		return 0, false, fmt.Errorf("rawdb: nil database during read transaction index")
-	}
-	key := txKey(txHash)
-	exists, err := db.Has(key)
-	if err != nil {
-		return 0, false, err
-	}
-	if exists {
-		data, err := db.Get(key)
-		if err != nil {
-			return 0, false, err
-		}
-		if len(data) != 8 {
-			return 0, true, fmt.Errorf("rawdb: transaction index %x has length %d, want 8", txHash, len(data))
-		}
-		return binary.BigEndian.Uint64(data), true, nil
+	if num, ok, err := readHotTransactionIndexStrict(db, txHash); err != nil || ok {
+		return num, ok, err
 	}
 	if db != nil && db.chainIndex != nil && len(txHash) == common.HashLength {
 		var hash common.Hash
@@ -403,6 +400,28 @@ func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error
 		return num, true, nil
 	}
 	return 0, false, nil
+}
+
+func readHotTransactionIndexStrict(db ethdb.KeyValueReader, txHash []byte) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read transaction index")
+	}
+	key := txKey(txHash)
+	exists, err := db.Has(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if !exists {
+		return 0, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(data) != 8 {
+		return 0, true, fmt.Errorf("rawdb: transaction index %x has length %d, want 8", txHash, len(data))
+	}
+	return binary.BigEndian.Uint64(data), true, nil
 }
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.
