@@ -1,11 +1,14 @@
 package net
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
@@ -780,6 +783,87 @@ func TestSyncServiceRestartsHalfCommittedPipelineWithNextStagedBody(t *testing.T
 	}
 }
 
+func TestSyncServiceContinuesDrainAfterResumePhasePublish(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	bc := makeTestChain(t)
+	bc.SetAsyncCommit(true)
+
+	ss := NewSyncService(bc, nil)
+	if err := ss.SetImportBatchSize(1); err != nil {
+		t.Fatalf("set import batch size: %v", err)
+	}
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block, rawOf(t, block))
+		if result.StageError != nil || result.ProgressWriteError != nil {
+			t.Fatalf("stage block %d result = %+v", block.Number(), result)
+		}
+	}
+
+	var hookOnce sync.Once
+	hooked := make(chan struct{})
+	release := make(chan struct{})
+	core.SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == block1.Number() {
+			hookOnce.Do(func() {
+				close(hooked)
+				<-release
+			})
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		core.SetCommitFoldHookForTest(nil)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	ss.mu.Unlock()
+	if buffered != 2 {
+		t.Fatalf("restored staged bodies buffered=%d, want 2", buffered)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ss.drainBufferedBlocks()
+		close(done)
+	}()
+
+	select {
+	case <-hooked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("commit fold hook was not reached")
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not finish after releasing commit fold hook")
+	}
+
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after resume-phase drain = %v, want block2 %x; stages=%s", got, block2.Hash(), syncPipelineProgressDebug(t, bc.DB()))
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after resume-phase drain ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after resume-phase drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
@@ -1056,4 +1140,21 @@ func TestFindCommonBlockNoMatch(t *testing.T) {
 	if commonNum != 0 {
 		t.Fatalf("expected common block #0 (genesis fallback), got #%d", commonNum)
 	}
+}
+
+func syncPipelineProgressDebug(t *testing.T, db ethdb.KeyValueReader) string {
+	t.Helper()
+	out := ""
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		switch {
+		case err != nil:
+			out += fmt.Sprintf("%s=err:%v ", stage, err)
+		case !ok:
+			out += fmt.Sprintf("%s=missing ", stage)
+		default:
+			out += fmt.Sprintf("%s=%d/%x ", stage, row.BlockNum, row.BlockHash)
+		}
+	}
+	return out
 }

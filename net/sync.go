@@ -1473,7 +1473,10 @@ drainLoop:
 		commitBarrier = ss.applyImportDrainCommitBarrier(sess.Finish(), paused, lastPeer)
 		paused = commitBarrier.Paused
 	}
-	ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
+	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
+	if ss.shouldResumeDrainAfterPhasePublish(resumePublish) {
+		ss.requestDrainAgain()
+	}
 }
 
 func (ss *SyncService) applyImportDrainCommitBarrier(finishErr error, paused bool, lastPeer *p2p.Peer) syncdl.ImportDrainCommitBarrierPlan {
@@ -1524,6 +1527,16 @@ func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportSt
 	}, syncImportResumePhasePublishApplier{service: ss})
 	ss.logImportResumePhasePublishResult(run.Publish.Publish)
 	return run
+}
+
+func (ss *SyncService) shouldResumeDrainAfterPhasePublish(run syncdl.ImportResumePhasePublishFinalizationRunApplyResult) bool {
+	return run.Finalization.Publish && run.Publish.Publish.Applied
+}
+
+func (ss *SyncService) requestDrainAgain() {
+	ss.drainMu.Lock()
+	ss.drainAgain = true
+	ss.drainMu.Unlock()
 }
 
 func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportResumePhasePublishApplyResult) {
@@ -2191,7 +2204,7 @@ func (a syncImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.Stage
 	if a.service == nil || a.service.chain == nil {
 		return rawdb.StageProgress{}, false, fmt.Errorf("sync: cannot read resume phase progress without service or chain")
 	}
-	db := a.service.chain.DB()
+	db := a.service.chain.BufferedDB()
 	if db == nil {
 		return rawdb.StageProgress{}, false, fmt.Errorf("sync: cannot read resume phase progress without database")
 	}
