@@ -297,24 +297,30 @@ func (db *ChainDB) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
 func (db *ChainDB) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	covered, _, err := db.eventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
+	return covered, err
+}
+
+func (db *ChainDB) eventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (covered bool, forceFullScan bool, err error) {
 	if db == nil || db.eventLog == nil {
-		return false, nil
+		return false, false, nil
 	}
 	if reader, ok := db.eventLog.(FilteredEventLogCoverageReader); ok {
 		filteredCovered, filteredErr := reader.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 		if filteredErr == nil && filteredCovered {
-			return true, nil
+			return true, false, nil
 		}
 		unfilteredCovered, unfilteredErr := db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
 		if unfilteredErr != nil {
-			return false, unfilteredErr
+			return false, false, unfilteredErr
 		}
 		if unfilteredCovered {
-			return true, nil
+			return true, true, nil
 		}
-		return false, filteredErr
+		return false, false, filteredErr
 	}
-	return db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
+	covered, err = db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
+	return covered, false, err
 }
 
 func (db *ChainDB) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -331,11 +337,15 @@ func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Eve
 	if reader, ok := db.eventLog.(CoveredEventLogReader); ok {
 		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, filter, fn))
 	}
-	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
+	covered, forceFullScan, err := db.eventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return covered, err
 	}
-	return true, db.IterateEventLogs(fromBlock, toBlock, filter, db.coveredEventLogValidator(fromBlock, toBlock, filter, fn))
+	iterFilter := filter
+	if forceFullScan {
+		iterFilter = EventLogFilter{}
+	}
+	return true, db.IterateEventLogs(fromBlock, toBlock, iterFilter, db.coveredEventLogValidator(fromBlock, toBlock, filter, fn))
 }
 
 func (db *ChainDB) coveredEventLogValidator(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) func(EventLog) (bool, error) {

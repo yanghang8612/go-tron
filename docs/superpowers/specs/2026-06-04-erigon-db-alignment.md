@@ -1937,7 +1937,9 @@ Status:
   producing a false empty result. The generic `ChainDB` filtered coverage
   boundary now follows the same rule: if a filtered coverage extension misses or
   fails but the unfiltered event-log rows continuously cover the request, covered
-  iteration can still full-scan those rows instead of dropping archive logs.
+  iteration can still full-scan those rows with an empty reader filter and then
+  apply the original user filter at the `ChainDB` validator boundary instead of
+  dropping archive logs.
   Event-log payload reads are bounded by the segment payload section before
   allocation, so corrupt length/offset entries are rejected as data errors
   instead of triggering unbounded verifier memory.

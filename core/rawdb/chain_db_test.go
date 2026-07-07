@@ -351,10 +351,11 @@ func TestChainDBIterateCoveredEventLogsFallsBackToFullScanWhenFilteredCoverageEr
 	t.Parallel()
 
 	want := EventLog{BlockNum: 19, Address: testChainDBEventLogAddress(0x19), Log: &corepb.TransactionInfo_Log{Address: []byte{0x19}}}
+	other := EventLog{BlockNum: 19, Address: testChainDBEventLogAddress(0x20), Log: &corepb.TransactionInfo_Log{Address: []byte{0x20}}}
 	reader := &recordingEventLogReader{
 		recordingBasicEventLogReader: recordingBasicEventLogReader{
 			covered: true,
-			rows:    []EventLog{want},
+			rows:    []EventLog{other, want},
 		},
 		filteredErr: errors.New("event-log index corrupt"),
 	}
@@ -371,6 +372,9 @@ func TestChainDBIterateCoveredEventLogsFallsBackToFullScanWhenFilteredCoverageEr
 	}
 	if reader.filteredCalls != 1 || reader.coveredCalls != 1 || reader.iterCalls != 1 {
 		t.Fatalf("reader calls filtered=%d covered=%d iter=%d, want filtered/covered/iter", reader.filteredCalls, reader.coveredCalls, reader.iterCalls)
+	}
+	if len(reader.lastIterFilter.Addresses) != 0 || len(reader.lastIterFilter.Topics) != 0 {
+		t.Fatalf("fallback iter filter = %+v, want empty full-scan filter", reader.lastIterFilter)
 	}
 	if len(got) != 1 || got[0].BlockNum != want.BlockNum {
 		t.Fatalf("covered rows after filtered error = %+v, want block %d", got, want.BlockNum)
@@ -962,12 +966,13 @@ func TestChainDBIterateCoveredEventLogsRejectsUnsortedAtomicRows(t *testing.T) {
 }
 
 type recordingBasicEventLogReader struct {
-	covered      bool
-	coveredCalls int
-	lastFrom     uint64
-	lastTo       uint64
-	rows         []EventLog
-	iterCalls    int
+	covered        bool
+	coveredCalls   int
+	lastFrom       uint64
+	lastTo         uint64
+	rows           []EventLog
+	iterCalls      int
+	lastIterFilter EventLogFilter
 }
 
 func (r *recordingBasicEventLogReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
@@ -977,10 +982,11 @@ func (r *recordingBasicEventLogReader) EventLogRangeCovered(fromBlock, toBlock u
 	return r.covered, nil
 }
 
-func (r *recordingBasicEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, _ EventLogFilter, fn func(EventLog) (bool, error)) error {
+func (r *recordingBasicEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
 	r.iterCalls++
 	r.lastFrom = fromBlock
 	r.lastTo = toBlock
+	r.lastIterFilter = filter
 	for _, row := range r.rows {
 		cont, err := fn(row)
 		if err != nil || !cont {
