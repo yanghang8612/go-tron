@@ -316,10 +316,10 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		energyLimit = 30_000_000 // default max energy for constant calls
 	}
 
-	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
-	dp.SetLatestBlockHeaderNumber(int64(block.Number()))
-	dp.SetLatestBlockHeaderTimestamp(block.Timestamp())
-	dp.SetLatestBlockHeaderHash(block.Hash())
+	dp, err := b.executionDynamicPropertiesStrict(statedbCopy, block)
+	if err != nil {
+		return nil, fmt.Errorf("load constant-call dynamic properties: %w", err)
+	}
 	cfg := vm.NewTVMConfig(block.Number(), dp)
 	cfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
@@ -452,10 +452,10 @@ func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *s
 		if err != nil {
 			return nil, nil, nil, release, err
 		}
-		dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
-		dp.SetLatestBlockHeaderNumber(int64(current.Number()))
-		dp.SetLatestBlockHeaderTimestamp(current.Timestamp())
-		dp.SetLatestBlockHeaderHash(current.Hash())
+		dp, err := b.executionDynamicPropertiesStrict(statedbCopy, current)
+		if err != nil {
+			return nil, nil, nil, release, fmt.Errorf("load trace dynamic properties: %w", err)
+		}
 		return statedbCopy, dp, current, release, nil
 	}
 
@@ -482,10 +482,11 @@ func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *s
 		release()
 		return nil, nil, nil, func() {}, err
 	}
-	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
-	dp.SetLatestBlockHeaderNumber(int64(block.Number()))
-	dp.SetLatestBlockHeaderTimestamp(block.Timestamp())
-	dp.SetLatestBlockHeaderHash(block.Hash())
+	dp, err := b.executionDynamicPropertiesStrict(statedbCopy, block)
+	if err != nil {
+		release()
+		return nil, nil, nil, func() {}, fmt.Errorf("load trace dynamic properties: %w", err)
+	}
 	return statedbCopy, dp, block, release, nil
 }
 
@@ -542,7 +543,10 @@ func (b *TronBackend) TraceTransaction(hash tcommon.Hash, cfg *tracers.TraceConf
 	if err != nil {
 		return nil, err
 	}
-	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+	dp, err := b.executionDynamicPropertiesStrict(statedbCopy, block)
+	if err != nil {
+		return nil, fmt.Errorf("load transaction trace dynamic properties: %w", err)
+	}
 
 	tracer, err := tracers.New(cfg)
 	if err != nil {
@@ -606,7 +610,10 @@ func (b *TronBackend) TraceBlock(block *types.Block, cfg *tracers.TraceConfig) (
 	if err != nil {
 		return nil, err
 	}
-	dp := state.LoadDynamicProperties(b.chain.buffer, statedbCopy)
+	dp, err := b.executionDynamicPropertiesStrict(statedbCopy, block)
+	if err != nil {
+		return nil, fmt.Errorf("load block trace dynamic properties: %w", err)
+	}
 
 	selected := make([]bool, len(txs))
 	_, replayErr := processBlockTracedEach(statedbCopy, dp, block, b.chain.vmKV(b.chain.buffer),
@@ -989,22 +996,40 @@ func (b *TronBackend) dynamicStringPropertiesAtKeys(reader *state.PersistentHist
 	return dp, nil
 }
 
+func (b *TronBackend) dynamicPropertyReader() ethdb.KeyValueReader {
+	if b.chain.buffer != nil {
+		return b.chain.buffer
+	}
+	return b.chain.db
+}
+
+func (b *TronBackend) dynamicPropertiesFromStateStrict(statedb *state.StateDB) (*state.DynamicProperties, error) {
+	dp, err := state.LoadDynamicPropertiesStrict(b.dynamicPropertyReader(), statedb)
+	if err != nil {
+		return nil, fmt.Errorf("load dynamic properties: %w", err)
+	}
+	return dp, nil
+}
+
+func (b *TronBackend) executionDynamicPropertiesStrict(statedb *state.StateDB, block *types.Block) (*state.DynamicProperties, error) {
+	dp, err := b.dynamicPropertiesFromStateStrict(statedb)
+	if err != nil {
+		return nil, err
+	}
+	if block != nil {
+		dp.SetLatestBlockHeaderNumber(int64(block.Number()))
+		dp.SetLatestBlockHeaderTimestamp(block.Timestamp())
+		dp.SetLatestBlockHeaderHash(block.Hash())
+	}
+	return dp, nil
+}
+
 func (b *TronBackend) dynamicPropertiesAtRootStrict(root tcommon.Hash) (*state.DynamicProperties, error) {
 	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	var dpReader ethdb.KeyValueReader
-	if b.chain.buffer != nil {
-		dpReader = b.chain.buffer
-	} else {
-		dpReader = b.chain.db
-	}
-	dp, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
-	if err != nil {
-		return nil, fmt.Errorf("load dynamic properties: %w", err)
-	}
-	return dp, nil
+	return b.dynamicPropertiesFromStateStrict(statedb)
 }
 
 func (b *TronBackend) headDynamicPropertiesStrict() (*state.DynamicProperties, error) {
@@ -4141,7 +4166,10 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 
 	// statedb is opened at the head root; reuse it as the system-KV reader so
 	// rooted dynprops match the state the tx is simulated against.
-	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
+	dynProps, err := b.executionDynamicPropertiesStrict(statedb, head)
+	if err != nil {
+		return fmt.Errorf("load validation dynamic properties: %w", err)
+	}
 
 	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing
 	// step. Witness index and capsules are rooted at the head state.

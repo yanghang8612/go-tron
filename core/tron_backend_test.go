@@ -530,6 +530,17 @@ func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) 
 			_, err := backend.GetAccountNet(addr)
 			return err
 		}},
+		{name: "TriggerConstantContract", call: func() error {
+			_, err := backend.TriggerConstantContract(addr, addr, nil, 1_000_000)
+			return err
+		}},
+		{name: "TraceCall", call: func() error {
+			_, err := backend.TraceCall(&addr, &addr, nil, 0, nil, &tracers.TraceConfig{})
+			return err
+		}},
+		{name: "ValidateTransaction", call: func() error {
+			return backend.ValidateTransaction(testTransferTransactionForBackend(t, addr, testCoreAddr(2)))
+		}},
 	}
 	for _, check := range checks {
 		if err := check.call(); err == nil || !strings.Contains(err.Error(), "burn_trx_amount") || !strings.Contains(err.Error(), "want 8") {
