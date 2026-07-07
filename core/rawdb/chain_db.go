@@ -321,6 +321,9 @@ func (db *ChainDB) validateCoveredEventLogCanonicalRow(row EventLog, blockCache 
 		return nil
 	}
 	if err := ValidateTransactionInfosForBlock(row.BlockNum, txs, infos, "covered cold event log row"); err != nil {
+		if errors.Is(err, ErrIncompleteTransactionInfoCoverage) {
+			return nil
+		}
 		return fmt.Errorf("rawdb: cold event log row block=%d canonical transaction infos: %w", row.BlockNum, err)
 	}
 	if err := validateCoveredEventLogCanonicalLog(row, infos); err != nil {
