@@ -584,6 +584,32 @@ func TestAuditBlockBalanceTraceCoverageAcceptsColdAccountTraceRows(t *testing.T)
 	}
 }
 
+func TestAuditBlockBalanceTraceCoverageAcceptsColdBlockBalanceTraceRows(t *testing.T) {
+	db := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	addr := derivedRebuildAddress(0xa6)
+	cold := newFakeBalanceTraceReader()
+	cold.putBlockTrace(1, derivedRebuildBalanceTrace(block, infos,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, addr, 1),
+		},
+	))
+	cold.putAccountTrace(addr, 1, 1)
+	db.SetBalanceTraceReader(cold)
+
+	result, err := AuditBlockBalanceTraceCoverage(db, db, 1, 1, 8)
+	if err != nil {
+		t.Fatalf("AuditBlockBalanceTraceCoverage: %v", err)
+	}
+	if !result.Complete() || result.BlocksWithBalanceTrace != 1 ||
+		result.MissingBlockBalanceTrace != 0 || result.MissingAccountTrace != 0 {
+		t.Fatalf("cold block balance trace coverage result = %+v, want complete", result)
+	}
+}
+
 func TestRebuildAccountTracesRejectsBadInputs(t *testing.T) {
 	db := NewMemoryChainDB()
 	if _, err := RebuildAccountTracesFromBlockBalanceTraces(nil, db, db, 1, 1, etl.Options{}); err == nil {

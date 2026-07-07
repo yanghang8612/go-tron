@@ -1845,10 +1845,10 @@ Status:
   as existing instead of being duplicated back into Pebble. Account-trace
   rebuilds can also use cold `BlockBalanceTrace` rows as their source and cold
   `AccountTrace` rows as partial-range baselines before materializing repaired
-  hot rows. Balance-trace
-  coverage audits also check touched-account `AccountTrace` rows through the
-  strict hot/cold accessor, so verified cold account-trace sidecars satisfy
-  coverage after hot trace pruning instead of being reported as missing rows.
+  hot rows. Balance-trace coverage audits also read `BlockBalanceTrace` rows and
+  touched-account `AccountTrace` rows through the strict hot/cold accessors, so
+  verified cold trace sidecars satisfy coverage after hot trace pruning instead
+  of being reported as missing rows.
 - The standalone `cmd/balance-trace` and `cmd/reward-trace` diagnostics now
   open the same `state-snapshots` manager, wrap the chain freezer with snapshot
   fallback, and route transaction-info, account-trace, and block-balance-trace

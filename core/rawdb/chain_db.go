@@ -65,6 +65,8 @@ type BalanceTraceReader interface {
 	AccountTraceAtOrBefore(owner []byte, blockNum int64) (traceBlock int64, balance int64, ok bool, err error)
 }
 
+var _ BalanceTraceReader = (*ChainDB)(nil)
+
 // SectionBloomReader is an optional cold section-bloom sidecar. It lets log
 // filters keep using section-bloom prefilters after hot `sb-` rows are pruned.
 type SectionBloomReader interface {
@@ -146,6 +148,25 @@ func (db *ChainDB) SetBalanceTraceReader(reader BalanceTraceReader) {
 		return
 	}
 	db.balanceTrace = reader
+}
+
+// BlockBalanceTrace implements BalanceTraceReader over the composed ChainDB
+// view: hot rows are preferred and the attached cold sidecar is consulted only
+// on a miss.
+func (db *ChainDB) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block balance trace")
+	}
+	return readBlockBalanceTraceStrict(db, blockNum)
+}
+
+// AccountTraceAtOrBefore implements BalanceTraceReader over the composed ChainDB
+// view, choosing the newest hot or cold account trace at or below blockNum.
+func (db *ChainDB) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	if db == nil {
+		return 0, 0, false, fmt.Errorf("account trace: nil database")
+	}
+	return ReadAccountTraceAtOrBefore(db, owner, blockNum)
 }
 
 // SetSectionBloomReader attaches a cold section-bloom sidecar. Passing nil
