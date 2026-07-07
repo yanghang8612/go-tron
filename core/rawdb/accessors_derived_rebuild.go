@@ -279,7 +279,7 @@ func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader acco
 // AuditBlockBalanceTraceCoverage checks that every retained canonical block in
 // the range has a BlockBalanceTrace row whose payload identifies that block,
 // and that every account touched by those trace operations has an exact-height
-// hot AccountTrace row. It does not require TransactionBalanceTrace entries:
+// hot or cold AccountTrace row. It does not require TransactionBalanceTrace entries:
 // java-tron-compatible history can legitimately emit an empty per-tx trace for
 // blocks that only touch balances outside a transaction or do not touch
 // balances at all.
@@ -363,7 +363,7 @@ func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueRe
 					}
 				}
 				for _, addr := range touched {
-					if _, ok, err := readHotAccountTrace(traceReader, addr, int64(blockNum)); err != nil {
+					if _, ok, err := ReadAccountTraceStrict(traceReader, addr, int64(blockNum)); err != nil {
 						return nil, err
 					} else if !ok {
 						result.MissingAccountTrace++
