@@ -81,6 +81,9 @@ type SectionBloomBitSetReader interface {
 	SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error)
 }
 
+var _ SectionBloomReader = (*ChainDB)(nil)
+var _ SectionBloomBitSetReader = (*ChainDB)(nil)
+
 // EventLogFilter is the raw cold-event-log query shape shared by snapshots and
 // JSON-RPC. Topics[i] uses nil/empty as wildcard and non-empty as OR values.
 type EventLogFilter struct {
@@ -121,6 +124,10 @@ type FilteredEventLogCoverageReader interface {
 type CoveredEventLogReader interface {
 	IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error)
 }
+
+var _ EventLogReader = (*ChainDB)(nil)
+var _ FilteredEventLogCoverageReader = (*ChainDB)(nil)
+var _ CoveredEventLogReader = (*ChainDB)(nil)
 
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
 // `anc` may be `NoopAncient{}` when the freezer is disabled or in tests
@@ -176,6 +183,26 @@ func (db *ChainDB) SetSectionBloomReader(reader SectionBloomReader) {
 		return
 	}
 	db.sectionBloom = reader
+}
+
+// SectionBloom implements SectionBloomReader over the composed ChainDB view:
+// hot rows are preferred and the attached cold sidecar is consulted only on a
+// miss.
+func (db *ChainDB) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
+	}
+	return ReadSectionBloomStrict(db, section, bitIndex)
+}
+
+// SectionBloomBitSet implements SectionBloomBitSetReader over the composed
+// ChainDB view, preserving cold sidecar errors for integrity-sensitive
+// prefilter and rebuild paths.
+func (db *ChainDB) SectionBloomBitSet(section, bitIndex uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
+	}
+	return ReadSectionBloomBitSetStrict(db, section, bitIndex)
 }
 
 // SetEventLogReader attaches a cold event-log sidecar. Passing nil disables the

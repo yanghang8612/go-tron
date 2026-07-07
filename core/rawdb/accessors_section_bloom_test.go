@@ -75,6 +75,67 @@ func TestSectionBloom_ColdFallback(t *testing.T) {
 	}
 }
 
+func TestChainDBSectionBloomReaderInterfaceUsesComposedView(t *testing.T) {
+	coldBitset := setSectionBloomBit(nil, 7)
+	coldEncoded, err := EncodeSectionBloomBitSet(coldBitset)
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet cold: %v", err)
+	}
+	hotBitset := setSectionBloomBit(nil, 9)
+	hotEncoded, err := EncodeSectionBloomBitSet(hotBitset)
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet hot: %v", err)
+	}
+
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomReader{
+		rows: map[[2]uint64][]byte{
+			{3, 42}: coldEncoded,
+		},
+	})
+	var rawReader SectionBloomReader = db
+	var bitsetReader SectionBloomBitSetReader = db
+
+	raw, ok, err := rawReader.SectionBloom(3, 42)
+	if err != nil || !ok {
+		t.Fatalf("cold interface SectionBloom = %x/%v/%v, want cold row", raw, ok, err)
+	}
+	bitset, err := DecodeSectionBloomBitSet(raw)
+	if err != nil || !SectionBloomBitSetHas(bitset, 7) {
+		t.Fatalf("cold interface SectionBloom bitset = %x/%v, want bit 7", bitset, err)
+	}
+	bitset, ok, err = bitsetReader.SectionBloomBitSet(3, 42)
+	if err != nil || !ok || !SectionBloomBitSetHas(bitset, 7) {
+		t.Fatalf("cold interface SectionBloomBitSet = %x/%v/%v, want bit 7", bitset, ok, err)
+	}
+
+	if err := WriteSectionBloom(db, 3, 42, hotEncoded); err != nil {
+		t.Fatalf("WriteSectionBloom hot: %v", err)
+	}
+	raw, ok, err = rawReader.SectionBloom(3, 42)
+	if err != nil || !ok || !bytes.Equal(raw, hotEncoded) {
+		t.Fatalf("hot interface SectionBloom = %x/%v/%v, want hot row", raw, ok, err)
+	}
+	bitset, ok, err = bitsetReader.SectionBloomBitSet(3, 42)
+	if err != nil || !ok || !SectionBloomBitSetHas(bitset, 9) || SectionBloomBitSetHas(bitset, 7) {
+		t.Fatalf("hot interface SectionBloomBitSet = %x/%v/%v, want hot bit 9 only", bitset, ok, err)
+	}
+}
+
+func TestChainDBSectionBloomReaderInterfaceSurfacesColdErrors(t *testing.T) {
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomReader{err: errors.New("cold section bloom unavailable")})
+	var rawReader SectionBloomReader = db
+	var bitsetReader SectionBloomBitSetReader = db
+
+	if raw, ok, err := rawReader.SectionBloom(3, 42); err == nil || ok || raw != nil || !strings.Contains(err.Error(), "cold section bloom unavailable") {
+		t.Fatalf("interface SectionBloom cold error = %x/%v/%v, want cold error", raw, ok, err)
+	}
+	if bitset, ok, err := bitsetReader.SectionBloomBitSet(3, 42); err == nil || ok || bitset != nil || !strings.Contains(err.Error(), "cold section bloom unavailable") {
+		t.Fatalf("interface SectionBloomBitSet cold error = %x/%v/%v, want cold error", bitset, ok, err)
+	}
+}
+
 func TestReadHotSectionBloomStrictIgnoresColdFallback(t *testing.T) {
 	coldEncoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, 7))
 	if err != nil {

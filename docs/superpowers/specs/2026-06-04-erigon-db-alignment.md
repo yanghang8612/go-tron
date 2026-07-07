@@ -1891,7 +1891,10 @@ Status:
   `section-bloom` snapshot segments freeze java-tron-compatible `sb-` rows by
   source block range, `snapshots.Manager` serves those rows after hot misses,
   and runtime startup attaches the manager so `TronBackend.GetLogs` can keep
-  using address/topic bloom prefilters after hot rows are reclaimed.
+  using address/topic bloom prefilters after hot rows are reclaimed. `ChainDB`
+  itself now satisfies the raw and decoded section-bloom reader interfaces over
+  the same hot/cold composed view, so rebuild and diagnostic code can accept the
+  generic reader boundary without bypassing verified cold sidecars.
 - `gtron snapshot build-section-blooms --snapshot.from-block
   --snapshot.to-block` builds registered cold section-bloom segments from local
   hot `sb-` rows and records the same signed-snapshot chain identity as freezer
