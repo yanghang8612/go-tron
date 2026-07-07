@@ -1474,7 +1474,16 @@ drainLoop:
 		paused = commitBarrier.Paused
 	}
 	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
-	if syncdl.PlanImportResumePhaseDrainContinuation(resumePublish).DrainAgain {
+	ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
+}
+
+func (ss *SyncService) applyImportResumePhaseDrainContinuation(run syncdl.ImportResumePhasePublishFinalizationRunApplyResult, lastPeer *p2p.Peer) {
+	resumeContinuation := syncdl.PlanImportResumePhaseDrainContinuation(run)
+	if resumeContinuation.Pause {
+		ss.pauseSync(lastPeer, resumeContinuation.PauseBlock, resumeContinuation.Err)
+		return
+	}
+	if resumeContinuation.DrainAgain {
 		ss.requestDrainAgain()
 	}
 }

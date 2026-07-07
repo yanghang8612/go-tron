@@ -1019,6 +1019,9 @@ type ImportResumePhasePublishFinalizationRunApplyResult struct {
 // local drain decision after a scheduler-yielded phase suffix settles.
 type ImportResumePhaseDrainContinuationPlan struct {
 	DrainAgain bool
+	Pause      bool
+	PauseBlock uint64
+	Err        error
 }
 
 // ImportResumePhasePublishRunApplyResult groups the read/plan/write phases for
@@ -1351,13 +1354,59 @@ func ApplyImportResumePhasePublishFinalizationRun(input ImportResumePhasePublish
 // PlanImportResumePhaseDrainContinuation decides whether the local drain loop
 // should immediately revisit staged bodies after resume-phase progress is
 // published. A rerun is safe only after the post-barrier publish path ran and
-// durably applied its rows; skipped, blocked, or failed publishes leave the
-// current drain stopped at the scheduler boundary.
+// durably applied its rows; skipped publishes leave the current drain stopped
+// at the scheduler boundary, while attempted-but-blocked/failed publishes
+// sticky-pause sync so later bodies cannot cross the undurable boundary.
 func PlanImportResumePhaseDrainContinuation(run ImportResumePhasePublishFinalizationRunApplyResult) ImportResumePhaseDrainContinuationPlan {
-	if run.Finalization.Publish && run.Publish.Publish.Applied {
+	if !run.Finalization.Publish {
+		return ImportResumePhaseDrainContinuationPlan{}
+	}
+	if run.Publish.Publish.Applied {
 		return ImportResumePhaseDrainContinuationPlan{DrainAgain: true}
 	}
-	return ImportResumePhaseDrainContinuationPlan{}
+	return ImportResumePhaseDrainContinuationPlan{
+		Pause:      true,
+		PauseBlock: importResumePhasePublishFailureBlock(run),
+		Err:        importResumePhasePublishFailureError(run),
+	}
+}
+
+func importResumePhasePublishFailureBlock(run ImportResumePhasePublishFinalizationRunApplyResult) uint64 {
+	for _, decision := range run.Publish.PublishPlan.Decisions {
+		if decision.Status != ImportResumePhasePublishReady {
+			return decision.TargetBlock
+		}
+	}
+	if len(run.Publish.PublishPlan.Decisions) > 0 {
+		return run.Publish.PublishPlan.Decisions[len(run.Publish.PublishPlan.Decisions)-1].TargetBlock
+	}
+	if len(run.Publish.PublishPlan.Progress) > 0 {
+		return run.Publish.PublishPlan.Progress[len(run.Publish.PublishPlan.Progress)-1].BlockNum
+	}
+	for _, phase := range run.Finalization.Phases {
+		if len(phase.Tasks) > 0 {
+			return phase.Tasks[len(phase.Tasks)-1].BlockNum
+		}
+	}
+	return 0
+}
+
+func importResumePhasePublishFailureError(run ImportResumePhasePublishFinalizationRunApplyResult) error {
+	if run.Publish.Publish.WriteError != nil {
+		return fmt.Errorf("downloader: sync import resume phase publish failed: %w", run.Publish.Publish.WriteError)
+	}
+	for _, decision := range run.Publish.PublishPlan.Decisions {
+		if decision.Status == ImportResumePhasePublishReady {
+			continue
+		}
+		if decision.Err != nil {
+			return fmt.Errorf("downloader: sync import resume phase not publishable at %s block %d: %s: %w",
+				decision.SyncStage, decision.TargetBlock, decision.Status.String(), decision.Err)
+		}
+		return fmt.Errorf("downloader: sync import resume phase not publishable at %s block %d: %s",
+			decision.SyncStage, decision.TargetBlock, decision.Status.String())
+	}
+	return fmt.Errorf("downloader: sync import resume phase publish did not apply")
 }
 
 // PlanImportResumePhasePublish verifies a yielded phase suffix against

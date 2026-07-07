@@ -589,7 +589,11 @@ Status:
 - The post-drain resume-phase publish gate is now downloader-owned too:
   no-phase, commit-barrier failure, paused-loop, and publish decisions are
   planned before the same downloader-owned run applies the verified read/write
-  publish path.
+  publish path. If that post-barrier publish path is attempted but cannot
+  apply, the downloader continuation plan now sticky-pauses sync at the failed
+  phase target instead of merely stopping the current drain pass, so later
+  fetched bodies cannot advance another import chunk past an undurable
+  scheduler boundary.
 - Import-batch drain-loop finalization now also lives in downloader: the
   post-import last-peer update, pause flag, resume-phase suffix, and
   stop/continue branch are derived from the import run before `SyncService`

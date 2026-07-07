@@ -2430,7 +2430,7 @@ func TestPlanImportResumePhaseDrainContinuation(t *testing.T) {
 		Phases:   phases,
 		FinishOK: true,
 	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows})
-	if got := PlanImportResumePhaseDrainContinuation(published); !got.DrainAgain {
+	if got := PlanImportResumePhaseDrainContinuation(published); !got.DrainAgain || got.Pause || got.Err != nil {
 		t.Fatalf("published continuation = %+v, want drain again", got)
 	}
 
@@ -2438,7 +2438,7 @@ func TestPlanImportResumePhaseDrainContinuation(t *testing.T) {
 		Phases:   phases,
 		FinishOK: false,
 	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows})
-	if got := PlanImportResumePhaseDrainContinuation(skipped); got.DrainAgain {
+	if got := PlanImportResumePhaseDrainContinuation(skipped); got.DrainAgain || got.Pause || got.Err != nil {
 		t.Fatalf("skipped continuation = %+v, want stop at boundary", got)
 	}
 
@@ -2447,16 +2447,18 @@ func TestPlanImportResumePhaseDrainContinuation(t *testing.T) {
 		Phases:   phases,
 		FinishOK: true,
 	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows, err: writeErr})
-	if got := PlanImportResumePhaseDrainContinuation(failedWrite); got.DrainAgain {
-		t.Fatalf("failed-write continuation = %+v, want stop at boundary", got)
+	if got := PlanImportResumePhaseDrainContinuation(failedWrite); got.DrainAgain || !got.Pause ||
+		got.PauseBlock != 7 || !errors.Is(got.Err, writeErr) {
+		t.Fatalf("failed-write continuation = %+v, want pause at block7 with write error", got)
 	}
 
 	blockedPublish := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
 		Phases:   phases,
 		FinishOK: true,
 	}, &recordingImportResumePhasePublishApplier{})
-	if got := PlanImportResumePhaseDrainContinuation(blockedPublish); got.DrainAgain {
-		t.Fatalf("blocked-publish continuation = %+v, want stop at boundary", got)
+	if got := PlanImportResumePhaseDrainContinuation(blockedPublish); got.DrainAgain || !got.Pause ||
+		got.PauseBlock != 7 || got.Err == nil {
+		t.Fatalf("blocked-publish continuation = %+v, want pause at blocked target", got)
 	}
 }
 

@@ -1032,6 +1032,43 @@ func TestSyncServiceResumePhasePublishFinalizationSkipsWhenPaused(t *testing.T) 
 	}
 }
 
+func TestSyncServicePausesWhenResumePhasePublishFails(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block := stubBlock(7, bc.CurrentBlock().Hash())
+
+	ss.applyImportResumePhaseDrainContinuation(syncdl.ImportResumePhasePublishFinalizationRunApplyResult{
+		Finalization: syncdl.ImportResumePhasePublishFinalizationPlan{
+			Publish: true,
+			Phases: []syncdl.ImportStagePhasePlan{
+				{
+					Phase:          syncdl.ImportStagePhaseCommitment,
+					CanonicalStage: rawdb.StageCommitment,
+					SyncStage:      rawdb.StageSyncCommitment,
+					Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
+				},
+			},
+		},
+		Publish: syncdl.ImportResumePhasePublishRunApplyResult{
+			PublishPlan: syncdl.ImportResumePhasePublishPlan{
+				Decisions: []syncdl.ImportResumePhasePublishDecision{
+					{
+						SyncStage:   rawdb.StageSyncCommitment,
+						TargetBlock: block.Number(),
+						TargetHash:  block.Hash(),
+						Status:      syncdl.ImportResumePhasePublishCanonicalMissing,
+					},
+				},
+			},
+		},
+	}, nil)
+
+	paused, atNum, _, err := ss.PausedStatus()
+	if !paused || atNum != block.Number() || err == nil {
+		t.Fatalf("pause status = paused:%v at:%d err:%v, want resume-publish pause at block %d", paused, atNum, err, block.Number())
+	}
+}
+
 func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	bc := makeTestChain(t)
 	block := stubBlock(1, bc.CurrentBlock().Hash())
