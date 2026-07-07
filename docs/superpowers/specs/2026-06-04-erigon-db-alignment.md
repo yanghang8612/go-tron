@@ -1842,7 +1842,10 @@ Status:
   the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
   replay backfill uses that archive view when checking existing target rows, so
   a pruned hot trace that is still present in a verified cold sidecar is counted
-  as existing instead of being duplicated back into Pebble. Balance-trace
+  as existing instead of being duplicated back into Pebble. Account-trace
+  rebuilds can also use cold `BlockBalanceTrace` rows as their source and cold
+  `AccountTrace` rows as partial-range baselines before materializing repaired
+  hot rows. Balance-trace
   coverage audits also check touched-account `AccountTrace` rows through the
   strict hot/cold accessor, so verified cold account-trace sidecars satisfy
   coverage after hot trace pruning instead of being reported as missing rows.

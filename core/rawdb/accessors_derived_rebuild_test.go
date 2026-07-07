@@ -439,6 +439,35 @@ func TestRebuildAccountTracesUsesExistingBaselineForPartialRange(t *testing.T) {
 	}
 }
 
+func TestRebuildAccountTracesUsesColdTraceInputs(t *testing.T) {
+	db := NewMemoryChainDB()
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	if err := WriteBlock(db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	a := derivedRebuildAddress(0xa5)
+	cold := newFakeBalanceTraceReader()
+	cold.putAccountTrace(a, 1, 70)
+	cold.putBlockTrace(2, derivedRebuildBalanceTrace(block2, infos2,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, a, 5),
+		},
+	))
+	db.SetBalanceTraceReader(cold)
+
+	result, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 2, 2, etl.Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("RebuildAccountTracesFromBlockBalanceTraces cold inputs: %v", err)
+	}
+	if result.BlocksWithBalanceTrace != 1 || result.AccountTraceRows != 1 {
+		t.Fatalf("cold rebuild result = %+v, want one cold block trace and one account trace row", result)
+	}
+	got, ok := ReadAccountTrace(db, a, 2)
+	if !ok || got != 75 {
+		t.Fatalf("ReadAccountTrace cold rebuild = %d/%v, want 75/true", got, ok)
+	}
+}
+
 func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
 	db := NewMemoryChainDB()
 	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)
