@@ -1348,13 +1348,13 @@ func (api *API) handleGetNextMaintenanceTime(w http.ResponseWriter, r *http.Requ
 		err error
 	)
 	if boundFn == nil {
-		t = api.backend.NextMaintenanceTime()
+		t, err = api.backend.NextMaintenanceTime()
 	} else {
 		t, err = api.backend.NextMaintenanceTimeAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	resp := map[string]int64{"num": t}
 	data, _ := json.Marshal(resp)

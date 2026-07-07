@@ -554,7 +554,11 @@ func paginateWitnessInfos(witnesses []*tronapi.WitnessInfo, offset, limit int64)
 
 // GetNextMaintenanceTime returns the timestamp of the next maintenance window.
 func (s *Server) GetNextMaintenanceTime(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.NextMaintenanceTime()}, nil
+	next, err := s.backend.NextMaintenanceTime()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: next}, nil
 }
 
 // ── PR-A2: Resource / Market / TRC10 / Node read RPCs ────────────────────────

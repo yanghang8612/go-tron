@@ -1095,9 +1095,9 @@ func (s *isolationStubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.Witn
 	}}, nil
 }
 
-func (s *isolationStubBackend) NextMaintenanceTime() int64 {
+func (s *isolationStubBackend) NextMaintenanceTime() (int64, error) {
 	s.liveNextMaintenanceCalls++
-	return 1
+	return 1, nil
 }
 
 func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {

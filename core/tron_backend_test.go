@@ -372,6 +372,10 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetChainParameters()
 			return err
 		}},
+		{name: "NextMaintenanceTime", call: func() error {
+			_, err := backend.NextMaintenanceTime()
+			return err
+		}},
 		{name: "GetBurnTrx", call: func() error {
 			_, err := backend.GetBurnTrx()
 			return err
@@ -486,6 +490,7 @@ func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) 
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
 	backend := &TronBackend{chain: bc}
+	addr := testCoreAddr(1)
 
 	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
 		if err := statedb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("burn_trx_amount"), []byte{0x01}); err != nil {
@@ -501,6 +506,10 @@ func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) 
 			_, err := backend.GetChainParameters()
 			return err
 		}},
+		{name: "NextMaintenanceTime", call: func() error {
+			_, err := backend.NextMaintenanceTime()
+			return err
+		}},
 		{name: "GetBurnTrx", call: func() error {
 			_, err := backend.GetBurnTrx()
 			return err
@@ -511,6 +520,14 @@ func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) 
 		}},
 		{name: "GetEnergyPrices", call: func() error {
 			_, err := backend.GetEnergyPrices()
+			return err
+		}},
+		{name: "GetAccountResource", call: func() error {
+			_, err := backend.GetAccountResource(addr)
+			return err
+		}},
+		{name: "GetAccountNet", call: func() error {
+			_, err := backend.GetAccountNet(addr)
 			return err
 		}},
 	}

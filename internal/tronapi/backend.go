@@ -167,10 +167,8 @@ type Backend interface {
 	// GetAccountResourceAt opens state at the given block to compute the
 	// per-account net/energy usage figures, used by /walletsolidity/ and
 	// /walletpbft/ variants so the bandwidth view matches the bound's
-	// commit point rather than live head. The DP-derived limits
-	// (FreeNetLimit, TotalNetLimit, TotalEnergyLimit) still read from
-	// disk DP (effectively solid) since DynamicProperties only flushes
-	// on solidification.
+	// commit point rather than live head. DP-derived limits are reconstructed
+	// from the same rooted/bound dynamic-property view.
 	GetAccountResourceAt(addr common.Address, blockNum uint64) (*AccountResource, error)
 	GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error)
 	GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error)
@@ -178,7 +176,7 @@ type Backend interface {
 	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
 	ListWitnessesAt(blockNum uint64) ([]*WitnessInfo, error)
-	NextMaintenanceTime() int64
+	NextMaintenanceTime() (int64, error)
 	NextMaintenanceTimeAt(blockNum uint64) (int64, error)
 
 	// Stake 2.0 transaction building

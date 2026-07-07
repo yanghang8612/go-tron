@@ -75,6 +75,7 @@ type stubBackend struct {
 	proposalErr     error
 	proposalAtErr   error
 	witnesses       []*tronapi.WitnessInfo
+	nextMaintErr    error
 	burnTrx         int64
 	burnTrxErr      error
 	bandwidthPrices string
@@ -213,7 +214,12 @@ func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return s
 func (s *stubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
 	return s.witnesses, nil
 }
-func (s *stubBackend) NextMaintenanceTime() int64 { return 0 }
+func (s *stubBackend) NextMaintenanceTime() (int64, error) {
+	if s.nextMaintErr != nil {
+		return 0, s.nextMaintErr
+	}
+	return 0, nil
+}
 func (s *stubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }
@@ -1131,6 +1137,7 @@ func TestLiveDynamicPropertyEndpointsSurfaceBackendErrors(t *testing.T) {
 		stub *stubBackend
 	}{
 		{path: "/wallet/getchainparameters", stub: &stubBackend{chainParamsErr: backendErr}},
+		{path: "/wallet/getnextmaintenancetime", stub: &stubBackend{nextMaintErr: backendErr}},
 		{path: "/wallet/getburntrx", stub: &stubBackend{burnTrxErr: backendErr}},
 		{path: "/wallet/getbandwidthprices", stub: &stubBackend{bandwidthErr: backendErr}},
 		{path: "/wallet/getenergyprices", stub: &stubBackend{energyErr: backendErr}},

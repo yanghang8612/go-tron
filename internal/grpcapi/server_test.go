@@ -58,6 +58,7 @@ type testBackend struct {
 	contractErr             error
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
+	nextMaintErr            error
 	burnErr                 error
 	bandwidthErr            error
 	energyErr               error
@@ -215,7 +216,12 @@ func (b *testBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 func (b *testBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
 	return b.witnesses, nil
 }
-func (b *testBackend) NextMaintenanceTime() int64 { return b.nextMaint }
+func (b *testBackend) NextMaintenanceTime() (int64, error) {
+	if b.nextMaintErr != nil {
+		return 0, b.nextMaintErr
+	}
+	return b.nextMaint, nil
+}
 func (b *testBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }
@@ -731,6 +737,10 @@ func TestLiveDynamicPropertyRPCsSurfaceBackendErrors(t *testing.T) {
 	}{
 		{name: "GetChainParameters", b: &testBackend{paramsErr: backendErr}, call: func(client apipb.WalletClient) error {
 			_, err := client.GetChainParameters(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetNextMaintenanceTime", b: &testBackend{nextMaintErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetNextMaintenanceTime(context.Background(), &apipb.EmptyMessage{})
 			return err
 		}},
 		{name: "GetBurnTrx", b: &testBackend{burnErr: backendErr}, call: func(client apipb.WalletClient) error {

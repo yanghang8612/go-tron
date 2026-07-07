@@ -878,7 +878,16 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 	// fresh as the rooted reads even before the async flush settles —
 	// matching cachedDynProps / block_builder. (Only rooted limit keys are
 	// returned today, so this is defensive alignment, not a behaviour change.)
-	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
+	var dpReader ethdb.KeyValueReader
+	if b.chain.buffer != nil {
+		dpReader = b.chain.buffer
+	} else {
+		dpReader = b.chain.db
+	}
+	dynProps, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
+	if err != nil {
+		return nil, fmt.Errorf("load account resource dynamic properties: %w", err)
+	}
 	return accountResourceFromAccount(statedb.GetAccount(addr), dynProps), nil
 }
 
@@ -980,14 +989,10 @@ func (b *TronBackend) dynamicStringPropertiesAtKeys(reader *state.PersistentHist
 	return dp, nil
 }
 
-func (b *TronBackend) headDynamicPropertiesStrict() (*state.DynamicProperties, error) {
-	root, err := b.headStateRootStrict()
-	if err != nil {
-		return nil, fmt.Errorf("read head state root: %w", err)
-	}
+func (b *TronBackend) dynamicPropertiesAtRootStrict(root tcommon.Hash) (*state.DynamicProperties, error) {
 	statedb, err := b.chain.openState(root)
 	if err != nil {
-		return nil, fmt.Errorf("open head state: %w", err)
+		return nil, fmt.Errorf("open state: %w", err)
 	}
 	var dpReader ethdb.KeyValueReader
 	if b.chain.buffer != nil {
@@ -996,6 +1001,18 @@ func (b *TronBackend) headDynamicPropertiesStrict() (*state.DynamicProperties, e
 		dpReader = b.chain.db
 	}
 	dp, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
+	if err != nil {
+		return nil, fmt.Errorf("load dynamic properties: %w", err)
+	}
+	return dp, nil
+}
+
+func (b *TronBackend) headDynamicPropertiesStrict() (*state.DynamicProperties, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read head state root: %w", err)
+	}
+	dp, err := b.dynamicPropertiesAtRootStrict(root)
 	if err != nil {
 		return nil, fmt.Errorf("load head dynamic properties: %w", err)
 	}
@@ -1124,8 +1141,12 @@ func activeWitnessMap(activeSet []tcommon.Address) map[tcommon.Address]bool {
 	return activeMap
 }
 
-func (b *TronBackend) NextMaintenanceTime() int64 {
-	return b.chain.NextMaintenanceTime()
+func (b *TronBackend) NextMaintenanceTime() (int64, error) {
+	dynProps, err := b.headDynamicPropertiesStrict()
+	if err != nil {
+		return 0, err
+	}
+	return dynProps.NextMaintenanceTime(), nil
 }
 
 func (b *TronBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
@@ -2730,7 +2751,16 @@ func (b *TronBackend) accountNetAtRoot(addr tcommon.Address, root tcommon.Hash) 
 	if acc == nil {
 		return nil, nil
 	}
-	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
+	var dpReader ethdb.KeyValueReader
+	if b.chain.buffer != nil {
+		dpReader = b.chain.buffer
+	} else {
+		dpReader = b.chain.db
+	}
+	dynProps, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
+	if err != nil {
+		return nil, fmt.Errorf("load account net dynamic properties: %w", err)
+	}
 	return accountNetFromAccount(acc, dynProps), nil
 }
 
