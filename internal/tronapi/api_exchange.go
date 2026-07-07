@@ -21,7 +21,7 @@ func (api *API) getExchangeByID(w http.ResponseWriter, r *http.Request) {
 	api.handleGetExchangeByID(w, r, nil)
 }
 
-func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var (
 		exchanges []*corepb.Exchange
 		err       error
@@ -29,7 +29,11 @@ func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boun
 	if boundFn == nil {
 		exchanges, err = api.backend.ListExchanges()
 	} else {
-		exchanges, err = api.backend.ListExchangesAt(boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchanges, err = api.backend.ListExchangesAt(blockNum)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -47,7 +51,7 @@ func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boun
 	w.Write(data)
 }
 
-func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	idStr := r.URL.Query().Get("id")
 	if idStr == "" {
 		idStr = r.URL.Query().Get("value")
@@ -74,7 +78,11 @@ func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, bo
 	if boundFn == nil {
 		exchange, err = api.backend.GetExchangeByID(id)
 	} else {
-		exchange, err = api.backend.GetExchangeByIDAt(id, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchange, err = api.backend.GetExchangeByIDAt(id, blockNum)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -88,7 +96,7 @@ func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, bo
 	writeTronJSON(w, exchange)
 }
 
-func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Offset int `json:"offset"`
 		Limit  int `json:"limit"`
@@ -130,7 +138,11 @@ func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Re
 	if boundFn == nil {
 		exchanges, err = api.backend.ListExchangesPaginated(body.Offset, body.Limit)
 	} else {
-		exchanges, err = api.backend.ListExchangesPaginatedAt(body.Offset, body.Limit, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchanges, err = api.backend.ListExchangesPaginatedAt(body.Offset, body.Limit, blockNum)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

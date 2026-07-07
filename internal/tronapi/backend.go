@@ -310,8 +310,8 @@ type Backend interface {
 	ValidateAddress(addr string) (bool, string)
 
 	// Confirmation-depth block numbers (M8.1)
-	SolidifiedBlockNum() uint64 // latest solidified (DPoS 2/3 confirmed) block number
-	LatestPbftBlockNum() int64  // latest PBFT-confirmed block number; -1 if not yet active
+	SolidifiedBlockNum() uint64         // latest solidified (DPoS 2/3 confirmed) block number
+	LatestPbftBlockNum() (int64, error) // latest PBFT-confirmed block number; -1 if not yet active
 
 	// ValidateTransaction validates a transaction's contract logic against current state.
 	// Returns nil if valid; a human-readable error otherwise.

@@ -152,7 +152,7 @@ func (api *API) getAssetIssueListByName(w http.ResponseWriter, r *http.Request) 
 	api.handleGetAssetIssueListByName(w, r, nil)
 }
 
-func (api *API) handleGetAssetIssueListByName(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetAssetIssueListByName(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	name := r.URL.Query().Get("value")
 	visible := r.URL.Query().Get("visible") == "true"
 	if name == "" {
@@ -176,7 +176,11 @@ func (api *API) handleGetAssetIssueListByName(w http.ResponseWriter, r *http.Req
 	if boundFn == nil {
 		asset, err = api.backend.GetAssetIssueByName(nameBytes)
 	} else {
-		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, blockNum)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

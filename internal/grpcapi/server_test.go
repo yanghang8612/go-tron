@@ -530,7 +530,7 @@ func (b *testBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.Pro
 }
 func (b *testBackend) ValidateAddress(addr string) (bool, string)      { return false, "" }
 func (b *testBackend) SolidifiedBlockNum() uint64                      { return 0 }
-func (b *testBackend) LatestPbftBlockNum() int64                       { return -1 }
+func (b *testBackend) LatestPbftBlockNum() (int64, error)              { return -1, nil }
 func (b *testBackend) ValidateTransaction(tx *types.Transaction) error { return nil }
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.

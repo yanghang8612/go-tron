@@ -129,19 +129,25 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerPbftConstantContract)
 }
 
+type blockBoundFunc func() (uint64, error)
+
 // solidBoundNum returns the solid block number as the upper bound.
-func (api *API) solidBoundNum() uint64 {
-	return api.backend.SolidifiedBlockNum()
+func (api *API) solidBoundNum() (uint64, error) {
+	return api.backend.SolidifiedBlockNum(), nil
 }
 
 // pbftBoundNum returns the PBFT-confirmed block number, falling back to the solid
-// block if PBFT has not been activated yet (ReadLatestPbftBlockNum returns -1).
-func (api *API) pbftBoundNum() uint64 {
-	n := api.backend.LatestPbftBlockNum()
+// block if PBFT has not been activated yet (ReadLatestPbftBlockNumStrict
+// returns -1/false/nil).
+func (api *API) pbftBoundNum() (uint64, error) {
+	n, err := api.backend.LatestPbftBlockNum()
+	if err != nil {
+		return 0, err
+	}
 	if n < 0 {
 		return api.solidBoundNum()
 	}
-	return uint64(n)
+	return uint64(n), nil
 }
 
 // --- State-bounded variants ---
@@ -485,7 +491,11 @@ func (api *API) estimatePbftEnergy(w http.ResponseWriter, r *http.Request) {
 // --- Solid-block variants ---
 
 func (api *API) getSolidNowBlock(w http.ResponseWriter, r *http.Request) {
-	block, err := api.backend.GetBlockByNumber(api.solidBoundNum())
+	boundNum, ok := resolveBound(w, api.solidBoundNum)
+	if !ok {
+		return
+	}
+	block, err := api.backend.GetBlockByNumber(boundNum)
 	if err != nil {
 		writeEmptyJSON(w)
 		return
@@ -512,7 +522,11 @@ func (api *API) getSolidBlockByNum(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
-	if num > api.solidBoundNum() {
+	boundNum, ok := resolveBound(w, api.solidBoundNum)
+	if !ok {
+		return
+	}
+	if num > boundNum {
 		http.Error(w, "block not yet solidified", http.StatusNotFound)
 		return
 	}
@@ -563,7 +577,11 @@ func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
-	if num > api.solidBoundNum() {
+	boundNum, ok := resolveBound(w, api.solidBoundNum)
+	if !ok {
+		return
+	}
+	if num > boundNum {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("[]"))
 		return
@@ -574,7 +592,11 @@ func (api *API) getSolidTxInfoByBlockNum(w http.ResponseWriter, r *http.Request)
 // --- PBFT-block variants ---
 
 func (api *API) getPbftNowBlock(w http.ResponseWriter, r *http.Request) {
-	block, err := api.backend.GetBlockByNumber(api.pbftBoundNum())
+	boundNum, ok := resolveBound(w, api.pbftBoundNum)
+	if !ok {
+		return
+	}
+	block, err := api.backend.GetBlockByNumber(boundNum)
 	if err != nil {
 		writeEmptyJSON(w)
 		return
@@ -601,7 +623,11 @@ func (api *API) getPbftBlockByNum(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
-	if num > api.pbftBoundNum() {
+	boundNum, ok := resolveBound(w, api.pbftBoundNum)
+	if !ok {
+		return
+	}
+	if num > boundNum {
 		http.Error(w, "block not yet pbft-confirmed", http.StatusNotFound)
 		return
 	}
@@ -652,7 +678,11 @@ func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
-	if num > api.pbftBoundNum() {
+	boundNum, ok := resolveBound(w, api.pbftBoundNum)
+	if !ok {
+		return
+	}
+	if num > boundNum {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("[]"))
 		return
@@ -660,7 +690,7 @@ func (api *API) getPbftTxInfoByBlockNum(w http.ResponseWriter, r *http.Request) 
 	api.writeTransactionInfoByBlockNum(w, num)
 }
 
-func (api *API) handleGetBlockByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
+func (api *API) handleGetBlockByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc, notReadyMessage string) {
 	hash, hashBytes, ok := parseBlockIDRequest(w, r)
 	if !ok {
 		return
@@ -670,14 +700,18 @@ func (api *API) handleGetBlockByIDAtBound(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid block id", http.StatusBadRequest)
 		return
 	}
-	if num > boundFn() {
+	boundNum, ok := resolveBound(w, boundFn)
+	if !ok {
+		return
+	}
+	if num > boundNum {
 		http.Error(w, notReadyMessage, http.StatusNotFound)
 		return
 	}
 	api.writeBlockByHash(w, hash)
 }
 
-func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64, notReadyMessage string) {
+func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc, notReadyMessage string) {
 	var body struct {
 		StartNum int64 `json:"startNum"`
 		EndNum   int64 `json:"endNum"`
@@ -694,16 +728,29 @@ func (api *API) handleGetBlockByLimitNextAtBound(w http.ResponseWriter, r *http.
 		http.Error(w, "invalid block range", http.StatusBadRequest)
 		return
 	}
-	if uint64(body.EndNum) > boundFn()+1 {
+	boundNum, ok := resolveBound(w, boundFn)
+	if !ok {
+		return
+	}
+	if uint64(body.EndNum) > boundNum+1 {
 		http.Error(w, notReadyMessage, http.StatusNotFound)
 		return
 	}
 	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
 }
 
-func (api *API) transactionWithinBound(w http.ResponseWriter, hash common.Hash, boundFn func() uint64) bool {
+func (api *API) transactionWithinBound(w http.ResponseWriter, hash common.Hash, boundFn blockBoundFunc) bool {
 	blockNum, ok, err := api.backend.GetTransactionBlockNumByID(hash)
-	if err != nil || !ok || blockNum > boundFn() {
+	if err != nil || !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return false
+	}
+	boundNum, resolved := resolveBound(w, boundFn)
+	if !resolved {
+		return false
+	}
+	if blockNum > boundNum {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return false
@@ -711,7 +758,7 @@ func (api *API) transactionWithinBound(w http.ResponseWriter, hash common.Hash, 
 	return true
 }
 
-func (api *API) handleGetTransactionByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetTransactionByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	hash, ok := parseTransactionIDRequest(w, r)
 	if !ok {
 		return
@@ -722,7 +769,7 @@ func (api *API) handleGetTransactionByIDAtBound(w http.ResponseWriter, r *http.R
 	api.writeTransactionByID(w, hash)
 }
 
-func (api *API) handleGetTransactionInfoByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetTransactionInfoByIDAtBound(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	hash, ok := parseTransactionIDRequest(w, r)
 	if !ok {
 		return

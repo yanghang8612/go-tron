@@ -596,7 +596,9 @@ func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 
 // --- M8.1: confirmation-depth stubs ---
 func (s *stubBackend) SolidifiedBlockNum() uint64 { return 0 }
-func (s *stubBackend) LatestPbftBlockNum() int64  { return -1 }
+func (s *stubBackend) LatestPbftBlockNum() (int64, error) {
+	return -1, nil
+}
 
 // --- M9.7: synchronous actuator validate ---
 func (s *stubBackend) ValidateTransaction(tx *types.Transaction) error {

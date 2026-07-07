@@ -125,8 +125,15 @@ func (b *TronBackend) SolidifiedBlockNum() uint64 {
 	return uint64(n)
 }
 
-func (b *TronBackend) LatestPbftBlockNum() int64 {
-	return rawdb.ReadLatestPbftBlockNum(b.chain.DB())
+func (b *TronBackend) LatestPbftBlockNum() (int64, error) {
+	if b == nil || b.chain == nil || b.chain.DB() == nil {
+		return -1, fmt.Errorf("latest pbft block number: nil database")
+	}
+	n, _, err := rawdb.ReadLatestPbftBlockNumStrict(b.chain.DB())
+	if err != nil {
+		return -1, err
+	}
+	return n, nil
 }
 
 func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {

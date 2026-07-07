@@ -215,7 +215,7 @@ func (api *API) getAccountById(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountById(w, r, nil)
 }
 
-func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	accountID := r.URL.Query().Get("account_id")
 	if accountID == "" {
 		var body struct {
@@ -230,7 +230,11 @@ func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, bou
 		err error
 	)
 	if boundFn != nil {
-		acc, err = api.backend.GetAccountByIdAt([]byte(accountID), boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		acc, err = api.backend.GetAccountByIdAt([]byte(accountID), blockNum)
 	} else {
 		acc, err = api.backend.GetAccountById([]byte(accountID))
 	}
@@ -253,7 +257,7 @@ func (api *API) getAccountNet(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountNet(w, r, nil)
 }
 
-func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -279,7 +283,11 @@ func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boun
 	}
 	var msg *apipb.AccountNetMessage
 	if boundFn != nil {
-		msg, err = api.backend.GetAccountNetAt(addr, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		msg, err = api.backend.GetAccountNetAt(addr, blockNum)
 	} else {
 		msg, err = api.backend.GetAccountNet(addr)
 	}

@@ -107,14 +107,19 @@ func TestTronAPIBackendAliasAuditRejectsBackendReceiverAlias(t *testing.T) {
 
 type API struct{ backend *backend }
 type backend struct{}
+type blockBoundFunc func() (uint64, error)
 
 func (b *backend) GetAccountAt(string, uint64) error { return nil }
 
-func (api *API) handleGetAccount(boundFn func() uint64) error {
+func (api *API) handleGetAccount(boundFn blockBoundFunc) error {
 	backend := api.backend
-	return backend.GetAccountAt("addr", boundFn())
+	blockNum, err := boundFn()
+	if err != nil {
+		return err
+	}
+	return backend.GetAccountAt("addr", blockNum)
 }
-`)
+	`)
 	offenders := tronAPIBackendAliasOffenders(source.fset, source.path, onlyTronAPIFuncBody(t, source.file, "handleGetAccount"))
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver assigned to alias") {
 		t.Fatalf("offenders = %+v, want backend receiver alias rejected", offenders)
@@ -126,13 +131,18 @@ func TestTronAPIBackendAliasAuditRejectsBackendReceiverArgument(t *testing.T) {
 
 type API struct{ backend *backend }
 type backend struct{}
+type blockBoundFunc func() (uint64, error)
 
 func useBackend(*backend, uint64) error { return nil }
 
-func (api *API) handleGetAccount(boundFn func() uint64) error {
-	return useBackend(api.backend, boundFn())
+func (api *API) handleGetAccount(boundFn blockBoundFunc) error {
+	blockNum, err := boundFn()
+	if err != nil {
+		return err
+	}
+	return useBackend(api.backend, blockNum)
 }
-`)
+	`)
 	offenders := tronAPIBackendReceiverEscapeOffenders(source.fset, source.path, onlyTronAPIFuncBody(t, source.file, "handleGetAccount"))
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend receiver referenced outside a method selector") {
 		t.Fatalf("offenders = %+v, want backend receiver argument rejected", offenders)
@@ -144,14 +154,19 @@ func TestTronAPIBackendAliasAuditRejectsBackendMethodAlias(t *testing.T) {
 
 type API struct{ backend *backend }
 type backend struct{}
+type blockBoundFunc func() (uint64, error)
 
 func (b *backend) GetAccountAt(string, uint64) error { return nil }
 
-func (api *API) handleGetAccount(boundFn func() uint64) error {
+func (api *API) handleGetAccount(boundFn blockBoundFunc) error {
 	read := api.backend.GetAccountAt
-	return read("addr", boundFn())
+	blockNum, err := boundFn()
+	if err != nil {
+		return err
+	}
+	return read("addr", blockNum)
 }
-`)
+	`)
 	offenders := tronAPIBackendMethodAliasOffenders(source.fset, source.path, onlyTronAPIFuncBody(t, source.file, "handleGetAccount"))
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "backend method referenced outside a direct call") {
 		t.Fatalf("offenders = %+v, want backend method alias rejected", offenders)
@@ -357,6 +372,9 @@ func hasTronAPIBoundFnParam(fields *ast.FieldList) bool {
 }
 
 func isTronAPIBoundFnType(expr ast.Expr) bool {
+	if tronAPIAuditExprTypeName(expr) == "blockBoundFunc" {
+		return true
+	}
 	fn, ok := expr.(*ast.FuncType)
 	if !ok {
 		return false
@@ -364,10 +382,17 @@ func isTronAPIBoundFnType(expr ast.Expr) bool {
 	if fn.Params != nil && len(fn.Params.List) != 0 {
 		return false
 	}
-	if fn.Results == nil || len(fn.Results.List) != 1 {
+	if fn.Results == nil {
 		return false
 	}
-	return tronAPIAuditExprTypeName(fn.Results.List[0].Type) == "uint64"
+	if len(fn.Results.List) == 1 {
+		return tronAPIAuditExprTypeName(fn.Results.List[0].Type) == "uint64"
+	}
+	if len(fn.Results.List) == 2 {
+		return tronAPIAuditExprTypeName(fn.Results.List[0].Type) == "uint64" &&
+			tronAPIAuditExprTypeName(fn.Results.List[1].Type) == "error"
+	}
+	return false
 }
 
 func tronAPIAuditExprTypeName(expr ast.Expr) string {

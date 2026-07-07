@@ -122,6 +122,33 @@ func TestTronBackend_BlockNumber(t *testing.T) {
 	_ = num // genesis block number is 0 or 1; just verify no panic
 }
 
+func TestTronBackend_LatestPbftBlockNumUsesStrictAccessor(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	backend := &TronBackend{chain: &BlockChain{db: db}}
+
+	got, err := backend.LatestPbftBlockNum()
+	if err != nil {
+		t.Fatalf("LatestPbftBlockNum missing row error = %v", err)
+	}
+	if got != -1 {
+		t.Fatalf("LatestPbftBlockNum missing row = %d, want -1", got)
+	}
+
+	rawdb.WriteLatestPbftBlockNum(db, 17)
+	got, err = backend.LatestPbftBlockNum()
+	if err != nil {
+		t.Fatalf("LatestPbftBlockNum valid row error = %v", err)
+	}
+	if got != 17 {
+		t.Fatalf("LatestPbftBlockNum valid row = %d, want 17", got)
+	}
+
+	_, err = (&TronBackend{chain: &BlockChain{}}).LatestPbftBlockNum()
+	if err == nil || !strings.Contains(err.Error(), "nil database") {
+		t.Fatalf("LatestPbftBlockNum nil database error = %v, want nil database", err)
+	}
+}
+
 func TestTronBackend_FreezerStatusReportsCountsStageAndStats(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	stageHash := tcommon.Hash{0xab}

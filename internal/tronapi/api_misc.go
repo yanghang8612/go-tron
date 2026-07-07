@@ -12,7 +12,7 @@ func (api *API) getProposalById(w http.ResponseWriter, r *http.Request) {
 	api.handleGetProposalById(w, r, nil)
 }
 
-func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	idStr := r.URL.Query().Get("id")
 	if idStr == "" {
 		var body struct {
@@ -31,7 +31,11 @@ func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, bo
 	if boundFn == nil {
 		p, err = api.backend.GetProposalByID(id)
 	} else {
-		p, err = api.backend.GetProposalByIDAt(id, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		p, err = api.backend.GetProposalByIDAt(id, blockNum)
 	}
 	if err != nil {
 		if proposalLookupNotFound(err) {
@@ -66,7 +70,7 @@ func (api *API) getPaginatedProposalList(w http.ResponseWriter, r *http.Request)
 	api.handleGetPaginatedProposalList(w, r, nil)
 }
 
-func (api *API) handleGetPaginatedProposalList(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetPaginatedProposalList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Offset int `json:"offset"`
 		Limit  int `json:"limit"`
@@ -85,7 +89,11 @@ func (api *API) handleGetPaginatedProposalList(w http.ResponseWriter, r *http.Re
 	if boundFn == nil {
 		proposals, err = api.backend.ListProposalsPaginated(body.Offset, body.Limit)
 	} else {
-		proposals, err = api.backend.ListProposalsPaginatedAt(body.Offset, body.Limit, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		proposals, err = api.backend.ListProposalsPaginatedAt(body.Offset, body.Limit, blockNum)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

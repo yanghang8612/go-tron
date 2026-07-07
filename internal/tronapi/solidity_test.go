@@ -23,10 +23,16 @@ type solidStubBackend struct {
 	stubBackend
 	solidNum uint64
 	pbftNum  int64
+	pbftErr  error
 }
 
 func (s *solidStubBackend) SolidifiedBlockNum() uint64 { return s.solidNum }
-func (s *solidStubBackend) LatestPbftBlockNum() int64  { return s.pbftNum }
+func (s *solidStubBackend) LatestPbftBlockNum() (int64, error) {
+	if s.pbftErr != nil {
+		return -1, s.pbftErr
+	}
+	return s.pbftNum, nil
+}
 
 type boundBlockStubBackend struct {
 	solidStubBackend
@@ -409,6 +415,51 @@ func TestPbftGetNowBlockNotFoundReturnsEmpty(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	assertHTTPEmptyObject(t, resp)
+}
+
+func TestPbftGetNowBlockSurfacesLatestPbftError(t *testing.T) {
+	stub := &solidStubBackend{
+		solidNum: 2,
+		pbftNum:  -1,
+		pbftErr:  errors.New("rawdb: latest pbft block number corrupt"),
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/walletpbft/getnowblock")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getnowblock status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestPbftBoundHandlerSurfacesLatestPbftError(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{
+			solidNum: 2,
+			pbftNum:  -1,
+			pbftErr:  errors.New("rawdb: latest pbft block number corrupt"),
+		},
+		liveAddr:  common.Address{0x41, 0x11},
+		solidAddr: common.Address{0x41, 0x22},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/walletpbft/getaccount?address=411234567890")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
+	}
+	if stub.gotAt != 0 {
+		t.Fatalf("GetAccountAt called with blockNum=%d despite pbft bound error", stub.gotAt)
+	}
 }
 
 // TestPbftGetBlockByNum_rejectsAbovePbft checks that requesting block #10
