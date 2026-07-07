@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -27,6 +28,22 @@ func TestLoadStoredHeadBlockSurfacesColdLookupErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load stored head") {
 		t.Fatalf("loadStoredHeadBlock err = %v, want startup head context", err)
+	}
+}
+
+func TestLoadStoredHeadBlockSurfacesHeadHashReadErrors(t *testing.T) {
+	db := blockchainStartupStrictReadFailingStore{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		hasErr:        errors.New("head hash presence failed"),
+	}
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+
+	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "head hash presence failed") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want head hash read error", err)
+	}
+	if !strings.Contains(err.Error(), "load stored head hash") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want startup head-hash context", err)
 	}
 }
 
@@ -57,6 +74,25 @@ func TestLoadForkLCABlockAndRootSurfacesColdLookupErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load LCA block") {
 		t.Fatalf("loadForkLCABlockAndRoot err = %v, want LCA context", err)
+	}
+}
+
+func TestStateRootForKnownGenesisSurfacesGenesisRootReadErrors(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	rawdb.WriteGenesisStateRoot(base, tcommon.Hash{0x55})
+	db := blockchainStartupStrictReadFailingStore{
+		KeyValueStore: base,
+		getErr:        errors.New("genesis root get failed"),
+	}
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	bc := &BlockChain{db: db, chaindb: chain}
+
+	_, _, err := bc.stateRootForKnownBlockStrict(blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "genesis root get failed") {
+		t.Fatalf("stateRootForKnownBlockStrict err = %v, want genesis root read error", err)
+	}
+	if !strings.Contains(err.Error(), "state root for genesis block") {
+		t.Fatalf("stateRootForKnownBlockStrict err = %v, want genesis state-root context", err)
 	}
 }
 
@@ -151,4 +187,24 @@ func (i blockchainStartupErrChainIndex) BlockNumberByHash(tcommon.Hash) (uint64,
 
 func (i blockchainStartupErrChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
 	return 0, false, i.err
+}
+
+type blockchainStartupStrictReadFailingStore struct {
+	ethdb.KeyValueStore
+	hasErr error
+	getErr error
+}
+
+func (s blockchainStartupStrictReadFailingStore) Has(key []byte) (bool, error) {
+	if s.hasErr != nil {
+		return false, s.hasErr
+	}
+	return s.KeyValueStore.Has(key)
+}
+
+func (s blockchainStartupStrictReadFailingStore) Get(key []byte) ([]byte, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.KeyValueStore.Get(key)
 }

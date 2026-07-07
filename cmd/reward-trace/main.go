@@ -117,8 +117,11 @@ func main() {
 	chaindb := rawdb.NewChainDB(db, ancient)
 	attachRewardTraceColdReaders(chaindb, snapshotManager)
 
-	headHash := rawdb.ReadHeadBlockHash(db)
-	if headHash == (tcommon.Hash{}) {
+	headHash, hasHead, err := rawdb.ReadHeadBlockHashStrict(db)
+	if err != nil {
+		log.Crit("read head block hash", "path", dbPath, "err", err)
+	}
+	if !hasHead || headHash == (tcommon.Hash{}) {
 		log.Crit("no head block", "path", dbPath)
 	}
 	headRoot, ok, err := readRewardTraceBlockStateRoot(chaindb, headHash)
@@ -126,7 +129,13 @@ func main() {
 		log.Crit("read head state root", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
 	}
 	if !ok {
-		headRoot = rawdb.ReadGenesisStateRoot(db)
+		headRoot, ok, err = rawdb.ReadGenesisStateRootStrict(db)
+		if err != nil {
+			log.Crit("read genesis state root", "err", err)
+		}
+		if !ok || headRoot == (tcommon.Hash{}) {
+			log.Crit("head block has no state root and genesis state root is missing", "hash", fmt.Sprintf("%x", headHash[:]))
+		}
 	}
 	stateDB := state.NewDatabase(rawdb.WrapKeyValueStore(db))
 	statedb, err := state.New(headRoot, stateDB)

@@ -1684,8 +1684,11 @@ func snapshotExpectedChainIdentity(chainConfig *params.ChainConfig, genesis *par
 }
 
 func ensureSnapshotRestoreBootstrapDatadir(db ethdb.KeyValueReader, genesisHash common.Hash) error {
-	head := rawdb.ReadHeadBlockHash(db)
-	if head == (common.Hash{}) || head == genesisHash {
+	head, ok, err := rawdb.ReadHeadBlockHashStrict(db)
+	if err != nil {
+		return fmt.Errorf("snapshot restore read head block hash: %w", err)
+	}
+	if !ok || head == (common.Hash{}) || head == genesisHash {
 		return nil
 	}
 	return fmt.Errorf("snapshot restore refuses non-genesis datadir: head=%x genesis=%x; use a fresh datadir or an explicit reset workflow", head, genesisHash)

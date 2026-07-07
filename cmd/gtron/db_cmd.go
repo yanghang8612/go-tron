@@ -2237,8 +2237,11 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	result := &dbBalanceTraceReplaySnapshotSeedResult{SnapshotDir: dir}
 
 	replayChain := rawdb.NewChainDB(replayDB, rawdb.NoopAncient{})
-	headHash := rawdb.ReadHeadBlockHash(replayChain)
-	if headHash != (common.Hash{}) {
+	headHash, hasHead, err := rawdb.ReadHeadBlockHashStrict(replayChain)
+	if err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed read replay head: %w", err)
+	}
+	if hasHead && headHash != (common.Hash{}) {
 		headNum, err := dbBalanceTraceReplayHeadBlockNumber(replayChain, headHash)
 		if err != nil {
 			return nil, err
@@ -2262,7 +2265,13 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	if err != nil {
 		return nil, fmt.Errorf("balance trace replay snapshot seed setup genesis: %w", err)
 	}
-	genesisRoot := rawdb.ReadGenesisStateRoot(replayDB)
+	genesisRoot, hasGenesisRoot, err := rawdb.ReadGenesisStateRootStrict(replayDB)
+	if err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed read genesis state root: %w", err)
+	}
+	if !hasGenesisRoot || genesisRoot == (common.Hash{}) {
+		return nil, errors.New("balance trace replay snapshot seed: genesis state root missing after genesis setup")
+	}
 	if err := rawdb.ResetMutableState(replayDB); err != nil {
 		return nil, fmt.Errorf("balance trace replay snapshot seed reset mutable state: %w", err)
 	}
@@ -2416,8 +2425,11 @@ func dbRebuildToBlock(ctx *cli.Context, chainDB *rawdb.ChainDB) (uint64, error) 
 		}
 		return toBlock, nil
 	}
-	head := rawdb.ReadHeadBlockHash(chainDB)
-	if head == (common.Hash{}) {
+	head, hasHead, err := rawdb.ReadHeadBlockHashStrict(chainDB)
+	if err != nil {
+		return 0, fmt.Errorf("db rebuild read head block hash: %w", err)
+	}
+	if !hasHead || head == (common.Hash{}) {
 		return 0, fmt.Errorf("db rebuild requires --db.to-block when no head block is recorded")
 	}
 	num, ok, err := rawdb.ReadBlockNumberStrict(chainDB, head)

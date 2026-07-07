@@ -503,8 +503,11 @@ func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
 }
 
 func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) (*types.Block, error) {
-	headHash := rawdb.ReadHeadBlockHash(chaindb)
-	if headHash == (tcommon.Hash{}) {
+	headHash, ok, err := rawdb.ReadHeadBlockHashStrict(chaindb)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head hash: %w", err)
+	}
+	if !ok || headHash == (tcommon.Hash{}) {
 		return genesis, nil
 	}
 	num, ok, err := rawdb.ReadBlockNumberStrict(chaindb, headHash)
@@ -1966,7 +1969,14 @@ func loadForkLCABlockAndRoot(chain *rawdb.ChainDB, db ethdb.KeyValueReader, lcaH
 		return block, root, nil
 	}
 	if num == 0 {
-		return block, rawdb.ReadGenesisStateRoot(db), nil
+		root, ok, err := rawdb.ReadGenesisStateRootStrict(db)
+		if err != nil {
+			return nil, tcommon.Hash{}, fmt.Errorf("load LCA genesis state root: %w", err)
+		}
+		if !ok || root == (tcommon.Hash{}) {
+			return nil, tcommon.Hash{}, errors.New("load LCA genesis state root: missing")
+		}
+		return block, root, nil
 	}
 	return block, block.AccountStateRoot(), nil
 }
@@ -2027,7 +2037,14 @@ func (bc *BlockChain) stateRootForKnownBlockStrict(block *types.Block) (tcommon.
 		return root, true, nil
 	}
 	if block.Number() == 0 {
-		return rawdb.ReadGenesisStateRoot(bc.db), true, nil
+		root, ok, err := rawdb.ReadGenesisStateRootStrict(bc.db)
+		if err != nil {
+			return tcommon.Hash{}, false, fmt.Errorf("state root for genesis block: %w", err)
+		}
+		if !ok || root == (tcommon.Hash{}) {
+			return tcommon.Hash{}, false, nil
+		}
+		return root, true, nil
 	}
 	// Backwards-compat fallback for chain databases written before
 	// blockStateRootPrefix existed; matches HeadStateRoot's behaviour.
