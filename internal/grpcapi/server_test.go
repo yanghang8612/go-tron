@@ -59,6 +59,7 @@ type testBackend struct {
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
 	nextMaintErr            error
+	totalTxErr              error
 	burnErr                 error
 	bandwidthErr            error
 	energyErr               error
@@ -388,7 +389,12 @@ func (b *testBackend) GetBrokerageInfo(addr common.Address) (int64, error) { ret
 func (b *testBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
 	return 0, nil
 }
-func (b *testBackend) TotalTransaction() int64 { return 0 }
+func (b *testBackend) TotalTransaction() (int64, error) {
+	if b.totalTxErr != nil {
+		return 0, b.totalTxErr
+	}
+	return 0, nil
+}
 func (b *testBackend) GetBurnTrx() (int64, error) {
 	if b.burnErr != nil {
 		return 0, b.burnErr
@@ -1520,6 +1526,14 @@ func TestGetBurnTrx(t *testing.T) {
 	}
 	if resp.GetNum() != 0 {
 		t.Fatalf("want 0, got %d", resp.GetNum())
+	}
+}
+
+func TestTotalTransactionBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{totalTxErr: errors.New("rawdb: decode total transaction count")})
+	_, err := client.TotalTransaction(context.Background(), &apipb.EmptyMessage{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("TotalTransaction error = %v, want Internal", err)
 	}
 }
 

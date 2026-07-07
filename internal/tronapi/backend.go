@@ -260,8 +260,8 @@ type Backend interface {
 	GetBrokerageInfo(addr common.Address) (int64, error)
 	GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error)
 
-	// Chain-level counters (stubs until dynamic-properties tracking is wired)
-	TotalTransaction() int64
+	// Chain-level counters.
+	TotalTransaction() (int64, error)
 	GetBurnTrx() (int64, error)
 	GetBurnTrxAt(blockNum uint64) (int64, error)
 

@@ -1094,7 +1094,11 @@ func (s *Server) GetTransactionListFromPending(_ context.Context, _ *apipb.Empty
 
 // TotalTransaction returns the total number of transactions ever processed.
 func (s *Server) TotalTransaction(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.TotalTransaction()}, nil
+	count, err := s.backend.TotalTransaction()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: count}, nil
 }
 
 // GetBurnTrx returns the amount of TRX burned by energy consumption.

@@ -549,6 +549,26 @@ func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) 
 	}
 }
 
+func TestTronBackend_TotalTransactionUsesStrictBufferedRead(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	backend := &TronBackend{chain: bc}
+	rawdb.WriteTotalTransactionCount(bc.db, 42)
+
+	got, err := backend.TotalTransaction()
+	if err != nil {
+		t.Fatalf("TotalTransaction: %v", err)
+	}
+	if got != 42 {
+		t.Fatalf("TotalTransaction = %d, want 42", got)
+	}
+
+	badBackend := &TronBackend{chain: &BlockChain{}}
+	if got, err := badBackend.TotalTransaction(); err == nil || got != 0 || !strings.Contains(err.Error(), "nil database") {
+		t.Fatalf("TotalTransaction nil buffer = %d/%v, want nil database error", got, err)
+	}
+}
+
 func commitHeadStateForBackendTest(t *testing.T, bc *BlockChain, mutate func(*state.StateDB)) {
 	t.Helper()
 

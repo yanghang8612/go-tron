@@ -2524,10 +2524,25 @@ func (b *TronBackend) GetBrokerageInfoAt(addr tcommon.Address, blockNum uint64) 
 	return rate, nil
 }
 
-func (b *TronBackend) TotalTransaction() int64 {
+func (b *TronBackend) TotalTransaction() (int64, error) {
 	// Read through the buffer overlay so the counter reflects the latest
 	// applied block before the async flush worker has drained it to disk.
-	return rawdb.ReadTotalTransactionCount(b.chain.BufferedDB())
+	var reader ethdb.KeyValueReader
+	if b != nil && b.chain != nil {
+		if b.chain.buffer != nil {
+			reader = b.chain.buffer
+		} else {
+			reader = b.chain.db
+		}
+	}
+	if reader == nil {
+		return 0, fmt.Errorf("total transaction count: nil database")
+	}
+	count, _, err := rawdb.ReadTotalTransactionCountStrict(reader)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (b *TronBackend) GetBurnTrx() (int64, error) {
