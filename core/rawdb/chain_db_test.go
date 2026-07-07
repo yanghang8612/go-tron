@@ -309,6 +309,28 @@ func TestChainDBEventLogCoverageUsesFilteredReaderWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestChainDBEventLogCoverageFallsBackWhenFilteredReaderMisses(t *testing.T) {
+	t.Parallel()
+
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress([]byte{0x51})},
+	}
+	reader := &recordingEventLogReader{
+		recordingBasicEventLogReader: recordingBasicEventLogReader{covered: true},
+		filteredCovered:              false,
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.EventLogRangeCoveredForFilter(11, 13, filter)
+	if err != nil || !covered {
+		t.Fatalf("filtered miss fallback coverage = %v/%v, want true/nil", covered, err)
+	}
+	if reader.filteredCalls != 1 || reader.coveredCalls != 1 {
+		t.Fatalf("reader calls filtered=%d covered=%d, want filtered then unfiltered", reader.filteredCalls, reader.coveredCalls)
+	}
+}
+
 func TestChainDBEventLogCoverageFallsBackToUnfilteredReader(t *testing.T) {
 	t.Parallel()
 
@@ -322,6 +344,36 @@ func TestChainDBEventLogCoverageFallsBackToUnfilteredReader(t *testing.T) {
 	}
 	if reader.coveredCalls != 1 || reader.lastFrom != 3 || reader.lastTo != 5 {
 		t.Fatalf("basic reader calls=%d range=%d..%d, want one call 3..5", reader.coveredCalls, reader.lastFrom, reader.lastTo)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsFallsBackToFullScanWhenFilteredCoverageErrors(t *testing.T) {
+	t.Parallel()
+
+	want := EventLog{BlockNum: 19, Address: testChainDBEventLogAddress(0x19), Log: &corepb.TransactionInfo_Log{Address: []byte{0x19}}}
+	reader := &recordingEventLogReader{
+		recordingBasicEventLogReader: recordingBasicEventLogReader{
+			covered: true,
+			rows:    []EventLog{want},
+		},
+		filteredErr: errors.New("event-log index corrupt"),
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var got []EventLog
+	covered, err := cdb.IterateCoveredEventLogs(19, 19, EventLogFilter{Addresses: []common.Address{want.Address}}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("IterateCoveredEventLogs filtered error fallback = covered %v err %v, want true/nil", covered, err)
+	}
+	if reader.filteredCalls != 1 || reader.coveredCalls != 1 || reader.iterCalls != 1 {
+		t.Fatalf("reader calls filtered=%d covered=%d iter=%d, want filtered/covered/iter", reader.filteredCalls, reader.coveredCalls, reader.iterCalls)
+	}
+	if len(got) != 1 || got[0].BlockNum != want.BlockNum {
+		t.Fatalf("covered rows after filtered error = %+v, want block %d", got, want.BlockNum)
 	}
 }
 
@@ -941,6 +993,7 @@ func (r *recordingBasicEventLogReader) IterateEventLogs(fromBlock, toBlock uint6
 type recordingEventLogReader struct {
 	recordingBasicEventLogReader
 	filteredCovered bool
+	filteredErr     error
 	filteredCalls   int
 	lastFilter      EventLogFilter
 }
@@ -950,7 +1003,7 @@ func (r *recordingEventLogReader) EventLogRangeCoveredForFilter(fromBlock, toBlo
 	r.lastFrom = fromBlock
 	r.lastTo = toBlock
 	r.lastFilter = filter
-	return r.filteredCovered, nil
+	return r.filteredCovered, r.filteredErr
 }
 
 type recordingCoveredEventLogReader struct {

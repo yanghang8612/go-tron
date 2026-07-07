@@ -301,7 +301,18 @@ func (db *ChainDB) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filt
 		return false, nil
 	}
 	if reader, ok := db.eventLog.(FilteredEventLogCoverageReader); ok {
-		return reader.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
+		filteredCovered, filteredErr := reader.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
+		if filteredErr == nil && filteredCovered {
+			return true, nil
+		}
+		unfilteredCovered, unfilteredErr := db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
+		if unfilteredErr != nil {
+			return false, unfilteredErr
+		}
+		if unfilteredCovered {
+			return true, nil
+		}
+		return false, filteredErr
 	}
 	return db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
 }

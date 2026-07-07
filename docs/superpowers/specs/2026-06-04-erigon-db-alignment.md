@@ -1934,9 +1934,13 @@ Status:
   Non-covered manager iteration can still fall back to a full cold event-log
   segment scan when the immutable event-log segments continuously cover the
   request range, so stale global index sidecars degrade performance without
-  producing a false empty result. Event-log payload reads are bounded by the
-  segment payload section before allocation, so corrupt length/offset entries
-  are rejected as data errors instead of triggering unbounded verifier memory.
+  producing a false empty result. The generic `ChainDB` filtered coverage
+  boundary now follows the same rule: if a filtered coverage extension misses or
+  fails but the unfiltered event-log rows continuously cover the request, covered
+  iteration can still full-scan those rows instead of dropping archive logs.
+  Event-log payload reads are bounded by the segment payload section before
+  allocation, so corrupt length/offset entries are rejected as data errors
+  instead of triggering unbounded verifier memory.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
