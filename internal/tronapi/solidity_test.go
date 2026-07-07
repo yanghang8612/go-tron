@@ -1034,9 +1034,9 @@ func (s *isolationStubBackend) GetAccountResourceAt(addr common.Address, blockNu
 	return &tronapi.AccountResource{EnergyUsed: 9, EnergyLimit: 99, NetUsed: 7, NetLimit: 77}, nil
 }
 
-func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
+func (s *isolationStubBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
 	s.liveChainParameterCalls++
-	return []tronapi.ChainParameter{{Key: "live_param", Value: 1}}
+	return []tronapi.ChainParameter{{Key: "live_param", Value: 1}}, nil
 }
 
 func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
@@ -1108,9 +1108,9 @@ func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, er
 	return 9900, nil
 }
 
-func (s *isolationStubBackend) GetBurnTrx() int64 {
+func (s *isolationStubBackend) GetBurnTrx() (int64, error) {
 	s.liveBurnCalls++
-	return 1
+	return 1, nil
 }
 
 func (s *isolationStubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
@@ -1121,9 +1121,9 @@ func (s *isolationStubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return 123456, nil
 }
 
-func (s *isolationStubBackend) GetBandwidthPrices() string {
+func (s *isolationStubBackend) GetBandwidthPrices() (string, error) {
 	s.liveBandwidthCalls++
-	return "live-bandwidth"
+	return "live-bandwidth", nil
 }
 
 func (s *isolationStubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
@@ -1134,9 +1134,9 @@ func (s *isolationStubBackend) GetBandwidthPricesAt(blockNum uint64) (string, er
 	return "0:10,42:20", nil
 }
 
-func (s *isolationStubBackend) GetEnergyPrices() string {
+func (s *isolationStubBackend) GetEnergyPrices() (string, error) {
 	s.liveEnergyCalls++
-	return "live-energy"
+	return "live-energy", nil
 }
 
 func (s *isolationStubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {

@@ -76,8 +76,12 @@ type stubBackend struct {
 	proposalAtErr   error
 	witnesses       []*tronapi.WitnessInfo
 	burnTrx         int64
+	burnTrxErr      error
 	bandwidthPrices string
+	bandwidthErr    error
 	energyPrices    string
+	energyErr       error
+	chainParamsErr  error
 	exchanges       []*corepb.Exchange
 	exchangeErr     error
 	assetErr        error
@@ -196,7 +200,12 @@ func (s *stubBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_Bloc
 	}
 	return s.blockBalanceTrace, nil
 }
-func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
+func (s *stubBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
+	if s.chainParamsErr != nil {
+		return nil, s.chainParamsErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	return nil, nil
 }
@@ -386,7 +395,12 @@ func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (
 	return 0, nil
 }
 func (s *stubBackend) TotalTransaction() int64 { return 0 }
-func (s *stubBackend) GetBurnTrx() int64       { return s.burnTrx }
+func (s *stubBackend) GetBurnTrx() (int64, error) {
+	if s.burnTrxErr != nil {
+		return 0, s.burnTrxErr
+	}
+	return s.burnTrx, nil
+}
 func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }
@@ -411,11 +425,21 @@ func (s *stubBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Addres
 func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
-func (s *stubBackend) GetBandwidthPrices() string { return s.bandwidthPrices }
+func (s *stubBackend) GetBandwidthPrices() (string, error) {
+	if s.bandwidthErr != nil {
+		return "", s.bandwidthErr
+	}
+	return s.bandwidthPrices, nil
+}
 func (s *stubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
-func (s *stubBackend) GetEnergyPrices() string { return s.energyPrices }
+func (s *stubBackend) GetEnergyPrices() (string, error) {
+	if s.energyErr != nil {
+		return "", s.energyErr
+	}
+	return s.energyPrices, nil
+}
 func (s *stubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
@@ -1097,6 +1121,33 @@ func TestGetBurnTrxAndPrices(t *testing.T) {
 	energy := postJSON(t, srv.URL+"/wallet/getenergyprices", `{}`)
 	if energy["prices"] != "0:100,200:300" {
 		t.Fatalf("getenergyprices = %v, want 0:100,200:300", energy)
+	}
+}
+
+func TestLiveDynamicPropertyEndpointsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("load head dynamic properties: corrupt")
+	tests := []struct {
+		path string
+		stub *stubBackend
+	}{
+		{path: "/wallet/getchainparameters", stub: &stubBackend{chainParamsErr: backendErr}},
+		{path: "/wallet/getburntrx", stub: &stubBackend{burnTrxErr: backendErr}},
+		{path: "/wallet/getbandwidthprices", stub: &stubBackend{bandwidthErr: backendErr}},
+		{path: "/wallet/getenergyprices", stub: &stubBackend{energyErr: backendErr}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			srv := newTestServer(t, tt.stub)
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
 	}
 }
 

@@ -1221,13 +1221,13 @@ func (api *API) handleGetChainParameters(w http.ResponseWriter, r *http.Request,
 		err    error
 	)
 	if boundFn == nil {
-		params = api.backend.GetChainParameters()
+		params, err = api.backend.GetChainParameters()
 	} else {
 		params, err = api.backend.GetChainParametersAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	resp := map[string]interface{}{
 		"chainParameter": params,
@@ -1372,13 +1372,13 @@ func (api *API) handleGetBurnTrx(w http.ResponseWriter, r *http.Request, boundFn
 		err    error
 	)
 	if boundFn == nil {
-		burned = api.backend.GetBurnTrx()
+		burned, err = api.backend.GetBurnTrx()
 	} else {
 		burned, err = api.backend.GetBurnTrxAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	data, _ := json.Marshal(map[string]int64{"num": burned})
 	w.Header().Set("Content-Type", "application/json")
@@ -1395,13 +1395,13 @@ func (api *API) handleGetBandwidthPrices(w http.ResponseWriter, r *http.Request,
 		err    error
 	)
 	if boundFn == nil {
-		prices = api.backend.GetBandwidthPrices()
+		prices, err = api.backend.GetBandwidthPrices()
 	} else {
 		prices, err = api.backend.GetBandwidthPricesAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	data, _ := json.Marshal(map[string]string{"prices": prices})
 	w.Header().Set("Content-Type", "application/json")
@@ -1418,13 +1418,13 @@ func (api *API) handleGetEnergyPrices(w http.ResponseWriter, r *http.Request, bo
 		err    error
 	)
 	if boundFn == nil {
-		prices = api.backend.GetEnergyPrices()
+		prices, err = api.backend.GetEnergyPrices()
 	} else {
 		prices, err = api.backend.GetEnergyPricesAt(boundFn())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	data, _ := json.Marshal(map[string]string{"prices": prices})
 	w.Header().Set("Content-Type", "application/json")

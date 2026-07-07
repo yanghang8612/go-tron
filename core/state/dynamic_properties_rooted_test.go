@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -200,6 +201,114 @@ func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	}
 	if loaded.LatestBlockHeaderHash() != flatHash {
 		t.Fatalf("derived hash = %x, want flat %x", loaded.LatestBlockHeaderHash(), flatHash)
+	}
+}
+
+func TestDynPropLoadStrictMergesRootedAndDerived(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	dp.Set("next_maintenance_time", 777)
+	dp.Set("burn_trx_amount", 888)
+	dp.SetString("memo_fee_history", "9")
+	dp.SetLatestBlockHeaderNumber(42)
+	dp.SetLatestBlockHeaderHash(tcommon.HexToHash("0x42"))
+	if err := dp.FlushRooted(sdb); err != nil {
+		t.Fatalf("flush rooted: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	dp.Flush(sdb.db.DiskDB())
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadDynamicPropertiesStrict(sdb.db.DiskDB(), reopened)
+	if err != nil {
+		t.Fatalf("LoadDynamicPropertiesStrict: %v", err)
+	}
+	if loaded.NextMaintenanceTime() != 777 || loaded.BurnTrxAmount() != 888 || loaded.LatestBlockHeaderNumber() != 42 {
+		t.Fatalf("strict loaded values = next %d burn %d latest %d, want 777/888/42", loaded.NextMaintenanceTime(), loaded.BurnTrxAmount(), loaded.LatestBlockHeaderNumber())
+	}
+	if got, _ := loaded.GetString("memo_fee_history"); got != "9" {
+		t.Fatalf("strict rooted string = %q, want 9", got)
+	}
+	if loaded.LatestBlockHeaderHash() != tcommon.HexToHash("0x42") {
+		t.Fatalf("strict derived hash = %x, want 0x42", loaded.LatestBlockHeaderHash())
+	}
+}
+
+func TestDynPropLoadStrictRejectsMalformedDerivedInt(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteDynamicProperty(db, "latest_block_header_number", []byte{0x01})
+
+	if loaded := LoadDynamicProperties(db, nil); loaded.LatestBlockHeaderNumber() != 0 {
+		t.Fatalf("legacy latest block number = %d, want default 0", loaded.LatestBlockHeaderNumber())
+	}
+	_, err := LoadDynamicPropertiesStrict(db, nil)
+	if err == nil || !strings.Contains(err.Error(), "latest_block_header_number") || !strings.Contains(err.Error(), "want 8") {
+		t.Fatalf("LoadDynamicPropertiesStrict malformed derived int err = %v, want length error", err)
+	}
+}
+
+func TestDynPropLoadStrictRejectsMalformedDerivedHash(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteDynamicProperty(db, "latest_block_header_hash", []byte{0x01})
+
+	if loaded := LoadDynamicProperties(db, nil); loaded.LatestBlockHeaderHash() != (tcommon.Hash{}) {
+		t.Fatalf("legacy latest hash = %x, want zero hash", loaded.LatestBlockHeaderHash())
+	}
+	_, err := LoadDynamicPropertiesStrict(db, nil)
+	if err == nil || !strings.Contains(err.Error(), "latest_block_header_hash") || !strings.Contains(err.Error(), "want 32") {
+		t.Fatalf("LoadDynamicPropertiesStrict malformed derived hash err = %v, want length error", err)
+	}
+}
+
+func TestDynPropLoadStrictRejectsMalformedRootedInt(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("energy_fee"), []byte{0x01}); err != nil {
+		t.Fatalf("seed malformed rooted energy_fee: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if loaded := LoadDynamicProperties(sdb.db.DiskDB(), reopened); loaded.EnergyFee() != NewDynamicProperties().EnergyFee() {
+		t.Fatalf("legacy energy fee = %d, want default %d", loaded.EnergyFee(), NewDynamicProperties().EnergyFee())
+	}
+	_, err = LoadDynamicPropertiesStrict(sdb.db.DiskDB(), reopened)
+	if err == nil || !strings.Contains(err.Error(), "energy_fee") || !strings.Contains(err.Error(), "want 8") {
+		t.Fatalf("LoadDynamicPropertiesStrict malformed rooted int err = %v, want length error", err)
+	}
+}
+
+func TestDynPropLoadStrictAcceptsEmptyRootedString(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("memo_fee_history"), nil); err != nil {
+		t.Fatalf("seed empty rooted memo_fee_history: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadDynamicPropertiesStrict(sdb.db.DiskDB(), reopened)
+	if err != nil {
+		t.Fatalf("LoadDynamicPropertiesStrict: %v", err)
+	}
+	if got, _ := loaded.GetString("memo_fee_history"); got != "" {
+		t.Fatalf("strict empty rooted string = %q, want empty", got)
 	}
 }
 

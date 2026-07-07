@@ -174,7 +174,7 @@ type Backend interface {
 	GetAccountResourceAt(addr common.Address, blockNum uint64) (*AccountResource, error)
 	GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error)
 	GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error)
-	GetChainParameters() []ChainParameter
+	GetChainParameters() ([]ChainParameter, error)
 	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
 	ListWitnessesAt(blockNum uint64) ([]*WitnessInfo, error)
@@ -264,13 +264,13 @@ type Backend interface {
 
 	// Chain-level counters (stubs until dynamic-properties tracking is wired)
 	TotalTransaction() int64
-	GetBurnTrx() int64
+	GetBurnTrx() (int64, error)
 	GetBurnTrxAt(blockNum uint64) (int64, error)
 
 	// Historical price strings (encoded as "blockNum:price,blockNum:price,...")
-	GetBandwidthPrices() string
+	GetBandwidthPrices() (string, error)
 	GetBandwidthPricesAt(blockNum uint64) (string, error)
-	GetEnergyPrices() string
+	GetEnergyPrices() (string, error)
 	GetEnergyPricesAt(blockNum uint64) (string, error)
 
 	// Paginated queries

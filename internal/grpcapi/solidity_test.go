@@ -474,7 +474,7 @@ func (b *solidTestBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, t
 	return b.testBackend.GetCanWithdrawUnfreezeAmountAt(addr, timestamp, blockNum)
 }
 
-func (b *solidTestBackend) GetBurnTrx() int64 {
+func (b *solidTestBackend) GetBurnTrx() (int64, error) {
 	b.liveBurn++
 	return b.testBackend.GetBurnTrx()
 }
@@ -490,7 +490,7 @@ func (b *solidTestBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return b.testBackend.GetBurnTrxAt(blockNum)
 }
 
-func (b *solidTestBackend) GetBandwidthPrices() string {
+func (b *solidTestBackend) GetBandwidthPrices() (string, error) {
 	b.liveBandwidth++
 	return b.testBackend.GetBandwidthPrices()
 }
@@ -506,7 +506,7 @@ func (b *solidTestBackend) GetBandwidthPricesAt(blockNum uint64) (string, error)
 	return b.testBackend.GetBandwidthPricesAt(blockNum)
 }
 
-func (b *solidTestBackend) GetEnergyPrices() string {
+func (b *solidTestBackend) GetEnergyPrices() (string, error) {
 	b.liveEnergy++
 	return b.testBackend.GetEnergyPrices()
 }

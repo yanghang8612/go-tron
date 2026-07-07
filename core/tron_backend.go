@@ -980,8 +980,34 @@ func (b *TronBackend) dynamicStringPropertiesAtKeys(reader *state.PersistentHist
 	return dp, nil
 }
 
-func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
-	return chainParametersFromDynamicProperties(b.chain.DynProps())
+func (b *TronBackend) headDynamicPropertiesStrict() (*state.DynamicProperties, error) {
+	root, err := b.headStateRootStrict()
+	if err != nil {
+		return nil, fmt.Errorf("read head state root: %w", err)
+	}
+	statedb, err := b.chain.openState(root)
+	if err != nil {
+		return nil, fmt.Errorf("open head state: %w", err)
+	}
+	var dpReader ethdb.KeyValueReader
+	if b.chain.buffer != nil {
+		dpReader = b.chain.buffer
+	} else {
+		dpReader = b.chain.db
+	}
+	dp, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
+	if err != nil {
+		return nil, fmt.Errorf("load head dynamic properties: %w", err)
+	}
+	return dp, nil
+}
+
+func (b *TronBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
+	dynProps, err := b.headDynamicPropertiesStrict()
+	if err != nil {
+		return nil, err
+	}
+	return chainParametersFromDynamicProperties(dynProps), nil
 }
 
 func (b *TronBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
@@ -2422,7 +2448,10 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) (int64, error) {
 	} else {
 		dpReader = b.chain.db
 	}
-	dp := state.LoadDynamicProperties(dpReader, statedb)
+	dp, err := state.LoadDynamicPropertiesStrict(dpReader, statedb)
+	if err != nil {
+		return 0, fmt.Errorf("load head dynamic properties: %w", err)
+	}
 	cycle := dp.CurrentCycleNumber()
 	rate, _, err := statedb.ReadCycleBrokerageStrict(cycle, addr.Bytes())
 	if err != nil {
@@ -2455,8 +2484,12 @@ func (b *TronBackend) TotalTransaction() int64 {
 	return rawdb.ReadTotalTransactionCount(b.chain.BufferedDB())
 }
 
-func (b *TronBackend) GetBurnTrx() int64 {
-	return b.chain.DynProps().BurnTrxAmount()
+func (b *TronBackend) GetBurnTrx() (int64, error) {
+	dynProps, err := b.headDynamicPropertiesStrict()
+	if err != nil {
+		return 0, err
+	}
+	return dynProps.BurnTrxAmount(), nil
 }
 
 func (b *TronBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
@@ -2473,8 +2506,12 @@ func (b *TronBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return dynProps.BurnTrxAmount(), nil
 }
 
-func (b *TronBackend) GetBandwidthPrices() string {
-	return b.chain.DynProps().BandwidthPriceHistory()
+func (b *TronBackend) GetBandwidthPrices() (string, error) {
+	dynProps, err := b.headDynamicPropertiesStrict()
+	if err != nil {
+		return "", err
+	}
+	return dynProps.BandwidthPriceHistory(), nil
 }
 
 func (b *TronBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
@@ -2491,8 +2528,12 @@ func (b *TronBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	return dynProps.BandwidthPriceHistory(), nil
 }
 
-func (b *TronBackend) GetEnergyPrices() string {
-	return b.chain.DynProps().EnergyPriceHistory()
+func (b *TronBackend) GetEnergyPrices() (string, error) {
+	dynProps, err := b.headDynamicPropertiesStrict()
+	if err != nil {
+		return "", err
+	}
+	return dynProps.EnergyPriceHistory(), nil
 }
 
 func (b *TronBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {

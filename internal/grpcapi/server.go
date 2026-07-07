@@ -147,7 +147,10 @@ func (s *Server) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (
 
 // GetChainParameters returns the current chain governance parameters.
 func (s *Server) GetChainParameters(_ context.Context, _ *apipb.EmptyMessage) (*corepb.ChainParameters, error) {
-	params := s.backend.GetChainParameters()
+	params, err := s.backend.GetChainParameters()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	cp := make([]*corepb.ChainParameters_ChainParameter, len(params))
 	for i, p := range params {
 		cp[i] = &corepb.ChainParameters_ChainParameter{
@@ -1092,7 +1095,11 @@ func (s *Server) TotalTransaction(_ context.Context, _ *apipb.EmptyMessage) (*ap
 
 // GetBurnTrx returns the amount of TRX burned by energy consumption.
 func (s *Server) GetBurnTrx(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.GetBurnTrx()}, nil
+	burned, err := s.backend.GetBurnTrx()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: burned}, nil
 }
 
 // ── PR-B: Transaction building RPCs ──────────────────────────────────────────
@@ -1453,10 +1460,18 @@ func (s *Server) GetPaginatedExchangeList(_ context.Context, in *apipb.Paginated
 
 // GetBandwidthPrices returns the historical bandwidth price string.
 func (s *Server) GetBandwidthPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetBandwidthPrices()}, nil
+	prices, err := s.backend.GetBandwidthPrices()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 // GetEnergyPrices returns the historical energy price string.
 func (s *Server) GetEnergyPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetEnergyPrices()}, nil
+	prices, err := s.backend.GetEnergyPrices()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }

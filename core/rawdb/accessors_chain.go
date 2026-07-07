@@ -92,6 +92,29 @@ func IterateDynamicProperties(db ethdb.Iteratee, fn func(name string, value []by
 	}
 }
 
+// IterateDynamicPropertiesStrict invokes fn for every persisted dynamic
+// property row and returns iterator or callback errors to the caller.
+func IterateDynamicPropertiesStrict(db ethdb.Iteratee, fn func(name string, value []byte) error) error {
+	if db == nil {
+		return fmt.Errorf("rawdb: nil database while iterating dynamic properties")
+	}
+	if fn == nil {
+		return nil
+	}
+	it := db.NewIterator(dynPropPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		name := string(bytes.TrimPrefix(it.Key(), dynPropPrefix))
+		if err := fn(name, append([]byte(nil), it.Value()...)); err != nil {
+			return err
+		}
+	}
+	if err := it.Error(); err != nil {
+		return fmt.Errorf("rawdb: iterate dynamic properties: %w", err)
+	}
+	return nil
+}
+
 // GenesisWitness is the immutable {address, initial vote count} pair captured
 // at genesis. java-tron's tryRemoveThePowerOfTheGr subtracts the *initial*
 // vote count (not the current count after vote accumulation), so this list

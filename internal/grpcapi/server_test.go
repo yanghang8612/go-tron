@@ -53,10 +53,14 @@ type testBackend struct {
 	txInfoErr               error
 	txInfoByBlockErr        error
 	params                  []tronapi.ChainParameter
+	paramsErr               error
 	contract                *contractpb.SmartContract
 	contractErr             error
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
+	burnErr                 error
+	bandwidthErr            error
+	energyErr               error
 	delegatedResources      []*tronapi.DelegatedResourceInfo
 	legacyDelegIndex        *corepb.DelegatedResourceAccountIndex
 	accountBalanceResp      *contractpb.AccountBalanceResponse
@@ -196,7 +200,12 @@ func (b *testBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_Bloc
 	b.lastBlockBalanceTraceID = id
 	return b.blockBalanceTrace, nil
 }
-func (b *testBackend) GetChainParameters() []tronapi.ChainParameter { return b.params }
+func (b *testBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
+	if b.paramsErr != nil {
+		return nil, b.paramsErr
+	}
+	return b.params, nil
+}
 func (b *testBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	return nil, nil
 }
@@ -374,7 +383,12 @@ func (b *testBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (
 	return 0, nil
 }
 func (b *testBackend) TotalTransaction() int64 { return 0 }
-func (b *testBackend) GetBurnTrx() int64       { return 0 }
+func (b *testBackend) GetBurnTrx() (int64, error) {
+	if b.burnErr != nil {
+		return 0, b.burnErr
+	}
+	return 0, nil
+}
 func (b *testBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }
@@ -399,11 +413,21 @@ func (b *testBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Addres
 func (b *testBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) GetBandwidthPrices() string { return "" }
+func (b *testBackend) GetBandwidthPrices() (string, error) {
+	if b.bandwidthErr != nil {
+		return "", b.bandwidthErr
+	}
+	return "", nil
+}
 func (b *testBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
-func (b *testBackend) GetEnergyPrices() string { return "" }
+func (b *testBackend) GetEnergyPrices() (string, error) {
+	if b.energyErr != nil {
+		return "", b.energyErr
+	}
+	return "", nil
+}
 func (b *testBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 	return "", nil
 }
@@ -695,6 +719,40 @@ func TestGetChainParameters(t *testing.T) {
 	}
 	if resp.GetChainParameter()[0].GetKey() != "getMaintenanceTimeInterval" {
 		t.Fatalf("param key mismatch: %s", resp.GetChainParameter()[0].GetKey())
+	}
+}
+
+func TestLiveDynamicPropertyRPCsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("load head dynamic properties: corrupt")
+	tests := []struct {
+		name string
+		b    *testBackend
+		call func(apipb.WalletClient) error
+	}{
+		{name: "GetChainParameters", b: &testBackend{paramsErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetChainParameters(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetBurnTrx", b: &testBackend{burnErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetBurnTrx(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetBandwidthPrices", b: &testBackend{bandwidthErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetBandwidthPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetEnergyPrices", b: &testBackend{energyErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetEnergyPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestClient(t, tt.b)
+			if err := tt.call(client); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
 	}
 }
 

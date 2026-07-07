@@ -368,6 +368,22 @@ func TestTronBackend_HeadStateReadsSurfaceColdStateRootErrors(t *testing.T) {
 			_, err := backend.GetBrokerageInfo(addr)
 			return err
 		}},
+		{name: "GetChainParameters", call: func() error {
+			_, err := backend.GetChainParameters()
+			return err
+		}},
+		{name: "GetBurnTrx", call: func() error {
+			_, err := backend.GetBurnTrx()
+			return err
+		}},
+		{name: "GetBandwidthPrices", call: func() error {
+			_, err := backend.GetBandwidthPrices()
+			return err
+		}},
+		{name: "GetEnergyPrices", call: func() error {
+			_, err := backend.GetEnergyPrices()
+			return err
+		}},
 		{name: "GetAccountNet", call: func() error {
 			_, err := backend.GetAccountNet(addr)
 			return err
@@ -463,6 +479,45 @@ func TestTronBackend_GetBrokerageInfoSurfacesMalformedLiveRow(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read cycle brokerage") || !strings.Contains(err.Error(), "length 3, want 4") {
 		t.Fatalf("GetBrokerageInfo malformed row error = %v, want brokerage decode context", err)
+	}
+}
+
+func TestTronBackend_DynamicPropertyLiveReadsSurfaceMalformedRows(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	backend := &TronBackend{chain: bc}
+
+	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
+		if err := statedb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("burn_trx_amount"), []byte{0x01}); err != nil {
+			t.Fatalf("write malformed burn_trx_amount: %v", err)
+		}
+	})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetChainParameters", call: func() error {
+			_, err := backend.GetChainParameters()
+			return err
+		}},
+		{name: "GetBurnTrx", call: func() error {
+			_, err := backend.GetBurnTrx()
+			return err
+		}},
+		{name: "GetBandwidthPrices", call: func() error {
+			_, err := backend.GetBandwidthPrices()
+			return err
+		}},
+		{name: "GetEnergyPrices", call: func() error {
+			_, err := backend.GetEnergyPrices()
+			return err
+		}},
+	}
+	for _, check := range checks {
+		if err := check.call(); err == nil || !strings.Contains(err.Error(), "burn_trx_amount") || !strings.Contains(err.Error(), "want 8") {
+			t.Fatalf("%s malformed dynamic property error = %v, want burn_trx_amount length error", check.name, err)
+		}
 	}
 }
 
