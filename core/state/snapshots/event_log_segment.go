@@ -876,9 +876,8 @@ func (s *EventLogSegment) readLog(entry eventLogIndexEntry) (*corepb.Transaction
 	if err := proto.Unmarshal(raw, &log); err != nil {
 		return nil, err
 	}
-	payloadAddress := eventLogAddress(log.GetAddress())
-	if payloadAddress != entry.address {
-		return nil, fmt.Errorf("snapshots: event log row block=%d tx=%d log=%d address %x does not match payload address %x", entry.blockNum, entry.txIndex, entry.logIndex, entry.address, payloadAddress)
+	if err := validateEventLogPayload(entry, &log, "event log segment read"); err != nil {
+		return nil, err
 	}
 	return &log, nil
 }
@@ -1378,7 +1377,7 @@ func validateEventLogPayload(entry eventLogIndexEntry, log *corepb.TransactionIn
 	}
 	address := eventLogAddress(log.GetAddress())
 	if entry.address != address {
-		return fmt.Errorf("snapshots: %s address %x but payload address is %x at block=%d tx=%d log=%d", context, entry.address, address, entry.blockNum, entry.txIndex, entry.logIndex)
+		return fmt.Errorf("snapshots: %s address %x does not match payload address %x at block=%d tx=%d log=%d", context, entry.address, address, entry.blockNum, entry.txIndex, entry.logIndex)
 	}
 	for i, topic := range log.GetTopics() {
 		if len(topic) != common.HashLength {
@@ -2013,8 +2012,8 @@ func checkEventLogPayloadIndex(file io.ReaderAt, ref SegmentRef, header eventLog
 		if err := proto.Unmarshal(raw, &log); err != nil {
 			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d payload: %w", ref.Path, i, err)
 		}
-		if eventLogAddress(log.GetAddress()) != entry.address {
-			return nil, nil, fmt.Errorf("snapshots: event log segment %q entry %d address index mismatch", ref.Path, i)
+		if err := validateEventLogPayload(entry, &log, fmt.Sprintf("event log segment %q entry %d", ref.Path, i)); err != nil {
+			return nil, nil, err
 		}
 		addressKey := string(eventLogAddressLookupKey(entry.address))
 		expectedAddress[addressKey] = append(expectedAddress[addressKey], i)

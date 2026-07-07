@@ -510,6 +510,11 @@ func validateCoveredEventLogRow(fromBlock, toBlock uint64, row EventLog) error {
 	if row.Address != payloadAddress {
 		return fmt.Errorf("rawdb: cold event log row block=%d tx=%d log=%d address %x does not match payload address %x", row.BlockNum, row.TxIndex, row.LogIndex, row.Address, payloadAddress)
 	}
+	for i, topic := range row.Log.GetTopics() {
+		if len(topic) != common.HashLength {
+			return fmt.Errorf("rawdb: cold event log row block=%d tx=%d log=%d topic %d length %d, want %d", row.BlockNum, row.TxIndex, row.LogIndex, i, len(topic), common.HashLength)
+		}
+	}
 	return nil
 }
 

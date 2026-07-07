@@ -692,6 +692,34 @@ func TestChainDBIterateCoveredEventLogsRejectsPayloadAddressMismatch(t *testing.
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsRejectsMalformedTopic(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows: []EventLog{{
+			BlockNum: 10,
+			TxIndex:  1,
+			LogIndex: 2,
+			Address:  testChainDBEventLogAddress(0xaa),
+			Log: &corepb.TransactionInfo_Log{
+				Address: []byte{0xaa},
+				Topics:  [][]byte{{0x01}},
+			},
+		}},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(10, 10, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for malformed-topic cold event-log row")
+		return true, nil
+	})
+	if err == nil || !covered || !strings.Contains(err.Error(), "topic 0 length 1") {
+		t.Fatalf("IterateCoveredEventLogs malformed topic = covered %v err %v, want topic length error", covered, err)
+	}
+}
+
 func TestChainDBIterateCoveredEventLogsRejectsCanonicalHashMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -829,7 +857,8 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogPayloadMismatch(t *tes
 	t.Parallel()
 
 	block, txHash := testChainDBEventLogBlock(15)
-	canonicalLog := &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{{0x01}}, Data: []byte{0xaa}}
+	topic := common.Hash{0x01}
+	canonicalLog := &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{topic[:]}, Data: []byte{0xaa}}
 	reader := &recordingCoveredEventLogReader{
 		covered: true,
 		rows: []EventLog{{
@@ -839,7 +868,7 @@ func TestChainDBIterateCoveredEventLogsRejectsCanonicalLogPayloadMismatch(t *tes
 			BlockHash: block.Hash(),
 			TxHash:    txHash,
 			Address:   testChainDBEventLogAddress(0x15),
-			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{{0x01}}, Data: []byte{0xbb}},
+			Log:       &corepb.TransactionInfo_Log{Address: []byte{0x15}, Topics: [][]byte{topic[:]}, Data: []byte{0xbb}},
 		}},
 	}
 	cdb := NewMemoryChainDB()

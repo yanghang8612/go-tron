@@ -1987,9 +1987,10 @@ Status:
   non-monotonic cold event-log rows before API code can silently drop or
   reorder them after hot receipt rows have been pruned. Runtime event-log
   segment iteration and the `ChainDB` covered cold-log boundary now also
-  recheck each payload address against the row/index metadata, so a corrupted
-  cold payload cannot be returned under a stale address posting after hot
-  receipt rows are gone. When the canonical block is readable, covered cold log
+  recheck each payload address against the row/index metadata and reject
+  non-32-byte payload topics, so a corrupted cold payload cannot be returned
+  under a stale address/topic posting after hot receipt rows are gone. When the
+  canonical block is readable, covered cold log
   rows must also carry the canonical block hash for their block number and a
   transaction hash/index that matches the canonical block body; when the
   canonical `TransactionRet` row is readable and complete, the row's
