@@ -1946,7 +1946,10 @@ Status:
   dropping archive logs.
   Event-log payload reads are bounded by the segment payload section before
   allocation, so corrupt length/offset entries are rejected as data errors
-  instead of triggering unbounded verifier memory.
+  instead of triggering unbounded verifier memory. Event-log segment
+  materialization now also rejects rows whose address metadata disagrees with
+  the protobuf log payload, or whose topics are not 32-byte hashes, before
+  publishing them into a new immutable sidecar.
   `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars

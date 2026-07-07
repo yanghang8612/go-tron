@@ -1332,7 +1332,10 @@ func collectEventLogRowsFromReaderToETL(reader rawdb.EventLogReader, fromBlock, 
 		if row.Log == nil {
 			return false, fmt.Errorf("snapshots: event log reader returned nil log at block=%d tx=%d log=%d", row.BlockNum, row.TxIndex, row.LogIndex)
 		}
-		address := eventLogAddress(row.Log.GetAddress())
+		address, err := validateEventLogReaderRow(row)
+		if err != nil {
+			return false, err
+		}
 		entry := eventLogIndexEntry{
 			blockNum:  row.BlockNum,
 			txIndex:   row.TxIndex,
@@ -1354,6 +1357,35 @@ func collectEventLogRowsFromReaderToETL(reader rawdb.EventLogReader, fromBlock, 
 		return 0, err
 	}
 	return rowCount, nil
+}
+
+func validateEventLogReaderRow(row EventLog) (common.Address, error) {
+	entry := eventLogIndexEntry{
+		blockNum: row.BlockNum,
+		txIndex:  row.TxIndex,
+		logIndex: row.LogIndex,
+		address:  row.Address,
+	}
+	if err := validateEventLogPayload(entry, row.Log, "event log reader row"); err != nil {
+		return common.Address{}, err
+	}
+	return row.Address, nil
+}
+
+func validateEventLogPayload(entry eventLogIndexEntry, log *corepb.TransactionInfo_Log, context string) error {
+	if log == nil {
+		return fmt.Errorf("snapshots: nil event log payload during %s at block=%d tx=%d log=%d", context, entry.blockNum, entry.txIndex, entry.logIndex)
+	}
+	address := eventLogAddress(log.GetAddress())
+	if entry.address != address {
+		return fmt.Errorf("snapshots: %s address %x but payload address is %x at block=%d tx=%d log=%d", context, entry.address, address, entry.blockNum, entry.txIndex, entry.logIndex)
+	}
+	for i, topic := range log.GetTopics() {
+		if len(topic) != common.HashLength {
+			return fmt.Errorf("snapshots: %s topic %d length %d, want %d at block=%d tx=%d log=%d", context, i, len(topic), common.HashLength, entry.blockNum, entry.txIndex, entry.logIndex)
+		}
+	}
+	return nil
 }
 
 func writeEventLogSegmentFromETL(dir string, ref SegmentRef, collector *etl.Collector, rowCount uint64) (SegmentRef, error) {
@@ -1464,6 +1496,9 @@ func (w *eventLogSegmentETLWriter) Put(key, value []byte) error {
 	var log corepb.TransactionInfo_Log
 	if err := proto.Unmarshal(raw, &log); err != nil {
 		return fmt.Errorf("snapshots: decode event log ETL row %d: %w", w.rowIndex, err)
+	}
+	if err := validateEventLogPayload(entry, &log, fmt.Sprintf("event log ETL row %d", w.rowIndex)); err != nil {
+		return err
 	}
 	for position, rawTopic := range log.GetTopics() {
 		var topic common.Hash

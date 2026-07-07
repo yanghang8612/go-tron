@@ -26,6 +26,24 @@ func (eventLogUncoveredReader) IterateEventLogs(fromBlock, toBlock uint64, filte
 	return nil
 }
 
+type eventLogRowsReader struct {
+	rows []EventLog
+}
+
+func (r eventLogRowsReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	return true, nil
+}
+
+func (r eventLogRowsReader) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+	for _, row := range r.rows {
+		cont, err := fn(row)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -243,6 +261,66 @@ func TestBuildEventLogSegmentFromReaderRequiresCoverage(t *testing.T) {
 	_, err := BuildEventLogSegmentFromReader(eventLogUncoveredReader{}, t.TempDir(), "", 1, 2)
 	if err == nil || !strings.Contains(err.Error(), "does not cover") {
 		t.Fatalf("BuildEventLogSegmentFromReader coverage error = %v, want coverage error", err)
+	}
+}
+
+func TestBuildEventLogSegmentFromReaderRejectsAddressMismatch(t *testing.T) {
+	addrA := eventLogTestAddress(0x73)
+	addrB := eventLogTestAddress(0x74)
+	topic := common.Hash{0x73}
+	reader := eventLogRowsReader{rows: []EventLog{{
+		BlockNum:  1,
+		Address:   common.BytesToAddress(addrB),
+		BlockHash: common.Hash{0x01},
+		TxHash:    common.Hash{0x02},
+		Log: &corepb.TransactionInfo_Log{
+			Address: addrA,
+			Topics:  [][]byte{topic[:]},
+		},
+	}}}
+
+	_, err := BuildEventLogSegmentFromReader(reader, t.TempDir(), "", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "payload address") {
+		t.Fatalf("BuildEventLogSegmentFromReader address mismatch err = %v, want payload address error", err)
+	}
+}
+
+func TestBuildEventLogSegmentFromReaderRejectsMalformedTopicLength(t *testing.T) {
+	addr := eventLogTestAddress(0x75)
+	reader := eventLogRowsReader{rows: []EventLog{{
+		BlockNum:  1,
+		Address:   common.BytesToAddress(addr),
+		BlockHash: common.Hash{0x01},
+		TxHash:    common.Hash{0x02},
+		Log: &corepb.TransactionInfo_Log{
+			Address: addr,
+			Topics:  [][]byte{{0x01}},
+		},
+	}}}
+
+	_, err := BuildEventLogSegmentFromReader(reader, t.TempDir(), "", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "topic 0 length 1") {
+		t.Fatalf("BuildEventLogSegmentFromReader malformed topic err = %v, want topic length error", err)
+	}
+}
+
+func TestBuildEventLogSegmentFromChainRejectsMalformedTopicLength(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x76)
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{{
+		Address: addr,
+		Topics:  [][]byte{{0x01}},
+	}})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	_, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "event log ETL row 0 topic 0 length 1") {
+		t.Fatalf("BuildEventLogSegmentFromChain malformed topic err = %v, want ETL topic length error", err)
 	}
 }
 
