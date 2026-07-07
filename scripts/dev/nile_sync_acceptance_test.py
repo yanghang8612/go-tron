@@ -4277,7 +4277,7 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                 proc.stderr,
             )
 
-    def test_rejects_inventory_interval_metric_mismatch(self):
+    def test_rejects_staged_sync_interval_metric_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = Path(tmp) / "samples.jsonl"
             row = clean_full_staged_sync_row()
@@ -4290,7 +4290,35 @@ class NileSyncAcceptanceTest(unittest.TestCase):
                     "intervalStageSyncInventoryBlocksPerMinute": 60.0,
                     "intervalStageSyncInventoryToTargetRatio": 0.4,
                     "intervalStageSyncBodiesBlocks": 20,
+                    "intervalStageSyncBodiesBlocksPerSecond": 1.0,
+                    "intervalStageSyncBodiesBlocksPerMinute": 30.0,
                     "intervalStageSyncBodiesToInventoryRatio": 1.0,
+                    "intervalStageSyncBodiesReadyBlocks": 10,
+                    "intervalStageSyncBodiesReadyBlocksPerSecond": 2.0,
+                    "intervalStageSyncBodiesReadyBlocksPerMinute": 10.0,
+                    "intervalStageSyncBodiesReadyToBodiesRatio": 0.4,
+                    "intervalStageSyncImportBlocks": 8,
+                    "intervalStageSyncImportBlocksPerSecond": 2.0,
+                    "intervalStageSyncImportBlocksPerMinute": 10.0,
+                    "intervalStageSyncImportToBodiesReadyRatio": 0.7,
+                    "intervalStageSyncExecutionBlocks": 7,
+                    "intervalStageSyncExecutionBlocksPerSecond": 2.0,
+                    "intervalStageSyncExecutionBlocksPerMinute": 10.0,
+                    "intervalStageSyncExecutionToImportRatio": 0.7,
+                    "intervalStageSyncCommitmentBlocks": 6,
+                    "intervalStageSyncCommitmentBlocksPerSecond": 2.0,
+                    "intervalStageSyncCommitmentBlocksPerMinute": 10.0,
+                    "intervalStageSyncCommitmentToExecutionRatio": 0.7,
+                    "intervalStageSyncFinishBlocks": 5,
+                    "intervalStageSyncFinishBlocksPerSecond": 2.0,
+                    "intervalStageSyncFinishBlocksPerMinute": 10.0,
+                    "intervalStageSyncFinishToCommitmentRatio": 0.7,
+                    "intervalStageChainFreezerBlocks": 4,
+                    "intervalStageChainFreezerBlocksPerSecond": 2.0,
+                    "intervalStageChainFreezerBlocksPerMinute": 10.0,
+                    "intervalStageSnapshotEventLogBuildBlocks": 3,
+                    "intervalStageSnapshotEventLogBuildBlocksPerSecond": 2.0,
+                    "intervalStageSnapshotEventLogBuildBlocksPerMinute": 10.0,
                 }
             )
             write_result(result, [row])
@@ -4329,6 +4357,51 @@ class NileSyncAcceptanceTest(unittest.TestCase):
             self.assertIn(
                 "intervalStageSyncInventoryBlocksPerMinute=60, want 90 "
                 "from intervalStageSyncInventoryBlocksPerSecond*60",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncBodiesReadyToBodiesRatio=0.4, want 0.5 "
+                "from intervalStageSyncBodiesReadyBlocks/intervalStageSyncBodiesBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncImportToBodiesReadyRatio=0.7, want 0.8 "
+                "from intervalStageSyncImportBlocks/intervalStageSyncBodiesReadyBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncExecutionToImportRatio=0.7, want 0.875 "
+                "from intervalStageSyncExecutionBlocks/intervalStageSyncImportBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncCommitmentToExecutionRatio=0.7, want 0.857143 "
+                "from intervalStageSyncCommitmentBlocks/intervalStageSyncExecutionBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncFinishToCommitmentRatio=0.7, want 0.833333 "
+                "from intervalStageSyncFinishBlocks/intervalStageSyncCommitmentBlocks",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncBodiesBlocksPerSecond=1, want 2 "
+                "from intervalStageSyncBodiesBlocks/intervalSeconds",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSyncFinishBlocksPerMinute=10, want 30 "
+                "from intervalStageSyncFinishBlocksPerSecond*60",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageChainFreezerBlocksPerSecond=2, want 0.4 "
+                "from intervalStageChainFreezerBlocks/intervalSeconds",
+                proc.stderr,
+            )
+            self.assertIn(
+                "intervalStageSnapshotEventLogBuildBlocksPerMinute=10, want 18 "
+                "from intervalStageSnapshotEventLogBuildBlocksPerSecond*60",
                 proc.stderr,
             )
 

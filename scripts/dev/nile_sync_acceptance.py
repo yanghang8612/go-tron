@@ -2160,16 +2160,28 @@ def check_full_staged_sync_derived_stage_metrics(row):
 
 def check_full_staged_sync_inventory_interval_metrics(row):
     issues = []
-    inventory_blocks, inventory_present = optional_int(
-        row, "intervalStageSyncInventoryBlocks", issues
+    interval_stage_fields = (
+        "intervalStageSyncInventory",
+        "intervalStageSyncBodies",
+        "intervalStageSyncBodiesReady",
+        "intervalStageSyncImport",
+        "intervalStageSyncExecution",
+        "intervalStageSyncCommitment",
+        "intervalStageSyncFinish",
+        "intervalStageChainFreezer",
+        "intervalStageSnapshotEventLogBuild",
     )
+    interval_blocks_by_prefix = {}
+    for prefix in interval_stage_fields:
+        blocks_field = f"{prefix}Blocks"
+        blocks, blocks_present = optional_int(row, blocks_field, issues)
+        if not blocks_present or blocks is None:
+            continue
+        interval_blocks_by_prefix[prefix] = blocks
+
     interval_blocks, interval_blocks_present = optional_int(row, "intervalBlocks", issues)
-    if (
-        inventory_present
-        and interval_blocks_present
-        and inventory_blocks is not None
-        and interval_blocks is not None
-    ):
+    inventory_blocks = interval_blocks_by_prefix.get("intervalStageSyncInventory")
+    if interval_blocks_present and inventory_blocks is not None and interval_blocks is not None:
         check_derived_number(
             row,
             "intervalStageSyncInventoryToTargetRatio",
@@ -2178,43 +2190,72 @@ def check_full_staged_sync_inventory_interval_metrics(row):
             "intervalStageSyncInventoryBlocks/intervalBlocks",
         )
 
-    bodies_blocks, bodies_present = optional_int(row, "intervalStageSyncBodiesBlocks", issues)
-    if (
-        bodies_present
-        and inventory_present
-        and bodies_blocks is not None
-        and inventory_blocks is not None
-    ):
+    interval_ratio_edges = (
+        (
+            "intervalStageSyncBodiesToInventoryRatio",
+            "intervalStageSyncBodies",
+            "intervalStageSyncInventory",
+            "intervalStageSyncBodiesBlocks/intervalStageSyncInventoryBlocks",
+        ),
+        (
+            "intervalStageSyncBodiesReadyToBodiesRatio",
+            "intervalStageSyncBodiesReady",
+            "intervalStageSyncBodies",
+            "intervalStageSyncBodiesReadyBlocks/intervalStageSyncBodiesBlocks",
+        ),
+        (
+            "intervalStageSyncImportToBodiesReadyRatio",
+            "intervalStageSyncImport",
+            "intervalStageSyncBodiesReady",
+            "intervalStageSyncImportBlocks/intervalStageSyncBodiesReadyBlocks",
+        ),
+        (
+            "intervalStageSyncExecutionToImportRatio",
+            "intervalStageSyncExecution",
+            "intervalStageSyncImport",
+            "intervalStageSyncExecutionBlocks/intervalStageSyncImportBlocks",
+        ),
+        (
+            "intervalStageSyncCommitmentToExecutionRatio",
+            "intervalStageSyncCommitment",
+            "intervalStageSyncExecution",
+            "intervalStageSyncCommitmentBlocks/intervalStageSyncExecutionBlocks",
+        ),
+        (
+            "intervalStageSyncFinishToCommitmentRatio",
+            "intervalStageSyncFinish",
+            "intervalStageSyncCommitment",
+            "intervalStageSyncFinishBlocks/intervalStageSyncCommitmentBlocks",
+        ),
+    )
+    for ratio_field, numerator_prefix, denominator_prefix, source in interval_ratio_edges:
+        numerator = interval_blocks_by_prefix.get(numerator_prefix)
+        denominator = interval_blocks_by_prefix.get(denominator_prefix)
+        if numerator is None or denominator is None:
+            continue
         check_derived_number(
             row,
-            "intervalStageSyncBodiesToInventoryRatio",
-            sampler_ratio(bodies_blocks, inventory_blocks),
+            ratio_field,
+            sampler_ratio(numerator, denominator),
             issues,
-            "intervalStageSyncBodiesBlocks/intervalStageSyncInventoryBlocks",
+            source,
         )
 
     interval_seconds, interval_seconds_present = optional_number(row, "intervalSeconds", issues)
-    if (
-        inventory_present
-        and interval_seconds_present
-        and inventory_blocks is not None
-        and interval_seconds is not None
-    ):
-        want = float(inventory_blocks) / interval_seconds if interval_seconds > 0 else 0.0
-        check_derived_number(
-            row,
-            "intervalStageSyncInventoryBlocksPerSecond",
-            want,
-            issues,
-            "intervalStageSyncInventoryBlocks/intervalSeconds",
-        )
-        check_derived_number(
-            row,
-            "intervalStageSyncInventoryBlocksPerMinute",
-            want * 60.0,
-            issues,
-            "intervalStageSyncInventoryBlocksPerSecond*60",
-        )
+    if interval_seconds_present and interval_seconds is not None:
+        for prefix, blocks in interval_blocks_by_prefix.items():
+            want = float(blocks) / interval_seconds if interval_seconds > 0 else 0.0
+            source = f"{prefix}Blocks/intervalSeconds"
+            per_second_field = f"{prefix}BlocksPerSecond"
+            per_minute_field = f"{prefix}BlocksPerMinute"
+            check_derived_number(row, per_second_field, want, issues, source)
+            check_derived_number(
+                row,
+                per_minute_field,
+                want * 60.0,
+                issues,
+                f"{prefix}BlocksPerSecond*60",
+            )
 
     return issues
 
