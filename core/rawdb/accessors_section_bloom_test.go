@@ -170,6 +170,41 @@ func TestReadHotSectionBloomStrictIgnoresColdFallback(t *testing.T) {
 	}
 }
 
+func TestSectionBloomStrictRejectsInvalidBitIndexWithoutHotAlias(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	encoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, 7))
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+	}
+	if err := WriteSectionBloom(db, 4, 42, encoded); err != nil {
+		t.Fatalf("WriteSectionBloom alias target: %v", err)
+	}
+
+	invalidBitIndex := uint64(1_000_042)
+	if got, ok, err := ReadSectionBloomStrict(db, 3, invalidBitIndex); err == nil || ok || got != nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadSectionBloomStrict invalid bit index = %x/%v/%v, want validation error", got, ok, err)
+	}
+	if got := ReadSectionBloom(db, 3, invalidBitIndex); got != nil {
+		t.Fatalf("ReadSectionBloom invalid bit index = %x, want compatibility miss", got)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, invalidBitIndex); err == nil || ok || bitset != nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadSectionBloomBitSetStrict invalid bit index = %x/%v/%v, want validation error", bitset, ok, err)
+	}
+}
+
+func TestSectionBloomStrictRejectsInvalidBitIndexBeforeColdFallback(t *testing.T) {
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomReader{err: errors.New("cold reader should not be reached")})
+
+	invalidBitIndex := uint64(SectionBloomBitSize)
+	if got, ok, err := ReadSectionBloomStrict(db, 3, invalidBitIndex); err == nil || ok || got != nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadSectionBloomStrict invalid cold bit index = %x/%v/%v, want validation error", got, ok, err)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, invalidBitIndex); err == nil || ok || bitset != nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadSectionBloomBitSetStrict invalid cold bit index = %x/%v/%v, want validation error", bitset, ok, err)
+	}
+}
+
 func TestSectionBloomBitSetStrictUsesDecodedColdReader(t *testing.T) {
 	coldBitset := setSectionBloomBit(nil, 7)
 	hotBitset := setSectionBloomBit(nil, 9)

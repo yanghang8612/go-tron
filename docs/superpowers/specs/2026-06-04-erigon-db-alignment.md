@@ -1789,7 +1789,9 @@ Status:
   Existing hot/cold section-bloom rows are now read through a strict accessor
   in this rebuild path, so hot KV read errors and cold sidecar errors abort the
   rebuild instead of being treated as missing rows that could clear unrelated
-  block bits.
+  block bits. The strict section-bloom readers also reject bit indexes outside
+  java-tron's 2048-bit bloom domain before forming the composite key, preventing
+  invalid reads from aliasing another section's `sb-` row.
   Cold section-bloom snapshot sidecars are accepted only when their block range
   covers complete java-tron bloom sections (`from % 2048 == 0` and
   `(to + 1) % 2048 == 0`), so manifests cannot advertise a partial section as

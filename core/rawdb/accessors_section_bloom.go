@@ -45,6 +45,9 @@ func ReadSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) (
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
 	}
+	if err := validateSectionBloomBitIndex(bitIndex, "read section bloom"); err != nil {
+		return nil, false, err
+	}
 	key := sectionBloomKey(section, bitIndex)
 	exists, err := db.Has(key)
 	if err != nil {
@@ -166,6 +169,9 @@ func ReadSectionBloomBitSet(db ethdb.KeyValueReader, section, bitIndex uint64) (
 func ReadSectionBloomBitSetStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
+	}
+	if err := validateSectionBloomBitIndex(bitIndex, "read section bloom bitset"); err != nil {
+		return nil, false, err
 	}
 	key := sectionBloomKey(section, bitIndex)
 	exists, err := db.Has(key)
