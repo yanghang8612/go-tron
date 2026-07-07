@@ -1015,6 +1015,12 @@ type ImportResumePhasePublishFinalizationRunApplyResult struct {
 	Publish      ImportResumePhasePublishRunApplyResult
 }
 
+// ImportResumePhaseDrainContinuationPlan is the downloader-owned post-publish
+// local drain decision after a scheduler-yielded phase suffix settles.
+type ImportResumePhaseDrainContinuationPlan struct {
+	DrainAgain bool
+}
+
 // ImportResumePhasePublishRunApplyResult groups the read/plan/write phases for
 // one resume-phase publish run.
 type ImportResumePhasePublishRunApplyResult struct {
@@ -1340,6 +1346,18 @@ func ApplyImportResumePhasePublishFinalizationRun(input ImportResumePhasePublish
 	}
 	result.Publish = ApplyImportResumePhasePublishRunPlan(NewImportResumePhasePublishRunPlan(result.Finalization.Phases), applier)
 	return result
+}
+
+// PlanImportResumePhaseDrainContinuation decides whether the local drain loop
+// should immediately revisit staged bodies after resume-phase progress is
+// published. A rerun is safe only after the post-barrier publish path ran and
+// durably applied its rows; skipped, blocked, or failed publishes leave the
+// current drain stopped at the scheduler boundary.
+func PlanImportResumePhaseDrainContinuation(run ImportResumePhasePublishFinalizationRunApplyResult) ImportResumePhaseDrainContinuationPlan {
+	if run.Finalization.Publish && run.Publish.Publish.Applied {
+		return ImportResumePhaseDrainContinuationPlan{DrainAgain: true}
+	}
+	return ImportResumePhaseDrainContinuationPlan{}
 }
 
 // PlanImportResumePhasePublish verifies a yielded phase suffix against

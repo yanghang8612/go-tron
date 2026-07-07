@@ -2411,6 +2411,55 @@ func TestApplyImportResumePhasePublishFinalizationRun(t *testing.T) {
 	}
 }
 
+func TestPlanImportResumePhaseDrainContinuation(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+	}
+	stageRows := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageCommitment:    {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+
+	published := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows})
+	if got := PlanImportResumePhaseDrainContinuation(published); !got.DrainAgain {
+		t.Fatalf("published continuation = %+v, want drain again", got)
+	}
+
+	skipped := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: false,
+	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows})
+	if got := PlanImportResumePhaseDrainContinuation(skipped); got.DrainAgain {
+		t.Fatalf("skipped continuation = %+v, want stop at boundary", got)
+	}
+
+	writeErr := errors.New("write failed")
+	failedWrite := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+	}, &recordingImportResumePhasePublishApplier{stageRows: stageRows, err: writeErr})
+	if got := PlanImportResumePhaseDrainContinuation(failedWrite); got.DrainAgain {
+		t.Fatalf("failed-write continuation = %+v, want stop at boundary", got)
+	}
+
+	blockedPublish := ApplyImportResumePhasePublishFinalizationRun(ImportResumePhasePublishFinalizationInput{
+		Phases:   phases,
+		FinishOK: true,
+	}, &recordingImportResumePhasePublishApplier{})
+	if got := PlanImportResumePhaseDrainContinuation(blockedPublish); got.DrainAgain {
+		t.Fatalf("blocked-publish continuation = %+v, want stop at boundary", got)
+	}
+}
+
 func TestPlanImportResumePhasePublish(t *testing.T) {
 	hash := tcommon.Hash{0x07}
 	phases := []ImportStagePhasePlan{

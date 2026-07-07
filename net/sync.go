@@ -1474,7 +1474,7 @@ drainLoop:
 		paused = commitBarrier.Paused
 	}
 	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
-	if ss.shouldResumeDrainAfterPhasePublish(resumePublish) {
+	if syncdl.PlanImportResumePhaseDrainContinuation(resumePublish).DrainAgain {
 		ss.requestDrainAgain()
 	}
 }
@@ -1527,10 +1527,6 @@ func (ss *SyncService) publishImportResumePhaseProgress(phases []syncdl.ImportSt
 	}, syncImportResumePhasePublishApplier{service: ss})
 	ss.logImportResumePhasePublishResult(run.Publish.Publish)
 	return run
-}
-
-func (ss *SyncService) shouldResumeDrainAfterPhasePublish(run syncdl.ImportResumePhasePublishFinalizationRunApplyResult) bool {
-	return run.Finalization.Publish && run.Publish.Publish.Applied
 }
 
 func (ss *SyncService) requestDrainAgain() {
