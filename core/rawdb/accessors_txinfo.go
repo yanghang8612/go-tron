@@ -81,6 +81,9 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
 			return info, ok, err
 		}
+		if info, ok, err := transactionInfoByExplicitIDPosition(txID, blockNum, infos, "read transaction info by explicit id"); err != nil || ok {
+			return info, ok, err
+		}
 	}
 	lookup, ok, err := readColdTransactionIndexByHash(db, txID)
 	if err != nil {
@@ -112,23 +115,26 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 	if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
 		return info, ok, err
 	}
+	return transactionInfoByExplicitIDPosition(txID, blockNum, infos, "read transaction info by explicit id")
+}
+
+func transactionInfoByExplicitIDPosition(txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
 	for _, info := range infos {
-		if transactionInfoMatchesIndexedLookup(info, txID, blockNum) && len(info.Id) != 0 {
+		if info == nil || len(info.Id) == 0 {
+			continue
+		}
+		if !bytes.Equal(info.Id, txID) {
+			continue
+		}
+		if err := validateTransactionInfoIDForKey(txID, info, context); err != nil {
+			return info, true, err
+		}
+		if transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
 			return info, true, nil
 		}
+		return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during %s", info.BlockNumber, blockNum, context)
 	}
 	return nil, false, nil
-}
-
-func transactionInfoIDMatches(info *corepb.TransactionInfo, txID []byte) bool {
-	return validateTransactionInfoIDForKey(txID, info, "read transaction info") == nil
-}
-
-func transactionInfoMatchesIndexedLookup(info *corepb.TransactionInfo, txID []byte, blockNum uint64) bool {
-	if !transactionInfoIDMatches(info, txID) {
-		return false
-	}
-	return transactionInfoBlockNumberMatches(info.BlockNumber, blockNum)
 }
 
 func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {

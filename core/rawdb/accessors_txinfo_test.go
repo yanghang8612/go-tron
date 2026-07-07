@@ -261,6 +261,36 @@ func TestReadTransactionInfoHotReadablePositionIgnoresColdPositionError(t *testi
 	}
 }
 
+func TestReadTransactionInfoHotExplicitIDIgnoresColdPositionError(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x63}, common.HashLength)
+	otherID := bytes.Repeat([]byte{0x64}, common.HashLength)
+	if err := WriteTransactionIndex(db, txID, 7); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Id: otherID, Fee: 100, BlockNumber: 7, BlockTimeStamp: 7070},
+		{Id: txID, Fee: 200, BlockNumber: 7, BlockTimeStamp: 7070},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(failingTxPositionChainIndex{
+		tx:     hash,
+		block:  7,
+		posErr: errors.New("cold tx position corrupt"),
+	})
+
+	got, ok, err := ReadTransactionInfoStrict(db, txID)
+	if err != nil || !ok || got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfoStrict hot explicit id = %+v ok %v err %v, want fee 200", got, ok, err)
+	}
+	if got := ReadTransactionInfo(db, txID); got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfo hot explicit id = %+v, want fee 200", got)
+	}
+}
+
 func TestReadTransactionInfoReadableBlockPositionRejectsCorruptBlockBody(t *testing.T) {
 	ancient := newFakeAncient()
 	ancient.put(ancientBlocks, 7, []byte("not-a-valid-block"))

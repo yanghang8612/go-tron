@@ -270,9 +270,11 @@ Status:
   transaction-position reader interfaces over that same hot/cold composed view,
   deriving tx positions from readable block bodies when only a block-number
   lookup row exists. Cold tx-position sidecars are consulted only after the hot
-  transaction index plus readable canonical block body cannot provide the
-  block-local position, so corrupt cold sidecars do not poison queries already
-  answerable from hot/canonical data while cold-only archive reads remain strict.
+  transaction index plus readable canonical block body, or an explicit matching
+  `TransactionInfo.Id` in the per-block `TransactionRet` payload, cannot provide
+  the block-local position, so corrupt cold sidecars do not poison queries
+  already answerable from hot/canonical data while cold-only archive reads remain
+  strict.
   Strict transaction-info reads are now exported for backend/API callers: they
   surface malformed hot rows, corrupt per-block `TransactionRet` payloads, and
   block-body/index mismatches as archive data errors, while still using readable
