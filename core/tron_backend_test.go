@@ -2098,6 +2098,61 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsUsesColdEventLogSegmentWithIncompleteHotTransactionInfo(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x35)
+	topic := tcommon.Hash{0x35}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x35, 0x36},
+	})
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	dir := t.TempDir()
+	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogs(bc.ChainDB(), 1, 1); err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, nil); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock incomplete block1: %v", err)
+	}
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs with incomplete hot TransactionRet: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs with incomplete hot TransactionRet returned %d logs, want 1", len(logs))
+	}
+	got := logs[0]
+	if got.Data != "0x3536" || got.TransactionHash != fmt.Sprintf("0x%x", block1.Transactions()[0].Hash()) {
+		t.Fatalf("cold log with incomplete hot TransactionRet = %+v, want data 0x3536 and canonical tx hash", got)
+	}
+}
+
 func TestTronBackend_GetLogsBlockHashUsesColdEventLogSegment(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()

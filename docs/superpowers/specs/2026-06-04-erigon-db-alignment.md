@@ -1963,8 +1963,12 @@ Status:
   receipt rows are gone. When the canonical block is readable, covered cold log
   rows must also carry the canonical block hash for their block number and a
   transaction hash/index that matches the canonical block body; when the
-  canonical `TransactionRet` row is readable, the row's block-wide log index
-  and payload must match the canonical receipt log too.
+  canonical `TransactionRet` row is readable and complete, the row's
+  block-wide log index and payload must match the canonical receipt log too.
+  Incomplete local `TransactionRet` coverage does not reject a cold event-log
+  row whose block hash and transaction hash already match the canonical block
+  body, so archive log queries keep using verified cold rows after hot receipt
+  coverage has been pruned or partially rebuilt.
   Segment-local address/topic lookup candidates must still match the requested
   filter at query time too: stale postings now fail as cold-index corruption
   instead of degrading into a false empty archive-log result. Backend and
@@ -2295,10 +2299,11 @@ Status:
   `gettransactioninfobyid` route, so receipt aliases cannot read transactions
   above the solid/PBFT boundary.
 - The hot `eth_getLogs` fallback scan now uses the strict per-block
-  `TransactionRet` reader too. For non-genesis blocks, missing per-block
-  tx-info rows on tx-bearing blocks now fail the query instead of producing a
-  false empty archive log response when cold event-log coverage is incomplete.
-  Present rows with mismatched block numbers, counts, nil entries, or tx ids
+  `TransactionRet` reader too. Missing or incomplete per-block tx-info
+  coverage is treated as unavailable local receipt coverage and skipped, matching
+  the legacy/java-style log scan contract instead of turning archive gaps into
+  hard RPC failures. Present malformed rows with mismatched block numbers, nil
+  entries, malformed tx ids, or tx ids that do not match the canonical block
   fail the query instead of producing a false empty or wrong log response. The
   fallback range scan also reads block bodies through `ReadBlockStrict`, so a
   corrupt freezer/hot body in the scanned range surfaces as data corruption
