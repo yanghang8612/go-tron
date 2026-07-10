@@ -230,6 +230,9 @@ func BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(dir string, eventR
 		if err := validateEventLogRef(ref); err != nil {
 			return SegmentRef{}, err
 		}
+		if err := CheckEventLogSegment(dir, ref); err != nil {
+			return SegmentRef{}, fmt.Errorf("snapshots: verify event-log-index source: %w", err)
+		}
 	}
 	fromBlock := eventRefs[0].FromTxNum
 	toBlock := eventRefs[len(eventRefs)-1].ToTxNum

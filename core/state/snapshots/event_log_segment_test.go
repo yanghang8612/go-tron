@@ -760,6 +760,24 @@ func TestVerifyEventLogIndexSegmentAgainstEventLogsRejectsEventChecksumMismatch(
 	}
 }
 
+func TestBuildEventLogIndexRejectsEventChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	ref := writeVerifiableEventLogSegment(t, dir, 1, 1)
+	ref.Checksum = badSnapshotChecksum()
+
+	_, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "log/index-source-check.idx")
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments error = %v, want checksum mismatch", err)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "log/index-source-check-*"))
+	if err != nil {
+		t.Fatalf("Glob index outputs: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("index outputs = %v, want none", files)
+	}
+}
+
 func TestEventLogIndexBuildRejectsGappedSegments(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

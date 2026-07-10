@@ -70,6 +70,11 @@ func BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(dir string, freeze
 	if freezerRef.Kind != SegmentChainFreezer {
 		return SegmentRef{}, fmt.Errorf("snapshots: chain index requires %s segment, got %s", SegmentChainFreezer, freezerRef.Kind)
 	}
+	// The build pass validates each row. Verify its file identity first so the
+	// derived index cannot be published from stale source metadata.
+	if err := checkSegmentFileMetadata(dir, freezerRef, false); err != nil {
+		return SegmentRef{}, fmt.Errorf("snapshots: verify chain-index source: %w", err)
+	}
 	if relPath == "" {
 		relPath = ChainIndexSegmentPath(freezerRef.FromTxNum, freezerRef.ToTxNum)
 	}

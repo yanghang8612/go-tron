@@ -73,6 +73,28 @@ func TestChainIndexSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestBuildChainIndexRejectsFreezerChecksumMismatch(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{{block: canonicalBoundaryTestBlock(t, 0)}})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "chain/freezer-0-0.seg", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	freezerRef.Checksum = badSnapshotChecksum()
+
+	_, err = BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "chain/index-0-0.idx")
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment error = %v, want checksum mismatch", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, "chain/index-0-0.idx")); !os.IsNotExist(err) {
+		t.Fatalf("index output stat error = %v, want not exist", err)
+	}
+}
+
 func TestVerifyChainIndexSegmentAgainstChainFreezerRejectsFreezerChecksumMismatch(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
