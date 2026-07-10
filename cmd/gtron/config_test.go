@@ -28,6 +28,7 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		seednodeFlag,
 		maxpeersFlag,
 		syncImportBatchFlag,
+		syncAsyncCommitFlag,
 	}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
@@ -52,6 +53,35 @@ func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
 	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "12"}))
 	if cfg.SyncImportBatch != 12 {
 		t.Fatalf("SyncImportBatch override = %d, want 12", cfg.SyncImportBatch)
+	}
+}
+
+func TestShouldEnableAsyncCommit(t *testing.T) {
+	if shouldEnableAsyncCommit(makeNodeConfigFlagSet(t, nil)) {
+		t.Fatal("async commit enabled by default")
+	}
+	if !shouldEnableAsyncCommit(makeNodeConfigFlagSet(t, []string{"--sync.async-commit"})) {
+		t.Fatal("explicit async commit flag was ignored")
+	}
+}
+
+func TestSyncAsyncCommitEnvironmentAlias(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT", "1")
+	var enabled bool
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{&cli.BoolFlag{
+		Name:    "sync.async-commit",
+		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
+	}}
+	app.Action = func(ctx *cli.Context) error {
+		enabled = shouldEnableAsyncCommit(ctx)
+		return nil
+	}
+	if err := app.Run([]string{"gtron"}); err != nil {
+		t.Fatalf("run app with async commit alias: %v", err)
+	}
+	if !enabled {
+		t.Fatal("GTRON_ASYNC_COMMIT=1 did not enable async commit")
 	}
 }
 

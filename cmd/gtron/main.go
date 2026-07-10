@@ -251,6 +251,11 @@ var (
 		Usage: "Maximum staged block bodies imported per local sync pass (1-100; wire fetch batch stays 100)",
 		Value: tsync.MaxImportBatch,
 	}
+	syncAsyncCommitFlag = &cli.BoolFlag{
+		Name:    "sync.async-commit",
+		Usage:   "Experimental: pipeline staged-sync state commits; validate with a Nile re-sync before production use",
+		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
+	}
 )
 
 var app = &cli.App{
@@ -315,6 +320,7 @@ var app = &cli.App{
 		freezerBatchFlag,
 		syncRestartFromFlag,
 		syncImportBatchFlag,
+		syncAsyncCommitFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
@@ -529,16 +535,15 @@ func gtron(ctx *cli.Context) error {
 	}
 	// Async/pipelined commit is OFF by default and DELIBERATELY not a
 	// chain-config / proposal value (it changes only the internal commit
-	// schedule, never any wire-observable byte). It is enabled ops-only via an
-	// environment variable for the live re-sync validation described in
-	// docs (async-commit validation protocol). Experimental; do not enable on a
-	// production node until that validation passes.
-	if os.Getenv("GTRON_ASYNC_COMMIT") == "1" {
+	// schedule, never any wire-observable byte). It is enabled only by the
+	// explicit experimental flag (or its retained environment alias) for the
+	// live re-sync validation described in the runbook.
+	if shouldEnableAsyncCommit(ctx) {
 		bc.SetAsyncCommit(true)
 		// depth > 2 (GTRON_ASYNC_COMMIT_DEPTH) additionally buffers the commit
 		// queue and amortizes the per-range drain across sync batches; depth 2
 		// (default) is the current rendezvous behavior.
-		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use",
+		log.Warn("Async commit ENABLED (experimental, --sync.async-commit) — internal commit pipelined off the critical path; validate via re-sync before production use",
 			"depth", bc.PipelinedCommitDepth())
 	}
 	if ctx.IsSet("sync.restart-from") {
@@ -970,6 +975,10 @@ func gtron(ctx *cli.Context) error {
 	}
 	closeStores()
 	return nil
+}
+
+func shouldEnableAsyncCommit(ctx *cli.Context) bool {
+	return ctx != nil && ctx.Bool("sync.async-commit")
 }
 
 func versionCmd(ctx *cli.Context) error {
