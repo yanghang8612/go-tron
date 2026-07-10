@@ -1138,6 +1138,9 @@ Status:
   state roots through chain-freezer segments plus the `chain-index` sidecar.
 - Chain-freezer snapshots now also publish a `chain-freezer-accessor` sidecar:
   a block-number to row-offset table for the variable-length freezer segment.
+  The accessor builder preflights the source freezer checksum and row payloads
+  before writing the derived sidecar, so malformed source rows cannot be
+  published as a valid-looking O(1) lookup index.
   `Manager.Ancient` prefers that accessor for O(1) block-number point reads
   and falls back to the old scan path only for legacy manifests without the
   sidecar. Snapshot-backed `AncientRange` now also reads through a single

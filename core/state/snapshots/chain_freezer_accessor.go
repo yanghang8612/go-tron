@@ -44,6 +44,11 @@ func BuildChainFreezerAccessorSegmentFromChainFreezerSegment(dir string, freezer
 	if freezerRef.Kind != SegmentChainFreezer {
 		return SegmentRef{}, fmt.Errorf("snapshots: chain-freezer accessor requires %s segment, got %s", SegmentChainFreezer, freezerRef.Kind)
 	}
+	// The offsets are only useful when they describe a semantically valid
+	// freezer segment. Do this before publishing a derived sidecar.
+	if err := CheckChainFreezerSegment(dir, freezerRef); err != nil {
+		return SegmentRef{}, fmt.Errorf("snapshots: verify chain-freezer accessor source: %w", err)
+	}
 	if relPath == "" {
 		relPath = ChainFreezerAccessorSegmentPath(freezerRef.FromTxNum, freezerRef.ToTxNum)
 	}

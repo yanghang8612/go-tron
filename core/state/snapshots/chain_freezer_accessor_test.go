@@ -60,6 +60,28 @@ func TestChainFreezerAccessorBuildCheckVerify(t *testing.T) {
 	}
 }
 
+func TestBuildChainFreezerAccessorRejectsMalformedFreezerSource(t *testing.T) {
+	snapshotDir := t.TempDir()
+	block := canonicalBoundaryTestBlock(t, 0)
+	blockRaw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal block: %v", err)
+	}
+	freezerRef := writeChainFreezerSegmentRowsForTest(t, snapshotDir, "chain/freezer-malformed-0-0.seg", 0, 0, []chainFreezerRow{{
+		blockNum:     0,
+		blockRaw:     blockRaw,
+		stateRootRaw: []byte{0x01},
+	}})
+
+	_, err = BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "chain/freezer-accessor-malformed-0-0.idx")
+	if err == nil || !strings.Contains(err.Error(), "state root length") {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment error = %v, want malformed source rejection", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, "chain/freezer-accessor-malformed-0-0.idx")); !os.IsNotExist(err) {
+		t.Fatalf("accessor output stat error = %v, want not exist", err)
+	}
+}
+
 func TestVerifyChainFreezerAccessorAgainstChainFreezerRejectsFreezerChecksumMismatch(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
