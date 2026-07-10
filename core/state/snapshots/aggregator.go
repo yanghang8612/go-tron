@@ -773,7 +773,12 @@ func aggregateLatestPath(base string, opts AggregatorBuildOptions, ext string) s
 
 func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {
 	for _, candidate := range refs {
-		if ref.normalizedDataset() != candidate.normalizedDataset() || ref.Domain != candidate.Domain || ref.Kind != candidate.Kind {
+		if ref.normalizedDataset() != candidate.normalizedDataset() || ref.Domain != candidate.Domain {
+			continue
+		}
+		if ref.Kind != candidate.Kind &&
+			!(IsLatestAccessorRef(ref) && (candidate.Kind == SegmentLatest || candidate.Kind == SegmentBTree)) &&
+			!(IsLatestAccessorRef(candidate) && (ref.Kind == SegmentLatest || ref.Kind == SegmentBTree)) {
 			continue
 		}
 		if ref.FromTxNum <= candidate.ToTxNum && candidate.FromTxNum <= ref.ToTxNum {

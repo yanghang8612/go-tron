@@ -319,6 +319,19 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 	return segRef, accessorRef, btreeRef, nil
 }
 
+// latestBinaryPublishedRefs returns the compact latest-segment publication set.
+// The B-tree is the primary lookup path, so newly built snapshots do not retain
+// the per-entry .lidx sidecar. Readers and verifiers still support legacy
+// manifests that include it.
+func latestBinaryPublishedRefs(dir string, latestRef, accessorRef, btreeRef SegmentRef) ([]SegmentRef, error) {
+	if accessorRef.Path != "" {
+		if err := os.Remove(filepath.Join(dir, accessorRef.Path)); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("snapshots: remove redundant latest accessor %q: %w", accessorRef.Path, err)
+		}
+	}
+	return []SegmentRef{latestRef, btreeRef}, nil
+}
+
 func readLatestBinarySegment(path string, ref SegmentRef) (*LatestSegment, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

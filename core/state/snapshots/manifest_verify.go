@@ -437,22 +437,21 @@ func verifyManifestLatestBinarySidecarSet(dir string, manifest *Manifest, cfg Do
 
 	if cfg.HasLatestAccessor {
 		accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
-		if !ok {
-			return fmt.Errorf("snapshots: binary latest %q missing required accessor %q", ref.Path, latestBinaryAccessorPath(ref.Path))
-		}
-		if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
-			return err
-		}
-		accessorFile, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
-		if err != nil {
-			return err
-		}
-		defer accessorFile.Close()
-		if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
-			return err
-		}
-		if err := verifyLatestBinaryAccessorOffsetsAgainstSegment(path, segFile, segHeader, accessorFile, accessorHeader); err != nil {
-			return err
+		if ok {
+			if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+				return err
+			}
+			accessorFile, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
+			if err != nil {
+				return err
+			}
+			defer accessorFile.Close()
+			if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
+				return err
+			}
+			if err := verifyLatestBinaryAccessorOffsetsAgainstSegment(path, segFile, segHeader, accessorFile, accessorHeader); err != nil {
+				return err
+			}
 		}
 	}
 	if cfg.HasLatestBTree {

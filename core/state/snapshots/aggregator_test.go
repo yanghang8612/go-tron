@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -69,7 +71,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build aggregate snapshot: %v", err)
 	}
-	if result.Manifest == nil || len(result.Segments) != 21 {
+	if result.Manifest == nil || len(result.Segments) != 15 {
 		t.Fatalf("aggregate result = %+v", result)
 	}
 	loaded, err := LoadManifest(dir)
@@ -77,28 +79,26 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 		t.Fatalf("load manifest: %v", err)
 	}
 	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
 	historyRef := assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentHistory)
 	assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentInverted)
 
 	accountRef := assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentLatest)
+	assertNoLatestAccessorRef(t, loaded)
+	if _, err := os.Stat(filepath.Join(dir, latestBinaryAccessorPath(accountRef.Path))); !os.IsNotExist(err) {
+		t.Fatalf("new latest accessor file stat error = %v, want not exist", err)
+	}
 	if !strings.HasSuffix(accountRef.Path, ".seg") {
 		t.Fatalf("account latest path = %q, want .seg", accountRef.Path)
 	}
@@ -215,6 +215,62 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 	if got, ok, err := mgr.GetCommitmentRoot(15); err != nil || !ok || got != newRoot {
 		t.Fatalf("updated root = %x ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestAggregatorRetiresLegacyLatestAccessor(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x6a}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v1")); err != nil {
+		t.Fatal(err)
+	}
+	legacyLatest, legacyAccessor, legacyBTree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, 10, 20, "latest/accounts.seg")
+	if err != nil {
+		t.Fatalf("build legacy latest segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 20, []SegmentRef{legacyLatest, legacyAccessor, legacyBTree})); err != nil {
+		t.Fatalf("publish legacy manifest: %v", err)
+	}
+
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v2")); err != nil {
+		t.Fatal(err)
+	}
+	latest, accessor, btree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, 10, 20, "latest/accounts.seg")
+	if err != nil {
+		t.Fatalf("build compact latest segment: %v", err)
+	}
+	refs, err := latestBinaryPublishedRefs(dir, latest, accessor, btree)
+	if err != nil {
+		t.Fatalf("select compact latest refs: %v", err)
+	}
+	manifest, err := NewAggregator(dir).Integrate(10, 20, refs)
+	if err != nil {
+		t.Fatalf("integrate compact latest segment: %v", err)
+	}
+	assertNoLatestAccessorRef(t, manifest)
+	legacyRetired := false
+	for _, ref := range manifest.Retired {
+		if ref.Path == legacyAccessor.Path && ref.Kind == legacyAccessor.Kind {
+			legacyRetired = true
+			break
+		}
+	}
+	if !legacyRetired {
+		t.Fatalf("legacy latest accessor was not retired: %+v", manifest.Retired)
+	}
+	if _, err := os.Stat(filepath.Join(dir, legacyAccessor.Path)); err != nil {
+		t.Fatalf("legacy accessor file missing before retired prune: %v", err)
+	}
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{}); err != nil {
+		t.Fatalf("verify compact manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open compact manager: %v", err)
+	}
+	if got, ok, err := mgr.GetAccountLatest(owner, 15); err != nil || !ok || string(got) != "account-v2" {
+		t.Fatalf("compact latest account = %q ok=%v err=%v, want account-v2", got, ok, err)
 	}
 }
 
@@ -388,25 +444,20 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 		t.Fatal("BuildLatest returned nil manifest")
 	}
 
-	// (a) Verify expected latest/accessor/btree refs are present.
+	// (a) Verify expected latest/btree refs are present without redundant .lidx files.
 	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
+	assertNoLatestAccessorRef(t, result.Manifest)
 
 	// (b) Assert NO history-kind refs are present.
 	for _, ref := range result.Manifest.Segments {
@@ -587,4 +638,13 @@ func assertSegmentRef(t *testing.T, manifest *Manifest, dataset SegmentDataset, 
 	}
 	t.Fatalf("missing %s/%s domain %#04x in %+v", dataset, kind, uint16(domain), manifest.Segments)
 	return SegmentRef{}
+}
+
+func assertNoLatestAccessorRef(t *testing.T, manifest *Manifest) {
+	t.Helper()
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentAccessor && strings.EqualFold(filepath.Ext(ref.Path), ".lidx") {
+			t.Fatalf("manifest retained redundant latest accessor: %+v", ref)
+		}
+	}
 }

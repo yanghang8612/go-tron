@@ -463,10 +463,9 @@ func validateLatestBinaryCompanionTriples(manifest *Manifest) error {
 		}
 		if cfg.HasLatestAccessor {
 			accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
-			if !ok {
-				return fmt.Errorf("snapshots: binary latest %q missing required accessor %q", ref.Path, latestBinaryAccessorPath(ref.Path))
+			if ok {
+				companionByLatest[accessorRef.Path] = struct{}{}
 			}
-			companionByLatest[accessorRef.Path] = struct{}{}
 		}
 		if cfg.HasLatestBTree {
 			btreeRef, ok := latestBinaryBTreeRef(manifest, ref)

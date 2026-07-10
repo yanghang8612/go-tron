@@ -155,13 +155,13 @@ func TestManifestAcceptsFlatLatestDatasets(t *testing.T) {
 	}
 }
 
-func TestManifestRejectsIncompleteBinaryLatestCompanions(t *testing.T) {
+func TestManifestValidatesBinaryLatestCompanions(t *testing.T) {
 	tests := []struct {
 		name     string
 		segments []SegmentRef
 	}{
 		{
-			name: "missing accessor",
+			name: "btree only",
 			segments: []SegmentRef{
 				{Dataset: SegmentDatasetAccountLatest, Kind: SegmentLatest, FromTxNum: 1, ToTxNum: 10, Path: "latest/accounts.seg"},
 				{Dataset: SegmentDatasetAccountLatest, Kind: SegmentBTree, FromTxNum: 1, ToTxNum: 10, Path: "latest/accounts.bt"},
@@ -189,8 +189,15 @@ func TestManifestRejectsIncompleteBinaryLatestCompanions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := NewManifest(1, 10, tt.segments).Validate(); err == nil {
-				t.Fatal("incomplete binary latest companion set accepted")
+			err := NewManifest(1, 10, tt.segments).Validate()
+			if tt.name == "btree only" {
+				if err != nil {
+					t.Fatalf("btree-only latest companion set rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("invalid binary latest companion set accepted")
 			}
 		})
 	}

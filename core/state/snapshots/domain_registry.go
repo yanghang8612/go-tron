@@ -194,7 +194,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 			ReadHotAccountLatest:    rawdb.ReadStateAccountLatest,
 			IterateHotAccountLatest: rawdb.IterateStateAccountLatest,
@@ -212,7 +212,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 			ReadHotKVLatest:        rawdb.ReadStateKVLatest,
 			IterateHotKVLatestRows: rawdb.IterateStateKVLatestRows,
@@ -229,7 +229,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 			ReadHotKVGeneration:    rawdb.ReadStateKVGeneration,
 			IterateHotKVGeneration: rawdb.IterateStateKVGeneration,
@@ -259,7 +259,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 			ReadHotCode:    readHotStateCode,
 			IterateHotCode: rawdb.IterateStateCode,
@@ -278,7 +278,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 		},
 		{
@@ -294,7 +294,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
 			},
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,

@@ -170,6 +170,11 @@ rollback, use `--snapshot.compress-latest=false` or set
 `GTRON_SNAPSHOT_COMPRESS_LATEST=false`; readers accept both this compressed
 encoding and the legacy raw records.
 
+New latest snapshot publications retain the sparse `.bt` lookup index but omit
+the redundant per-entry `.lidx` offset sidecar. Existing accessor-bearing
+manifests remain readable and are validated when present; a subsequent latest
+build retires the old sidecar for normal retired-file reclamation.
+
 ## Signed Cold Prune Drill
 
 Run the producer profile with `--signed-cold-prune` to exercise the minimum
