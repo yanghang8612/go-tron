@@ -102,6 +102,10 @@ func snapshotCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "snapshot",
 		Usage: "Manage verified state snapshots",
+		Before: func(ctx *cli.Context) error {
+			applySnapshotCompressionConfigs(ctx)
+			return nil
+		},
 		Subcommands: []*cli.Command{
 			{
 				Name:  "restore",

@@ -13,3 +13,16 @@ func applySnapshotCompressionConfig(ctx *cli.Context) bool {
 	statesnapshots.CompressHistorySegments = enabled
 	return enabled
 }
+
+func applySnapshotLatestCompressionConfig(ctx *cli.Context) bool {
+	enabled := snapshotCompressLatestFlag.Value
+	if ctx != nil {
+		enabled = ctx.Bool(snapshotCompressLatestFlag.Name)
+	}
+	statesnapshots.CompressLatestSegments = enabled
+	return enabled
+}
+
+func applySnapshotCompressionConfigs(ctx *cli.Context) (history, latest bool) {
+	return applySnapshotCompressionConfig(ctx), applySnapshotLatestCompressionConfig(ctx)
+}

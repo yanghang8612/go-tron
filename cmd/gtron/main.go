@@ -163,6 +163,12 @@ var (
 		Value:   true,
 		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_HISTORY"},
 	}
+	snapshotCompressLatestFlag = &cli.BoolFlag{
+		Name:    "snapshot.compress-latest",
+		Usage:   "Write new cold latest-state records with Snappy compression when smaller; set false to emit legacy raw records",
+		Value:   true,
+		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_LATEST"},
+	}
 	snapshotCatalogSigningKeyFileRuntimeFlag = &cli.StringFlag{
 		Name:    "snapshot.catalog-signing-key-file",
 		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap mode only)",
@@ -301,6 +307,7 @@ var app = &cli.App{
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
 		snapshotCompressHistoryFlag,
+		snapshotCompressLatestFlag,
 		snapshotCatalogSigningKeyFileRuntimeFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
@@ -392,8 +399,8 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
-	compressHistorySegments := applySnapshotCompressionConfig(ctx)
-	log.Info("Cold history compression configured", "enabled", compressHistorySegments)
+	compressHistorySegments, compressLatestSegments := applySnapshotCompressionConfigs(ctx)
+	log.Info("Cold snapshot compression configured", "history", compressHistorySegments, "latest", compressLatestSegments)
 	dbPath := chainDataDir(cfg.DataDir)
 
 	// In dev mode, parse witness key early so we can build the genesis with it

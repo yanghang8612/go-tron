@@ -164,6 +164,12 @@ rollback to raw segment emission, start the producer with
 `GTRON_SNAPSHOT_COMPRESS_HISTORY=false`; existing compressed and raw segments
 remain readable either way.
 
+New latest-state records in cold snapshot segments use per-value Snappy
+compression when it reduces their size. For an A/B comparison or raw-emission
+rollback, use `--snapshot.compress-latest=false` or set
+`GTRON_SNAPSHOT_COMPRESS_LATEST=false`; readers accept both this compressed
+encoding and the legacy raw records.
+
 ## Signed Cold Prune Drill
 
 Run the producer profile with `--signed-cold-prune` to exercise the minimum

@@ -84,6 +84,139 @@ func TestLatestBinarySegmentRoundTripGetAndIteratePrefix(t *testing.T) {
 	}
 }
 
+func TestLatestBinarySegmentCompressesValuesWithAccessorReads(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestBinaryAddress(0x45)
+	key := AccountKVSnapshotKey(owner, 7, []byte("compressed"))
+	value := bytes.Repeat([]byte("repeated latest-state value "), 512)
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "latest/compressed.seg",
+	}
+	segRef, accessorRef, btreeRef, err := writeLatestBinarySegmentAndAccessor(dir, ref, func(yield func(LatestEntry) error) error {
+		return yield(LatestEntry{Key: key, Value: value})
+	})
+	if err != nil {
+		t.Fatalf("write latest segment: %v", err)
+	}
+	path := filepath.Join(dir, segRef.Path)
+	data := latestBinaryMustReadFile(t, path)
+	flags := binary.BigEndian.Uint16(data[22:24])
+	if flags != latestBinaryCompressedValues {
+		t.Fatalf("compressed latest segment flags = %#04x, want %#04x", flags, latestBinaryCompressedValues)
+	}
+	valueLenOffset := latestBinaryHeaderSize + 4
+	storedLen := binary.BigEndian.Uint32(data[valueLenOffset : valueLenOffset+4])
+	if storedLen&latestBinaryValueCompressedFlag == 0 {
+		t.Fatal("compressible latest value was not marked compressed")
+	}
+	rawSize := uint64(latestBinaryHeaderSize + 8 + len(key) + len(value))
+	if segRef.Size >= rawSize {
+		t.Fatalf("compressed latest size = %d, want below raw size %d", segRef.Size, rawSize)
+	}
+	if err := checkLatestBinarySegment(dir, segRef); err != nil {
+		t.Fatalf("check compressed latest segment: %v", err)
+	}
+	if err := checkLatestBinaryAccessor(dir, accessorRef); err != nil {
+		t.Fatalf("check compressed latest accessor: %v", err)
+	}
+	got, ok, err := readLatestBinaryValueByAccessorFile(dir, path, segRef, accessorRef, key)
+	if err != nil || !ok || !bytes.Equal(got, value) {
+		t.Fatalf("read compressed latest value = %d bytes ok=%v err=%v, want %d bytes", len(got), ok, err, len(value))
+	}
+	got, ok, err = readLatestBinaryValueByBTreeFile(dir, path, segRef, btreeRef, key)
+	if err != nil || !ok || !bytes.Equal(got, value) {
+		t.Fatalf("btree read compressed latest value = %d bytes ok=%v err=%v, want %d bytes", len(got), ok, err, len(value))
+	}
+}
+
+func TestLatestBinaryEntryRejectsMalformedCompressedValue(t *testing.T) {
+	data := make([]byte, 8)
+	binary.BigEndian.PutUint32(data[4:], latestBinaryValueCompressedFlag)
+	if _, _, err := decodeLatestBinaryEntry(data, true); err == nil || !strings.Contains(err.Error(), "zero encoded length") {
+		t.Fatalf("decode malformed compressed latest entry error = %v, want zero-length rejection", err)
+	}
+}
+
+func TestLatestBinaryValueFrameRejectsOversizeEncodedValue(t *testing.T) {
+	frame := latestBinaryValueFrame{encodedLen: latestBinaryMaxDecodedValueSize + 1}
+	if err := validateLatestBinaryValueFrame(frame); err == nil || !strings.Contains(err.Error(), "encoded length") {
+		t.Fatalf("validate oversized latest binary value frame error = %v, want encoded-length rejection", err)
+	}
+}
+
+func TestLatestBinaryEntryReadsLegacyRawValue(t *testing.T) {
+	key := []byte("legacy-key")
+	value := bytes.Repeat([]byte("legacy uncompressed latest value "), 32)
+	data := make([]byte, 8+len(key)+len(value))
+	binary.BigEndian.PutUint32(data[:4], uint32(len(key)))
+	binary.BigEndian.PutUint32(data[4:8], uint32(len(value)))
+	copy(data[8:], key)
+	copy(data[8+len(key):], value)
+
+	entry, rest, err := decodeLatestBinaryEntry(data, false)
+	if err != nil {
+		t.Fatalf("decode legacy raw latest entry: %v", err)
+	}
+	if len(rest) != 0 || !bytes.Equal(entry.Key, key) || !bytes.Equal(entry.Value, value) {
+		t.Fatalf("legacy raw latest entry = key %q value %d bytes rest %d", entry.Key, len(entry.Value), len(rest))
+	}
+}
+
+func TestCompressLatestSegmentsGate(t *testing.T) {
+	prev := CompressLatestSegments
+	t.Cleanup(func() { CompressLatestSegments = prev })
+	owner := latestBinaryAddress(0x46)
+	key := AccountKVSnapshotKey(owner, 7, []byte("compression-gate"))
+	value := bytes.Repeat([]byte("compressible latest-state value "), 32)
+	segment := &LatestSegment{
+		Version:   LatestSegmentVersion,
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Entries:   []LatestEntry{{Key: key, Value: value}},
+	}
+
+	CompressLatestSegments = true
+	compressed, err := encodeLatestBinarySegment(segment)
+	if err != nil {
+		t.Fatalf("encode compressed latest segment: %v", err)
+	}
+	compressedHeader, compressedPayload, err := decodeLatestBinaryHeader(compressed)
+	if err != nil {
+		t.Fatalf("decode compressed latest header: %v", err)
+	}
+	if !compressedHeader.compressedValues {
+		t.Fatal("compressed latest segment did not set the header capability bit")
+	}
+	compressedEntry, rest, err := decodeLatestBinaryEntry(compressedPayload, compressedHeader.compressedValues)
+	if err != nil || len(rest) != 0 || !bytes.Equal(compressedEntry.Value, value) {
+		t.Fatalf("decode compressed latest segment = %d bytes rest=%d err=%v", len(compressedEntry.Value), len(rest), err)
+	}
+
+	CompressLatestSegments = false
+	raw, err := encodeLatestBinarySegment(segment)
+	if err != nil {
+		t.Fatalf("encode raw latest segment: %v", err)
+	}
+	rawHeader, rawPayload, err := decodeLatestBinaryHeader(raw)
+	if err != nil {
+		t.Fatalf("decode raw latest header: %v", err)
+	}
+	if rawHeader.compressedValues {
+		t.Fatal("raw latest segment set the compressed-value capability bit")
+	}
+	rawEntry, rest, err := decodeLatestBinaryEntry(rawPayload, rawHeader.compressedValues)
+	if err != nil || len(rest) != 0 || !bytes.Equal(rawEntry.Value, value) {
+		t.Fatalf("decode raw latest segment = %d bytes rest=%d err=%v", len(rawEntry.Value), len(rest), err)
+	}
+}
+
 func TestLatestBinarySegmentStableSortAndBytes(t *testing.T) {
 	owner1 := latestBinaryAddress(0x01)
 	owner2 := latestBinaryAddress(0x02)
@@ -349,7 +482,7 @@ func TestLatestBinaryHeaderReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
 func TestLatestBinaryEntryReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
 	keyOutOfBounds := make([]byte, 8)
 	binary.BigEndian.PutUint32(keyOutOfBounds[:4], ^uint32(0))
-	if _, _, err := readLatestBinaryEntryKeyAt(bytes.NewReader(keyOutOfBounds), 0, uint64(len(keyOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry key") {
+	if _, _, err := readLatestBinaryEntryKeyAt(bytes.NewReader(keyOutOfBounds), 0, uint64(len(keyOutOfBounds)), false); err == nil || !strings.Contains(err.Error(), "entry key") {
 		t.Fatalf("key reader err = %v, want key bound", err)
 	}
 	keyPath := filepath.Join(t.TempDir(), "latest-key.seg")
@@ -361,13 +494,13 @@ func TestLatestBinaryEntryReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer keyFile.Close()
-	if _, _, err := readLatestBinaryEntryKey(keyFile, uint64(len(keyOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry key") {
+	if _, _, err := readLatestBinaryEntryKey(keyFile, uint64(len(keyOutOfBounds)), false); err == nil || !strings.Contains(err.Error(), "entry key") {
 		t.Fatalf("streaming key reader err = %v, want key bound", err)
 	}
 
 	valueOutOfBounds := make([]byte, 8)
 	binary.BigEndian.PutUint32(valueOutOfBounds[4:8], ^uint32(0))
-	if _, _, _, err := readLatestBinaryEntryAtWithNext(bytes.NewReader(valueOutOfBounds), 0, uint64(len(valueOutOfBounds))); err == nil || !strings.Contains(err.Error(), "entry value") {
+	if _, _, _, err := readLatestBinaryEntryAtWithNext(bytes.NewReader(valueOutOfBounds), 0, uint64(len(valueOutOfBounds)), false); err == nil || !strings.Contains(err.Error(), "entry value") {
 		t.Fatalf("value reader err = %v, want value bound", err)
 	}
 
@@ -380,7 +513,7 @@ func TestLatestBinaryEntryReadersRejectOutOfBoundsBeforeAlloc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	_, valueLen, err := readLatestBinaryEntryKey(file, uint64(len(valueOutOfBounds)))
+	_, valueLen, err := readLatestBinaryEntryKey(file, uint64(len(valueOutOfBounds)), false)
 	if err != nil {
 		t.Fatalf("read zero-key entry header: %v", err)
 	}
