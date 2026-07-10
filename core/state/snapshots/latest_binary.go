@@ -153,36 +153,39 @@ func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter lat
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	offsets, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".offsets-*.tmp")
-	if err != nil {
-		_ = tmp.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	var offsets, btreePayload, btreeOffsets *os.File
+	closeTemps := func() {
+		for _, file := range []*os.File{tmp, offsets, btreePayload, btreeOffsets} {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
 	}
-	offsetsName := offsets.Name()
-	defer os.Remove(offsetsName)
-	btreePayload, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-*.tmp")
+	defer closeTemps()
+
+	var offsetsName string
+	if writeAccessor {
+		offsets, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".offsets-*.tmp")
+		if err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
+		offsetsName = offsets.Name()
+		defer os.Remove(offsetsName)
+	}
+	btreePayload, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-*.tmp")
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	btreePayloadName := btreePayload.Name()
 	defer os.Remove(btreePayloadName)
-	btreeOffsets, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-offsets-*.tmp")
+	btreeOffsets, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-offsets-*.tmp")
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	btreeOffsetsName := btreeOffsets.Name()
 	defer os.Remove(btreeOffsetsName)
 
 	if err := writeLatestBinaryHeaderTo(tmp, ref.normalizedDataset(), ref.Domain, SegmentLatest, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	var count uint64
@@ -234,63 +237,37 @@ func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter lat
 		return nil
 	})
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if ref.normalizedDataset() == SegmentDatasetCommitmentRoot && count != 1 {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", count)
 	}
 	var countBuf [8]byte
 	binary.BigEndian.PutUint64(countBuf[:], count)
 	if _, err := tmp.WriteAt(countBuf[:], 40); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := tmp.Close(); err != nil {
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if err := offsets.Sync(); err != nil {
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
-	}
-	if err := offsets.Close(); err != nil {
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	if writeAccessor {
+		if err := offsets.Sync(); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
+		if err := offsets.Close(); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
 	}
 	if err := btreePayload.Sync(); err != nil {
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreePayload.Close(); err != nil {
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreeOffsets.Sync(); err != nil {
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreeOffsets.Close(); err != nil {
