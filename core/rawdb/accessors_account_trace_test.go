@@ -136,3 +136,38 @@ func TestAccountTrace_RejectsEmptyOwner(t *testing.T) {
 		t.Fatal("expected error for empty owner")
 	}
 }
+
+func TestAccountTraceRejectsNegativeBlockNumbers(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := mustAddr(0xee)
+	if err := WriteAccountTrace(db, owner, -1, 1); err == nil {
+		t.Fatal("WriteAccountTrace accepted negative block")
+	}
+	if got, ok := ReadAccountTrace(db, owner, -1); got != 0 || ok {
+		t.Fatalf("ReadAccountTrace negative block = %d/%v, want 0/false", got, ok)
+	}
+	if got, ok, err := ReadAccountTraceStrict(db, owner, -1); err == nil || got != 0 || ok {
+		t.Fatalf("ReadAccountTraceStrict negative block = %d/%v/%v, want error", got, ok, err)
+	}
+	if err := DeleteAccountTrace(db, owner, -1); err == nil {
+		t.Fatal("DeleteAccountTrace accepted negative block")
+	}
+}
+
+func TestIterateAccountTraceRowsRejectsNegativeEncodedRow(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := mustAddr(0xef)
+	data := []byte{0x08, 0x01}
+	if err := db.Put(accountTraceKey(owner, -1), data); err != nil {
+		t.Fatalf("put negative account trace: %v", err)
+	}
+	if err := IterateAccountTraceRows(db, 0, 1, func(_ []byte, _ int64, _ int64) (bool, error) {
+		t.Fatal("IterateAccountTraceRows called callback for negative row")
+		return false, nil
+	}); err == nil || !strings.Contains(err.Error(), "negative block") {
+		t.Fatalf("IterateAccountTraceRows negative row error = %v, want negative-block error", err)
+	}
+	if block, balance, ok, err := ReadAccountTraceAtOrBefore(db, owner, 0); err == nil || block != 0 || balance != 0 || ok || !strings.Contains(err.Error(), "negative block") {
+		t.Fatalf("ReadAccountTraceAtOrBefore negative row = %d/%d/%v/%v, want negative-block error", block, balance, ok, err)
+	}
+}

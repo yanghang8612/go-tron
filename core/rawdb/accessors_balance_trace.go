@@ -49,6 +49,9 @@ func HasBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) bool {
 
 // DeleteBlockBalanceTrace removes the balance trace for blockNum.
 func DeleteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64) error {
+	if blockNum < 0 {
+		return fmt.Errorf("rawdb: negative block balance trace block %d", blockNum)
+	}
 	return db.Delete(balanceTraceKey(blockNum))
 }
 
@@ -79,6 +82,9 @@ func IterateBlockBalanceTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, f
 			return fmt.Errorf("rawdb: malformed balance trace key length %d", len(key))
 		}
 		blockNum := int64(binary.BigEndian.Uint64(key[len(balanceTracePrefix):]))
+		if blockNum < 0 {
+			return fmt.Errorf("rawdb: negative block balance trace block %d in hot row", blockNum)
+		}
 		if blockNum > toBlock {
 			break
 		}
@@ -96,6 +102,9 @@ func IterateBlockBalanceTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, f
 func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read block balance trace")
+	}
+	if blockNum < 0 {
+		return nil, false, fmt.Errorf("rawdb: negative block balance trace block %d", blockNum)
 	}
 	key := balanceTraceKey(blockNum)
 	exists, err := db.Has(key)
@@ -140,6 +149,9 @@ func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*cont
 }
 
 func validateBlockBalanceTraceForKey(blockNum int64, trace *contractpb.BlockBalanceTrace, context string) error {
+	if blockNum < 0 {
+		return fmt.Errorf("rawdb: negative block balance trace block %d during %s", blockNum, context)
+	}
 	if trace == nil {
 		return errors.New("rawdb: nil BlockBalanceTrace")
 	}

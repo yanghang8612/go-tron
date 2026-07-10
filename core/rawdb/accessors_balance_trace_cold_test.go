@@ -282,3 +282,22 @@ func TestAccountTraceRejectsColdFutureLookup(t *testing.T) {
 		t.Fatalf("ReadAccountTraceAtOrBefore cold future = block %d balance %d ok %v err %v, want future-block error", block, balance, ok, err)
 	}
 }
+
+func TestAccountTraceRejectsColdNegativeLookup(t *testing.T) {
+	db := NewMemoryChainDB()
+	cold := newFakeBalanceTraceReader()
+	db.SetBalanceTraceReader(cold)
+	owner := mustAddr(0xe4)
+	cold.setAccountTraceLookup(owner, -1, 100, true)
+
+	if got, ok := ReadAccountTrace(db, owner, 10); ok || got != 0 {
+		t.Fatalf("ReadAccountTrace cold negative = %d/%v, want 0/false", got, ok)
+	}
+	if got, ok, err := ReadAccountTraceStrict(db, owner, 10); err == nil || ok || got != 0 || !strings.Contains(err.Error(), "negative block") {
+		t.Fatalf("ReadAccountTraceStrict cold negative = %d/%v/%v, want negative-block error", got, ok, err)
+	}
+	block, balance, ok, err := ReadAccountTraceAtOrBefore(db, owner, 10)
+	if err == nil || ok || block != 0 || balance != 0 || !strings.Contains(err.Error(), "negative block") {
+		t.Fatalf("ReadAccountTraceAtOrBefore cold negative = %d/%d/%v/%v, want negative-block error", block, balance, ok, err)
+	}
+}

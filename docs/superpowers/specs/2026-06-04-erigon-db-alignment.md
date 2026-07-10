@@ -2221,6 +2221,16 @@ Status:
   `BlockBalanceTrace` operation has an exact-height account-index row in the
   same immutable segment, and rejects malformed operation addresses before
   signed manifest verification or archive balance APIs can trust the sidecar.
+  Balance-trace builders run that full checker before returning a newly written
+  content-addressed file; a failed check deletes the unpublished file, so a
+  malformed source row cannot be integrated into a manifest or reach hot-row
+  pruning as an unreadable cold sidecar.
+  The trace rawdb write/read/delete and hot-row iteration boundaries also reject
+  negative block numbers; legacy negative-key rows surface as corruption during
+  iteration instead of being silently copied into a new sidecar.
+  Section-bloom rawdb and derived-ETL entry points also reject `(section, bit)`
+  coordinates whose java-tron `section*1_000_000 + bit` key would overflow, so
+  malformed repair or snapshot input cannot alias another hot bloom row.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or

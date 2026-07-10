@@ -258,7 +258,7 @@ func TestBuildBalanceTraceSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	}
 }
 
-func TestCheckBalanceTraceSegmentRejectsMissingAccountIndexForOperation(t *testing.T) {
+func TestBuildBalanceTraceSegmentRejectsMissingAccountIndexForOperation(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
 	source := rawdb.NewMemoryChainDB()
@@ -273,22 +273,15 @@ func TestCheckBalanceTraceSegmentRejectsMissingAccountIndexForOperation(t *testi
 	if err := rawdb.WriteBlockBalanceTrace(source, 12, trace); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace: %v", err)
 	}
-	ref, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 12, 12)
-	if err != nil {
-		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	if _, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 12, 12); err == nil || !strings.Contains(err.Error(), "missing account index") {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB missing account index = %v, want missing-account-index error", err)
 	}
-	if err := CheckBalanceTraceSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "missing account index") {
-		t.Fatalf("CheckBalanceTraceSegment missing account index = %v, want missing-account-index error", err)
-	}
-	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
-		t.Fatalf("PublishManifest: %v", err)
-	}
-	if _, err := VerifyManifestFiles(snapshotDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err == nil || !strings.Contains(err.Error(), "missing account index") {
-		t.Fatalf("VerifyManifestFiles missing account index = %v, want missing-account-index error", err)
+	if matches, err := filepath.Glob(filepath.Join(snapshotDir, "trace", "balance-trace-12-12-*.seg")); err != nil || len(matches) != 0 {
+		t.Fatalf("invalid balance trace files = %v/%v, want none", matches, err)
 	}
 }
 
-func TestCheckBalanceTraceSegmentRejectsMalformedOperationAddress(t *testing.T) {
+func TestBuildBalanceTraceSegmentRejectsMalformedOperationAddress(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")
 	source := rawdb.NewMemoryChainDB()
@@ -302,12 +295,34 @@ func TestCheckBalanceTraceSegmentRejectsMalformedOperationAddress(t *testing.T) 
 	if err := rawdb.WriteBlockBalanceTrace(source, 13, trace); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace: %v", err)
 	}
-	ref, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 13, 13)
-	if err != nil {
-		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	if _, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 13, 13); err == nil || !strings.Contains(err.Error(), "operation address length") {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB malformed operation address = %v, want address-length error", err)
 	}
-	if err := CheckBalanceTraceSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "operation address length") {
-		t.Fatalf("CheckBalanceTraceSegment malformed operation address = %v, want address-length error", err)
+	if matches, err := filepath.Glob(filepath.Join(snapshotDir, "trace", "balance-trace-13-13-*.seg")); err != nil || len(matches) != 0 {
+		t.Fatalf("invalid balance trace files = %v/%v, want none", matches, err)
+	}
+}
+
+func TestAggregatorBuildBalanceTracesRejectsInvalidSegmentBeforeManifestPublish(t *testing.T) {
+	dir := t.TempDir()
+	source := rawdb.NewMemoryChainDB()
+	owner := balanceTraceTestAddress(0xd5)
+	trace := balanceTraceTestBlockTrace(14, 1400)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: owner.Bytes(),
+			Amount:  25,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(source, 14, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	if _, err := NewAggregator(dir).BuildBalanceTraces(source, 14, 14); err == nil || !strings.Contains(err.Error(), "missing account index") {
+		t.Fatalf("BuildBalanceTraces error = %v, want missing-account-index error", err)
+	}
+	if manifest, err := LoadProductionManifest(dir); err == nil || !os.IsNotExist(err) || manifest != nil {
+		t.Fatalf("LoadProductionManifest = %+v/%v, want no manifest", manifest, err)
 	}
 }
 

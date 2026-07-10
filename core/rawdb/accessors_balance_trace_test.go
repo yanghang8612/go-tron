@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -145,5 +146,38 @@ func TestBlockBalanceTrace_MultiBlock(t *testing.T) {
 		if got == nil || got.Timestamp != i {
 			t.Errorf("block %d: got %v", i, got)
 		}
+	}
+}
+
+func TestBlockBalanceTraceRejectsNegativeBlockNumbers(t *testing.T) {
+	db := memorydb.New()
+	if err := WriteBlockBalanceTrace(db, -1, &contractpb.BlockBalanceTrace{Timestamp: 1}); err == nil {
+		t.Fatal("WriteBlockBalanceTrace accepted negative block")
+	}
+	if got := ReadBlockBalanceTrace(db, -1); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace negative block = %+v, want nil", got)
+	}
+	if trace, ok, err := ReadBlockBalanceTraceStrict(db, -1); err == nil || trace != nil || ok {
+		t.Fatalf("ReadBlockBalanceTraceStrict negative block = %+v/%v/%v, want error", trace, ok, err)
+	}
+	if err := DeleteBlockBalanceTrace(db, -1); err == nil {
+		t.Fatal("DeleteBlockBalanceTrace accepted negative block")
+	}
+}
+
+func TestIterateBlockBalanceTraceRowsRejectsNegativeEncodedRow(t *testing.T) {
+	db := memorydb.New()
+	data, err := proto.Marshal(&contractpb.BlockBalanceTrace{Timestamp: 1})
+	if err != nil {
+		t.Fatalf("marshal trace: %v", err)
+	}
+	if err := db.Put(balanceTraceKey(-1), data); err != nil {
+		t.Fatalf("put negative balance trace: %v", err)
+	}
+	if err := IterateBlockBalanceTraceRows(db, 0, 1, func(_ int64, _ []byte) (bool, error) {
+		t.Fatal("IterateBlockBalanceTraceRows called callback for negative row")
+		return false, nil
+	}); err == nil || !strings.Contains(err.Error(), "negative block") {
+		t.Fatalf("IterateBlockBalanceTraceRows negative row error = %v, want negative-block error", err)
 	}
 }

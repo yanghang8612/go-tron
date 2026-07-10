@@ -576,6 +576,12 @@ func writeBalanceTraceSegment(dir string, ref SegmentRef, blockCount, accountCou
 	if err := os.Rename(tmpName, finalAbs); err != nil {
 		return SegmentRef{}, err
 	}
+	if err := CheckBalanceTraceSegment(dir, ref); err != nil {
+		if removeErr := os.Remove(finalAbs); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return SegmentRef{}, fmt.Errorf("snapshots: validate balance trace segment %q: %w (remove invalid file: %v)", ref.Path, err, removeErr)
+		}
+		return SegmentRef{}, fmt.Errorf("snapshots: validate balance trace segment %q: %w", ref.Path, err)
+	}
 	return ref, nil
 }
 

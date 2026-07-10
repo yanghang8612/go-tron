@@ -21,7 +21,7 @@ const (
 // java-tron stores a zlib-compressed BitSet.toByteArray payload; callers that
 // build compatible rows should use EncodeSectionBloomBitSet first.
 func WriteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64, value []byte) error {
-	if err := validateSectionBloomBitIndex(bitIndex, "write section bloom"); err != nil {
+	if err := validateSectionBloomCoordinates(section, bitIndex, "write section bloom"); err != nil {
 		return err
 	}
 	return db.Put(sectionBloomKey(section, bitIndex), value)
@@ -45,7 +45,7 @@ func ReadSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) (
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
 	}
-	if err := validateSectionBloomBitIndex(bitIndex, "read section bloom"); err != nil {
+	if err := validateSectionBloomCoordinates(section, bitIndex, "read section bloom"); err != nil {
 		return nil, false, err
 	}
 	key := sectionBloomKey(section, bitIndex)
@@ -84,7 +84,7 @@ func ReadHotSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read hot section bloom")
 	}
-	if err := validateSectionBloomBitIndex(bitIndex, "read hot section bloom"); err != nil {
+	if err := validateSectionBloomCoordinates(section, bitIndex, "read hot section bloom"); err != nil {
 		return nil, false, err
 	}
 	key := sectionBloomKey(section, bitIndex)
@@ -106,7 +106,7 @@ func ReadHotSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64
 
 // DeleteSectionBloom removes the (section, bitIndex) entry.
 func DeleteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64) error {
-	if err := validateSectionBloomBitIndex(bitIndex, "delete section bloom"); err != nil {
+	if err := validateSectionBloomCoordinates(section, bitIndex, "delete section bloom"); err != nil {
 		return err
 	}
 	return db.Delete(sectionBloomKey(section, bitIndex))
@@ -170,7 +170,7 @@ func ReadSectionBloomBitSetStrict(db ethdb.KeyValueReader, section, bitIndex uin
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read section bloom")
 	}
-	if err := validateSectionBloomBitIndex(bitIndex, "read section bloom bitset"); err != nil {
+	if err := validateSectionBloomCoordinates(section, bitIndex, "read section bloom bitset"); err != nil {
 		return nil, false, err
 	}
 	key := sectionBloomKey(section, bitIndex)
@@ -263,6 +263,16 @@ func sectionBloomBitIndex(movement uint64) uint64 {
 func validateSectionBloomBitIndex(bitIndex uint64, op string) error {
 	if bitIndex >= SectionBloomBitSize {
 		return fmt.Errorf("%s: bit index %d exceeds %d", op, bitIndex, SectionBloomBitSize-1)
+	}
+	return nil
+}
+
+func validateSectionBloomCoordinates(section, bitIndex uint64, op string) error {
+	if err := validateSectionBloomBitIndex(bitIndex, op); err != nil {
+		return err
+	}
+	if section > (^uint64(0)-bitIndex)/1_000_000 {
+		return fmt.Errorf("%s: section %d overflows java-tron composite key", op, section)
 	}
 	return nil
 }

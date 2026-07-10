@@ -338,6 +338,29 @@ func TestSectionBloomRejectsInvalidBitIndex(t *testing.T) {
 	}
 }
 
+func TestSectionBloomRejectsCompositeKeyOverflow(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	overflowSection := ^uint64(0)/1_000_000 + 1
+	if err := WriteSectionBloom(db, overflowSection, 0, []byte{0x01}); err == nil || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("WriteSectionBloom overflow = %v, want composite-key overflow", err)
+	}
+	if err := DeleteSectionBloom(db, overflowSection, 0); err == nil || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("DeleteSectionBloom overflow = %v, want composite-key overflow", err)
+	}
+	if raw, ok, err := ReadSectionBloomStrict(db, overflowSection, 0); err == nil || raw != nil || ok || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("ReadSectionBloomStrict overflow = %x/%v/%v, want composite-key overflow", raw, ok, err)
+	}
+	if raw, ok, err := ReadHotSectionBloomStrict(db, overflowSection, 0); err == nil || raw != nil || ok || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("ReadHotSectionBloomStrict overflow = %x/%v/%v, want composite-key overflow", raw, ok, err)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, overflowSection, 0); err == nil || bitset != nil || ok || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("ReadSectionBloomBitSetStrict overflow = %x/%v/%v, want composite-key overflow", bitset, ok, err)
+	}
+	if raw := ReadSectionBloom(db, overflowSection, 0); raw != nil {
+		t.Fatalf("ReadSectionBloom overflow = %x, want compatibility miss", raw)
+	}
+}
+
 func TestSectionBloomBitSetCodecRejectsOversizedDecodedRow(t *testing.T) {
 	bitset := setSectionBloomBit(nil, SectionBloomBitSize)
 	encoded := encodeRawSectionBloomPayload(t, bitset)
