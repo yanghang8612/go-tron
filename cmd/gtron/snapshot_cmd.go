@@ -1118,15 +1118,8 @@ func printSnapshotBuildResult(label string, fromBlock, toBlock uint64, result *s
 }
 
 func ensureSnapshotManifestChainIdentity(dir string, identity statesnapshots.ChainIdentity) error {
-	manifest, err := statesnapshots.LoadProductionManifest(dir)
-	if err != nil {
-		return err
-	}
-	if manifest.Chain != nil {
-		return manifest.ValidateChainIdentity(identity)
-	}
-	manifest.Chain = &identity
-	return statesnapshots.PublishManifest(dir, manifest)
+	_, err := statesnapshots.EnsureProductionManifestChainIdentity(dir, identity)
+	return err
 }
 
 func snapshotETLOptions(ctx *cli.Context) (statesnapshots.RestoreETLOptions, error) {
@@ -1549,6 +1542,22 @@ func snapshotCatalogSigningKey(ctx *cli.Context) (ed25519.PrivateKey, error) {
 		return parseSnapshotCatalogPrivateKey(raw)
 	}
 	return parseSnapshotCatalogPrivateKey(ctx.String("snapshot.signing-key"))
+}
+
+func runtimeSnapshotCatalogSigningKey(ctx *cli.Context) (ed25519.PrivateKey, bool, error) {
+	path := strings.TrimSpace(ctx.String("snapshot.catalog-signing-key-file"))
+	if path == "" {
+		return nil, false, nil
+	}
+	raw, err := readSnapshotCatalogSigningKeyFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	key, err := parseSnapshotCatalogPrivateKey(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return key, true, nil
 }
 
 func readSnapshotCatalogSigningKeyFile(path string) (string, error) {

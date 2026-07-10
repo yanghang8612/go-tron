@@ -127,6 +127,9 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	}
 	var out SnapshotLifecyclePass
 	if l.builder != nil {
+		if err := l.builder.PreflightCatalog(); err != nil {
+			return out, err
+		}
 		result, err := l.builder.OnePass()
 		if err != nil {
 			return out, err
@@ -167,6 +170,16 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.RetiredPrune = result
+	}
+	if l.builder != nil {
+		published, err := l.builder.PublishCatalogIfManifestChanged()
+		if err != nil {
+			return out, err
+		}
+		out.Snapshot.CatalogPublished = published
+		if published {
+			lifecycleLog.Info("Signed snapshot catalog published")
+		}
 	}
 	return out, nil
 }

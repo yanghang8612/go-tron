@@ -78,7 +78,7 @@ not complete.
 | Latest files | Binary `.seg` plus `.lidx` and `.bt`. | Strong for point lookup and prefix iteration. Not recsplit, intentionally. |
 | Commitment domain | Staged hex-patricia branch rows, checkpoints, cold branch restore, java root adapter. | Strong. Internal root is decoupled from java-tron header root. |
 | Code retention | Content-addressed CodeDomain latest snapshots selected by account-envelope history. | Strong, with a deliberate no-temporal-code policy. |
-| Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle and operator remote fetch/restore exist; automated remote publish/handoff is still missing. |
+| Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle can optionally bind chain identity and sign the final catalog after a changed manifest; remote distribution/handoff remains operator-managed. |
 | Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
 | Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Range-shaped and stage-tracked, but not a full Erigon staged-sync loop. |
@@ -143,6 +143,14 @@ Status:
   installability before writing latest/history state, and only advances
   canonical chain stages after chain-freezer data proves the boundary block
   hash.
+- A running `--prune.mode=snap` node can set
+  `--snapshot.catalog-signing-key-file` (or
+  `GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE`) to bind each changed runtime
+  manifest to its chain identity and sign a fresh catalog after the lifecycle
+  completes build, compaction, and hot-prune progress updates. The lifecycle
+  rejects an existing manifest with a different identity before it builds or
+  prunes, and skips re-signing when the current catalog already authenticates
+  the final manifest for the configured signer.
 - Snapshot catalog trust can now be supplied by `--snapshot.trusted-key-file`
   or `GTRON_SNAPSHOT_TRUSTED_KEY_FILE` across fetch, verify, bootstrap,
   restore, and chain-lookup prune commands. Inline trusted keys can also be

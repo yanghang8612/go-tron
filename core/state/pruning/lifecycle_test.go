@@ -2,6 +2,8 @@ package pruning
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +63,82 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || !ok || got != 12 {
 		t.Fatalf("snapshot hot-prune stage = %d ok=%v err=%v, want 12", got, ok, err)
+	}
+}
+
+func TestSnapshotLifecyclePublishesCatalogAfterHotPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	identity := snapshots.ChainIdentity{
+		ChainID:     1,
+		NetworkID:   1,
+		GenesisHash: strings.Repeat("91", common.HashLength),
+	}
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x91}, ed25519.SeedSize))
+
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:               dir,
+			Enabled:           true,
+			Interval:          time.Hour,
+			HistoryWindow:     1,
+			CatalogSigningKey: privateKey,
+			CatalogChain:      &identity,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.CatalogPublished || result.Prune.DeletedDomainChangeBlocks != 1 {
+		t.Fatalf("lifecycle result = %+v, want signed catalog before hot prune", result)
+	}
+	if _, _, err := snapshots.VerifySignedSnapshotCatalog(dir, identity, []ed25519.PublicKey{privateKey.Public().(ed25519.PublicKey)}); err != nil {
+		t.Fatalf("VerifySignedSnapshotCatalog: %v", err)
+	}
+}
+
+func TestSnapshotLifecycleDoesNotPruneWhenCatalogIdentityMismatches(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	wrongIdentity := snapshots.ChainIdentity{
+		ChainID:     2,
+		NetworkID:   1,
+		GenesisHash: strings.Repeat("92", common.HashLength),
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifestForChain(0, 0, nil, wrongIdentity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	wantIdentity := wrongIdentity
+	wantIdentity.ChainID = 1
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x92}, ed25519.SeedSize))
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:               dir,
+			Enabled:           true,
+			Interval:          time.Hour,
+			HistoryWindow:     1,
+			CatalogSigningKey: privateKey,
+			CatalogChain:      &wantIdentity,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+	if _, err := lifecycle.OnePass(); err == nil || !strings.Contains(err.Error(), "chain identity mismatch") {
+		t.Fatalf("lifecycle pass error = %v, want catalog identity mismatch", err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("hot domain change after failed catalog publish = ok %v err %v, want retained", ok, err)
 	}
 }
 

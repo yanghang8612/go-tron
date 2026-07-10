@@ -153,6 +153,15 @@ gtron snapshot publish-catalog \
 
 # For automated publish jobs, GTRON_SNAPSHOT_SIGNING_KEY_FILE is equivalent.
 
+# A snap-mode node can sign each changed runtime manifest after its cold
+# build/compaction/prune lifecycle completes. This option is file-only so the
+# private key is not exposed through the command line.
+gtron --datadir /path/to/datadir \
+  --prune.mode snap \
+  --snapshot.catalog-signing-key-file /secure/path/catalog-signing-key.hex
+
+# GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE is the equivalent environment setting.
+
 gtron snapshot prune-retired \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots

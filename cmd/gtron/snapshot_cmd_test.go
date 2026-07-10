@@ -705,6 +705,29 @@ func TestSnapshotCatalogSigningKeyFromFile(t *testing.T) {
 	}
 }
 
+func TestRuntimeSnapshotCatalogSigningKeyFromFile(t *testing.T) {
+	seed := strings.Repeat("45", ed25519.SeedSize)
+	keyFile := filepath.Join(t.TempDir(), "snapshot-runtime-signing-key.txt")
+	if err := os.WriteFile(keyFile, []byte("# runtime catalog key\ned25519:"+seed+"\n"), 0o600); err != nil {
+		t.Fatalf("write signing key file: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.catalog-signing-key-file", keyFile,
+	})
+
+	key, enabled, err := runtimeSnapshotCatalogSigningKey(ctx)
+	if err != nil {
+		t.Fatalf("runtimeSnapshotCatalogSigningKey: %v", err)
+	}
+	if !enabled {
+		t.Fatal("runtime catalog signing key was not enabled")
+	}
+	want := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x45}, ed25519.SeedSize))
+	if !bytes.Equal(key, want) {
+		t.Fatalf("runtime signing key = %x, want %x", key, want)
+	}
+}
+
 func TestSnapshotCatalogSigningKeyFileRejectsMultipleKeys(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "snapshot-signing-key.txt")
 	if err := os.WriteFile(keyFile, []byte(strings.Repeat("55", ed25519.SeedSize)+"\n"+strings.Repeat("66", ed25519.SeedSize)+"\n"), 0o600); err != nil {
@@ -2785,6 +2808,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotForkConfigHashFlag,
 		snapshotCatalogSigningKeyFlag,
 		snapshotCatalogSigningKeyFileFlag,
+		snapshotCatalogSigningKeyFileRuntimeFlag,
 		snapshotFromBlockFlag,
 		snapshotToBlockFlag,
 		snapshotFromColdFlag,
@@ -2811,6 +2835,7 @@ func restoreSnapshotTestCLIFlagState() func() {
 	snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet := snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet
 	snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet := snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet
 	snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet := snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet
+	snapshotCatalogSigningKeyFileRuntimeValue, snapshotCatalogSigningKeyFileRuntimeHasBeenSet := snapshotCatalogSigningKeyFileRuntimeFlag.Value, snapshotCatalogSigningKeyFileRuntimeFlag.HasBeenSet
 	return func() {
 		snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet = snapshotURLValue, snapshotURLHasBeenSet
 		snapshotTrustedCatalogKeyFlag.HasBeenSet = snapshotTrustedCatalogKeyHasBeenSet
@@ -2818,6 +2843,7 @@ func restoreSnapshotTestCLIFlagState() func() {
 		snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet = snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet
 		snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet = snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet
 		snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet = snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet
+		snapshotCatalogSigningKeyFileRuntimeFlag.Value, snapshotCatalogSigningKeyFileRuntimeFlag.HasBeenSet = snapshotCatalogSigningKeyFileRuntimeValue, snapshotCatalogSigningKeyFileRuntimeHasBeenSet
 	}
 }
 

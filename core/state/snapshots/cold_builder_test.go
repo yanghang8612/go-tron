@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -54,6 +55,14 @@ func seedLatestRows(t *testing.T, db ethdb.KeyValueWriter, owner common.Address,
 		t.Fatalf("seed tx range block %d: %v", blockNum, err)
 	}
 	writeColdBuilderCanonicalBlock(t, db, blockNum)
+}
+
+func coldBuilderCatalogIdentity() ChainIdentity {
+	return ChainIdentity{
+		ChainID:     1,
+		NetworkID:   1,
+		GenesisHash: strings.Repeat("79", common.HashLength),
+	}
 }
 
 func TestColdBuilderConfigDefaultsHistoryDataset(t *testing.T) {
@@ -150,6 +159,53 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	}
 	if want := []string{"a", "b", "c"}; !equalStrings(got, want) {
 		t.Fatalf("changes = %v, want %v", got, want)
+	}
+}
+
+func TestColdBuilderOnePassPublishesSignedCatalog(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x79)
+	writeColdBuilderChange(t, db, owner, 1, 1, "a")
+	writeColdBuilderCanonicalBlock(t, db, 1)
+	writeColdBuilderChange(t, db, owner, 2, 2, "b")
+	writeColdBuilderCanonicalBlock(t, db, 2)
+	writeColdBuilderChange(t, db, owner, 3, 3, "c")
+	writeColdBuilderCanonicalBlock(t, db, 3)
+
+	identity := coldBuilderCatalogIdentity()
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x79}, ed25519.SeedSize))
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 4}, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		CatalogSigningKey: privateKey,
+		CatalogChain:      &identity,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || result.CatalogPublished {
+		t.Fatalf("result = %+v, want history without standalone catalog publication", result)
+	}
+	published, err := runner.PublishCatalogIfManifestChanged()
+	if err != nil || !published {
+		t.Fatalf("PublishCatalogIfManifestChanged = %v/%v, want true/nil", published, err)
+	}
+	if _, report, err := VerifySignedSnapshotCatalog(dir, identity, []ed25519.PublicKey{privateKey.Public().(ed25519.PublicKey)}); err != nil {
+		t.Fatalf("VerifySignedSnapshotCatalog: %v", err)
+	} else if report == nil || report.ActiveSegments == 0 {
+		t.Fatalf("catalog report = %+v, want verified active segments", report)
+	}
+
+	idle, err := runner.PublishCatalogIfManifestChanged()
+	if err != nil {
+		t.Fatalf("idle PublishCatalogIfManifestChanged: %v", err)
+	}
+	if idle {
+		t.Fatal("unchanged manifest published a new catalog")
 	}
 }
 

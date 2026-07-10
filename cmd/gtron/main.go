@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -162,6 +163,11 @@ var (
 		Value:   true,
 		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_HISTORY"},
 	}
+	snapshotCatalogSigningKeyFileRuntimeFlag = &cli.StringFlag{
+		Name:    "snapshot.catalog-signing-key-file",
+		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap mode only)",
+		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE"},
+	}
 	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
 		Name:  "state.commitment.checkpoints",
 		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
@@ -279,6 +285,7 @@ var app = &cli.App{
 		pruneModeFlag,
 		historyEnabledFlag,
 		snapshotCompressHistoryFlag,
+		snapshotCatalogSigningKeyFileRuntimeFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
@@ -433,7 +440,7 @@ func gtron(ctx *cli.Context) error {
 	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
 
 	// Setup genesis (idempotent)
-	chainConfig, _, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
+	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("setup genesis: %w", err)
@@ -455,6 +462,20 @@ func gtron(ctx *cli.Context) error {
 	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
 		closeStores()
 		return err
+	}
+	snapshotCatalogSigningKey, snapshotCatalogSigningEnabled, err := runtimeSnapshotCatalogSigningKey(ctx)
+	if err != nil {
+		closeStores()
+		return err
+	}
+	if snapshotCatalogSigningEnabled && (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
+		closeStores()
+		return errors.New("--snapshot.catalog-signing-key-file requires snap history mode with history capture enabled")
+	}
+	var snapshotCatalogChain *statesnapshots.ChainIdentity
+	if snapshotCatalogSigningEnabled {
+		identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, "")
+		snapshotCatalogChain = &identity
 	}
 	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
 	switch mode := ctx.String("state.commitment.mode"); mode {
@@ -690,6 +711,8 @@ func gtron(ctx *cli.Context) error {
 				BuildSectionBlooms: true,
 				BuildBalanceTraces: true,
 				BuildEventLogs:     true,
+				CatalogSigningKey:  snapshotCatalogSigningKey,
+				CatalogChain:       snapshotCatalogChain,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.

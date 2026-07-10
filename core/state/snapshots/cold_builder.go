@@ -1,9 +1,12 @@
 package snapshots
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,6 +72,11 @@ type Config struct {
 	// ETL configures sorted scratch ingestion for derived cold sidecar builds
 	// launched by this lifecycle pass. Zero values preserve collector defaults.
 	ETL RestoreETLOptions
+	// CatalogSigningKey optionally lets SnapshotLifecycle sign the final active
+	// production manifest after a lifecycle pass. CatalogChain identifies the
+	// chain served by that catalog.
+	CatalogSigningKey ed25519.PrivateKey
+	CatalogChain      *ChainIdentity
 }
 
 // PassResult describes a single cold snapshot builder pass.
@@ -88,6 +96,7 @@ type PassResult struct {
 	SectionBloomBuilt bool
 	BalanceTraceBuilt bool
 	EventLogBuilt     bool
+	CatalogPublished  bool
 	Manifest          *Manifest
 }
 
@@ -155,6 +164,13 @@ func (c Config) applyDefaults() Config {
 	if c.CompactMaxTxSpan == 0 {
 		c.CompactMaxTxSpan = c.BatchBlocks * uint64(c.CompactMinSegments)
 	}
+	if c.CatalogSigningKey != nil {
+		c.CatalogSigningKey = append(ed25519.PrivateKey(nil), c.CatalogSigningKey...)
+	}
+	if c.CatalogChain != nil {
+		identity := *c.CatalogChain
+		c.CatalogChain = &identity
+	}
 	return c
 }
 
@@ -180,6 +196,21 @@ func (c Config) validate() error {
 	}
 	if cfg.BuildHistory == nil {
 		return fmt.Errorf("snapshots: history domain %s has no builder", c.HistoryDataset)
+	}
+	if c.CatalogChain != nil {
+		identity := *c.CatalogChain
+		normalizeChainIdentity(&identity)
+		if err := validateChainIdentity(&identity); err != nil {
+			return fmt.Errorf("snapshots: invalid catalog chain identity: %w", err)
+		}
+	}
+	if len(c.CatalogSigningKey) != 0 {
+		if len(c.CatalogSigningKey) != ed25519.PrivateKeySize {
+			return fmt.Errorf("snapshots: catalog signing key length %d, want %d", len(c.CatalogSigningKey), ed25519.PrivateKeySize)
+		}
+		if c.CatalogChain == nil {
+			return errors.New("snapshots: catalog signing requires a chain identity")
+		}
 	}
 	return nil
 }
@@ -294,6 +325,67 @@ func (r *Runner) OnePass() (PassResult, error) {
 	}
 	r.recordPass(result, start)
 	return result, err
+}
+
+// PreflightCatalog verifies an existing manifest identity before a lifecycle
+// pass can prune hot data. New manifests are bound and signed after the pass,
+// once every manifest progress update is complete.
+func (r *Runner) PreflightCatalog() error {
+	if r == nil || len(r.cfg.CatalogSigningKey) == 0 {
+		return nil
+	}
+	if r.cfg.CatalogChain == nil {
+		return errors.New("snapshots: catalog signing requires a chain identity")
+	}
+	if err := r.cfg.validate(); err != nil {
+		return err
+	}
+	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	_, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain)
+	return err
+}
+
+// PublishCatalogIfManifestChanged signs the final manifest view after a
+// lifecycle pass. It avoids rehashing every cold segment when the existing
+// catalog already authenticates the same manifest for this signer and chain.
+func (r *Runner) PublishCatalogIfManifestChanged() (bool, error) {
+	if r == nil || len(r.cfg.CatalogSigningKey) == 0 {
+		return false, nil
+	}
+	if r.cfg.CatalogChain == nil {
+		return false, errors.New("snapshots: catalog signing requires a chain identity")
+	}
+	if err := r.cfg.validate(); err != nil {
+		return false, err
+	}
+	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain); err != nil {
+		return false, err
+	}
+	checksum, err := checksumFile(filepath.Join(r.cfg.Dir, ManifestFile))
+	if err != nil {
+		return false, err
+	}
+	if catalog, err := LoadSnapshotCatalog(r.cfg.Dir); err == nil &&
+		strings.EqualFold(catalog.ManifestChecksum, checksum) &&
+		catalog.ValidateChainIdentity(*r.cfg.CatalogChain) == nil &&
+		catalog.VerifySignature([]ed25519.PublicKey{r.cfg.CatalogSigningKey.Public().(ed25519.PublicKey)}) == nil {
+		return false, nil
+	}
+	if _, err := PublishSignedSnapshotCatalog(r.cfg.Dir, r.cfg.CatalogSigningKey); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Runner) onePass() (PassResult, error) {

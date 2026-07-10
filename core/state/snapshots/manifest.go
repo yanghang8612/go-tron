@@ -308,6 +308,32 @@ func (m *Manifest) ValidateChainIdentity(expected ChainIdentity) error {
 	return nil
 }
 
+// EnsureProductionManifestChainIdentity attaches identity to the active
+// production manifest when it is still legacy/unbound. An existing identity
+// must match exactly; snapshot publishers must never relabel a manifest from a
+// different chain.
+func EnsureProductionManifestChainIdentity(dir string, identity ChainIdentity) (*Manifest, error) {
+	normalizeChainIdentity(&identity)
+	if err := validateChainIdentity(&identity); err != nil {
+		return nil, fmt.Errorf("snapshots: invalid production manifest chain identity: %w", err)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Chain != nil {
+		if err := manifest.ValidateChainIdentity(identity); err != nil {
+			return nil, err
+		}
+		return manifest, nil
+	}
+	manifest.Chain = &identity
+	if err := PublishManifest(dir, manifest); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
 type segmentFamily struct {
 	dataset SegmentDataset
 	domain  kvdomains.KVDomain
