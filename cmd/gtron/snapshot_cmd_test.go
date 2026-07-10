@@ -451,7 +451,7 @@ func TestSnapshotVerifyCmdRejectsUntrustedSigner(t *testing.T) {
 	}
 }
 
-func TestSnapshotBootstrapCmdFetchesAndRestoresCanonicalBoundary(t *testing.T) {
+func TestRuntimeSnapshotBootstrapFetchesAndRestoresCanonicalBoundary(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "remote")
 	destDir := filepath.Join(root, "downloaded")
@@ -528,13 +528,14 @@ func TestSnapshotBootstrapCmdFetchesAndRestoresCanonicalBoundary(t *testing.T) {
 
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
+		"--snapshot.bootstrap",
 		"--snapshot.dir", destDir,
 		"--snapshot.url", server.URL,
 		"--snapshot.reset",
 		"--snapshot.trusted-key", hex.EncodeToString(pub),
 	})
-	if err := snapshotBootstrapCmd(ctx); err != nil {
-		t.Fatalf("snapshotBootstrapCmd: %v", err)
+	if err := bootstrapRuntimeSnapshot(ctx); err != nil {
+		t.Fatalf("bootstrapRuntimeSnapshot: %v", err)
 	}
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatalf("stale snapshot file still exists or stat failed with unexpected error: %v", err)
@@ -595,6 +596,25 @@ func TestSnapshotBootstrapCmdFetchesAndRestoresCanonicalBoundary(t *testing.T) {
 	}
 	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
 		t.Fatalf("head after boundary-tail import = %v, want block2 %x", got, block2.Hash())
+	}
+}
+
+func TestRuntimeSnapshotBootstrapRejectsDevMode(t *testing.T) {
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.bootstrap",
+		"--dev",
+	})
+	if err := bootstrapRuntimeSnapshot(ctx); err == nil || !strings.Contains(err.Error(), "does not support --dev") {
+		t.Fatalf("bootstrapRuntimeSnapshot error = %v, want --dev rejection", err)
+	}
+}
+
+func TestRuntimeSnapshotBootstrapSkipsWhenDisabled(t *testing.T) {
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.url", "not-a-url",
+	})
+	if err := bootstrapRuntimeSnapshot(ctx); err != nil {
+		t.Fatalf("bootstrapRuntimeSnapshot disabled error = %v", err)
 	}
 }
 
@@ -2799,6 +2819,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		dbMemtableFlag,
 		dbL0CompactionFlag,
 		dbL0StopFlag,
+		snapshotBootstrapFlag,
 		snapshotDirFlag,
 		snapshotURLFlag,
 		snapshotResetFlag,

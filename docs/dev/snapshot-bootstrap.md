@@ -273,6 +273,24 @@ these cold derived-prune boundaries.
 
 ## One-Step Bootstrap
 
+For a fresh node, bootstrap and continue directly into normal P2P sync in one
+process:
+
+```bash
+gtron \
+  --datadir /path/to/datadir \
+  --snapshot.bootstrap \
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
+```
+
+`--snapshot.bootstrap` is opt-in. Before any fetch or `--snapshot.reset` side
+effect, it rejects a non-genesis chain database or a non-empty freezer. It does
+not support `--dev`. After the verified restore completes, startup continues
+from the installed canonical boundary and normal sync imports the recent tail.
+
+The equivalent two-process operator flow remains available:
+
 For the normal operator path:
 
 ```bash

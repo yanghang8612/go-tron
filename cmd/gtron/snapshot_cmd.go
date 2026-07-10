@@ -26,6 +26,10 @@ import (
 )
 
 var (
+	snapshotBootstrapFlag = &cli.BoolFlag{
+		Name:  "snapshot.bootstrap",
+		Usage: "Before starting a fresh node, fetch and restore a signed remote snapshot, then continue normal sync",
+	}
 	snapshotDirFlag = &cli.StringFlag{
 		Name:  "snapshot.dir",
 		Usage: "Local state snapshot directory containing snapshot-catalog.json and manifest.json",
@@ -503,6 +507,21 @@ func snapshotBootstrapCmd(ctx *cli.Context) error {
 		return err
 	}
 	return snapshotRestoreCmd(ctx)
+}
+
+// bootstrapRuntimeSnapshot keeps startup opt-in and reuses the same verified
+// restore path as the explicit snapshot bootstrap command.
+func bootstrapRuntimeSnapshot(ctx *cli.Context) error {
+	if !ctx.Bool("snapshot.bootstrap") {
+		return nil
+	}
+	if ctx.Bool("dev") {
+		return errors.New("--snapshot.bootstrap does not support --dev")
+	}
+	if err := snapshotBootstrapCmd(ctx); err != nil {
+		return fmt.Errorf("bootstrap remote snapshot: %w", err)
+	}
+	return nil
 }
 
 func snapshotRestoreCmd(ctx *cli.Context) error {

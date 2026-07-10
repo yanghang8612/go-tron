@@ -284,6 +284,17 @@ var app = &cli.App{
 		gcmodeFlag,
 		pruneModeFlag,
 		historyEnabledFlag,
+		snapshotBootstrapFlag,
+		snapshotDirFlag,
+		snapshotURLFlag,
+		snapshotResetFlag,
+		snapshotFetchConcurrencyFlag,
+		snapshotTrustedCatalogKeyFlag,
+		snapshotTrustedCatalogKeyFileFlag,
+		snapshotForkConfigHashFlag,
+		snapshotETLTempDirFlag,
+		snapshotETLBufferMiBFlag,
+		snapshotETLBatchMiBFlag,
 		snapshotCompressHistoryFlag,
 		snapshotCatalogSigningKeyFileRuntimeFlag,
 		stateCommitmentCheckpointsFlag,
@@ -404,6 +415,13 @@ func gtron(ctx *cli.Context) error {
 			"p2pVersion", genesis.Config.P2PVersion,
 			"witnesses", len(genesis.Witnesses),
 			"accounts", len(genesis.Accounts))
+	}
+	if ctx.Bool("snapshot.bootstrap") {
+		log.Info("Bootstrapping verified remote snapshot before node startup")
+		if err := bootstrapRuntimeSnapshot(ctx); err != nil {
+			return err
+		}
+		log.Info("Verified remote snapshot bootstrap completed")
 	}
 
 	// Open database
