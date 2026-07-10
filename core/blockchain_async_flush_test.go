@@ -2,14 +2,63 @@ package core
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 )
+
+type metadataWriteCountingDB struct {
+	ethdb.Database
+
+	mu   sync.Mutex
+	puts map[string]int
+}
+
+func newMetadataWriteCountingDB() *metadataWriteCountingDB {
+	return &metadataWriteCountingDB{
+		Database: ethrawdb.NewMemoryDatabase(),
+		puts:     make(map[string]int),
+	}
+}
+
+func (db *metadataWriteCountingDB) NewBatch() ethdb.Batch {
+	return &metadataWriteCountingBatch{Batch: db.Database.NewBatch(), db: db}
+}
+
+func (db *metadataWriteCountingDB) NewBatchWithSize(size int) ethdb.Batch {
+	return &metadataWriteCountingBatch{Batch: db.Database.NewBatchWithSize(size), db: db}
+}
+
+func (db *metadataWriteCountingDB) resetPuts() {
+	db.mu.Lock()
+	clear(db.puts)
+	db.mu.Unlock()
+}
+
+func (db *metadataWriteCountingDB) putCount(key []byte) int {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.puts[string(key)]
+}
+
+type metadataWriteCountingBatch struct {
+	ethdb.Batch
+	db *metadataWriteCountingDB
+}
+
+func (b *metadataWriteCountingBatch) Put(key, value []byte) error {
+	b.db.mu.Lock()
+	b.db.puts[string(key)]++
+	b.db.mu.Unlock()
+	return b.Batch.Put(key, value)
+}
 
 // newAsyncFlushChainOn spins up a single-witness chain on the supplied
 // store. Single-SR setup keeps `solidified == head` every block, so the
@@ -84,6 +133,62 @@ func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 	}
 	if got := len(bc.buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
+	}
+}
+
+// TestBlockMetadataRowsAvoidDuplicateSolidifiedFlush proves that the block body
+// and TAPOS rows remain visible in the reorg buffer after their direct metadata
+// batch succeeds, but are not written again by the subsequent solidified flush.
+func TestBlockMetadataRowsAvoidDuplicateSolidifiedFlush(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	diskdb := newMetadataWriteCountingDB()
+	bc := newAsyncFlushChainOn(t, diskdb, witnessAddr)
+	defer bc.Close()
+
+	diskdb.resetPuts()
+	block := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+	bc.WaitForFlushSettled()
+
+	for _, key := range [][]byte{
+		rawdb.BlockStorageKey(block.Number()),
+		rawdb.TaposRefStorageKey(block.Number()),
+	} {
+		if got := diskdb.putCount(key); got != 1 {
+			t.Fatalf("writes for metadata key %x = %d, want one direct metadata write and no duplicate flush", key, got)
+		}
+	}
+	if got, ok, err := rawdb.ReadBlockStrict(bc.ChainDB(), block.Number()); err != nil || !ok || got.Hash() != block.Hash() {
+		t.Fatalf("block after flush = %v/%v/%v, want canonical block", got, ok, err)
+	}
+}
+
+// TestAsyncCommitMetadataRowsAvoidDuplicateSolidifiedFlush exercises the same
+// invariant through the worker-owned in-flight layer used by bulk sync.
+func TestAsyncCommitMetadataRowsAvoidDuplicateSolidifiedFlush(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	diskdb := newMetadataWriteCountingDB()
+	bc := newAsyncFlushChainOn(t, diskdb, witnessAddr)
+	bc.SetAsyncCommit(true)
+	defer bc.Close()
+
+	diskdb.resetPuts()
+	block := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.InsertBlocks([]*types.Block{block}); err != nil {
+		t.Fatalf("InsertBlocks: %v", err)
+	}
+	bc.WaitForCommitSettled()
+	bc.WaitForFlushSettled()
+
+	for _, key := range [][]byte{
+		rawdb.BlockStorageKey(block.Number()),
+		rawdb.TaposRefStorageKey(block.Number()),
+	} {
+		if got := diskdb.putCount(key); got != 1 {
+			t.Fatalf("async writes for metadata key %x = %d, want one direct metadata write and no duplicate flush", key, got)
+		}
 	}
 }
 

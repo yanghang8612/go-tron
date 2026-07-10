@@ -60,16 +60,21 @@ type layer struct {
 	mu        sync.RWMutex
 	writes    map[string][]byte
 	deletes   map[string]struct{}
+	// durableWrites records values already persisted by an ordered direct
+	// metadata batch. They remain in the overlay for reorg/read visibility but
+	// do not need to be written a second time when this layer is later flushed.
+	durableWrites map[string][]byte
 }
 
 const maxFlushBatchValueSize = 1 << 20
 
 func newLayer(hash common.Hash, number uint64) *layer {
 	return &layer{
-		blockHash: hash,
-		number:    number,
-		writes:    make(map[string][]byte),
-		deletes:   make(map[string]struct{}),
+		blockHash:     hash,
+		number:        number,
+		writes:        make(map[string][]byte),
+		deletes:       make(map[string]struct{}),
+		durableWrites: make(map[string][]byte),
 	}
 }
 
@@ -314,10 +319,12 @@ func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
 	if op.delete {
 		delete(target.writes, k)
 		target.deletes[k] = struct{}{}
+		delete(target.durableWrites, k)
 		return
 	}
 	delete(target.deletes, k)
 	target.writes[k] = append([]byte(nil), op.value...)
+	delete(target.durableWrites, k)
 }
 
 func bufferBatchOpSize(op bufferBatchOp) int {
@@ -628,6 +635,64 @@ func (b *Buffer) NewestInflight() (InflightHandle, bool) {
 	return InflightHandle{l: l, hash: l.blockHash, number: l.number}, true
 }
 
+// MarkActiveWritesDurable records active-layer values that have already been
+// persisted by a successful ordered direct write. The values remain in the
+// overlay for readers and reorg handling, but a later Flush/FlushUpTo skips an
+// identical value instead of writing it to the base store again.
+//
+// Callers must invoke this only after the direct write succeeds. Every key
+// must already be a put in the active layer; a missing or deleted key is a
+// caller ordering bug and returns an error rather than silently dropping a
+// future flush.
+func (b *Buffer) MarkActiveWritesDurable(keys ...[]byte) error {
+	b.mu.RLock()
+	target := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if target == nil {
+		return errors.New("blockbuffer: mark durable writes with no active layer")
+	}
+	return markLayerWritesDurable(target, keys...)
+}
+
+// MarkInflightWritesDurable is MarkActiveWritesDurable for an explicitly
+// captured in-flight layer. The async commit worker uses it after persisting a
+// block's direct metadata batch while the foreground may be writing a newer
+// layer.
+func (b *Buffer) MarkInflightWritesDurable(h InflightHandle, keys ...[]byte) error {
+	if !h.Valid() {
+		return errors.New("blockbuffer: mark durable writes with invalid handle")
+	}
+	b.mu.RLock()
+	inflight := b.layerInflightLocked(h.l)
+	b.mu.RUnlock()
+	if !inflight {
+		return errors.New("blockbuffer: mark durable writes for non-inflight layer")
+	}
+	return markLayerWritesDurable(h.l, keys...)
+}
+
+func markLayerWritesDurable(target *layer, keys ...[]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	for _, key := range keys {
+		k := string(key)
+		if _, ok := target.writes[k]; !ok {
+			return fmt.Errorf("blockbuffer: mark durable write missing key %x", key)
+		}
+		if _, deleted := target.deletes[k]; deleted {
+			return fmt.Errorf("blockbuffer: mark durable write deleted key %x", key)
+		}
+	}
+	for _, key := range keys {
+		k := string(key)
+		target.durableWrites[k] = append([]byte(nil), target.writes[k]...)
+	}
+	return nil
+}
+
 // CommitInflight promotes the in-flight layer referenced by h onto the
 // committed stack. It asserts h is the OLDEST in-flight layer so the committed
 // stack stays block-number ordered (the worker commits FIFO, in fold order).
@@ -862,6 +927,7 @@ func (b *Buffer) Put(key, value []byte) error {
 	active.mu.Lock()
 	delete(active.deletes, k)
 	active.writes[k] = v
+	delete(active.durableWrites, k)
 	active.mu.Unlock()
 	return nil
 }
@@ -879,6 +945,7 @@ func (b *Buffer) Delete(key []byte) error {
 	active.mu.Lock()
 	delete(active.writes, k)
 	active.deletes[k] = struct{}{}
+	delete(active.durableWrites, k)
 	active.mu.Unlock()
 	return nil
 }
@@ -1076,6 +1143,9 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 	for k, v := range l.writes {
+		if durable, ok := l.durableWrites[k]; ok && bytes.Equal(durable, v) {
+			continue
+		}
 		if err := w.Put([]byte(k), v); err != nil {
 			return err
 		}
@@ -1094,6 +1164,9 @@ func layerWriteSize(l *layer) int {
 	}
 	size := 0
 	for k, v := range l.writes {
+		if durable, ok := l.durableWrites[k]; ok && bytes.Equal(durable, v) {
+			continue
+		}
 		size += len(k) + len(v)
 	}
 	for k := range l.deletes {

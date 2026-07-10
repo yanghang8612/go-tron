@@ -17,6 +17,14 @@ func taposRefBytes(blockNum uint64) [2]byte {
 	return b
 }
 
+// TaposRefStorageKey returns the recent-block ring key selected by blockNum.
+// It is used by layered writers that retain the TAPOS row for overlay/reorg
+// reads after a direct metadata batch has already persisted the same value.
+func TaposRefStorageKey(blockNum uint64) []byte {
+	ref := taposRefBytes(blockNum)
+	return taposKey(ref[:])
+}
+
 // WriteTaposRef records a block's hash tail (bytes 8..16 of its
 // 32-byte hash) under the 2-byte ref slot derived from its block number.
 // Each new block at the same lower-half number overwrites the previous

@@ -9,6 +9,13 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+// BlockStorageKey returns the hot canonical block-body key for number. It is
+// exposed for layered writers that need to retain a block row for overlay and
+// reorg reads after the same row has already been committed in a direct batch.
+func BlockStorageKey(number uint64) []byte {
+	return blockKey(number)
+}
+
 func WriteHeadBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headBlockKey, hash.Bytes())
 }

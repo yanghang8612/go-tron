@@ -1469,6 +1469,13 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData); err != nil {
 		return err
 	}
+	// The block body and TAPOS row above are intentionally retained in the
+	// buffer overlay for in-range BLOCKHASH/TAPOS reads and fork rewind. The
+	// metadata batch just made their identical disk rows durable, so mark them
+	// to avoid writing the same bytes again when a solidified layer flushes.
+	if err := bc.buffer.MarkActiveWritesDurable(blockMetadataOverlayKeys(block)...); err != nil {
+		return fmt.Errorf("mark durable block metadata overlay writes: %w", err)
+	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
 	// Publish the new head only after all metadata needed by readers
@@ -1631,6 +1638,20 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 		return fmt.Errorf("write block metadata batch: %w", err)
 	}
 	return nil
+}
+
+// blockMetadataOverlayKeys returns the buffered rows that writeBlockMetadataBatch
+// persists directly. Keeping those rows in a buffer layer is necessary for
+// in-range execution and reorg visibility; marking them durable later prevents
+// the solidified-layer flusher from writing their identical bytes twice.
+func blockMetadataOverlayKeys(block *types.Block) [][]byte {
+	if block == nil {
+		return nil
+	}
+	return [][]byte{
+		rawdb.BlockStorageKey(block.Number()),
+		rawdb.TaposRefStorageKey(block.Number()),
+	}
 }
 
 // flushBufferUpToSolidified drains every committed buffer layer whose block

@@ -74,6 +74,20 @@ func (b *countingBatch) Write() error {
 	return b.Batch.Write()
 }
 
+type recordingWriter struct {
+	db   ethdb.KeyValueStore
+	puts []string
+}
+
+func (w *recordingWriter) Put(key, value []byte) error {
+	w.puts = append(w.puts, string(key))
+	return w.db.Put(key, value)
+}
+
+func (w *recordingWriter) Delete(key []byte) error {
+	return w.db.Delete(key)
+}
+
 func bufHash(b byte) common.Hash {
 	var h common.Hash
 	h[31] = b
@@ -680,6 +694,120 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	if !bytes.Equal(got, []byte("C")) {
 		t.Fatalf("batched FlushUpTo order = %q, want %q", got, "C")
 	}
+}
+
+func TestBuffer_DurableWritesSkipFlushAndRetainOverlay(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	durableKey, durableValue := []byte("block"), []byte("direct-metadata")
+	if err := base.Put(durableKey, durableValue); err != nil {
+		t.Fatal(err)
+	}
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put(durableKey, durableValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put([]byte("state"), []byte("buffer-only")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.MarkActiveWritesDurable(durableKey); err != nil {
+		t.Fatalf("MarkActiveWritesDurable: %v", err)
+	}
+	mustGet(t, b, durableKey, durableValue)
+	b.CommitBlock()
+
+	writer := &recordingWriter{db: base}
+	if err := b.Flush(writer); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got, want := writer.puts, []string{"state"}; !equalStrings(got, want) {
+		t.Fatalf("flushed puts = %q, want %q", got, want)
+	}
+	mustDBValue(t, base, durableKey, durableValue)
+	mustDBValue(t, base, []byte("state"), []byte("buffer-only"))
+}
+
+func TestBuffer_DurableWriteChangedAfterMarkFlushesCurrentValue(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	key := []byte("block")
+	if err := base.Put(key, []byte("direct-metadata")); err != nil {
+		t.Fatal(err)
+	}
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put(key, []byte("direct-metadata")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.MarkActiveWritesDurable(key); err != nil {
+		t.Fatalf("MarkActiveWritesDurable: %v", err)
+	}
+	if err := b.Put(key, []byte("newer-overlay")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	writer := &recordingWriter{db: base}
+	if err := b.Flush(writer); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got, want := writer.puts, []string{"block"}; !equalStrings(got, want) {
+		t.Fatalf("flushed puts = %q, want %q", got, want)
+	}
+	mustDBValue(t, base, key, []byte("newer-overlay"))
+}
+
+func TestBuffer_MarkInflightWritesDurable(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	key, value := []byte("block"), []byte("direct-metadata")
+	if err := base.Put(key, value); err != nil {
+		t.Fatal(err)
+	}
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put(key, value); err != nil {
+		t.Fatal(err)
+	}
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("NewestInflight = false")
+	}
+	if err := b.MarkInflightWritesDurable(h, key); err != nil {
+		t.Fatalf("MarkInflightWritesDurable: %v", err)
+	}
+	if err := b.CommitInflight(h); err != nil {
+		t.Fatalf("CommitInflight: %v", err)
+	}
+
+	writer := &recordingWriter{db: base}
+	if err := b.Flush(writer); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if len(writer.puts) != 0 {
+		t.Fatalf("flushed puts = %q, want none", writer.puts)
+	}
+}
+
+func mustDBValue(t *testing.T, db ethdb.KeyValueReader, key, want []byte) {
+	t.Helper()
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", key, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Get(%q) = %q, want %q", key, got, want)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // drainIterator walks a buffer iterator to completion and returns the

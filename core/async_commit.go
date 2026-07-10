@@ -332,6 +332,13 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
 	}
+	// Keep the body/TAPOS rows in this layer for foreground reads and potential
+	// rewind, while skipping their duplicate write when the committed layer is
+	// eventually flushed to Pebble.
+	if err := bc.buffer.MarkInflightWritesDurable(job.layer, blockMetadataOverlayKeys(job.block)...); err != nil {
+		bc.failCommit(job, fmt.Errorf("async commit mark durable metadata block %d: %w", job.block.Number(), err))
+		return
+	}
 	rawdb.WriteHeadBlockHash(index, job.block.Hash())
 
 	// Publish the new head, then the DP snapshot, in that order.

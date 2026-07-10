@@ -547,6 +547,13 @@ Status:
   commitment/finish rows from making restart diagnostics look more advanced
   than the applied pipeline. `SyncService` is left to orchestrate logging,
   pausing, ready-frontier refresh, and canonical insertion.
+- Canonical block metadata still commits the block body and TAPOS ring before
+  publishing the head, but the same body/TAPOS writes now stay in the layered
+  buffer only for in-range execution and reorg visibility. After the direct
+  metadata batch succeeds, the layer records those exact values as durable, so
+  the later solidified flush skips the duplicate Pebble writes while preserving
+  block-root, `BLOCKHASH`, TAPOS, and fork-rewind semantics. The synchronous
+  and async-commit paths each have write-count regression coverage.
 - Imported-batch record/report scheduling now treats persisted sync-stage
   progress as the boundary for throughput diagnostics: if the staged-body
   delete or hash-bound `SyncImport`/`SyncExecution`/`SyncCommitment`/`SyncFinish`
