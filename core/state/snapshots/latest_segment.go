@@ -103,14 +103,14 @@ func BuildAccountLatestSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxN
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetAccountLatest,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -123,7 +123,7 @@ func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, f
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildLatestDomainSegmentFromDB(db ethdb.Iteratee, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -166,15 +166,15 @@ func BuildLatestDomainSegmentFilesFromDB(db ethdb.Iteratee, dir string, domain k
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath)
+	return buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
 	currentGeneration := latestKVGenerationFilter(store)
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
 		Kind:      SegmentLatest,
@@ -195,7 +195,7 @@ func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, do
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, generation uint64) (bool, error) {
@@ -254,14 +254,14 @@ func BuildKVGenerationSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNu
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVGeneration,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -274,7 +274,7 @@ func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fr
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildCodeSegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -308,14 +308,14 @@ func BuildCodeSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxN
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCode,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -328,7 +328,7 @@ func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum,
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildCommitmentRootSegmentFromDB(db ethdb.KeyValueReader, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -364,10 +364,10 @@ func BuildCommitmentRootSegmentFilesFromDB(db ethdb.KeyValueReader, dir string, 
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
@@ -378,7 +378,7 @@ func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, 
 	if !ok {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: missing latest commitment root")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCommitmentRoot,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -386,21 +386,21 @@ func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, 
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return yield(LatestEntry{Key: rawdb.LatestDomainCommitmentRootLogicalKey(), Value: root.Bytes()})
-	})
+	}, writeAccessor)
 }
 
 func BuildCommitmentCheckpointSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCommitmentCheckpoint,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -430,7 +430,7 @@ func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir st
 			return nil
 		}
 		return yield(LatestEntry{Key: rawdb.LatestStateCommitmentCheckpointLogicalKey(), Value: latestValue})
-	})
+	}, writeAccessor)
 }
 
 func WriteLatestSegment(dir string, ref SegmentRef, entries []LatestEntry) (SegmentRef, error) {

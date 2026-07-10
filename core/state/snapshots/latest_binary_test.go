@@ -134,6 +134,42 @@ func TestLatestBinarySegmentCompressesValuesWithAccessorReads(t *testing.T) {
 	}
 }
 
+func TestLatestBinarySegmentWriterWithoutAccessor(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestBinaryAddress(0x47)
+	key := AccountKVSnapshotKey(owner, 7, []byte("btree-only"))
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "latest/btree-only.seg",
+	}
+	segRef, accessorRef, btreeRef, err := writeLatestBinarySegmentWithCompanions(dir, ref, func(yield func(LatestEntry) error) error {
+		return yield(LatestEntry{Key: key, Value: []byte("value")})
+	}, false)
+	if err != nil {
+		t.Fatalf("write btree-only latest segment: %v", err)
+	}
+	if accessorRef != (SegmentRef{}) {
+		t.Fatalf("btree-only latest accessor = %+v, want empty", accessorRef)
+	}
+	if _, err := os.Stat(filepath.Join(dir, latestBinaryAccessorPath(segRef.Path))); !os.IsNotExist(err) {
+		t.Fatalf("btree-only accessor file stat error = %v, want not exist", err)
+	}
+	if err := checkLatestBinarySegment(dir, segRef); err != nil {
+		t.Fatalf("check btree-only latest segment: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		t.Fatalf("check btree-only latest btree: %v", err)
+	}
+	got, ok, err := readLatestBinaryValueByBTreeFile(dir, filepath.Join(dir, segRef.Path), segRef, btreeRef, key)
+	if err != nil || !ok || string(got) != "value" {
+		t.Fatalf("read btree-only latest value = %q ok=%v err=%v", got, ok, err)
+	}
+}
+
 func TestLatestBinaryEntryRejectsMalformedCompressedValue(t *testing.T) {
 	data := make([]byte, 8)
 	binary.BigEndian.PutUint32(data[4:], latestBinaryValueCompressedFlag)

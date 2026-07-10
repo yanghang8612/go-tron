@@ -236,14 +236,14 @@ func TestAggregatorRetiresLegacyLatestAccessor(t *testing.T) {
 	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v2")); err != nil {
 		t.Fatal(err)
 	}
-	latest, accessor, btree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, 10, 20, "latest/accounts.seg")
+	latest, accessor, btree, err := buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, 10, 20, "latest/accounts.seg", false)
 	if err != nil {
 		t.Fatalf("build compact latest segment: %v", err)
 	}
-	refs, err := latestBinaryPublishedRefs(dir, latest, accessor, btree)
-	if err != nil {
-		t.Fatalf("select compact latest refs: %v", err)
+	if accessor != (SegmentRef{}) {
+		t.Fatalf("compact latest accessor = %+v, want none", accessor)
 	}
+	refs := []SegmentRef{latest, btree}
 	manifest, err := NewAggregator(dir).Integrate(10, 20, refs)
 	if err != nil {
 		t.Fatalf("integrate compact latest segment: %v", err)

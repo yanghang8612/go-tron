@@ -190,11 +190,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotAccountLatest:    rawdb.ReadStateAccountLatest,
 			IterateHotAccountLatest: rawdb.IterateStateAccountLatest,
@@ -208,11 +208,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildLatestDomainSegmentFilesFromDB(db, dir, domain, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotKVLatest:        rawdb.ReadStateKVLatest,
 			IterateHotKVLatestRows: rawdb.IterateStateKVLatestRows,
@@ -225,11 +225,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildKVGenerationSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotKVGeneration:    rawdb.ReadStateKVGeneration,
 			IterateHotKVGeneration: rawdb.IterateStateKVGeneration,
@@ -255,11 +255,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCodeSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotCode:    readHotStateCode,
 			IterateHotCode: rawdb.IterateStateCode,
@@ -274,11 +274,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCommitmentRootSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 		},
 		{
@@ -290,11 +290,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCommitmentCheckpointSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return latestBinaryPublishedRefs(dir, latest, accessor, btree)
+				return []SegmentRef{latest, btree}, nil
 			},
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,

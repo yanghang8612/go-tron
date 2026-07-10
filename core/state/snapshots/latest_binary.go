@@ -123,6 +123,10 @@ func writeLatestBinarySegment(path string, seg *LatestSegment) (string, uint64, 
 }
 
 func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latestEntryIterator) (SegmentRef, SegmentRef, SegmentRef, error) {
+	return writeLatestBinarySegmentWithCompanions(dir, ref, iter, true)
+}
+
+func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter latestEntryIterator, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if iter == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest entry iterator")
 	}
@@ -205,10 +209,12 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 		if pos < 0 {
 			return fmt.Errorf("snapshots: latest stream negative offset %d", pos)
 		}
-		var off [8]byte
-		binary.BigEndian.PutUint64(off[:], uint64(pos))
-		if _, err := offsets.Write(off[:]); err != nil {
-			return err
+		if writeAccessor {
+			var off [8]byte
+			binary.BigEndian.PutUint64(off[:], uint64(pos))
+			if _, err := offsets.Write(off[:]); err != nil {
+				return err
+			}
 		}
 		if count%latestBinaryBTreeBlockSize == 0 {
 			if err := writeLatestBinaryBTreeTempEntry(btreePayload, btreeOffsets, latestBinaryBTreeEntry{
@@ -308,28 +314,18 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 	segRef.Size = size
 	segRef.Checksum = checksum
 
-	accessorRef, err := writeLatestBinaryAccessorFromOffsetsFile(dir, segRef, checksumBytes, offsetsName, count)
-	if err != nil {
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	var accessorRef SegmentRef
+	if writeAccessor {
+		accessorRef, err = writeLatestBinaryAccessorFromOffsetsFile(dir, segRef, checksumBytes, offsetsName, count)
+		if err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
 	}
 	btreeRef, err := writeLatestBinaryBTreeFromTempFiles(dir, segRef, checksumBytes, btreePayloadName, btreeOffsetsName, btreeCount)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	return segRef, accessorRef, btreeRef, nil
-}
-
-// latestBinaryPublishedRefs returns the compact latest-segment publication set.
-// The B-tree is the primary lookup path, so newly built snapshots do not retain
-// the per-entry .lidx sidecar. Readers and verifiers still support legacy
-// manifests that include it.
-func latestBinaryPublishedRefs(dir string, latestRef, accessorRef, btreeRef SegmentRef) ([]SegmentRef, error) {
-	if accessorRef.Path != "" {
-		if err := os.Remove(filepath.Join(dir, accessorRef.Path)); err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("snapshots: remove redundant latest accessor %q: %w", accessorRef.Path, err)
-		}
-	}
-	return []SegmentRef{latestRef, btreeRef}, nil
 }
 
 func readLatestBinarySegment(path string, ref SegmentRef) (*LatestSegment, error) {
