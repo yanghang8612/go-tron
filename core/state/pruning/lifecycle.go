@@ -18,6 +18,7 @@ var lifecycleLog = gtronlog.NewModule("core/state/lifecycle")
 type SnapshotLifecycleConfig struct {
 	Snapshot          snapshots.Config
 	Pruner            PrunerConfig
+	ChainFreezerBuild ChainFreezerBuildFunc
 	ChainLookupPrune  ChainLookupPruneFunc
 	SectionBloomPrune SectionBloomPruneFunc
 	BalanceTracePrune BalanceTracePruneFunc
@@ -29,10 +30,12 @@ type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 type SectionBloomPruneFunc func() (*snapshots.PruneHotSectionBloomResult, error)
 type BalanceTracePruneFunc func() (*snapshots.PruneHotBalanceTraceResult, error)
 type RetiredPruneFunc func() (*snapshots.PruneRetiredSegmentFilesResult, error)
+type ChainFreezerBuildFunc func() (snapshots.ChainFreezerSnapshotPassResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
 type SnapshotLifecyclePass struct {
 	Snapshot          snapshots.PassResult
+	ChainFreezerBuild snapshots.ChainFreezerSnapshotPassResult
 	Prune             Stats
 	ChainLookupPrune  *snapshots.PruneHotChainLookupResult
 	SectionBloomPrune *snapshots.PruneHotSectionBloomResult
@@ -46,6 +49,7 @@ type SnapshotLifecyclePass struct {
 type SnapshotLifecycle struct {
 	builder           *snapshots.Runner
 	pruner            *Pruner
+	chainFreezerBuild ChainFreezerBuildFunc
 	chainLookupPrune  ChainLookupPruneFunc
 	sectionBloomPrune SectionBloomPruneFunc
 	balanceTracePrune BalanceTracePruneFunc
@@ -76,6 +80,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 	return &SnapshotLifecycle{
 		builder:           builder,
 		pruner:            NewPruner(chain, cfg.Pruner),
+		chainFreezerBuild: cfg.ChainFreezerBuild,
 		chainLookupPrune:  cfg.ChainLookupPrune,
 		sectionBloomPrune: cfg.SectionBloomPrune,
 		balanceTracePrune: cfg.BalanceTracePrune,
@@ -101,6 +106,7 @@ func (l *SnapshotLifecycle) Start() error {
 	go l.loop()
 	lifecycleLog.Info("Domain state snapshot/prune lifecycle started",
 		"snapshotEnabled", l.builder != nil,
+		"chainFreezerBuild", l.chainFreezerBuild != nil,
 		"chainLookupPrune", l.chainLookupPrune != nil,
 		"sectionBloomPrune", l.sectionBloomPrune != nil,
 		"balanceTracePrune", l.balanceTracePrune != nil,
@@ -135,6 +141,13 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.Snapshot = result
+	}
+	if l.chainFreezerBuild != nil {
+		result, err := l.chainFreezerBuild()
+		if err != nil {
+			return out, err
+		}
+		out.ChainFreezerBuild = result
 	}
 	if l.pruner != nil {
 		stats, err := l.pruner.PrunePass()

@@ -699,6 +699,15 @@ func gtron(ctx *cli.Context) error {
 	sectionBloomPruneLifecycleWired := false
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
+	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
+	if ancientStore != nil && freezerCfg.Enabled {
+		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
+			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
+				Dir:            stateSnapshotDir,
+				BuildEventLogs: true,
+			})
+		}
+	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
@@ -723,6 +732,7 @@ func gtron(ctx *cli.Context) error {
 				SnapshotDir: stateSnapshotDir,
 				MaxSyncLag:  prunePolicy.HistoryWindow,
 			},
+			ChainFreezerBuild: chainFreezerSnapshotBuild,
 			ChainLookupPrune: func() (*statesnapshots.PruneHotChainLookupResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
 				if err != nil {
@@ -771,6 +781,7 @@ func gtron(ctx *cli.Context) error {
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+			"chainFreezerBuild", chainFreezerSnapshotBuild != nil,
 			"chainLookupPrune", true,
 			"sectionBloomPrune", true,
 			"balanceTracePrune", true,

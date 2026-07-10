@@ -376,6 +376,44 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecycleBuildsChainFreezerBeforePruningLookups(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &fakePruneChain{db: db, solidified: 2}
+	chainFreezerBuilt := false
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		ChainFreezerBuild: func() (snapshots.ChainFreezerSnapshotPassResult, error) {
+			chainFreezerBuilt = true
+			return snapshots.ChainFreezerSnapshotPassResult{
+				Built:     true,
+				FromBlock: 0,
+				ToBlock:   1,
+				ColdHead:  2,
+			}, nil
+		},
+		ChainLookupPrune: func() (*snapshots.PruneHotChainLookupResult, error) {
+			if !chainFreezerBuilt {
+				t.Fatal("chain lookup pruning ran before chain-freezer cold coverage was built")
+			}
+			return &snapshots.PruneHotChainLookupResult{HasRange: true, FromBlock: 0, ToBlock: 1}, nil
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.ChainFreezerBuild.Built || result.ChainFreezerBuild.ToBlock != 1 {
+		t.Fatalf("chain-freezer result = %+v, want published range through block 1", result.ChainFreezerBuild)
+	}
+	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange {
+		t.Fatalf("chain lookup result = %+v, want hook result", result.ChainLookupPrune)
+	}
+}
+
 func lifecycleEventLogBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txPB := &corepb.Transaction{
