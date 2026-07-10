@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -331,6 +333,16 @@ func fetchSnapshotSegment(ctx context.Context, client *http.Client, baseURL, dir
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return false, 0, err
 	}
+	if ref.Size == 0 {
+		return fetchSnapshotSegmentFresh(ctx, client, fileURL, abs, ref)
+	}
+	return fetchSnapshotSegmentResumable(ctx, client, fileURL, abs, ref)
+}
+
+// fetchSnapshotSegmentFresh keeps the legacy full-download flow for the rare
+// manifest entries without a known size. Production manifests carry a size and
+// use the resumable path below.
+func fetchSnapshotSegmentFresh(ctx context.Context, client *http.Client, fileURL, abs string, ref SegmentRef) (bool, uint64, error) {
 	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
 	if err != nil {
 		return false, 0, err
@@ -390,6 +402,243 @@ func fetchSnapshotSegment(ctx context.Context, client *http.Client, baseURL, dir
 	}
 	cleanup = false
 	return true, uint64(n), nil
+}
+
+// fetchSnapshotSegmentResumable persists incomplete bytes in a checksum-bound
+// partial file. A changed remote catalog receives a distinct partial path, so
+// stale bytes can never be appended to a different signed segment revision.
+func fetchSnapshotSegmentResumable(ctx context.Context, client *http.Client, fileURL, abs string, ref SegmentRef) (bool, uint64, error) {
+	partialPath := snapshotSegmentPartialPath(abs, ref.Checksum)
+	partial, offset, checksum, err := openSnapshotSegmentPartial(partialPath, ref.Size)
+	if err != nil {
+		return false, 0, err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = partial.Close()
+		}
+	}()
+
+	if offset == ref.Size {
+		if snapshotSegmentChecksumMatches(checksum, ref.Checksum) {
+			if err := promoteSnapshotSegmentPartial(partial, partialPath, abs); err != nil {
+				return false, 0, err
+			}
+			closed = true
+			return false, 0, nil
+		}
+		if err := resetSnapshotSegmentPartial(partial); err != nil {
+			return false, 0, err
+		}
+		checksum.Reset()
+		offset = 0
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	if offset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, 0, err
+	}
+	defer resp.Body.Close()
+
+	if offset > 0 && resp.StatusCode == http.StatusOK {
+		// Some static HTTP servers do not support Range. Reset only after the
+		// server has accepted the request, then verify the full response below.
+		if err := resetSnapshotSegmentPartial(partial); err != nil {
+			return false, 0, err
+		}
+		checksum.Reset()
+		offset = 0
+	}
+	switch {
+	case offset == 0 && resp.StatusCode == http.StatusOK:
+	case offset > 0 && resp.StatusCode == http.StatusPartialContent:
+		if err := validateSnapshotRangeResponse(resp.Header.Get("Content-Range"), offset, ref.Size); err != nil {
+			return false, 0, err
+		}
+	default:
+		return false, 0, fmt.Errorf("snapshots: GET %s: %s", fileURL, resp.Status)
+	}
+
+	remaining := ref.Size - offset
+	if resp.ContentLength >= 0 && uint64(resp.ContentLength) != remaining {
+		return false, 0, fmt.Errorf("snapshots: segment %q content length %d, want %d", ref.Path, resp.ContentLength, remaining)
+	}
+	limited := &snapshotFetchLimitReader{r: resp.Body, remaining: remaining}
+	n, err := io.Copy(io.MultiWriter(partial, checksum), limited)
+	if err != nil {
+		return false, 0, err
+	}
+	if limited.remaining != 0 {
+		return false, 0, fmt.Errorf("snapshots: segment %q size %d, want %d", ref.Path, offset+uint64(n), ref.Size)
+	}
+	if err := ensureSnapshotFetchBodyExhausted(resp.Body); err != nil {
+		return false, 0, fmt.Errorf("snapshots: segment %q response exceeds expected size %d: %w", ref.Path, remaining, err)
+	}
+	if !snapshotSegmentChecksumMatches(checksum, ref.Checksum) {
+		_ = partial.Close()
+		closed = true
+		_ = os.Remove(partialPath)
+		return false, 0, fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, snapshotSegmentChecksum(checksum), ref.Checksum)
+	}
+	if err := promoteSnapshotSegmentPartial(partial, partialPath, abs); err != nil {
+		return false, 0, err
+	}
+	closed = true
+	return true, uint64(n), nil
+}
+
+type snapshotFetchLimitReader struct {
+	r         io.Reader
+	remaining uint64
+}
+
+func (r *snapshotFetchLimitReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if uint64(len(p)) > r.remaining {
+		p = p[:int(r.remaining)]
+	}
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.remaining -= uint64(n)
+	}
+	return n, err
+}
+
+func ensureSnapshotFetchBodyExhausted(body io.Reader) error {
+	var extra [1]byte
+	for {
+		n, err := body.Read(extra[:])
+		if n > 0 {
+			return errors.New("unexpected extra response byte")
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func snapshotSegmentPartialPath(abs, checksum string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(checksum))))
+	return filepath.Join(filepath.Dir(abs), "."+filepath.Base(abs)+"."+hex.EncodeToString(sum[:])+".part")
+}
+
+func openSnapshotSegmentPartial(path string, expectedSize uint64) (*os.File, uint64, hash.Hash, error) {
+	if info, err := os.Lstat(path); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, 0, nil, err
+		}
+	} else if !info.Mode().IsRegular() {
+		return nil, 0, nil, fmt.Errorf("snapshots: partial segment %q is not a regular file", path)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	closeWithError := func(err error) (*os.File, uint64, hash.Hash, error) {
+		_ = file.Close()
+		return nil, 0, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return closeWithError(err)
+	}
+	if !info.Mode().IsRegular() {
+		return closeWithError(fmt.Errorf("snapshots: partial segment %q is not a regular file", path))
+	}
+	offset := uint64(info.Size())
+	if offset > expectedSize {
+		if err := resetSnapshotSegmentPartial(file); err != nil {
+			return closeWithError(err)
+		}
+		offset = 0
+	}
+	checksum := sha256.New()
+	if offset > 0 {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return closeWithError(err)
+		}
+		if _, err := io.Copy(checksum, file); err != nil {
+			return closeWithError(err)
+		}
+	}
+	if _, err := file.Seek(int64(offset), io.SeekStart); err != nil {
+		return closeWithError(err)
+	}
+	return file, offset, checksum, nil
+}
+
+func resetSnapshotSegmentPartial(file *os.File) error {
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	_, err := file.Seek(0, io.SeekStart)
+	return err
+}
+
+func promoteSnapshotSegmentPartial(file *os.File, partialPath, abs string) error {
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(partialPath, abs)
+}
+
+func snapshotSegmentChecksum(checksum hash.Hash) string {
+	return "sha256:" + hex.EncodeToString(checksum.Sum(nil))
+}
+
+func snapshotSegmentChecksumMatches(checksum hash.Hash, expected string) bool {
+	return strings.EqualFold(snapshotSegmentChecksum(checksum), expected)
+}
+
+func validateSnapshotRangeResponse(value string, offset, size uint64) error {
+	parts := strings.Split(strings.TrimSpace(value), "/")
+	if len(parts) != 2 || !strings.HasPrefix(parts[0], "bytes ") {
+		return fmt.Errorf("snapshots: invalid Content-Range %q", value)
+	}
+	rangeParts := strings.Split(strings.TrimPrefix(parts[0], "bytes "), "-")
+	if len(rangeParts) != 2 {
+		return fmt.Errorf("snapshots: invalid Content-Range %q", value)
+	}
+	start, err := parseSnapshotRangeUint(rangeParts[0], value)
+	if err != nil {
+		return err
+	}
+	end, err := parseSnapshotRangeUint(rangeParts[1], value)
+	if err != nil {
+		return err
+	}
+	total, err := parseSnapshotRangeUint(parts[1], value)
+	if err != nil {
+		return err
+	}
+	if start != offset || end < start || total != size || end != size-1 {
+		return fmt.Errorf("snapshots: Content-Range %q does not match requested bytes=%d- or size %d", value, offset, size)
+	}
+	return nil
+}
+
+func parseSnapshotRangeUint(value, contentRange string) (uint64, error) {
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("snapshots: invalid Content-Range %q", contentRange)
+	}
+	return parsed, nil
 }
 
 func writeSnapshotBytesAtomic(dir, relPath string, data []byte) error {

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -212,6 +213,173 @@ func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	}
 	if maxInFlight.Load() < 2 {
 		t.Fatalf("max concurrent segment downloads = %d, want at least 2", maxInFlight.Load())
+	}
+}
+
+func TestFetchSnapshotSegmentResumesPartialRange(t *testing.T) {
+	ref, payload := snapshotFetchTestSegment(t)
+	dest := t.TempDir()
+	offset := len(payload) / 2
+	writeSnapshotSegmentPartialForTest(t, dest, ref, payload[:offset])
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/"+ref.Path {
+			http.NotFound(w, r)
+			return
+		}
+		requests.Add(1)
+		if got, want := r.Header.Get("Range"), fmt.Sprintf("bytes=%d-", offset); got != want {
+			http.Error(w, "missing expected range", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, len(payload)-1, len(payload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)-offset))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[offset:])
+	}))
+	defer server.Close()
+
+	downloaded, bytes, err := fetchSnapshotSegment(context.Background(), server.Client(), server.URL, dest, ref)
+	if err != nil {
+		t.Fatalf("fetchSnapshotSegment: %v", err)
+	}
+	if !downloaded || bytes != uint64(len(payload)-offset) {
+		t.Fatalf("fetch result downloaded=%v bytes=%d, want true/%d", downloaded, bytes, len(payload)-offset)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("range requests = %d, want 1", requests.Load())
+	}
+	assertFetchedSnapshotSegmentForTest(t, dest, ref, payload)
+}
+
+func TestFetchSnapshotSegmentFallsBackWhenServerIgnoresRange(t *testing.T) {
+	ref, payload := snapshotFetchTestSegment(t)
+	dest := t.TempDir()
+	offset := len(payload) / 2
+	writeSnapshotSegmentPartialForTest(t, dest, ref, payload[:offset])
+
+	var gotRange string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/"+ref.Path {
+			http.NotFound(w, r)
+			return
+		}
+		gotRange = r.Header.Get("Range")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	downloaded, bytes, err := fetchSnapshotSegment(context.Background(), server.Client(), server.URL, dest, ref)
+	if err != nil {
+		t.Fatalf("fetchSnapshotSegment: %v", err)
+	}
+	if !downloaded || bytes != uint64(len(payload)) {
+		t.Fatalf("fetch result downloaded=%v bytes=%d, want true/%d", downloaded, bytes, len(payload))
+	}
+	if want := fmt.Sprintf("bytes=%d-", offset); gotRange != want {
+		t.Fatalf("request range = %q, want %q", gotRange, want)
+	}
+	assertFetchedSnapshotSegmentForTest(t, dest, ref, payload)
+}
+
+func TestFetchSnapshotSegmentRejectsMismatchedContentRange(t *testing.T) {
+	ref, payload := snapshotFetchTestSegment(t)
+	dest := t.TempDir()
+	offset := len(payload) / 2
+	writeSnapshotSegmentPartialForTest(t, dest, ref, payload[:offset])
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/"+ref.Path {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)-offset))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[offset:])
+	}))
+	defer server.Close()
+
+	_, _, err := fetchSnapshotSegment(context.Background(), server.Client(), server.URL, dest, ref)
+	if err == nil || !strings.Contains(err.Error(), "Content-Range") {
+		t.Fatalf("fetchSnapshotSegment error = %v, want Content-Range rejection", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ref.Path)); !os.IsNotExist(err) {
+		t.Fatalf("final segment stat error = %v, want no published segment", err)
+	}
+}
+
+func TestFetchSnapshotSegmentPromotesCompletePartialWithoutRequest(t *testing.T) {
+	ref, payload := snapshotFetchTestSegment(t)
+	dest := t.TempDir()
+	writeSnapshotSegmentPartialForTest(t, dest, ref, payload)
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "segment should not be requested", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	downloaded, bytes, err := fetchSnapshotSegment(context.Background(), server.Client(), server.URL, dest, ref)
+	if err != nil {
+		t.Fatalf("fetchSnapshotSegment: %v", err)
+	}
+	if downloaded || bytes != 0 {
+		t.Fatalf("fetch result downloaded=%v bytes=%d, want false/0", downloaded, bytes)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("segment requests = %d, want 0", requests.Load())
+	}
+	assertFetchedSnapshotSegmentForTest(t, dest, ref, payload)
+}
+
+func snapshotFetchTestSegment(t *testing.T) (SegmentRef, []byte) {
+	t.Helper()
+	source, _, _ := writeVerifiableHistoryManifest(t)
+	manifest, err := LoadProductionManifest(source)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if len(manifest.Segments) == 0 {
+		t.Fatal("test manifest has no segments")
+	}
+	ref := manifest.Segments[0]
+	payload, err := os.ReadFile(filepath.Join(source, ref.Path))
+	if err != nil {
+		t.Fatalf("read source segment: %v", err)
+	}
+	if ref.Size != uint64(len(payload)) || len(payload) < 2 {
+		t.Fatalf("source segment size=%d bytes=%d, want matching non-trivial payload", ref.Size, len(payload))
+	}
+	return ref, payload
+}
+
+func writeSnapshotSegmentPartialForTest(t *testing.T, dir string, ref SegmentRef, data []byte) {
+	t.Helper()
+	partial := snapshotSegmentPartialPath(filepath.Join(dir, ref.Path), ref.Checksum)
+	if err := os.MkdirAll(filepath.Dir(partial), 0o755); err != nil {
+		t.Fatalf("mkdir partial parent: %v", err)
+	}
+	if err := os.WriteFile(partial, data, 0o644); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+}
+
+func assertFetchedSnapshotSegmentForTest(t *testing.T, dir string, ref SegmentRef, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(dir, ref.Path))
+	if err != nil {
+		t.Fatalf("read fetched segment: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("fetched segment bytes mismatch")
+	}
+	partial := snapshotSegmentPartialPath(filepath.Join(dir, ref.Path), ref.Checksum)
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Fatalf("partial segment stat error = %v, want removed", err)
 	}
 }
 

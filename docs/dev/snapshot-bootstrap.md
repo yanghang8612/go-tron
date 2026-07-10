@@ -20,6 +20,10 @@ file.
   catalog/manifest serially for trust establishment, then fetch segment files
   concurrently. Use `--snapshot.fetch.concurrency N` to tune the segment worker
   count; `0` keeps the built-in default.
+- Interrupted segment downloads are retained as checksum-bound local partial
+  files. A retry sends HTTP Range requests for the missing suffix, validates the
+  exact `Content-Range`, length, and final SHA-256 before publishing the file.
+  Servers without Range support fall back to a verified full-file download.
 
 Official mainnet/testnet URLs and signer keys are release artifacts. Until they
 are published, operators should pass their deployment-specific URL and key set
@@ -311,7 +315,7 @@ verified snapshot/freezer boundary and imports the recent tail from peers.
 
 - Use `--snapshot.reset` only for the snapshot directory, not for chain data.
   The command deletes the local snapshot directory before fetching the current
-  remote catalog.
+  remote catalog, including any resumable partial files.
 - Keep `archive` mode for RPC providers that need full historical state APIs.
   `full`, `snap`, `blocks`, and `minimal` may prune hot rows once verified cold
   coverage exists.
