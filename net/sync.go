@@ -1400,8 +1400,18 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
+	// One drain may consume several small local import chunks. Reuse one
+	// canonical executor across all of them so synchronous sync avoids reopening
+	// StateDB/CommitScope at every chunk boundary. The synchronous session flushes
+	// latest-domain writes after each chunk to retain ordinary InsertBlocks
+	// visibility; deep async keeps the worker pipeline full. Depth 2 retains its
+	// established per-chunk settlement behavior. The deep session is created up
+	// front to retain its existing empty-drain settlement barrier; the synchronous
+	// session starts only after a real batch is available.
+	depth := ss.chain.PipelinedCommitDepth()
+	useInsertSession := depth == 0 || depth > 2
 	var sess *core.InsertSession
-	if ss.chain.PipelinedCommitDepth() > 2 {
+	if depth > 2 {
 		sess = ss.chain.BeginInsertSession()
 	}
 	var lastPeer *p2p.Peer
@@ -1448,7 +1458,14 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
-		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss, session: sess})
+		if useInsertSession && sess == nil {
+			sess = ss.chain.BeginInsertSession()
+		}
+		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{
+			service:                ss,
+			session:                sess,
+			flushLatestAfterInsert: depth == 0,
+		})
 		importLoop := syncdl.PlanImportBatchDrainLoopFinalization(importRun)
 		if importLoop.HasLastPeer {
 			lastPeer = importLoop.LastPeer
@@ -2113,8 +2130,9 @@ func (ss *SyncService) logDecodeBatchResult(result syncdl.BufferedBatchDecodeRes
 }
 
 type syncImportBatchRunApplier struct {
-	service *SyncService
-	session *core.InsertSession
+	service                *SyncService
+	session                *core.InsertSession
+	flushLatestAfterInsert bool
 }
 
 func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
@@ -2131,6 +2149,14 @@ func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatch
 		executor = a.session
 	}
 	result := syncdl.RunImportBatchExecutionAttemptWithStageHook(attempt, executor, time.Now)
+	if a.session != nil && a.flushLatestAfterInsert {
+		if flushErr := a.session.FlushLatest(); flushErr != nil {
+			if result.Err != nil {
+				return result.Elapsed, fmt.Errorf("%w; flush import session latest: %v", result.Err, flushErr)
+			}
+			return result.Elapsed, fmt.Errorf("flush import session latest: %w", flushErr)
+		}
+	}
 	return result.Elapsed, result.Err
 }
 

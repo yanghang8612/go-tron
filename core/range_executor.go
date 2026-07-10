@@ -284,6 +284,18 @@ func (e *canonicalRangeExecutor) Reset() {
 	e.lastDynProps = nil
 }
 
+// FlushLatest makes the shared scope's latest-domain writes visible through the
+// current block-buffer layers without closing the scope or its domain
+// transaction. Synchronous staged sync calls this at each local chunk boundary
+// so it retains ordinary InsertBlocks visibility while reusing the executor for
+// the following chunk.
+func (e *canonicalRangeExecutor) FlushLatest() error {
+	if e == nil || e.commit == nil {
+		return nil
+	}
+	return e.commit.FlushLatest()
+}
+
 func (e *canonicalRangeExecutor) Abort() error {
 	if e == nil {
 		return nil

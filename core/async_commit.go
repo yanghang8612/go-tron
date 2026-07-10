@@ -91,10 +91,10 @@ func (bc *BlockChain) SetAsyncCommit(enabled bool) {
 	}
 }
 
-// PipelinedCommitDepth returns the configured async-commit pipeline depth (≥2)
-// when async commit is enabled, else 0. Used by the sync drain loop to decide
-// whether to span one InsertSession across batches (depth > 2) for cross-batch
-// barrier amortization.
+// PipelinedCommitDepth returns the configured async-commit pipeline depth (>=2)
+// when async commit is enabled, else 0. The sync drain reuses an InsertSession
+// across contiguous chunks in synchronous and deep (depth > 2) modes; depth 2
+// retains its established per-chunk settlement behavior.
 func (bc *BlockChain) PipelinedCommitDepth() int {
 	if !bc.asyncCommit {
 		return 0

@@ -547,6 +547,16 @@ Status:
   commitment/finish rows from making restart diagnostics look more advanced
   than the applied pipeline. `SyncService` is left to orchestrate logging,
   pausing, ready-frontier refresh, and canonical insertion.
+- One `InsertSession` now spans every contiguous local import chunk in a drain,
+  including the default synchronous path. It reuses one canonical `StateDB` and
+  `CommitScope` across chunk boundaries, matching Erigon's stage-scoped domain
+  transaction intent without relaxing TRON's per-block execution, root,
+  maintenance, or reorg rules. The synchronous path flushes latest-domain rows
+  into the current buffer layer after each chunk, preserving existing chunk
+  boundary visibility while keeping the scope transaction open. Deep async
+  commit also keeps its existing cross-chunk worker-barrier amortization.
+  Cross-batch synchronous and deep regression tests prove identical roots/head,
+  one opened state/scope, and matching fork-switch results.
 - Canonical block metadata still commits the block body and TAPOS ring before
   publishing the head, but the same body/TAPOS writes now stay in the layered
   buffer only for in-range execution and reorg visibility. After the direct
