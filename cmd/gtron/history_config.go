@@ -150,6 +150,16 @@ func shouldEnableChainFreezerTailPruner(cfg *params.ChainConfig) bool {
 	return cfg != nil && cfg.EffectiveHistoryMode() == params.HistoryModeMinimal
 }
 
+// shouldEnableChainFreezerSnapshotBuilder keeps the duplicate cold
+// chain-freezer snapshot files limited to minimal mode. Other modes retain the
+// local ancient source, so publishing a second full chain copy would consume
+// more disk than the lookup rows it could later replace. Minimal mode is the
+// only mode that advances the local freezer tail after verified cold coverage
+// is available, making this build path a net storage reduction.
+func shouldEnableChainFreezerSnapshotBuilder(cfg *params.ChainConfig, ancientAvailable, freezerEnabled bool) bool {
+	return ancientAvailable && freezerEnabled && shouldEnableChainFreezerTailPruner(cfg)
+}
+
 func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) statepruning.Policy {
 	historyWindow := params.HistoryDefaultPruneWindow
 	mode := params.HistoryModeFull

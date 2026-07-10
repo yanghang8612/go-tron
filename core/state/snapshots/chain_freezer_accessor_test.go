@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -57,6 +58,40 @@ func TestChainFreezerAccessorBuildCheckVerify(t *testing.T) {
 	}
 	if row.blockNum != 2 || len(row.blockRaw) == 0 {
 		t.Fatalf("row = %+v, want block 2 with body", row)
+	}
+}
+
+func TestChainFreezerAccessorOffsetsSkipCompressedRows(t *testing.T) {
+	dir := t.TempDir()
+	payload := bytes.Repeat([]byte("compressible chain-freezer row "), 128)
+	ref := writeChainFreezerSegmentRowsForTest(t, dir, "chain/freezer-compressed-0-0.seg", 0, 0, []chainFreezerRow{{
+		blockNum:     0,
+		blockRaw:     payload,
+		txInfosRaw:   payload,
+		stateRootRaw: payload,
+	}})
+	offsets, err := chainFreezerRowOffsets(dir, ref)
+	if err != nil {
+		t.Fatalf("chainFreezerRowOffsets: %v", err)
+	}
+	if len(offsets) != 1 || offsets[0] != chainFreezerHeaderSize {
+		t.Fatalf("offsets = %v, want [%d]", offsets, chainFreezerHeaderSize)
+	}
+	file, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		t.Fatalf("open compressed chain-freezer segment: %v", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat compressed chain-freezer segment: %v", err)
+	}
+	row, err := readChainFreezerSegmentRowAt(file, offsets[0], 0, uint64(info.Size()))
+	if err != nil {
+		t.Fatalf("read compressed chain-freezer row: %v", err)
+	}
+	if !bytes.Equal(row.blockRaw, payload) || !bytes.Equal(row.txInfosRaw, payload) || !bytes.Equal(row.stateRootRaw, payload) {
+		t.Fatalf("compressed row payload mismatch: %+v", row)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/golang/snappy"
 )
 
 const (
@@ -398,13 +400,13 @@ func chainFreezerRowOffsets(dir string, ref SegmentRef) ([]uint64, error) {
 	for i := uint64(0); i < count; i++ {
 		offsets = append(offsets, offset)
 		var next uint64
-		if _, next, err = readChainFreezerBytesAt(file, offset, fileSize); err != nil {
+		if next, err = skipChainFreezerBytesAt(file, offset, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d body for accessor: %w", fromBlock+i, err)
 		}
-		if _, next, err = readChainFreezerBytesAt(file, next, fileSize); err != nil {
+		if next, err = skipChainFreezerBytesAt(file, next, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d tx infos for accessor: %w", fromBlock+i, err)
 		}
-		if _, next, err = readChainFreezerBytesAt(file, next, fileSize); err != nil {
+		if next, err = skipChainFreezerBytesAt(file, next, fileSize); err != nil {
 			return nil, fmt.Errorf("snapshots: read chain-freezer block %d state root for accessor: %w", fromBlock+i, err)
 		}
 		offset = next
@@ -442,42 +444,88 @@ func readChainFreezerSegmentRowAtWithNext(file io.ReaderAt, offset, blockNum, fi
 }
 
 func readChainFreezerBytesAt(file io.ReaderAt, offset, fileSize uint64) ([]byte, uint64, error) {
-	if offset > uint64(^uint(0)>>1) {
-		return nil, 0, fmt.Errorf("offset %d overflows int64", offset)
-	}
-	if offset > fileSize || fileSize-offset < 4 {
-		return nil, 0, io.ErrUnexpectedEOF
-	}
-	var rawLen [4]byte
-	if _, err := file.ReadAt(rawLen[:], int64(offset)); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, 0, io.ErrUnexpectedEOF
-		}
+	encoded, compressed, next, err := readChainFreezerEncodedBytesAt(file, offset, fileSize)
+	if err != nil {
 		return nil, 0, err
 	}
-	length := uint64(binary.BigEndian.Uint32(rawLen[:]))
-	dataOffset := offset + 4
-	next := dataOffset + length
-	if next < dataOffset {
-		return nil, 0, fmt.Errorf("length %d at offset %d overflows", length, offset)
+	if !compressed {
+		return encoded, next, nil
 	}
-	if length > fileSize-dataOffset {
-		return nil, 0, fmt.Errorf("declared length %d at offset %d exceeds remaining %d", length, offset, fileSize-dataOffset)
+	decodedLen, err := snappy.DecodedLen(encoded)
+	if err != nil {
+		return nil, 0, fmt.Errorf("decode compressed chain-freezer blob length: %w", err)
+	}
+	if decodedLen > chainFreezerMaxDecodedBlobSize {
+		return nil, 0, fmt.Errorf("compressed chain-freezer blob decoded length %d exceeds limit %d", decodedLen, chainFreezerMaxDecodedBlobSize)
+	}
+	decoded, err := snappy.Decode(nil, encoded)
+	if err != nil {
+		return nil, 0, fmt.Errorf("decode compressed chain-freezer blob: %w", err)
+	}
+	return decoded, next, nil
+}
+
+func skipChainFreezerBytesAt(file io.ReaderAt, offset, fileSize uint64) (uint64, error) {
+	_, _, next, err := chainFreezerBlobBoundsAt(file, offset, fileSize)
+	return next, err
+}
+
+func readChainFreezerEncodedBytesAt(file io.ReaderAt, offset, fileSize uint64) ([]byte, bool, uint64, error) {
+	length, compressed, next, err := chainFreezerBlobBoundsAt(file, offset, fileSize)
+	if err != nil {
+		return nil, false, 0, err
 	}
 	if length == 0 {
-		return nil, next, nil
-	}
-	if next > uint64(^uint(0)>>1) {
-		return nil, 0, fmt.Errorf("offset %d length %d overflows int64", offset, length)
+		return nil, false, next, nil
 	}
 	out := make([]byte, int(length))
 	if _, err := file.ReadAt(out, int64(offset+4)); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, 0, io.ErrUnexpectedEOF
+			return nil, false, 0, io.ErrUnexpectedEOF
 		}
-		return nil, 0, err
+		return nil, false, 0, err
 	}
-	return out, next, nil
+	return out, compressed, next, nil
+}
+
+func chainFreezerBlobBoundsAt(file io.ReaderAt, offset, fileSize uint64) (uint64, bool, uint64, error) {
+	if offset > uint64(^uint(0)>>1) {
+		return 0, false, 0, fmt.Errorf("offset %d overflows int64", offset)
+	}
+	if offset > fileSize || fileSize-offset < 4 {
+		return 0, false, 0, io.ErrUnexpectedEOF
+	}
+	var rawLen [4]byte
+	if _, err := file.ReadAt(rawLen[:], int64(offset)); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, false, 0, io.ErrUnexpectedEOF
+		}
+		return 0, false, 0, err
+	}
+	storedLen := binary.BigEndian.Uint32(rawLen[:])
+	compressed := storedLen&chainFreezerBlobCompressedFlag != 0
+	length := uint64(storedLen & chainFreezerBlobLengthMask)
+	dataOffset := offset + 4
+	next := dataOffset + length
+	if next < dataOffset {
+		return 0, false, 0, fmt.Errorf("length %d at offset %d overflows", length, offset)
+	}
+	if length > fileSize-dataOffset {
+		return 0, false, 0, fmt.Errorf("declared length %d at offset %d exceeds remaining %d", length, offset, fileSize-dataOffset)
+	}
+	if length > chainFreezerMaxDecodedBlobSize {
+		return 0, false, 0, fmt.Errorf("chain-freezer blob encoded length %d exceeds limit %d", length, chainFreezerMaxDecodedBlobSize)
+	}
+	if length == 0 {
+		if compressed {
+			return 0, false, 0, fmt.Errorf("compressed chain-freezer blob at offset %d has zero encoded length", offset)
+		}
+		return 0, false, next, nil
+	}
+	if next > uint64(^uint(0)>>1) {
+		return 0, false, 0, fmt.Errorf("offset %d length %d overflows int64", offset, length)
+	}
+	return length, compressed, next, nil
 }
 
 func writeChainFreezerAccessorHeader(w io.Writer, header chainFreezerAccessorHeader) error {

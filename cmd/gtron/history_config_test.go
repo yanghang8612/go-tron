@@ -408,6 +408,31 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 	}
 }
 
+func TestShouldEnableChainFreezerSnapshotBuilder(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		mode             string
+		ancientAvailable bool
+		freezerEnabled   bool
+		want             bool
+	}{
+		{name: "minimal with ancient freezer", mode: params.HistoryModeMinimal, ancientAvailable: true, freezerEnabled: true, want: true},
+		{name: "minimal without ancient", mode: params.HistoryModeMinimal, freezerEnabled: true},
+		{name: "minimal freezer disabled", mode: params.HistoryModeMinimal, ancientAvailable: true},
+		{name: "full retains local ancient", mode: params.HistoryModeFull, ancientAvailable: true, freezerEnabled: true},
+		{name: "snap retains local ancient", mode: params.HistoryModeSnap, ancientAvailable: true, freezerEnabled: true},
+		{name: "blocks retains local ancient", mode: params.HistoryModeBlocks, ancientAvailable: true, freezerEnabled: true},
+		{name: "archive retains local ancient", mode: params.HistoryModeArchive, ancientAvailable: true, freezerEnabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &params.ChainConfig{HistoryMode: tc.mode}
+			if got := shouldEnableChainFreezerSnapshotBuilder(cfg, tc.ancientAvailable, tc.freezerEnabled); got != tc.want {
+				t.Fatalf("shouldEnableChainFreezerSnapshotBuilder(%q, ancient=%v, freezer=%v) = %v, want %v", tc.mode, tc.ancientAvailable, tc.freezerEnabled, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestShouldEnableChainLookupPruner(t *testing.T) {
 	tests := []struct {
 		name string

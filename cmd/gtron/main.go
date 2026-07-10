@@ -700,7 +700,7 @@ func gtron(ctx *cli.Context) error {
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
-	if ancientStore != nil && freezerCfg.Enabled {
+	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
 		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
 			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
 				Dir:            stateSnapshotDir,

@@ -84,6 +84,127 @@ func TestChainFreezerSegmentBuildVerifyInstall(t *testing.T) {
 	assertChainFreezerRowsEqual(t, src, dstCatalog, 0, 2)
 }
 
+func TestChainFreezerBlobCompressionRoundTripAndLegacyRead(t *testing.T) {
+	compressedPayload := bytes.Repeat([]byte("repeated chain-freezer payload "), 256)
+	var compressed bytes.Buffer
+	if err := writeChainFreezerBytes(&compressed, compressedPayload); err != nil {
+		t.Fatalf("write compressed chain-freezer blob: %v", err)
+	}
+	if len(compressed.Bytes()) < 4 || binary.BigEndian.Uint32(compressed.Bytes()[:4])&chainFreezerBlobCompressedFlag == 0 {
+		t.Fatal("compressible chain-freezer blob was not marked compressed")
+	}
+	got, next, err := readChainFreezerBytesAt(bytes.NewReader(compressed.Bytes()), 0, uint64(compressed.Len()))
+	if err != nil {
+		t.Fatalf("read compressed chain-freezer blob: %v", err)
+	}
+	if next != uint64(compressed.Len()) || !bytes.Equal(got, compressedPayload) {
+		t.Fatalf("compressed round trip = next:%d bytes:%d, want next:%d bytes:%d", next, len(got), compressed.Len(), len(compressedPayload))
+	}
+
+	legacyPayload := []byte("legacy raw chain-freezer blob")
+	legacy := make([]byte, 4+len(legacyPayload))
+	binary.BigEndian.PutUint32(legacy[:4], uint32(len(legacyPayload)))
+	copy(legacy[4:], legacyPayload)
+	got, next, err = readChainFreezerBytesAt(bytes.NewReader(legacy), 0, uint64(len(legacy)))
+	if err != nil {
+		t.Fatalf("read legacy chain-freezer blob: %v", err)
+	}
+	if next != uint64(len(legacy)) || !bytes.Equal(got, legacyPayload) {
+		t.Fatalf("legacy round trip = next:%d payload:%q, want next:%d payload:%q", next, got, len(legacy), legacyPayload)
+	}
+}
+
+func TestBuildChainFreezerSegmentCompressesLargeCanonicalRows(t *testing.T) {
+	root := t.TempDir()
+	store := openChainFreezerTestStore(t, filepath.Join(root, "ancient"))
+	defer store.Close()
+
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	txPB := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Timestamp:  10_001,
+		Expiration: 20_001,
+		Data:       bytes.Repeat([]byte("compressible transaction input "), 512),
+	}}
+	tx := types.NewTransactionFromPB(txPB)
+	block1 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 30_001}},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	txInfosRaw, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber:    1,
+		BlockTimeStamp: 30_001,
+		Transactioninfo: []*corepb.TransactionInfo{{
+			Id:             tx.Hash().Bytes(),
+			BlockNumber:    1,
+			BlockTimeStamp: 30_001,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal transaction infos: %v", err)
+	}
+	appendChainFreezerRawRows(t, store, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfosRaw},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref, err := BuildChainFreezerSegmentFromAncient(store, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	block0Raw, err := block0.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block 0: %v", err)
+	}
+	block1Raw, err := block1.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block 1: %v", err)
+	}
+	rawSize := uint64(chainFreezerHeaderSize + (4 + len(block0Raw)) + 4 + 4 + (4 + len(block1Raw)) + (4 + len(txInfosRaw)) + 4)
+	if ref.Size >= rawSize {
+		t.Fatalf("compressed segment size = %d, want below raw framing size %d", ref.Size, rawSize)
+	}
+	if err := CheckChainFreezerSegment(snapshotDir, ref); err != nil {
+		t.Fatalf("CheckChainFreezerSegment compressed segment: %v", err)
+	}
+	accessorRef, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, ref, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment: %v", err)
+	}
+	if _, _, err := readChainFreezerSegmentRowWithAccessor(snapshotDir, ref, accessorRef, 1); err != nil {
+		t.Fatalf("read compressed chain-freezer row through accessor: %v", err)
+	}
+}
+
+func TestReadChainFreezerBlobRejectsEmptyCompressedPayload(t *testing.T) {
+	raw := make([]byte, 4)
+	binary.BigEndian.PutUint32(raw, chainFreezerBlobCompressedFlag)
+	if _, _, err := readChainFreezerBytesAt(bytes.NewReader(raw), 0, uint64(len(raw))); err == nil || !strings.Contains(err.Error(), "zero encoded length") {
+		t.Fatalf("read empty compressed chain-freezer blob error = %v, want zero encoded length rejection", err)
+	}
+}
+
+func TestReadChainFreezerBlobRejectsOversizedCompressedPayload(t *testing.T) {
+	encoded := make([]byte, binary.MaxVarintLen64)
+	encodedLen := binary.PutUvarint(encoded, uint64(chainFreezerMaxDecodedBlobSize+1))
+	encoded = encoded[:encodedLen]
+	raw := make([]byte, 4+len(encoded))
+	binary.BigEndian.PutUint32(raw[:4], uint32(len(encoded))|chainFreezerBlobCompressedFlag)
+	copy(raw[4:], encoded)
+	if _, _, err := readChainFreezerBytesAt(bytes.NewReader(raw), 0, uint64(len(raw))); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("read oversized compressed chain-freezer blob error = %v, want decoded-size rejection", err)
+	}
+}
+
+func TestReadChainFreezerBlobRejectsOversizedRawPayload(t *testing.T) {
+	raw := make([]byte, 4)
+	binary.BigEndian.PutUint32(raw, uint32(chainFreezerMaxDecodedBlobSize+1))
+	fileSize := uint64(chainFreezerMaxDecodedBlobSize + 5)
+	if _, _, err := readChainFreezerBytesAt(bytes.NewReader(raw), 0, fileSize); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("read oversized raw chain-freezer blob error = %v, want decoded-size rejection", err)
+	}
+}
+
 func TestRestoreChainFreezerSegmentRejectsNonContiguousHead(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))

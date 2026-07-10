@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
@@ -25,6 +26,18 @@ import (
 const (
 	ChainFreezerSegmentVersion = 1
 	chainFreezerHeaderSize     = 8 + 8 + 8 + 8
+
+	// The high bit in a row blob's uint32 length marks a Snappy-compressed
+	// payload. Existing v1 segments only use unmarked lengths, so this is a
+	// backward-compatible extension of the row framing rather than a manifest
+	// format migration.
+	chainFreezerBlobCompressedFlag = uint32(1 << 31)
+	chainFreezerBlobLengthMask     = ^chainFreezerBlobCompressedFlag
+
+	// A valid TRON block or TransactionRet is far smaller than this bound. It
+	// keeps corrupt compressed cold files from requesting multi-gigabyte
+	// allocations during checker, restore, or archive reads.
+	chainFreezerMaxDecodedBlobSize = 256 << 20
 )
 
 var chainFreezerMagic = [8]byte{'g', 't', 'f', 'r', 'z', 'r', '1', '\n'}
@@ -1049,18 +1062,32 @@ func readChainFreezerHeader(r io.Reader) (uint64, uint64, uint64, error) {
 }
 
 func writeChainFreezerBytes(w io.Writer, data []byte) error {
-	if uint64(len(data)) > uint64(^uint32(0)) {
-		return fmt.Errorf("snapshots: chain-freezer blob length %d exceeds uint32", len(data))
+	if len(data) > chainFreezerMaxDecodedBlobSize {
+		return fmt.Errorf("snapshots: chain-freezer blob length %d exceeds decoded limit %d", len(data), chainFreezerMaxDecodedBlobSize)
+	}
+	if uint64(len(data)) > uint64(chainFreezerBlobLengthMask) {
+		return fmt.Errorf("snapshots: chain-freezer blob length %d exceeds encodable length", len(data))
+	}
+	encoded := data
+	length := uint32(len(encoded))
+	// Snappy framing adds overhead for small or incompressible rows. Retain
+	// those verbatim so the snapshot is never larger just for a format flag.
+	if len(data) >= 64 {
+		compressed := snappy.Encode(nil, data)
+		if len(compressed) < len(data) {
+			encoded = compressed
+			length = uint32(len(compressed)) | chainFreezerBlobCompressedFlag
+		}
 	}
 	var rawLen [4]byte
-	binary.BigEndian.PutUint32(rawLen[:], uint32(len(data)))
+	binary.BigEndian.PutUint32(rawLen[:], length)
 	if _, err := w.Write(rawLen[:]); err != nil {
 		return err
 	}
-	if len(data) == 0 {
+	if len(encoded) == 0 {
 		return nil
 	}
-	_, err := w.Write(data)
+	_, err := w.Write(encoded)
 	return err
 }
 
