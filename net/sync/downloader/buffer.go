@@ -3,6 +3,8 @@ package downloader
 import (
 	"errors"
 	"fmt"
+	"runtime"
+	"sync"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -53,6 +55,16 @@ type BufferedBatch struct {
 	Buffered    []BufferedBlock
 	BufferWaits []time.Duration
 }
+
+// maxBufferedBatchDecodeWorkers bounds the CPU work performed while turning a
+// staged-body chunk back into pointer-rich block objects. Very short chunks
+// stay serial because goroutine scheduling costs more than protobuf work there.
+// Canonical insertion remains serial; this only overlaps independent protobuf
+// decode and buffered metadata validation before the importer starts.
+const (
+	minBufferedBatchDecodeParallelBlocks = 4
+	maxBufferedBatchDecodeWorkers        = 4
+)
 
 // BufferedBatchDecodeAction tells the local drain loop what to do after
 // decoding a raw buffered batch.
@@ -1167,25 +1179,92 @@ func PopBufferedBatch(buffer map[uint64]BufferedBlock, bufferedHashes map[tcommo
 	return batch
 }
 
-// DecodeBlocks decodes raw buffered entries into Blocks. It preserves the
-// successfully decoded prefix and reports the first undecodable entry; callers
-// can import the prefix and refetch the dropped suffix.
+// DecodeBlocks decodes raw buffered entries into Blocks. It uses a bounded
+// worker set because every raw body is independent until canonical insertion,
+// then rebuilds Blocks in order so it preserves the successfully decoded prefix
+// and reports the first undecodable entry. Callers can import that prefix and
+// refetch the dropped suffix.
 func (b *BufferedBatch) DecodeBlocks() (BufferedBlock, error) {
 	if b == nil {
 		return BufferedBlock{}, nil
 	}
+	return b.decodeBlocks(bufferedBatchDecodeWorkerCount(len(b.Buffered)))
+}
+
+func bufferedBatchDecodeWorkerCount(blocks int) int {
+	if blocks < minBufferedBatchDecodeParallelBlocks {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > maxBufferedBatchDecodeWorkers {
+		workers = maxBufferedBatchDecodeWorkers
+	}
+	if workers > blocks {
+		workers = blocks
+	}
+	return workers
+}
+
+func (b *BufferedBatch) decodeBlocks(workers int) (BufferedBlock, error) {
+	if b == nil {
+		return BufferedBlock{}, nil
+	}
 	b.Blocks = make([]*types.Block, 0, len(b.Buffered))
-	for _, buffered := range b.Buffered {
-		block, err := types.UnmarshalBlock(buffered.Raw)
-		if err != nil {
+	if len(b.Buffered) == 0 {
+		return BufferedBlock{}, nil
+	}
+	if workers <= 1 {
+		for _, buffered := range b.Buffered {
+			block, err := decodeBufferedBlock(buffered)
+			if err != nil {
+				return buffered, err
+			}
+			b.Blocks = append(b.Blocks, block)
+		}
+		return BufferedBlock{}, nil
+	}
+	if workers > len(b.Buffered) {
+		workers = len(b.Buffered)
+	}
+	blocks := make([]*types.Block, len(b.Buffered))
+	errs := make([]error, len(b.Buffered))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				blocks[i], errs[i] = decodeBufferedBlock(b.Buffered[i])
+			}
+		}()
+	}
+	for i := range b.Buffered {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	for i, buffered := range b.Buffered {
+		if err := errs[i]; err != nil {
 			return buffered, err
 		}
-		if err := ValidateBufferedBlockMetadata(buffered, block); err != nil {
-			return buffered, err
-		}
-		b.Blocks = append(b.Blocks, block)
+		b.Blocks = append(b.Blocks, blocks[i])
 	}
 	return BufferedBlock{}, nil
+}
+
+func decodeBufferedBlock(buffered BufferedBlock) (*types.Block, error) {
+	block, err := types.UnmarshalBlock(buffered.Raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateBufferedBlockMetadata(buffered, block); err != nil {
+		return nil, err
+	}
+	return block, nil
 }
 
 // ValidateBufferedBlockMetadata verifies that a decoded staged-body payload

@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -70,6 +71,61 @@ func TestBufferedBatchDecodeBlocksKeepsPrefixOnError(t *testing.T) {
 	}
 	if len(batch.Blocks) != 1 || batch.Blocks[0].Hash() != block1.Hash() {
 		t.Fatalf("decoded prefix = %d blocks, want only block1", len(batch.Blocks))
+	}
+}
+
+func TestBufferedBatchDecodeWorkersPreserveFirstFailurePrefix(t *testing.T) {
+	const count = 6
+	buffered := make([]BufferedBlock, 0, count)
+	for i := 1; i <= count; i++ {
+		block := testBufferedBlock(int64(i))
+		raw, err := block.Marshal()
+		if err != nil {
+			t.Fatalf("marshal block %d: %v", i, err)
+		}
+		buffered = append(buffered, BufferedBlock{Raw: raw, Hash: block.Hash(), Num: block.Number()})
+	}
+	// The failure is deliberately in the middle. Parallel workers may complete
+	// later entries first, but canonical import must still receive only the
+	// ordered prefix before this row.
+	buffered[3].Raw = []byte{0x01, 0x02}
+
+	for _, workers := range []int{1, 2, count + 1} {
+		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
+			batch := BufferedBatch{Buffered: append([]BufferedBlock(nil), buffered...)}
+			dropped, err := batch.decodeBlocks(workers)
+			if err == nil {
+				t.Fatal("decode succeeded, want first malformed entry error")
+			}
+			if dropped.Num != 4 || dropped.Hash != buffered[3].Hash {
+				t.Fatalf("dropped = #%d %x, want buffered block #4", dropped.Num, dropped.Hash)
+			}
+			if len(batch.Blocks) != 3 {
+				t.Fatalf("decoded prefix length = %d, want 3", len(batch.Blocks))
+			}
+			for i, block := range batch.Blocks {
+				if block == nil || block.Number() != uint64(i+1) || block.Hash() != buffered[i].Hash {
+					t.Fatalf("decoded block[%d] = %v, want block #%d", i, block, i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestBufferedBatchDecodeWorkerCountIsBounded(t *testing.T) {
+	for _, blocks := range []int{0, 1, minBufferedBatchDecodeParallelBlocks - 1} {
+		if workers := bufferedBatchDecodeWorkerCount(blocks); workers != 1 {
+			t.Fatalf("worker count for short %d-block batch = %d, want 1", blocks, workers)
+		}
+	}
+	for _, blocks := range []int{0, 1, 2, 32, 128} {
+		workers := bufferedBatchDecodeWorkerCount(blocks)
+		if workers < 1 || workers > maxBufferedBatchDecodeWorkers {
+			t.Fatalf("worker count for %d blocks = %d, want [1,%d]", blocks, workers, maxBufferedBatchDecodeWorkers)
+		}
+		if blocks > 0 && workers > blocks {
+			t.Fatalf("worker count for %d blocks = %d, exceeds batch size", blocks, workers)
+		}
 	}
 }
 

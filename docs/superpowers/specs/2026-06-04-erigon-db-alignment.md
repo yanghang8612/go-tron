@@ -547,6 +547,14 @@ Status:
   commitment/finish rows from making restart diagnostics look more advanced
   than the applied pipeline. `SyncService` is left to orchestrate logging,
   pausing, ready-frontier refresh, and canonical insertion.
+- Raw staged-body chunks now decode with a bounded worker set (at most four
+  workers, also capped by CPU count and chunk size) before canonical import;
+  chunks shorter than four bodies remain serial to avoid scheduling overhead.
+  Each worker only unmarshals and validates its independent raw protobuf body;
+  the result is rebuilt in block order and reports the first bad entry, so
+  import, stage progress, pause handling, and the accepted-prefix boundary
+  remain serial and byte-identical. Worker-count regression and race coverage
+  pin the ordered-prefix behavior even when a later worker completes first.
 - One `InsertSession` now spans every contiguous local import chunk in a drain,
   including the default synchronous path. It reuses one canonical `StateDB` and
   `CommitScope` across chunk boundaries, matching Erigon's stage-scoped domain
