@@ -101,10 +101,49 @@ func TestStateDomainReadersSurfaceStorageErrors(t *testing.T) {
 	}
 }
 
+func TestStateDomainReadersUseAtomicPresenceCapability(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := WriteStateTxRange(db, 7, common.Hash{0x07}, 70, 72); err != nil {
+		t.Fatalf("write tx range: %v", err)
+	}
+	reader := &atomicPresenceStateReader{reader: db}
+	row, ok, err := ReadStateTxRange(reader, 7)
+	if err != nil || !ok || row.BlockNum != 7 {
+		t.Fatalf("ReadStateTxRange = %+v/%v/%v, want block 7", row, ok, err)
+	}
+	if reader.atomicReads != 1 || reader.hasCalls != 0 {
+		t.Fatalf("reader calls atomic=%d has=%d, want 1/0", reader.atomicReads, reader.hasCalls)
+	}
+}
+
 type failingStateDomainReader struct {
 	reader ethdb.KeyValueReader
 	hasErr error
 	getErr error
+}
+
+type atomicPresenceStateReader struct {
+	reader      ethdb.KeyValueReader
+	atomicReads int
+	hasCalls    int
+}
+
+func (r *atomicPresenceStateReader) GetWithPresence(key []byte) ([]byte, bool, error) {
+	r.atomicReads++
+	value, err := r.reader.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
+func (r *atomicPresenceStateReader) Has(key []byte) (bool, error) {
+	r.hasCalls++
+	return r.reader.Has(key)
+}
+
+func (r *atomicPresenceStateReader) Get(key []byte) ([]byte, error) {
+	return r.reader.Get(key)
 }
 
 func (r failingStateDomainReader) Has(key []byte) (bool, error) {

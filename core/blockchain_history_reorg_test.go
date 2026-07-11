@@ -196,6 +196,23 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 0 || !row.HasBlockHash || row.BlockHash != bc.genesisBlock.Hash() {
 		t.Fatalf("TxLookup stage after switchFork = %+v ok=%v err=%v, want LCA genesis hash-bound", row, ok, err)
 	}
+	// Direct metadata is durable before its matching buffer layer is promoted.
+	// A fork switch must therefore remove reverse lookup rows unique to the
+	// orphan branch; overwriting b-<number> alone leaves tx- and bh- entries
+	// that resolve an orphan hash to an unrelated canonical block at that height.
+	for n := 1; n <= 5; n++ {
+		oldTxHash := chainA[n].Transactions()[0].Hash()
+		if got := rawdb.ReadTransactionIndex(bc.ChainDB(), oldTxHash[:]); got != nil {
+			t.Fatalf("orphan A%d transaction index = %d, want absent", n, *got)
+		}
+		if got := rawdb.ReadBlockNumber(bc.ChainDB(), chainA[n].Hash()); got != nil {
+			t.Fatalf("orphan A%d block-hash lookup = %d, want absent", n, *got)
+		}
+		canonicalTxHash := chainB[n].Transactions()[0].Hash()
+		if got := rawdb.ReadTransactionIndex(bc.ChainDB(), canonicalTxHash[:]); got == nil || *got != uint64(n) {
+			t.Fatalf("canonical B%d transaction index = %v, want %d", n, got, n)
+		}
+	}
 
 	// (a) Per-height tx ranges reflect chain B, not chain A. If
 	// DiscardBlock had failed to strip A's layer, the buffer's
@@ -263,6 +280,39 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 		if acc.Balance() == notWant {
 			t.Errorf("AccountAt(recipient, %d).Balance() = %d matches chain A's orphan value", n, notWant)
 		}
+	}
+}
+
+func TestHistoryReorgRemovesOrphanAccountTrace(t *testing.T) {
+	bc, witnessAddr := newHistoryReorgChain(t)
+	defer bc.Close()
+
+	orphanReceiver := testInsertAddr(2)
+	canonicalReceiver := testInsertAddr(3)
+	chainA1 := buildTransferBlockTo(t, 1, 3000, bc.genesisBlock.Hash(), witnessAddr, testInsertAddr(1), orphanReceiver, 999)
+	if err := bc.InsertBlock(chainA1); err != nil {
+		t.Fatalf("insert A1: %v", err)
+	}
+	if _, ok := rawdb.ReadAccountTrace(bc.DB(), orphanReceiver.Bytes(), 1); !ok {
+		t.Fatal("orphan receiver trace missing before fork switch")
+	}
+
+	chainB1 := buildTransferBlockTo(t, 1, 3001, bc.genesisBlock.Hash(), witnessAddr, testInsertAddr(1), canonicalReceiver, 1000)
+	chainB2 := buildTransferBlockTo(t, 2, 6001, chainB1.Hash(), witnessAddr, testInsertAddr(1), canonicalReceiver, 2000)
+	if err := bc.InsertBlock(chainB1); err != nil {
+		t.Fatalf("insert B1: %v", err)
+	}
+	if err := bc.InsertBlock(chainB2); err != nil {
+		t.Fatalf("insert B2: %v", err)
+	}
+	if got := bc.CurrentBlock().Hash(); got != chainB2.Hash() {
+		t.Fatalf("head after fork switch = %x, want B2 %x", got, chainB2.Hash())
+	}
+	if _, ok := rawdb.ReadAccountTrace(bc.DB(), orphanReceiver.Bytes(), 1); ok {
+		t.Fatal("orphan receiver account trace survived fork switch")
+	}
+	if got, ok := rawdb.ReadAccountTrace(bc.DB(), canonicalReceiver.Bytes(), 1); !ok || got != 1000 {
+		t.Fatalf("canonical receiver trace = %d/%v, want 1000/true", got, ok)
 	}
 }
 

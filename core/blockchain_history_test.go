@@ -26,10 +26,14 @@ func cloneMainnetChainConfig() *params.ChainConfig {
 // buildTransferBlock constructs a single-tx block transferring `amount`
 // from genesis-funded testInsertAddr(1) to testInsertAddr(2).
 func buildTransferBlock(t *testing.T, number int64, ts int64, parentHash tcommon.Hash, witness tcommon.Address, amount int64) *types.Block {
+	return buildTransferBlockTo(t, number, ts, parentHash, witness, testInsertAddr(1), testInsertAddr(2), amount)
+}
+
+func buildTransferBlockTo(t *testing.T, number int64, ts int64, parentHash tcommon.Hash, witness, owner, recipient tcommon.Address, amount int64) *types.Block {
 	t.Helper()
 	tc := &contractpb.TransferContract{
-		OwnerAddress: testInsertAddr(1).Bytes(),
-		ToAddress:    testInsertAddr(2).Bytes(),
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    recipient.Bytes(),
 		Amount:       amount,
 	}
 	param, _ := anypb.New(tc)

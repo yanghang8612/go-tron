@@ -580,6 +580,19 @@ Status:
   the later solidified flush skips the duplicate Pebble writes while preserving
   block-root, `BLOCKHASH`, TAPOS, and fork-rewind semantics. The synchronous
   and async-commit paths each have write-count regression coverage.
+- A fork switch now removes direct metadata unique to the orphan branch after
+  its account-trace ownership set has been captured but before its buffer
+  layers are dropped: orphan block-hash, state-root,
+  transaction-lookup, and legacy per-transaction-info rows cannot resolve to
+  an unrelated canonical block at the same height. History-mode account traces
+  use the buffered state-change ownership set; replacement blocks rewrite their
+  numbered receipt/trace rows and any shared transaction lookup. Cleanup failure
+  therefore aborts the fork before the canonical head changes. Buffer-backed
+  strict point readers also use one
+  presence-coupled overlay read rather than a separately interleavable
+  `Has`/`Get` pair; an ordinary row disappearing with the discarded branch is
+  therefore an unavailable-history result, while non-buffered storage errors
+  retain the existing strict propagation.
 - A solidified buffer flush now also coalesces repeated writes across the
   source block layers that enter one physical batch. The later layer's
   put/delete remains the sole persisted operation for each key, matching the
@@ -1841,8 +1854,10 @@ Status:
   the redundant per-tx `ti-<hash>` row; receipt-by-ID reads resolve through
   `tx-` plus `tib-`.
   The stage watermark is hash-bound, bounded per pass, and
-  is clamped on fork rewind; a crash after the ETL load but before the watermark
-  write is safe because the next pass deterministically rewrites the same keys.
+  is clamped on fork rewind; the fork cleanup also removes orphan `tx-` rows
+  before the next pass can serve them. A crash after the ETL load but before the
+  watermark write is safe because the next pass deterministically rewrites the
+  same keys.
   If a metadata/index suffix reached disk ahead of the buffered persisted head,
   startup clamps the watermark back to that head before retrying.
   Legacy databases establish their initial watermark at the stored head because

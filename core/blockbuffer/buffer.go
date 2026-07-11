@@ -836,6 +836,53 @@ func (b *Buffer) Get(key []byte) ([]byte, error) {
 	return b.base.Get(key)
 }
 
+// GetWithPresence returns one presence-coupled value read from the layered
+// view. Unlike an external Has followed by Get, it holds the layer snapshot
+// while resolving both questions, so a reorg cannot remove an overlay row in
+// between and turn an ordinary miss into a storage error. rawdb detects this
+// optional capability for strict point readers; it is intentionally not part
+// of ethdb.KeyValueReader.
+func (b *Buffer) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if b == nil {
+		return nil, false, nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for i := len(b.inflight) - 1; i >= 0; i-- {
+		v, found, tomb := b.inflight[i].lookup(key)
+		if tomb {
+			return nil, false, nil
+		}
+		if found {
+			return append([]byte(nil), v...), true, nil
+		}
+	}
+	for i := len(b.layers) - 1; i >= 0; i-- {
+		v, found, tomb := b.layers[i].lookup(key)
+		if tomb {
+			return nil, false, nil
+		}
+		if found {
+			return append([]byte(nil), v...), true, nil
+		}
+	}
+	if b.base == nil {
+		return nil, false, nil
+	}
+	value, err := b.base.Get(key)
+	if err == nil {
+		return value, true, nil
+	}
+	exists, hasErr := b.base.Has(key)
+	if hasErr != nil {
+		return nil, false, hasErr
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
 // GetNoCopy is Get without the defensive value copy: on a buffer hit it returns
 // the layer's internal value slice directly (aliasing buffer storage), saving
 // the per-Get allocation that dominates the commitment-fold read path. The

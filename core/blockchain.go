@@ -1891,6 +1891,22 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	} else {
 		lcaHash = oldBranch[len(oldBranch)-1].ParentHash()
 	}
+	// Block bodies at an orphaned height will be overwritten by the replacement
+	// branch below, but their hash-keyed metadata will not. Capture the small
+	// history-mode account-trace key set before dropping the buffer layers, then
+	// remove the old direct rows before the rewind changes canonical state. A
+	// replacement block rewrites its numbered rows and any shared tx- lookup.
+	orphanBlocks := make([]*types.Block, 0, len(oldBranch))
+	for _, kb := range oldBranch {
+		orphanBlocks = append(orphanBlocks, kb.block)
+	}
+	orphaned, err := bc.planOrphanedBlockMetadata(orphanBlocks)
+	if err != nil {
+		return fmt.Errorf("plan orphaned block metadata cleanup: %w", err)
+	}
+	if err := bc.deleteOrphanedBlockMetadata(orphaned); err != nil {
+		return fmt.Errorf("delete orphaned block metadata: %w", err)
+	}
 
 	// Drop the buffer layers belonging to orphan-branch blocks. These were
 	// laid down by earlier applyBlock calls (linear extensions) and contain
@@ -1984,6 +2000,103 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 		}
 	}
 	return forkExecutor.Close()
+}
+
+type orphanedBlockMetadata struct {
+	block              *types.Block
+	accountTraceOwners map[tcommon.Address]struct{}
+}
+
+// planOrphanedBlockMetadata reads the history rows while the orphan layers are
+// still visible, so their account-trace keys can be deleted before the layers
+// are dropped.
+func (bc *BlockChain) planOrphanedBlockMetadata(blocks []*types.Block) ([]orphanedBlockMetadata, error) {
+	if bc == nil || bc.db == nil {
+		return nil, errors.New("blockchain unavailable")
+	}
+	plans := make([]orphanedBlockMetadata, 0, len(blocks))
+	for _, block := range blocks {
+		if block == nil {
+			return nil, errors.New("nil orphan block")
+		}
+		owners, err := bc.accountTraceOwnersAtBlock(block)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, orphanedBlockMetadata{block: block, accountTraceOwners: owners})
+	}
+	return plans, nil
+}
+
+func (bc *BlockChain) accountTraceOwnersAtBlock(block *types.Block) (map[tcommon.Address]struct{}, error) {
+	owners := make(map[tcommon.Address]struct{})
+	if bc == nil || bc.config == nil || !bc.config.HistoryEnabled || block == nil {
+		return owners, nil
+	}
+	blockNum := block.Number()
+	blockHash := block.Hash()
+	if err := rawdb.IterateStateDomainChanges(bc.buffer, blockNum, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change.BlockNum != blockNum || change.BlockHash != blockHash {
+			return false, fmt.Errorf("state change belongs to block %d (%x), want %d (%x)", change.BlockNum, change.BlockHash, blockNum, blockHash)
+		}
+		if change.FlatDomain == rawdb.StateFlatDomainAccountLatest {
+			owners[change.Owner] = struct{}{}
+		}
+		return true, nil
+	}); err != nil {
+		return nil, fmt.Errorf("read state changes for block %d: %w", blockNum, err)
+	}
+	return owners, nil
+}
+
+// deleteOrphanedBlockMetadata removes direct, canonical-only metadata that is
+// not covered by replacing numbered block rows during a fork switch. The
+// caller invokes it before the buffer layers are dropped and before applying
+// the replacement branch, so any storage failure leaves the canonical head
+// unchanged.
+func (bc *BlockChain) deleteOrphanedBlockMetadata(orphaned []orphanedBlockMetadata) error {
+	if len(orphaned) == 0 {
+		return nil
+	}
+	if bc == nil || bc.db == nil {
+		return errors.New("blockchain unavailable")
+	}
+	batch := bc.db.NewBatch()
+	for _, orphan := range orphaned {
+		block := orphan.block
+		blockNum := block.Number()
+		blockHash := block.Hash()
+		if err := rawdb.DeleteBlockNumber(batch, blockHash); err != nil {
+			return fmt.Errorf("delete block number %d (%x): %w", blockNum, blockHash, err)
+		}
+		rawdb.DeleteBlockStateRoot(batch, blockHash)
+		if err := rawdb.DeleteTransactionInfosByBlock(batch, blockNum); err != nil {
+			return fmt.Errorf("delete transaction infos for block %d: %w", blockNum, err)
+		}
+		if err := rawdb.DeleteBlockBalanceTrace(batch, int64(blockNum)); err != nil {
+			return fmt.Errorf("delete balance trace for block %d: %w", blockNum, err)
+		}
+		for _, tx := range block.Transactions() {
+			txHash := tx.Hash()
+			// ti- is no longer written for new blocks, but deleting it keeps a
+			// reorg correct for databases created by prior releases.
+			if err := rawdb.DeleteTransactionInfo(batch, txHash[:]); err != nil {
+				return fmt.Errorf("delete transaction info %x: %w", txHash, err)
+			}
+			if err := rawdb.DeleteTransactionIndex(batch, txHash[:]); err != nil {
+				return fmt.Errorf("delete transaction index %x: %w", txHash, err)
+			}
+		}
+		for owner := range orphan.accountTraceOwners {
+			if err := rawdb.DeleteAccountTrace(batch, owner.Bytes(), int64(blockNum)); err != nil {
+				return fmt.Errorf("delete account trace for block %d owner %x: %w", blockNum, owner, err)
+			}
+		}
+	}
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("write orphan metadata delete batch: %w", err)
+	}
+	return nil
 }
 
 func loadForkLCABlockAndRoot(chain *rawdb.ChainDB, db ethdb.KeyValueReader, lcaHash tcommon.Hash) (*types.Block, tcommon.Hash, error) {
