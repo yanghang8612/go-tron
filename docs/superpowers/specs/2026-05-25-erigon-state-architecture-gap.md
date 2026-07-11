@@ -612,6 +612,11 @@ Status update:
   new history segment.
 - `SnapshotPrune` stage progress is now advanced by the pruner, not by
   `InsertBlock`.
+- Hot pruning batches each history, CodeDomain, and commitment-checkpoint
+  deletion family against the same read view, committing the batch before its
+  corresponding manifest or stage watermark advances. This follows Erigon's
+  bounded prune-write shape and avoids one Pebble write per deleted row while
+  preserving the dependency order from history to code retention.
 - Manifest latest/history/accessor/commitment-flush/hot-prune txNum watermarks
   are mirrored through the snapshot stage-progress adapter whenever the
   builder, aggregator, or pruner has a DB writer, keeping rawdb stage writes at

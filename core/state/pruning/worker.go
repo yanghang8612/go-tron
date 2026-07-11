@@ -36,6 +36,34 @@ type Stats struct {
 	DeletedStateCodeRows         int
 }
 
+// pruneBatchStore keeps scans on the committed store while directing writes to
+// one batch. Pruning first discovers all target rows, so it never needs to read
+// its own deletes before the batch is committed.
+type pruneBatchStore struct {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+	ethdb.Iteratee
+}
+
+func newPruneBatchStore(store Store) (Store, func() error) {
+	batcher, ok := store.(ethdb.Batcher)
+	if !ok {
+		return store, func() error { return nil }
+	}
+	batch := batcher.NewBatch()
+	return pruneBatchStore{
+			KeyValueReader: store,
+			KeyValueWriter: batch,
+			Iteratee:       store,
+		}, func() error {
+			defer batch.Reset()
+			if batch.ValueSize() == 0 {
+				return nil
+			}
+			return batch.Write()
+		}
+}
+
 func Run(db Store, policy Policy, headNum uint64) (Stats, error) {
 	return Worker{DB: db, Policy: policy}.PruneTo(headNum)
 }
@@ -59,7 +87,8 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	hotStats, err := historyCfg.PruneHotHistory(w.DB, snapshots.HotHistoryPruneOptions{
+	historyStore, flushHistory := newPruneBatchStore(w.DB)
+	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
 		MaxBlocks: w.MaxBlocks,
 		Decide: func(row *rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
 			if w.Policy.RetainHistory(row.BlockNum, headNum) {
@@ -80,6 +109,9 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	if err := flushHistory(); err != nil {
+		return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
+	}
 	stats.DeletedTxRanges = hotStats.DeletedTxRanges
 	stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
 	if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
@@ -90,9 +122,13 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 			return Stats{}, fmt.Errorf("pruning: write snapshot/hot-prune stage progress: %w", err)
 		}
 	}
-	deletedCodeRows, err := w.pruneStateCodeRows(headNum)
+	codeStore, flushCode := newPruneBatchStore(w.DB)
+	deletedCodeRows, err := w.pruneStateCodeRows(codeStore, headNum)
 	if err != nil {
 		return Stats{}, err
+	}
+	if err := flushCode(); err != nil {
+		return Stats{}, fmt.Errorf("pruning: flush CodeDomain delete batch: %w", err)
 	}
 	stats.DeletedStateCodeRows = deletedCodeRows
 
@@ -103,8 +139,9 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	if checkpointCfg.IterateHotCommitmentCheckpoints == nil || checkpointCfg.DeleteHotCommitmentCheckpoint == nil {
 		return Stats{}, errors.New("pruning: missing commitment checkpoint lifecycle hooks")
 	}
+	checkpointStore, flushCheckpoints := newPruneBatchStore(w.DB)
 	var commitmentBlocks []uint64
-	if err := checkpointCfg.IterateHotCommitmentCheckpoints(w.DB, func(cp *rawdb.StateCommitmentCheckpoint) (bool, error) {
+	if err := checkpointCfg.IterateHotCommitmentCheckpoints(checkpointStore, func(cp *rawdb.StateCommitmentCheckpoint) (bool, error) {
 		if !w.Policy.RetainReorgData(cp.BlockNum, headNum) {
 			commitmentBlocks = append(commitmentBlocks, cp.BlockNum)
 		}
@@ -113,10 +150,13 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 		return Stats{}, err
 	}
 	for _, blockNum := range commitmentBlocks {
-		if err := checkpointCfg.DeleteHotCommitmentCheckpoint(w.DB, blockNum); err != nil {
+		if err := checkpointCfg.DeleteHotCommitmentCheckpoint(checkpointStore, blockNum); err != nil {
 			return Stats{}, err
 		}
 		stats.DeletedCommitmentCheckpoints++
+	}
+	if err := flushCheckpoints(); err != nil {
+		return Stats{}, fmt.Errorf("pruning: flush commitment checkpoint delete batch: %w", err)
 	}
 	if err := w.writeSnapshotPruneProgress(headNum); err != nil {
 		return Stats{}, fmt.Errorf("pruning: write snapshot/prune stage progress: %w", err)
@@ -140,7 +180,7 @@ func (w Worker) hotHistoryDomainConfig() (snapshots.DomainCfg, error) {
 	return cfg, nil
 }
 
-func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
+func (w Worker) pruneStateCodeRows(db Store, headNum uint64) (int, error) {
 	if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
 		return 0, nil
 	}
@@ -154,7 +194,7 @@ func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
 	if mgr.Manifest() == nil {
 		return 0, nil
 	}
-	headTxNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(w.DB, headNum)
+	headTxNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(db, headNum)
 	if err != nil {
 		return 0, err
 	}
@@ -173,7 +213,7 @@ func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
 		return 0, errors.New("pruning: missing CodeDomain lifecycle hooks")
 	}
 	refs := make(codeHashRefs)
-	if err := accountCfg.IterateHotAccountLatest(w.DB, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+	if err := accountCfg.IterateHotAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
 		hash, err := decodeAccountEnvelopeCodeHash(row.Value, fmt.Sprintf("account latest %x", row.Owner))
 		if err != nil {
 			return false, err
@@ -183,12 +223,12 @@ func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	if err := (Checker{DB: w.DB, SnapshotDir: w.SnapshotDir}).collectHistoryCodeHashes(refs); err != nil {
+	if err := (Checker{DB: db, SnapshotDir: w.SnapshotDir}).collectHistoryCodeHashes(refs); err != nil {
 		return 0, err
 	}
 
 	var deleteHashes []common.Hash
-	if err := codeCfg.IterateHotCode(w.DB, func(row rawdb.StateCodeRow) (bool, error) {
+	if err := codeCfg.IterateHotCode(db, func(row rawdb.StateCodeRow) (bool, error) {
 		if !isMeaningfulCodeHash(row.Hash) {
 			return true, nil
 		}
@@ -218,7 +258,7 @@ func (w Worker) pruneStateCodeRows(headNum uint64) (int, error) {
 		return 0, err
 	}
 	for _, hash := range deleteHashes {
-		if err := codeCfg.DeleteHotCode(w.DB, hash); err != nil {
+		if err := codeCfg.DeleteHotCode(db, hash); err != nil {
 			return 0, err
 		}
 	}

@@ -142,6 +142,101 @@ func TestWorkerPrunesDomainHistoryForBlocksAndMinimalModes(t *testing.T) {
 	}
 }
 
+func TestWorkerBatchesHotPruneDeletes(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	db := &pruneBatchCountingStore{KeyValueStore: base}
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x71}, common.AccountIDLength)...))
+
+	for _, blockNum := range []uint64{1, 2} {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+		for seq := uint64(1); seq <= 2; seq++ {
+			if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+				BlockNum:   blockNum,
+				BlockHash:  common.Hash{byte(blockNum)},
+				TxNum:      blockNum,
+				Seq:        seq,
+				FlatDomain: rawdb.StateFlatDomainKVLatest,
+				Owner:      owner,
+				Domain:     kvdomains.SystemDynamicProperty,
+				Key:        []byte{byte(seq)},
+				PrevExists: true,
+				Prev:       []byte("prev"),
+				NextExists: true,
+				Next:       []byte("next"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
+			BlockNum:  blockNum,
+			BlockHash: common.Hash{byte(blockNum)},
+			Root:      common.Hash{byte(blockNum)},
+			Scheme:    rawdb.LatestDomainCommitmentScheme,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.batchWrites = 0
+	db.directDeletes = 0
+
+	stats, err := Worker{DB: db, Policy: FullPolicy(2, 1)}.PruneTo(5)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if stats.DeletedTxRanges != 2 || stats.DeletedDomainChangeBlocks != 2 || stats.DeletedCommitmentCheckpoints != 2 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if db.directDeletes != 0 {
+		t.Fatalf("direct prune deletes = %d, want 0", db.directDeletes)
+	}
+	if db.batchWrites != 2 {
+		t.Fatalf("prune batch writes = %d, want 2 (history and checkpoints)", db.batchWrites)
+	}
+}
+
+func TestWorkerDoesNotAdvancePruneStagesWhenHistoryBatchFails(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	db := &pruneBatchCountingStore{KeyValueStore: base, writeErr: errors.New("injected batch failure")}
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x72}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   1,
+		BlockHash:  common.Hash{0x01},
+		TxNum:      1,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      owner,
+		Domain:     kvdomains.SystemDynamicProperty,
+		Key:        []byte("key"),
+		PrevExists: true,
+		Prev:       []byte("prev"),
+		NextExists: true,
+		Next:       []byte("next"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (Worker{DB: db, Policy: FullPolicy(2, 1)}).PruneTo(5); err == nil || !strings.Contains(err.Error(), "injected batch failure") {
+		t.Fatalf("prune error = %v, want injected batch failure", err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("state tx range after failed batch ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("domain change after failed batch ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || ok {
+		t.Fatalf("snapshot/hot-prune stage advanced after failed batch ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || ok {
+		t.Fatalf("snapshot/prune stage advanced after failed batch ok=%v err=%v", ok, err)
+	}
+}
+
 func TestWorkerSnapPreservesHotChangesWithoutCompleteSnapshotCoverage(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -874,6 +969,40 @@ func corruptSnapshotFile(t *testing.T, dir string, ref snapshots.SegmentRef) {
 type checkerCodeHidingStore struct {
 	Store
 	hidden map[common.Hash]struct{}
+}
+
+type pruneBatchCountingStore struct {
+	ethdb.KeyValueStore
+	batchWrites   int
+	directDeletes int
+	writeErr      error
+}
+
+func (db *pruneBatchCountingStore) Delete(key []byte) error {
+	db.directDeletes++
+	return db.KeyValueStore.Delete(key)
+}
+
+func (db *pruneBatchCountingStore) NewBatch() ethdb.Batch {
+	return &pruneCountingBatch{Batch: db.KeyValueStore.NewBatch(), writes: &db.batchWrites, writeErr: &db.writeErr}
+}
+
+func (db *pruneBatchCountingStore) NewBatchWithSize(size int) ethdb.Batch {
+	return &pruneCountingBatch{Batch: db.KeyValueStore.NewBatchWithSize(size), writes: &db.batchWrites, writeErr: &db.writeErr}
+}
+
+type pruneCountingBatch struct {
+	ethdb.Batch
+	writes   *int
+	writeErr *error
+}
+
+func (b *pruneCountingBatch) Write() error {
+	*b.writes++
+	if b.writeErr != nil && *b.writeErr != nil {
+		return *b.writeErr
+	}
+	return b.Batch.Write()
 }
 
 func (db *checkerCodeHidingStore) Get(key []byte) ([]byte, error) {
