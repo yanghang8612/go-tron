@@ -599,6 +599,42 @@ func TestPayEnergyBill_OriginSplit_OriginCappedByLimit(t *testing.T) {
 	}
 }
 
+// Before ENERGY_LIMIT, allowTvmFreeze, and Stake 2.0, java's getOriginUsage
+// caps the origin share only by recovered stake-left. origin_energy_limit was
+// not part of billing until the software fork.
+func TestPayEnergyBill_PreEnergyLimitFork_DoesNotCapOriginByLimit(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x21}
+	origin := tcommon.Address{0x41, 0xBB, 0x21}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit - 1)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const totalEnergy = int64(10_000)
+	const originLimit = int64(1_000)
+	const wantOrigin = int64(5_000) // consume_user_resource_percent=50
+	installOriginContract(t, ctx, contractAddr, origin, 50, originLimit)
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.GetAccount(origin).AddFrozenEnergy((totalEnergy+1)*params.TRXPrecision, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(1_000_000_000_000)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1_000_000_000_000)
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: int32(corepb.Transaction_Result_SUCCESS)}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+	if result.OriginEnergyUsage != wantOrigin {
+		t.Fatalf("OriginEnergyUsage: got %d, want %d (origin limit %d ignored pre-fork)",
+			result.OriginEnergyUsage, wantOrigin, originLimit)
+	}
+	if result.EnergyFee != (totalEnergy-wantOrigin)*100 {
+		t.Fatalf("EnergyFee: got %d, want %d", result.EnergyFee, (totalEnergy-wantOrigin)*100)
+	}
+}
+
 // TestPayEnergyBill_OriginSplit_OriginCappedByStake: origin has less
 // stake-energy than its 50% share would demand; the uncovered portion
 // flows back to caller (who pays it via its own stake or balance).

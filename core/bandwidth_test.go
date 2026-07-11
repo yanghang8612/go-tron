@@ -437,3 +437,63 @@ func TestConsumeBandwidth_CreateNewAccount_Fee(t *testing.T) {
 		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, got)
 	}
 }
+
+// A zero create-new-account bandwidth rate is legal governance state. Java
+// accepts the staked-bandwidth branch at zero cost even when the account has no
+// stake, and still persists its consume/operation timestamps.
+func TestConsumeBandwidth_CreateNewAccount_ZeroBandwidthRate(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.Set("create_new_account_bandwidth_rate", 0)
+
+	sender := testProcessorAddr(1)
+	statedb.CreateAccount(sender, corepb.AccountType_Normal)
+	statedb.AddBalance(sender, 10_000_000)
+
+	tx := makeTestTransferTx(1, 2, 100)
+	balBefore := statedb.GetBalance(sender)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+	if res.NetUsage != 0 || res.NetFee != 0 {
+		t.Fatalf("bill: got usage=%d fee=%d, want both zero", res.NetUsage, res.NetFee)
+	}
+	if got := statedb.GetBalance(sender); got != balBefore {
+		t.Fatalf("balance: got %d, want unchanged %d", got, balBefore)
+	}
+	if got := statedb.GetLatestConsumeTime(sender); got != testBandwidthHeadSlot {
+		t.Fatalf("latest consume time: got %d, want %d", got, testBandwidthHeadSlot)
+	}
+	if got := statedb.GetLatestOperationTime(sender); got != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: got %d, want %d", got, testBandwidthBlockTime)
+	}
+}
+
+// When staked bandwidth cannot cover creation and create_account_fee is zero,
+// Java still executes the fee path and refreshes latest_operation_time.
+func TestConsumeBandwidth_CreateNewAccount_ZeroFeeRefreshesOperationTime(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.Set("create_account_fee", 0)
+
+	sender := testProcessorAddr(1)
+	statedb.CreateAccount(sender, corepb.AccountType_Normal)
+	statedb.AddBalance(sender, 10_000_000)
+
+	tx := makeTestTransferTx(1, 2, 100)
+	balBefore := statedb.GetBalance(sender)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+	if res.NetUsage != 0 || res.NetFee != 0 {
+		t.Fatalf("bill: got usage=%d fee=%d, want both zero", res.NetUsage, res.NetFee)
+	}
+	if got := statedb.GetBalance(sender); got != balBefore {
+		t.Fatalf("balance: got %d, want unchanged %d", got, balBefore)
+	}
+	if got := statedb.GetLatestOperationTime(sender); got != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: got %d, want %d", got, testBandwidthBlockTime)
+	}
+}

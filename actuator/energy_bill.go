@@ -36,12 +36,9 @@ import (
 // the spill goes to `burn_trx_amount`. See
 // docs/dev/cross-impl-divergences-2026-05-02.md.
 //
-// gtron uses the "modern" `getOriginUsage` formula
-// (allowTvmFreeze/supportUnfreezeDelay path), which caps origin usage by
-// min(stake-left, origin_energy_limit). All chains since 4.0 take this
-// branch; pre-4.0 historical replay (no origin_energy_limit cap) is not
-// modeled here — would need a fork gate if M0″ Phase 2 covers blocks
-// from that era.
+// The origin_energy_limit cap is fork-sensitive. Before the ENERGY_LIMIT
+// software fork (and before allowTvmFreeze/Stake 2.0), java caps only by the
+// origin's stake-left. Modern blocks additionally cap by origin_energy_limit.
 func PayEnergyBill(ctx *Context, result *Result) error {
 	if result != nil {
 		result.OriginEnergyUsage = 0
@@ -299,15 +296,17 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 
 	want := totalEnergy * originPercent / 100
 
-	originLimit := contractOriginEnergyLimit(contract)
 	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.ResourceTime())
 	if vmReceiptEnergyLeftMode(ctx) && result != nil && result.HasOriginEnergyLeft {
 		originStakeLeft = result.OriginEnergyLeft
 	}
 
 	capLeft := originStakeLeft
-	if originLimit > 0 && originLimit < capLeft {
-		capLeft = originLimit
+	if energyLimitHardForkActive(ctx) {
+		originLimit := contractOriginEnergyLimit(contract)
+		if originLimit > 0 && originLimit < capLeft {
+			capLeft = originLimit
+		}
 	}
 	if want > capLeft {
 		want = capLeft
