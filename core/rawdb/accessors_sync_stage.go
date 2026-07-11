@@ -330,15 +330,35 @@ func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBloc
 
 // WriteSyncImportProgressBatch commits the storage side effects for an applied
 // sync import prefix: delete imported staged body rows and persist hash-bound
-// sync pipeline progress rows. Backends with batch support flush all writes in
-// one batch. Imported body deletes require at least one progress row so the
-// staged-body proof is not discarded before a durable SyncImport boundary
-// exists; cleanup-only callers should use the explicit staged-body cleanup
-// helpers instead.
+// sync pipeline progress rows. Imported body deletes require at least one
+// progress row so the staged-body proof is not discarded before a durable
+// SyncImport boundary exists; cleanup-only callers should use the explicit
+// staged-body cleanup helpers instead.
 func WriteSyncImportProgressBatch(db interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 }, deletes []SyncStagedBlockDelete, progress []StageProgress) SyncImportProgressWriteResult {
+	return writeSyncImportProgressBatch(db, deletes, progress, nil, false)
+}
+
+// WriteSyncImportProgressAndReadyBatch also updates the downstream
+// SyncBodiesReady frontier in the same batch as the imported-body delete and
+// import-stage progress rows. A nil ready row deletes the frontier; otherwise
+// it must be a hash-bound SyncBodiesReady row backed by a staged body after
+// the imported delete prefix. This API requires a batch-capable writer; callers
+// compute the frontier before the batch
+// only when the canonical head is already at the imported boundary.
+func WriteSyncImportProgressAndReadyBatch(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, deletes []SyncStagedBlockDelete, progress []StageProgress, ready *StageProgress) SyncImportProgressWriteResult {
+	return writeSyncImportProgressBatch(db, deletes, progress, ready, true)
+}
+
+func writeSyncImportProgressBatch(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, deletes []SyncStagedBlockDelete, progress []StageProgress, ready *StageProgress, updateReady bool) SyncImportProgressWriteResult {
 	var result SyncImportProgressWriteResult
 	if db == nil || (len(deletes) == 0 && len(progress) == 0) {
 		return result
@@ -362,8 +382,14 @@ func WriteSyncImportProgressBatch(db interface {
 		result.ProgressError = err
 		return result
 	}
+	if updateReady {
+		if err := validateSyncImportReadyProgress(db, deletes, ready); err != nil {
+			result.ProgressError = err
+			return result
+		}
+	}
 	if batcher, ok := db.(ethdb.Batcher); ok {
-		batch := batcher.NewBatchWithSize((len(deletes) + len(progress)) * 8)
+		batch := batcher.NewBatchWithSize((len(deletes) + len(progress) + 1) * 8)
 		defer batch.Reset()
 		enqueuedDeletes := make([]SyncStagedBlockDelete, 0, len(deletes))
 		for _, block := range deletes {
@@ -380,6 +406,17 @@ func WriteSyncImportProgressBatch(db interface {
 		for _, row := range progress {
 			if err := batch.Put(stageProgressKey(row.Stage), encodeStageProgress(row.BlockNum, row.BlockHash, row.HasBlockHash)); err != nil {
 				result.ProgressError = fmt.Errorf("rawdb: write stage progress %s at %d: %w", row.Stage, row.BlockNum, err)
+				return result
+			}
+		}
+		if updateReady {
+			if ready == nil {
+				if err := batch.Delete(stageProgressKey(StageSyncBodiesReady)); err != nil {
+					result.ProgressError = fmt.Errorf("rawdb: delete sync bodies ready progress: %w", err)
+					return result
+				}
+			} else if err := batch.Put(stageProgressKey(StageSyncBodiesReady), encodeStageProgress(ready.BlockNum, ready.BlockHash, true)); err != nil {
+				result.ProgressError = fmt.Errorf("rawdb: write sync bodies ready progress at %d: %w", ready.BlockNum, err)
 				return result
 			}
 		}
@@ -403,6 +440,10 @@ func WriteSyncImportProgressBatch(db interface {
 		result.ProgressRows = len(progress)
 		return result
 	}
+	if updateReady {
+		result.ProgressError = errors.New("rawdb: sync import progress and ready update requires batch writer")
+		return result
+	}
 	if err := WriteStageProgressRows(db, progress); err != nil {
 		result.ProgressError = err
 		return result
@@ -412,6 +453,32 @@ func WriteSyncImportProgressBatch(db interface {
 	result.Deleted = deleteResult.Deleted
 	result.DeleteErrors = deleteResult.Errors
 	return result
+}
+
+func validateSyncImportReadyProgress(db ethdb.KeyValueReader, deletes []SyncStagedBlockDelete, ready *StageProgress) error {
+	if ready == nil {
+		return nil
+	}
+	if ready.Stage != StageSyncBodiesReady {
+		return fmt.Errorf("rawdb: ready progress stage %s, want %s", ready.Stage, StageSyncBodiesReady)
+	}
+	if !ready.HasBlockHash {
+		return fmt.Errorf("rawdb: sync bodies ready progress at block %d is not hash-bound", ready.BlockNum)
+	}
+	if len(deletes) > 0 && ready.BlockNum <= deletes[len(deletes)-1].Number {
+		return fmt.Errorf("rawdb: sync bodies ready progress at block %d must follow imported delete prefix ending at block %d", ready.BlockNum, deletes[len(deletes)-1].Number)
+	}
+	row, ok, err := ReadSyncStagedBlockRaw(db, ready.BlockNum)
+	if err != nil {
+		return fmt.Errorf("rawdb: read sync bodies ready staged block %d: %w", ready.BlockNum, err)
+	}
+	if !ok {
+		return fmt.Errorf("rawdb: sync bodies ready staged block %d missing", ready.BlockNum)
+	}
+	if row.Hash != ready.BlockHash {
+		return fmt.Errorf("rawdb: sync bodies ready staged block %d hash %x, want %x", ready.BlockNum, row.Hash, ready.BlockHash)
+	}
+	return nil
 }
 
 func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedBlockDelete) []SyncStagedBlockDeleteError {

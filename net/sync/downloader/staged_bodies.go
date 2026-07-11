@@ -241,9 +241,11 @@ func FindStagedBodyReadyFrontier(start, targetHead uint64, read StagedBodyReader
 	}
 }
 
-// RefreshStagedBodyReadyProgress recomputes SyncBodiesReady from the persisted
-// sync-staged body table and writes or deletes the ready stage row.
-func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead uint64) StagedBodyReadyProgressRefresh {
+// PlanStagedBodyReadyProgress recomputes the SyncBodiesReady frontier without
+// writing it. Callers that have already advanced the canonical head can use
+// this plan to fold the ready update into the same database batch as their
+// imported-body delete and SyncImport progress rows.
+func PlanStagedBodyReadyProgress(db ethdb.KeyValueReader, start, targetHead uint64) StagedBodyReadyProgressRefresh {
 	var result StagedBodyReadyProgressRefresh
 	if db == nil {
 		result.Frontier.NextMissing = start
@@ -255,11 +257,53 @@ func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead ui
 	result.Frontier = frontier
 	if !frontier.Have {
 		result.Deleted = true
-		result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
 		return result
 	}
 	result.Updated = true
-	result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash)
+	return result
+}
+
+// ReadyStageProgress returns the hash-bound row for a planned ready frontier.
+// A nil row means the frontier should be deleted. Plans with a scan error are
+// intentionally not safe to batch: the ordinary refresh path still publishes
+// the verified prefix and surfaces the unreadable suffix to the caller.
+func (r StagedBodyReadyProgressRefresh) ReadyStageProgress() (*rawdb.StageProgress, bool) {
+	if r.Frontier.Error != nil {
+		return nil, false
+	}
+	if r.Updated {
+		return &rawdb.StageProgress{
+			Stage:        rawdb.StageSyncBodiesReady,
+			BlockNum:     r.Frontier.Number,
+			BlockHash:    r.Frontier.Hash,
+			HasBlockHash: true,
+		}, true
+	}
+	if r.Deleted {
+		return nil, true
+	}
+	return nil, false
+}
+
+// RefreshStagedBodyReadyProgress recomputes SyncBodiesReady from the persisted
+// sync-staged body table and writes or deletes the ready stage row.
+func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead uint64) StagedBodyReadyProgressRefresh {
+	result := PlanStagedBodyReadyProgress(db, start, targetHead)
+	if result.Frontier.Error != nil {
+		if !result.Frontier.Have {
+			result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
+			return result
+		}
+		result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, result.Frontier.Number, result.Frontier.Hash)
+		return result
+	}
+	if result.Deleted {
+		result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
+		return result
+	}
+	if result.Updated {
+		result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, result.Frontier.Number, result.Frontier.Hash)
+	}
 	return result
 }
 

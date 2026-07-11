@@ -760,6 +760,47 @@ func (a *recordingImportedBatchProgressApplier) RefreshSyncBodiesReady() StagedB
 	return StagedBodyReadyProgressRefresh{Updated: true}
 }
 
+type atomicReadyImportedBatchProgressApplier struct {
+	recordingImportedBatchProgressApplier
+	atomicCalls int
+}
+
+func (a *atomicReadyImportedBatchProgressApplier) WriteImportedSyncProgressAndReady(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) (rawdb.SyncImportProgressWriteResult, StagedBodyReadyProgressRefresh, bool) {
+	a.atomicCalls++
+	return rawdb.SyncImportProgressWriteResult{
+		Deleted:      len(deletes),
+		ProgressRows: len(rows),
+	}, StagedBodyReadyProgressRefresh{Updated: true}, true
+}
+
+func TestApplyImportedBatchProgressPlanUsesAtomicReadyWriter(t *testing.T) {
+	deleteRow := rawdb.SyncStagedBlockDelete{Number: 7, Hash: tcommon.Hash{0x07}}
+	progressRow := rawdb.StageProgress{Stage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: deleteRow.Hash, HasBlockHash: true}
+	plan := ImportedBatchProgressPlan{
+		OK: true,
+		Steps: []ImportedBatchProgressStep{
+			{Action: ImportedBatchWriteProgress, Deletes: []rawdb.SyncStagedBlockDelete{deleteRow}, Progress: []rawdb.StageProgress{progressRow}},
+			{Action: ImportedBatchRefreshBodiesReady},
+		},
+	}
+	applier := &atomicReadyImportedBatchProgressApplier{}
+
+	result := ApplyImportedBatchProgressPlan(plan, applier)
+
+	if applier.atomicCalls != 1 {
+		t.Fatalf("atomic write calls = %d, want 1", applier.atomicCalls)
+	}
+	if len(applier.calls) != 0 {
+		t.Fatalf("fallback write/refresh calls = %+v, want none", applier.calls)
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, []ImportedBatchProgressStepAction{ImportedBatchWriteProgress, ImportedBatchRefreshBodiesReady}) {
+		t.Fatalf("applied steps = %+v, want write/refresh", result.AppliedSteps)
+	}
+	if result.WriteFailed() || result.ReadyRefreshFailed() || !result.HasReadyRefresh || !result.ReadyRefresh.Updated {
+		t.Fatalf("result = %+v, want successful atomic ready update", result)
+	}
+}
+
 func TestPlanImportedBatchProgressStopsAtStageMismatch(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)

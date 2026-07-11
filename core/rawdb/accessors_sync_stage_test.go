@@ -147,6 +147,116 @@ func TestWriteSyncImportProgressBatch(t *testing.T) {
 	}
 }
 
+func TestWriteSyncImportProgressAndReadyBatch(t *testing.T) {
+	base := NewMemoryDatabase()
+	blocks := []*types.Block{
+		testSyncStagedBlock(1, common.Hash{}),
+		testSyncStagedBlock(2, common.Hash{0x01}),
+		testSyncStagedBlock(3, common.Hash{0x02}),
+	}
+	for _, block := range blocks {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := WriteStageProgressWithHash(base, StageSyncBodiesReady, blocks[1].Number(), blocks[1].Hash()); err != nil {
+		t.Fatalf("write stale ready progress: %v", err)
+	}
+
+	db := &countingBatchStore{KeyValueStore: base}
+	ready := &StageProgress{
+		Stage:        StageSyncBodiesReady,
+		BlockNum:     blocks[2].Number(),
+		BlockHash:    blocks[2].Hash(),
+		HasBlockHash: true,
+	}
+	result := WriteSyncImportProgressAndReadyBatch(db, []SyncStagedBlockDelete{
+		{Number: blocks[0].Number(), Hash: blocks[0].Hash()},
+		{Number: blocks[1].Number(), Hash: blocks[1].Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: blocks[1].Number(), BlockHash: blocks[1].Hash(), HasBlockHash: true},
+		{Stage: StageSyncExecution, BlockNum: blocks[1].Number(), BlockHash: blocks[1].Hash(), HasBlockHash: true},
+	}, ready)
+	if result.Deleted != 2 || len(result.DeleteErrors) != 0 || result.ProgressRows != 2 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want deleted 2 and two progress rows", result)
+	}
+	if db.batches != 1 || db.directDeletes != 0 || db.directPuts != 0 {
+		t.Fatalf("sync import + ready used batches=%d directDeletes=%d directPuts=%d, want one batch", db.batches, db.directDeletes, db.directPuts)
+	}
+	for _, block := range blocks[:2] {
+		if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || ok {
+			t.Fatalf("deleted staged block %d ok=%v err=%v, want missing", block.Number(), ok, err)
+		}
+	}
+	row, ok, err := ReadStageProgressRow(db, StageSyncBodiesReady)
+	if err != nil || !ok || row.BlockNum != blocks[2].Number() || row.BlockHash != blocks[2].Hash() || !row.HasBlockHash {
+		t.Fatalf("ready progress = %+v ok=%v err=%v, want block3 hash-bound", row, ok, err)
+	}
+}
+
+func TestWriteSyncImportProgressAndReadyBatchRejectsDeletedReadyTarget(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(1, common.Hash{})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	ready := &StageProgress{Stage: StageSyncBodiesReady, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true}
+	result := WriteSyncImportProgressAndReadyBatch(base, []SyncStagedBlockDelete{{Number: block.Number(), Hash: block.Hash()}}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	}, ready)
+	if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "imported delete prefix") {
+		t.Fatalf("result = %+v, want deleted ready target error", result)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after rejected ready target ok=%v err=%v, want present", ok, err)
+	}
+}
+
+func TestWriteSyncImportProgressAndReadyBatchDeletesExhaustedReadyFrontier(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(1, common.Hash{})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(base, StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+	db := &countingBatchStore{KeyValueStore: base}
+	result := WriteSyncImportProgressAndReadyBatch(db, []SyncStagedBlockDelete{{Number: block.Number(), Hash: block.Hash()}}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	}, nil)
+	if result.Deleted != 1 || len(result.DeleteErrors) != 0 || result.ProgressRows != 1 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want one deleted body and one progress row", result)
+	}
+	if db.batches != 1 || db.directDeletes != 0 || db.directPuts != 0 {
+		t.Fatalf("sync import + ready delete used batches=%d directDeletes=%d directPuts=%d, want one batch", db.batches, db.directDeletes, db.directPuts)
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("ready progress after exhausted frontier = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}
+
+func TestWriteSyncImportProgressAndReadyBatchRequiresBatchWriter(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(1, common.Hash{})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	db := &directSyncStageWriter{reader: base, writer: base}
+	result := WriteSyncImportProgressAndReadyBatch(db, []SyncStagedBlockDelete{{Number: block.Number(), Hash: block.Hash()}}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	}, nil)
+	if result.ProgressError == nil || !strings.Contains(result.ProgressError.Error(), "requires batch writer") {
+		t.Fatalf("result = %+v, want batch-writer error", result)
+	}
+	if db.puts != 0 || db.deletes != 0 {
+		t.Fatalf("non-batch writer mutated store puts=%d deletes=%d, want none", db.puts, db.deletes)
+	}
+	if _, ok, err := ReadSyncStagedBlock(base, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block after non-batch rejection ok=%v err=%v, want present", ok, err)
+	}
+}
+
 func TestWriteSyncImportProgressBatchRejectsInvalidProgressBeforeDeletes(t *testing.T) {
 	tests := []struct {
 		name string

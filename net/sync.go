@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -2315,6 +2316,34 @@ type syncImportResumePhasePublishApplier struct {
 
 func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult {
 	return a.service.writeImportedSyncProgress(deletes, rows)
+}
+
+// WriteImportedSyncProgressAndReady coalesces the default synchronous drain's
+// imported-body delete, stage-prefix progress, and next ready frontier. Async
+// sessions keep the existing two-step flow because their CurrentBlock may lag
+// the just-executed batch until the commitment worker publishes it.
+func (a syncImportedBatchProgressApplier) WriteImportedSyncProgressAndReady(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) (rawdb.SyncImportProgressWriteResult, syncdl.StagedBodyReadyProgressRefresh, bool) {
+	if a.service == nil || a.service.chain == nil || a.service.chain.PipelinedCommitDepth() != 0 {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	db := a.service.chain.DB()
+	head := a.service.chain.CurrentBlock()
+	if db == nil || head == nil || len(deletes) == 0 {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	lastDeleted := deletes[len(deletes)-1]
+	if head.Number() != lastDeleted.Number || head.Hash() != lastDeleted.Hash {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	if _, ok := db.(ethdb.Batcher); !ok {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	ready := syncdl.PlanStagedBodyReadyProgress(db, head.Number()+1, a.service.targetHeadNum)
+	readyRow, readyOK := ready.ReadyStageProgress()
+	if !readyOK {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	return rawdb.WriteSyncImportProgressAndReadyBatch(db, deletes, rows, readyRow), ready, true
 }
 
 func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() syncdl.StagedBodyReadyProgressRefresh {

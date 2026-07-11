@@ -59,6 +59,52 @@ func TestSyncServiceRestoresInventoryTargetProgress(t *testing.T) {
 	}
 }
 
+func TestSyncImportedBatchProgressApplierBatchesReadyAfterSynchronousImport(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("insert canonical block 1: %v", err)
+	}
+
+	result, ready, used := (syncImportedBatchProgressApplier{service: ss}).WriteImportedSyncProgressAndReady(
+		[]rawdb.SyncStagedBlockDelete{{Number: block1.Number(), Hash: block1.Hash()}},
+		[]rawdb.StageProgress{{Stage: rawdb.StageSyncImport, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true}},
+	)
+	if !used {
+		t.Fatal("synchronous import did not use atomic ready-progress writer")
+	}
+	if result.ProgressError != nil || len(result.DeleteErrors) != 0 || result.Deleted != 1 || result.ProgressRows != 1 {
+		t.Fatalf("write result = %+v, want one successful imported body/progress write", result)
+	}
+	if !ready.Updated || ready.Frontier.Error != nil || ready.Frontier.Number != block2.Number() || ready.Frontier.Hash != block2.Hash() {
+		t.Fatalf("ready refresh = %+v, want block2 frontier", ready)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
+		t.Fatalf("imported staged block1 ok=%v err=%v, want deleted", ok, err)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() || !row.HasBlockHash {
+		t.Fatalf("ready progress = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
+	}
+}
+
+func TestSyncImportedBatchProgressApplierKeepsAsyncReadyRefreshSeparate(t *testing.T) {
+	bc := makeTestChain(t)
+	bc.SetAsyncCommit(true)
+	ss := NewSyncService(bc, nil)
+	_, _, used := (syncImportedBatchProgressApplier{service: ss}).WriteImportedSyncProgressAndReady(nil, nil)
+	if used {
+		t.Fatal("async import used atomic ready-progress writer before commitment published the head")
+	}
+}
+
 func TestSyncServiceIgnoresStaleInventoryTargetProgress(t *testing.T) {
 	bc := makeChainWithBlocks(t, 10)
 	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, 7); err != nil {

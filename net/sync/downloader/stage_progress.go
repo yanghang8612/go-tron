@@ -1040,6 +1040,15 @@ type ImportedBatchProgressPlanApplier interface {
 	RefreshSyncBodiesReady() StagedBodyReadyProgressRefresh
 }
 
+// ImportedBatchProgressAtomicReadyApplier is an optional fast path for the
+// synchronous importer. It writes the imported-body delete, SyncImport prefix,
+// and the already-planned SyncBodiesReady update in one database batch. The
+// boolean is false when the caller must retain the ordinary two-step path,
+// such as when async commitment has not yet published the canonical head.
+type ImportedBatchProgressAtomicReadyApplier interface {
+	WriteImportedSyncProgressAndReady(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) (rawdb.SyncImportProgressWriteResult, StagedBodyReadyProgressRefresh, bool)
+}
+
 // ImportedBatchProgressPlan is the downloader-owned storage plan for the
 // successfully imported prefix of one local staged-body batch.
 type ImportedBatchProgressPlan struct {
@@ -1628,19 +1637,27 @@ func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier Impo
 	if !plan.OK || applier == nil {
 		return result
 	}
+	readyWrittenWithProgress := false
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case ImportedBatchWriteProgress:
 			result.WriteDeletes = len(step.Deletes)
 			result.WriteProgressRows = len(step.Progress)
-			result.WriteResult = applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
+			if atomic, ok := applier.(ImportedBatchProgressAtomicReadyApplier); ok {
+				result.WriteResult, result.ReadyRefresh, readyWrittenWithProgress = atomic.WriteImportedSyncProgressAndReady(step.Deletes, step.Progress)
+			}
+			if !readyWrittenWithProgress {
+				result.WriteResult = applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
+			}
 			result.HasWriteResult = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 			if result.WriteFailed() {
 				return result
 			}
 		case ImportedBatchRefreshBodiesReady:
-			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
+			if !readyWrittenWithProgress {
+				result.ReadyRefresh = applier.RefreshSyncBodiesReady()
+			}
 			result.HasReadyRefresh = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 			if result.ReadyRefreshFailed() {

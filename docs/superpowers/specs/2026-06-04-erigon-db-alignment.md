@@ -543,7 +543,12 @@ Status:
   applied-prefix summary derives the staged body delete descriptors used for
   imported-body cleanup, and those deletes are committed with the hash-bound
   sync import/execution/commitment/finish rows through one `core/rawdb` batch
-  when the backing store supports batched writes. The downloader package now
+  when the backing store supports batched writes. In the default synchronous
+  path, once the canonical head is proven equal to that deleted prefix's final
+  block/hash, the computed next `SyncBodiesReady` row (or its deletion) joins
+  the same batch; this removes one Pebble commit per local import chunk while
+  keeping async paths on the prior two-step flow until their commitment worker
+  publishes the head. The downloader package now
   owns the complete imported-batch storage plan and builds explicit
   bodies/execution/commitment/finish import-stage tasks for the applied
   block/hash boundary. Stage rows are published only as a contiguous
