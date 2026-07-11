@@ -269,7 +269,8 @@ Status:
   `ReadTransactionInfo`, and the freezer fall-through branch of
   `ReadBlockStateRoot` first prefer hot Pebble rows, then use the cold
   `chain-index` sidecar for historical rows. `ReadTransactionInfo` now also
-  consumes the sidecar's tx hash to block-local index mapping, so archive
+  treats the canonical `tx-` plus per-block `TransactionRet` path as
+  authoritative and consumes the sidecar's tx hash to block-local index mapping, so archive
   receipt reads can recover from pruned per-tx rows even when old
   `TransactionRet` payloads lack a populated `TransactionInfo.Id`; when the
   matching block body remains readable through hot KV, ancient freezer, or cold
@@ -1847,7 +1848,9 @@ Status:
   rows from the canonical block body, but present per-block info rows must match
   the canonical block transaction count, block number, and tx hash order before
   the rebuild republishes the authoritative per-block receipt row. It does not
-  reintroduce redundant per-tx `ti-` rows.
+  reintroduce redundant per-tx `ti-` rows, and deletes a legacy `ti-` row only
+  after that verified per-block coverage exists; an incomplete historical range
+  therefore retains its sole legacy receipt rather than losing recoverability.
 - `rawdb.RebuildTransactionLookupFromBlocks` is the narrower recoverable
   `TxLookup` stage payload. Bulk sync persists canonical blocks and per-block
   `TransactionRet` rows first, then writes only `tx-<hash>` rows through sorted

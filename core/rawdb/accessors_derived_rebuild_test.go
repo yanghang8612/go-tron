@@ -43,6 +43,11 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	if err := WriteTransactionInfo(db, txID, legacyInfo); err != nil {
 		t.Fatalf("WriteTransactionInfo legacy row: %v", err)
 	}
+	legacyOnlyInfo := proto.Clone(infos3[0]).(*corepb.TransactionInfo)
+	legacyOnlyInfo.Fee++
+	if err := WriteTransactionInfo(db, infos3[0].Id, legacyOnlyInfo); err != nil {
+		t.Fatalf("WriteTransactionInfo legacy-only row: %v", err)
+	}
 	if got := ReadTransactionIndex(db, txID); got != nil {
 		t.Fatalf("pre-rebuild tx index = %v, want nil", got)
 	}
@@ -79,8 +84,11 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	if got := ReadTransactionIndex(db, infos3[0].Id); got == nil || *got != 3 {
 		t.Fatalf("post-rebuild tx index for block3 = %v, want 3", got)
 	}
-	if got := ReadTransactionInfo(db, infos3[0].Id); got != nil {
-		t.Fatalf("post-rebuild tx info for block3 = %+v, want nil without TransactionRet", got)
+	if got := ReadTransactionInfo(db, infos3[0].Id); got == nil || got.Fee != legacyOnlyInfo.Fee {
+		t.Fatalf("post-rebuild tx info for block3 = %+v, want retained legacy fee %d without TransactionRet", got, legacyOnlyInfo.Fee)
+	}
+	if has, err := db.Has(txInfoKey(infos3[0].Id)); err != nil || !has {
+		t.Fatalf("post-rebuild legacy-only direct tx info present=%v err=%v, want retained", has, err)
 	}
 }
 

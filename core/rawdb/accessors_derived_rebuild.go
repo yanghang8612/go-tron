@@ -134,9 +134,6 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 			if err := collector.PutTransactionIndex(txHash[:], blockNum); err != nil {
 				return nil, err
 			}
-			if err := collector.DeleteTransactionInfo(txHash[:]); err != nil {
-				return nil, err
-			}
 			result.TransactionsIndexed++
 		}
 		infos, hasInfos, err := ReadTransactionInfosByBlockStrict(chain, blockNum)
@@ -150,11 +147,18 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 			if err := collector.PutTransactionInfosByBlock(blockNum, infos); err != nil {
 				return nil, err
 			}
+			for _, info := range infos {
+				if err := collector.DeleteTransactionInfo(info.Id); err != nil {
+					return nil, err
+				}
+			}
 			result.BlocksWithTxInfo++
 			// Keep the one authoritative TransactionRet payload by block. Receipt
 			// reads resolve an individual transaction through tx- plus tib-, so
 			// rebuilding another full ti- protobuf for every transaction would
-			// only reintroduce the duplicate canonical write removed from sync.
+			// only reintroduce the duplicate canonical write removed from sync. A
+			// legacy ti- row is removed only after this verified coverage exists;
+			// without it, that row may be the sole recoverable receipt payload.
 			result.TransactionInfosIndexed += uint64(len(infos))
 		}
 		if blockNum == toBlock {

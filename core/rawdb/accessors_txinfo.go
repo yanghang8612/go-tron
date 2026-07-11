@@ -44,10 +44,11 @@ func HasHotTransactionInfo(db ethdb.KeyValueReader, txID []byte) (bool, error) {
 	return db.Has(txInfoKey(txID))
 }
 
-// ReadTransactionInfo retrieves a TransactionInfo by txID. The hot per-tx
-// `ti-<txid>` row is preferred; on a miss, a ChainDB with a cold chain-index
-// sidecar can resolve txID -> block number and scan that block's TransactionRet
-// payload from ancient or hot per-block storage.
+// ReadTransactionInfo retrieves a TransactionInfo by txID. A transaction
+// lookup plus the canonical per-block TransactionRet is authoritative; the
+// legacy hot `ti-<txid>` row is used only when that block-level coverage is
+// unavailable. A ChainDB with a cold chain-index sidecar can resolve txID ->
+// block number and read the TransactionRet payload from ancient storage.
 func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	info, ok, err := ReadTransactionInfoStrict(db, txID)
 	if err != nil || !ok {
@@ -63,20 +64,13 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 	if err := validateTransactionHashKey(txID, "read transaction info"); err != nil {
 		return nil, false, err
 	}
-	data, ok, err := readValueThenVerifyMiss(db, txInfoKey(txID), fmt.Sprintf("transaction info %x", txID), nil)
-	if err != nil {
-		return nil, false, err
+	if info, ok, err := readTransactionInfoFromCanonicalBlock(db, txID); err != nil || ok {
+		return info, ok, err
 	}
-	if ok {
-		info := &corepb.TransactionInfo{}
-		if err := proto.Unmarshal(data, info); err != nil {
-			return nil, true, err
-		}
-		if err := validateTransactionInfoIDForKey(txID, info, "read transaction info"); err != nil {
-			return info, true, err
-		}
-		return info, true, nil
-	}
+	return readLegacyTransactionInfo(db, txID)
+}
+
+func readTransactionInfoFromCanonicalBlock(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
 	blockNum, hasIndex, err := readHotTransactionIndexStrict(db, txID)
 	if err != nil {
 		return nil, hasIndex, err
@@ -131,6 +125,21 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		return info, ok, err
 	}
 	return transactionInfoByExplicitIDPosition(txID, blockNum, infos, "read transaction info by explicit id")
+}
+
+func readLegacyTransactionInfo(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
+	data, ok, err := readValueThenVerifyMiss(db, txInfoKey(txID), fmt.Sprintf("transaction info %x", txID), nil)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	info := &corepb.TransactionInfo{}
+	if err := proto.Unmarshal(data, info); err != nil {
+		return nil, true, err
+	}
+	if err := validateTransactionInfoIDForKey(txID, info, "read legacy transaction info"); err != nil {
+		return info, true, err
+	}
+	return info, true, nil
 }
 
 func transactionInfoByExplicitIDPosition(txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {

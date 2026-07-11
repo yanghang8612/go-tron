@@ -83,6 +83,50 @@ func TestReadTransactionInfoRejectsMismatchedHotRow(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing.T) {
+	db := NewMemoryChainDB()
+	txPB := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 100, Expiration: 200}}
+	tx := types.NewTransactionFromPB(txPB)
+	txHash := tx.Hash()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 7, Timestamp: 700}},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionIndex(db, txHash[:], 7); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{{
+		Id: txHash[:], Fee: 700, BlockNumber: 7,
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := WriteTransactionInfo(db, txHash[:], &corepb.TransactionInfo{
+		Id: txHash[:], Fee: 999, BlockNumber: 7,
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfo legacy row: %v", err)
+	}
+
+	info, ok, err := ReadTransactionInfoStrict(db, txHash[:])
+	if err != nil || !ok || info == nil || info.Fee != 700 {
+		t.Fatalf("ReadTransactionInfoStrict = %+v/%v/%v, want canonical fee 700", info, ok, err)
+	}
+	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 {
+		t.Fatalf("ReadTransactionInfo = %+v, want canonical fee 700", got)
+	}
+	failingLegacy := NewChainDB(failingTxInfoHotStore{
+		KeyValueStore: db.KeyValueStore,
+		getKey:        txInfoKey(txHash[:]),
+		getErr:        errors.New("legacy transaction info unreadable"),
+	}, NoopAncient{})
+	info, ok, err = ReadTransactionInfoStrict(failingLegacy, txHash[:])
+	if err != nil || !ok || info == nil || info.Fee != 700 {
+		t.Fatalf("ReadTransactionInfoStrict with unreadable legacy row = %+v/%v/%v, want canonical fee 700", info, ok, err)
+	}
+}
+
 func TestWriteTransactionInfoRejectsMismatchedID(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x21}, common.HashLength)
