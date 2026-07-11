@@ -85,16 +85,19 @@ var (
 		Usage: "Build derived snapshot segments from existing verified cold sidecars in --snapshot.dir instead of hot rawdb rows",
 	}
 	snapshotETLTempDirFlag = &cli.StringFlag{
-		Name:  "snapshot.etl.tempdir",
-		Usage: "Parent directory for temporary snapshot ETL run files",
+		Name:    "snapshot.etl.tempdir",
+		Usage:   "Parent directory for temporary snapshot ETL run files",
+		EnvVars: []string{"GTRON_SNAPSHOT_ETL_TEMPDIR"},
 	}
 	snapshotETLBufferMiBFlag = &cli.Uint64Flag{
-		Name:  "snapshot.etl.buffer",
-		Usage: "Snapshot ETL memory buffer limit in MiB (0 = default)",
+		Name:    "snapshot.etl.buffer",
+		Usage:   "Snapshot ETL memory buffer limit in MiB (0 = default)",
+		EnvVars: []string{"GTRON_SNAPSHOT_ETL_BUFFER"},
 	}
 	snapshotETLBatchMiBFlag = &cli.Uint64Flag{
-		Name:  "snapshot.etl.batch",
-		Usage: "Snapshot ETL output batch size in MiB (0 = default)",
+		Name:    "snapshot.etl.batch",
+		Usage:   "Snapshot ETL output batch size in MiB (0 = default)",
+		EnvVars: []string{"GTRON_SNAPSHOT_ETL_BATCH"},
 	}
 )
 

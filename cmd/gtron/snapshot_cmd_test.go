@@ -2888,6 +2888,27 @@ func TestSnapshotETLOptionsDefaultsAndOverflow(t *testing.T) {
 	}
 }
 
+func TestSnapshotETLEnvironmentAliases(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("GTRON_SNAPSHOT_ETL_TEMPDIR", tempDir)
+	t.Setenv("GTRON_SNAPSHOT_ETL_BUFFER", "9")
+	t.Setenv("GTRON_SNAPSHOT_ETL_BATCH", "2")
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{snapshotETLTempDirFlag, snapshotETLBufferMiBFlag, snapshotETLBatchMiBFlag}
+	var got statesnapshots.RestoreETLOptions
+	app.Action = func(ctx *cli.Context) error {
+		var err error
+		got, err = snapshotETLOptions(ctx)
+		return err
+	}
+	if err := app.Run([]string{"gtron"}); err != nil {
+		t.Fatalf("run snapshot ETL environment aliases: %v", err)
+	}
+	if got.TempDir != tempDir || got.BufferLimit != 9*1024*1024 || got.BatchSize != 2*1024*1024 {
+		t.Fatalf("snapshot ETL environment options = %+v", got)
+	}
+}
+
 func TestGtronRejectsOverflowingRuntimeSnapshotETLBeforeStartup(t *testing.T) {
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", t.TempDir(),

@@ -271,7 +271,9 @@ The same flags are accepted by `snapshot bootstrap`, `snapshot build-freezer`,
 flags also configure the snap-mode background lifecycle's state-history,
 event-log, balance-trace, and section-bloom builds; set them before starting a
 long-running node so those periodic passes do not spill sorted runs into the
-default temporary directory.
+default temporary directory. Managed deployments can set the same root-process
+options with `GTRON_SNAPSHOT_ETL_TEMPDIR`, `GTRON_SNAPSHOT_ETL_BUFFER`, and
+`GTRON_SNAPSHOT_ETL_BATCH`.
 
 ## Migration Targets
 
