@@ -42,6 +42,13 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutor(bc, true)}
 }
 
+// BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup rows
+// are emitted by the recoverable TxLookup stage after canonical execution has
+// finished. Receipt rows remain on the normal synchronous metadata path.
+func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
+	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutorWithOptions(bc, true, nil, true)}
+}
+
 // Insert applies one batch within the session WITHOUT settling (no scope close
 // and, when async commit is active, no commit-worker drain) — that is deferred
 // to Finish so the range state survives local chunk boundaries. Acquires chainmu

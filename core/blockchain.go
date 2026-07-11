@@ -431,6 +431,9 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	if err := bc.ensureCanonicalStageHead(head); err != nil {
 		return nil, err
 	}
+	if err := bc.ensureTransactionLookupStageLocked(); err != nil {
+		return nil, err
+	}
 
 	// Seed the dynprops cache now that the head is known: rooted keys load from
 	// the system-KV at the head root, derived keys from the buffer.
@@ -682,6 +685,18 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 // sync/import diagnostics that need to mirror the real canonical stage
 // boundary without registering a global BlockChain callback.
 func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
+	return bc.insertBlocksWithStageHook(blocks, hook, false)
+}
+
+// InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring only
+// the rebuildable tx-hash lookup index. SyncService must follow each successful
+// range with AdvanceTransactionLookupStage; ordinary block insertion always
+// keeps transaction lookup writes synchronous.
+func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
+	return bc.insertBlocksWithStageHook(blocks, hook, true)
+}
+
+func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -691,12 +706,16 @@ func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook Stag
 		return ErrBlockChainClosed
 	}
 
-	return bc.insertBlocksLocked(blocks, hook)
+	return bc.insertBlocksLockedWithOptions(blocks, hook, deferTransactionLookup)
 }
 
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block, hook StageProgressHook) (err error) {
+	return bc.insertBlocksLockedWithOptions(blocks, hook, false)
+}
+
+func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) (err error) {
 	// Parallel signature pre-verification: warm every tx's sender recovery and
 	// every block's witness-signature recovery ahead of serial execution, off
 	// the critical path. Pure cache-warming — the serial path (envelope
@@ -704,7 +723,7 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block, hook StageProgre
 	// and reads an identical recovered value, computing inline on any miss.
 	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
 
-	executor := newCanonicalRangeExecutorWithStageHook(bc, true, hook)
+	executor := newCanonicalRangeExecutorWithOptions(bc, true, hook, deferTransactionLookup)
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The
@@ -1466,7 +1485,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData, !plan.deferTransactionLookup); err != nil {
 		return err
 	}
 	// The block body and TAPOS row above are intentionally retained in the
@@ -1479,7 +1498,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
 	// Publish the new head only after all metadata needed by readers
-	// (block body, out-of-band state root, TAPOS, tx infos, tx indexes) has
+	// (block body, out-of-band state root, TAPOS, and tx infos) has
 	// landed in one durable batch.
 	bc.currentBlock.Store(block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
@@ -1509,6 +1528,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	stats.mark(&stats.Hooks)
 	if err := stagePipeline.Advance(rawdb.StageFinish); err != nil {
+		return err
+	}
+	if err := plan.AdvanceTransactionLookupStage(bc.buffer, block); err != nil {
 		return err
 	}
 
@@ -1584,7 +1606,7 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) error {
 	batch := bc.db.NewBatch()
 
 	// The root is persisted out-of-band — we do NOT mutate
@@ -1607,10 +1629,12 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
 		return fmt.Errorf("write block tx infos: %w", err)
 	}
-	for _, tx := range block.Transactions() {
-		h := tx.Hash()
-		if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {
-			return fmt.Errorf("write tx index: %w", err)
+	if writeTransactionLookup {
+		for _, tx := range block.Transactions() {
+			h := tx.Hash()
+			if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {
+				return fmt.Errorf("write tx index: %w", err)
+			}
 		}
 	}
 	if balanceTrace != nil {
@@ -1920,6 +1944,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.currentBlock.Store(lcaBlock)
 	if err := rewindCanonicalStagePipeline(bc.db, lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress to LCA %d: %w", lcaBlock.Number(), err)
+	}
+	if err := bc.rewindTransactionLookupStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
+		return fmt.Errorf("rewind tx lookup stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}
 
 	// Apply new branch blocks in order LCA+1 → newHead.

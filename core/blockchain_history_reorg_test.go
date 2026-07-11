@@ -145,6 +145,13 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 			t.Fatalf("pre-reorg StateTxRange at %d: hash %x, want A%d %x", n, txRange.BlockHash, n, chainA[n].Hash())
 		}
 	}
+	// Seed the independent derived-index watermark at chain A's head. The fork
+	// rewind must clamp it to the LCA before it re-applies chain B; otherwise a
+	// later TxLookup pass would incorrectly believe the replacement branch was
+	// already indexed through height five.
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageTxLookup, chainA[5].Number(), chainA[5].Hash()); err != nil {
+		t.Fatalf("seed tx lookup stage: %v", err)
+	}
 
 	// --- Chain B: 6 transfer blocks branching from genesis, +1 timestamp
 	// offset → distinct hashes from chain A, amount = N * 1000 → larger
@@ -185,6 +192,9 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 		if err != nil || !ok || got != 6 {
 			t.Fatalf("%s stage after switchFork = %d ok=%v err=%v, want 6", stage, got, ok, err)
 		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 0 || !row.HasBlockHash || row.BlockHash != bc.genesisBlock.Hash() {
+		t.Fatalf("TxLookup stage after switchFork = %+v ok=%v err=%v, want LCA genesis hash-bound", row, ok, err)
 	}
 
 	// (a) Per-height tx ranges reflect chain B, not chain A. If

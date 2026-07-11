@@ -32,6 +32,10 @@ type canonicalBlockExecution struct {
 	// as the next block's parentDynProps.
 	parentDynProps *state.DynamicProperties
 	finalDynProps  *state.DynamicProperties
+	// deferTransactionLookup is restricted to the staged sync path. The block
+	// body and receipt rows remain durable before head publication; only the
+	// rebuildable tx-hash reverse index is emitted later by StageTxLookup.
+	deferTransactionLookup bool
 }
 
 type canonicalCommitResult struct {
@@ -168,17 +172,37 @@ func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 	return p.commit.FlushLatestUpTo(uint64(cutoff))
 }
 
+// AdvanceTransactionLookupStage records inline tx lookup completion only after
+// Finish. Bulk sync intentionally skips this: its tx- rows are rebuilt by the
+// independent TxLookup stage after the canonical range has settled.
+func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.KeyValueWriter, block *types.Block) error {
+	if p == nil {
+		return fmt.Errorf("canonical block execution: nil plan")
+	}
+	if block == nil {
+		return fmt.Errorf("canonical block execution: nil block")
+	}
+	if p.deferTransactionLookup {
+		return nil
+	}
+	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageTxLookup, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write tx lookup stage progress: %w", err)
+	}
+	return nil
+}
+
 // canonicalRangeExecutor owns the reusable state surfaces for one canonical
 // range application. InsertBlocks, fork replay, and restart replay should all
 // enter block execution through this object so state opening, txNum planning,
 // commit-scope reuse, and per-block stage progress stay on one staged path.
 type canonicalRangeExecutor struct {
-	bc                *BlockChain
-	allowSharedCommit bool
-	stageHook         StageProgressHook
-	state             *state.StateDB
-	commit            *state.CommitScope
-	txRanges          *stateTxRangeAllocator
+	bc                     *BlockChain
+	allowSharedCommit      bool
+	stageHook              StageProgressHook
+	deferTransactionLookup bool
+	state                  *state.StateDB
+	commit                 *state.CommitScope
+	txRanges               *stateTxRangeAllocator
 	// tipBlock is the range-local tip: the block this executor last applied
 	// successfully. nil means "not yet advanced in this range" → tip() falls
 	// back to bc.CurrentBlock(). Reset/Abort clear it. With async commit off,
@@ -197,7 +221,16 @@ func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonica
 }
 
 func newCanonicalRangeExecutorWithStageHook(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook) *canonicalRangeExecutor {
-	return &canonicalRangeExecutor{bc: bc, allowSharedCommit: allowSharedCommit, stageHook: hook}
+	return newCanonicalRangeExecutorWithOptions(bc, allowSharedCommit, hook, false)
+}
+
+func newCanonicalRangeExecutorWithOptions(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook, deferTransactionLookup bool) *canonicalRangeExecutor {
+	return &canonicalRangeExecutor{
+		bc:                     bc,
+		allowSharedCommit:      allowSharedCommit,
+		stageHook:              hook,
+		deferTransactionLookup: deferTransactionLookup,
+	}
 }
 
 // tip returns the range-local tip — the block subsequent applies build on.
@@ -245,11 +278,12 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		e.commit = e.state.NewCommitScope()
 	}
 	plan := &canonicalBlockExecution{
-		state:    e.state,
-		commit:   e.commit,
-		txRange:  plannedTxRange,
-		pipeline: newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
-		parent:   current,
+		state:                  e.state,
+		commit:                 e.commit,
+		txRange:                plannedTxRange,
+		pipeline:               newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
+		parent:                 current,
+		deferTransactionLookup: e.deferTransactionLookup,
 	}
 	// Under async commit, thread the previous block's finalized dynamic
 	// properties into this block (decision-b). Left nil for the synchronous

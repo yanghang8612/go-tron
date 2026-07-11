@@ -187,6 +187,9 @@ func TestBlockChain_InsertBlocks_AdvancesCanonicalStages(t *testing.T) {
 			t.Fatalf("%s stage progress = %+v ok=%v err=%v, want block 3 hash-bound", stage, row, ok, err)
 		}
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.buffer, rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 3 || !row.HasBlockHash || row.BlockHash != blocks[2].Hash() {
+		t.Fatalf("TxLookup stage progress = %+v ok=%v err=%v, want block 3 hash-bound", row, ok, err)
+	}
 }
 
 func TestBlockChain_InsertBlocksWithStageHookObservesCanonicalStages(t *testing.T) {

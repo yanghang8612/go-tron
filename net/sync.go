@@ -143,6 +143,12 @@ type SyncService struct {
 	completeHooks []func()
 }
 
+// transactionLookupStageBatchBlocks bounds one derived-index catch-up pass.
+// The stage runs after canonical import settlement, so a large restored
+// downloader buffer cannot hold the chain writer lock for an unbounded ETL
+// sort/load.
+const transactionLookupStageBatchBlocks = 4096
+
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
 // a CurrentBlockNum accessor that unwraps CurrentBlock().Number() — keeps
 // net/sync free of core/types imports.
@@ -1438,7 +1444,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 	useInsertSession := depth == 0 || depth > 2
 	var sess *core.InsertSession
 	if depth > 2 {
-		sess = ss.chain.BeginInsertSession()
+		sess = ss.chain.BeginSyncInsertSession()
 	}
 	var lastPeer *p2p.Peer
 	var resumePhases []syncdl.ImportStagePhasePlan
@@ -1486,7 +1492,7 @@ drainLoop:
 		ss.mu.Unlock()
 		batch := drainSession.Batch
 		if useInsertSession && sess == nil {
-			sess = ss.chain.BeginInsertSession()
+			sess = ss.chain.BeginSyncInsertSession()
 		}
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{
 			service:                ss,
@@ -1537,6 +1543,9 @@ drainLoop:
 	// re-arm the drain from a paused session.
 	publishPausedPrefix := paused && syncdl.ImportResumePhaseSuffixPrecedesBlock(resumePhases, pauseBlock)
 	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused && !publishPausedPrefix)
+	if commitBarrier.FinishOK && !paused {
+		ss.advanceTransactionLookupStage()
+	}
 	if !publishPausedPrefix {
 		ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
 	}
@@ -2183,6 +2192,24 @@ type syncImportBatchRunApplier struct {
 	flushLatestAfterInsert bool
 }
 
+// syncImportStageHookExecutor selects the sync-only insertion surface. It
+// keeps the downloader's small stage-hook interface while ensuring ordinary
+// producer/gossip insertion cannot accidentally defer tx lookup rows.
+type syncImportStageHookExecutor struct {
+	chain   *core.BlockChain
+	session *core.InsertSession
+}
+
+func (e syncImportStageHookExecutor) InsertBlocksWithStageHook(blocks []*types.Block, hook core.StageProgressHook) error {
+	if e.session != nil {
+		return e.session.InsertBlocksWithStageHook(blocks, hook)
+	}
+	if e.chain == nil {
+		return fmt.Errorf("sync: nil chain import executor")
+	}
+	return e.chain.InsertSyncBlocksWithStageHook(blocks, hook)
+}
+
 func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
 	a.service.logDecodeBatchResult(result)
 }
@@ -2192,10 +2219,7 @@ func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 }
 
 func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatchExecutionAttempt) (time.Duration, error) {
-	var executor syncdl.ImportBatchStageHookExecutor = a.service.chain
-	if a.session != nil {
-		executor = a.session
-	}
+	var executor syncdl.ImportBatchStageHookExecutor = syncImportStageHookExecutor{chain: a.service.chain, session: a.session}
 	result := syncdl.RunImportBatchExecutionAttemptWithStageHook(attempt, executor, time.Now)
 	if a.session != nil && a.flushLatestAfterInsert {
 		if flushErr := a.session.FlushLatest(); flushErr != nil {
@@ -2206,6 +2230,23 @@ func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatch
 		}
 	}
 	return result.Elapsed, result.Err
+}
+
+func (ss *SyncService) advanceTransactionLookupStage() {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	result, err := ss.chain.AdvanceTransactionLookupStage(transactionLookupStageBatchBlocks)
+	if err != nil {
+		// TxLookup is derived from durable canonical bodies. Keep consensus import
+		// live on a transient ETL failure; the watermark remains unchanged and a
+		// later drain wake retries the same range.
+		syncLog.Warn("Advance transaction lookup stage failed", "err", err)
+		return
+	}
+	if result.Advanced {
+		ss.requestDrainAgain()
+	}
 }
 
 func (a syncImportBatchRunApplier) ApplyImportedBatchRecord(plan syncdl.ImportedBatchRecordPlan) syncdl.ImportedBatchRecordApplyResult {

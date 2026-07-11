@@ -76,6 +76,45 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	}
 }
 
+func TestRebuildTransactionLookupFromBlocksLeavesReceiptIndexesUntouched(t *testing.T) {
+	db := NewMemoryChainDB()
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 2)
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	for _, block := range []*types.Block{block1, block2} {
+		if err := WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := WriteTransactionInfosByBlock(db, block1.Number(), infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, block2.Number(), infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block2: %v", err)
+	}
+
+	result, err := RebuildTransactionLookupFromBlocks(db, db, 1, 2, etl.Options{
+		TempDir:     t.TempDir(),
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("RebuildTransactionLookupFromBlocks: %v", err)
+	}
+	if result.BlocksScanned != 2 || result.TransactionsIndexed != 3 || result.ETL.SpilledRuns == 0 {
+		t.Fatalf("result = %+v, want 2 blocks, 3 tx indexes, spilled ETL", result)
+	}
+	for _, info := range append(infos1, infos2...) {
+		if got := ReadTransactionIndex(db, info.Id); got == nil || *got != uint64(info.BlockNumber) {
+			t.Fatalf("tx lookup %x = %v, want block %d", info.Id, got, info.BlockNumber)
+		}
+		if has, err := db.Has(txInfoKey(info.Id)); err != nil || has {
+			t.Fatalf("direct tx info row %x present=%v err=%v, want untouched absent", info.Id, has, err)
+		}
+	}
+	if got := ReadTransactionInfosByBlock(db, block1.Number()); len(got) != len(infos1) {
+		t.Fatalf("tx infos by block1 = %+v, want untouched %d infos", got, len(infos1))
+	}
+}
+
 func TestRebuildTransactionDerivedIndexesFromAncientTxInfos(t *testing.T) {
 	hot := NewMemoryDatabase()
 	anc := newFakeAncient()

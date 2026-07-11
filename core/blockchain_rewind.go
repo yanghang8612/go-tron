@@ -195,6 +195,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := rewindCanonicalStagePipeline(bc.db, height, final.Hash()); err != nil {
 		return fmt.Errorf("restart sync: rewind canonical stage progress: %w", err)
 	}
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageTxLookup, height, final.Hash()); err != nil {
+		return fmt.Errorf("restart sync: write tx lookup stage progress: %w", err)
+	}
 	if err := bc.resetRuntimeStateLocked(final, bc.HeadStateRoot()); err != nil {
 		return err
 	}
@@ -363,6 +366,9 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 	}
 	if err := rewindCanonicalStagePipeline(bc.db, height, target.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress: %w", err)
+	}
+	if err := bc.rewindTransactionLookupStageLocked(height, target.Hash()); err != nil {
+		return fmt.Errorf("rewind tx lookup stage progress: %w", err)
 	}
 	if err := bc.resetRuntimeStateLocked(target, expectedRoot); err != nil {
 		return err

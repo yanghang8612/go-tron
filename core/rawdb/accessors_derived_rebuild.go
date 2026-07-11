@@ -27,6 +27,18 @@ type RebuildTransactionDerivedIndexesResult struct {
 	ETL                     etl.Stats
 }
 
+// RebuildTransactionLookupResult describes one transaction hash lookup rebuild
+// pass. Unlike RebuildTransactionDerivedIndexesFromBlocks it deliberately does
+// not touch transaction receipts or per-block receipt rows: those are produced
+// on the canonical execution path and are not a prerequisite for tx lookup.
+type RebuildTransactionLookupResult struct {
+	FromBlock           uint64
+	ToBlock             uint64
+	BlocksScanned       uint64
+	TransactionsIndexed uint64
+	ETL                 etl.Stats
+}
+
 type RebuildSectionBloomsResult struct {
 	FromBlock                  uint64
 	ToBlock                    uint64
@@ -142,6 +154,58 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 				}
 				result.TransactionInfosIndexed++
 			}
+		}
+		if blockNum == toBlock {
+			break
+		}
+	}
+	stats, err := collector.Load(writer)
+	if err != nil {
+		return nil, err
+	}
+	result.ETL = stats
+	return result, nil
+}
+
+// RebuildTransactionLookupFromBlocks rebuilds only tx-hash to block-number
+// rows from retained canonical block bodies. It is the recoverable TxLookup
+// stage payload used after bulk sync; keeping it independent lets execution
+// avoid unordered tx- writes without delaying receipt availability.
+func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options) (*RebuildTransactionLookupResult, error) {
+	if chain == nil {
+		return nil, errors.New("rawdb: nil chain db")
+	}
+	if writer == nil {
+		return nil, errors.New("rawdb: nil transaction lookup writer")
+	}
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("rawdb: inverted transaction lookup rebuild range [%d,%d]", fromBlock, toBlock)
+	}
+	collector, err := NewDerivedIndexCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer collector.Close()
+
+	result := &RebuildTransactionLookupResult{FromBlock: fromBlock, ToBlock: toBlock}
+	for blockNum := fromBlock; ; blockNum++ {
+		block, ok, err := ReadBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("rawdb: missing block %d during transaction lookup rebuild", blockNum)
+		}
+		result.BlocksScanned++
+		for _, tx := range block.Transactions() {
+			if tx == nil {
+				continue
+			}
+			txHash := tx.Hash()
+			if err := collector.PutTransactionIndex(txHash[:], blockNum); err != nil {
+				return nil, err
+			}
+			result.TransactionsIndexed++
 		}
 		if blockNum == toBlock {
 			break

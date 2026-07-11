@@ -18,6 +18,11 @@ const (
 	StageExecution  StageID = "Execution"
 	StageCommitment StageID = "Commitment"
 	StageFinish     StageID = "Finish"
+	// StageTxLookup records the highest canonical block whose transaction
+	// hash-to-block lookup rows have been materialized. It is a derived index:
+	// execution and receipts remain authoritative, so the stage may lag Finish
+	// and be rebuilt from canonical block bodies after interruption.
+	StageTxLookup StageID = "TxLookup"
 	// StageSnapshotBuild records the highest canonical source block whose
 	// state-domain history files have been published. It is hash-bound so
 	// snapshot build progress cannot silently cross a same-height fork.
@@ -317,6 +322,7 @@ func StageProgressOrderPairs() []StageProgressOrderPair {
 		{Downstream: StageExecution, Upstream: StageBodies},
 		{Downstream: StageCommitment, Upstream: StageExecution},
 		{Downstream: StageFinish, Upstream: StageCommitment},
+		{Downstream: StageTxLookup, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotBuild, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotLatestBuild, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotEventLogBuild, Upstream: StageFinish, RequireUpstream: true},
@@ -400,6 +406,7 @@ func KnownStageProgressStages() []StageID {
 		StageExecution,
 		StageCommitment,
 		StageFinish,
+		StageTxLookup,
 		StageSyncInventory,
 		StageSyncBodies,
 		StageSyncBodiesReady,

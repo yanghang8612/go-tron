@@ -985,9 +985,9 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"stageStatus=ok",
 		"stageIssues=0",
 		"stagePipelineComplete=false",
-		"stagePipelinePending=8",
+		"stagePipelinePending=9",
 		"stagePipelineIssues=0",
-		fmt.Sprintf("stagePipelineNext=%s", rawdb.StageSnapshotBuild),
+		fmt.Sprintf("stagePipelineNext=%s", rawdb.StageTxLookup),
 		"stagePipelineNextStatus=missing",
 		"stagePipelineNextTarget=4",
 		fmt.Sprintf("stagePipelineNextUpstream=%s", rawdb.StageFinish),
@@ -1107,10 +1107,10 @@ func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_alert_component_status{component="freezer",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_stage_pipeline_complete{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
-		fmt.Sprintf(`gtron_storage_stage_pipeline_pending{datadir="%s"} 8`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_pending{datadir="%s"} 9`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_stage_pipeline_issues{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
-		fmt.Sprintf(`gtron_storage_stage_pipeline_next_target_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 4`, dbPrometheusLabelValue(dataDir), rawdb.StageSnapshotBuild, rawdb.StageFinish),
-		fmt.Sprintf(`gtron_storage_stage_pipeline_next_current_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 0`, dbPrometheusLabelValue(dataDir), rawdb.StageSnapshotBuild, rawdb.StageFinish),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_target_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 4`, dbPrometheusLabelValue(dataDir), rawdb.StageTxLookup, rawdb.StageFinish),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_current_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 0`, dbPrometheusLabelValue(dataDir), rawdb.StageTxLookup, rawdb.StageFinish),
 		fmt.Sprintf(`gtron_storage_alert_freezer_hidden_bytes{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
@@ -1458,8 +1458,8 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	if report.StagePipeline.Pending == 0 || report.StagePipeline.Issues != 1 || len(report.StagePipeline.Tasks) == 0 {
 		t.Fatalf("storage alert stage pipeline = %+v, want pending task and one hash/order issue", report.StagePipeline)
 	}
-	if first := report.StagePipeline.Tasks[0]; first.Stage != string(rawdb.StageSnapshotBuild) || first.Upstream != string(rawdb.StageFinish) || first.Status != string(rawdb.StageProgressPipelineTaskMissing) || first.TargetValue != block4.Number() {
-		t.Fatalf("storage alert first pipeline task = %+v, want missing SnapshotBuild after Finish", first)
+	if first := report.StagePipeline.Tasks[0]; first.Stage != string(rawdb.StageTxLookup) || first.Upstream != string(rawdb.StageFinish) || first.Status != string(rawdb.StageProgressPipelineTaskMissing) || first.TargetValue != block4.Number() {
+		t.Fatalf("storage alert first pipeline task = %+v, want missing TxLookup after Finish", first)
 	}
 	if report.FreezerStatus != "ok" || report.FreezerIssues != 0 || report.FreezerAlertHiddenBytes != 0 {
 		t.Fatalf("unexpected freezer alert fields: %+v", report)

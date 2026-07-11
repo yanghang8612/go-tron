@@ -1762,6 +1762,7 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageExecution,
 		rawdb.StageCommitment,
 		rawdb.StageFinish,
+		rawdb.StageTxLookup,
 		rawdb.StageSyncImport,
 		rawdb.StageSyncExecution,
 		rawdb.StageSyncCommitment,
@@ -1935,6 +1936,8 @@ func dbStageStatusGroup(stage rawdb.StageID) string {
 	switch stage {
 	case rawdb.StageHeaders, rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish:
 		return "canonical"
+	case rawdb.StageTxLookup:
+		return "derived"
 	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
 		return "sync"
 	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotEventLogBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:

@@ -108,6 +108,9 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 		t.Fatalf("sync import stage = %+v ok=%v err=%v, want block2", row, ok, err)
 	}
 	assertSyncPipelineProgress(t, bc.DB(), block2)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
+		t.Fatalf("tx lookup stage = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
+	}
 	for _, block := range []*types.Block{block1, block2} {
 		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
 			t.Fatalf("imported sync staged body #%d ok=%v err=%v, want deleted", block.Number(), ok, err)

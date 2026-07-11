@@ -185,6 +185,9 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 			t.Fatalf("%s stage after rewind = %d ok=%v err=%v, want 2", stage, got, ok, err)
 		}
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(diskdb, rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 2 || !row.HasBlockHash || row.BlockHash != blocks[2].Hash() {
+		t.Fatalf("TxLookup stage after rewind = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
+	}
 	headState, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		t.Fatalf("open rewound state: %v", err)
@@ -468,6 +471,18 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 		if err != nil || !ok || got != 2 {
 			t.Fatalf("%s stage after rewind = %d ok=%v err=%v, want 2", stage, got, ok, err)
 		}
+	}
+	// Inline inserts had already materialized tx lookup through block 5, so the
+	// incremental rewind clamps that complete watermark to the retained canonical
+	// head instead of requiring a needless rebuild of the surviving prefix.
+	if row, ok, err := rawdb.ReadStageProgressRow(diskdb, rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 2 || !row.HasBlockHash || row.BlockHash != blocks[2].Hash() {
+		t.Fatalf("TxLookup stage after incremental rewind = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
+	}
+	if result, err := bc.AdvanceTransactionLookupStage(10); err != nil || result.Advanced {
+		t.Fatalf("advance TxLookup after incremental rewind = %+v err=%v, want already complete", result, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(diskdb, rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 2 || !row.HasBlockHash || row.BlockHash != blocks[2].Hash() {
+		t.Fatalf("TxLookup stage after incremental verification = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
 	}
 	headState, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
