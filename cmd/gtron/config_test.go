@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -68,6 +69,13 @@ func TestValidateSyncImportBatch(t *testing.T) {
 	}
 	if err := validateSyncImportBatch(tsync.MaxStagedImportBatch); err != nil {
 		t.Fatalf("validateSyncImportBatch(max) = %v", err)
+	}
+}
+
+func TestGtronRejectsInvalidSyncImportBatchBeforeStartup(t *testing.T) {
+	ctx := makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "0"})
+	if err := gtron(ctx); err == nil || !strings.Contains(err.Error(), "sync import batch") {
+		t.Fatalf("gtron invalid sync import batch error = %v, want startup validation error", err)
 	}
 }
 
