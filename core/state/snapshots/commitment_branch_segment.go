@@ -58,17 +58,21 @@ func BuildCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 	if toTxNum < fromTxNum {
 		return SegmentRef{}, fmt.Errorf("snapshots: branch segment range [%d,%d] is inverted", fromTxNum, toTxNum)
 	}
-	return writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum)
+	ref, _, err := writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum, false)
+	return ref, err
 }
 
-func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64) (SegmentRef, error) {
+// writeCommitmentBranchSegmentFromDB streams a branch segment. When skipEmpty
+// is true it removes the temporary output and returns hasRows=false for an
+// empty keyspace, letting production latest builds avoid a separate pre-scan.
+func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool) (SegmentRef, bool, error) {
 	abs := filepath.Join(dir, relPath)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
@@ -78,7 +82,7 @@ func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 	writer := bufio.NewWriterSize(counter, 1<<20)
 	if _, err := fmt.Fprintf(writer, `{"version":%d,"dataset":%q,"fromTxNum":%d,"toTxNum":%d,"entries":[`, CommitmentBranchSegmentVersion, SegmentDatasetCommitmentBranch, fromTxNum, toTxNum); err != nil {
 		_ = tmp.Close()
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	first := true
 	if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
@@ -98,22 +102,28 @@ func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 		return true, nil
 	}); err != nil {
 		_ = tmp.Close()
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
+	}
+	if first && skipEmpty {
+		if err := tmp.Close(); err != nil {
+			return SegmentRef{}, false, err
+		}
+		return SegmentRef{}, false, nil
 	}
 	if _, err := writer.WriteString(`]}`); err != nil {
 		_ = tmp.Close()
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	if err := writer.Flush(); err != nil {
 		_ = tmp.Close()
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	if err := tmp.Close(); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 
 	ref := SegmentRef{
@@ -128,12 +138,12 @@ func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
 	finalAbs := filepath.Join(dir, ref.Path)
 	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
 	if err := os.Rename(tmpName, finalAbs); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, false, err
 	}
-	return ref, nil
+	return ref, true, nil
 }
 
 // OpenCommitmentBranchSegment validates the branch segment at dir/ref.Path.
@@ -347,33 +357,17 @@ func (s *CommitmentBranchSource) IterateCommitmentBranches(txNum uint64, fn func
 	return seg.Iterate(fn)
 }
 
-// hasAnyCommitmentBranchRow reports whether the state-commitment-branch-v1-
-// keyspace is non-empty without materializing it.
-func hasAnyCommitmentBranchRow(db ethdb.Iteratee) (bool, error) {
-	found := false
-	if err := rawdb.IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
-		found = true
-		return false, nil // stop after first row
-	}); err != nil {
-		return false, err
-	}
-	return found, nil
-}
-
 // buildCommitmentBranchLatest is the registry LatestSnapshotBuilder adapter for
 // the CommitmentBranch family. It returns no ref (publishes nothing) when the
-// branch keyspace is empty, mirroring Runner.onePass's "no rows, return early".
+// branch keyspace is empty, mirroring Runner.onePass's "no rows, return early"
+// without first walking a large branch keyspace just to detect that it exists.
 func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-	has, err := hasAnyCommitmentBranchRow(db)
+	ref, hasRows, err := writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum, true)
 	if err != nil {
 		return nil, err
 	}
-	if !has {
+	if !hasRows {
 		return nil, nil
-	}
-	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum)
-	if err != nil {
-		return nil, err
 	}
 	return []SegmentRef{ref}, nil
 }

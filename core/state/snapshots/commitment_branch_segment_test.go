@@ -256,6 +256,46 @@ func TestCommitmentBranchEmptyKeyspaceSkipped(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchLatestBuildScansBranchKeyspaceOnce(t *testing.T) {
+	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	seedStagedBranchRows(t, db)
+
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	if err != nil {
+		t.Fatalf("build commitment branch latest: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("built refs = %d, want 1", len(refs))
+	}
+	if db.iterators != 1 {
+		t.Fatalf("branch builder opened %d iterators, want 1", db.iterators)
+	}
+}
+
+func TestCommitmentBranchLatestBuildSkipsEmptyAfterOneScan(t *testing.T) {
+	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	if err != nil {
+		t.Fatalf("build empty commitment branch latest: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("built refs = %d, want 0", len(refs))
+	}
+	if db.iterators != 1 {
+		t.Fatalf("empty branch builder opened %d iterators, want 1", db.iterators)
+	}
+}
+
+type countingCommitmentBranchBuildDB struct {
+	ethdb.KeyValueStore
+	iterators int
+}
+
+func (db *countingCommitmentBranchBuildDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	db.iterators++
+	return db.KeyValueStore.NewIterator(prefix, start)
+}
+
 // TestCommitmentBranchSourceComposes proves CommitmentBranchSource serves the
 // snapshot root (delegated to the embedded Manager) and the branch rows from
 // disk, and that txNum outside the segment range yields zero branch rows.
