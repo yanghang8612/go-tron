@@ -90,9 +90,13 @@ func preChargeEnergyUsage(ctx *Context, addr common.Address, charge int64, resul
 // restoreEnergyPreCharges undoes every pre-charge recorded on `result` after the VM,
 // mirroring java-tron TransactionTrace.pay():
 //
-//   - SUCCESS (java commits rootRepository, then calls resetAccountUsage): subtract the
-//     pre-charge's area contribution from the CURRENT (post-VM) usage, preserving any
-//     change the VM itself made to this account's energy_usage.
+//   - SUCCESS with a positive energy bill (java commits rootRepository, then calls
+//     resetAccountUsage and useEnergy): subtract the pre-charge's area contribution
+//     from the CURRENT post-VM usage, preserving any resource change made by the VM.
+//   - SUCCESS with zero total energy: retain the committed pre-charge. This is the
+//     java-tron live-chain result for a zero-op CreateSmartContract (Nile 35,838,079):
+//     the reset/finalization ordering around ReceiptCapsule's zero-energy early
+//     return leaves the merged usage/window as the persisted account state.
 //   - REVERT / exception / OOE (java never commits rootRepository and skips
 //     resetAccountUsage): discard the pre-charge entirely — restore the pristine state.
 //
@@ -103,6 +107,12 @@ func restoreEnergyPreCharges(ctx *Context, result *Result) {
 		return
 	}
 	success := result.ContractRet == int32(corepb.Transaction_Result_SUCCESS)
+	if success && result.EnergyUsageTotal <= 0 {
+		// The VM-visible merged accounts are already in StateDB. Keeping them and
+		// dropping only the rollback metadata mirrors java's zero-energy commit.
+		result.energyPreCharges = nil
+		return
+	}
 	cancelAllV2 := ctx.DynProps != nil && ctx.DynProps.SupportCancelAllUnfreezeV2()
 	for _, pc := range result.energyPreCharges {
 		if !success {

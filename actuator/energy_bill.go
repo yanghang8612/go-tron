@@ -248,9 +248,6 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 	if ctx.Tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
 		return common.Address{}, 0, totalEnergy
 	}
-	if legacyVMReceiptEnergyLeftMode(ctx) {
-		return common.Address{}, 0, totalEnergy
-	}
 	c := ctx.Tx.Contract()
 	if c == nil || c.Parameter == nil {
 		return common.Address{}, 0, totalEnergy
@@ -271,6 +268,15 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 	}
 	if !ctx.State.AccountExists(originAddr) && ctx.DynProps.AllowTvmConstantinople() {
 		return common.Address{}, 0, totalEnergy
+	}
+	if legacyVMReceiptEnergyLeftMode(ctx) {
+		// Before the ENERGY_LIMIT software fork VMActuator's float-ratio path
+		// leaves receipt.originEnergyLeft at its zero default, so java computes
+		// originUsage=0. It still takes ReceiptCapsule's caller!=origin branch and
+		// calls useEnergy(origin, 0, now), which recovers and persists the origin's
+		// window. Preserve the origin identity here so PayEnergyBill performs that
+		// consensus write while charging the full bill to the caller.
+		return originAddr, 0, totalEnergy
 	}
 
 	userPercent := clampPercent(contract.ConsumeUserResourcePercent)

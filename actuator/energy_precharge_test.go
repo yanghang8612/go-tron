@@ -98,7 +98,10 @@ func TestEnergyPreCharge_RoundTripMatchesNoPreChargeBill(t *testing.T) {
 
 		// Path B — pre-charge → (no VM change) → restore(success) → settle.
 		ctxB := setup()
-		resultB := &Result{ContractRet: int32(corepb.Transaction_Result_SUCCESS)}
+		resultB := &Result{
+			ContractRet:      int32(corepb.Transaction_Result_SUCCESS),
+			EnergyUsageTotal: billed,
+		}
 		leftFrozen := availableAccountEnergyForBill(ctxB.State, ctxB.DynProps, owner, ctxB.ResourceTime())
 		feelimitEnergy := ctxB.Tx.FeeLimit() / vmEnergyFee(ctxB)
 		preChargeEnergyUsage(ctxB, owner, minInt64(leftFrozen, feelimitEnergy), resultB)
@@ -121,6 +124,64 @@ func TestEnergyPreCharge_RoundTripMatchesNoPreChargeBill(t *testing.T) {
 		if gotTime != wantTime {
 			t.Fatalf("cancelAllV2=%v: final latestConsumeTime changed by pre-charge: want %d got %d", cancelAllV2, wantTime, gotTime)
 		}
+	}
+}
+
+// TestEnergyPreCharge_ZeroEnergySuccessKeepsCharge pins java-tron's persisted
+// result for a successful VM transaction that consumes zero energy. VMActuator
+// has already merged the fee-limit pre-charge into the caller before VM.play;
+// the reset/finalization ordering around ReceiptCapsule.payEnergyBill's
+// energy_usage_total == 0 early return leaves that merged usage/window in state.
+//
+// Nile block 35,838,079 is the live witness: a CreateSmartContract with bytecode
+// STOP, fee_limit=1_000_000_000 and energy_usage_total=0 retained the pre-charge
+// in java-tron. Restoring it in go-tron shrank the caller window from roughly
+// 10k to 6.4k and seeded the balance divergence that stopped at 48,640,086.
+func TestEnergyPreCharge_ZeroEnergySuccessKeepsCharge(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x55, 0x20}
+	ctx := newEnergyBillCtx(t, owner)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.Set("energy_fee", 420)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	acct := ctx.State.GetAccount(owner)
+	acct.AddFrozenEnergy(50_186_094_633_948, ctx.BlockTime+10_000_000)
+	acct.SetNewEnergyWindowSize(6_428)
+	ctx.DynProps.SetTotalEnergyWeight(485_316_808)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(90_000_000_000)
+	ctx.State.SetEnergyUsage(owner, 12_360_946)
+	ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.HeadSlot)
+
+	result := &Result{
+		ContractRet:      int32(corepb.Transaction_Result_SUCCESS),
+		EnergyUsageTotal: 0,
+	}
+	leftFrozen := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime())
+	feelimitEnergy := ctx.Tx.FeeLimit() / vmEnergyFee(ctx)
+	preChargeEnergyUsage(ctx, owner, minInt64(leftFrozen, feelimitEnergy), result)
+	wantUsage := ctx.State.GetEnergyUsage(owner)
+	wantWindow := ctx.State.GetAccount(owner).RawEnergyWindowSize()
+	wantOptimized := ctx.State.GetAccount(owner).EnergyWindowOptimized()
+	wantTime := ctx.State.GetLatestConsumeTimeForEnergy(owner)
+	if feelimitEnergy != 2_380_952 || wantUsage != 14_741_898 || wantWindow != 10_041 {
+		t.Fatalf("Nile golden pre-charge = energy %d, state (%d,%d); want 2380952, (14741898,10041)",
+			feelimitEnergy, wantUsage, wantWindow)
+	}
+
+	restoreEnergyPreCharges(ctx, result)
+
+	if got := ctx.State.GetEnergyUsage(owner); got != wantUsage {
+		t.Fatalf("zero-energy success: pre-charge usage was restored: got %d, want retained %d", got, wantUsage)
+	}
+	acct = ctx.State.GetAccount(owner)
+	if got := acct.RawEnergyWindowSize(); got != wantWindow {
+		t.Fatalf("zero-energy success: pre-charge window was restored: got %d, want retained %d", got, wantWindow)
+	}
+	if got := acct.EnergyWindowOptimized(); got != wantOptimized {
+		t.Fatalf("zero-energy success: optimized flag = %v, want %v", got, wantOptimized)
+	}
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(owner); got != wantTime {
+		t.Fatalf("zero-energy success: latest consume time = %d, want %d", got, wantTime)
 	}
 }
 
