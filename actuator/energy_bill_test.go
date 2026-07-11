@@ -791,6 +791,46 @@ func TestPayEnergyBill_OriginSplit_PercentHundred_RefreshesStaleOrigin(t *testin
 	}
 }
 
+// TestPayEnergyBill_LegacyEnergyLimitRefreshesZeroUsageOrigin covers the Nile
+// interval where Stake 2.0 was active but the ENERGY_LIMIT software fork was
+// not. VMActuator's legacy float-ratio path leaves originEnergyLeft at zero, so
+// the origin pays none of the bill; ReceiptCapsule nevertheless calls
+// useEnergy(origin, 0, now) when caller != origin. The zero-charge call is a
+// consensus write: it recovers the origin window and advances its consume time.
+func TestPayEnergyBill_LegacyEnergyLimitRefreshesZeroUsageOrigin(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x20}
+	origin := tcommon.Address{0x41, 0xBB, 0x20}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit - 1)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+	ctx.HeadSlot = 30_000
+	installOriginContract(t, ctx, contractAddr, origin, 10, 10_000_000)
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.SetEnergyUsage(origin, 700_000)
+	ctx.State.SetLatestConsumeTimeForEnergy(origin, 20_000)
+
+	result := &Result{EnergyUsageTotal: 12_000, ContractRet: int32(corepb.Transaction_Result_SUCCESS)}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != 0 {
+		t.Fatalf("legacy origin usage = %d, want 0", result.OriginEnergyUsage)
+	}
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(origin); got != ctx.HeadSlot {
+		t.Fatalf("legacy zero-usage origin consume time = %d, want refreshed %d", got, ctx.HeadSlot)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got >= 700_000 {
+		t.Fatalf("legacy zero-usage origin was not recovered: got %d, want < 700000", got)
+	}
+}
+
 // TestPayEnergyBill_OriginSplit_CallerEqualsOrigin: when caller IS the
 // contract's deployer (common case for owner-only admin functions),
 // java skips the split and bills caller directly.
