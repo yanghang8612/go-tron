@@ -1436,12 +1436,12 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 	// canonical executor across all of them so synchronous sync avoids reopening
 	// StateDB/CommitScope at every chunk boundary. The synchronous session flushes
 	// latest-domain writes after each chunk to retain ordinary InsertBlocks
-	// visibility; deep async keeps the worker pipeline full. Depth 2 retains its
-	// established per-chunk settlement behavior. The deep session is created up
-	// front to retain its existing empty-drain settlement barrier; the synchronous
-	// session starts only after a real batch is available.
+	// visibility; async sessions keep their shared scope until the final drain
+	// barrier. Deep async additionally keeps a buffered worker pipeline full. The
+	// deep session is created up front to retain its existing empty-drain settlement
+	// barrier; synchronous and depth-2 sessions start only after a real batch is
+	// available.
 	depth := ss.chain.PipelinedCommitDepth()
-	useInsertSession := depth == 0 || depth > 2
 	var sess *core.InsertSession
 	if depth > 2 {
 		sess = ss.chain.BeginSyncInsertSession()
@@ -1491,7 +1491,7 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
-		if useInsertSession && sess == nil {
+		if sess == nil {
 			sess = ss.chain.BeginSyncInsertSession()
 		}
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{
@@ -1510,15 +1510,16 @@ drainLoop:
 		if importLoop.YieldResumePhase {
 			resumePhases = importLoop.ResumePhases
 			ss.logImportResumePhaseYield(importLoop.ResumePhasePlan)
-			// A deep async session can continue feeding later chunks while the
-			// worker finishes this chunk's commitment/finish suffix. The worker
-			// commits FIFO, so the final pending suffix at the session barrier
-			// proves every earlier chunk too; stopping here would drain the worker
-			// after every local chunk and defeat the cross-chunk pipeline.
-			if depth > 2 {
+			// An async session can continue feeding later chunks while the worker
+			// finishes this chunk's commitment/finish suffix. The worker commits
+			// FIFO, so the final pending suffix at the session barrier proves every
+			// earlier chunk too; stopping here would drain the worker after every
+			// local chunk and defeat the cross-chunk session. Depth 2 still uses an
+			// unbuffered rendezvous queue, so this does not widen its in-flight cap.
+			if depth > 0 {
 				continue drainLoop
 			}
-		} else if depth > 2 && importRun.Run.HasRecord && !importRun.Run.RecordProgressFailed() {
+		} else if depth > 0 && importRun.Run.HasRecord && !importRun.Run.RecordProgressFailed() {
 			// A later chunk that completed every phase can supersede an older
 			// pending suffix: FIFO commitment means its canonical boundary also
 			// proves the older one has finished.

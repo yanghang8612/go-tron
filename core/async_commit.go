@@ -20,9 +20,12 @@ import (
 // in-flight buffer layers, matching SetMaxInflight(D)); the send blocking on a
 // full queue is the backpressure that keeps BeginBlock from exceeding maxInflight.
 //
-//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2 — EXACTLY today.
-//   - D  > 2  → buffered + the cross-batch barrier-amortization path (see
-//     pipelinedCommit / InsertSession). Enabled ops-only, never wire-observable.
+//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2. InsertSession
+//     still spans contiguous local sync chunks, but this never widens the
+//     in-flight cap.
+//   - D  > 2  → additionally buffers commit jobs and keeps that worker pipeline
+//     filled across chunks (see pipelinedCommit / InsertSession). Enabled
+//     ops-only, never wire-observable.
 //
 // The depth is resolved ONCE at NewBlockChain (so the commit worker, started in
 // the constructor, ranges a correctly-sized channel and is never orphaned by a
@@ -93,8 +96,8 @@ func (bc *BlockChain) SetAsyncCommit(enabled bool) {
 
 // PipelinedCommitDepth returns the configured async-commit pipeline depth (>=2)
 // when async commit is enabled, else 0. The sync drain reuses an InsertSession
-// across contiguous chunks in synchronous and deep (depth > 2) modes; depth 2
-// retains its established per-chunk settlement behavior.
+// across contiguous chunks in every mode; depth > 2 additionally buffers the
+// commit worker to overlap more than one pending commitment suffix.
 func (bc *BlockChain) PipelinedCommitDepth() int {
 	if !bc.asyncCommit {
 		return 0

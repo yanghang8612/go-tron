@@ -547,9 +547,9 @@ func gtron(ctx *cli.Context) error {
 	// live re-sync validation described in the runbook.
 	if shouldEnableAsyncCommit(ctx) {
 		bc.SetAsyncCommit(true)
-		// depth > 2 (GTRON_ASYNC_COMMIT_DEPTH) additionally buffers the commit
-		// queue and amortizes the per-range drain across sync batches; depth 2
-		// (default) is the current rendezvous behavior.
+		// Every depth amortizes the shared staged-sync session across local import
+		// batches. Depth > 2 additionally buffers the commit queue; depth 2 keeps
+		// the conservative rendezvous worker behavior.
 		log.Warn("Async commit ENABLED (experimental, --sync.async-commit) — internal commit pipelined off the critical path; validate via re-sync before production use",
 			"depth", bc.PipelinedCommitDepth())
 	}

@@ -875,8 +875,100 @@ func TestSyncServiceContinuesDrainAfterResumePhasePublish(t *testing.T) {
 	}
 }
 
+func TestSyncServiceDepthTwoSessionExecutesNextChunkBeforeCommitmentSettles(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "2")
+	bc := makeTestChain(t)
+	bc.SetAsyncCommit(true)
+
+	ss := NewSyncService(bc, nil)
+	if err := ss.SetImportBatchSize(1); err != nil {
+		t.Fatalf("set import batch size: %v", err)
+	}
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block, rawOf(t, block))
+		if result.StageError != nil || result.ProgressWriteError != nil {
+			t.Fatalf("stage block %d result = %+v", block.Number(), result)
+		}
+	}
+
+	var hookOnce sync.Once
+	hooked := make(chan struct{})
+	release := make(chan struct{})
+	core.SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == block1.Number() {
+			hookOnce.Do(func() {
+				close(hooked)
+				<-release
+			})
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		core.SetCommitFoldHookForTest(nil)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		ss.drainBufferedBlocks()
+		close(done)
+	}()
+
+	select {
+	case <-hooked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("commit fold hook was not reached")
+	}
+	if !waitUntil(3*time.Second, func() bool {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.BufferedDB(), rawdb.StageExecution)
+		return err == nil && ok && row.HasBlockHash && row.BlockNum == block2.Number() && row.BlockHash == block2.Hash()
+	}) {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.BufferedDB(), rawdb.StageExecution)
+		t.Fatalf("depth-2 session did not execute next chunk before first commitment settled: row=%+v ok=%v err=%v", row, ok, err)
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not finish after releasing commit fold hook")
+	}
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after depth-2 session drain = %v, want block2 %x; stages=%s", got, block2.Hash(), syncPipelineProgressDebug(t, bc.DB()))
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after depth-2 drain ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after depth-2 drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
+func TestSyncServiceDepthTwoSessionPublishesCommittedPrefixBeforeLaterFailure(t *testing.T) {
+	testSyncServiceAsyncSessionPublishesCommittedPrefixBeforeLaterFailure(t, "2")
+}
+
 func TestSyncServiceDeepAsyncPublishesCommittedPrefixBeforeLaterFailure(t *testing.T) {
-	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	testSyncServiceAsyncSessionPublishesCommittedPrefixBeforeLaterFailure(t, "4")
+}
+
+func testSyncServiceAsyncSessionPublishesCommittedPrefixBeforeLaterFailure(t *testing.T, depth string) {
+	t.Helper()
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", depth)
 	bc := makeTestChain(t)
 	bc.SetAsyncCommit(true)
 

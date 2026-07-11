@@ -566,15 +566,17 @@ Status:
   transaction intent without relaxing TRON's per-block execution, root,
   maintenance, or reorg rules. The synchronous path flushes latest-domain rows
   into the current buffer layer after each chunk, preserving existing chunk
-  boundary visibility while keeping the scope transaction open. Deep async
-  commit now keeps later local chunks flowing while an earlier chunk's
-  commitment/finish suffix is pending, keeping the worker queue filled instead
-  of draining at every chunk boundary. At the one session barrier, only the
-  latest pending suffix is published because FIFO commitment proves all earlier
-  chunks; if a later chunk fails, an already-finished prefix still publishes
-  its verified suffix but the paused drain is never re-armed.
-  Cross-batch synchronous and deep regression tests prove identical roots/head,
-  one opened state/scope, and matching fork-switch results.
+  boundary visibility while keeping the scope transaction open. Async commit
+  keeps later local chunks flowing while an earlier chunk's commitment/finish
+  suffix is pending: depth 2 keeps its unbuffered rendezvous queue and existing
+  in-flight bound, while deeper settings also keep a buffered worker queue
+  filled instead of draining at every chunk boundary. At the one session
+  barrier, only the latest pending suffix is published because FIFO commitment
+  proves all earlier chunks; if a later chunk fails, an already-finished prefix
+  still publishes its verified suffix but the paused drain is never re-armed.
+  Cross-batch synchronous, depth-2, and deep-async regression tests prove
+  identical roots/head, one opened state/scope, matching fork-switch results,
+  and correct committed-prefix recovery after a later failure.
 - Canonical block metadata still commits the block body and TAPOS ring before
   publishing the head, but the same body/TAPOS writes now stay in the layered
   buffer only for in-range execution and reorg visibility. After the direct

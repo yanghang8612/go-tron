@@ -135,13 +135,15 @@ func TestInsertSession_CrossBatch_MatchesSync(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		async bool
+		depth string
 	}{
 		{name: "synchronous"},
-		{name: "deep_async", async: true},
+		{name: "depth_two_async", async: true, depth: "2"},
+		{name: "deep_async", async: true, depth: "4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.async {
-				t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+				t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", tc.depth)
 			}
 			bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
 			if tc.async {
