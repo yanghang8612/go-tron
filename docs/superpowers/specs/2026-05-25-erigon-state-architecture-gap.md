@@ -1117,22 +1117,14 @@ Status update:
 
 Next step:
 
-- account-KV generation changes are covered end-to-end:
-  `TestRecreatedAccountDoesNotLeakOldGenerationSlots` proves a destroy+recreate
-  bumps the per-account generation (persisted via the account envelope and read
-  back as generation+1 on reopen), so the recreated account reads a fresh
-  namespace and does NOT leak a prior-incarnation slot, while the orphaned gen-0
-  rows survive on disk (Erigon-incarnation style, no O(N) prefix delete).
-  `TestArchiveStorageAgreesWithLiveAcrossRecreate` proves the archive
-  `StorageAt` path agrees with live reads across the recreate.
-  Benign residual: the standalone generation-as-of row reader
-  (`ReadStateKVGenerationAsOfTxNum`, which reads the separate `KVGeneration` row
-  rather than the envelope) can return a stale generation after a recreate,
-  because the recreate bump is persisted via the envelope, not that row, and
-  `ResetAccountKV` (the only writer that marks the row dirty) has no callers. The
-  storage reconstruction path does not consume that row (proven by the
-  archive-vs-live storage test), so no storage/leak divergence is observable;
-  this is a latent inconsistency in a non-storage accessor, not a correctness bug.
+- **Closed 2026-07-11:** account-KV generation changes are covered end-to-end.
+  `GetOrCreateAccount` now records a `kvResetChange` and marks a recreated
+  account's generation dirty, so commit persists the bumped `KVGeneration` row
+  and publishes its history change-set. `TestRecreatedAccountDoesNotLeakOldGenerationSlots`,
+  `TestStateDB_RecreatedAccountKVAsOfDoesNotLeakOldGeneration`, and
+  `TestArchiveStorageAgreesWithLiveAcrossRecreate` prove live and archive reads
+  use the new namespace without leaking old-generation slots, while the
+  orphaned rows remain physically retained in Erigon-incarnation style.
 - Keep java-tron fixture replay as the final compatibility gate.
 
 Acceptance:
