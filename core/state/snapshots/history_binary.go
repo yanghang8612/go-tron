@@ -1910,16 +1910,12 @@ func readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir string, ref Segme
 		return nil, false, err
 	}
 	defer segmentFile.Close()
-	txRanges, _, err := readStateDomainChangeBinaryTxRangeTableAt(segmentFile, segmentSize, ref, segmentHeader)
+	row, hasTableRows, found, err := findStateDomainChangeBinaryTxRangeForBlock(segmentFile, segmentSize, ref, segmentHeader, blockNum)
 	if err != nil {
 		return nil, false, err
 	}
-	if len(txRanges) > 0 {
-		i := sort.Search(len(txRanges), func(i int) bool { return txRanges[i].BlockNum >= blockNum })
-		if i < len(txRanges) && txRanges[i].BlockNum == blockNum {
-			return cloneStateTxRangeForSegment(txRanges[i]), true, nil
-		}
-		return nil, false, nil
+	if hasTableRows {
+		return row, found, nil
 	}
 
 	indexFile, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)
@@ -1935,7 +1931,7 @@ func readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir string, ref Segme
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	var row *rawdb.StateTxRange
+	var derived *rawdb.StateTxRange
 	for i := start; i < indexHeader.count; i++ {
 		entry, err := readStateDomainChangeBinaryIndexEntryAt(indexFile, i)
 		if err != nil {
@@ -1951,36 +1947,36 @@ func readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir string, ref Segme
 				return nil, false, fmt.Errorf("snapshots: state-domain-change binary index entry for tx %d read record tx %d", entry.txNum, change.TxNum)
 			}
 			if change.BlockNum > blockNum {
-				if row != nil {
-					return row, true, nil
+				if derived != nil {
+					return derived, true, nil
 				}
 				return nil, false, nil
 			}
 			if change.BlockNum == blockNum {
-				if row == nil {
-					row = &rawdb.StateTxRange{
+				if derived == nil {
+					derived = &rawdb.StateTxRange{
 						BlockNum:   change.BlockNum,
 						BlockHash:  change.BlockHash,
 						BeginTxNum: change.TxNum,
 						EndTxNum:   change.TxNum,
 					}
 				} else {
-					if change.BlockHash != row.BlockHash {
+					if change.BlockHash != derived.BlockHash {
 						return nil, false, fmt.Errorf("snapshots: state-domain-change binary segment %q has multiple hashes for block %d", ref.Path, blockNum)
 					}
-					if change.TxNum < row.BeginTxNum {
-						row.BeginTxNum = change.TxNum
+					if change.TxNum < derived.BeginTxNum {
+						derived.BeginTxNum = change.TxNum
 					}
-					if change.TxNum > row.EndTxNum {
-						row.EndTxNum = change.TxNum
+					if change.TxNum > derived.EndTxNum {
+						derived.EndTxNum = change.TxNum
 					}
 				}
 			}
 			offset = nextOffset
 		}
 	}
-	if row != nil {
-		return row, true, nil
+	if derived != nil {
+		return derived, true, nil
 	}
 	return nil, false, nil
 }
@@ -2313,6 +2309,61 @@ func stateDomainChangeBinaryTxRangeTableBoundsAt(r io.ReaderAt, fileSize uint64,
 		return 0, 0, io.ErrUnexpectedEOF
 	}
 	return count, payloadOffset, nil
+}
+
+// findStateDomainChangeBinaryTxRangeForBlock performs a point lookup in the
+// fixed-width, block-sorted tx-range table. Snapshot creation and remote
+// bootstrap validate table ordering before the manifest becomes usable, so the
+// archive read path can avoid decoding every block range for one lookup.
+func findStateDomainChangeBinaryTxRangeForBlock(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader, blockNum uint64) (*rawdb.StateTxRange, bool, bool, error) {
+	count, payloadOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(r, fileSize, ref, header)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if count == 0 {
+		return nil, false, false, nil
+	}
+	if payloadOffset > math.MaxInt64 {
+		return nil, false, false, fmt.Errorf("snapshots: state-domain-change binary segment %q tx range table exceeds int64", ref.Path)
+	}
+
+	low, high := uint64(0), count
+	for low < high {
+		mid := low + (high-low)/2
+		row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, mid)
+		if err != nil {
+			return nil, true, false, err
+		}
+		if row.BlockNum < blockNum {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	if low == count {
+		return nil, true, false, nil
+	}
+	row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, low)
+	if err != nil {
+		return nil, true, false, err
+	}
+	if row.BlockNum != blockNum {
+		return nil, true, false, nil
+	}
+	return row, true, true, nil
+}
+
+func readStateDomainChangeBinaryTxRangeAt(r io.ReaderAt, ref SegmentRef, index uint64) (*rawdb.StateTxRange, error) {
+	offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + index*stateDomainChangeBinaryTxRangeSize
+	var raw [stateDomainChangeBinaryTxRangeSize]byte
+	if _, err := r.ReadAt(raw[:], int64(offset)); err != nil {
+		return nil, err
+	}
+	row := decodeStateDomainChangeBinaryTxRange(raw[:])
+	if err := validateStateDomainChangeBinaryTxRange(ref, row, index, nil); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 func validateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader) (uint64, error) {

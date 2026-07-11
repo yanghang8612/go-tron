@@ -474,6 +474,61 @@ func TestStateDomainChangeBinaryStoresNoChangeBlockTxRange(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryTxRangePointLookupUsesLogarithmicReads(t *testing.T) {
+	dir := t.TempDir()
+	const rangeCount = 4096
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 1,
+		ToTxNum:   rangeCount,
+		Path:      "history/state-domain-change-point-lookup.seg",
+	}
+	ranges := make([]*rawdb.StateTxRange, rangeCount)
+	for i := range ranges {
+		num := uint64(i + 1)
+		ranges[i] = &rawdb.StateTxRange{
+			BlockNum:   num,
+			BlockHash:  common.Hash{byte(num)},
+			BeginTxNum: num,
+			EndTxNum:   num,
+		}
+	}
+	segRef, _, err := writeStateDomainChangeBinaryFiles(dir, ref, nil, ranges)
+	if err != nil {
+		t.Fatalf("write binary files: %v", err)
+	}
+	reader, size, header, err := openHistorySegmentForRead(dir, segRef)
+	if err != nil {
+		t.Fatalf("open binary segment: %v", err)
+	}
+	defer reader.Close()
+	counted := &countingStateDomainReaderAt{reader: reader}
+
+	got, hasTableRows, found, err := findStateDomainChangeBinaryTxRangeForBlock(counted, size, segRef, header, 3073)
+	if err != nil || !hasTableRows || !found {
+		t.Fatalf("point lookup: hasTableRows=%v found=%v err=%v", hasTableRows, found, err)
+	}
+	if got.BlockNum != 3073 || got.BeginTxNum != 3073 || got.EndTxNum != 3073 {
+		t.Fatalf("point lookup range = %+v, want block 3073 tx [3073,3073]", got)
+	}
+	if counted.reads > 20 {
+		t.Fatalf("point lookup used %d reads for %d ranges, want logarithmic reads", counted.reads, rangeCount)
+	}
+}
+
+type countingStateDomainReaderAt struct {
+	reader interface {
+		ReadAt([]byte, int64) (int, error)
+	}
+	reads int
+}
+
+func (r *countingStateDomainReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	return r.reader.ReadAt(p, off)
+}
+
 func TestStateDomainChangeBinaryContentAddressedPathsDifferForSameRange(t *testing.T) {
 	dir := t.TempDir()
 	ref := SegmentRef{
