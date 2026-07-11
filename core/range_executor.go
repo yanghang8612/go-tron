@@ -32,10 +32,10 @@ type canonicalBlockExecution struct {
 	// as the next block's parentDynProps.
 	parentDynProps *state.DynamicProperties
 	finalDynProps  *state.DynamicProperties
-	// deferTransactionLookup is restricted to the staged sync path. The block
-	// body and receipt rows remain durable before head publication; only the
-	// rebuildable tx-hash reverse index is emitted later by StageTxLookup.
-	deferTransactionLookup bool
+	// deferTransactionDerivedIndexes is restricted to the staged sync path. The block
+	// body and per-block receipt rows remain durable before head publication;
+	// duplicate ti- and rebuildable tx-hash reverse rows are omitted.
+	deferTransactionDerivedIndexes bool
 }
 
 type canonicalCommitResult struct {
@@ -174,7 +174,8 @@ func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 
 // AdvanceTransactionLookupStage records inline tx lookup completion only after
 // Finish. Bulk sync intentionally skips this: its tx- rows are rebuilt by the
-// independent TxLookup stage after the canonical range has settled.
+// independent TxLookup stage after the canonical range has settled, while
+// receipt-by-ID reads fall back to the durable per-block TransactionRet row.
 func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.KeyValueWriter, block *types.Block) error {
 	if p == nil {
 		return fmt.Errorf("canonical block execution: nil plan")
@@ -182,7 +183,7 @@ func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.Key
 	if block == nil {
 		return fmt.Errorf("canonical block execution: nil block")
 	}
-	if p.deferTransactionLookup {
+	if p.deferTransactionDerivedIndexes {
 		return nil
 	}
 	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageTxLookup, block.Number(), block.Hash()); err != nil {
@@ -196,13 +197,13 @@ func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.Key
 // enter block execution through this object so state opening, txNum planning,
 // commit-scope reuse, and per-block stage progress stay on one staged path.
 type canonicalRangeExecutor struct {
-	bc                     *BlockChain
-	allowSharedCommit      bool
-	stageHook              StageProgressHook
-	deferTransactionLookup bool
-	state                  *state.StateDB
-	commit                 *state.CommitScope
-	txRanges               *stateTxRangeAllocator
+	bc                             *BlockChain
+	allowSharedCommit              bool
+	stageHook                      StageProgressHook
+	deferTransactionDerivedIndexes bool
+	state                          *state.StateDB
+	commit                         *state.CommitScope
+	txRanges                       *stateTxRangeAllocator
 	// tipBlock is the range-local tip: the block this executor last applied
 	// successfully. nil means "not yet advanced in this range" → tip() falls
 	// back to bc.CurrentBlock(). Reset/Abort clear it. With async commit off,
@@ -224,12 +225,12 @@ func newCanonicalRangeExecutorWithStageHook(bc *BlockChain, allowSharedCommit bo
 	return newCanonicalRangeExecutorWithOptions(bc, allowSharedCommit, hook, false)
 }
 
-func newCanonicalRangeExecutorWithOptions(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook, deferTransactionLookup bool) *canonicalRangeExecutor {
+func newCanonicalRangeExecutorWithOptions(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook, deferTransactionDerivedIndexes bool) *canonicalRangeExecutor {
 	return &canonicalRangeExecutor{
-		bc:                     bc,
-		allowSharedCommit:      allowSharedCommit,
-		stageHook:              hook,
-		deferTransactionLookup: deferTransactionLookup,
+		bc:                             bc,
+		allowSharedCommit:              allowSharedCommit,
+		stageHook:                      hook,
+		deferTransactionDerivedIndexes: deferTransactionDerivedIndexes,
 	}
 }
 
@@ -278,12 +279,12 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		e.commit = e.state.NewCommitScope()
 	}
 	plan := &canonicalBlockExecution{
-		state:                  e.state,
-		commit:                 e.commit,
-		txRange:                plannedTxRange,
-		pipeline:               newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
-		parent:                 current,
-		deferTransactionLookup: e.deferTransactionLookup,
+		state:                          e.state,
+		commit:                         e.commit,
+		txRange:                        plannedTxRange,
+		pipeline:                       newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
+		parent:                         current,
+		deferTransactionDerivedIndexes: e.deferTransactionDerivedIndexes,
 	}
 	// Under async commit, thread the previous block's finalized dynamic
 	// properties into this block (decision-b). Left nil for the synchronous

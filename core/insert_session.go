@@ -44,7 +44,8 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 
 // BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup rows
 // are emitted by the recoverable TxLookup stage after canonical execution has
-// finished. Receipt rows remain on the normal synchronous metadata path.
+// finished. Per-block TransactionRet rows remain on the normal synchronous
+// metadata path; only their duplicate per-tx materialization is deferred.
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
 	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutorWithOptions(bc, true, nil, true)}
 }

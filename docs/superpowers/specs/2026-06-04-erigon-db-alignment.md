@@ -81,7 +81,7 @@ not complete.
 | Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle can optionally bind chain identity and sign the final catalog after a changed manifest; remote distribution/handoff remains operator-managed. |
 | Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
-| Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Bulk sync defers only `tx-` writes and catches them up from canonical bodies with sorted ETL; range execution is staged, but this is not yet a full Erigon staged-sync loop. |
+| Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Bulk sync defers `tx-` plus duplicate per-tx `ti-` materialization; `tib-` remains authoritative and `tx-` is caught up from canonical bodies with sorted ETL. Range execution is staged, but this is not yet a full Erigon staged-sync loop. |
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
@@ -1835,9 +1835,11 @@ Status:
   block number, and tx hash order before the rebuild republishes per-block or
   per-tx info rows.
 - `rawdb.RebuildTransactionLookupFromBlocks` is the narrower recoverable
-  `TxLookup` stage payload. Bulk sync persists canonical blocks and receipt rows
-  first, then writes only `tx-<hash>` rows through sorted ETL after verified
-  `Finish` progress. The stage watermark is hash-bound, bounded per pass, and
+  `TxLookup` stage payload. Bulk sync persists canonical blocks and per-block
+  `TransactionRet` rows first, then writes only `tx-<hash>` rows through sorted
+  ETL after verified `Finish` progress. It intentionally omits the redundant
+  per-tx `ti-<hash>` row; receipt-by-ID reads resolve through `tx-` plus `tib-`.
+  The stage watermark is hash-bound, bounded per pass, and
   is clamped on fork rewind; a crash after the ETL load but before the watermark
   write is safe because the next pass deterministically rewrites the same keys.
   If a metadata/index suffix reached disk ahead of the buffered persisted head,

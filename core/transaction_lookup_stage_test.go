@@ -64,6 +64,9 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got != nil {
 		t.Fatalf("tx lookup before derived stage = %d, want nil", *got)
 	}
+	if got := rawdb.ReadTransactionInfo(bc.ChainDB(), txHash[:]); got != nil {
+		t.Fatalf("tx info before derived stage = %+v, want nil without ti-/tx- materialization", got)
+	}
 	if infos := rawdb.ReadTransactionInfosByBlock(bc.ChainDB(), block.Number()); len(infos) != 1 {
 		t.Fatalf("tx infos by block = %+v, want durable receipt", infos)
 	}
@@ -77,6 +80,9 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	}
 	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got == nil || *got != block.Number() {
 		t.Fatalf("tx lookup after derived stage = %v, want block %d", got, block.Number())
+	}
+	if got := rawdb.ReadTransactionInfo(bc.ChainDB(), txHash[:]); got == nil || got.Fee == 0 || got.BlockNumber != int64(block.Number()) {
+		t.Fatalf("tx info after derived lookup fallback = %+v, want block receipt", got)
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != block.Number() || !row.HasBlockHash || row.BlockHash != block.Hash() {
 		t.Fatalf("TxLookup progress = %+v ok=%v err=%v, want block 1 hash-bound", row, ok, err)

@@ -325,10 +325,10 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		return
 	}
 
-	// Out-of-band metadata batch to disk (block, state root, TAPOS, tx infos,
-	// and normally tx index) — durable BEFORE the head pointer advances, preserving the
+	// Out-of-band metadata batch to disk (block, state root, TAPOS, per-block
+	// tx infos, and normally per-tx derived rows) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
-	if err := bc.writeBlockMetadataBatch(job.block, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionLookup); err != nil {
+	if err := bc.writeBlockMetadataBatch(job.block, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionDerivedIndexes); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
 	}
