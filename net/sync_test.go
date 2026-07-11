@@ -1183,6 +1183,37 @@ func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	}
 }
 
+func TestSyncServiceCompleteHookRunsAfterSessionReset(t *testing.T) {
+	bc := makeTestChain(t)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+		t.Fatalf("write sync staged block: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+	called := false
+	ss.AddSyncCompleteHook(func() {
+		ss.mu.Lock()
+		syncing := ss.syncing
+		ss.mu.Unlock()
+		if syncing {
+			t.Error("sync complete hook ran before the session reset")
+		}
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Errorf("staged block during complete hook ok=%v err=%v, want deleted", ok, err)
+		}
+		called = true
+	})
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	ss.finishSync()
+
+	if !called {
+		t.Fatal("sync complete hook was not called")
+	}
+}
+
 func TestBuildChainSummaryMultipleBlocks(t *testing.T) {
 	bc := makeTestChain(t)
 

@@ -136,6 +136,10 @@ type SyncService struct {
 	bufferWait syncdl.BufferWaitTracker
 
 	lastPeerJoinAttempt time.Time
+
+	// completeHooks run after a successful sync session has been reset. Hooks
+	// must return promptly; they are intended for non-blocking stage wakeups.
+	completeHooks []func()
 }
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -169,6 +173,27 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	// persist/hooks alongside the existing execElapsed total.
 	chain.AddApplyStatsHook(ss.onApplyStats)
 	return ss
+}
+
+// AddSyncCompleteHook registers a callback invoked after every completed sync
+// session has cleared its staged-body and in-memory tracking state. The hook
+// runs without ss.mu held and must return promptly.
+func (ss *SyncService) AddSyncCompleteHook(hook func()) {
+	if ss == nil || hook == nil {
+		return
+	}
+	ss.mu.Lock()
+	ss.completeHooks = append(ss.completeHooks, hook)
+	ss.mu.Unlock()
+}
+
+func (ss *SyncService) notifySyncComplete() {
+	ss.mu.Lock()
+	hooks := append([]func(){}, ss.completeHooks...)
+	ss.mu.Unlock()
+	for _, hook := range hooks {
+		hook()
+	}
 }
 
 // SetImportBatchSize changes the local staged-body import chunk. It never
@@ -2935,6 +2960,7 @@ func (ss *SyncService) finishSync() {
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
+	ss.notifySyncComplete()
 
 	totalElapsed := time.Since(totalStart)
 	ctx := []any{

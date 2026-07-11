@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -411,6 +412,61 @@ func TestSnapshotLifecycleBuildsChainFreezerBeforePruningLookups(t *testing.T) {
 	}
 	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange {
 		t.Fatalf("chain lookup result = %+v, want hook result", result.ChainLookupPrune)
+	}
+}
+
+func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &fakePruneChain{db: db, solidified: 2}
+	entered := make(chan int, 3)
+	release := make(chan struct{})
+	var passes atomic.Int32
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			pass := int(passes.Add(1))
+			entered <- pass
+			if pass == 2 {
+				<-release
+			}
+			return nil, nil
+		},
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	defer func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Fatalf("stop lifecycle: %v", err)
+		}
+	}()
+
+	waitLifecyclePass(t, entered, 1)
+	lifecycle.RequestPass()
+	waitLifecyclePass(t, entered, 2)
+	lifecycle.RequestPass()
+	lifecycle.RequestPass()
+	close(release)
+	waitLifecyclePass(t, entered, 3)
+
+	time.Sleep(50 * time.Millisecond)
+	if got := passes.Load(); got != 3 {
+		t.Fatalf("lifecycle passes = %d, want initial pass plus two coalesced requested passes", got)
+	}
+}
+
+func waitLifecyclePass(t *testing.T, entered <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-entered:
+		if got != want {
+			t.Fatalf("lifecycle pass = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for lifecycle pass %d", want)
 	}
 }
 

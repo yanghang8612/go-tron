@@ -56,6 +56,7 @@ type SnapshotLifecycle struct {
 	retiredPrune      RetiredPruneFunc
 
 	interval time.Duration
+	wake     chan struct{}
 	quit     chan struct{}
 	done     chan struct{}
 	once     sync.Once
@@ -86,6 +87,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		balanceTracePrune: cfg.BalanceTracePrune,
 		retiredPrune:      cfg.RetiredPrune,
 		interval:          interval,
+		wake:              make(chan struct{}, 1),
 		quit:              make(chan struct{}),
 		done:              make(chan struct{}),
 	}
@@ -125,6 +127,24 @@ func (l *SnapshotLifecycle) Stop() error {
 	<-l.done
 	lifecycleLog.Info("Domain state snapshot/prune lifecycle stopped")
 	return nil
+}
+
+// RequestPass schedules one lifecycle pass without waiting for it. Requests
+// coalesce while a pass is pending, which makes this suitable for sync and
+// freezer completion notifications.
+func (l *SnapshotLifecycle) RequestPass() {
+	if l == nil {
+		return
+	}
+	select {
+	case <-l.quit:
+		return
+	default:
+	}
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
@@ -209,6 +229,10 @@ func (l *SnapshotLifecycle) loop() {
 		case <-ticker.C:
 			if _, err := l.OnePass(); err != nil {
 				lifecycleLog.Warn("Domain state snapshot/prune pass failed", "err", err)
+			}
+		case <-l.wake:
+			if _, err := l.OnePass(); err != nil {
+				lifecycleLog.Warn("Domain state snapshot/prune requested pass failed", "err", err)
 			}
 		case <-l.quit:
 			return

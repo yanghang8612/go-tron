@@ -804,6 +804,7 @@ func gtron(ctx *cli.Context) error {
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
+		syncService.AddSyncCompleteHook(domainLifecycle.RequestPass)
 		chainLookupPruneLifecycleWired = true
 		sectionBloomPruneLifecycleWired = true
 		balanceTracePruneLifecycleWired = true
