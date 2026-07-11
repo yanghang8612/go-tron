@@ -91,6 +91,7 @@ func dbCommand() *cli.Command {
 					dbETLTempDirFlag,
 					dbETLBufferMiBFlag,
 					dbETLBatchMiBFlag,
+					snapshotDirFlag,
 				},
 				Action: dbRebuildTxIndexesCmd,
 			},
@@ -109,6 +110,7 @@ func dbCommand() *cli.Command {
 					dbETLTempDirFlag,
 					dbETLBufferMiBFlag,
 					dbETLBatchMiBFlag,
+					snapshotDirFlag,
 				},
 				Action: dbRebuildSectionBloomsCmd,
 			},
@@ -127,6 +129,7 @@ func dbCommand() *cli.Command {
 					dbETLTempDirFlag,
 					dbETLBufferMiBFlag,
 					dbETLBatchMiBFlag,
+					snapshotDirFlag,
 				},
 				Action: dbRebuildAccountTracesCmd,
 			},
@@ -142,6 +145,7 @@ func dbCommand() *cli.Command {
 					dbL0StopFlag,
 					dbFromBlockFlag,
 					dbToBlockFlag,
+					snapshotDirFlag,
 				},
 				Action: dbAuditBalanceTracesCmd,
 			},
@@ -194,6 +198,7 @@ func dbCommand() *cli.Command {
 					dbMemtableFlag,
 					dbL0CompactionFlag,
 					dbL0StopFlag,
+					snapshotDirFlag,
 				},
 				Action: dbFreezerAlertsCmd,
 			},
@@ -209,6 +214,7 @@ func dbCommand() *cli.Command {
 					dbL0StopFlag,
 					dbAlertJSONFlag,
 					dbAlertPrometheusFlag,
+					snapshotDirFlag,
 				},
 				Action: dbStorageAlertsCmd,
 			},
@@ -224,6 +230,7 @@ func dbCommand() *cli.Command {
 					dbL0StopFlag,
 					dbStageVerifyFlag,
 					dbAlertJSONFlag,
+					snapshotDirFlag,
 				},
 				Action: dbStageStatusCmd,
 			},
@@ -364,6 +371,7 @@ func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePrune
 
 func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -375,7 +383,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open freezer: %w", err)
 	}
 	defer f.Close()
-	chainDB, err := dbFreezerAlertChainDB(db, f, cfg.DataDir)
+	chainDB, err := dbFreezerAlertChainDB(db, f, stateSnapshotDir)
 	if err != nil {
 		return err
 	}
@@ -418,6 +426,7 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 
 func dbStorageAlertsCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
 	if ctx.Bool(dbAlertJSONFlag.Name) && ctx.Bool(dbAlertPrometheusFlag.Name) {
 		return fmt.Errorf("--%s and --%s are mutually exclusive", dbAlertJSONFlag.Name, dbAlertPrometheusFlag.Name)
 	}
@@ -432,7 +441,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open freezer: %w", err)
 	}
 	defer f.Close()
-	chainDB, err := dbFreezerAlertChainDB(db, f, cfg.DataDir)
+	chainDB, err := dbFreezerAlertChainDB(db, f, stateSnapshotDir)
 	if err != nil {
 		return err
 	}
@@ -457,7 +466,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	stageIssueDetails := dbStageStatusIssueDetails(stageRows, db, stateSnapshotsDir(cfg.DataDir))
+	stageIssueDetails := dbStageStatusIssueDetails(stageRows, db, stateSnapshotDir)
 	stageIssues := dbStageStatusIssueStrings(stageIssueDetails)
 	stageStatus := "ok"
 	if len(stageIssues) > 0 {
@@ -468,7 +477,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 	modeStatus := dbModeAlertStatus(modeIssues)
 	pruneEvidence := dbStoragePruneEvidenceFromStageRows(stageRows)
 
-	snapshotInspection, snapshotIssues := dbSnapshotRetiredAlertIssues(stateSnapshotsDir(cfg.DataDir))
+	snapshotInspection, snapshotIssues := dbSnapshotRetiredAlertIssues(stateSnapshotDir)
 	snapshotStatus := dbSnapshotAlertStatus(snapshotIssues)
 
 	status := "ok"
@@ -937,11 +946,11 @@ func dbSnapshotAlertStatus(issues []dbSnapshotAlertIssue) string {
 	return "ok"
 }
 
-func dbFreezerAlertChainDB(db ethdb.KeyValueStore, freezer *rawdbfreezer.Freezer, dataDir string) (*rawdb.ChainDB, error) {
+func dbFreezerAlertChainDB(db ethdb.KeyValueStore, freezer *rawdbfreezer.Freezer, stateSnapshotDir string) (*rawdb.ChainDB, error) {
 	if db == nil {
 		return nil, errors.New("nil freezer alert database")
 	}
-	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(dataDir))
+	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
 	if err != nil {
 		return nil, fmt.Errorf("open state snapshots: %w", err)
 	}
@@ -1125,12 +1134,12 @@ func dbFreezerHiddenSize(stats rawdbfreezer.Stats) uint64 {
 	return hidden
 }
 
-func openSnapshotPruneChainDB(db ethdb.KeyValueStore, dataDir string) (*rawdb.ChainDB, func(), error) {
+func openSnapshotPruneChainDB(db ethdb.KeyValueStore, dataDir, stateSnapshotDir string) (*rawdb.ChainDB, func(), error) {
 	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(dataDir)
 	if err != nil {
 		return nil, closeAncient, err
 	}
-	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(dataDir))
+	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
 	if err != nil {
 		closeAncient()
 		return nil, func() {}, fmt.Errorf("open state snapshots: %w", err)
@@ -1145,19 +1154,20 @@ func openSnapshotPruneChainDB(db ethdb.KeyValueStore, dataDir string) (*rawdb.Ch
 
 func dbStageStatusCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, stateSnapshotDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	return dbPrintStageStatus(db, chainDB, cfg.DataDir, dbStageStatusOptions{
+	return dbPrintStageStatus(db, chainDB, cfg.DataDir, stateSnapshotDir, dbStageStatusOptions{
 		Verify: ctx.Bool("db.stage.verify"),
 		JSON:   ctx.Bool(dbAlertJSONFlag.Name),
 	})
@@ -1234,7 +1244,7 @@ type dbStageStatusPipelineTaskJSON struct {
 	CurrentHash  string `json:"currentHash,omitempty"`
 }
 
-func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string, opts dbStageStatusOptions) error {
+func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir, stateSnapshotDir string, opts dbStageStatusOptions) error {
 	rows, err := dbStageStatusRows(db, canonical)
 	if err != nil {
 		return err
@@ -1248,7 +1258,7 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 	var issues []string
 	var issueDetails []dbStageStatusIssueJSON
 	if opts.JSON || opts.Verify {
-		issueDetails = dbStageStatusIssueDetails(rows, db, stateSnapshotsDir(dataDir))
+		issueDetails = dbStageStatusIssueDetails(rows, db, stateSnapshotDir)
 		issues = dbStageStatusIssueStrings(issueDetails)
 	}
 	pipeline := dbStageStatusPipeline(rows)
@@ -1959,7 +1969,7 @@ func dbRebuildTxIndexesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return err
 	}
@@ -1999,7 +2009,7 @@ func dbRebuildSectionBloomsCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return err
 	}
@@ -2042,7 +2052,7 @@ func dbRebuildAccountTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return err
 	}
@@ -2083,7 +2093,7 @@ func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return err
 	}
@@ -2133,7 +2143,7 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir, snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return err
 	}

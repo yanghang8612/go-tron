@@ -1275,6 +1275,7 @@ func TestDBPrometheusLabelValueEscapesSpecialCharacters(t *testing.T) {
 
 func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 	dataDir := t.TempDir()
+	configuredSnapshotDir := filepath.Join(t.TempDir(), "cold-snapshots")
 	f := openDBCmdFreezer(t, dataDir)
 	appendDBCmdFreezerValidBlockRows(t, f, 5)
 	if err := f.Close(); err != nil {
@@ -1298,13 +1299,19 @@ func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 		t.Fatalf("close pebble: %v", err)
 	}
 
-	snapshotDir := stateSnapshotsDir(dataDir)
+	defaultSnapshotDir := stateSnapshotsDir(dataDir)
+	if err := os.MkdirAll(defaultSnapshotDir, 0o755); err != nil {
+		t.Fatalf("mkdir default snapshot dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultSnapshotDir, statesnapshots.ManifestFile), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write invalid default manifest: %v", err)
+	}
 	retiredPath := filepath.Join("event-log", "retired.seg")
 	retiredBytes := []byte("retired snapshot bytes")
-	if err := os.MkdirAll(filepath.Join(snapshotDir, filepath.Dir(retiredPath)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(configuredSnapshotDir, filepath.Dir(retiredPath)), 0o755); err != nil {
 		t.Fatalf("mkdir retired dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(snapshotDir, retiredPath), retiredBytes, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(configuredSnapshotDir, retiredPath), retiredBytes, 0o644); err != nil {
 		t.Fatalf("write retired file: %v", err)
 	}
 	manifest := statesnapshots.NewManifest(0, 0, nil)
@@ -1316,11 +1323,11 @@ func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 		Path:      retiredPath,
 		Size:      uint64(len(retiredBytes)),
 	}}
-	if err := statesnapshots.PublishManifest(snapshotDir, manifest); err != nil {
+	if err := statesnapshots.PublishManifest(configuredSnapshotDir, manifest); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
 
-	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--snapshot.dir", configuredSnapshotDir})
 	output, err := captureDBCmdStdout(t, func() error {
 		return dbStorageAlertsCmd(ctx)
 	})
@@ -1343,6 +1350,43 @@ func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDBColdDataCommandsExposeSnapshotDirFlag(t *testing.T) {
+	wantCommands := map[string]struct{}{
+		"rebuild-tx-indexes":      {},
+		"rebuild-section-blooms":  {},
+		"rebuild-account-traces":  {},
+		"audit-balance-traces":    {},
+		"backfill-balance-traces": {},
+		"freezer-alerts":          {},
+		"storage-alerts":          {},
+		"stage-status":            {},
+	}
+	for _, command := range dbCommand().Subcommands {
+		if _, ok := wantCommands[command.Name]; !ok {
+			continue
+		}
+		found := false
+		for _, flag := range command.Flags {
+			for _, name := range flag.Names() {
+				if name == snapshotDirFlag.Name {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("db %s does not expose --%s", command.Name, snapshotDirFlag.Name)
+		}
+		delete(wantCommands, command.Name)
+	}
+	if len(wantCommands) != 0 {
+		t.Fatalf("missing db commands: %v", wantCommands)
 	}
 }
 

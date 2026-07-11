@@ -312,6 +312,11 @@ After bootstrap completes, start `gtron` with the same `--snapshot.dir` when
 the snapshot directory is outside the datadir. Sync resumes from the verified
 snapshot/freezer boundary and imports the recent tail from peers.
 
+Use that same `--snapshot.dir` for `gtron db storage-alerts`, `gtron db
+stage-status`, freezer alerts, and DB rebuild/audit commands. Those commands
+open the cold snapshot readers to verify coverage and to read pruned archive
+data.
+
 ## Safety Notes
 
 - Use `--snapshot.reset` only for the snapshot directory, not for chain data.
