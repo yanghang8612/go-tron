@@ -96,6 +96,17 @@ func (c *DerivedIndexCollector) PutTransactionInfosByBlock(blockNum uint64, info
 	return c.collector.Put(txInfoBlockKey(blockNum), data)
 }
 
+// PutCompactTransactionInfosByBlock writes a verified canonical receipt row
+// without redundant per-transaction IDs. The matching canonical block body is
+// the source of those hashes when a block-level reader needs to return them.
+func (c *DerivedIndexCollector) PutCompactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo) error {
+	compact, err := compactTransactionInfosByBlock(blockNum, infos, "collect compact transaction infos by block")
+	if err != nil {
+		return err
+	}
+	return c.PutTransactionInfosByBlock(blockNum, compact)
+}
+
 func (c *DerivedIndexCollector) PutTransactionIndex(txHash []byte, blockNum uint64) error {
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")

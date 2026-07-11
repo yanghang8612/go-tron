@@ -722,7 +722,7 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 		return nil, err
 	}
 	if hasInfos {
-		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "transaction info block query"); err != nil {
+		if err := rawdb.PopulateTransactionInfoIDsForBlock(blockNum, block.Transactions(), infos, "transaction info block query"); err != nil {
 			return nil, err
 		}
 	}

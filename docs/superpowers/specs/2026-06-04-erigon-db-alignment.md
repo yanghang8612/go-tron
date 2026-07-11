@@ -81,7 +81,7 @@ not complete.
 | Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle can optionally bind chain identity and sign the final catalog after a changed manifest; remote distribution/handoff remains operator-managed. |
 | Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
-| Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Canonical insertion retains one authoritative `tib-` receipt row per block instead of duplicate `ti-` rows; bulk sync also defers `tx-`, which is caught up from canonical bodies with sorted ETL. Range execution is staged, but this is not yet a full Erigon staged-sync loop. |
+| Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Canonical insertion retains one authoritative compact `tib-` receipt row per block instead of duplicate `ti-` rows or per-receipt transaction IDs already present in the block body; bulk sync also defers `tx-`, which is caught up from canonical bodies with sorted ETL. Range execution is staged, but this is not yet a full Erigon staged-sync loop. |
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
@@ -1847,16 +1847,18 @@ Status:
   without retained `TransactionRet` can still rebuild tx-hash reverse lookup
   rows from the canonical block body, but present per-block info rows must match
   the canonical block transaction count, block number, and tx hash order before
-  the rebuild republishes the authoritative per-block receipt row. It does not
-  reintroduce redundant per-tx `ti-` rows, and deletes a legacy `ti-` row only
+  the rebuild republishes the compact authoritative per-block receipt row with
+  transaction IDs omitted when their canonical block positions prove them. It
+  does not reintroduce redundant per-tx `ti-` rows, and deletes a legacy `ti-` row only
   after that verified per-block coverage exists; an incomplete historical range
   therefore retains its sole legacy receipt rather than losing recoverability.
 - `rawdb.RebuildTransactionLookupFromBlocks` is the narrower recoverable
   `TxLookup` stage payload. Bulk sync persists canonical blocks and per-block
   `TransactionRet` rows first, then writes only `tx-<hash>` rows through sorted
   ETL after verified `Finish` progress. Canonical insertion intentionally omits
-  the redundant per-tx `ti-<hash>` row; receipt-by-ID reads resolve through
-  `tx-` plus `tib-`.
+  the redundant per-tx `ti-<hash>` row and redundant `TransactionInfo.Id` bytes
+  inside `tib-`; receipt-by-ID reads resolve through `tx-` plus the canonical
+  block position, while block-level API responses repopulate the omitted ID.
   The stage watermark is hash-bound, bounded per pass, and
   is clamped on fork rewind; the fork cleanup also removes orphan `tx-` rows
   before the next pass can serve them. A crash after the ETL load but before the

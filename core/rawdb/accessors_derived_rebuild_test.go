@@ -75,6 +75,9 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	if got := ReadTransactionInfo(db, txID); got == nil || got.Fee != infos1[1].Fee {
 		t.Fatalf("post-rebuild tx info = %+v, want fee %d", got, infos1[1].Fee)
 	}
+	if got := ReadTransactionInfosByBlock(db, 1); len(got) != len(infos1) || len(got[1].Id) != 0 {
+		t.Fatalf("post-rebuild compact infos = %+v, want ID-free block receipts", got)
+	}
 	if has, err := db.Has(txInfoKey(txID)); err != nil || has {
 		t.Fatalf("post-rebuild direct tx info row present=%v err=%v, want absent", has, err)
 	}

@@ -98,10 +98,14 @@ func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing
 	if err := WriteTransactionIndex(db, txHash[:], 7); err != nil {
 		t.Fatalf("WriteTransactionIndex: %v", err)
 	}
-	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{{
+	if err := WriteCompactTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{{
 		Id: txHash[:], Fee: 700, BlockNumber: 7,
 	}}); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+		t.Fatalf("WriteCompactTransactionInfosByBlock: %v", err)
+	}
+	stored, hasStored, err := ReadTransactionInfosByBlockStrict(db, 7)
+	if err != nil || !hasStored || len(stored) != 1 || len(stored[0].Id) != 0 {
+		t.Fatalf("stored compact infos = %+v/%v/%v, want one receipt without ID", stored, hasStored, err)
 	}
 	if err := WriteTransactionInfo(db, txHash[:], &corepb.TransactionInfo{
 		Id: txHash[:], Fee: 999, BlockNumber: 7,
@@ -112,6 +116,9 @@ func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing
 	info, ok, err := ReadTransactionInfoStrict(db, txHash[:])
 	if err != nil || !ok || info == nil || info.Fee != 700 {
 		t.Fatalf("ReadTransactionInfoStrict = %+v/%v/%v, want canonical fee 700", info, ok, err)
+	}
+	if len(info.Id) != 0 {
+		t.Fatalf("ReadTransactionInfoStrict ID = %x, want compact empty ID", info.Id)
 	}
 	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 {
 		t.Fatalf("ReadTransactionInfo = %+v, want canonical fee 700", got)
@@ -513,6 +520,37 @@ func TestWriteReadTransactionInfosByBlock(t *testing.T) {
 	}
 	if got[1].Fee != 200 {
 		t.Fatalf("info[1] fee: got %d, want 200", got[1].Fee)
+	}
+}
+
+func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x04}, common.HashLength)
+	infos := []*corepb.TransactionInfo{{
+		Id: txID, Fee: 400, BlockNumber: 5, BlockTimeStamp: 15_000,
+	}}
+	full, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 5, BlockTimeStamp: 15_000, Transactioninfo: infos,
+	})
+	if err != nil {
+		t.Fatalf("marshal full TransactionRet: %v", err)
+	}
+	if err := WriteCompactTransactionInfosByBlock(db, 5, infos); err != nil {
+		t.Fatalf("WriteCompactTransactionInfosByBlock: %v", err)
+	}
+	if !bytes.Equal(infos[0].Id, txID) {
+		t.Fatalf("input TransactionInfo ID = %x, want unchanged %x", infos[0].Id, txID)
+	}
+	data, err := db.Get(txInfoBlockKey(5))
+	if err != nil {
+		t.Fatalf("read compact TransactionRet: %v", err)
+	}
+	if len(data) >= len(full) {
+		t.Fatalf("compact TransactionRet length = %d, want less than full length %d", len(data), len(full))
+	}
+	stored, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
+	if err != nil || !ok || len(stored) != 1 || len(stored[0].Id) != 0 || stored[0].Fee != 400 {
+		t.Fatalf("stored compact TransactionRet = %+v/%v/%v, want one ID-free receipt", stored, ok, err)
 	}
 }
 

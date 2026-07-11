@@ -1621,7 +1621,7 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("write tapos ref: %w", err)
 	}
-	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
+	if err := rawdb.WriteCompactTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
 		return fmt.Errorf("write block tx infos: %w", err)
 	}
 	if writeTransactionLookup {

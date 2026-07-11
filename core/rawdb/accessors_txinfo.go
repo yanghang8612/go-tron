@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -271,7 +272,9 @@ func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum u
 	return nil, true, fmt.Errorf("rawdb: transaction index points to block %d but transaction %x is not in the readable block body", blockNum, txID)
 }
 
-// WriteTransactionInfosByBlock stores all TransactionInfos for a block.
+// WriteTransactionInfosByBlock stores all TransactionInfos for a block without
+// changing their payload. Use WriteCompactTransactionInfosByBlock only when a
+// matching canonical block body is retained to reconstruct omitted IDs.
 func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
 	if err := validateTransactionInfosForKey(blockNum, infos, "write transaction infos by block"); err != nil {
 		return err
@@ -288,6 +291,33 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 		return err
 	}
 	return db.Put(txInfoBlockKey(blockNum), data)
+}
+
+// WriteCompactTransactionInfosByBlock stores a block's receipt payload without
+// the per-transaction Id field. Each Id duplicates the canonical block body's
+// transaction hash at the same position, so canonical execution and verified
+// rebuilds can save that space while block-level API readers reconstruct it
+// from the body.
+// The input slice and its messages are never modified.
+func WriteCompactTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
+	compact, err := compactTransactionInfosByBlock(blockNum, infos, "write compact transaction infos by block")
+	if err != nil {
+		return err
+	}
+	return WriteTransactionInfosByBlock(db, blockNum, compact)
+}
+
+func compactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, context string) ([]*corepb.TransactionInfo, error) {
+	if err := validateTransactionInfosForKey(blockNum, infos, context); err != nil {
+		return nil, err
+	}
+	compact := make([]*corepb.TransactionInfo, len(infos))
+	for i, info := range infos {
+		cloned := proto.Clone(info).(*corepb.TransactionInfo)
+		cloned.Id = nil
+		compact[i] = cloned
+	}
+	return compact, nil
 }
 
 // ReadTransactionInfosByBlock retrieves all TransactionInfos for a block
@@ -383,6 +413,23 @@ func validateTransactionInfoForBlockKey(blockNum uint64, txIndex int, info *core
 	}
 	if len(info.Id) != 0 && len(info.Id) != common.HashLength {
 		return fmt.Errorf("rawdb: transaction info id length %d at block %d index %d during %s", len(info.Id), blockNum, txIndex, context)
+	}
+	return nil
+}
+
+// PopulateTransactionInfoIDsForBlock restores omitted compact receipt IDs from
+// the matching canonical transaction positions. Callers receive decoded
+// per-block payloads and may safely expose the populated values to APIs.
+func PopulateTransactionInfoIDsForBlock(blockNum uint64, txs []*types.Transaction, infos []*corepb.TransactionInfo, context string) error {
+	if err := ValidateTransactionInfosForBlock(blockNum, txs, infos, context); err != nil {
+		return err
+	}
+	for txIndex, info := range infos {
+		if len(info.Id) != 0 {
+			continue
+		}
+		hash := txs[txIndex].Hash()
+		info.Id = append([]byte(nil), hash[:]...)
 	}
 	return nil
 }
