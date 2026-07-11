@@ -418,6 +418,10 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	snapshotETL, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
 	compressHistorySegments, compressLatestSegments := applySnapshotCompressionConfigs(ctx)
 	log.Info("Cold snapshot compression configured", "history", compressHistorySegments, "latest", compressLatestSegments)
 	dbPath := chainDataDir(cfg.DataDir)
@@ -776,6 +780,7 @@ func gtron(ctx *cli.Context) error {
 				Enabled:            chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 				HistoryDataset:     historyDataset,
 				HistoryWindow:      prunePolicy.HistoryWindow,
+				ETL:                snapshotETL,
 				BuildSectionBlooms: true,
 				BuildBalanceTraces: true,
 				BuildEventLogs:     true,
@@ -849,6 +854,9 @@ func gtron(ctx *cli.Context) error {
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,
 			"reorgWindow", prunePolicy.ReorgWindow,
+			"etlTempDir", snapshotETL.TempDir,
+			"etlBufferBytes", snapshotETL.BufferLimit,
+			"etlBatchBytes", snapshotETL.BatchSize,
 			"snapshotDir", stateSnapshotDir)
 	} else {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())

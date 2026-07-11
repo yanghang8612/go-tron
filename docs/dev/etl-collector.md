@@ -267,7 +267,11 @@ gtron snapshot build-derived-indexes \
 
 The same flags are accepted by `snapshot bootstrap`, `snapshot build-freezer`,
 `snapshot build-balance-traces`, `snapshot build-section-blooms`, and
-`snapshot build-event-logs`.
+`snapshot build-event-logs`. When passed to the root `gtron` process, the same
+flags also configure the snap-mode background lifecycle's state-history,
+event-log, balance-trace, and section-bloom builds; set them before starting a
+long-running node so those periodic passes do not spill sorted runs into the
+default temporary directory.
 
 ## Migration Targets
 

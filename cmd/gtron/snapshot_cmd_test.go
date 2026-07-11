@@ -2859,6 +2859,45 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 	return cli.NewContext(app, set, nil)
 }
 
+func TestSnapshotETLOptions(t *testing.T) {
+	tempDir := t.TempDir()
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.etl.tempdir", tempDir,
+		"--snapshot.etl.buffer", "12",
+		"--snapshot.etl.batch", "3",
+	})
+	opts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		t.Fatalf("snapshotETLOptions: %v", err)
+	}
+	if opts.TempDir != tempDir || opts.BufferLimit != 12*1024*1024 || opts.BatchSize != 3*1024*1024 {
+		t.Fatalf("snapshot ETL options = %+v", opts)
+	}
+}
+
+func TestSnapshotETLOptionsDefaultsAndOverflow(t *testing.T) {
+	opts, err := snapshotETLOptions(makeSnapshotRestoreTestContext(t, nil))
+	if err != nil {
+		t.Fatalf("default snapshotETLOptions: %v", err)
+	}
+	if opts.TempDir != "" || opts.BufferLimit != 0 || opts.BatchSize != 0 {
+		t.Fatalf("default snapshot ETL options = %+v, want zero values", opts)
+	}
+	if _, err := snapshotETLOptions(makeSnapshotRestoreTestContext(t, []string{"--snapshot.etl.buffer", "18446744073709551615"})); err == nil {
+		t.Fatal("snapshotETLOptions accepted overflowing buffer")
+	}
+}
+
+func TestGtronRejectsOverflowingRuntimeSnapshotETLBeforeStartup(t *testing.T) {
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", t.TempDir(),
+		"--snapshot.etl.buffer", "18446744073709551615",
+	})
+	if err := gtron(ctx); err == nil || !strings.Contains(err.Error(), "snapshot.etl.buffer") {
+		t.Fatalf("gtron overflowing runtime snapshot ETL error = %v, want snapshot.etl.buffer overflow", err)
+	}
+}
+
 func TestInitCmdUsesConfiguredSnapshotDir(t *testing.T) {
 	dataDir := t.TempDir()
 	configuredDir := filepath.Join(t.TempDir(), "cold-snapshots")
