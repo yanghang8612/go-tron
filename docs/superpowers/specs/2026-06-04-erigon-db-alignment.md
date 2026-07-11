@@ -575,6 +575,13 @@ Status:
   the later solidified flush skips the duplicate Pebble writes while preserving
   block-root, `BLOCKHASH`, TAPOS, and fork-rewind semantics. The synchronous
   and async-commit paths each have write-count regression coverage.
+- A solidified buffer flush now also coalesces repeated writes across the
+  source block layers that enter one physical batch. The later layer's
+  put/delete remains the sole persisted operation for each key, matching the
+  batch's prior final-state semantics while removing repeated canonical-stage,
+  dynamic-property, and other hot-key writes. Source-layer grouping remains
+  bounded by the existing 1 MiB flush limit; direct non-batch writers retain
+  ordered per-layer replay.
 - Imported-batch record/report scheduling now treats persisted sync-stage
   progress as the boundary for throughput diagnostics: if the staged-body
   delete or hash-bound `SyncImport`/`SyncExecution`/`SyncCommitment`/`SyncFinish`

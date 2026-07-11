@@ -74,6 +74,44 @@ func (b *countingBatch) Write() error {
 	return b.Batch.Write()
 }
 
+type mutationCountingBatcher struct {
+	ethdb.KeyValueStore
+	batches atomic.Int32
+	writes  atomic.Int32
+	puts    atomic.Int32
+	deletes atomic.Int32
+}
+
+func (w *mutationCountingBatcher) NewBatch() ethdb.Batch {
+	w.batches.Add(1)
+	return &mutationCountingBatch{Batch: w.KeyValueStore.NewBatch(), parent: w}
+}
+
+func (w *mutationCountingBatcher) NewBatchWithSize(size int) ethdb.Batch {
+	w.batches.Add(1)
+	return &mutationCountingBatch{Batch: w.KeyValueStore.NewBatchWithSize(size), parent: w}
+}
+
+type mutationCountingBatch struct {
+	ethdb.Batch
+	parent *mutationCountingBatcher
+}
+
+func (b *mutationCountingBatch) Put(key, value []byte) error {
+	b.parent.puts.Add(1)
+	return b.Batch.Put(key, value)
+}
+
+func (b *mutationCountingBatch) Delete(key []byte) error {
+	b.parent.deletes.Add(1)
+	return b.Batch.Delete(key)
+}
+
+func (b *mutationCountingBatch) Write() error {
+	b.parent.writes.Add(1)
+	return b.Batch.Write()
+}
+
 type recordingWriter struct {
 	db   ethdb.KeyValueStore
 	puts []string
@@ -694,6 +732,62 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	if !bytes.Equal(got, []byte("C")) {
 		t.Fatalf("batched FlushUpTo order = %q, want %q", got, "C")
 	}
+}
+
+func TestBuffer_FlushUpToCoalescesDuplicateLayerWrites(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	for i := 1; i <= 3; i++ {
+		b.BeginBlock(bufHash(byte(i)), uint64(i))
+		switch i {
+		case 1:
+			if err := b.Put([]byte("shared"), []byte("first")); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Put([]byte("toggled"), []byte("first")); err != nil {
+				t.Fatal(err)
+			}
+		case 2:
+			if err := b.Put([]byte("shared"), []byte("second")); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Delete([]byte("toggled")); err != nil {
+				t.Fatal(err)
+			}
+		case 3:
+			if err := b.Delete([]byte("shared")); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Put([]byte("toggled"), []byte("third")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.Put([]byte("latest"), []byte{byte('0' + i)}); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	dst := &mutationCountingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(3, dst); err != nil {
+		t.Fatalf("FlushUpTo: %v", err)
+	}
+	if got := dst.batches.Load(); got != 1 {
+		t.Fatalf("NewBatch calls = %d, want 1", got)
+	}
+	if got := dst.writes.Load(); got != 1 {
+		t.Fatalf("batch Write calls = %d, want 1", got)
+	}
+	if got := dst.puts.Load(); got != 2 {
+		t.Fatalf("batched puts = %d, want final toggled/latest writes only", got)
+	}
+	if got := dst.deletes.Load(); got != 1 {
+		t.Fatalf("batched deletes = %d, want final shared delete only", got)
+	}
+	if has, err := dst.Has([]byte("shared")); err != nil || has {
+		t.Fatalf("shared exists=%v err=%v, want deleted", has, err)
+	}
+	mustDBValue(t, dst, []byte("toggled"), []byte("third"))
+	mustDBValue(t, dst, []byte("latest"), []byte("3"))
 }
 
 func TestBuffer_DurableWritesSkipFlushAndRetainOverlay(t *testing.T) {

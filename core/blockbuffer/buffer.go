@@ -1104,32 +1104,41 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 	batch := batcher.NewBatch()
 	defer closeBatch(batch)
 
-	flushed := 0
-	queuedLayers := 0
+	var (
+		flushed         int
+		queuedLayers    int
+		queuedRawSize   int
+		coalescedWrites layerWriteSet
+	)
 	flushQueued := func() error {
 		if queuedLayers == 0 {
 			return nil
+		}
+		if err := coalescedWrites.writeTo(batch); err != nil {
+			return err
 		}
 		if err := batch.Write(); err != nil {
 			return err
 		}
 		flushed += queuedLayers
 		queuedLayers = 0
+		queuedRawSize = 0
+		coalescedWrites.reset()
 		batch.Reset()
 		return nil
 	}
 
 	for _, l := range layers {
-		if queuedLayers > 0 && batch.ValueSize()+layerWriteSize(l) > maxFlushBatchValueSize {
+		layerSize := layerWriteSize(l)
+		if queuedLayers > 0 && queuedRawSize+layerSize > maxFlushBatchValueSize {
 			if err := flushQueued(); err != nil {
 				return flushed, err
 			}
 		}
-		if err := writeLayer(l, batch); err != nil {
-			return flushed, err
-		}
+		coalescedWrites.addLayer(l)
 		queuedLayers++
-		if batch.ValueSize() >= maxFlushBatchValueSize {
+		queuedRawSize += layerSize
+		if queuedRawSize >= maxFlushBatchValueSize {
 			if err := flushQueued(); err != nil {
 				return flushed, err
 			}
@@ -1139,6 +1148,63 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		return flushed, err
 	}
 	return flushed, nil
+}
+
+// layerWriteSet retains only the final operation for each key across a group
+// of already-committed layers. A normal flush writes all those layers through
+// one ethdb batch, where later operations on the same key already determine the
+// visible result. Collapsing them first removes repeated stage-progress,
+// dynamic-property, and other hot-key writes without changing that batch's
+// atomic final state. queuedRawSize in flushLayers still caps the source layer
+// group, so this map cannot grow beyond the existing flush batch workload.
+type layerWriteSet struct {
+	ops map[string]layerWriteOp
+}
+
+type layerWriteOp struct {
+	value  []byte
+	delete bool
+}
+
+func (s *layerWriteSet) addLayer(l *layer) {
+	if l == nil {
+		return
+	}
+	for k, v := range l.writes {
+		if durable, ok := l.durableWrites[k]; ok && bytes.Equal(durable, v) {
+			continue
+		}
+		s.set(k, layerWriteOp{value: v})
+	}
+	for k := range l.deletes {
+		s.set(k, layerWriteOp{delete: true})
+	}
+}
+
+func (s *layerWriteSet) set(key string, op layerWriteOp) {
+	if s.ops == nil {
+		s.ops = make(map[string]layerWriteOp)
+	}
+	s.ops[key] = op
+}
+
+func (s *layerWriteSet) writeTo(w ethdb.KeyValueWriter) error {
+	for key, op := range s.ops {
+		if op.delete {
+			if err := w.Delete([]byte(key)); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.Put([]byte(key), op.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *layerWriteSet) reset() {
+	clear(s.ops)
 }
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
