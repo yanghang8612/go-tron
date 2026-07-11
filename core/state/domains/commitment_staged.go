@@ -212,6 +212,20 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 // rebuild path was taken.
 var rebuildSpyHook func()
 
+const (
+	// rebuildFoldMaxUpdates bounds the resolved-op and parallel branch-buffer
+	// working sets for one staged rebuild fold. The latest-domain source can
+	// contain tens of millions of rows, so Rebuild must never collect it all.
+	rebuildFoldMaxUpdates = 64 * 1024
+	// rebuildFoldMaxBytes bounds copied iterator keys/values before a fold. One
+	// oversized source row is still processed on its own, which is unavoidable
+	// because hashing that value requires it to be read from the database.
+	rebuildFoldMaxBytes = 32 * 1024 * 1024
+	// Account for the Update header and allocator slack as well as key/value
+	// bytes so many tiny rows cannot bypass the byte budget.
+	rebuildFoldUpdateOverhead = 64
+)
+
 // SetRebuildSpyHook installs fn as the rebuild spy for tests. Pass nil to clear.
 // This is the only exported interface to rebuildSpyHook; production code never
 // calls it.
@@ -232,17 +246,7 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 	if err := s.store.clear(); err != nil {
 		return common.Hash{}, err
 	}
-	var updates []Update
-	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
-		updates = append(updates, Update{
-			Key:   append([]byte(nil), key...),
-			Value: append([]byte(nil), value...),
-		})
-		return true, nil
-	}); err != nil {
-		return common.Hash{}, err
-	}
-	root, err := s.trie.Fold(updates)
+	root, err := s.rebuildLatestDomainSources(rebuildFoldMaxUpdates, rebuildFoldMaxBytes)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -250,6 +254,64 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 		return common.Hash{}, err
 	}
 	return root, nil
+}
+
+// rebuildLatestDomainSources folds current latest-domain rows in bounded input
+// windows. Fold is incremental by construction: its persisted branch rows are
+// the next window's base state, and the fold equivalence tests prove that this
+// produces the same root and branch set as one resident all-rows fold.
+func (s *stagedCommitmentStore) rebuildLatestDomainSources(maxUpdates, maxBytes int) (common.Hash, error) {
+	if maxUpdates <= 0 || maxBytes <= 0 {
+		return common.Hash{}, fmt.Errorf("domains: invalid staged rebuild limits updates=%d bytes=%d", maxUpdates, maxBytes)
+	}
+	initialCap := maxUpdates
+	if initialCap > 4096 {
+		initialCap = 4096
+	}
+	updates := make([]Update, 0, initialCap)
+	var root common.Hash
+	var updateBytes int
+	folded := false
+	flush := func() error {
+		if len(updates) == 0 {
+			return nil
+		}
+		var err error
+		root, err = s.trie.Fold(updates)
+		if err != nil {
+			return err
+		}
+		for i := range updates {
+			updates[i] = Update{}
+		}
+		updates = updates[:0]
+		updateBytes = 0
+		folded = true
+		return nil
+	}
+	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
+		entryBytes := len(key) + len(value) + rebuildFoldUpdateOverhead
+		if len(updates) > 0 && (len(updates) >= maxUpdates || entryBytes > maxBytes-updateBytes) {
+			if err := flush(); err != nil {
+				return false, err
+			}
+		}
+		updates = append(updates, Update{
+			Key:   append([]byte(nil), key...),
+			Value: append([]byte(nil), value...),
+		})
+		updateBytes += entryBytes
+		return true, nil
+	}); err != nil {
+		return common.Hash{}, err
+	}
+	if err := flush(); err != nil {
+		return common.Hash{}, err
+	}
+	if folded {
+		return root, nil
+	}
+	return s.trie.Fold(nil)
 }
 
 // Update applies the incremental commitment updates through the fold engine

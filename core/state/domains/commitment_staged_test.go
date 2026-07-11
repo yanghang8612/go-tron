@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -134,6 +135,56 @@ func TestStagedCommitmentUpdateMatchesRebuild(t *testing.T) {
 	}
 	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(rebuildDB); err != nil || !ok || stored != rebuildRoot {
 		t.Fatalf("Rebuild store root row = %x ok=%v err=%v, want %x", stored, ok, err, rebuildRoot)
+	}
+}
+
+func TestStagedCommitmentRebuildFoldsLatestRowsInBoundedBatches(t *testing.T) {
+	const rows = 17
+	owner := common.Address{0x41, 0x59}
+
+	updateDB := rawdb.NewMemoryDatabase()
+	updates := make([]rawdb.StateCommitmentUpdate, 0, rows+1)
+	if err := rawdb.WriteStateKVGeneration(updateDB, owner, 0); err != nil {
+		t.Fatal(err)
+	}
+	updates = append(updates, rawdb.NewStateCommitmentPut(rawdb.StateKVGenerationCommitmentKey(owner), rawdb.EncodeStateKVGenerationValue(0)))
+	for i := 0; i < rows; i++ {
+		key := []byte(fmt.Sprintf("slot-%02d", i))
+		value := []byte(fmt.Sprintf("value-%02d", i))
+		if err := rawdb.WriteStateKVLatest(updateDB, owner, 0, kvdomains.ContractStorage, key, value); err != nil {
+			t.Fatalf("write latest row %d: %v", i, err)
+		}
+		updates = append(updates, rawdb.NewStateCommitmentPut(
+			rawdb.StateKVLatestCommitmentKey(owner, 0, kvdomains.ContractStorage, key),
+			rawdb.EncodeStateKVLatestValue(value),
+		))
+	}
+	want, err := NewStagedCommitmentStore(updateDB).Update(updates)
+	if err != nil {
+		t.Fatalf("incremental update: %v", err)
+	}
+
+	rebuildDB := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateKVGeneration(rebuildDB, owner, 0); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		key := []byte(fmt.Sprintf("slot-%02d", i))
+		value := []byte(fmt.Sprintf("value-%02d", i))
+		if err := rawdb.WriteStateKVLatest(rebuildDB, owner, 0, kvdomains.ContractStorage, key, value); err != nil {
+			t.Fatalf("write rebuild latest row %d: %v", i, err)
+		}
+	}
+	store := newStagedCommitmentStore(rebuildDB)
+	got, err := store.rebuildLatestDomainSources(2, 1<<20)
+	if err != nil {
+		t.Fatalf("bounded latest rebuild: %v", err)
+	}
+	if got != want {
+		t.Fatalf("bounded rebuild root %x, want incremental root %x", got, want)
+	}
+	if rederived, err := store.trie.Fold(nil); err != nil || rederived != want {
+		t.Fatalf("bounded rebuild branch root %x err=%v, want %x", rederived, err, want)
 	}
 }
 

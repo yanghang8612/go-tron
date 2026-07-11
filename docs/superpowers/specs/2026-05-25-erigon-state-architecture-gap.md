@@ -533,6 +533,10 @@ Status update (2026-05-27):
   incremental folds equal a from-scratch recompute), wired through the existing
   `LatestCommitmentStore` seam via `ApplyLatestCommitmentWithStore[AndRepair]`
   and selected at commit time by `StateDB.stagedCommitment()`.
+- Full latest-domain fallback rebuild now drains source rows through bounded
+  incremental folds (64K rows or roughly 32 MiB of copied key/value input per
+  fold). This follows Erigon's sharded streaming rebuild shape and avoids
+  materializing the entire latest state as `[]Update` before commitment recovery.
 - A normal commit folds incrementally over persisted branch state and does NOT
   trigger a full-latest rebuild (regression-guarded by the staged-engine
   "no bootstrap on normal commit" test).
