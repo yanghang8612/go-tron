@@ -1252,18 +1252,18 @@ func closeBatch(batch ethdb.Batch) {
 // semantics match Get — the active layer wins over committed layers (newest
 // first) which in turn override the base reader; tombstones mask base keys.
 //
-// Implementation snapshots the relevant entries at construction time so the
-// returned iterator does not have to hold any locks while iterating. This is
-// the right shape for prefix-bounded scans of small key sets (DP map at ~133
-// keys); a streaming/merging iterator would only matter for unbounded scans.
+// The overlay is captured at construction time, then merged lazily with the
+// base iterator. This keeps the buffer layer race-free without materializing a
+// whole disk prefix: archive history and derived-index scans can cover many
+// rows, while the matching in-memory overlay is normally small or empty.
 //
 // Implements ethdb.Iteratee so a *Buffer can be substituted anywhere a disk
 // store is expected — most importantly, state.LoadDynamicProperties can
 // recognize it and replace its 133 point Gets per applyBlock with one scan.
 func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	// Step 1: collect the overlay newest-first (in-flight newest→oldest, then
-	// committed newest→oldest) under a brief read lock. Step 2-4 (base merge +
-	// sort) are shared with LayerView via finishIterator.
+	// committed newest→oldest) under a brief read lock. The merge with the base
+	// iterator is shared with LayerView via finishIterator.
 	b.mu.RLock()
 	overlay := newOverlayState()
 	for i := len(b.inflight) - 1; i >= 0; i-- {
@@ -1330,105 +1330,156 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 }
 
 // finishIterator merges the resolved overlay with the base keys in the
-// [prefix, prefix+start) window and returns a snapshot iterator. Runs lock-free
-// (the base store has its own concurrency control; overlay is already a private
-// copy). Shared by Buffer.NewIterator and LayerView.NewIterator.
+// [prefix, prefix+start) window. It runs lock-free: the overlay is already a
+// private copy, while the base iterator owns the database snapshot/lifetime.
+// Shared by Buffer.NewIterator and LayerView.NewIterator.
 func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) ethdb.Iterator {
-	type kv struct{ key, value []byte }
-	var entries []kv
-	if b.base != nil {
-		if iter, ok := b.base.(ethdb.Iteratee); ok {
-			it := iter.NewIterator(prefix, start)
-			for it.Next() {
-				k := string(it.Key())
-				if op, masked := overlay.m[k]; masked {
-					if !op.deleted {
-						entries = append(entries, kv{
-							key:   append([]byte(nil), it.Key()...),
-							value: op.value,
-						})
-					}
-					delete(overlay.m, k)
-					continue
-				}
-				entries = append(entries, kv{
-					key:   append([]byte(nil), it.Key()...),
-					value: append([]byte(nil), it.Value()...),
-				})
-			}
-			err := it.Error()
-			it.Release()
-			if err != nil {
-				return &bufferIterator{err: err}
-			}
-		}
-		// If the base does not implement Iteratee, only the overlay is
-		// surfaced. This matches the contract that NewIterator on a reader
-		// with no iteration support cannot synthesize one.
+	entries := make([]bufferIteratorEntry, 0, len(overlay.m))
+	for key, op := range overlay.m {
+		entries = append(entries, bufferIteratorEntry{
+			key:     []byte(key),
+			value:   op.value,
+			deleted: op.deleted,
+		})
 	}
-	// Overlay-only keys (no disk hit). Tombstones for non-existent disk keys
-	// contribute nothing.
-	for k, op := range overlay.m {
-		if op.deleted {
-			continue
-		}
-		entries = append(entries, kv{key: []byte(k), value: op.value})
-	}
-
-	// Sort ascending by key. The disk leg arrives already sorted; the overlay
-	// leg is map-order. One sort over the combined list is cleaner than a
-	// merge-cursor for small N.
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].key, entries[j].key) < 0
 	})
-	out := make([]bufferIteratorEntry, len(entries))
-	for i, e := range entries {
-		out[i] = bufferIteratorEntry{key: e.key, value: e.value}
-	}
-	return &bufferIterator{entries: out, idx: -1}
-}
 
-// bufferIterator is a snapshot iterator returned by Buffer.NewIterator.
-// Holds no locks. Key/Value buffers are owned by the iterator; callers must
-// not mutate them (mirrors the ethdb.Iterator contract).
-type bufferIterator struct {
-	entries []bufferIteratorEntry
-	idx     int
-	err     error
+	var base ethdb.Iterator
+	if iter, ok := b.base.(ethdb.Iteratee); ok {
+		base = iter.NewIterator(prefix, start)
+	}
+	return &bufferMergeIterator{base: base, overlay: entries}
 }
 
 type bufferIteratorEntry struct {
 	key, value []byte
+	deleted    bool
 }
 
-func (it *bufferIterator) Next() bool {
-	if it.err != nil {
+// bufferMergeIterator lazily merges one immutable overlay snapshot with a
+// sorted base iterator. It never holds Buffer locks while callers scan; the
+// base iterator's own lifetime rules remain authoritative for base values.
+type bufferMergeIterator struct {
+	base    ethdb.Iterator
+	overlay []bufferIteratorEntry
+
+	overlayIndex int
+	baseValid    bool
+	started      bool
+	released     bool
+
+	consumeBase    bool
+	consumeOverlay bool
+	key, value     []byte
+}
+
+func (it *bufferMergeIterator) Next() bool {
+	if it == nil || it.released {
 		return false
 	}
-	if it.idx+1 >= len(it.entries) {
-		return false
+	if !it.started {
+		it.started = true
+		if it.base != nil {
+			it.baseValid = it.base.Next()
+		}
+	} else {
+		it.advancePending()
 	}
-	it.idx++
-	return true
+	it.key, it.value = nil, nil
+
+	for {
+		if it.baseValid && it.overlayIndex < len(it.overlay) {
+			overlay := it.overlay[it.overlayIndex]
+			cmp := bytes.Compare(it.base.Key(), overlay.key)
+			switch {
+			case cmp < 0:
+				it.key, it.value = it.base.Key(), it.base.Value()
+				it.consumeBase = true
+				return true
+			case cmp > 0:
+				if overlay.deleted {
+					it.consumeOverlay = true
+					it.advancePending()
+					continue
+				}
+				it.key, it.value = overlay.key, overlay.value
+				it.consumeOverlay = true
+				return true
+			default:
+				it.consumeBase, it.consumeOverlay = true, true
+				if overlay.deleted {
+					it.advancePending()
+					continue
+				}
+				it.key, it.value = overlay.key, overlay.value
+				return true
+			}
+		}
+		if it.baseValid {
+			it.key, it.value = it.base.Key(), it.base.Value()
+			it.consumeBase = true
+			return true
+		}
+		for it.overlayIndex < len(it.overlay) && it.overlay[it.overlayIndex].deleted {
+			it.overlayIndex++
+		}
+		if it.overlayIndex == len(it.overlay) {
+			return false
+		}
+		overlay := it.overlay[it.overlayIndex]
+		it.key, it.value = overlay.key, overlay.value
+		it.consumeOverlay = true
+		return true
+	}
 }
 
-func (it *bufferIterator) Error() error { return it.err }
+func (it *bufferMergeIterator) advancePending() {
+	if it.consumeBase {
+		it.consumeBase = false
+		if it.base != nil {
+			it.baseValid = it.base.Next()
+		} else {
+			it.baseValid = false
+		}
+	}
+	if it.consumeOverlay {
+		it.consumeOverlay = false
+		it.overlayIndex++
+	}
+}
 
-func (it *bufferIterator) Key() []byte {
-	if it.idx < 0 || it.idx >= len(it.entries) {
+func (it *bufferMergeIterator) Error() error {
+	if it == nil || it.base == nil {
 		return nil
 	}
-	return it.entries[it.idx].key
+	return it.base.Error()
 }
 
-func (it *bufferIterator) Value() []byte {
-	if it.idx < 0 || it.idx >= len(it.entries) {
+func (it *bufferMergeIterator) Key() []byte {
+	if it == nil || it.released {
 		return nil
 	}
-	return it.entries[it.idx].value
+	return it.key
 }
 
-func (it *bufferIterator) Release() {
-	it.entries = nil
-	it.idx = 0
+func (it *bufferMergeIterator) Value() []byte {
+	if it == nil || it.released {
+		return nil
+	}
+	return it.value
+}
+
+func (it *bufferMergeIterator) Release() {
+	if it == nil || it.released {
+		return
+	}
+	it.released = true
+	if it.base != nil {
+		it.base.Release()
+		it.base = nil
+	}
+	it.overlay = nil
+	it.key, it.value = nil, nil
 }

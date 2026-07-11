@@ -3,6 +3,7 @@ package blockbuffer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1088,6 +1089,55 @@ func TestBuffer_NewIterator_Release(t *testing.T) {
 	if k := it.Key(); k != nil {
 		t.Fatalf("Key after Release: got %v, want nil", k)
 	}
+}
+
+// A large archive/history scan must not copy the entire disk prefix when the
+// buffer has no matching overlay rows. The old iterator eagerly drained the
+// base iterator before returning, which made a broad history scan allocate one
+// copied key/value pair per hot row.
+func TestBuffer_NewIterator_LazilyStreamsBasePrefix(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	for i := 0; i < 128; i++ {
+		key := []byte(fmt.Sprintf("history-%03d", i))
+		if err := base.Put(key, []byte("value")); err != nil {
+			t.Fatalf("base.Put(%q): %v", key, err)
+		}
+	}
+	counting := &iteratorCountingReader{KeyValueStore: base}
+	b := New(counting)
+
+	it := b.NewIterator([]byte("history-"), nil)
+	defer it.Release()
+	if counting.nextCalls != 0 {
+		t.Fatalf("NewIterator eagerly advanced base %d times", counting.nextCalls)
+	}
+	if !it.Next() || string(it.Key()) != "history-000" {
+		t.Fatalf("first iterator item = %q, want history-000", it.Key())
+	}
+	if counting.nextCalls != 1 {
+		t.Fatalf("base Next calls after first item = %d, want 1", counting.nextCalls)
+	}
+}
+
+// iteratorCountingReader makes eager base-prefix draining observable without
+// relying on private iterator implementation details.
+type iteratorCountingReader struct {
+	ethdb.KeyValueStore
+	nextCalls int
+}
+
+func (r *iteratorCountingReader) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return &iteratorCountingIterator{Iterator: r.KeyValueStore.NewIterator(prefix, start), nextCalls: &r.nextCalls}
+}
+
+type iteratorCountingIterator struct {
+	ethdb.Iterator
+	nextCalls *int
+}
+
+func (it *iteratorCountingIterator) Next() bool {
+	(*it.nextCalls)++
+	return it.Iterator.Next()
 }
 
 func equalEntries(a, b [][2]string) bool {
