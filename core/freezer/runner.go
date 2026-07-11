@@ -331,9 +331,13 @@ type Runner struct {
 	cfg     Config
 	metrics runnerMetrics
 
+	wake chan struct{}
 	quit chan struct{}
 	done chan struct{}
 	once sync.Once
+
+	hookMu       sync.Mutex
+	advanceHooks []func()
 
 	// stats fields are atomics so Snapshot is lock-free against the running
 	// goroutine.
@@ -372,6 +376,7 @@ func New(chain ChainSource, fz FreezerStore, cfg Config) *Runner {
 		freezer:     fz,
 		cfg:         cfg,
 		metrics:     newRunnerMetrics(cfg.MetricsNamespace),
+		wake:        make(chan struct{}, 1),
 		quit:        make(chan struct{}),
 		done:        make(chan struct{}),
 		pauseCtx:    ctx,
@@ -416,6 +421,45 @@ func (r *Runner) Stop() error {
 	return nil
 }
 
+// RequestPass schedules one freezer pass without waiting for it. Requests
+// coalesce while a pass is pending, so sync completion can wake the freezer
+// without creating an unbounded queue during catch-up.
+func (r *Runner) RequestPass() {
+	if r == nil {
+		return
+	}
+	select {
+	case <-r.quit:
+		return
+	default:
+	}
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// AddChainFreezerAdvanceHook registers a callback that runs after a pass
+// advances or repairs the hash-bound ChainFreezer stage. Hooks run without
+// runner locks held and must return promptly.
+func (r *Runner) AddChainFreezerAdvanceHook(hook func()) {
+	if r == nil || hook == nil {
+		return
+	}
+	r.hookMu.Lock()
+	r.advanceHooks = append(r.advanceHooks, hook)
+	r.hookMu.Unlock()
+}
+
+func (r *Runner) notifyChainFreezerAdvance() {
+	r.hookMu.Lock()
+	hooks := append([]func(){}, r.advanceHooks...)
+	r.hookMu.Unlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
 // Snapshot returns a thread-safe copy of the runner's current counters.
 // Safe to call from any goroutine — every field is read from an atomic.
 func (r *Runner) Snapshot() Stats {
@@ -457,13 +501,17 @@ func (r *Runner) updateMetrics() {
 // produced enough blocks above the margin yet). Per-pass errors leave
 // the freezer in a consistent state thanks to ModifyAncients' atomic
 // rollback; the next pass simply retries.
-func (r *Runner) OnePass() (uint64, error) {
+func (r *Runner) OnePass() (frozen uint64, err error) {
 	start := time.Now()
+	stageAdvanced := false
 	defer func() {
 		r.lastPassUnixNano.Store(start.UnixNano())
 		r.lastPassDuration.Store(int64(time.Since(start)))
 		r.passesCompleted.Add(1)
 		r.updateMetrics()
+		if err == nil && stageAdvanced {
+			r.notifyChainFreezerAdvance()
+		}
 	}()
 
 	if !r.cfg.Enabled {
@@ -520,9 +568,11 @@ func (r *Runner) OnePass() (uint64, error) {
 			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
 				return 0, err
 			}
-			if err := r.writeChainFreezerStage(leftoverHi); err != nil {
+			advanced, err := r.writeChainFreezerStage(leftoverHi)
+			if err != nil {
 				return 0, err
 			}
+			stageAdvanced = stageAdvanced || advanced
 			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
 			if err := r.chain.DB().Compact(start, limit); err != nil {
 				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
@@ -532,9 +582,11 @@ func (r *Runner) OnePass() (uint64, error) {
 		}
 	}
 	if freezeFromN > 0 {
-		if err := r.writeChainFreezerStage(freezeFromN - 1); err != nil {
+		advanced, err := r.writeChainFreezerStage(freezeFromN - 1)
+		if err != nil {
 			return 0, err
 		}
+		stageAdvanced = stageAdvanced || advanced
 	}
 
 	if freezeTo < freezeFromN {
@@ -622,9 +674,11 @@ func (r *Runner) OnePass() (uint64, error) {
 	if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), freezeFromN, frozenHi); err != nil {
 		return 0, err
 	}
-	if err := r.writeChainFreezerStage(frozenHi); err != nil {
+	advanced, err := r.writeChainFreezerStage(frozenHi)
+	if err != nil {
 		return 0, err
 	}
+	stageAdvanced = stageAdvanced || advanced
 
 	// Phase 4: compact the freed range. Pebble turns DeleteRange into
 	// range tombstones, which are O(1) on the write path but only reclaim
@@ -645,7 +699,7 @@ func (r *Runner) OnePass() (uint64, error) {
 	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
 	// pass on the still-hot `b-` prefix — cheap because after a successful
 	// freeze the prefix only holds the post-margin window.
-	frozen := capExclusive - freezeFromN
+	frozen = capExclusive - freezeFromN
 	r.blocksFrozen.Add(frozen)
 	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
 	return frozen, nil
@@ -704,29 +758,32 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 	return block, ok, nil
 }
 
-func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
+func (r *Runner) writeChainFreezerStage(blockNum uint64) (bool, error) {
 	db := r.chain.DB()
 	blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(blockNum)
 	if err != nil {
-		return fmt.Errorf("freezer: read canonical hash for ChainFreezer stage %d: %w", blockNum, err)
+		return false, fmt.Errorf("freezer: read canonical hash for ChainFreezer stage %d: %w", blockNum, err)
 	}
 	if !ok || blockHash == (tcommon.Hash{}) {
-		return fmt.Errorf("freezer: cannot resolve block hash for ChainFreezer stage %d", blockNum)
+		return false, fmt.Errorf("freezer: cannot resolve block hash for ChainFreezer stage %d", blockNum)
 	}
 	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if ok && current.BlockNum > blockNum {
-		return fmt.Errorf("freezer: ChainFreezer stage %d is ahead of local ancient head %d", current.BlockNum, blockNum)
+		return false, fmt.Errorf("freezer: ChainFreezer stage %d is ahead of local ancient head %d", current.BlockNum, blockNum)
 	}
 	if ok && current.BlockNum == blockNum && current.HasBlockHash {
 		if current.BlockHash != blockHash {
-			return fmt.Errorf("freezer: ChainFreezer stage %d hash %x does not match canonical hash %x", blockNum, current.BlockHash, blockHash)
+			return false, fmt.Errorf("freezer: ChainFreezer stage %d hash %x does not match canonical hash %x", blockNum, current.BlockHash, blockHash)
 		}
-		return nil
+		return false, nil
 	}
-	return rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, blockNum, blockHash)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, blockNum, blockHash); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // loop is the goroutine. Fires once on Start so a fresh-install backlog
@@ -750,6 +807,12 @@ func (r *Runner) loop() {
 				log.Warn("Freezer: pass failed", "err", err)
 			} else if frozen > 0 {
 				log.Info("Freezer: pass frozen", "blocks", frozen)
+			}
+		case <-r.wake:
+			if frozen, err := r.OnePass(); err != nil {
+				log.Warn("Freezer: requested pass failed", "err", err)
+			} else if frozen > 0 {
+				log.Info("Freezer: requested pass frozen", "blocks", frozen)
 			}
 		case <-r.quit:
 			return

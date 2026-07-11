@@ -973,6 +973,19 @@ func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
 		MarginBlocks: 0,
 		BatchBlocks:  10,
 	})
+	advanced := 0
+	var hookStage uint64
+	hookStageOK := false
+	r.AddChainFreezerAdvanceHook(func() {
+		stage, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer)
+		if err != nil {
+			t.Errorf("read ChainFreezer stage from hook: %v", err)
+			return
+		}
+		advanced++
+		hookStage = stage
+		hookStageOK = ok
+	})
 	frozen, err := r.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
@@ -980,12 +993,67 @@ func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
 	if frozen != 0 {
 		t.Fatalf("OnePass frozen=%d, want no new rows", frozen)
 	}
+	if advanced != 1 {
+		t.Fatalf("ChainFreezer advance hooks = %d, want 1 after stage backfill", advanced)
+	}
+	if !hookStageOK || hookStage != 9 {
+		t.Fatalf("ChainFreezer stage from hook = %d/%v, want 9/true", hookStage, hookStageOK)
+	}
 	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 9 {
 		t.Fatalf("StageChainFreezer backfill = %d ok=%v err=%v, want 9", got, ok, err)
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(9) {
 		t.Fatalf("StageChainFreezer backfill row = %+v ok=%v err=%v, want hash-bound block9", row, ok, err)
 	}
+}
+
+func TestRunnerRequestPassRunsBeforeInterval(t *testing.T) {
+	fc := newFakeChain()
+	for n := uint64(0); n < 2; n++ {
+		fc.plantBlock(t, n)
+	}
+	f := newFreezer(t)
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		Interval:     time.Hour,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	advanced := make(chan struct{}, 1)
+	r.AddChainFreezerAdvanceHook(func() { advanced <- struct{}{} })
+	if err := r.Start(); err != nil {
+		t.Fatalf("start runner: %v", err)
+	}
+	defer func() {
+		if err := r.Stop(); err != nil {
+			t.Fatalf("stop runner: %v", err)
+		}
+	}()
+
+	waitForRunnerPasses(t, r, 1)
+	fc.setSolidified(1)
+	r.RequestPass()
+	r.RequestPass()
+	select {
+	case <-advanced:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for requested freezer pass")
+	}
+	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 1 {
+		t.Fatalf("StageChainFreezer after requested pass = %d ok=%v err=%v, want 1", got, ok, err)
+	}
+}
+
+func waitForRunnerPasses(t *testing.T, r *Runner, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if r.Snapshot().PassesCompleted >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d freezer passes", want)
 }
 
 func TestOnePassRejectsChainFreezerStageAheadOfAncientHead(t *testing.T) {

@@ -31,6 +31,7 @@ type ChainFreezerTailPruneLifecycle struct {
 	cold    rawdb.AncientReader
 	cfg     ChainFreezerTailPruneLifecycleConfig
 
+	wake chan struct{}
 	quit chan struct{}
 	done chan struct{}
 	once sync.Once
@@ -46,6 +47,7 @@ func NewChainFreezerTailPruneLifecycle(db ethdb.KeyValueReader, freezer ChainFre
 		freezer: freezer,
 		cold:    cold,
 		cfg:     cfg,
+		wake:    make(chan struct{}, 1),
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -85,6 +87,24 @@ func (l *ChainFreezerTailPruneLifecycle) Stop() error {
 	return nil
 }
 
+// RequestPass schedules one tail-prune pass without waiting for it. Requests
+// coalesce while a pass is pending so upstream snapshot completion can wake
+// this dependent stage safely.
+func (l *ChainFreezerTailPruneLifecycle) RequestPass() {
+	if l == nil {
+		return
+	}
+	select {
+	case <-l.quit:
+		return
+	default:
+	}
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (l *ChainFreezerTailPruneLifecycle) OnePass() (*ChainFreezerTailPruneApplyResult, error) {
 	if l == nil || l.db == nil || l.freezer == nil || l.cold == nil || l.cfg.RetainBlocks == 0 || l.cfg.HeadBlock == nil {
 		return nil, nil
@@ -103,6 +123,9 @@ func (l *ChainFreezerTailPruneLifecycle) loop() {
 		case <-ticker.C:
 			result, err := l.OnePass()
 			l.logPass("periodic", result, err)
+		case <-l.wake:
+			result, err := l.OnePass()
+			l.logPass("requested", result, err)
 		case <-l.quit:
 			return
 		}

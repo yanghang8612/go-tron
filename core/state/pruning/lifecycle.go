@@ -60,6 +60,9 @@ type SnapshotLifecycle struct {
 	quit     chan struct{}
 	done     chan struct{}
 	once     sync.Once
+
+	hookMu    sync.Mutex
+	passHooks []func()
 }
 
 func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *SnapshotLifecycle {
@@ -147,6 +150,27 @@ func (l *SnapshotLifecycle) RequestPass() {
 	}
 }
 
+// AddPassCompleteHook registers a callback after a full successful lifecycle
+// pass. Hooks run without lifecycle locks held and must return promptly; they
+// are intended to wake dependent maintenance stages.
+func (l *SnapshotLifecycle) AddPassCompleteHook(hook func()) {
+	if l == nil || hook == nil {
+		return
+	}
+	l.hookMu.Lock()
+	l.passHooks = append(l.passHooks, hook)
+	l.hookMu.Unlock()
+}
+
+func (l *SnapshotLifecycle) notifyPassComplete() {
+	l.hookMu.Lock()
+	hooks := append([]func(){}, l.passHooks...)
+	l.hookMu.Unlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
 func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	if l == nil {
 		return SnapshotLifecyclePass{}, nil
@@ -214,6 +238,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			lifecycleLog.Info("Signed snapshot catalog published")
 		}
 	}
+	l.notifyPassComplete()
 	return out, nil
 }
 

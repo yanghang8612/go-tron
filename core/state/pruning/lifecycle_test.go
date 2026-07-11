@@ -458,6 +458,24 @@ func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecyclePassCompleteHookRunsAfterSuccess(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+	})
+	completed := 0
+	lifecycle.AddPassCompleteHook(func() { completed++ })
+	if _, err := lifecycle.OnePass(); err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if completed != 1 {
+		t.Fatalf("completed hooks = %d, want 1", completed)
+	}
+}
+
 func waitLifecyclePass(t *testing.T, entered <-chan int, want int) {
 	t.Helper()
 	select {

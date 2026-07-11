@@ -729,6 +729,7 @@ func gtron(ctx *cli.Context) error {
 	sectionBloomPruneLifecycleWired := false
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
+	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
 	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
 		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
@@ -741,7 +742,7 @@ func gtron(ctx *cli.Context) error {
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
-		domainLifecycle := statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
+		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
 				Dir:                stateSnapshotDir,
 				Enabled:            chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
@@ -858,7 +859,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
 		retainBlocks := statesnapshots.EffectiveChainFreezerTailRetainBlocks(chainConfig.EffectiveHistoryPruneWindow())
-		stack.RegisterLifecycle(statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
+		chainFreezerTailLifecycle := statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
 			RetainBlocks: retainBlocks,
 			HeadBlock: func() uint64 {
 				if head := bc.CurrentBlock(); head != nil {
@@ -866,7 +867,11 @@ func gtron(ctx *cli.Context) error {
 				}
 				return 0
 			},
-		}))
+		})
+		stack.RegisterLifecycle(chainFreezerTailLifecycle)
+		if domainLifecycle != nil {
+			domainLifecycle.AddPassCompleteHook(chainFreezerTailLifecycle.RequestPass)
+		}
 		log.Info("Chain freezer tail prune lifecycle enabled",
 			"mode", chainConfig.EffectiveHistoryMode(),
 			"retainBlocks", retainBlocks,
@@ -876,6 +881,10 @@ func gtron(ctx *cli.Context) error {
 	if ancientStore != nil && freezerCfg.Enabled {
 		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
+			syncService.AddSyncCompleteHook(freezerRunner.RequestPass)
+			if domainLifecycle != nil {
+				freezerRunner.AddChainFreezerAdvanceHook(domainLifecycle.RequestPass)
+			}
 			stack.RegisterLifecycle(freezerRunner)
 			log.Info("Chain freezer enabled",
 				"ancient", ancientPath,
