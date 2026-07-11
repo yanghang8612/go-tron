@@ -106,12 +106,9 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 //     renormalizes and persists the window (V2/optimized under
 //     supportCancelAllUnfreezeV2).
 func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, addr tcommon.Address, acct *types.Account, cost, now int64) bool {
-	netLimit := availableAccountNet(acct, dynProps)
-	if netLimit <= 0 {
-		return false
-	}
 	netUsage := statedb.GetNetUsage(addr)
 	lastTime := statedb.GetLatestConsumeTime(addr)
+	netLimit := availableAccountNet(acct, dynProps)
 
 	if !dynProps.SupportUnfreezeDelay() {
 		recovered := recoverUsageForDP(netUsage, lastTime, now, dynProps)
@@ -388,9 +385,6 @@ func resolveBandwidthAsset(statedb *state.StateDB, dynProps *state.DynamicProper
 // `total_create_account_cost` is incremented.
 func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (*BandwidthResult, error) {
 	ratio := dynProps.CreateNewAccountBandwidthRate()
-	if ratio <= 0 {
-		ratio = 1
-	}
 	netCost := txSize * ratio
 
 	acct := statedb.GetAccount(sender)
@@ -400,11 +394,6 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	}
 
 	fee := dynProps.CreateAccountFee()
-	if fee <= 0 {
-		// Some private chains may run with zero fee; allow the tx through
-		// rather than failing it on a zero-cost path.
-		return &BandwidthResult{}, nil
-	}
 	if err := statedb.SubBalance(sender, fee); err != nil {
 		return nil, fmt.Errorf("insufficient balance for create_account_fee: need %d sun", fee)
 	}
