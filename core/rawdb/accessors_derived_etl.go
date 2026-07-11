@@ -82,14 +82,7 @@ func (c *DerivedIndexCollector) PutTransactionInfosByBlock(blockNum uint64, info
 	if err := validateTransactionInfosForKey(blockNum, infos, "collect transaction infos by block"); err != nil {
 		return err
 	}
-	ret := &corepb.TransactionRet{
-		BlockNumber:     int64(blockNum),
-		Transactioninfo: infos,
-	}
-	if len(infos) > 0 {
-		ret.BlockTimeStamp = infos[0].BlockTimeStamp
-	}
-	data, err := proto.Marshal(ret)
+	data, err := marshalTransactionInfosByBlock(blockNum, infos, transactionInfosBlockTimestamp(infos))
 	if err != nil {
 		return err
 	}
@@ -97,14 +90,21 @@ func (c *DerivedIndexCollector) PutTransactionInfosByBlock(blockNum uint64, info
 }
 
 // PutCompactTransactionInfosByBlock writes a verified canonical receipt row
-// without redundant per-transaction IDs. The matching canonical block body is
-// the source of those hashes when a block-level reader needs to return them.
+// without redundant per-transaction IDs or block metadata. The matching block
+// body and TransactionRet header provide those fields when readers need them.
 func (c *DerivedIndexCollector) PutCompactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo) error {
-	compact, err := compactTransactionInfosByBlock(blockNum, infos, "collect compact transaction infos by block")
+	if c == nil || c.collector == nil {
+		return errors.New("rawdb: nil derived index collector")
+	}
+	compact, blockTimestamp, err := compactTransactionInfosByBlock(blockNum, infos, "collect compact transaction infos by block")
 	if err != nil {
 		return err
 	}
-	return c.PutTransactionInfosByBlock(blockNum, compact)
+	data, err := marshalTransactionInfosByBlock(blockNum, compact, blockTimestamp)
+	if err != nil {
+		return err
+	}
+	return c.collector.Put(txInfoBlockKey(blockNum), data)
 }
 
 func (c *DerivedIndexCollector) PutTransactionIndex(txHash []byte, blockNum uint64) error {

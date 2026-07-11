@@ -541,6 +541,9 @@ func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *tes
 	if !bytes.Equal(infos[0].Id, txID) {
 		t.Fatalf("input TransactionInfo ID = %x, want unchanged %x", infos[0].Id, txID)
 	}
+	if infos[0].BlockNumber != 5 || infos[0].BlockTimeStamp != 15_000 {
+		t.Fatalf("input TransactionInfo block metadata = %d/%d, want unchanged 5/15000", infos[0].BlockNumber, infos[0].BlockTimeStamp)
+	}
 	data, err := db.Get(txInfoBlockKey(5))
 	if err != nil {
 		t.Fatalf("read compact TransactionRet: %v", err)
@@ -548,9 +551,32 @@ func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *tes
 	if len(data) >= len(full) {
 		t.Fatalf("compact TransactionRet length = %d, want less than full length %d", len(data), len(full))
 	}
+	storedRaw := &corepb.TransactionRet{}
+	if err := proto.Unmarshal(data, storedRaw); err != nil {
+		t.Fatalf("unmarshal compact TransactionRet: %v", err)
+	}
+	if storedRaw.BlockNumber != 5 || storedRaw.BlockTimeStamp != 15_000 || len(storedRaw.Transactioninfo) != 1 ||
+		len(storedRaw.Transactioninfo[0].Id) != 0 || storedRaw.Transactioninfo[0].BlockNumber != 0 || storedRaw.Transactioninfo[0].BlockTimeStamp != 0 {
+		t.Fatalf("stored compact TransactionRet = %+v, want block metadata only on TransactionRet", storedRaw)
+	}
 	stored, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
-	if err != nil || !ok || len(stored) != 1 || len(stored[0].Id) != 0 || stored[0].Fee != 400 {
-		t.Fatalf("stored compact TransactionRet = %+v/%v/%v, want one ID-free receipt", stored, ok, err)
+	if err != nil || !ok || len(stored) != 1 || len(stored[0].Id) != 0 || stored[0].Fee != 400 ||
+		stored[0].BlockNumber != 5 || stored[0].BlockTimeStamp != 15_000 {
+		t.Fatalf("decoded compact TransactionRet = %+v/%v/%v, want restored block metadata and empty ID", stored, ok, err)
+	}
+}
+
+func TestWriteCompactTransactionInfosByBlockRejectsMismatchedTimestamp(t *testing.T) {
+	db := NewMemoryChainDB()
+	err := WriteCompactTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{
+		{BlockNumber: 5, BlockTimeStamp: 15_000},
+		{BlockNumber: 5, BlockTimeStamp: 15_001},
+	})
+	if err == nil || !strings.Contains(err.Error(), "block timestamp 15001") {
+		t.Fatalf("WriteCompactTransactionInfosByBlock error = %v, want timestamp mismatch", err)
+	}
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("ReadTransactionInfosByBlock after rejected compact write = %+v, want nil", got)
 	}
 }
 

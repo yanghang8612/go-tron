@@ -279,45 +279,71 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 	if err := validateTransactionInfosForKey(blockNum, infos, "write transaction infos by block"); err != nil {
 		return err
 	}
-	ret := &corepb.TransactionRet{
-		BlockNumber:     int64(blockNum),
-		Transactioninfo: infos,
-	}
-	if len(infos) > 0 {
-		ret.BlockTimeStamp = infos[0].BlockTimeStamp
-	}
-	data, err := proto.Marshal(ret)
+	return writeTransactionInfosByBlock(db, blockNum, infos, transactionInfosBlockTimestamp(infos))
+}
+
+func writeTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) error {
+	data, err := marshalTransactionInfosByBlock(blockNum, infos, blockTimestamp)
 	if err != nil {
 		return err
 	}
 	return db.Put(txInfoBlockKey(blockNum), data)
 }
 
+func marshalTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) ([]byte, error) {
+	ret := &corepb.TransactionRet{
+		BlockNumber:     int64(blockNum),
+		BlockTimeStamp:  blockTimestamp,
+		Transactioninfo: infos,
+	}
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 // WriteCompactTransactionInfosByBlock stores a block's receipt payload without
-// the per-transaction Id field. Each Id duplicates the canonical block body's
-// transaction hash at the same position, so canonical execution and verified
-// rebuilds can save that space while block-level API readers reconstruct it
-// from the body.
+// per-transaction Id, block number, or timestamp fields. The ID duplicates the
+// canonical block body's transaction hash at the same position, while the
+// block metadata is retained once in TransactionRet. Canonical execution and
+// verified rebuilds can therefore save that space while readers reconstruct it.
 // The input slice and its messages are never modified.
 func WriteCompactTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
-	compact, err := compactTransactionInfosByBlock(blockNum, infos, "write compact transaction infos by block")
+	compact, blockTimestamp, err := compactTransactionInfosByBlock(blockNum, infos, "write compact transaction infos by block")
 	if err != nil {
 		return err
 	}
-	return WriteTransactionInfosByBlock(db, blockNum, compact)
+	return writeTransactionInfosByBlock(db, blockNum, compact, blockTimestamp)
 }
 
-func compactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, context string) ([]*corepb.TransactionInfo, error) {
+func compactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, context string) ([]*corepb.TransactionInfo, int64, error) {
 	if err := validateTransactionInfosForKey(blockNum, infos, context); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	compact := make([]*corepb.TransactionInfo, len(infos))
+	var blockTimestamp int64
 	for i, info := range infos {
+		if info.BlockTimeStamp != 0 {
+			if blockTimestamp != 0 && blockTimestamp != info.BlockTimeStamp {
+				return nil, 0, fmt.Errorf("rawdb: transaction info block timestamp %d at block %d index %d during %s does not match timestamp %d", info.BlockTimeStamp, blockNum, i, context, blockTimestamp)
+			}
+			blockTimestamp = info.BlockTimeStamp
+		}
 		cloned := proto.Clone(info).(*corepb.TransactionInfo)
 		cloned.Id = nil
+		cloned.BlockNumber = 0
+		cloned.BlockTimeStamp = 0
 		compact[i] = cloned
 	}
-	return compact, nil
+	return compact, blockTimestamp, nil
+}
+
+func transactionInfosBlockTimestamp(infos []*corepb.TransactionInfo) int64 {
+	if len(infos) == 0 {
+		return 0
+	}
+	return infos[0].BlockTimeStamp
 }
 
 // ReadTransactionInfosByBlock retrieves all TransactionInfos for a block
@@ -378,6 +404,12 @@ func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.Trans
 		return nil, fmt.Errorf("rawdb: transaction ret block number %d does not match key block %d", ret.BlockNumber, blockNum)
 	}
 	for txIndex, info := range ret.Transactioninfo {
+		if info != nil && info.BlockNumber == 0 {
+			info.BlockNumber = int64(blockNum)
+		}
+		if info != nil && info.BlockTimeStamp == 0 && ret.BlockTimeStamp != 0 {
+			info.BlockTimeStamp = ret.BlockTimeStamp
+		}
 		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, "read transaction infos by block"); err != nil {
 			return nil, err
 		}
