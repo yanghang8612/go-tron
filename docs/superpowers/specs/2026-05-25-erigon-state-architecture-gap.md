@@ -292,12 +292,14 @@ Status update:
 - Binary history restore also streams the explicit block-to-tx-range table, so
   bootstrap does not open a whole history segment merely to recover ranges for
   blocks with no state changes.
-- Cold block-to-state-tx-range lookup now uses the binary `.idx` file to
-  lower-bound by block and `ReadAt` only the candidate state-domain-change
-  records. `Manager.StateTxRangeForBlock` no longer opens and decodes an entire
-  history segment to derive a block's txNum range.
+- Cold block-to-state-tx-range lookup binary-searches the fixed-width,
+  block-sorted range table with `ReadAt`; legacy v1 files retain the `.idx`
+  record lookup fallback. `Manager.StateTxRangeForBlock` no longer opens and
+  decodes an entire history segment to derive a block's txNum range.
 - The checker validates `.idx` and `.kv` by streaming/random reads. Full
-  accessor decoding remains as a test/debug helper.
+  accessor decoding remains as a test/debug helper. Companion verification also
+  streams the range table, derives contiguous `.idx` coverage without a record
+  bitmap, and uses a one-bit-per-record `.kv` coverage bitmap.
 - The checker validates binary history `.seg` files by streaming record frames
   from disk. `CheckRegisteredSegment` no longer calls
   `OpenStateDomainChangeSegment` for binary history, so pruning checks validate

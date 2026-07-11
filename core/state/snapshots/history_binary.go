@@ -1152,7 +1152,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 		return err
 	}
 	defer segment.Close()
-	_, recordOffset, err := readStateDomainChangeBinaryTxRangeTableAt(segment, segmentSize, historyRef, segmentHeader)
+	recordOffset, err := validateStateDomainChangeBinaryTxRangeTableAt(segment, segmentSize, historyRef, segmentHeader)
 	if err != nil {
 		return err
 	}
@@ -1190,7 +1190,6 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 }
 
 func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64) error {
-	seen := make([]bool, int(recordCount))
 	expectedRecordIndex := uint64(0)
 	expectedOffset := recordOffset
 	for i := uint64(0); i < indexCount; i++ {
@@ -1216,10 +1215,6 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 		}
 		offset := entry.offset
 		for j := uint64(0); j < entry.count; j++ {
-			recordIndex := entry.recordIndex + j
-			if seen[recordIndex] {
-				return fmt.Errorf("snapshots: state-domain-change binary index %q covers segment record %d more than once", indexRef.Path, recordIndex)
-			}
 			change, next, err := readStateDomainChangeBinaryRecordAtBounded(segment, offset, segmentSize)
 			if err != nil {
 				return err
@@ -1227,22 +1222,26 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 			if change.TxNum != entry.txNum {
 				return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d read segment tx %d", indexRef.Path, entry.txNum, change.TxNum)
 			}
-			seen[recordIndex] = true
 			offset = next
 		}
 		expectedRecordIndex += entry.count
 		expectedOffset = offset
 	}
-	for i, ok := range seen {
-		if !ok {
-			return fmt.Errorf("snapshots: state-domain-change binary index %q missing segment record %d", indexRef.Path, i)
-		}
+	if expectedRecordIndex != recordCount {
+		return fmt.Errorf("snapshots: state-domain-change binary index %q missing segment record %d", indexRef.Path, expectedRecordIndex)
 	}
 	return nil
 }
 
 func verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, accessor io.ReaderAt, accessorSize, accessorCount uint64) error {
-	seen := make([]bool, int(recordCount))
+	if accessorCount != recordCount {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q count %d, want segment count %d", accessorRef.Path, accessorCount, recordCount)
+	}
+	seenWords := recordCount / 64
+	if recordCount%64 != 0 {
+		seenWords++
+	}
+	seen := make([]uint64, seenWords)
 	source := stateDomainChangeBinaryCompactionSource{
 		history:        historyRef,
 		accessor:       accessorRef,
@@ -1260,19 +1259,18 @@ func verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef Segme
 		if entry.recordIndex >= recordCount {
 			return fmt.Errorf("snapshots: state-domain-change binary accessor %q record index %d outside segment count %d", accessorRef.Path, entry.recordIndex, recordCount)
 		}
-		if seen[entry.recordIndex] {
+		word := entry.recordIndex / 64
+		mask := uint64(1) << (entry.recordIndex % 64)
+		if seen[word]&mask != 0 {
 			return fmt.Errorf("snapshots: state-domain-change binary accessor %q covers segment record %d more than once", accessorRef.Path, entry.recordIndex)
 		}
 		if err := validateStateDomainChangeBinaryAccessorEntryAgainstSegment(source, segment, segmentSize, entry); err != nil {
 			return err
 		}
-		seen[entry.recordIndex] = true
+		seen[word] |= mask
 	}
-	for i, ok := range seen {
-		if !ok {
-			return fmt.Errorf("snapshots: state-domain-change binary accessor %q missing segment record %d", accessorRef.Path, i)
-		}
-	}
+	// accessorCount equals recordCount and every in-range record index is unique,
+	// therefore every segment record is covered without a second full scan.
 	return nil
 }
 
