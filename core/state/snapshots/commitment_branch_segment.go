@@ -1,11 +1,14 @@
 package snapshots
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,23 +37,12 @@ type commitmentBranchEntry struct {
 	Encoded []byte `json:"encoded"`
 }
 
-// commitmentBranchSegment is the JSON document persisted for a branch family
-// segment. It mirrors the shape of LatestSegment but is deliberately
-// self-contained: it does not route through LatestSegment.Validate or the
-// dataset registry.
-type commitmentBranchSegment struct {
-	Version   uint32                  `json:"version"`
-	Dataset   SegmentDataset          `json:"dataset"`
-	FromTxNum uint64                  `json:"fromTxNum"`
-	ToTxNum   uint64                  `json:"toTxNum"`
-	Entries   []commitmentBranchEntry `json:"entries"`
-}
-
 // CommitmentBranchSegment is an opened, validated branch segment ready for
-// iteration.
+// streaming iteration. It retains only the segment location; branch rows stay
+// on disk until Iterate consumes them.
 type CommitmentBranchSegment struct {
-	ref SegmentRef
-	seg *commitmentBranchSegment
+	ref  SegmentRef
+	path string
 }
 
 // BuildCommitmentBranchSegmentFromDB streams every state-commitment-branch-v1-
@@ -66,39 +58,10 @@ func BuildCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 	if toTxNum < fromTxNum {
 		return SegmentRef{}, fmt.Errorf("snapshots: branch segment range [%d,%d] is inverted", fromTxNum, toTxNum)
 	}
-	seg := &commitmentBranchSegment{
-		Version:   CommitmentBranchSegmentVersion,
-		Dataset:   SegmentDatasetCommitmentBranch,
-		FromTxNum: fromTxNum,
-		ToTxNum:   toTxNum,
-	}
-	if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
-		seg.Entries = append(seg.Entries, commitmentBranchEntry{
-			Prefix:  append([]byte(nil), prefix...),
-			Encoded: append([]byte(nil), encoded...),
-		})
-		return true, nil
-	}); err != nil {
-		return SegmentRef{}, err
-	}
-	return writeCommitmentBranchSegment(dir, relPath, seg, fromTxNum, toTxNum)
+	return writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum)
 }
 
-func writeCommitmentBranchSegment(dir, relPath string, seg *commitmentBranchSegment, fromTxNum, toTxNum uint64) (SegmentRef, error) {
-	data, err := json.Marshal(seg)
-	if err != nil {
-		return SegmentRef{}, err
-	}
-	sum := sha256.Sum256(data)
-	ref := SegmentRef{
-		Dataset:   SegmentDatasetCommitmentBranch,
-		Kind:      SegmentLatest,
-		FromTxNum: fromTxNum,
-		ToTxNum:   toTxNum,
-		Path:      filepath.ToSlash(relPath),
-		Size:      uint64(len(data)),
-		Checksum:  "sha256:" + hex.EncodeToString(sum[:]),
-	}
+func writeCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64) (SegmentRef, error) {
 	abs := filepath.Join(dir, relPath)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return SegmentRef{}, err
@@ -109,7 +72,39 @@ func writeCommitmentBranchSegment(dir, relPath string, seg *commitmentBranchSegm
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
+
+	hash := sha256.New()
+	counter := &countingWriter{w: io.MultiWriter(tmp, hash)}
+	writer := bufio.NewWriterSize(counter, 1<<20)
+	if _, err := fmt.Fprintf(writer, `{"version":%d,"dataset":%q,"fromTxNum":%d,"toTxNum":%d,"entries":[`, CommitmentBranchSegmentVersion, SegmentDatasetCommitmentBranch, fromTxNum, toTxNum); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	first := true
+	if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+		if !first {
+			if err := writer.WriteByte(','); err != nil {
+				return false, err
+			}
+		}
+		first = false
+		entry, err := json.Marshal(commitmentBranchEntry{Prefix: prefix, Encoded: encoded})
+		if err != nil {
+			return false, err
+		}
+		if _, err := writer.Write(entry); err != nil {
+			return false, err
+		}
+		return true, nil
+	}); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if _, err := writer.WriteString(`]}`); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := writer.Flush(); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
@@ -120,14 +115,30 @@ func writeCommitmentBranchSegment(dir, relPath string, seg *commitmentBranchSegm
 	if err := tmp.Close(); err != nil {
 		return SegmentRef{}, err
 	}
-	if err := os.Rename(tmpName, abs); err != nil {
+
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetCommitmentBranch,
+		Kind:      SegmentLatest,
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+		Path:      filepath.ToSlash(relPath),
+		Size:      counter.n,
+		Checksum:  "sha256:" + hex.EncodeToString(hash.Sum(nil)),
+	}
+	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
+	finalAbs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
+		return SegmentRef{}, err
+	}
+	if err := os.Rename(tmpName, finalAbs); err != nil {
 		return SegmentRef{}, err
 	}
 	return ref, nil
 }
 
-// OpenCommitmentBranchSegment loads and validates the branch segment at
-// dir/ref.Path.
+// OpenCommitmentBranchSegment validates the branch segment at dir/ref.Path.
+// The returned handle keeps no entries in memory; Iterate opens and streams the
+// verified segment file when its rows are needed.
 func OpenCommitmentBranchSegment(dir string, ref SegmentRef) (*CommitmentBranchSegment, error) {
 	if ref.Dataset != SegmentDatasetCommitmentBranch {
 		return nil, fmt.Errorf("snapshots: segment %q dataset %q, want %q", ref.Path, ref.Dataset, SegmentDatasetCommitmentBranch)
@@ -135,49 +146,156 @@ func OpenCommitmentBranchSegment(dir string, ref SegmentRef) (*CommitmentBranchS
 	if err := validateBranchSegmentPath(ref.Path); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ref.Path))
-	if err != nil {
+	path := filepath.Join(dir, ref.Path)
+	if err := streamCommitmentBranchSegment(path, ref, true, nil); err != nil {
 		return nil, err
 	}
-	if ref.Size != 0 && uint64(len(data)) != ref.Size {
-		return nil, fmt.Errorf("snapshots: branch segment %q size %d, want %d", ref.Path, len(data), ref.Size)
-	}
-	if ref.Checksum != "" {
-		sum := sha256.Sum256(data)
-		want := "sha256:" + hex.EncodeToString(sum[:])
-		if !strings.EqualFold(ref.Checksum, want) {
-			return nil, fmt.Errorf("snapshots: branch segment %q checksum %s, want %s", ref.Path, want, ref.Checksum)
-		}
-	}
-	var seg commitmentBranchSegment
-	if err := json.Unmarshal(data, &seg); err != nil {
-		return nil, err
-	}
-	if seg.Version != CommitmentBranchSegmentVersion {
-		return nil, fmt.Errorf("snapshots: unsupported branch segment version %d", seg.Version)
-	}
-	if seg.Dataset != SegmentDatasetCommitmentBranch {
-		return nil, fmt.Errorf("snapshots: branch segment %q dataset %q", ref.Path, seg.Dataset)
-	}
-	if seg.FromTxNum != ref.FromTxNum || seg.ToTxNum != ref.ToTxNum {
-		return nil, fmt.Errorf("snapshots: branch segment %q metadata does not match manifest", ref.Path)
-	}
-	return &CommitmentBranchSegment{ref: ref, seg: &seg}, nil
+	return &CommitmentBranchSegment{ref: ref, path: path}, nil
 }
 
 // Iterate calls fn with each (prefix, encoded) branch row in the segment.
 func (s *CommitmentBranchSegment) Iterate(fn func(prefix, encoded []byte) (bool, error)) error {
-	if s == nil || s.seg == nil {
+	if s == nil || s.path == "" {
 		return nil
 	}
-	for _, entry := range s.seg.Entries {
-		cont, err := fn(append([]byte(nil), entry.Prefix...), append([]byte(nil), entry.Encoded...))
+	return streamCommitmentBranchSegment(s.path, s.ref, false, fn)
+}
+
+// streamCommitmentBranchSegment parses the branch document one field and one
+// entry at a time. Open calls it with verifyChecksum before handing the segment
+// to a caller, so Restore cannot persist rows from a corrupt snapshot. Iterate
+// then performs a second, bounded-memory pass over its immutable file.
+func streamCommitmentBranchSegment(path string, ref SegmentRef, verifyChecksum bool, fn func(prefix, encoded []byte) (bool, error)) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if ref.Size != 0 && uint64(stat.Size()) != ref.Size {
+		return fmt.Errorf("snapshots: branch segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
+	}
+
+	reader := io.Reader(file)
+	var checksum hash.Hash
+	if verifyChecksum && ref.Checksum != "" {
+		checksum = sha256.New()
+		reader = io.TeeReader(reader, checksum)
+	}
+	decoder := json.NewDecoder(reader)
+	start, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("snapshots: decode branch segment %q: %w", ref.Path, err)
+	}
+	if delim, ok := start.(json.Delim); !ok || delim != '{' {
+		return fmt.Errorf("snapshots: branch segment %q must contain an object", ref.Path)
+	}
+
+	var version uint32
+	var dataset SegmentDataset
+	var fromTxNum, toTxNum uint64
+	for decoder.More() {
+		field, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("snapshots: decode branch segment %q field: %w", ref.Path, err)
+		}
+		name, ok := field.(string)
+		if !ok {
+			return fmt.Errorf("snapshots: branch segment %q contains a non-string field", ref.Path)
+		}
+		switch name {
+		case "version":
+			err = decoder.Decode(&version)
+		case "dataset":
+			err = decoder.Decode(&dataset)
+		case "fromTxNum":
+			err = decoder.Decode(&fromTxNum)
+		case "toTxNum":
+			err = decoder.Decode(&toTxNum)
+		case "entries":
+			err = streamCommitmentBranchEntries(decoder, fn)
+		default:
+			var ignored json.RawMessage
+			err = decoder.Decode(&ignored)
+		}
+		if err != nil {
+			return fmt.Errorf("snapshots: decode branch segment %q field %q: %w", ref.Path, name, err)
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("snapshots: decode branch segment %q end: %w", ref.Path, err)
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != '}' {
+		return fmt.Errorf("snapshots: branch segment %q has an invalid object terminator", ref.Path)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("snapshots: branch segment %q has trailing JSON data", ref.Path)
+		}
+		return fmt.Errorf("snapshots: decode branch segment %q trailing data: %w", ref.Path, err)
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return err
+	}
+	if checksum != nil {
+		want := "sha256:" + hex.EncodeToString(checksum.Sum(nil))
+		if !strings.EqualFold(ref.Checksum, want) {
+			return fmt.Errorf("snapshots: branch segment %q checksum %s, want %s", ref.Path, want, ref.Checksum)
+		}
+	}
+	if version != CommitmentBranchSegmentVersion {
+		return fmt.Errorf("snapshots: unsupported branch segment version %d", version)
+	}
+	if dataset != SegmentDatasetCommitmentBranch {
+		return fmt.Errorf("snapshots: branch segment %q dataset %q", ref.Path, dataset)
+	}
+	if fromTxNum != ref.FromTxNum || toTxNum != ref.ToTxNum {
+		return fmt.Errorf("snapshots: branch segment %q metadata does not match manifest", ref.Path)
+	}
+	return nil
+}
+
+func streamCommitmentBranchEntries(decoder *json.Decoder, fn func(prefix, encoded []byte) (bool, error)) error {
+	start, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if start == nil {
+		return nil
+	}
+	if delim, ok := start.(json.Delim); !ok || delim != '[' {
+		return errors.New("entries must be an array")
+	}
+	callFn := fn != nil
+	for decoder.More() {
+		var entry commitmentBranchEntry
+		if err := decoder.Decode(&entry); err != nil {
+			return err
+		}
+		if !callFn {
+			continue
+		}
+		cont, err := fn(entry.Prefix, entry.Encoded)
 		if err != nil {
 			return err
 		}
 		if !cont {
-			return nil
+			// The caller asked to stop receiving rows, but the surrounding
+			// document still has to be consumed so the parser remains aligned.
+			callFn = false
 		}
+	}
+	end, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != ']' {
+		return errors.New("entries array has an invalid terminator")
 	}
 	return nil
 }
@@ -260,8 +378,8 @@ func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDoma
 	return []SegmentRef{ref}, nil
 }
 
-// checkCommitmentBranchSegment validates a published branch segment by opening
-// it (checksum + metadata) — the registry CheckLatest hook for the family.
+// checkCommitmentBranchSegment validates a published branch segment without
+// materializing its branch rows — the registry CheckLatest hook for the family.
 func checkCommitmentBranchSegment(dir string, ref SegmentRef) error {
 	_, err := OpenCommitmentBranchSegment(dir, ref)
 	return err

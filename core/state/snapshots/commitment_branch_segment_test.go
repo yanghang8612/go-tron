@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -68,6 +70,9 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 	if ref.Size == 0 || ref.Checksum == "" {
 		t.Fatalf("ref missing size/checksum: %+v", ref)
 	}
+	if ref.Path == "commitment/branches-10-10.json" {
+		t.Fatalf("branch segment path %q is not content addressed", ref.Path)
+	}
 
 	got := map[string][]byte{}
 	seg, err := OpenCommitmentBranchSegment(dir, ref)
@@ -92,6 +97,55 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 		if !bytes.Equal(gv, wv) {
 			t.Fatalf("round-trip prefix %x value = %x, want %x", []byte(k), gv, wv)
 		}
+	}
+}
+
+func TestCommitmentBranchSegmentRejectsTrailingJSON(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+	dir := t.TempDir()
+	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-10-10.json", 10, 10)
+	if err != nil {
+		t.Fatalf("build branch segment: %v", err)
+	}
+
+	path := filepath.Join(dir, ref.Path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read branch segment: %v", err)
+	}
+	data = append(data, '\n', '{', '}')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("append trailing JSON: %v", err)
+	}
+	ref.Size = uint64(len(data))
+	ref.Checksum = checksumBytes(data)
+	if _, err := OpenCommitmentBranchSegment(dir, ref); err == nil {
+		t.Fatal("opened branch segment with trailing JSON")
+	}
+}
+
+func TestCommitmentBranchSegmentIterationCanStopEarly(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+	dir := t.TempDir()
+	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-10-10.json", 10, 10)
+	if err != nil {
+		t.Fatalf("build branch segment: %v", err)
+	}
+	seg, err := OpenCommitmentBranchSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("open branch segment: %v", err)
+	}
+	called := 0
+	if err := seg.Iterate(func(_, _ []byte) (bool, error) {
+		called++
+		return false, nil
+	}); err != nil {
+		t.Fatalf("iterate branch segment: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("callback count = %d, want 1", called)
 	}
 }
 
