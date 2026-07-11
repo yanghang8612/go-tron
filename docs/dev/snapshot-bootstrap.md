@@ -308,8 +308,9 @@ Pass `--snapshot.url`, `--snapshot.trusted-key-file`, or
 `--snapshot.fork-config-hash` on the command line when a one-off run should
 override the corresponding `GTRON_SNAPSHOT_*` environment default.
 
-After bootstrap completes, start `gtron` normally. Sync resumes from the
-verified snapshot/freezer boundary and imports the recent tail from peers.
+After bootstrap completes, start `gtron` with the same `--snapshot.dir` when
+the snapshot directory is outside the datadir. Sync resumes from the verified
+snapshot/freezer boundary and imports the recent tail from peers.
 
 ## Safety Notes
 

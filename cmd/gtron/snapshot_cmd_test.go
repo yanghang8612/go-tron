@@ -2859,6 +2859,29 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 	return cli.NewContext(app, set, nil)
 }
 
+func TestInitCmdUsesConfiguredSnapshotDir(t *testing.T) {
+	dataDir := t.TempDir()
+	configuredDir := filepath.Join(t.TempDir(), "cold-snapshots")
+	defaultDir := stateSnapshotsDir(dataDir)
+	if err := os.MkdirAll(defaultDir, 0o755); err != nil {
+		t.Fatalf("mkdir default snapshot directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultDir, statesnapshots.ManifestFile), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write invalid default manifest: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", configuredDir,
+	})
+
+	if err := initCmd(ctx); err != nil {
+		t.Fatalf("initCmd: %v", err)
+	}
+	if _, err := statesnapshots.OpenManager(defaultDir); err == nil {
+		t.Fatal("default snapshot manager accepted invalid manifest")
+	}
+}
+
 func restoreSnapshotTestCLIFlagState() func() {
 	snapshotURLValue, snapshotURLHasBeenSet := snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet
 	snapshotTrustedCatalogKeyHasBeenSet := snapshotTrustedCatalogKeyFlag.HasBeenSet

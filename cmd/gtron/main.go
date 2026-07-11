@@ -344,6 +344,7 @@ var app = &cli.App{
 			Usage: "Initialize genesis block",
 			Flags: []cli.Flag{
 				dataDirFlag,
+				snapshotDirFlag,
 				testnetFlag,
 				genesisFileFlag,
 				dbCacheFlag,
@@ -383,7 +384,7 @@ func initCmd(ctx *cli.Context) error {
 		defer fz.Close()
 		ancientReader = rawdb.NewFreezerReader(fz)
 	}
-	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(cfg.DataDir))
+	stateSnapshotManager, err := statesnapshots.OpenManager(snapshotDir(ctx, cfg.DataDir))
 	if err != nil {
 		return fmt.Errorf("open state snapshots: %w", err)
 	}
@@ -462,7 +463,7 @@ func gtron(ctx *cli.Context) error {
 		}
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
 	}
-	stateSnapshotDir := stateSnapshotsDir(cfg.DataDir)
+	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
 	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
 	if err != nil {
 		closeStores()
