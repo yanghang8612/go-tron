@@ -60,6 +60,17 @@ func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
 	}
 }
 
+func TestValidateSyncImportBatch(t *testing.T) {
+	for _, size := range []int{0, -1, tsync.MaxStagedImportBatch + 1} {
+		if err := validateSyncImportBatch(size); err == nil {
+			t.Fatalf("validateSyncImportBatch(%d) succeeded", size)
+		}
+	}
+	if err := validateSyncImportBatch(tsync.MaxStagedImportBatch); err != nil {
+		t.Fatalf("validateSyncImportBatch(max) = %v", err)
+	}
+}
+
 func TestSyncImportBatchEnvironmentAlias(t *testing.T) {
 	t.Setenv("GTRON_SYNC_IMPORT_BATCH", "12")
 	app := cli.NewApp()

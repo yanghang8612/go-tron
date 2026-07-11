@@ -423,6 +423,9 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
+		return err
+	}
 	compressHistorySegments, compressLatestSegments := applySnapshotCompressionConfigs(ctx)
 	log.Info("Cold snapshot compression configured", "history", compressHistorySegments, "latest", compressLatestSegments)
 	dbPath := chainDataDir(cfg.DataDir)

@@ -12,6 +12,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/crypto"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
@@ -63,6 +64,16 @@ func syncTransactionLookupETLOptions(cfg *node.Config) (etl.Options, error) {
 		return etl.Options{}, err
 	}
 	return etl.Options{TempDir: cfg.SyncETLTempDir, BufferLimit: buffer, BatchSize: batch}, nil
+}
+
+func validateSyncImportBatch(size int) error {
+	if size < 1 {
+		return fmt.Errorf("sync import batch must be >= 1")
+	}
+	if size > tsync.MaxStagedImportBatch {
+		return fmt.Errorf("sync import batch %d exceeds staged import batch cap %d", size, tsync.MaxStagedImportBatch)
+	}
+	return nil
 }
 
 func makeGenesis(ctx *cli.Context) (*params.Genesis, error) {
