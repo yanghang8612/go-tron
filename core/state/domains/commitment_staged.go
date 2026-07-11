@@ -3,6 +3,7 @@ package domains
 import (
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -179,19 +180,8 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 	if err != nil || !ok || snapshotRoot != expectedRoot {
 		return false, err
 	}
-	restored := 0
-	if err := branchSource.IterateCommitmentBranches(txNum, func(prefix, encoded []byte) (bool, error) {
-		// Validate the encoded value decodes to a BranchData before persisting,
-		// so a corrupt snapshot is rejected rather than poisoning the keyspace.
-		if _, decodeErr := DecodeBranchData(encoded); decodeErr != nil {
-			return false, fmt.Errorf("domains: snapshot branch %x: %w", prefix, decodeErr)
-		}
-		if err := rawdb.WriteCommitmentBranch(s.db, prefix, encoded); err != nil {
-			return false, err
-		}
-		restored++
-		return true, nil
-	}); err != nil {
+	restored, err := s.restoreSnapshotBranches(branchSource, txNum)
+	if err != nil {
 		return false, err
 	}
 	if restored == 0 {
@@ -205,6 +195,54 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 		return false, nil
 	}
 	return true, nil
+}
+
+// restoreSnapshotBranches verifies each opaque branch row before staging it in
+// bounded Pebble batches. The final batch is committed before Fold(nil) reads
+// the rows, so the restore remains self-verifying; an error still leaves the
+// existing Rebuild fallback responsible for clearing any partial writes.
+func (s *stagedCommitmentStore) restoreSnapshotBranches(source CommitmentBranchSnapshotSource, txNum uint64) (int, error) {
+	writer := ethdb.KeyValueWriter(s.db)
+	var batch ethdb.Batch
+	if batcher, ok := s.db.(ethdb.Batcher); ok {
+		batch = batcher.NewBatch()
+		defer batch.Reset()
+		writer = batch
+	}
+	restored := 0
+	flush := func() error {
+		if batch == nil || batch.ValueSize() == 0 {
+			return nil
+		}
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		batch.Reset()
+		return nil
+	}
+	if err := source.IterateCommitmentBranches(txNum, func(prefix, encoded []byte) (bool, error) {
+		// Validate the encoded value decodes to a BranchData before persisting,
+		// so a corrupt snapshot is rejected rather than poisoning the keyspace.
+		if _, decodeErr := DecodeBranchData(encoded); decodeErr != nil {
+			return false, fmt.Errorf("domains: snapshot branch %x: %w", prefix, decodeErr)
+		}
+		if err := rawdb.WriteCommitmentBranch(writer, prefix, encoded); err != nil {
+			return false, err
+		}
+		restored++
+		if batch != nil && batch.ValueSize() >= ethdb.IdealBatchSize {
+			if err := flush(); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}); err != nil {
+		return 0, err
+	}
+	if err := flush(); err != nil {
+		return 0, err
+	}
+	return restored, nil
 }
 
 // rebuildSpyHook, when non-nil, fires at the start of Rebuild. It is nil in

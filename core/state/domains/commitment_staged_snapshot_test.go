@@ -1,10 +1,13 @@
 package domains
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 // fakeBranchSnapshotSource is an in-memory CommitmentBranchSnapshotSource for the
@@ -75,6 +78,27 @@ func deleteStagedBranchRows(t *testing.T, db CommitmentDB) {
 	}
 }
 
+type batchCountingCommitmentDB struct {
+	ethdb.KeyValueStore
+	batches int
+	writes  int
+}
+
+func (db *batchCountingCommitmentDB) NewBatch() ethdb.Batch {
+	db.batches++
+	return &batchCountingCommitmentBatch{Batch: db.KeyValueStore.NewBatch(), parent: db}
+}
+
+type batchCountingCommitmentBatch struct {
+	ethdb.Batch
+	parent *batchCountingCommitmentDB
+}
+
+func (b *batchCountingCommitmentBatch) Write() error {
+	b.parent.writes++
+	return b.Batch.Write()
+}
+
 // TestStagedRestoreNodesFromSnapshotRederivesRoot is the focused unit: a staged
 // store that has committed branch state, had its hot branch rows captured into a
 // snapshot source, then deleted, must re-derive the original root from the
@@ -118,6 +142,50 @@ func TestStagedRestoreNodesFromSnapshotRederivesRoot(t *testing.T) {
 	}
 	if rederived != originalRoot {
 		t.Fatalf("Fold(nil) after restore = %x, want original %x", rederived, originalRoot)
+	}
+}
+
+func TestStagedRestoreNodesFromSnapshotBatchesBranchWrites(t *testing.T) {
+	const rows = 4096
+	db := &batchCountingCommitmentDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	owner := common.Address{0x41, 0x58}
+	if err := rawdb.WriteStateKVGeneration(db, owner, 0); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		key := []byte(fmt.Sprintf("slot-%04d", i))
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte("snapshot-restore-value")); err != nil {
+			t.Fatalf("write latest row %d: %v", i, err)
+		}
+	}
+	store := newStagedCommitmentStore(db)
+	root, err := store.Rebuild()
+	if err != nil {
+		t.Fatalf("rebuild branch state: %v", err)
+	}
+	src := captureBranchSnapshot(t, db)
+	if len(src.branches) < 2 {
+		t.Fatalf("captured branches = %d, want multiple rows", len(src.branches))
+	}
+	deleteStagedBranchRows(t, db)
+	db.batches = 0
+	db.writes = 0
+
+	ok, err := store.RestoreNodesFromSnapshot(src, 42, root)
+	if err != nil {
+		t.Fatalf("restore branch snapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("restore branch snapshot returned false")
+	}
+	if db.batches != 1 {
+		t.Fatalf("restore batches = %d, want 1 reusable batch", db.batches)
+	}
+	if db.writes < 2 {
+		t.Fatalf("restore batch writes = %d, want multiple writes for a large branch snapshot", db.writes)
+	}
+	if rederived, err := store.trie.Fold(nil); err != nil || rederived != root {
+		t.Fatalf("restored branch root %x err=%v, want %x", rederived, err, root)
 	}
 }
 
