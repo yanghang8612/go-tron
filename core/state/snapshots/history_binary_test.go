@@ -131,6 +131,55 @@ func TestStateDomainChangeBinaryV3AccessorRejectsCountBeyondRecordIndex(t *testi
 	}
 }
 
+func TestStateDomainChangeBinaryV3AccessorCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 10, ToTxNum: 11, Path: "history/state-domain-change-v3.seg"}
+	owner := binaryAddress(0xa5)
+	changes := []*rawdb.StateDomainChange{binaryStateDomainChange(10, 10, 1, "slot/a"), binaryStateDomainChange(11, 11, 1, "slot/b")}
+	for _, change := range changes {
+		change.Owner = owner
+		change.Generation = 3
+		change.Domain = kvdomains.ContractStorage
+	}
+	segmentData, index, entries, err := encodeStateDomainChangeBinarySegment(ref.FromTxNum, ref.ToTxNum, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeStateDomainChangeBinaryIndex(ref.FromTxNum, ref.ToTxNum, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV3(ref.FromTxNum, ref.ToTxNum, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segRef := ref
+	setStateDomainChangeBinaryRefMetadata(&segRef, segmentData)
+	idxRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryIndexPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
+	accessorRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryAccessorPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, accessorData)
+	for _, file := range []struct {
+		ref  SegmentRef
+		data []byte
+	}{{segRef, segmentData}, {idxRef, indexData}, {accessorRef, accessorData}} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, file.ref.Path), file.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, segRef, idxRef, accessorRef); err != nil {
+		t.Fatalf("verify v3 companions: %v", err)
+	}
+	var got []*rawdb.StateDomainChange
+	if err := iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir, segRef, accessorRef, stateDomainChangeBinaryAccessorLookupPrefix(owner, 3, kvdomains.ContractStorage, []byte("slot/")), 10, 11, func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+}
+
 func encodeStateDomainChangeBinaryAccessorV2ForTest(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
 	sorted := append([]stateDomainChangeBinaryAccessorEntry(nil), entries...)
 	sort.Slice(sorted, func(i, j int) bool {

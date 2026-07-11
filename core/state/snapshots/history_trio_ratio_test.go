@@ -22,7 +22,7 @@ func compressedSize(t *testing.T, dir, name string, blob []byte) int64 {
 }
 
 // TestHistoryTrioCompressionRatio reports the HONEST archive-unit number: the
-// whole .seg+.idx+.kv trio, not just the .seg. v3 accessors deliberately stay
+// whole .seg+.idx+.kv trio, not just the .seg. v3/v4 accessors deliberately stay
 // raw because their fixed-width exact table is a random-read index; legacy v2
 // accessors were compressed. The .idx remains raw because it is tiny and serves
 // random seeks.
@@ -52,9 +52,9 @@ func TestHistoryTrioCompressionRatio(t *testing.T) {
 	trioRaw := int64(segRaw + idxRaw + kvRaw)
 	accessorWired := kvC
 	accessorMode := "compressed"
-	if binary.BigEndian.Uint32(accessorData[8:12]) == stateDomainChangeBinaryVersionV3 {
+	if binary.BigEndian.Uint32(accessorData[8:12]) >= stateDomainChangeBinaryVersionV3 {
 		accessorWired = int64(kvRaw)
-		accessorMode = "raw v3 random-read index"
+		accessorMode = "raw v3/v4 random-read index"
 	}
 	trioWired := segC + int64(idxRaw) + accessorWired
 

@@ -23,6 +23,7 @@ const (
 	stateDomainChangeBinaryVersionV1 = uint32(1)
 	stateDomainChangeBinaryVersionV2 = uint32(2)
 	stateDomainChangeBinaryVersionV3 = uint32(3)
+	stateDomainChangeBinaryVersionV4 = uint32(4)
 	stateDomainChangeBinaryVersion   = stateDomainChangeBinaryVersionV2
 
 	stateDomainChangeBinaryHeaderSize     = 8 + 4 + 8 + 8 + 8
@@ -218,7 +219,7 @@ func writeStateDomainChangeBinaryFilesWithAccessor(dir string, ref SegmentRef, c
 }
 
 // CompressHistorySegments gates whether new cold history payload segments are
-// block-compressed. v3 accessors deliberately remain raw: their fixed-width
+// block-compressed. v3/v4 accessors deliberately remain raw: their fixed-width
 // exact table is a random-read index, so zstd would trade away its point-lookup
 // latency and allocation benefit. Legacy v1/v2 compressed accessors remain
 // readable through the same magic-dispatch path.
@@ -240,7 +241,7 @@ const historyCompressChunkSize = 16384
 
 // writeStateDomainChangeBinaryCompressedSegmentFiles writes a cold history
 // segment whose .seg payload is block-compressed (magic gtcblk01). Its .idx and
-// v3 .kv accessor retain uncompressed record offsets, which the codec's ReadAt
+// v3/v4 .kv accessors retain uncompressed record offsets, which the codec's ReadAt
 // resolves. A reader opened via openHistorySegmentForRead serves either segment
 // format transparently.
 func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, SegmentRef, error) {
@@ -323,7 +324,7 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
 
-	// .idx and the v3 exact/group accessor stay uncompressed. The accessor is a
+	// .idx and the v3/v4 exact/group accessor stay uncompressed. The accessor is a
 	// random-read index rather than bulk payload; raw fixed-width hash probes
 	// avoid repeated zstd block expansion during archive point lookups.
 	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, idxRef.Path), indexData); err != nil {
@@ -678,11 +679,11 @@ func writeCompactedStateDomainChangeBinaryAccessor(dir string, segRef SegmentRef
 		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
 	// Rebuild against the compacted history payload instead of remapping the
-	// source accessors. v3 has two independent lookup orders (hash for point
+	// source accessors. v4 has two independent lookup orders (hash for point
 	// reads and owner/domain plus logical key for prefix reads), so a bounded
 	// streamed rebuild is both simpler and format-independent for v1/v2 inputs.
 	_ = sources
-	accessor, _, err := buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir, segRef, ref, etl.Options{TempDir: filepath.Join(dir, "etl")})
+	accessor, _, err := buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, segRef, ref, etl.Options{TempDir: filepath.Join(dir, "etl")})
 	return accessor, err
 }
 
@@ -1134,6 +1135,9 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return verifyStateDomainChangeBinaryAccessorV3Coverage(historyRef, accessorRef, segment, segmentSize, segmentHeader.count, indexFile, indexHeader.count, accessorFile, accessorSize, accessorHeader)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
+		return verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef, segment, segmentSize, segmentHeader.count, indexFile, indexHeader.count, accessorFile, accessorSize, accessorHeader)
 	}
 	return verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef, segment, segmentSize, recordOffset, segmentHeader.count, accessorFile, accessorSize, accessorHeader.count)
 }
@@ -1621,6 +1625,9 @@ func readStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) ([]stateDom
 	if header.version == stateDomainChangeBinaryVersionV3 {
 		return readStateDomainChangeBinaryAccessorV3Debug(dir, ref, accessorFile, fileSize, header)
 	}
+	if header.version == stateDomainChangeBinaryVersionV4 {
+		return readStateDomainChangeBinaryAccessorV4Debug(dir, ref, accessorFile, fileSize, header)
+	}
 	offsetTableLen := header.count * 8
 	minOffset := uint64(stateDomainChangeBinaryHeaderSize) + offsetTableLen
 	if fileSize < minOffset {
@@ -1695,6 +1702,9 @@ func checkStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) error {
 	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
 		return checkStateDomainChangeBinaryAccessorV3(accessorFile, fileSize, header)
+	}
+	if header.version == stateDomainChangeBinaryVersionV4 {
+		return checkStateDomainChangeBinaryAccessorV4(accessorFile, fileSize, header)
 	}
 
 	offsetTableLen := header.count * 8
@@ -1977,6 +1987,9 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV3Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
 	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
+		return iterateStateDomainChangeBinarySegmentByAccessorV4Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
+	}
 
 	start, ok, err := stateDomainChangeBinaryAccessorLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupKey)
 	if err != nil || !ok {
@@ -2043,6 +2056,9 @@ func iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir string, ref S
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV3Prefix(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupPrefix, fromTxNum, toTxNum, fn)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
+		return iterateStateDomainChangeBinarySegmentByAccessorV4Prefix(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupPrefix, fromTxNum, toTxNum, fn)
 	}
 
 	start, ok, err := stateDomainChangeBinaryAccessorLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupPrefix)
@@ -2439,7 +2455,7 @@ func encodeStateDomainChangeBinaryIndex(fromTxNum, toTxNum uint64, index []state
 }
 
 func encodeStateDomainChangeBinaryAccessor(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
-	return encodeStateDomainChangeBinaryAccessorV3(fromTxNum, toTxNum, entries)
+	return encodeStateDomainChangeBinaryAccessorV4(fromTxNum, toTxNum, entries)
 }
 
 func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomainChangeBinaryHeader, []byte, error) {
@@ -2450,7 +2466,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{
@@ -2669,6 +2685,11 @@ func openStateDomainChangeBinaryAccessorReader(dir string, ref SegmentRef) (hist
 		if _, err := stateDomainChangeBinaryAccessorV3LayoutAt(reader, logicalSize, header); err != nil {
 			_ = reader.Close()
 			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v3 layout: %w", ref.Path, err)
+		}
+	} else if header.version == stateDomainChangeBinaryVersionV4 {
+		if _, err := stateDomainChangeBinaryAccessorV4LayoutAt(reader, logicalSize, header); err != nil {
+			_ = reader.Close()
+			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v4 layout: %w", ref.Path, err)
 		}
 	} else if minSize := uint64(stateDomainChangeBinaryHeaderSize) + header.count*8; logicalSize < minSize {
 		_ = reader.Close()

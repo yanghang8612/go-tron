@@ -163,7 +163,7 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 	}
 
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if binary.BigEndian.Uint32(data[8:12]) == stateDomainChangeBinaryVersionV3 {
+	if binary.BigEndian.Uint32(data[8:12]) >= stateDomainChangeBinaryVersionV3 {
 		firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
 		secondRecordIndex := firstRecordIndex + stateDomainChangeBinaryAccessorV3ExactEntrySize
 		if secondRecordIndex+4 > len(data) {

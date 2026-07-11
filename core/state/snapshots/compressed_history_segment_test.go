@@ -242,8 +242,7 @@ func BenchmarkKeyedLookupUncompressed(b *testing.B) { benchmarkKeyedLookup(b, fa
 
 // TestCompactionMergesCompressedSources proves the compactor reads COMPRESSED
 // source segments (copyPayload decompresses instead of raw-copying) and emits a
-// compressed merged seg+kv that reads back — so compression survives merges
-// rather than decaying to uncompressed on every retire.
+// compressed merged payload plus raw random-read accessor that reads back.
 func TestCompactionMergesCompressedSources(t *testing.T) {
 	if !CompressHistorySegments {
 		t.Skip("compression disabled")

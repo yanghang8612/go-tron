@@ -74,7 +74,7 @@ not complete.
 | Latest state domains | `state-account-latest-v1`, `state-kv-latest-v2`, `state-kv-generation-v2`, `state-code-v1`, `state-commitment-*`. | Strong. Domain shape is Erigon-style and TRON-adapted. |
 | Domain registry | `core/state/snapshots/domain_registry.go` registers account, account-KV, generation, code, commitment root/checkpoint/branch, and history. | Strong. Lifecycle is config-driven. |
 | Temporal history | `StateDomainChange`, `StateTxRange`, inverse indexes, hot as-of readers. | Strong for consensus state covered by the flat domains. |
-| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`; new builds and compactions emit a block-compressed `.seg`, raw v3 `.kv` random-read accessor, and raw `.idx`. `--snapshot.compress-history=false` / `GTRON_SNAPSHOT_COMPRESS_HISTORY=false` only changes `.seg` emission; legacy raw/compressed v1/v2 companions remain readable. | Strong functionally, different file names from Erigon. Source-audit coverage now pins low-level record readers behind compressed-aware openers. |
+| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`; new builds and compactions emit a block-compressed `.seg`, raw v4 `.kv` random-read accessor, and raw `.idx`. `--snapshot.compress-history=false` / `GTRON_SNAPSHOT_COMPRESS_HISTORY=false` only changes `.seg` emission; legacy raw/compressed v1/v2/v3 companions remain readable. | Strong functionally, different file names from Erigon. Source-audit coverage now pins low-level record readers behind compressed-aware openers. |
 | Latest files | New binary publications use `.seg` plus sparse `.bt`; legacy `.lidx` files remain readable and verifiable. Values use per-value Snappy compression when smaller, controlled by `--snapshot.compress-latest`. | Strong for point lookup and prefix iteration. Not recsplit, intentionally. |
 | Commitment domain | Staged hex-patricia branch rows, checkpoints, cold branch restore, java root adapter. | Strong. Internal root is decoupled from java-tron header root. |
 | Code retention | Content-addressed CodeDomain latest snapshots selected by account-envelope history. | Strong, with a deliberate no-temporal-code policy. |
@@ -2618,18 +2618,22 @@ Status:
   `.kv` from 2,140,036 to 1,558,278 bytes, but only reduced the old
   production-compressed accessor from 922,049 to 915,701 bytes (about 0.7%).
   It was not adopted.
-- v3 replaces the old ordered-key `.kv` for new history builds and compactions.
-  It has a fixed-width SHA-256/128-bit hash, record-offset, and record-index
-  table for point reads, plus owner/generation/domain groups whose records stay
-  in logical-key order for KV-latest prefix reads. A point lookup verifies the
-  key read from `.seg`, so a truncated-hash collision cannot return a wrong
-  change. The accessor remains raw because zstd expansion on every binary-search
-  probe outweighed its storage benefit. Streaming ETL creates v3 from the final
-  history payload, so v1/v2 inputs can compact directly into v3; strict
-  companion verification checks both tables against the segment and index.
-  On the same synthetic corpus, raw v3 `.kv` is 801,516 bytes versus 922,049
-  bytes for zstd-compressed v2, while compressed-segment point lookup improved
-  from about 470 us / 347 KB to 98 us / 68 KB per operation on an Apple M1 Max.
+- v3 replaced the old ordered-key `.kv` with a fixed-width exact table and
+  owner/domain groups. v4 is emitted by new history builds and compactions: it
+  retains that layout but adds a 4-byte logical-key prefix to each group record.
+  Archive prefix lookup first binary-searches those prefixes, then verifies the
+  actual keys read from `.seg`; this bounds the pre-match scan without storing
+  full keys or introducing an MPHF dependency. v1/v2/v3 remain read-compatible.
+  The exact table is SHA-256/128-bit hash plus record offset and record index;
+  every point lookup verifies the key read from `.seg`, so a truncated-hash
+  collision cannot return a wrong change. The accessor remains raw because zstd
+  expansion on every binary-search probe outweighed its storage benefit.
+  Streaming ETL creates v4 from the final history payload, so v1/v2/v3 inputs
+  compact directly into v4; strict companion verification checks both tables
+  against the segment and index. On the same synthetic corpus, raw v4 `.kv` is
+  881,516 bytes versus about 922 KB for zstd-compressed v2, while
+  compressed-segment point lookup remains about 98 us / 68 KB per operation on
+  an Apple M1 Max.
   These are development measurements, not a production claim: Nile profile and
   archive-sync samples remain the acceptance evidence for disk and latency.
 

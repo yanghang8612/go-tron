@@ -211,7 +211,7 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	})
 }
 
-func TestCompactHistoryDomainUpgradesV2AccessorToV3(t *testing.T) {
+func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xef)
 	first := binaryStateDomainChange(1, 1, 1, "slot/a")
@@ -233,12 +233,12 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV3(t *testing.T) {
 
 	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
 	if err != nil {
-		t.Fatalf("compact mixed v2/v3 history: %v", err)
+		t.Fatalf("compact mixed v2/v4 history: %v", err)
 	}
 	accessorRef := compactionRefByKind(t, result, SegmentAccessor)
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV3 {
-		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV3)
+	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV4 {
+		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV4)
 	}
 
 	mgr, err := OpenManager(dir)
@@ -250,7 +250,7 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV3(t *testing.T) {
 		got = append(got, change)
 		return true, nil
 	}); err != nil {
-		t.Fatalf("iterate compacted v3 prefix: %v", err)
+		t.Fatalf("iterate compacted v4 prefix: %v", err)
 	}
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 1, key: "slot/b"}})
 }
@@ -259,7 +259,7 @@ func rewriteStateDomainChangeAccessorAsV2(t *testing.T, dir string, ref *Segment
 	t.Helper()
 	entries, err := readStateDomainChangeBinaryAccessor(dir, *ref)
 	if err != nil {
-		t.Fatalf("read v3 accessor: %v", err)
+		t.Fatalf("read accessor: %v", err)
 	}
 	data, err := encodeStateDomainChangeBinaryAccessorV2ForTest(ref.FromTxNum, ref.ToTxNum, entries)
 	if err != nil {
@@ -278,7 +278,7 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, binaryStateDomainChange(3, 3, 1, "b"))...)
 	accessorRef := refs[1]
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if binary.BigEndian.Uint32(data[8:12]) == stateDomainChangeBinaryVersionV3 {
+	if binary.BigEndian.Uint32(data[8:12]) >= stateDomainChangeBinaryVersionV3 {
 		recordIndexOffset := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
 		binary.BigEndian.PutUint32(data[recordIndexOffset:recordIndexOffset+4], 1)
 	} else {

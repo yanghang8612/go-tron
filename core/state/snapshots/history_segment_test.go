@@ -555,6 +555,51 @@ func TestManagerIteratesStateDomainChangesByPrefixStopsCallbackBeforeReadingRest
 	}
 }
 
+func TestManagerIteratesStateDomainChangesByPrefixV4SeeksPastEarlierGroupRecords(t *testing.T) {
+	dir := t.TempDir()
+	owner := binaryAddress(0x5c)
+	changes := make([]*rawdb.StateDomainChange, 0, 128)
+	for i := 0; i < 128; i++ {
+		change := binaryStateDomainChange(uint64(i+1), uint64(i+1), 1, "")
+		change.Owner = owner
+		change.Generation = 5
+		change.Domain = kvdomains.ContractStorage
+		change.Key = []byte{byte(i), 0x01}
+		changes = append(changes, change)
+	}
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 1,
+		ToTxNum:   128,
+		Path:      "history/state-domain-change-prefix-v4-seek.seg",
+	}, changes)
+	if err != nil {
+		t.Fatalf("write binary history: %v", err)
+	}
+	if data := mustReadFile(t, filepath.Join(dir, accessorRef.Path)); binary.BigEndian.Uint32(data[8:12]) != stateDomainChangeBinaryVersionV4 {
+		t.Fatalf("accessor version = %d, want %d", binary.BigEndian.Uint32(data[8:12]), stateDomainChangeBinaryVersionV4)
+	}
+	segRef = corruptStateDomainChangeBinaryRecordFrameLength(t, dir, segRef, idxRef, 0)
+	if err := PublishManifest(dir, NewManifest(1, 128, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByPrefix(1, 128, owner, 5, kvdomains.ContractStorage, []byte{0x7f}, func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("v4 prefix seek read corrupt earlier record: %v", err)
+	}
+	if len(got) != 1 || !bytes.Equal(got[0].Key, []byte{0x7f, 0x01}) {
+		t.Fatalf("v4 prefix result = %+v, want key 7f01", got)
+	}
+}
+
 func writeStreamingStopHistorySegment(t *testing.T, dir string, sameKey bool) (SegmentRef, SegmentRef, SegmentRef, []*rawdb.StateDomainChange) {
 	t.Helper()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x59}, common.AccountIDLength)...))

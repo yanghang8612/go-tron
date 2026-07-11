@@ -147,7 +147,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 		ToTxNum:   ref.ToTxNum,
 		Path:      stateDomainChangeBinaryAccessorPath(segmentRef.Path),
 	}
-	accessorRef, result.accessorETL, err = buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir, segmentRef, accessorRef, opts)
+	accessorRef, result.accessorETL, err = buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, segmentRef, accessorRef, opts)
 	if err != nil {
 		return result, err
 	}
@@ -479,7 +479,7 @@ func (*stateDomainChangeBinaryAccessorV3ExactETLWriter) Delete([]byte) error {
 	return errors.New("snapshots: state-domain-change accessor v3 exact ETL writer does not support deletes")
 }
 
-type stateDomainChangeBinaryAccessorV3GroupETLWriter struct {
+type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
 	payload      *os.File
 	offsets      *os.File
 	groups       uint64
@@ -490,17 +490,18 @@ type stateDomainChangeBinaryAccessorV3GroupETLWriter struct {
 	countOffset  int64
 }
 
-func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) Put(_ []byte, value []byte) error {
+func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []byte) error {
 	if w == nil || w.payload == nil || w.offsets == nil {
 		return errors.New("snapshots: nil state-domain-change accessor v3 group ETL writer")
 	}
-	if len(value) != stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize {
-		return fmt.Errorf("snapshots: state-domain-change accessor v3 group value size %d, want %d", len(value), stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize)
+	if len(value) != stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize {
+		return fmt.Errorf("snapshots: state-domain-change accessor v4 group value size %d, want %d", len(value), stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize)
 	}
 	var key [stateDomainChangeBinaryAccessorV3GroupKeySize]byte
 	copy(key[:], value[:stateDomainChangeBinaryAccessorV3GroupKeySize])
-	offset := binary.BigEndian.Uint64(value[stateDomainChangeBinaryAccessorV3GroupKeySize : stateDomainChangeBinaryAccessorV3GroupKeySize+8])
-	recordIndex := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize+8:])
+	prefix := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize : stateDomainChangeBinaryAccessorV3GroupKeySize+4])
+	offset := binary.BigEndian.Uint64(value[stateDomainChangeBinaryAccessorV3GroupKeySize+4 : stateDomainChangeBinaryAccessorV3GroupKeySize+12])
+	recordIndex := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize+12:])
 	if offset < stateDomainChangeBinaryHeaderSize {
 		return fmt.Errorf("snapshots: state-domain-change accessor v3 group record offset %d is invalid", offset)
 	}
@@ -532,9 +533,10 @@ func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) Put(_ []byte, value []
 		w.haveGroup = true
 		w.groups++
 	}
-	var raw [stateDomainChangeBinaryAccessorV3GroupEntrySize]byte
-	binary.BigEndian.PutUint64(raw[0:8], offset)
-	binary.BigEndian.PutUint32(raw[8:], recordIndex)
+	var raw [stateDomainChangeBinaryAccessorV4GroupEntrySize]byte
+	binary.BigEndian.PutUint32(raw[0:4], prefix)
+	binary.BigEndian.PutUint64(raw[4:12], offset)
+	binary.BigEndian.PutUint32(raw[12:], recordIndex)
 	if _, err := w.payload.Write(raw[:]); err != nil {
 		return err
 	}
@@ -543,12 +545,12 @@ func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) Put(_ []byte, value []
 	return nil
 }
 
-func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) finishGroup() error {
+func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) finishGroup() error {
 	if w == nil || !w.haveGroup {
 		return nil
 	}
 	if w.currentCount == 0 {
-		return errors.New("snapshots: state-domain-change accessor v3 group has no records")
+		return errors.New("snapshots: state-domain-change accessor v4 group has no records")
 	}
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], w.currentCount)
@@ -559,11 +561,11 @@ func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) finishGroup() error {
 	return nil
 }
 
-func (*stateDomainChangeBinaryAccessorV3GroupETLWriter) Delete([]byte) error {
-	return errors.New("snapshots: state-domain-change accessor v3 group ETL writer does not support deletes")
+func (*stateDomainChangeBinaryAccessorV4GroupETLWriter) Delete([]byte) error {
+	return errors.New("snapshots: state-domain-change accessor v4 group ETL writer does not support deletes")
 }
 
-func buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir string, segmentRef, accessorRef SegmentRef, opts etl.Options) (SegmentRef, etl.Stats, error) {
+func buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir string, segmentRef, accessorRef SegmentRef, opts etl.Options) (SegmentRef, etl.Stats, error) {
 	if opts.TempDir == "" {
 		opts.TempDir = filepath.Join(dir, "etl")
 	}
@@ -609,10 +611,11 @@ func buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir string, segmen
 		}
 		if groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change); ok {
 			entry := stateDomainChangeBinaryAccessorEntry{key: key, txNum: change.TxNum, seq: change.Seq, offset: offset, recordIndex: recordIndex}
-			groupValue := make([]byte, stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize)
+			groupValue := make([]byte, stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize)
 			copy(groupValue[:stateDomainChangeBinaryAccessorV3GroupKeySize], groupKey[:])
-			binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+8], offset)
-			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+8:], uint32(recordIndex))
+			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+4], stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key))
+			binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+4:stateDomainChangeBinaryAccessorV3GroupKeySize+12], offset)
+			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+12:], uint32(recordIndex))
 			if err := groupCollector.Put(stateDomainChangeBinaryAccessorETLSortKey(entry), groupValue); err != nil {
 				return SegmentRef{}, etl.Stats{}, err
 			}
@@ -650,7 +653,7 @@ func buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir string, segmen
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = groupOffsetsTmp.Close(); _ = os.Remove(groupOffsetsName) }()
-	groupWriter := stateDomainChangeBinaryAccessorV3GroupETLWriter{payload: groupPayloadTmp, offsets: groupOffsetsTmp}
+	groupWriter := stateDomainChangeBinaryAccessorV4GroupETLWriter{payload: groupPayloadTmp, offsets: groupOffsetsTmp}
 	if _, err := groupCollector.Load(&groupWriter); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
@@ -672,7 +675,7 @@ func buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir string, segmen
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = accessorTmp.Close(); _ = os.Remove(accessorTmpName) }()
-	if err := writeStateDomainChangeBinaryHeaderToVersion(accessorTmp, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, header.count, stateDomainChangeBinaryVersionV3); err != nil {
+	if err := writeStateDomainChangeBinaryHeaderToVersion(accessorTmp, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, header.count, stateDomainChangeBinaryVersionV4); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	if err := writeStateDomainChangeBinaryTxRangeCount(accessorTmp, groupWriter.groups); err != nil {

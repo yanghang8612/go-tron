@@ -182,12 +182,13 @@ func zstdBlockCompress(t *testing.T, records [][]byte, blockSize int) (raw, comp
 	return raw, compressed
 }
 
-// TestHistoryAccessorV3IndexComposition reports the current v3 accessor against
-// the legacy v2 ordered-key format. v3 keeps a 128-bit hash + offset + record
-// index exact table and a KV-latest owner/generation/domain prefix group, then
+// TestHistoryAccessorV4IndexComposition reports the current v4 accessor against
+// the legacy v2 ordered-key format. v4 keeps a 128-bit hash + offset + record
+// index exact table and a KV-latest owner/generation/domain prefix group with a
+// 4-byte logical-key seek prefix, then
 // verifies all resolved records against the history segment. It is intentionally
 // not an MPHF/recsplit estimate: this test records the real emitted layout.
-func TestHistoryAccessorV3IndexComposition(t *testing.T) {
+func TestHistoryAccessorV4IndexComposition(t *testing.T) {
 	changes := buildHistoryStructs(400, 50)
 	from, to := uint64(9_000_000), uint64(9_000_399)
 	normalized := normalizeStateDomainChangesForBinary(changes)
@@ -209,9 +210,9 @@ func TestHistoryAccessorV3IndexComposition(t *testing.T) {
 	}
 	defer enc.Close()
 	v2Compressed := len(enc.EncodeAll(legacyV2, nil))
-	v3Compressed := len(enc.EncodeAll(accessorData, nil))
-	layout, err := stateDomainChangeBinaryAccessorV3LayoutAt(bytes.NewReader(accessorData), uint64(len(accessorData)), stateDomainChangeBinaryHeader{
-		version:   stateDomainChangeBinaryVersionV3,
+	v4Compressed := len(enc.EncodeAll(accessorData, nil))
+	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(bytes.NewReader(accessorData), uint64(len(accessorData)), stateDomainChangeBinaryHeader{
+		version:   stateDomainChangeBinaryVersionV4,
 		fromTxNum: from,
 		toTxNum:   to,
 		count:     uint64(len(accessor)),
@@ -223,11 +224,11 @@ func TestHistoryAccessorV3IndexComposition(t *testing.T) {
 	groupBytes := uint64(len(accessorData)) - layout.groupPayloadStart
 	t.Logf("entries=%d", len(accessor))
 	t.Logf("  v2 ordered .kv zstd       = %8d", v2Compressed)
-	t.Logf("  v3 raw .kv                = %8d", len(accessorData))
-	t.Logf("  v3 zstd .kv               = %8d", v3Compressed)
-	t.Logf("  v3 exact table            = %8d", exactBytes)
-	t.Logf("  v3 prefix groups           = %8d (%d groups)", groupBytes, layout.groupCount)
-	t.Logf("  v3 raw versus v2 zstd     = %.2fx", float64(v2Compressed)/float64(len(accessorData)))
+	t.Logf("  v4 raw .kv                = %8d", len(accessorData))
+	t.Logf("  v4 zstd .kv               = %8d", v4Compressed)
+	t.Logf("  v4 exact table            = %8d", exactBytes)
+	t.Logf("  v4 prefix groups           = %8d (%d groups)", groupBytes, layout.groupCount)
+	t.Logf("  v4 raw versus v2 zstd     = %.2fx", float64(v2Compressed)/float64(len(accessorData)))
 }
 
 // TestHistoryCompressionRatioGate is the go/no-go measurement (not a pass/fail
