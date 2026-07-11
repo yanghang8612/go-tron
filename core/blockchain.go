@@ -688,16 +688,15 @@ func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook Stag
 	return bc.insertBlocksWithStageHook(blocks, hook, false)
 }
 
-// InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring the
-// rebuildable per-transaction derived rows (`tx-` and duplicate `ti-`). The
-// authoritative per-block TransactionRet row remains durable. SyncService must
-// follow each successful range with AdvanceTransactionLookupStage; ordinary
-// block insertion always materializes the derived rows synchronously.
+// InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring its
+// rebuildable tx-hash lookup rows. Per-block TransactionRet rows remain
+// durable; canonical insertion never materializes their duplicate `ti-` rows.
+// SyncService must follow each successful range with AdvanceTransactionLookupStage.
 func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
 	return bc.insertBlocksWithStageHook(blocks, hook, true)
 }
 
-func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook, deferTransactionDerivedIndexes bool) error {
+func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -707,7 +706,7 @@ func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook Stag
 		return ErrBlockChainClosed
 	}
 
-	return bc.insertBlocksLockedWithOptions(blocks, hook, deferTransactionDerivedIndexes)
+	return bc.insertBlocksLockedWithOptions(blocks, hook, deferTransactionLookup)
 }
 
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
@@ -716,7 +715,7 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block, hook StageProgre
 	return bc.insertBlocksLockedWithOptions(blocks, hook, false)
 }
 
-func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook StageProgressHook, deferTransactionDerivedIndexes bool) (err error) {
+func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) (err error) {
 	// Parallel signature pre-verification: warm every tx's sender recovery and
 	// every block's witness-signature recovery ahead of serial execution, off
 	// the critical path. Pure cache-warming — the serial path (envelope
@@ -724,7 +723,7 @@ func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook 
 	// and reads an identical recovered value, computing inline on any miss.
 	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
 
-	executor := newCanonicalRangeExecutorWithOptions(bc, true, hook, deferTransactionDerivedIndexes)
+	executor := newCanonicalRangeExecutorWithOptions(bc, true, hook, deferTransactionLookup)
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The
@@ -1486,7 +1485,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData, !plan.deferTransactionDerivedIndexes); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData, !plan.deferTransactionLookup); err != nil {
 		return err
 	}
 	// The block body and TAPOS row above are intentionally retained in the
@@ -1607,7 +1606,7 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionDerivedIndexes bool) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) error {
 	batch := bc.db.NewBatch()
 
 	// The root is persisted out-of-band — we do NOT mutate
@@ -1622,17 +1621,10 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("write tapos ref: %w", err)
 	}
-	if writeTransactionDerivedIndexes {
-		for _, info := range txInfos {
-			if err := rawdb.WriteTransactionInfo(batch, info.Id, info); err != nil {
-				return fmt.Errorf("write tx info: %w", err)
-			}
-		}
-	}
 	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
 		return fmt.Errorf("write block tx infos: %w", err)
 	}
-	if writeTransactionDerivedIndexes {
+	if writeTransactionLookup {
 		for _, tx := range block.Transactions() {
 			h := tx.Hash()
 			if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {

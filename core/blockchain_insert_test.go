@@ -84,6 +84,10 @@ func TestBlockChain_InsertBlock_Transfer(t *testing.T) {
 	if bc.CurrentBlock().Number() != 1 {
 		t.Fatalf("current block: got %d, want 1", bc.CurrentBlock().Number())
 	}
+	txHash := block1.Transactions()[0].Hash()
+	if info := rawdb.ReadTransactionInfo(bc.ChainDB(), txHash[:]); info == nil || info.BlockNumber != int64(block1.Number()) {
+		t.Fatalf("transaction info through tx-/tib- fallback = %+v, want block 1 receipt", info)
+	}
 
 	// Verify DynProps updated. Read via bc.DynProps() (buffered): slice 2 of
 	// the fork-rewind fix routes DP writes through the in-memory buffer and

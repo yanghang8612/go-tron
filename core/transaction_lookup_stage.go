@@ -68,8 +68,8 @@ func (bc *BlockChain) ensureTransactionLookupStageLocked() error {
 
 // AdvanceTransactionLookupStage rebuilds a bounded prefix of the recoverable
 // tx-hash lookup index from canonical block bodies. The authoritative per-block
-// TransactionRet rows make individual `ti-` materialization unnecessary on the
-// bulk-sync path: receipt-by-ID reads resolve through this lookup then tib-.
+// TransactionRet rows make individual `ti-` materialization unnecessary:
+// receipt-by-ID reads resolve through this lookup then tib-.
 // It holds chainmu while
 // loading and publishing the ETL result so a fork cannot race a stage watermark
 // past a different canonical branch. A failed ETL load leaves the previous
