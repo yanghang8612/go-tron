@@ -179,14 +179,61 @@ func TestPopBufferedBatchCarriesBufferWait(t *testing.T) {
 
 func TestSetImportBatchSizeRejectsInvalidLimits(t *testing.T) {
 	ss := NewSyncService(makeTestChain(t), nil)
-	for _, size := range []int{0, -1, maxFetchBatch + 1} {
+	for _, size := range []int{0, -1, maxStagedImportBatch + 1} {
 		if err := ss.SetImportBatchSize(size); err == nil {
 			t.Fatalf("SetImportBatchSize(%d) succeeded, want error", size)
 		}
 	}
-	if err := ss.SetImportBatchSize(maxFetchBatch); err != nil {
-		t.Fatalf("SetImportBatchSize(maxFetchBatch): %v", err)
+	if err := ss.SetImportBatchSize(maxStagedImportBatch); err != nil {
+		t.Fatalf("SetImportBatchSize(maxStagedImportBatch): %v", err)
 	}
+}
+
+func TestLocalImportBatchCanExceedWireFetchBatch(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	limit := maxFetchBatch + 1
+	if err := ss.SetImportBatchSize(limit); err != nil {
+		t.Fatalf("SetImportBatchSize(%d): %v", limit, err)
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, limit)
+	ss.targetHeadNum = last.Number()
+	batch := ss.popBufferedSyncBatchLocked(time.Now())
+	ss.mu.Unlock()
+
+	if got := len(batch.Buffered); got != limit {
+		t.Fatalf("local staged import batch = %d, want %d (larger than wire fetch batch %d)", got, limit, maxFetchBatch)
+	}
+	if got := batch.Buffered[len(batch.Buffered)-1].Num; got != last.Number() {
+		t.Fatalf("local staged import batch end = %d, want %d", got, last.Number())
+	}
+}
+
+func TestDrainBufferedBlocksImportsLocalChunkLargerThanWireFetch(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	limit := maxFetchBatch + 1
+	if err := ss.SetImportBatchSize(limit); err != nil {
+		t.Fatalf("SetImportBatchSize(%d): %v", limit, err)
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, limit)
+	ss.targetHeadNum = last.Number()
+	ss.mu.Unlock()
+	ss.drainBufferedBlocksOnce()
+
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != last.Hash() {
+		t.Fatalf("head after large local chunk = %v, want block %d %x", got, last.Number(), last.Hash())
+	}
+	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != limit {
+		t.Fatalf("sync stats total blocks after large local chunk = %d, want %d", got, limit)
+	}
+	assertSyncPipelineProgress(t, bc.DB(), last)
 }
 
 func TestDrainBufferedBlocksImportsMultipleChunks(t *testing.T) {

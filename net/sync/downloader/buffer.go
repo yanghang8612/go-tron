@@ -1001,8 +1001,8 @@ func ImportBatchLimit(configured int) int {
 	if configured <= 0 {
 		return tsync.MaxImportBatch
 	}
-	if configured > tsync.MaxFetchBatch {
-		return tsync.MaxFetchBatch
+	if configured > tsync.MaxStagedImportBatch {
+		return tsync.MaxStagedImportBatch
 	}
 	return configured
 }

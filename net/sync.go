@@ -26,6 +26,7 @@ const (
 	maxChainInventorySize   = tsync.MaxChainInventorySize
 	maxFetchBatch           = tsync.MaxFetchBatch
 	maxSyncImportBatch      = tsync.MaxImportBatch
+	maxStagedImportBatch    = tsync.MaxStagedImportBatch
 	maxParallelSyncPeers    = tsync.MaxParallelSyncPeers
 	minFetchRequestInterval = tsync.MinFetchRequestInterval
 	peerJoinAttemptInterval = 2 * time.Second
@@ -206,8 +207,8 @@ func (ss *SyncService) SetImportBatchSize(size int) error {
 	if size <= 0 {
 		return fmt.Errorf("sync import batch must be >= 1")
 	}
-	if size > maxFetchBatch {
-		return fmt.Errorf("sync import batch %d exceeds fetch batch %d", size, maxFetchBatch)
+	if size > maxStagedImportBatch {
+		return fmt.Errorf("sync import batch %d exceeds staged import batch cap %d", size, maxStagedImportBatch)
 	}
 	ss.mu.Lock()
 	ss.importBatchSize = size

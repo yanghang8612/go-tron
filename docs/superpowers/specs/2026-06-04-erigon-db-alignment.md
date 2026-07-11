@@ -519,8 +519,8 @@ Status:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per
   `InsertBlocksWithStageHook` call. The local chunk defaults to 32 blocks and
-  is operator-tunable through `--sync.import-batch` within the wire-safe
-  1..100 range. This keeps peer throughput high but bounds the decoded block
+  is operator-tunable through `--sync.import-batch` within the local
+  1..1024 range. This keeps peer throughput high but bounds the decoded block
   range, state execution, commitment folding, and stage-row observation done in
   one local pass. Regression coverage proves a range larger than one local
   import chunk drains through multiple chunks, custom chunk limits are honored,

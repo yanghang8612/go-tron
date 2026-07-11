@@ -254,7 +254,7 @@ var (
 	}
 	syncImportBatchFlag = &cli.IntFlag{
 		Name:  "sync.import-batch",
-		Usage: "Maximum staged block bodies imported per local sync pass (1-100; wire fetch batch stays 100)",
+		Usage: "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
 		Value: tsync.MaxImportBatch,
 	}
 	syncAsyncCommitFlag = &cli.BoolFlag{

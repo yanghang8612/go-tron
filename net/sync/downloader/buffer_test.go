@@ -1791,7 +1791,7 @@ func TestImportBatchLimit(t *testing.T) {
 		{name: "zero uses default", want: tsync.MaxImportBatch},
 		{name: "negative uses default", configured: -1, want: tsync.MaxImportBatch},
 		{name: "custom limit", configured: 12, want: 12},
-		{name: "fetch cap", configured: tsync.MaxFetchBatch + 1, want: tsync.MaxFetchBatch},
+		{name: "staged import cap", configured: tsync.MaxStagedImportBatch + 1, want: tsync.MaxStagedImportBatch},
 	}
 	for _, tt := range tests {
 		if got := ImportBatchLimit(tt.configured); got != tt.want {
