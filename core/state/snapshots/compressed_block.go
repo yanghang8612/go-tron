@@ -624,6 +624,57 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 	return w.Finish(path)
 }
 
+// compressFileToFile is the file-backed counterpart to compressBlobToFile. It
+// keeps one logical block in memory while converting large cold-history files,
+// avoiding a whole-segment allocation during build and compaction.
+func compressFileToFile(dir, path, src string, chunkSize int) (err error) {
+	if chunkSize <= 0 {
+		chunkSize = 16384
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := in.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	w, err := newCompressedBlockWriter(dir, 1)
+	if err != nil {
+		return err
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			_ = w.tmp.Close()
+			_ = os.Remove(w.tmpName)
+		}
+	}()
+
+	buf := make([]byte, chunkSize)
+	for {
+		n, readErr := in.Read(buf)
+		if n > 0 {
+			if _, err := w.Append(buf[:n]); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	if err := w.Finish(path); err != nil {
+		return err
+	}
+	finished = true
+	return nil
+}
+
 // BlockAt returns a private copy of the decompressed block containing offset plus
 // that block's uncompressed start. Used for sequential range iteration: the
 // caller walks records across blocks, calling BlockAt(start+len(block)) next.

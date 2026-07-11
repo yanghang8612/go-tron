@@ -510,8 +510,8 @@ func historyCompactionCompanion(candidate historyCompactionCandidate, kind Segme
 // appends the file checksum to the path (the .seg does this; the .kv/.idx derive
 // their path from the .seg). The temp's bytes are the uncompressed logical
 // content, so the published file is byte-addressable at the same offsets.
-func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress bool) (SegmentRef, error) {
-	if !CompressHistorySegments {
+func finalizeStateDomainChangeHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress, compress bool) (SegmentRef, error) {
+	if !compress {
 		size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
 		if err != nil {
 			return SegmentRef{}, err
@@ -525,12 +525,8 @@ func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpN
 	if err := tmp.Close(); err != nil {
 		return SegmentRef{}, err
 	}
-	raw, err := os.ReadFile(tmpName)
-	if err != nil {
-		return SegmentRef{}, err
-	}
 	compTmp := tmpName + ".cb"
-	if err := compressBlobToFile(dir, compTmp, raw, historyCompressChunkSize); err != nil {
+	if err := compressFileToFile(dir, compTmp, tmpName, historyCompressChunkSize); err != nil {
 		return SegmentRef{}, err
 	}
 	defer os.Remove(compTmp)
@@ -539,6 +535,10 @@ func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpN
 		return SegmentRef{}, err
 	}
 	return publishStateDomainChangeBinaryFinal(dir, ref, compTmp, size, checksum, contentAddress)
+}
+
+func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress bool) (SegmentRef, error) {
+	return finalizeStateDomainChangeHistoryFile(dir, ref, tmp, tmpName, contentAddress, CompressHistorySegments)
 }
 
 // publishStateDomainChangeBinaryFinal renames src into its final (optionally

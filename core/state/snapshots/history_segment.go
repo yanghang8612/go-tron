@@ -60,6 +60,21 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 	if !ok || cfg.IterateHotHistoryTxRangeChanges == nil || cfg.IterateHotHistoryTxRanges == nil {
 		return nil, errors.New("snapshots: missing state-domain history iterators")
 	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+		Path:      relPath,
+	}
+	if isStateDomainChangeBinarySegmentPath(relPath) {
+		result, err := buildStateDomainChangeHistoryBinarySegmentsFromDB(db, dir, ref, cfg, etl.Options{})
+		if err != nil {
+			return nil, err
+		}
+		return result.refs, nil
+	}
+
 	var changes []*rawdb.StateDomainChange
 	if err := cfg.IterateHotHistoryTxRangeChanges(db, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
 		changes = append(changes, cloneStateDomainChangeForSegment(change))
@@ -76,20 +91,6 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 		return true, nil
 	}); err != nil {
 		return nil, err
-	}
-	ref := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentHistory,
-		FromTxNum: fromTxNum,
-		ToTxNum:   toTxNum,
-		Path:      relPath,
-	}
-	if isStateDomainChangeBinarySegmentPath(relPath) {
-		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, ref, changes, txRanges)
-		if err != nil {
-			return nil, err
-		}
-		return []SegmentRef{segRef, accessorRef, idxRef}, nil
 	}
 	segRef, err := WriteStateDomainChangeSegment(dir, ref, changes, txRanges)
 	if err != nil {

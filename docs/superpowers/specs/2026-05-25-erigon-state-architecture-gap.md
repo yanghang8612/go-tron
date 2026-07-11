@@ -300,6 +300,14 @@ Status update:
   `OpenStateDomainChangeSegment` for binary history, so pruning checks validate
   checksum/size, header metadata, tx ordering, and trailing bytes without
   materializing all changes.
+- Production binary cold-history builds now preflight record/range counts and
+  externally sort physical hot rows into the cold file's tx/sequence order.
+  They then stream the `.seg` and `.idx`; the `.kv` accessor is sorted by a
+  second bounded ETL collector. The builder no longer retains a batch-wide
+  `[]StateDomainChange` or `[]StateTxRange`.
+- History segment/accessor compression now reads the logical temporary file in
+  fixed blocks rather than loading it with `os.ReadFile`, removing the
+  whole-file allocation from cold-build output and compaction finalization.
 - File-native history readers bound record and accessor-frame payload lengths
   by the actual file size before allocation, so corrupt cold files cannot force
   large transient buffers during range, block-range, keyed, or checker reads.
@@ -333,6 +341,14 @@ history reads (`iterateStateDomainChangeBinarySegmentByAccessorFile`,
 no whole-segment changes/accessor slice. `LoadProductionManifest` →
 `validateHistoryBinaryCompanionTriples` returns a hard error (not a warning) when a
 registered history `.seg` is missing its `.idx`/`.kv` companion.
+
+**Build-path update 2026-07-11:** the production binary builder now uses
+`buildStateDomainChangeHistoryBinarySegmentsFromDB`: bounded preflight scans
+count records/ranges, externally sort the `.seg` record stream and `.kv` rows
+through `rawdb/etl.Collector`, then stream `.seg`/`.idx` emission. The legacy
+JSON and direct slice writers remain for tests and compatibility only; the
+production aggregator no longer creates a resident change slice for cold
+history.
 
 ### 4. Domain Registry Is Only Partially Applied
 

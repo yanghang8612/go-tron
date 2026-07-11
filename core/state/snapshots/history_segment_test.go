@@ -10,6 +10,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -234,6 +235,130 @@ func TestManagerIteratesStateDomainChangesByAccessorKey(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Owner != owner || string(got[0].Key) != "slot/a" || string(got[0].Prev) != "old-a" {
 		t.Fatalf("prefix changes = %+v", got)
+	}
+}
+
+func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x59}, common.AccountIDLength)...))
+
+	for _, row := range []*rawdb.StateTxRange{
+		{BlockNum: 1, BlockHash: common.Hash{0x01}, BeginTxNum: 10, EndTxNum: 11},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, BeginTxNum: 12, EndTxNum: 13},
+	} {
+		if err := rawdb.WriteStateTxRange(db, row.BlockNum, row.BlockHash, row.BeginTxNum, row.EndTxNum); err != nil {
+			t.Fatalf("write tx range: %v", err)
+		}
+	}
+	for _, change := range []*rawdb.StateDomainChange{
+		// Hot rows are physically keyed by block/seq. Deliberately place TxNum in
+		// the opposite order so the builder must externally sort records rather
+		// than assuming physical iteration already matches cold-file ordering.
+		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("one")},
+		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 11, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00, 0x00}, NextExists: true, Next: []byte("two")},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 12, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("three")},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 13, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x01}, NextExists: true, Next: []byte("four")},
+	} {
+		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
+			t.Fatalf("write state change: %v", err)
+		}
+	}
+
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain-change registry")
+	}
+	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDB(db, dir, SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: 10, ToTxNum: 13, Path: "history/state-domain-change-10-13.seg",
+	}, cfg, etl.Options{TempDir: filepath.Join(dir, "etl-scratch"), BufferLimit: 1})
+	if err != nil {
+		t.Fatalf("build streamed binary history: %v", err)
+	}
+	if result.recordETL.SpilledRuns < 2 {
+		t.Fatalf("record ETL spilled %d runs, want forced external spill", result.recordETL.SpilledRuns)
+	}
+	if result.accessorETL.SpilledRuns < 2 {
+		t.Fatalf("accessor ETL spilled %d runs, want forced external spill", result.accessorETL.SpilledRuns)
+	}
+	if result.accessorETL.Applied != 4 {
+		t.Fatalf("accessor ETL applied %d entries, want 4", result.accessorETL.Applied)
+	}
+	if len(result.refs) != 3 {
+		t.Fatalf("streamed refs = %+v, want history+accessor+index", result.refs)
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, result.refs[0], result.refs[2], result.refs[1]); err != nil {
+		t.Fatalf("verify streamed companions: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 13, result.refs)); err != nil {
+		t.Fatalf("publish streamed history manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open streamed history manager: %v", err)
+	}
+	var exact []uint64
+	if err := mgr.IterateStateDomainChangesByKey(10, 13, rawdb.StateFlatDomainKVLatest, owner, 0, kvdomains.ContractStorage, []byte{0x00}, func(change *rawdb.StateDomainChange) (bool, error) {
+		exact = append(exact, change.TxNum)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate streamed history by exact key: %v", err)
+	}
+	if len(exact) != 2 || exact[0] != 10 || exact[1] != 12 {
+		t.Fatalf("exact key txNums = %v, want [10 12]", exact)
+	}
+	var prefix []uint64
+	if err := mgr.IterateStateDomainChangesByPrefix(10, 13, owner, 0, kvdomains.ContractStorage, []byte{0x00}, func(change *rawdb.StateDomainChange) (bool, error) {
+		prefix = append(prefix, change.TxNum)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate streamed history by prefix: %v", err)
+	}
+	if len(prefix) != 3 || prefix[0] != 10 || prefix[1] != 12 || prefix[2] != 11 {
+		t.Fatalf("prefix key txNums = %v, want [10 12 11]", prefix)
+	}
+}
+
+func TestBuildStateDomainChangeHistoryStreamHonorsCompressionGate(t *testing.T) {
+	previous := CompressHistorySegments
+	CompressHistorySegments = false
+	defer func() { CompressHistorySegments = previous }()
+
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5b}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 10, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
+		Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 10, "history/state-domain-change-10-10.seg")
+	if err != nil {
+		t.Fatalf("build uncompressed streamed history: %v", err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("refs = %+v, want history+accessor+index", refs)
+	}
+	file, err := os.Open(filepath.Join(dir, refs[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var magic [8]byte
+	if _, err := file.ReadAt(magic[:], 0); err != nil {
+		t.Fatal(err)
+	}
+	if string(magic[:]) == compressedBlockMagic {
+		t.Fatalf("streamed history segment was compressed with gate disabled")
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, refs[0], refs[2], refs[1]); err != nil {
+		t.Fatalf("verify uncompressed streamed companions: %v", err)
 	}
 }
 
