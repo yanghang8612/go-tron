@@ -296,7 +296,7 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 	mergedSeg := compactionRefByKind(t, result, SegmentHistory)
 	mergedAcc := compactionRefByKind(t, result, SegmentAccessor)
 
-	assertMagic := func(rel string) {
+	assertMagic := func(rel string, want string) {
 		f, err := os.Open(filepath.Join(dir, rel))
 		if err != nil {
 			t.Fatal(err)
@@ -306,12 +306,12 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 		if _, err := f.ReadAt(m[:], 0); err != nil {
 			t.Fatal(err)
 		}
-		if string(m[:]) != compressedBlockMagic {
-			t.Fatalf("merged %s not compressed (magic %q)", rel, m)
+		if string(m[:]) != want {
+			t.Fatalf("merged %s magic %q, want %q", rel, m, want)
 		}
 	}
-	assertMagic(mergedSeg.Path)
-	assertMagic(mergedAcc.Path)
+	assertMagic(mergedSeg.Path, compressedBlockMagic)
+	assertMagic(mergedAcc.Path, string(stateDomainChangeBinaryAccessorMagic[:]))
 
 	// The merged compressed seg reads back across multiple source compression
 	// blocks without materializing a source segment.

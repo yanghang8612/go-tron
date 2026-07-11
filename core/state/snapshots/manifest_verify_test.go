@@ -163,22 +163,34 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 	}
 
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if len(data) < stateDomainChangeBinaryHeaderSize+16 {
-		t.Fatalf("accessor data length = %d, want second offset", len(data))
+	if binary.BigEndian.Uint32(data[8:12]) == stateDomainChangeBinaryVersionV3 {
+		firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
+		secondRecordIndex := firstRecordIndex + stateDomainChangeBinaryAccessorV3ExactEntrySize
+		if secondRecordIndex+4 > len(data) {
+			t.Fatalf("accessor data length = %d, want two v3 exact entries", len(data))
+		}
+		first := binary.BigEndian.Uint32(data[firstRecordIndex : firstRecordIndex+4])
+		second := binary.BigEndian.Uint32(data[secondRecordIndex : secondRecordIndex+4])
+		binary.BigEndian.PutUint32(data[firstRecordIndex:firstRecordIndex+4], second)
+		binary.BigEndian.PutUint32(data[secondRecordIndex:secondRecordIndex+4], first)
+	} else {
+		if len(data) < stateDomainChangeBinaryHeaderSize+16 {
+			t.Fatalf("accessor data length = %d, want second offset", len(data))
+		}
+		secondEntryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize+8 : stateDomainChangeBinaryHeaderSize+16])
+		if secondEntryOffset+4 > uint64(len(data)) {
+			t.Fatalf("second accessor offset %d outside data length %d", secondEntryOffset, len(data))
+		}
+		keyLen := binary.BigEndian.Uint32(data[secondEntryOffset : secondEntryOffset+4])
+		keyEnd := secondEntryOffset + 4 + uint64(keyLen)
+		if keyEnd == secondEntryOffset+4 || keyEnd > uint64(len(data)) {
+			t.Fatalf("second accessor key range [%d,%d) outside data length %d", secondEntryOffset+4, keyEnd, len(data))
+		}
+		if data[keyEnd-1] != 'b' {
+			t.Fatalf("second accessor key suffix = %q, want b", data[keyEnd-1])
+		}
+		data[keyEnd-1] = 'c'
 	}
-	secondEntryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize+8 : stateDomainChangeBinaryHeaderSize+16])
-	if secondEntryOffset+4 > uint64(len(data)) {
-		t.Fatalf("second accessor offset %d outside data length %d", secondEntryOffset, len(data))
-	}
-	keyLen := binary.BigEndian.Uint32(data[secondEntryOffset : secondEntryOffset+4])
-	keyEnd := secondEntryOffset + 4 + uint64(keyLen)
-	if keyEnd == secondEntryOffset+4 || keyEnd > uint64(len(data)) {
-		t.Fatalf("second accessor key range [%d,%d) outside data length %d", secondEntryOffset+4, keyEnd, len(data))
-	}
-	if data[keyEnd-1] != 'b' {
-		t.Fatalf("second accessor key suffix = %q, want b", data[keyEnd-1])
-	}
-	data[keyEnd-1] = 'c'
 	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
 	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {
 		t.Fatalf("write stale accessor: %v", err)
@@ -189,8 +201,8 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 
 	manifest = NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
 	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
-	if err == nil || !strings.Contains(err.Error(), "key mismatch") {
-		t.Fatalf("VerifyLoadedManifestFiles stale accessor err = %v, want key mismatch", err)
+	if err == nil || (!strings.Contains(err.Error(), "key mismatch") && !strings.Contains(err.Error(), "exact entry")) {
+		t.Fatalf("VerifyLoadedManifestFiles stale accessor err = %v, want companion mismatch", err)
 	}
 }
 

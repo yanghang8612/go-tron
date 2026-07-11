@@ -514,7 +514,7 @@ func TestManagerIteratesStateDomainChangesByKeyStopsBeforeReadingRestOfBinaryAcc
 	}
 }
 
-func TestManagerIteratesStateDomainChangesByPrefixStopsBeforeReadingRestOfBinaryAccessor(t *testing.T) {
+func TestManagerIteratesStateDomainChangesByPrefixStopsCallbackBeforeReadingRestOfBinaryAccessor(t *testing.T) {
 	dir := t.TempDir()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5b}, common.AccountIDLength)...))
 	first := binaryStateDomainChange(1, 1, 1, "slot/a")
@@ -546,7 +546,7 @@ func TestManagerIteratesStateDomainChangesByPrefixStopsBeforeReadingRestOfBinary
 	var got []*rawdb.StateDomainChange
 	if err := mgr.IterateStateDomainChangesByPrefix(1, 2, owner, 5, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
 		got = append(got, change)
-		return true, nil
+		return false, nil
 	}); err != nil {
 		t.Fatalf("stream prefix stopped before corrupt record: %v", err)
 	}

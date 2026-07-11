@@ -54,11 +54,6 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 		return result, fmt.Errorf("snapshots: create state-domain-change history record ETL collector: %w", err)
 	}
 	defer recordCollector.Close()
-	accessorCollector, err := etl.NewCollector(opts)
-	if err != nil {
-		return result, fmt.Errorf("snapshots: create state-domain-change history accessor ETL collector: %w", err)
-	}
-	defer accessorCollector.Close()
 	recordCount, err := collectStateDomainChangeHistoryRecords(db, cfg, ref.FromTxNum, ref.ToTxNum, recordCollector)
 	if err != nil {
 		return result, err
@@ -99,28 +94,9 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 		return result, err
 	}
 
-	accessorTmp, accessorTmpName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryAccessorPath(ref.Path))
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		_ = accessorTmp.Close()
-		_ = os.Remove(accessorTmpName)
-	}()
-	if err := writeStateDomainChangeBinaryHeaderTo(accessorTmp, stateDomainChangeBinaryAccessorMagic, ref.FromTxNum, ref.ToTxNum, recordCount); err != nil {
-		return result, err
-	}
-	if recordCount > (math.MaxUint64-uint64(stateDomainChangeBinaryHeaderSize))/8 {
-		return result, fmt.Errorf("snapshots: state-domain-change accessor count %d overflows offset table", recordCount)
-	}
-	if err := writeZeroes(accessorTmp, recordCount*8); err != nil {
-		return result, err
-	}
-
 	recordWriter := stateDomainChangeHistoryRecordETLWriter{
 		segment:    segmentTmp,
 		index:      indexTmp,
-		accessor:   accessorCollector,
 		ref:        ref,
 		expected:   recordCount,
 		segmentOff: recordOffset,
@@ -134,20 +110,6 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 	}
 	if err := writeStateDomainChangeBinaryIndexCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return result, err
-	}
-
-	accessorWriter := stateDomainChangeBinaryAccessorETLWriter{
-		file:          accessorTmp,
-		ref:           ref,
-		expected:      recordCount,
-		payloadOffset: uint64(stateDomainChangeBinaryHeaderSize) + recordCount*8,
-	}
-	result.accessorETL, err = accessorCollector.Load(&accessorWriter)
-	if err != nil {
-		return result, fmt.Errorf("snapshots: sort state-domain-change history accessor: %w", err)
-	}
-	if accessorWriter.count != recordCount {
-		return result, fmt.Errorf("snapshots: state-domain-change accessor emitted %d records, want %d", accessorWriter.count, recordCount)
 	}
 
 	var segmentRef, indexRef, accessorRef SegmentRef
@@ -185,7 +147,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 		ToTxNum:   ref.ToTxNum,
 		Path:      stateDomainChangeBinaryAccessorPath(segmentRef.Path),
 	}
-	accessorRef, err = finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false, CompressHistorySegments)
+	accessorRef, result.accessorETL, err = buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir, segmentRef, accessorRef, opts)
 	if err != nil {
 		return result, err
 	}
@@ -375,7 +337,6 @@ func stateDomainChangeHistoryRecordETLSortKey(change *rawdb.StateDomainChange, o
 type stateDomainChangeHistoryRecordETLWriter struct {
 	segment      *os.File
 	index        *os.File
-	accessor     *etl.Collector
 	ref          SegmentRef
 	expected     uint64
 	count        uint64
@@ -387,7 +348,7 @@ type stateDomainChangeHistoryRecordETLWriter struct {
 }
 
 func (w *stateDomainChangeHistoryRecordETLWriter) Put(_ []byte, value []byte) error {
-	if w == nil || w.segment == nil || w.index == nil || w.accessor == nil {
+	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record ETL writer")
 	}
 	if w.count >= w.expected {
@@ -424,20 +385,6 @@ func (w *stateDomainChangeHistoryRecordETLWriter) Put(_ []byte, value []byte) er
 		return err
 	}
 	if _, err := w.segment.Write(frame); err != nil {
-		return err
-	}
-	entry := stateDomainChangeBinaryAccessorEntry{
-		key:         stateDomainChangeBinaryAccessorKey(change),
-		txNum:       change.TxNum,
-		seq:         change.Seq,
-		offset:      w.segmentOff,
-		recordIndex: w.count,
-	}
-	entryFrame, err := encodeStateDomainChangeBinaryAccessorEntryFrame(entry)
-	if err != nil {
-		return err
-	}
-	if err := w.accessor.Put(stateDomainChangeBinaryAccessorETLSortKey(entry), entryFrame); err != nil {
 		return err
 	}
 	if uint64(len(frame)) > math.MaxUint64-w.segmentOff {
@@ -486,6 +433,286 @@ func writeStateDomainChangeBinaryIndexCount(file *os.File, count uint64) error {
 	binary.BigEndian.PutUint64(raw[:], count)
 	_, err := file.WriteAt(raw[:], 28)
 	return err
+}
+
+type stateDomainChangeBinaryAccessorV3ExactETLWriter struct {
+	file     *os.File
+	expected uint64
+	count    uint64
+	previous stateDomainChangeBinaryAccessorV3ExactEntry
+	havePrev bool
+}
+
+func (w *stateDomainChangeBinaryAccessorV3ExactETLWriter) Put(_ []byte, value []byte) error {
+	if w == nil || w.file == nil {
+		return errors.New("snapshots: nil state-domain-change accessor v3 exact ETL writer")
+	}
+	if len(value) != stateDomainChangeBinaryAccessorV3ExactEntrySize {
+		return fmt.Errorf("snapshots: state-domain-change accessor v3 exact value size %d, want %d", len(value), stateDomainChangeBinaryAccessorV3ExactEntrySize)
+	}
+	if w.count >= w.expected {
+		return fmt.Errorf("snapshots: state-domain-change accessor v3 exact emitted more than %d entries", w.expected)
+	}
+	var entry stateDomainChangeBinaryAccessorV3ExactEntry
+	copy(entry.hash[:], value[:stateDomainChangeBinaryAccessorV3HashSize])
+	entry.offset = binary.BigEndian.Uint64(value[stateDomainChangeBinaryAccessorV3HashSize : stateDomainChangeBinaryAccessorV3HashSize+8])
+	entry.recordIndex = binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3HashSize+8:])
+	if entry.offset < stateDomainChangeBinaryHeaderSize {
+		return fmt.Errorf("snapshots: state-domain-change accessor v3 exact record offset %d is invalid", entry.offset)
+	}
+	if w.havePrev {
+		if cmp := bytes.Compare(w.previous.hash[:], entry.hash[:]); cmp > 0 ||
+			(cmp == 0 && (w.previous.offset > entry.offset || (w.previous.offset == entry.offset && w.previous.recordIndex >= entry.recordIndex))) {
+			return errors.New("snapshots: state-domain-change accessor v3 exact ETL rows are not strictly ordered")
+		}
+	}
+	if _, err := w.file.Write(value); err != nil {
+		return err
+	}
+	w.previous = entry
+	w.havePrev = true
+	w.count++
+	return nil
+}
+
+func (*stateDomainChangeBinaryAccessorV3ExactETLWriter) Delete([]byte) error {
+	return errors.New("snapshots: state-domain-change accessor v3 exact ETL writer does not support deletes")
+}
+
+type stateDomainChangeBinaryAccessorV3GroupETLWriter struct {
+	payload      *os.File
+	offsets      *os.File
+	groups       uint64
+	records      uint64
+	haveGroup    bool
+	currentKey   [stateDomainChangeBinaryAccessorV3GroupKeySize]byte
+	currentCount uint64
+	countOffset  int64
+}
+
+func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) Put(_ []byte, value []byte) error {
+	if w == nil || w.payload == nil || w.offsets == nil {
+		return errors.New("snapshots: nil state-domain-change accessor v3 group ETL writer")
+	}
+	if len(value) != stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize {
+		return fmt.Errorf("snapshots: state-domain-change accessor v3 group value size %d, want %d", len(value), stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize)
+	}
+	var key [stateDomainChangeBinaryAccessorV3GroupKeySize]byte
+	copy(key[:], value[:stateDomainChangeBinaryAccessorV3GroupKeySize])
+	offset := binary.BigEndian.Uint64(value[stateDomainChangeBinaryAccessorV3GroupKeySize : stateDomainChangeBinaryAccessorV3GroupKeySize+8])
+	recordIndex := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize+8:])
+	if offset < stateDomainChangeBinaryHeaderSize {
+		return fmt.Errorf("snapshots: state-domain-change accessor v3 group record offset %d is invalid", offset)
+	}
+	if !w.haveGroup || !bytes.Equal(w.currentKey[:], key[:]) {
+		if err := w.finishGroup(); err != nil {
+			return err
+		}
+		pos, err := w.payload.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if pos < 0 {
+			return errors.New("snapshots: state-domain-change accessor v3 group payload offset is negative")
+		}
+		var raw [8]byte
+		binary.BigEndian.PutUint64(raw[:], uint64(pos))
+		if _, err := w.offsets.Write(raw[:]); err != nil {
+			return err
+		}
+		if _, err := w.payload.Write(key[:]); err != nil {
+			return err
+		}
+		w.countOffset = pos + stateDomainChangeBinaryAccessorV3GroupKeySize
+		if err := writeZeroes(w.payload, 8); err != nil {
+			return err
+		}
+		w.currentKey = key
+		w.currentCount = 0
+		w.haveGroup = true
+		w.groups++
+	}
+	var raw [stateDomainChangeBinaryAccessorV3GroupEntrySize]byte
+	binary.BigEndian.PutUint64(raw[0:8], offset)
+	binary.BigEndian.PutUint32(raw[8:], recordIndex)
+	if _, err := w.payload.Write(raw[:]); err != nil {
+		return err
+	}
+	w.currentCount++
+	w.records++
+	return nil
+}
+
+func (w *stateDomainChangeBinaryAccessorV3GroupETLWriter) finishGroup() error {
+	if w == nil || !w.haveGroup {
+		return nil
+	}
+	if w.currentCount == 0 {
+		return errors.New("snapshots: state-domain-change accessor v3 group has no records")
+	}
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], w.currentCount)
+	if _, err := w.payload.WriteAt(raw[:], w.countOffset); err != nil {
+		return err
+	}
+	w.haveGroup = false
+	return nil
+}
+
+func (*stateDomainChangeBinaryAccessorV3GroupETLWriter) Delete([]byte) error {
+	return errors.New("snapshots: state-domain-change accessor v3 group ETL writer does not support deletes")
+}
+
+func buildStateDomainChangeBinaryAccessorV3FromHistorySegment(dir string, segmentRef, accessorRef SegmentRef, opts etl.Options) (SegmentRef, etl.Stats, error) {
+	if opts.TempDir == "" {
+		opts.TempDir = filepath.Join(dir, "etl")
+	}
+	exactCollector, err := etl.NewCollector(opts)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: create state-domain-change accessor v3 exact ETL collector: %w", err)
+	}
+	defer exactCollector.Close()
+	groupCollector, err := etl.NewCollector(opts)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: create state-domain-change accessor v3 group ETL collector: %w", err)
+	}
+	defer groupCollector.Close()
+
+	segment, segmentSize, header, err := openHistorySegmentForRead(dir, segmentRef)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer segment.Close()
+	if header.count > math.MaxUint32 {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v3 count %d exceeds uint32 record index", header.count)
+	}
+	_, offset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(segment, segmentSize, segmentRef, header)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
+		change, next, err := readStateDomainChangeBinaryRecordAtBounded(segment, offset, segmentSize)
+		if err != nil {
+			return SegmentRef{}, etl.Stats{}, err
+		}
+		key := stateDomainChangeBinaryAccessorKey(change)
+		if recordIndex > math.MaxUint32 {
+			return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v3 record index %d exceeds uint32", recordIndex)
+		}
+		hash := stateDomainChangeBinaryAccessorV3Hash(key)
+		exactValue := make([]byte, stateDomainChangeBinaryAccessorV3ExactEntrySize)
+		copy(exactValue[:stateDomainChangeBinaryAccessorV3HashSize], hash[:])
+		binary.BigEndian.PutUint64(exactValue[stateDomainChangeBinaryAccessorV3HashSize:], offset)
+		binary.BigEndian.PutUint32(exactValue[stateDomainChangeBinaryAccessorV3HashSize+8:], uint32(recordIndex))
+		if err := exactCollector.Put(exactValue, exactValue); err != nil {
+			return SegmentRef{}, etl.Stats{}, err
+		}
+		if groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change); ok {
+			entry := stateDomainChangeBinaryAccessorEntry{key: key, txNum: change.TxNum, seq: change.Seq, offset: offset, recordIndex: recordIndex}
+			groupValue := make([]byte, stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV3GroupEntrySize)
+			copy(groupValue[:stateDomainChangeBinaryAccessorV3GroupKeySize], groupKey[:])
+			binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+8], offset)
+			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+8:], uint32(recordIndex))
+			if err := groupCollector.Put(stateDomainChangeBinaryAccessorETLSortKey(entry), groupValue); err != nil {
+				return SegmentRef{}, etl.Stats{}, err
+			}
+		}
+		offset = next
+	}
+	if offset != segmentSize {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v3 source segment %q has %d trailing bytes", segmentRef.Path, segmentSize-offset)
+	}
+
+	exactTmp, exactTmpName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".exact")
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer func() { _ = exactTmp.Close(); _ = os.Remove(exactTmpName) }()
+	exactWriter := stateDomainChangeBinaryAccessorV3ExactETLWriter{file: exactTmp, expected: header.count}
+	exactStats, err := exactCollector.Load(&exactWriter)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if exactWriter.count != header.count {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v3 exact entries %d, want %d", exactWriter.count, header.count)
+	}
+	if err := exactTmp.Sync(); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+
+	groupPayloadTmp, groupPayloadName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".groups")
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer func() { _ = groupPayloadTmp.Close(); _ = os.Remove(groupPayloadName) }()
+	groupOffsetsTmp, groupOffsetsName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".group-offsets")
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer func() { _ = groupOffsetsTmp.Close(); _ = os.Remove(groupOffsetsName) }()
+	groupWriter := stateDomainChangeBinaryAccessorV3GroupETLWriter{payload: groupPayloadTmp, offsets: groupOffsetsTmp}
+	if _, err := groupCollector.Load(&groupWriter); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if err := groupWriter.finishGroup(); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if groupWriter.groups > header.count || groupWriter.records > header.count {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v3 groups %d records %d exceed segment count %d", groupWriter.groups, groupWriter.records, header.count)
+	}
+	if err := groupPayloadTmp.Sync(); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if err := groupOffsetsTmp.Sync(); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+
+	accessorTmp, accessorTmpName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer func() { _ = accessorTmp.Close(); _ = os.Remove(accessorTmpName) }()
+	if err := writeStateDomainChangeBinaryHeaderToVersion(accessorTmp, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, header.count, stateDomainChangeBinaryVersionV3); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if err := writeStateDomainChangeBinaryTxRangeCount(accessorTmp, groupWriter.groups); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if _, err := exactTmp.Seek(0, io.SeekStart); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if _, err := io.Copy(accessorTmp, exactTmp); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	payloadStart := uint64(stateDomainChangeBinaryHeaderSize+stateDomainChangeBinaryAccessorV3HeaderExtra) + header.count*stateDomainChangeBinaryAccessorV3ExactEntrySize + groupWriter.groups*8
+	if _, err := groupOffsetsTmp.Seek(0, io.SeekStart); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	for i := uint64(0); i < groupWriter.groups; i++ {
+		var raw [8]byte
+		if _, err := io.ReadFull(groupOffsetsTmp, raw[:]); err != nil {
+			return SegmentRef{}, etl.Stats{}, err
+		}
+		relative := binary.BigEndian.Uint64(raw[:])
+		if relative > math.MaxUint64-payloadStart {
+			return SegmentRef{}, etl.Stats{}, errors.New("snapshots: state-domain-change accessor v3 group payload offset overflows")
+		}
+		binary.BigEndian.PutUint64(raw[:], payloadStart+relative)
+		if _, err := accessorTmp.Write(raw[:]); err != nil {
+			return SegmentRef{}, etl.Stats{}, err
+		}
+	}
+	if _, err := groupPayloadTmp.Seek(0, io.SeekStart); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	if _, err := io.Copy(accessorTmp, groupPayloadTmp); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	resultRef, err := finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false, false)
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	return resultRef, exactStats, nil
 }
 
 // stateDomainChangeBinaryAccessorETLSortKey preserves the binary accessor's

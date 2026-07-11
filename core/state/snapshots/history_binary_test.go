@@ -3,9 +3,12 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -39,6 +42,123 @@ func TestStateDomainChangeBinaryRecordRoundTrip(t *testing.T) {
 	if _, err := decodeStateDomainChangeRecord(encoded); err == nil {
 		t.Fatal("record with trailing bytes decoded successfully")
 	}
+}
+
+func TestStateDomainChangeBinaryV2AccessorCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 10,
+		ToTxNum:   11,
+		Path:      "history/state-domain-change-v2.seg",
+	}
+	owner := binaryAddress(0xa4)
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(10, 10, 1, "slot/a"),
+		binaryStateDomainChange(11, 11, 1, "slot/b"),
+	}
+	for _, change := range changes {
+		change.Owner = owner
+		change.Generation = 3
+		change.Domain = kvdomains.ContractStorage
+	}
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	segmentData, index, accessor, err := encodeStateDomainChangeBinarySegment(ref.FromTxNum, ref.ToTxNum, normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeStateDomainChangeBinaryIndex(ref.FromTxNum, ref.ToTxNum, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV2ForTest(ref.FromTxNum, ref.ToTxNum, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segRef := ref
+	setStateDomainChangeBinaryRefMetadata(&segRef, segmentData)
+	idxRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryIndexPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
+	accessorRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryAccessorPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, accessorData)
+	for _, file := range []struct {
+		ref  SegmentRef
+		data []byte
+	}{{segRef, segmentData}, {idxRef, indexData}, {accessorRef, accessorData}} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, file.ref.Path), file.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, segRef, idxRef, accessorRef); err != nil {
+		t.Fatalf("verify v2 companions: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 11, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keyed []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByKey(10, 11, rawdb.StateFlatDomainKVLatest, owner, 3, kvdomains.ContractStorage, []byte("slot/a"), func(change *rawdb.StateDomainChange) (bool, error) {
+		keyed = append(keyed, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, keyed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}})
+	var prefixed []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByPrefix(10, 11, owner, 3, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
+		prefixed = append(prefixed, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, prefixed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+}
+
+func TestStateDomainChangeBinaryV3AccessorRejectsCountBeyondRecordIndex(t *testing.T) {
+	var data bytes.Buffer
+	writeStateDomainChangeBinaryHeaderVersion(&data, stateDomainChangeBinaryAccessorMagic, 1, 1, uint64(math.MaxUint32)+1, stateDomainChangeBinaryVersionV3)
+	writeUint64(&data, 0)
+	header, err := readStateDomainChangeBinaryHeaderAt(bytes.NewReader(data.Bytes()), stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatalf("read v3 header: %v", err)
+	}
+	if _, err := stateDomainChangeBinaryAccessorV3LayoutAt(bytes.NewReader(data.Bytes()), uint64(data.Len()), header); err == nil || !strings.Contains(err.Error(), "exceeds uint32") {
+		t.Fatalf("v3 oversized count error = %v, want uint32 limit", err)
+	}
+}
+
+func encodeStateDomainChangeBinaryAccessorV2ForTest(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
+	sorted := append([]stateDomainChangeBinaryAccessorEntry(nil), entries...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return compareStateDomainChangeBinaryAccessorEntry(sorted[i], sorted[j]) < 0
+	})
+	var out bytes.Buffer
+	writeStateDomainChangeBinaryHeaderVersion(&out, stateDomainChangeBinaryAccessorMagic, fromTxNum, toTxNum, uint64(len(sorted)), stateDomainChangeBinaryVersionV2)
+	payloadStart := uint64(stateDomainChangeBinaryHeaderSize + len(sorted)*8)
+	var offsets bytes.Buffer
+	var payload bytes.Buffer
+	for i, entry := range sorted {
+		if err := validateStateDomainChangeBinaryAccessorEntry(SegmentRef{Path: "v2 accessor", FromTxNum: fromTxNum, ToTxNum: toTxNum}, entry, uint64(i)); err != nil {
+			return nil, err
+		}
+		if len(entry.key) > math.MaxUint32 {
+			return nil, fmt.Errorf("accessor key too large: %d", len(entry.key))
+		}
+		writeUint64(&offsets, payloadStart+uint64(payload.Len()))
+		writeUint32(&payload, uint32(len(entry.key)))
+		payload.Write(entry.key)
+		writeUint64(&payload, entry.txNum)
+		writeUint64(&payload, entry.seq)
+		writeUint64(&payload, entry.offset)
+		writeUint64(&payload, entry.recordIndex)
+	}
+	out.Write(offsets.Bytes())
+	out.Write(payload.Bytes())
+	return out.Bytes(), nil
 }
 
 func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T) {
