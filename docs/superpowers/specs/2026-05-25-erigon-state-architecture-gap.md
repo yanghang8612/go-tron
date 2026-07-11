@@ -289,6 +289,9 @@ Status update:
   range and keyed iteration now dispatch through `IterateHistoryRange` /
   `IterateHistoryByKey`, so callers can stop early without first materializing
   all matching changes from a cold segment.
+- Binary history restore also streams the explicit block-to-tx-range table, so
+  bootstrap does not open a whole history segment merely to recover ranges for
+  blocks with no state changes.
 - Cold block-to-state-tx-range lookup now uses the binary `.idx` file to
   lower-bound by block and `ReadAt` only the candidate state-domain-change
   records. `Manager.StateTxRangeForBlock` no longer opens and decodes an entire

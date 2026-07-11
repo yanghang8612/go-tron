@@ -455,6 +455,16 @@ func TestStateDomainChangeBinaryStoresNoChangeBlockTxRange(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("tx ranges = %d, want 4: %+v", len(rows), rows)
 	}
+	var streamed []*rawdb.StateTxRange
+	if err := iterateStateDomainChangeBinaryTxRanges(dir, segRef, func(row *rawdb.StateTxRange) (bool, error) {
+		streamed = append(streamed, cloneStateTxRangeForSegment(row))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate binary tx ranges: %v", err)
+	}
+	if !reflect.DeepEqual(streamed, rows) {
+		t.Fatalf("streamed tx ranges = %+v, want %+v", streamed, rows)
+	}
 	got, ok, err := readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir, segRef, idxRef, 13)
 	if err != nil || !ok {
 		t.Fatalf("read no-change block tx range: ok=%v err=%v", ok, err)

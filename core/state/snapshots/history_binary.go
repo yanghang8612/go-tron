@@ -2279,22 +2279,13 @@ func decodeStateDomainChangeBinaryTxRangeTable(ref SegmentRef, header stateDomai
 }
 
 func readStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader) ([]*rawdb.StateTxRange, uint64, error) {
-	count, payloadOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(r, fileSize, ref, header)
+	var txRanges []*rawdb.StateTxRange
+	payloadOffset, err := iterateStateDomainChangeBinaryTxRangeTableAt(r, fileSize, ref, header, func(row *rawdb.StateTxRange) (bool, error) {
+		txRanges = append(txRanges, row)
+		return true, nil
+	})
 	if err != nil {
 		return nil, 0, err
-	}
-	txRanges := make([]*rawdb.StateTxRange, 0, count)
-	var raw [stateDomainChangeBinaryTxRangeSize]byte
-	for i := uint64(0); i < count; i++ {
-		offset := int64(stateDomainChangeBinaryHeaderSize + 8 + i*stateDomainChangeBinaryTxRangeSize)
-		if _, err := r.ReadAt(raw[:], offset); err != nil {
-			return nil, 0, err
-		}
-		row := decodeStateDomainChangeBinaryTxRange(raw[:])
-		if err := validateStateDomainChangeBinaryTxRange(ref, row, i, txRanges); err != nil {
-			return nil, 0, err
-		}
-		txRanges = append(txRanges, row)
 	}
 	return txRanges, payloadOffset, nil
 }
@@ -2325,6 +2316,13 @@ func stateDomainChangeBinaryTxRangeTableBoundsAt(r io.ReaderAt, fileSize uint64,
 }
 
 func validateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader) (uint64, error) {
+	return iterateStateDomainChangeBinaryTxRangeTableAt(r, fileSize, ref, header, nil)
+}
+
+// iterateStateDomainChangeBinaryTxRangeTableAt validates the fixed-width range
+// table and streams rows to fn. It keeps only the preceding block number, so
+// archive restore never needs a resident []StateTxRange for a whole segment.
+func iterateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader, fn func(*rawdb.StateTxRange) (bool, error)) (uint64, error) {
 	count, payloadOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(r, fileSize, ref, header)
 	if err != nil {
 		return 0, err
@@ -2350,8 +2348,30 @@ func validateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint6
 			return 0, fmt.Errorf("snapshots: state-domain-change binary segment %q tx ranges are not sorted", ref.Path)
 		}
 		previousBlock = row.BlockNum
+		if fn != nil {
+			cont, err := fn(row)
+			if err != nil {
+				return 0, err
+			}
+			if !cont {
+				return payloadOffset, nil
+			}
+		}
 	}
 	return payloadOffset, nil
+}
+
+// iterateStateDomainChangeBinaryTxRanges opens a binary history segment and
+// streams its explicit block-to-tx-range table. Blocks with no state changes
+// still need these rows restored during snapshot bootstrap.
+func iterateStateDomainChangeBinaryTxRanges(dir string, ref SegmentRef, fn func(*rawdb.StateTxRange) (bool, error)) error {
+	reader, logicalSize, header, err := openHistorySegmentForRead(dir, ref)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	_, err = iterateStateDomainChangeBinaryTxRangeTableAt(reader, logicalSize, ref, header, fn)
+	return err
 }
 
 func decodeStateDomainChangeBinaryTxRange(raw []byte) *rawdb.StateTxRange {

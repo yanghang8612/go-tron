@@ -497,6 +497,17 @@ func (m *Manager) restoreExplicitStateTxRanges(txRanges map[uint64]*rawdb.StateT
 		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
 			continue
 		}
+		if isStateDomainChangeBinarySegmentPath(ref.Path) {
+			if err := iterateStateDomainChangeBinaryTxRanges(m.dir, ref, func(row *rawdb.StateTxRange) (bool, error) {
+				if row.BeginTxNum < fromTxNum || row.EndTxNum > toTxNum {
+					return true, nil
+				}
+				return true, mergeStateTxRange(txRanges, row)
+			}); err != nil {
+				return err
+			}
+			continue
+		}
 		seg, err := OpenStateDomainChangeSegment(m.dir, ref)
 		if err != nil {
 			return err
