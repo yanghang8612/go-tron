@@ -1417,6 +1417,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 	var lastPeer *p2p.Peer
 	var resumePhases []syncdl.ImportStagePhasePlan
 	paused := false
+	pauseBlock := uint64(0)
 drainLoop:
 	for {
 		now := time.Now()
@@ -1472,10 +1473,24 @@ drainLoop:
 		}
 		if importLoop.Pause {
 			paused = true
+			pauseBlock = importRun.Run.Outcome.PauseNum
 		}
 		if importLoop.YieldResumePhase {
 			resumePhases = importLoop.ResumePhases
 			ss.logImportResumePhaseYield(importLoop.ResumePhasePlan)
+			// A deep async session can continue feeding later chunks while the
+			// worker finishes this chunk's commitment/finish suffix. The worker
+			// commits FIFO, so the final pending suffix at the session barrier
+			// proves every earlier chunk too; stopping here would drain the worker
+			// after every local chunk and defeat the cross-chunk pipeline.
+			if depth > 2 {
+				continue drainLoop
+			}
+		} else if depth > 2 && importRun.Run.HasRecord && !importRun.Run.RecordProgressFailed() {
+			// A later chunk that completed every phase can supersede an older
+			// pending suffix: FIFO commitment means its canonical boundary also
+			// proves the older one has finished.
+			resumePhases = nil
 		}
 		if importLoop.StopLoop {
 			break drainLoop
@@ -1490,8 +1505,15 @@ drainLoop:
 		commitBarrier = ss.applyImportDrainCommitBarrier(sess.Finish(), paused, lastPeer)
 		paused = commitBarrier.Paused
 	}
-	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused)
-	ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
+	// A later chunk may have paused the drain after an earlier chunk's async
+	// commitment suffix became pending. Preserve that already-finished prefix
+	// when every suffix task is strictly before the failed block, but never
+	// re-arm the drain from a paused session.
+	publishPausedPrefix := paused && syncdl.ImportResumePhaseSuffixPrecedesBlock(resumePhases, pauseBlock)
+	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused && !publishPausedPrefix)
+	if !publishPausedPrefix {
+		ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
+	}
 }
 
 func (ss *SyncService) applyImportResumePhaseDrainContinuation(run syncdl.ImportResumePhasePublishFinalizationRunApplyResult, lastPeer *p2p.Peer) {

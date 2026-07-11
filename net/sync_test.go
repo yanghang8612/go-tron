@@ -842,6 +842,17 @@ func TestSyncServiceContinuesDrainAfterResumePhasePublish(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("commit fold hook was not reached")
 	}
+	// The first commitment fold is deliberately blocked. A depth-4 session must
+	// still execute the next local chunk and enqueue its fold before the barrier
+	// is released; otherwise every pending commitment suffix serializes the
+	// staged drain back to one local import chunk at a time.
+	if !waitUntil(3*time.Second, func() bool {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.BufferedDB(), rawdb.StageExecution)
+		return err == nil && ok && row.HasBlockHash && row.BlockNum == block2.Number() && row.BlockHash == block2.Hash()
+	}) {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.BufferedDB(), rawdb.StageExecution)
+		t.Fatalf("next chunk did not execute while first commitment was blocked: row=%+v ok=%v err=%v", row, ok, err)
+	}
 	close(release)
 
 	select {
@@ -862,6 +873,79 @@ func TestSyncServiceContinuesDrainAfterResumePhasePublish(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
 		t.Fatalf("SyncBodiesReady after resume-phase drain = %+v ok=%v err=%v, want deleted", row, ok, err)
 	}
+}
+
+func TestSyncServiceDeepAsyncPublishesCommittedPrefixBeforeLaterFailure(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	bc := makeTestChain(t)
+	bc.SetAsyncCommit(true)
+
+	ss := NewSyncService(bc, nil)
+	if err := ss.SetImportBatchSize(1); err != nil {
+		t.Fatalf("set import batch size: %v", err)
+	}
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	// This body extends block1 but declares the wrong java-tron account root.
+	// The first chunk can commit, while canonical execution must pause at the
+	// second after its execution stage has been observed.
+	block2 := stubBlock(2, block1.Hash())
+	block2.Proto().BlockHeader.RawData.AccountStateRoot = tcommon.Hash{0xff}.Bytes()
+	block2 = types.NewBlockFromPB(block2.Proto())
+	for _, block := range []*types.Block{block1, block2} {
+		result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block, rawOf(t, block))
+		if result.StageError != nil || result.ProgressWriteError != nil {
+			t.Fatalf("stage block %d result = %+v", block.Number(), result)
+		}
+	}
+
+	var hookOnce sync.Once
+	hooked := make(chan struct{})
+	release := make(chan struct{})
+	core.SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == block1.Number() {
+			hookOnce.Do(func() {
+				close(hooked)
+				<-release
+			})
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		core.SetCommitFoldHookForTest(nil)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		ss.drainBufferedBlocks()
+		close(done)
+	}()
+	select {
+	case <-hooked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("commit fold hook was not reached")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not finish after later-block failure")
+	}
+
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block1.Hash() {
+		t.Fatalf("head after failed second chunk = %v, want block1 %x", got, block1.Hash())
+	}
+	if !ss.IsPaused() {
+		t.Fatal("sync did not pause after the second chunk failed")
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block1)
 }
 
 func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {

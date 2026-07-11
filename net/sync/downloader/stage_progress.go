@@ -1313,6 +1313,27 @@ func PlanImportResumePhaseSuffix(schedule ImportBatchStagePhaseSchedule, resume 
 	return []ImportStagePhasePlan{resume}
 }
 
+// ImportResumePhaseSuffixPrecedesBlock reports whether every planned task in a
+// pending resume suffix is strictly before blockNum. SyncService uses this
+// after a later chunk fails: a finished prefix may still publish its verified
+// commitment/finish diagnostics, but it must not publish a suffix that reaches
+// the failed block or an unknown boundary.
+func ImportResumePhaseSuffixPrecedesBlock(phases []ImportStagePhasePlan, blockNum uint64) bool {
+	if blockNum == 0 || len(phases) == 0 {
+		return false
+	}
+	haveTask := false
+	for _, phase := range phases {
+		for _, task := range phase.Tasks {
+			if task.BlockNum >= blockNum {
+				return false
+			}
+			haveTask = true
+		}
+	}
+	return haveTask
+}
+
 // PlanImportResumePhasePublishFinalization gates a yielded phase suffix after
 // the caller's commit barrier. Resume-phase progress may be published only
 // when there is real work, the commit barrier completed, and the sync loop has

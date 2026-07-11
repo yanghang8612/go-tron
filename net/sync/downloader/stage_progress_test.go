@@ -2288,6 +2288,35 @@ func TestPlanImportResumePhaseSuffix(t *testing.T) {
 	}
 }
 
+func TestImportResumePhaseSuffixPrecedesBlock(t *testing.T) {
+	hash := tcommon.Hash{0x07}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, hash)},
+		},
+		{
+			Phase:          ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []ImportStageTask{ImportFinishStageTask(7, hash)},
+		},
+	}
+	if !ImportResumePhaseSuffixPrecedesBlock(phases, 8) {
+		t.Fatal("phase suffix before block8 was rejected")
+	}
+	for _, blockNum := range []uint64{0, 7} {
+		if ImportResumePhaseSuffixPrecedesBlock(phases, blockNum) {
+			t.Fatalf("phase suffix before block%d accepted, want rejected", blockNum)
+		}
+	}
+	if ImportResumePhaseSuffixPrecedesBlock(nil, 8) {
+		t.Fatal("empty phase suffix accepted")
+	}
+}
+
 func TestPlanImportResumePhasePublishFinalization(t *testing.T) {
 	hash := tcommon.Hash{0x07}
 	phases := []ImportStagePhasePlan{

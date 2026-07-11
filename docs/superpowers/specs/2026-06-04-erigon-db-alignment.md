@@ -565,7 +565,12 @@ Status:
   maintenance, or reorg rules. The synchronous path flushes latest-domain rows
   into the current buffer layer after each chunk, preserving existing chunk
   boundary visibility while keeping the scope transaction open. Deep async
-  commit also keeps its existing cross-chunk worker-barrier amortization.
+  commit now keeps later local chunks flowing while an earlier chunk's
+  commitment/finish suffix is pending, keeping the worker queue filled instead
+  of draining at every chunk boundary. At the one session barrier, only the
+  latest pending suffix is published because FIFO commitment proves all earlier
+  chunks; if a later chunk fails, an already-finished prefix still publishes
+  its verified suffix but the paused drain is never re-armed.
   Cross-batch synchronous and deep regression tests prove identical roots/head,
   one opened state/scope, and matching fork-switch results.
 - Canonical block metadata still commits the block body and TAPOS ring before
