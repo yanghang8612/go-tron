@@ -2613,6 +2613,14 @@ Status:
   candidate to be present with `--require-event-log-index-point-profile`, and
   the standalone profiler can fail saved manifests on point-candidate overhead
   with `--max-point-sidecar-share-milli` and `--max-point-snapshot-share-milli`.
+- A 20,000-record high-entropy storage-history experiment confirms that simple
+  front-coding is not a worthwhile new accessor format on top of the existing
+  zstd blocks: it reduced the raw `.kv` from 2,140,036 to 1,558,278 bytes, but
+  only reduced the production-compressed accessor from 922,049 to 915,701
+  bytes (about 0.7%). Keep the stable ordered `.kv` format. A future material
+  reduction needs an Erigon-style exact-key MPHF/existence filter and must add
+  a separate owner/generation/domain grouping path so archive prefix queries
+  retain their current bounded behavior.
 
 Adopt only where profiles justify it:
 
