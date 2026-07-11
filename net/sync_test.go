@@ -95,13 +95,74 @@ func TestSyncImportedBatchProgressApplierBatchesReadyAfterSynchronousImport(t *t
 	}
 }
 
-func TestSyncImportedBatchProgressApplierKeepsAsyncReadyRefreshSeparate(t *testing.T) {
+func TestSyncImportedBatchProgressApplierClearsReadyWithAsyncProgress(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "2")
 	bc := makeTestChain(t)
 	bc.SetAsyncCommit(true)
 	ss := NewSyncService(bc, nil)
-	_, _, used := (syncImportedBatchProgressApplier{service: ss}).WriteImportedSyncProgressAndReady(nil, nil)
-	if used {
-		t.Fatal("async import used atomic ready-progress writer before commitment published the head")
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+
+	var hookOnce sync.Once
+	hooked := make(chan struct{})
+	release := make(chan struct{})
+	core.SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == block1.Number() {
+			hookOnce.Do(func() {
+				close(hooked)
+				<-release
+			})
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		core.SetCommitFoldHookForTest(nil)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	session := bc.BeginSyncInsertSession()
+	if err := session.Insert([]*types.Block{block1}); err != nil {
+		t.Fatalf("insert async block1: %v", err)
+	}
+	select {
+	case <-hooked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("async commit fold hook was not reached")
+	}
+
+	result, ready, used := (syncImportedBatchProgressApplier{service: ss}).WriteImportedSyncProgressAndReady(
+		[]rawdb.SyncStagedBlockDelete{{Number: block1.Number(), Hash: block1.Hash()}},
+		[]rawdb.StageProgress{{Stage: rawdb.StageSyncImport, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true}},
+	)
+	if !used {
+		t.Fatal("async import did not coalesce ready deletion with stage progress")
+	}
+	if result.ProgressError != nil || len(result.DeleteErrors) != 0 || result.Deleted != 1 || result.ProgressRows != 1 {
+		t.Fatalf("write result = %+v, want one successful imported body/progress write", result)
+	}
+	if !ready.Deleted || ready.Failed() {
+		t.Fatalf("ready refresh = %+v, want successful cleared frontier", ready)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
+		t.Fatalf("imported staged block1 ok=%v err=%v, want deleted", ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("ready progress after async import = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+	close(release)
+	if err := session.Finish(); err != nil {
+		t.Fatalf("finish async insert session: %v", err)
 	}
 }
 

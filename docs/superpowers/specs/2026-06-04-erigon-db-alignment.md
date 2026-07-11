@@ -546,9 +546,12 @@ Status:
   when the backing store supports batched writes. In the default synchronous
   path, once the canonical head is proven equal to that deleted prefix's final
   block/hash, the computed next `SyncBodiesReady` row (or its deletion) joins
-  the same batch; this removes one Pebble commit per local import chunk while
-  keeping async paths on the prior two-step flow until their commitment worker
-  publishes the head. The downloader package now
+  the same batch. Async paths instead clear `SyncBodiesReady` in that batch:
+  their commitment worker can publish a head before Finish/layer promotion, so
+  they must not speculate a next frontier; later body ingress or session startup
+  recomputes it from the durable staged rows. Both paths remove one Pebble
+  commit per local import chunk without relaxing the stage boundary. The
+  downloader package now
   owns the complete imported-batch storage plan and builds explicit
   bodies/execution/commitment/finish import-stage tasks for the applied
   block/hash boundary. Stage rows are published only as a contiguous

@@ -2318,24 +2318,32 @@ func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []ra
 	return a.service.writeImportedSyncProgress(deletes, rows)
 }
 
-// WriteImportedSyncProgressAndReady coalesces the default synchronous drain's
-// imported-body delete, stage-prefix progress, and next ready frontier. Async
-// sessions keep the existing two-step flow because their CurrentBlock may lag
-// the just-executed batch until the commitment worker publishes it.
+// WriteImportedSyncProgressAndReady coalesces imported-body deletion and stage
+// progress with the downstream ready state. A synchronous batch whose head is
+// already published can write its next frontier; async batches instead clear
+// SyncBodiesReady in the same batch because the commit worker may still be
+// publishing that frontier. The local drain can safely continue without a ready
+// row, and the next body ingress or restart reconstructs it.
 func (a syncImportedBatchProgressApplier) WriteImportedSyncProgressAndReady(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) (rawdb.SyncImportProgressWriteResult, syncdl.StagedBodyReadyProgressRefresh, bool) {
-	if a.service == nil || a.service.chain == nil || a.service.chain.PipelinedCommitDepth() != 0 {
+	if a.service == nil || a.service.chain == nil || len(deletes) == 0 {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
 	db := a.service.chain.DB()
+	if db == nil {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	if _, ok := db.(ethdb.Batcher); !ok {
+		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
+	}
+	if a.service.chain.PipelinedCommitDepth() > 0 {
+		return rawdb.WriteSyncImportProgressAndReadyBatch(db, deletes, rows, nil), syncdl.StagedBodyReadyProgressRefresh{Deleted: true}, true
+	}
 	head := a.service.chain.CurrentBlock()
-	if db == nil || head == nil || len(deletes) == 0 {
+	if head == nil {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
 	lastDeleted := deletes[len(deletes)-1]
 	if head.Number() != lastDeleted.Number || head.Hash() != lastDeleted.Hash {
-		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
-	}
-	if _, ok := db.(ethdb.Batcher); !ok {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
 	ready := syncdl.PlanStagedBodyReadyProgress(db, head.Number()+1, a.service.targetHeadNum)
