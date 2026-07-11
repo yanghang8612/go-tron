@@ -308,6 +308,10 @@ Status update:
 - History segment/accessor compression now reads the logical temporary file in
   fixed blocks rather than loading it with `os.ReadFile`, removing the
   whole-file allocation from cold-build output and compaction finalization.
+- State-domain history compaction now copies each source's logical record
+  payload through the seekable `ReadAt` reader with a fixed buffer. This keeps
+  compressed source records out of a resident decompressed segment while
+  preserving the existing index/accessor offset remapping.
 - File-native history readers bound record and accessor-frame payload lengths
   by the actual file size before allocation, so corrupt cold files cannot force
   large transient buffers during range, block-range, keyed, or checker reads.

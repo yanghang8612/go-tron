@@ -786,31 +786,39 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *os.File, source 
 	if source.segmentSize < source.recordOffset {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d below record offset %d", source.history.Path, source.segmentSize, source.recordOffset)
 	}
-	payloadSize := source.segmentSize - source.recordOffset
-	// source.segmentSize is the logical uncompressed size. Read the source's
-	// logical content, decompressing if needed, then copy only record payloads
-	// after the per-block tx-range table.
-	data, err := os.ReadFile(filepath.Join(dir, source.history.Path))
+	reader, header, logicalSize, err := openStateDomainChangeBinarySegmentReader(dir, source.history)
 	if err != nil {
 		return err
 	}
-	logical := data
-	if isCompressedBlockBlob(data) {
-		if logical, err = decompressBlockBlob(data); err != nil {
-			return err
-		}
+	defer reader.Close()
+	if header != source.segmentHeader {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q changed during compaction", source.history.Path)
 	}
-	if uint64(len(logical)) != source.segmentSize {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q logical size %d, want %d", source.history.Path, len(logical), source.segmentSize)
+	if logicalSize != source.segmentSize {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q logical size %d, want %d", source.history.Path, logicalSize, source.segmentSize)
 	}
-	if uint64(len(logical)) < source.recordOffset {
-		return io.ErrUnexpectedEOF
-	}
-	if uint64(len(logical))-source.recordOffset != payloadSize {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q payload size mismatch", source.history.Path)
-	}
-	if _, err := dst.Write(logical[source.recordOffset:]); err != nil {
+	_, recordOffset, err := readStateDomainChangeBinaryTxRangeTableAt(reader, logicalSize, source.history, header)
+	if err != nil {
 		return err
+	}
+	if recordOffset != source.recordOffset {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q record offset %d, want %d", source.history.Path, recordOffset, source.recordOffset)
+	}
+	payloadSize := logicalSize - recordOffset
+	if recordOffset > math.MaxInt64 || payloadSize > math.MaxInt64 {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q payload exceeds int64", source.history.Path)
+	}
+	// The source reader serves the uncompressed logical byte space for both raw
+	// and block-compressed segments. Copy only record frames with a fixed buffer;
+	// materializing the full compressed source here would turn large archive
+	// compactions back into an O(segment-size) memory operation.
+	section := io.NewSectionReader(reader, int64(recordOffset), int64(payloadSize))
+	written, err := io.CopyBuffer(dst, section, make([]byte, 1<<20))
+	if err != nil {
+		return err
+	}
+	if uint64(written) != payloadSize {
+		return io.ErrUnexpectedEOF
 	}
 	return nil
 }
