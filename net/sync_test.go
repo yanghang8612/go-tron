@@ -1472,7 +1472,7 @@ func TestFindCommonBlock(t *testing.T) {
 	block3 := bc.GetBlockByNumber(3)
 	block0 := bc.GetBlockByNumber(0)
 
-	peerSummary := []types.BlockID{block3.ID(), block0.ID()}
+	peerSummary := []types.BlockID{block0.ID(), block3.ID()}
 	commonNum := ss.FindCommonBlock(peerSummary)
 
 	if commonNum != 3 {

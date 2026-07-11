@@ -53,7 +53,11 @@ func BuildChainSummary(chain *core.BlockChain) []types.BlockID {
 // `chain`. Returns 0 (genesis) when no entry matches.
 func FindCommonBlock(chain *core.BlockChain, peerSummary []types.BlockID) uint64 {
 	headNum := chain.CurrentBlock().Number()
-	for _, bid := range peerSummary {
+	// Summaries are ordered from oldest to newest. Search backwards so the
+	// genesis entry does not mask a later common block and make every follow-up
+	// inventory request restart from height zero.
+	for i := len(peerSummary) - 1; i >= 0; i-- {
+		bid := peerSummary[i]
 		if bid.Number() > headNum {
 			continue
 		}

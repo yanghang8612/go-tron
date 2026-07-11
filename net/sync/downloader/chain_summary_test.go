@@ -114,10 +114,20 @@ func TestFindCommonBlockSharedPrefix(t *testing.T) {
 	bc := newTestChain(t, 5)
 	block3 := bc.GetBlockByNumber(3)
 	block0 := bc.GetBlockByNumber(0)
-	peerSummary := []types.BlockID{block3.ID(), block0.ID()}
+	// SYNC_BLOCK_CHAIN summaries are oldest-first on the wire.
+	peerSummary := []types.BlockID{block0.ID(), block3.ID()}
 	commonNum := FindCommonBlock(bc, peerSummary)
 	if commonNum != 3 {
 		t.Fatalf("expected common block #3, got #%d", commonNum)
+	}
+}
+
+func TestFindCommonBlockReturnsHighestSharedSummaryEntry(t *testing.T) {
+	bc := newTestChain(t, 8)
+	summary := BuildChainSummary(bc)
+
+	if got := FindCommonBlock(bc, summary); got != 8 {
+		t.Fatalf("common block = %d, want highest shared block 8", got)
 	}
 }
 

@@ -61,6 +61,33 @@ func TestRecoverStalledFetchNoopWhenNotSyncing(t *testing.T) {
 	}
 }
 
+func TestRecoverStalledFetchFinishesDrainedCompletedSession(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "completed-peer", false, nil)
+
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.targetHeadNum = bc.CurrentBlock().Number()
+	ps, added := ss.addPeerStateLocked(peer)
+	if !added || ps == nil {
+		ss.mu.Unlock()
+		t.Fatal("failed to add peer to sync session")
+	}
+	ps.done = true
+	ss.mu.Unlock()
+
+	ss.RecoverStalledFetch()
+
+	if ss.IsSyncing() {
+		t.Fatal("RecoverStalledFetch left a drained completed session active")
+	}
+}
+
 // TestFillFetchSlotsRearmsOnWaitingForLocalHead covers the depth>2 lost-wakeup
 // root cause: a peer that drained its fetch list while its last inventory tip is
 // still ahead of our (commit-worker-lagged) head must arm a re-check timer, so
