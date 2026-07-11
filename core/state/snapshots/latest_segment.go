@@ -39,11 +39,12 @@ type LatestSegment struct {
 }
 
 type Manager struct {
-	dir      string
-	mu       sync.RWMutex
-	manifest *Manifest
-	pinned   bool
-	cache    map[string]*LatestSegment
+	dir          string
+	mu           sync.RWMutex
+	manifest     *Manifest
+	manifestInfo os.FileInfo
+	pinned       bool
+	cache        map[string]*LatestSegment
 }
 
 func AccountSnapshotKey(owner common.Address) []byte {
@@ -784,14 +785,11 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 }
 
 func OpenManager(dir string) (*Manager, error) {
-	manifest, err := LoadProductionManifest(dir)
+	manifest, info, err := loadCurrentProductionManifest(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &Manager{dir: dir, cache: make(map[string]*LatestSegment)}, nil
-		}
 		return nil, err
 	}
-	return &Manager{dir: dir, manifest: manifest, cache: make(map[string]*LatestSegment)}, nil
+	return &Manager{dir: dir, manifest: manifest, manifestInfo: info, cache: make(map[string]*LatestSegment)}, nil
 }
 
 func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
@@ -1191,20 +1189,104 @@ func (m *Manager) currentManifest() (*Manifest, error) {
 		m.mu.RUnlock()
 		return manifest, nil
 	}
-	manifest, err := LoadProductionManifest(m.dir)
+	path := filepath.Join(m.dir, ManifestFile)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			m.mu.Lock()
-			m.manifest = nil
+			m.setManifestLocked(nil, nil)
 			m.mu.Unlock()
 			return nil, nil
 		}
 		return nil, err
 	}
+	m.mu.RLock()
+	if sameManifestFile(m.manifestInfo, info) {
+		manifest := m.manifest
+		m.mu.RUnlock()
+		return manifest, nil
+	}
+	m.mu.RUnlock()
+
+	manifest, manifestInfo, err := loadCurrentProductionManifest(m.dir)
+	if err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
-	m.manifest = manifest
+	if sameManifestFile(m.manifestInfo, manifestInfo) {
+		manifest = m.manifest
+	} else {
+		m.setManifestLocked(manifest, manifestInfo)
+	}
 	m.mu.Unlock()
 	return manifest, nil
+}
+
+// loadCurrentProductionManifest returns a manifest only when the file identity
+// remains stable across parsing. PublishManifest uses atomic rename, so the
+// identity check detects a newly published generation without reparsing an
+// unchanged manifest on every archive cold-state lookup.
+func loadCurrentProductionManifest(dir string) (*Manifest, os.FileInfo, error) {
+	path := filepath.Join(dir, ManifestFile)
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
+		manifest, err := LoadProductionManifest(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		after, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, nil, err
+		}
+		if sameManifestFile(before, after) {
+			return manifest, after, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("snapshots: manifest changed while loading %q", path)
+}
+
+func sameManifestFile(a, b os.FileInfo) bool {
+	return a != nil && b != nil &&
+		os.SameFile(a, b) &&
+		a.Size() == b.Size() &&
+		a.ModTime().Equal(b.ModTime())
+}
+
+func (m *Manager) setManifestLocked(manifest *Manifest, info os.FileInfo) {
+	m.manifest = manifest
+	m.manifestInfo = info
+	m.pruneInactiveLatestCacheLocked()
+}
+
+// pruneInactiveLatestCacheLocked prevents legacy JSON latest segments from
+// surviving every manifest compaction in the process heap. New binary readers
+// stay file-backed and do not enter this cache.
+func (m *Manager) pruneInactiveLatestCacheLocked() {
+	if len(m.cache) == 0 {
+		return
+	}
+	active := make(map[string]struct{})
+	if m.manifest != nil {
+		for _, ref := range m.manifest.Segments {
+			if cacheKey, ok := latestSegmentCacheKey(ref); ok {
+				active[cacheKey] = struct{}{}
+			}
+		}
+	}
+	for cacheKey := range m.cache {
+		if _, ok := active[cacheKey]; !ok {
+			delete(m.cache, cacheKey)
+		}
+	}
 }
 
 func (m *Manager) load(ref SegmentRef) (*LatestSegment, error) {
@@ -1230,10 +1312,24 @@ func (m *Manager) load(ref SegmentRef) (*LatestSegment, error) {
 			m.mu.Unlock()
 			return cached, nil
 		}
-		m.cache[cacheKey] = seg
+		if m.latestRefActiveLocked(cacheKey) {
+			m.cache[cacheKey] = seg
+		}
 		m.mu.Unlock()
 	}
 	return seg, nil
+}
+
+func (m *Manager) latestRefActiveLocked(cacheKey string) bool {
+	if m == nil || m.manifest == nil {
+		return false
+	}
+	for _, ref := range m.manifest.Segments {
+		if key, ok := latestSegmentCacheKey(ref); ok && key == cacheKey {
+			return true
+		}
+	}
+	return false
 }
 
 func latestSegmentCacheKey(ref SegmentRef) (string, bool) {

@@ -116,6 +116,9 @@ func TestManagerReloadsLatestSegmentWhenSamePathMetadataChanges(t *testing.T) {
 	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "old" {
 		t.Fatalf("first GetKVLatest = %q ok=%v err=%v, want old/true/nil", got, ok, err)
 	}
+	if len(mgr.cache) != 1 {
+		t.Fatalf("legacy latest cache entries = %d, want 1 after first read", len(mgr.cache))
+	}
 
 	secondRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte("new")}})
 	if err != nil {
@@ -127,9 +130,46 @@ func TestManagerReloadsLatestSegmentWhenSamePathMetadataChanges(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{secondRef})); err != nil {
 		t.Fatalf("publish second manifest: %v", err)
 	}
+	if _, err := mgr.currentManifest(); err != nil {
+		t.Fatalf("reload second manifest: %v", err)
+	}
+	if len(mgr.cache) != 0 {
+		t.Fatalf("legacy latest cache entries = %d after manifest replacement, want stale entry evicted", len(mgr.cache))
+	}
 
 	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "new" {
 		t.Fatalf("reloaded GetKVLatest = %q ok=%v err=%v, want new/true/nil", got, ok, err)
+	}
+}
+
+func TestManagerReusesUnchangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := latestStoreTestAddress(0x2d)
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account")); err != nil {
+		t.Fatalf("WriteStateAccountLatest: %v", err)
+	}
+	ref, err := BuildAccountLatestSegmentFromDB(db, dir, 1, 1, "latest/account-latest-1-1.json")
+	if err != nil {
+		t.Fatalf("BuildAccountLatestSegmentFromDB: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 1, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	first, err := mgr.currentManifest()
+	if err != nil || first == nil {
+		t.Fatalf("first currentManifest = %v/%v, want manifest/nil", first, err)
+	}
+	second, err := mgr.currentManifest()
+	if err != nil || second == nil {
+		t.Fatalf("second currentManifest = %v/%v, want manifest/nil", second, err)
+	}
+	if first != second {
+		t.Fatal("unchanged manifest was reparsed instead of reusing the verified manager view")
 	}
 }
 
