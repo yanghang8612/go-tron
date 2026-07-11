@@ -1239,6 +1239,107 @@ func TestResetSyncStagedBodiesDeletesRowsAndProgress(t *testing.T) {
 	}
 }
 
+func TestSyncStagedBlockBulkCleanupUsesRangeTombstone(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*syncStageRangeDeleteCountingStore, []*types.Block) (int, error)
+	}{
+		{
+			name: "through",
+			run: func(db *syncStageRangeDeleteCountingStore, blocks []*types.Block) (int, error) {
+				return DeleteSyncStagedBlocksThrough(db, blocks[31].Number())
+			},
+		},
+		{
+			name: "from",
+			run: func(db *syncStageRangeDeleteCountingStore, blocks []*types.Block) (int, error) {
+				return DeleteSyncStagedBlocksFrom(db, blocks[32].Number())
+			},
+		},
+		{
+			name: "prune tail with progress rewind",
+			run: func(db *syncStageRangeDeleteCountingStore, blocks []*types.Block) (int, error) {
+				if err := WriteStageProgressWithHash(db, StageSyncBodies, blocks[len(blocks)-1].Number(), blocks[len(blocks)-1].Hash()); err != nil {
+					return 0, err
+				}
+				result, err := PruneSyncStagedBlocksFrom(db, blocks[32].Number(), blocks[31].Number(), blocks[31].Hash(), true)
+				return result.Deleted, err
+			},
+		},
+		{
+			name: "all",
+			run: func(db *syncStageRangeDeleteCountingStore, _ []*types.Block) (int, error) {
+				return DeleteAllSyncStagedBlocks(db)
+			},
+		},
+		{
+			name: "reset",
+			run: func(db *syncStageRangeDeleteCountingStore, _ []*types.Block) (int, error) {
+				result := ResetSyncStagedBodies(db)
+				if result.StagedDeleteError != nil {
+					return result.DeletedBodies, result.StagedDeleteError
+				}
+				if result.BodiesProgressError != nil {
+					return result.DeletedBodies, result.BodiesProgressError
+				}
+				return result.DeletedBodies, result.BodiesReadyProgressError
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := NewMemoryDatabase()
+			blocks := make([]*types.Block, 64)
+			for i := range blocks {
+				blocks[i] = testSyncStagedBlock(uint64(i+1), common.Hash{byte(i)})
+				if err := WriteSyncStagedBlock(base, blocks[i]); err != nil {
+					t.Fatalf("write staged block %d: %v", blocks[i].Number(), err)
+				}
+			}
+			db := &syncStageRangeDeleteCountingStore{KeyValueStore: base}
+			deleted, err := test.run(db, blocks)
+			if err != nil {
+				t.Fatalf("bulk cleanup: %v", err)
+			}
+			if deleted != 32 && test.name != "all" && test.name != "reset" {
+				t.Fatalf("deleted = %d, want 32", deleted)
+			}
+			if (test.name == "all" || test.name == "reset") && deleted != len(blocks) {
+				t.Fatalf("deleted = %d, want %d", deleted, len(blocks))
+			}
+			if db.rangeDeletes != 1 || db.pointDeletes != 0 || db.batches != 1 {
+				t.Fatalf("range cleanup used rangeDeletes=%d pointDeletes=%d batches=%d, want 1/0/1", db.rangeDeletes, db.pointDeletes, db.batches)
+			}
+		})
+	}
+}
+
+func TestDeleteSyncStagedBlocksThroughKeepsMalformedRows(t *testing.T) {
+	base := NewMemoryDatabase()
+	block := testSyncStagedBlock(1, common.Hash{})
+	if err := WriteSyncStagedBlock(base, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	malformedKey := append(syncStagedBlockKey(block.Number()), 0x00)
+	if err := base.Put(malformedKey, []byte("corrupt")); err != nil {
+		t.Fatalf("write malformed staged row: %v", err)
+	}
+	db := &syncStageRangeDeleteCountingStore{KeyValueStore: base}
+	deleted, err := DeleteSyncStagedBlocksThrough(db, block.Number())
+	if err != nil {
+		t.Fatalf("delete staged blocks through: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+	if db.rangeDeletes != 0 || db.pointDeletes != 1 || db.batches != 1 {
+		t.Fatalf("malformed fallback used rangeDeletes=%d pointDeletes=%d batches=%d, want 0/1/1", db.rangeDeletes, db.pointDeletes, db.batches)
+	}
+	if exists, err := db.Has(malformedKey); err != nil || !exists {
+		t.Fatalf("malformed staged row exists=%v err=%v, want retained", exists, err)
+	}
+}
+
 func testSyncStagedBlock(number uint64, parent common.Hash) *types.Block {
 	return types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
@@ -1290,6 +1391,41 @@ func (db *countingBatchStore) NewBatch() ethdb.Batch {
 func (db *countingBatchStore) NewBatchWithSize(size int) ethdb.Batch {
 	db.batches++
 	return db.KeyValueStore.NewBatchWithSize(size)
+}
+
+type syncStageRangeDeleteCountingStore struct {
+	ethdb.KeyValueStore
+
+	batches      int
+	pointDeletes int
+	rangeDeletes int
+}
+
+func (db *syncStageRangeDeleteCountingStore) NewBatch() ethdb.Batch {
+	db.batches++
+	return &syncStageRangeDeleteCountingBatch{Batch: db.KeyValueStore.NewBatch(), store: db}
+}
+
+func (db *syncStageRangeDeleteCountingStore) NewBatchWithSize(size int) ethdb.Batch {
+	db.batches++
+	return &syncStageRangeDeleteCountingBatch{Batch: db.KeyValueStore.NewBatchWithSize(size), store: db}
+}
+
+type syncStageRangeDeleteCountingBatch struct {
+	ethdb.Batch
+	store *syncStageRangeDeleteCountingStore
+}
+
+func (b *syncStageRangeDeleteCountingBatch) Delete(key []byte) error {
+	if bytes.HasPrefix(key, syncStagedBlockPrefix) {
+		b.store.pointDeletes++
+	}
+	return b.Batch.Delete(key)
+}
+
+func (b *syncStageRangeDeleteCountingBatch) DeleteRange(start, end []byte) error {
+	b.store.rangeDeletes++
+	return b.Batch.DeleteRange(start, end)
 }
 
 type failingBatchDeleteStore struct {

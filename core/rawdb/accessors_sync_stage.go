@@ -605,28 +605,7 @@ func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int
 	if db == nil {
 		return 0, nil
 	}
-	it := db.NewIterator(syncStagedBlockPrefix, nil)
-	var keys [][]byte
-	for it.Next() {
-		key := append([]byte{}, it.Key()...)
-		if len(key) != len(syncStagedBlockPrefix)+8 {
-			continue
-		}
-		num := binary.BigEndian.Uint64(key[len(syncStagedBlockPrefix):])
-		if num > blockNum {
-			break
-		}
-		keys = append(keys, key)
-	}
-	if err := it.Error(); err != nil {
-		it.Release()
-		return 0, err
-	}
-	it.Release()
-	if err := deleteKeyBatch(db, keys); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	return deleteSyncStagedBlockRange(db, syncStagedBlockPrefix, syncStagedBlockRangeEnd(blockNum), false)
 }
 
 func decodeSyncStagedBlockRow(number uint64, data []byte) (SyncStagedBlockRow, bool, error) {
@@ -655,37 +634,119 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 	if db == nil {
 		return 0, nil
 	}
-	keys, err := collectSyncStagedBlockKeysFrom(db, blockNum)
-	if err != nil {
-		return 0, err
-	}
-	if err := deleteKeyBatch(db, keys); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	return deleteSyncStagedBlockRange(db, syncStagedBlockKey(blockNum), prefixUpperBound(syncStagedBlockPrefix), false)
 }
 
-func collectSyncStagedBlockKeysFrom(db ethdb.Iteratee, blockNum uint64) ([][]byte, error) {
-	if db == nil {
-		return nil, nil
+// syncStagedBlockRangeEnd returns the exclusive key bound for staged rows up
+// to and including blockNum. The MaxUint64 case must extend to the end of the
+// namespace because blockNum+1 would wrap before the prefix.
+func syncStagedBlockRangeEnd(blockNum uint64) []byte {
+	if blockNum == ^uint64(0) {
+		return prefixUpperBound(syncStagedBlockPrefix)
 	}
-	var start [8]byte
-	binary.BigEndian.PutUint64(start[:], blockNum)
-	it := db.NewIterator(syncStagedBlockPrefix, start[:])
-	var keys [][]byte
+	return syncStagedBlockKey(blockNum + 1)
+}
+
+// syncStagedBlockRangeDeletePlan retains the normal range-tombstone path
+// without giving malformed keys a different cleanup meaning. Production rows
+// are always fixed-width block-number keys, so Pebble receives one range
+// tombstone instead of an in-memory key slice and one point tombstone per row.
+// A corrupt namespace falls back to point deletes for its valid rows, matching
+// the former behavior that left malformed keys untouched.
+type syncStagedBlockRangeDeletePlan struct {
+	Deleted     int
+	Start       []byte
+	End         []byte
+	RangeDelete bool
+	Keys        [][]byte
+}
+
+func planSyncStagedBlockRangeDelete(db ethdb.Iteratee, start, end []byte, deleteMalformed bool) (syncStagedBlockRangeDeletePlan, error) {
+	plan := syncStagedBlockRangeDeletePlan{
+		Start:       start,
+		End:         end,
+		RangeDelete: true,
+	}
+	if db == nil {
+		return plan, nil
+	}
+	if !bytes.HasPrefix(start, syncStagedBlockPrefix) {
+		return plan, fmt.Errorf("rawdb: invalid sync staged block range start %x", start)
+	}
+	it := db.NewIterator(syncStagedBlockPrefix, start[len(syncStagedBlockPrefix):])
 	for it.Next() {
-		key := append([]byte{}, it.Key()...)
-		if len(key) != len(syncStagedBlockPrefix)+8 {
+		key := it.Key()
+		if end != nil && bytes.Compare(key, end) >= 0 {
+			break
+		}
+		if deleteMalformed {
+			plan.Deleted++
 			continue
 		}
-		keys = append(keys, key)
+		if _, ok := parseSyncStagedBlockKey(key); !ok {
+			plan.RangeDelete = false
+			continue
+		}
+		plan.Deleted++
+	}
+	err := it.Error()
+	it.Release()
+	if err != nil {
+		return syncStagedBlockRangeDeletePlan{}, err
+	}
+	if plan.RangeDelete || plan.Deleted == 0 {
+		return plan, nil
+	}
+	// Preserve the old malformed-key behavior on damaged data. This path is not
+	// used by normal staged sync rows and may allocate one key per valid row.
+	it = db.NewIterator(syncStagedBlockPrefix, start[len(syncStagedBlockPrefix):])
+	defer it.Release()
+	plan.Keys = make([][]byte, 0, plan.Deleted)
+	for it.Next() {
+		key := it.Key()
+		if end != nil && bytes.Compare(key, end) >= 0 {
+			break
+		}
+		if _, ok := parseSyncStagedBlockKey(key); !ok {
+			continue
+		}
+		plan.Keys = append(plan.Keys, append([]byte(nil), key...))
 	}
 	if err := it.Error(); err != nil {
-		it.Release()
-		return nil, err
+		return syncStagedBlockRangeDeletePlan{}, err
 	}
-	it.Release()
-	return keys, nil
+	return plan, nil
+}
+
+func (p syncStagedBlockRangeDeletePlan) appendTo(batch ethdb.Batch) error {
+	if p.Deleted == 0 {
+		return nil
+	}
+	if p.RangeDelete {
+		return batch.DeleteRange(p.Start, p.End)
+	}
+	for _, key := range p.Keys {
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteSyncStagedBlockRange(db ethdb.KeyValueStore, start, end []byte, deleteMalformed bool) (int, error) {
+	plan, err := planSyncStagedBlockRangeDelete(db, start, end, deleteMalformed)
+	if err != nil || plan.Deleted == 0 {
+		return plan.Deleted, err
+	}
+	batch := db.NewBatchWithSize(len(start) + len(end))
+	defer batch.Reset()
+	if err := plan.appendTo(batch); err != nil {
+		return 0, err
+	}
+	if err := batch.Write(); err != nil {
+		return 0, err
+	}
+	return plan.Deleted, nil
 }
 
 // PruneSyncStagedBlocksFrom removes a stale downloader body tail and keeps the
@@ -697,10 +758,6 @@ func PruneSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64, lastRest
 	var result SyncStagedTailPruneResult
 	if db == nil {
 		return result, nil
-	}
-	keys, err := collectSyncStagedBlockKeysFrom(db, blockNum)
-	if err != nil {
-		return result, err
 	}
 	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil {
@@ -719,15 +776,17 @@ func PruneSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64, lastRest
 			deleteProgress = true
 		}
 	}
-	if len(keys) == 0 && !deleteProgress && !rewindProgress {
+	plan, err := planSyncStagedBlockRangeDelete(db, syncStagedBlockKey(blockNum), prefixUpperBound(syncStagedBlockPrefix), false)
+	if err != nil {
+		return result, err
+	}
+	if plan.Deleted == 0 && !deleteProgress && !rewindProgress {
 		return result, nil
 	}
-	batch := db.NewBatchWithSize(len(keys)*8 + 8 + common.HashLength)
+	batch := db.NewBatchWithSize(len(plan.Start) + len(plan.End) + 8 + common.HashLength)
 	defer batch.Reset()
-	for _, key := range keys {
-		if err := batch.Delete(key); err != nil {
-			return result, err
-		}
+	if err := plan.appendTo(batch); err != nil {
+		return result, err
 	}
 	if deleteProgress {
 		if err := batch.Delete(stageProgressKey(StageSyncBodies)); err != nil {
@@ -742,7 +801,7 @@ func PruneSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64, lastRest
 	if err := batch.Write(); err != nil {
 		return result, err
 	}
-	result.Deleted = len(keys)
+	result.Deleted = plan.Deleted
 	if deleteProgress {
 		result.DeletedProgress = true
 	}
@@ -758,54 +817,7 @@ func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
-	keys, err := collectAllSyncStagedBlockKeys(db)
-	if err != nil {
-		return 0, err
-	}
-	if err := deleteKeyBatch(db, keys); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
-}
-
-func collectAllSyncStagedBlockKeys(db ethdb.Iteratee) ([][]byte, error) {
-	if db == nil {
-		return nil, nil
-	}
-	it := db.NewIterator(syncStagedBlockPrefix, nil)
-	var keys [][]byte
-	for it.Next() {
-		keys = append(keys, append([]byte{}, it.Key()...))
-	}
-	if err := it.Error(); err != nil {
-		it.Release()
-		return nil, err
-	}
-	it.Release()
-	return keys, nil
-}
-
-func deleteKeyBatch(db ethdb.KeyValueWriter, keys [][]byte) error {
-	if db == nil || len(keys) == 0 {
-		return nil
-	}
-	batcher, ok := db.(ethdb.Batcher)
-	if !ok {
-		for _, key := range keys {
-			if err := db.Delete(key); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	batch := batcher.NewBatchWithSize(len(keys) * 8)
-	defer batch.Reset()
-	for _, key := range keys {
-		if err := batch.Delete(key); err != nil {
-			return err
-		}
-	}
-	return batch.Write()
+	return deleteSyncStagedBlockRange(db, syncStagedBlockPrefix, prefixUpperBound(syncStagedBlockPrefix), true)
 }
 
 // ResetSyncStagedBodies clears the downloader body staging table and its body
@@ -816,19 +828,17 @@ func ResetSyncStagedBodies(db ethdb.KeyValueStore) SyncStagedResetResult {
 	if db == nil {
 		return result
 	}
-	keys, err := collectAllSyncStagedBlockKeys(db)
+	plan, err := planSyncStagedBlockRangeDelete(db, syncStagedBlockPrefix, prefixUpperBound(syncStagedBlockPrefix), true)
 	if err != nil {
 		result.StagedDeleteError = err
 		result.BodiesProgressError = DeleteStageProgress(db, StageSyncBodies)
 		result.BodiesReadyProgressError = DeleteStageProgress(db, StageSyncBodiesReady)
 		return result
 	}
-	batch := db.NewBatchWithSize(len(keys)*8 + 2*8)
+	batch := db.NewBatchWithSize(len(plan.Start) + len(plan.End) + 2*8)
 	defer batch.Reset()
-	for _, key := range keys {
-		if err := batch.Delete(key); err != nil && result.StagedDeleteError == nil {
-			result.StagedDeleteError = err
-		}
+	if err := plan.appendTo(batch); err != nil {
+		result.StagedDeleteError = err
 	}
 	if err := batch.Delete(stageProgressKey(StageSyncBodies)); err != nil {
 		result.BodiesProgressError = err
@@ -837,7 +847,7 @@ func ResetSyncStagedBodies(db ethdb.KeyValueStore) SyncStagedResetResult {
 		result.BodiesReadyProgressError = err
 	}
 	if err := batch.Write(); err != nil {
-		if len(keys) > 0 && result.StagedDeleteError == nil {
+		if plan.Deleted > 0 && result.StagedDeleteError == nil {
 			result.StagedDeleteError = err
 		}
 		if result.BodiesProgressError == nil {
@@ -849,7 +859,7 @@ func ResetSyncStagedBodies(db ethdb.KeyValueStore) SyncStagedResetResult {
 		return result
 	}
 	if result.StagedDeleteError == nil {
-		result.DeletedBodies = len(keys)
+		result.DeletedBodies = plan.Deleted
 	}
 	return result
 }

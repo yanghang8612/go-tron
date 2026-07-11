@@ -504,7 +504,10 @@ Status:
   `SyncBodies`/`SyncBodiesReady` rows in one batch, and range cleanup for startup
   imported-through deletes, stale-tail deletes, and full-reset staged body
   deletes now flushes through rawdb batches where the backing store supports
-  them.
+  them. Normal Pebble cleanup batches use one staged-body key-range tombstone
+  while streaming the deleted-row count, avoiding an in-memory key slice and
+  one point tombstone per staged body; malformed namespace keys retain the
+  prior valid-row-only fallback behavior.
   `SyncBodiesReady` refresh and drain-limit reads are downloader helpers now:
   refresh recomputes the contiguous staged-body frontier and writes or deletes
   the ready row, while the drain-limit helper reads the hash-bound ready row
