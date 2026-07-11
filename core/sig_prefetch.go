@@ -2,6 +2,7 @@ package core
 
 import (
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -48,6 +49,17 @@ type headerSignaturePrewarmer interface {
 // warmed on the happy path / not touched when the kill switch is off.
 var sigPrewarmJobHook func()
 
+// sigPrewarmBlockSpan maps a consecutive range of prewarm work indexes to one
+// block. Header recovery, when present, occupies the first index and the
+// remaining indexes address block.Transactions() directly. This keeps the
+// scheduler's auxiliary memory proportional to blocks instead of transactions.
+type sigPrewarmBlockSpan struct {
+	block      *types.Block
+	txs        []*types.Transaction
+	start, end int64
+	header     bool
+}
+
 // prewarmBlockSignatures concurrently warms the ECDSA-recovery memos for a
 // contiguous batch of blocks: each transaction's recovered signers and (when the
 // engine supports it) each block's recovered witness. It is a pure cache-warming
@@ -65,44 +77,52 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 		return
 	}
 
-	// Flatten the batch into independent recovery jobs so work is balanced
-	// across goroutines regardless of how txs are distributed between blocks.
-	// A block job (negative txIndex sentinel) warms the header signature; a tx
-	// job warms one transaction's signers.
-	type job struct {
-		block   *types.Block
-		txs     []*types.Transaction
-		txIndex int // -1 → header-signature job; >=0 → index into txs
-	}
+	// Build one span per block rather than one heap object per transaction.
+	// Sync ranges can contain many transactions; retaining a full job vector
+	// duplicates their scheduling metadata and increases GC work before serial
+	// execution starts. The worker resolves an atomic work index through these
+	// block spans, so independent transaction recovery remains balanced.
 	var (
-		jobs    []job
-		totalTx int
+		spans    []sigPrewarmBlockSpan
+		totalTx  int
+		jobCount int64
 	)
 	for _, block := range blocks {
 		if block == nil || block.Proto() == nil {
 			continue
 		}
-		if engine != nil {
-			jobs = append(jobs, job{block: block, txIndex: -1})
-		}
 		txs := block.Transactions()
-		for i, tx := range txs {
+		header := engine != nil
+		span := sigPrewarmBlockSpan{
+			block:  block,
+			txs:    txs,
+			start:  jobCount,
+			header: header,
+		}
+		if header {
+			jobCount++
+		}
+		for _, tx := range txs {
 			if tx == nil || tx.Proto() == nil {
 				continue
 			}
 			totalTx++
-			jobs = append(jobs, job{txs: txs, txIndex: i})
+		}
+		jobCount += int64(len(txs))
+		span.end = jobCount
+		if span.start != span.end {
+			spans = append(spans, span)
 		}
 	}
 	// Gate on transaction volume: a near-empty batch is cheaper to recover
 	// inline than to fan out. Header-only jobs don't count toward the gate.
-	if totalTx < ParallelSigVerifyMinTxs || len(jobs) == 0 {
+	if totalTx < ParallelSigVerifyMinTxs || jobCount == 0 {
 		return
 	}
 
 	workers := runtime.GOMAXPROCS(0)
-	if workers > len(jobs) {
-		workers = len(jobs)
+	if jobCount < int64(workers) {
+		workers = int(jobCount)
 	}
 	if workers < 1 {
 		workers = 1
@@ -110,8 +130,8 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 	// Single worker collapses to the serial warm — still off the execution
 	// path's later read, but no goroutine churn.
 	if workers == 1 {
-		for i := range jobs {
-			runSigJob(jobs[i].block, jobs[i].txs, jobs[i].txIndex, engine)
+		for i := int64(0); i < jobCount; i++ {
+			runSigPrewarmIndex(spans, i, engine)
 		}
 		return
 	}
@@ -120,39 +140,59 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 		wg   sync.WaitGroup
 		next atomic.Int64
 	)
-	n := int64(len(jobs))
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
 				idx := next.Add(1) - 1
-				if idx >= n {
+				if idx >= jobCount {
 					return
 				}
-				j := &jobs[idx]
-				runSigJob(j.block, j.txs, j.txIndex, engine)
+				runSigPrewarmIndex(spans, idx, engine)
 			}
 		}()
 	}
 	wg.Wait()
 }
 
+func runSigPrewarmIndex(spans []sigPrewarmBlockSpan, index int64, engine headerSignaturePrewarmer) {
+	spanIndex := sort.Search(len(spans), func(i int) bool {
+		return spans[i].end > index
+	})
+	if spanIndex >= len(spans) {
+		return
+	}
+	span := spans[spanIndex]
+	offset := index - span.start
+	if span.header {
+		if offset == 0 {
+			runSigJob(span.block, nil, -1, engine)
+			return
+		}
+		offset--
+	}
+	runSigJob(nil, span.txs, int(offset), engine)
+}
+
 // runSigJob executes one recovery job. txIndex < 0 means warm the block's header
 // signature; otherwise warm txs[txIndex]'s signers. Errors are intentionally
 // discarded here — they are memoized and resurfaced by the serial path.
 func runSigJob(block *types.Block, txs []*types.Transaction, txIndex int, engine headerSignaturePrewarmer) {
-	if sigPrewarmJobHook != nil {
-		sigPrewarmJobHook()
-	}
 	if txIndex < 0 {
 		if engine != nil && block != nil {
+			if sigPrewarmJobHook != nil {
+				sigPrewarmJobHook()
+			}
 			engine.PrewarmHeaderSignature(block)
 		}
 		return
 	}
 	if txIndex >= len(txs) || txs[txIndex] == nil || txs[txIndex].Proto() == nil {
 		return
+	}
+	if sigPrewarmJobHook != nil {
+		sigPrewarmJobHook()
 	}
 	_, _ = txs[txIndex].RecoverSigners()
 }

@@ -197,6 +197,14 @@ func withMinTxs(v int, fn func()) {
 	fn()
 }
 
+type countingHeaderSignaturePrewarmer struct {
+	calls atomic.Int64
+}
+
+func (p *countingHeaderSignaturePrewarmer) PrewarmHeaderSignature(*types.Block) {
+	p.calls.Add(1)
+}
+
 // TestPrewarm_IdenticalAccept_OnVsOff: a batch of validly-signed blocks (header
 // signatures + signed transfer txs) must insert identically whether the parallel
 // pre-pass is ON (low threshold) or OFF (0). Both reach the same head; ON warms
@@ -280,6 +288,42 @@ func TestPrewarmSkipsNilBlocksAndTransactions(t *testing.T) {
 
 	if jobs.Load() != 1 {
 		t.Fatalf("prewarm jobs = %d, want only the valid transaction warmed", jobs.Load())
+	}
+}
+
+func TestPrewarmSpansCoverHeadersAndSparseTransactionsAcrossBlocks(t *testing.T) {
+	var jobs atomic.Int64
+	prevHook := sigPrewarmJobHook
+	sigPrewarmJobHook = func() { jobs.Add(1) }
+	defer func() { sigPrewarmJobHook = prevHook }()
+
+	prewarmer := &countingHeaderSignaturePrewarmer{}
+	blocks := []*types.Block{
+		types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1}},
+			Transactions: []*corepb.Transaction{
+				{RawData: &corepb.TransactionRaw{}},
+				nil,
+				{RawData: &corepb.TransactionRaw{}},
+			},
+		}),
+		types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 2}},
+			Transactions: []*corepb.Transaction{
+				{RawData: &corepb.TransactionRaw{}},
+				{RawData: &corepb.TransactionRaw{}},
+			},
+		}),
+	}
+
+	withMinTxs(1, func() {
+		prewarmBlockSignatures(blocks, prewarmer)
+	})
+	if got := prewarmer.calls.Load(); got != 2 {
+		t.Fatalf("header prewarm calls = %d, want 2", got)
+	}
+	if got := jobs.Load(); got != 6 { // two headers plus four valid transactions
+		t.Fatalf("prewarm jobs = %d, want 6", got)
 	}
 }
 

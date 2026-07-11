@@ -1734,7 +1734,9 @@ Status:
   The serial header/envelope validation path still owns every accept/reject
   decision, and the pre-pass now skips nil/malformed block or transaction
   wrappers instead of panicking before the serial validator can report the real
-  block error.
+  block error. Its scheduler holds one span per block rather than one job object
+  per transaction, so large sync batches retain O(blocks) scheduling metadata
+  while preserving balanced independent recovery work.
 - `core/state/prefetcher.go` now provides the first race-safe prefetch driver:
   worker goroutines warm raw latest-domain account, account-KV, contract code,
   and contract storage reads through `ethdb.KeyValueReader`, with bounded
