@@ -5,6 +5,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -32,6 +33,7 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bc.Close()
+	bc.SetTransactionLookupETLOptions(etl.Options{TempDir: t.TempDir(), BufferLimit: 1, BatchSize: 1})
 
 	transfer, err := anypb.New(&contractpb.TransferContract{
 		OwnerAddress: testInsertAddr(1).Bytes(),
@@ -77,6 +79,9 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	}
 	if !result.Advanced || result.Rebuilt == nil || result.Rebuilt.TransactionsIndexed != 1 {
 		t.Fatalf("stage result = %+v, want one advanced transaction index", result)
+	}
+	if result.Rebuilt.ETL.SpilledRuns == 0 || result.Rebuilt.ETL.BatchWrites == 0 {
+		t.Fatalf("TxLookup ETL stats = %+v, want configured spill and batch writes", result.Rebuilt.ETL)
 	}
 	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got == nil || *got != block.Number() {
 		t.Fatalf("tx lookup after derived stage = %v, want block %d", got, block.Number())

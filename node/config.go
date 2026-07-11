@@ -21,6 +21,11 @@ type Config struct {
 	// SyncImportBatch bounds local staged block import chunks. It does not
 	// affect wire-level fetch batch size.
 	SyncImportBatch int
+	// SyncETL* tune the sorted TxLookup catch-up stage used after bulk block
+	// import. Zero buffer/batch values retain the collector defaults.
+	SyncETLTempDir   string
+	SyncETLBufferMiB uint64
+	SyncETLBatchMiB  uint64
 
 	// NetworkID matches the value java-tron peers send in HelloMessage. Defaults
 	// to 1 (libp2p default). Mainnet/Nile should override via params.

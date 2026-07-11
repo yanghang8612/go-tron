@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/params"
@@ -31,19 +32,37 @@ func resolveNetworkID(g *params.Genesis) int32 {
 
 func makeConfig(ctx *cli.Context) *node.Config {
 	return &node.Config{
-		DataDir:         ctx.String("datadir"),
-		P2PPort:         ctx.Int("p2p.port"),
-		DiscoverPort:    ctx.Int("discover.port"),
-		ExternalIP:      ctx.String("external.ip"),
-		HTTPPort:        ctx.Int("http.port"),
-		JSONRPCPort:     ctx.Int("jsonrpc.port"),
-		GRPCPort:        ctx.Int("grpc.port"),
-		PProfPort:       ctx.Int("pprof.port"),
-		PProfAddr:       ctx.String("pprof.addr"),
-		SeedNodes:       ctx.StringSlice("seednode"),
-		MaxPeers:        ctx.Int("maxpeers"),
-		SyncImportBatch: ctx.Int("sync.import-batch"),
+		DataDir:          ctx.String("datadir"),
+		P2PPort:          ctx.Int("p2p.port"),
+		DiscoverPort:     ctx.Int("discover.port"),
+		ExternalIP:       ctx.String("external.ip"),
+		HTTPPort:         ctx.Int("http.port"),
+		JSONRPCPort:      ctx.Int("jsonrpc.port"),
+		GRPCPort:         ctx.Int("grpc.port"),
+		PProfPort:        ctx.Int("pprof.port"),
+		PProfAddr:        ctx.String("pprof.addr"),
+		SeedNodes:        ctx.StringSlice("seednode"),
+		MaxPeers:         ctx.Int("maxpeers"),
+		SyncImportBatch:  ctx.Int("sync.import-batch"),
+		SyncETLTempDir:   strings.TrimSpace(ctx.String("sync.etl.tempdir")),
+		SyncETLBufferMiB: ctx.Uint64("sync.etl.buffer"),
+		SyncETLBatchMiB:  ctx.Uint64("sync.etl.batch"),
 	}
+}
+
+func syncTransactionLookupETLOptions(cfg *node.Config) (etl.Options, error) {
+	if cfg == nil {
+		return etl.Options{}, fmt.Errorf("sync TxLookup ETL: nil node config")
+	}
+	buffer, err := mibToIntBytes(cfg.SyncETLBufferMiB, "sync.etl.buffer")
+	if err != nil {
+		return etl.Options{}, err
+	}
+	batch, err := mibToIntBytes(cfg.SyncETLBatchMiB, "sync.etl.batch")
+	if err != nil {
+		return etl.Options{}, err
+	}
+	return etl.Options{TempDir: cfg.SyncETLTempDir, BufferLimit: buffer, BatchSize: batch}, nil
 }
 
 func makeGenesis(ctx *cli.Context) (*params.Genesis, error) {

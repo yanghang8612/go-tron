@@ -17,6 +17,8 @@ rows during execution, so Wallet HTTP/gRPC account and block balance trace read
 paths have a live data source for newly imported history-enabled blocks.
 Snapshot restore and snapshot build commands expose `--snapshot.etl.*` flags so
 operators can place large sorted-run scratch files on fast temporary storage.
+Bulk sync exposes the same controls for its recoverable `TxLookup` stage through
+`--sync.etl.tempdir`, `--sync.etl.buffer`, and `--sync.etl.batch`.
 
 ## Purpose
 
@@ -68,6 +70,10 @@ writes to collector-backed loads.
 - `gtron db rebuild-tx-indexes` is the operator entry point for that rebuild.
   It opens the datadir hot store plus read-only ancient freezer rows and writes
   the rebuilt hot `tx-`, `tib-`, and `ti-` rows through sorted ETL.
+- `BlockChain.AdvanceTransactionLookupStage` rebuilds only the deferred `tx-`
+  reverse lookup rows after bulk sync. Runtime `--sync.etl.*` controls its
+  collector scratch directory, buffer, and batch size without changing block
+  execution or canonical stage semantics.
 - `rawdb.RebuildSectionBloomsFromTransactionInfos` rebuilds java-tron-compatible
   section-bloom rows from retained canonical blocks plus hot or ancient
   per-block `TransactionRet` log payloads. Partial-range rebuilds read existing
@@ -209,6 +215,20 @@ gtron db rebuild-tx-indexes \
 
 Omit `--db.to-block` to rebuild through the current head. The command fails on
 missing blocks rather than silently publishing partial transaction indexes.
+
+Bulk sync can move TxLookup's temporary sorted runs to a fast local disk while
+keeping canonical data in the node datadir:
+
+```bash
+gtron --datadir /path/to/datadir \
+  --sync.etl.tempdir /path/to/fast-scratch \
+  --sync.etl.buffer 256 \
+  --sync.etl.batch 16
+```
+
+`0` keeps the collector defaults; `GTRON_SYNC_ETL_TEMPDIR`,
+`GTRON_SYNC_ETL_BUFFER`, and `GTRON_SYNC_ETL_BATCH` provide the same runtime
+settings for managed deployments.
 
 Section bloom rebuild uses the same flags and rebuilds the java-tron
 `section-bloom` rows from stored `TransactionInfo.log` payloads:

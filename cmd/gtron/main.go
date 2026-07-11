@@ -257,6 +257,21 @@ var (
 		Usage: "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
 		Value: tsync.MaxImportBatch,
 	}
+	syncETLTempDirFlag = &cli.StringFlag{
+		Name:    "sync.etl.tempdir",
+		Usage:   "Parent directory for sorted TxLookup ETL run files during bulk sync",
+		EnvVars: []string{"GTRON_SYNC_ETL_TEMPDIR"},
+	}
+	syncETLBufferMiBFlag = &cli.Uint64Flag{
+		Name:    "sync.etl.buffer",
+		Usage:   "TxLookup ETL memory buffer limit in MiB during bulk sync (0 = default)",
+		EnvVars: []string{"GTRON_SYNC_ETL_BUFFER"},
+	}
+	syncETLBatchMiBFlag = &cli.Uint64Flag{
+		Name:    "sync.etl.batch",
+		Usage:   "TxLookup ETL output batch size in MiB during bulk sync (0 = default)",
+		EnvVars: []string{"GTRON_SYNC_ETL_BATCH"},
+	}
 	syncAsyncCommitFlag = &cli.BoolFlag{
 		Name:    "sync.async-commit",
 		Usage:   "Experimental: pipeline staged-sync state commits; validate with a Nile re-sync before production use",
@@ -327,6 +342,9 @@ var app = &cli.App{
 		freezerBatchFlag,
 		syncRestartFromFlag,
 		syncImportBatchFlag,
+		syncETLTempDirFlag,
+		syncETLBufferMiBFlag,
+		syncETLBatchMiBFlag,
 		syncAsyncCommitFlag,
 	},
 	Before: func(ctx *cli.Context) error {
@@ -535,11 +553,20 @@ func gtron(ctx *cli.Context) error {
 	} else {
 		log.Info("State trie node cache disabled")
 	}
+	syncETLOpts, err := syncTransactionLookupETLOptions(cfg)
+	if err != nil {
+		closeStores()
+		return err
+	}
 	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
+	}
+	bc.SetTransactionLookupETLOptions(syncETLOpts)
+	if syncETLOpts.TempDir != "" || syncETLOpts.BufferLimit > 0 || syncETLOpts.BatchSize > 0 {
+		log.Info("Sync TxLookup ETL configured", "tempDir", syncETLOpts.TempDir, "bufferBytes", syncETLOpts.BufferLimit, "batchBytes", syncETLOpts.BatchSize)
 	}
 	// Async/pipelined commit is OFF by default and DELIBERATELY not a
 	// chain-config / proposal value (it changes only the internal commit

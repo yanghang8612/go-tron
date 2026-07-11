@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
+	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -28,6 +29,9 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		seednodeFlag,
 		maxpeersFlag,
 		syncImportBatchFlag,
+		syncETLTempDirFlag,
+		syncETLBufferMiBFlag,
+		syncETLBatchMiBFlag,
 		syncAsyncCommitFlag,
 	}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -53,6 +57,35 @@ func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
 	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "12"}))
 	if cfg.SyncImportBatch != 12 {
 		t.Fatalf("SyncImportBatch override = %d, want 12", cfg.SyncImportBatch)
+	}
+}
+
+func TestSyncTransactionLookupETLOptions(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{
+		"--sync.etl.tempdir", tempDir,
+		"--sync.etl.buffer", "12",
+		"--sync.etl.batch", "3",
+	}))
+	opts, err := syncTransactionLookupETLOptions(cfg)
+	if err != nil {
+		t.Fatalf("syncTransactionLookupETLOptions: %v", err)
+	}
+	if opts.TempDir != tempDir || opts.BufferLimit != 12*1024*1024 || opts.BatchSize != 3*1024*1024 {
+		t.Fatalf("sync TxLookup ETL options = %+v", opts)
+	}
+}
+
+func TestSyncTransactionLookupETLOptionsDefaultsAndOverflow(t *testing.T) {
+	opts, err := syncTransactionLookupETLOptions(makeConfig(makeNodeConfigFlagSet(t, nil)))
+	if err != nil {
+		t.Fatalf("default syncTransactionLookupETLOptions: %v", err)
+	}
+	if opts.TempDir != "" || opts.BufferLimit != 0 || opts.BatchSize != 0 {
+		t.Fatalf("default sync TxLookup ETL options = %+v, want zero values", opts)
+	}
+	if _, err := syncTransactionLookupETLOptions(&node.Config{SyncETLBufferMiB: ^uint64(0)}); err == nil {
+		t.Fatal("syncTransactionLookupETLOptions accepted overflowing buffer")
 	}
 }
 

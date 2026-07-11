@@ -19,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -133,11 +134,12 @@ type BlockChain struct {
 	stateDB *state.Database
 	config  *params.ChainConfig
 
-	stateCodeColdHistory       state.StateCodeColdHistoryAtOrBefore
-	stateCommitmentColdHistory state.StateCommitmentColdHistory
-	stateOpenHook              func(tcommon.Hash)
-	stateCommitScopeHook       func()
-	stateTxRangeSeedHook       func(uint64)
+	stateCodeColdHistory        state.StateCodeColdHistoryAtOrBefore
+	stateCommitmentColdHistory  state.StateCommitmentColdHistory
+	stateOpenHook               func(tcommon.Hash)
+	stateCommitScopeHook        func()
+	stateTxRangeSeedHook        func(uint64)
+	transactionLookupETLOptions etl.Options
 
 	currentBlock   atomic.Pointer[types.Block]
 	chainmu        sync.Mutex // serializes block insertion

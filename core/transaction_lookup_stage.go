@@ -16,6 +16,18 @@ type TransactionLookupStageResult struct {
 	Rebuilt  *rawdb.RebuildTransactionLookupResult
 }
 
+// SetTransactionLookupETLOptions configures the sorted ETL collector used by
+// the recoverable TxLookup stage. It is intended to run during node setup,
+// before sync begins; zero values retain the collector's defaults.
+func (bc *BlockChain) SetTransactionLookupETLOptions(opts etl.Options) {
+	if bc == nil {
+		return
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	bc.transactionLookupETLOptions = opts
+}
+
 // EnsureTransactionLookupStage initializes the derived tx lookup watermark for
 // a database written before the staged sync path existed. Older versions wrote
 // every tx- row synchronously, so the stored canonical head is a safe baseline.
@@ -110,7 +122,7 @@ func (bc *BlockChain) AdvanceTransactionLookupStage(maxBlocks uint64) (Transacti
 		toBlock = fromBlock + maxBlocks - 1
 	}
 
-	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocks(bc.chaindb, bc.db, fromBlock, toBlock, etl.Options{})
+	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocks(bc.chaindb, bc.db, fromBlock, toBlock, bc.transactionLookupETLOptions)
 	if err != nil {
 		return TransactionLookupStageResult{}, fmt.Errorf("tx lookup stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
 	}
