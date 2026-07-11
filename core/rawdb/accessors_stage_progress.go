@@ -28,6 +28,11 @@ const (
 	// (`b-<num>` and `tib-<num>`) are covered by the local ancient store and no
 	// longer need hot KV copies. Hash-keyed lookup pruning has its own stage.
 	StageChainFreezer StageID = "ChainFreezer"
+	// StageChainFreezerStateRootPrune records the highest freezer-covered block
+	// whose hash-keyed bsr- row was removed from hot KV. The local ancient
+	// state_roots table plus the still-hot/cold block hash index retain the
+	// read path, so this stage can advance before chain lookup pruning.
+	StageChainFreezerStateRootPrune StageID = "ChainFreezerStateRootPrune"
 
 	// StageSyncInventory records the highest block target observed from peer
 	// CHAIN_INVENTORY messages. It is downloader progress, not canonical proof.
@@ -317,6 +322,7 @@ func StageProgressOrderPairs() []StageProgressOrderPair {
 		{Downstream: StageSnapshotEventLogBuild, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotPrune, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageChainFreezer, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageChainFreezerStateRootPrune, Upstream: StageChainFreezer, RequireUpstream: true},
 		{Downstream: StageSnapshotSectionBloomPrune, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotBalanceTracePrune, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotChainLookupPrune, Upstream: StageChainFreezer, RequireUpstream: true},
@@ -412,6 +418,7 @@ func KnownStageProgressStages() []StageID {
 		StageSnapshotHotPrune,
 		StageSnapshotPrune,
 		StageChainFreezer,
+		StageChainFreezerStateRootPrune,
 		StageSnapshotChainLookupPrune,
 		StageSnapshotSectionBloomPrune,
 		StageSnapshotBalanceTracePrune,

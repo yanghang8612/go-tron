@@ -19,9 +19,10 @@
 //     a single ModifyAncients call. The freezer rolls back atomically on
 //     error so a partial pass leaves no orphan ancient rows.
 //  6. fsync the ancient (`freezer.Sync()`).
-//  7. DeleteRange the now-frozen `b-<num>` and `tib-<num>` rows from
-//     Pebble (hash-keyed `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
-//     `ti-<txid>` remain hot per the slice-1 design).
+//  7. Delete the now-frozen `b-<num>`, `tib-<num>`, and `bsr-<hash>` rows
+//     from Pebble. The block/transaction lookup rows (`bh-<hash>`,
+//     `tx-<hash>`, `ti-<txid>`) remain hot until a verified cold chain-index
+//     sidecar can replace them.
 //  8. Compact the freed range so Pebble reclaims space promptly.
 //
 // Crash safety: every batch first appends to ancient (with fsync), then
@@ -590,6 +591,11 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	}
 
 	if freezeTo < freezeFromN {
+		if freezeFromN > 0 {
+			if err := r.pruneFrozenStateRoots(freezeFromN - 1); err != nil {
+				return 0, err
+			}
+		}
 		return 0, nil
 	}
 	// The freezer pass works in half-open [freezeFromN, capExclusive)
@@ -602,6 +608,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	if capExclusive <= freezeFromN {
 		return 0, nil
 	}
+	blockHashes := make([]tcommon.Hash, 0, capExclusive-freezeFromN)
 
 	// Phase 1: append every block's three blobs to ancient atomically.
 	// ModifyAncients rolls every table back to its pre-call head if the
@@ -651,6 +658,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
 			}
+			blockHashes = append(blockHashes, hash)
 		}
 		return nil
 	}); err != nil {
@@ -667,11 +675,13 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		return 0, err
 	}
 
-	// Phase 3: delete the now-frozen hot rows from Pebble. The two
-	// DeleteRange calls cover `b-<num>` and `tib-<num>`; hash-keyed
-	// `bh-<hash>` / `bsr-<hash>` stay hot per the slice-1 design.
+	// Phase 3: delete the now-frozen hot rows from Pebble. `b-<num>` and
+	// `tib-<num>` leave through range tombstones while `bsr-<hash>` leaves in
+	// the same batch: state_roots is already durable in ancient, and hot
+	// bh-<hash> rows retain the ancient fallback path until cold chain-index
+	// coverage permits pruning those lookup rows too.
 	frozenHi := capExclusive - 1
-	if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), freezeFromN, frozenHi); err != nil {
+	if err := rawdb.DeleteFrozenBlockRangeWithStateRoots(r.chain.DB(), freezeFromN, frozenHi, blockHashes); err != nil {
 		return 0, err
 	}
 	advanced, err := r.writeChainFreezerStage(frozenHi)
@@ -694,6 +704,9 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		// Log and proceed.
 		log.Warn("Freezer: compact failed (rows still deleted)",
 			"from", freezeFromN, "to", frozenHi, "err", err)
+	}
+	if err := r.pruneFrozenStateRoots(frozenHi); err != nil {
+		return 0, err
 	}
 
 	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
@@ -759,31 +772,113 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 }
 
 func (r *Runner) writeChainFreezerStage(blockNum uint64) (bool, error) {
+	return r.writeHashBoundStage(rawdb.StageChainFreezer, blockNum)
+}
+
+func (r *Runner) writeChainFreezerStateRootPruneStage(blockNum uint64) (bool, error) {
+	return r.writeHashBoundStage(rawdb.StageChainFreezerStateRootPrune, blockNum)
+}
+
+func (r *Runner) writeHashBoundStage(stage rawdb.StageID, blockNum uint64) (bool, error) {
 	db := r.chain.DB()
 	blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(blockNum)
 	if err != nil {
-		return false, fmt.Errorf("freezer: read canonical hash for ChainFreezer stage %d: %w", blockNum, err)
+		return false, fmt.Errorf("freezer: read canonical hash for %s stage %d: %w", stage, blockNum, err)
 	}
 	if !ok || blockHash == (tcommon.Hash{}) {
-		return false, fmt.Errorf("freezer: cannot resolve block hash for ChainFreezer stage %d", blockNum)
+		return false, fmt.Errorf("freezer: cannot resolve block hash for %s stage %d", stage, blockNum)
 	}
-	current, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageChainFreezer)
+	current, ok, err := rawdb.ReadStageProgressRow(db, stage)
 	if err != nil {
 		return false, err
 	}
 	if ok && current.BlockNum > blockNum {
-		return false, fmt.Errorf("freezer: ChainFreezer stage %d is ahead of local ancient head %d", current.BlockNum, blockNum)
+		return false, fmt.Errorf("freezer: %s stage %d is ahead of local ancient head %d", stage, current.BlockNum, blockNum)
 	}
 	if ok && current.BlockNum == blockNum && current.HasBlockHash {
 		if current.BlockHash != blockHash {
-			return false, fmt.Errorf("freezer: ChainFreezer stage %d hash %x does not match canonical hash %x", blockNum, current.BlockHash, blockHash)
+			return false, fmt.Errorf("freezer: %s stage %d hash %x does not match canonical hash %x", stage, blockNum, current.BlockHash, blockHash)
 		}
 		return false, nil
 	}
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, blockNum, blockHash); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(db, stage, blockNum, blockHash); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// pruneFrozenStateRoots incrementally removes bsr- rows left by freezer
+// versions that kept hash-keyed state roots hot. The same Config.BatchBlocks
+// budget bounds migration work so an upgrade cannot monopolize one freezer
+// pass. Ancient state-root presence is checked before every delete; the
+// hash-bound progress row makes retries and restarts idempotent.
+func (r *Runner) pruneFrozenStateRoots(upTo uint64) error {
+	if r == nil || r.chain == nil || r.chain.DB() == nil || r.freezer == nil {
+		return nil
+	}
+	current, hasCurrent, err := rawdb.ReadStageProgressRow(r.chain.DB(), rawdb.StageChainFreezerStateRootPrune)
+	if err != nil {
+		return err
+	}
+	start := uint64(0)
+	if hasCurrent {
+		if current.BlockNum > upTo {
+			return fmt.Errorf("freezer: %s stage %d is ahead of local ancient head %d", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, upTo)
+		}
+		if current.HasBlockHash {
+			canonicalHash, ok, err := r.chain.ReadBlockHashByNumberStrict(current.BlockNum)
+			if err != nil {
+				return fmt.Errorf("freezer: read canonical hash for %s stage %d: %w", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, err)
+			}
+			if !ok || canonicalHash == (tcommon.Hash{}) {
+				return fmt.Errorf("freezer: cannot resolve block hash for %s stage %d", rawdb.StageChainFreezerStateRootPrune, current.BlockNum)
+			}
+			if current.BlockHash != canonicalHash {
+				return fmt.Errorf("freezer: %s stage %d hash %x does not match canonical hash %x", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, current.BlockHash, canonicalHash)
+			}
+			if current.BlockNum == upTo {
+				return nil
+			}
+			start = current.BlockNum + 1
+		} else {
+			// Reprocess the legacy unbound boundary so it is upgraded to a
+			// hash-bound row before later blocks are skipped.
+			start = current.BlockNum
+		}
+	}
+	if start > upTo {
+		return nil
+	}
+	end := upTo
+	if limit := r.cfg.BatchBlocks; limit > 0 && end-start+1 > limit {
+		end = start + limit - 1
+	}
+	hashes := make([]tcommon.Hash, 0, end-start+1)
+	for number := start; ; number++ {
+		hasRoot, err := r.freezer.HasAncient(rawdb.AncientStateRootsTable, number)
+		if err != nil {
+			return fmt.Errorf("freezer: check ancient state root %d: %w", number, err)
+		}
+		if !hasRoot {
+			return fmt.Errorf("freezer: ancient state root %d is missing below ChainFreezer stage", number)
+		}
+		blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(number)
+		if err != nil {
+			return fmt.Errorf("freezer: read canonical hash for frozen block %d while pruning state roots: %w", number, err)
+		}
+		if !ok || blockHash == (tcommon.Hash{}) {
+			return fmt.Errorf("freezer: cannot resolve canonical hash for frozen block %d while pruning state roots", number)
+		}
+		hashes = append(hashes, blockHash)
+		if number == end {
+			break
+		}
+	}
+	if err := rawdb.DeleteFrozenBlockStateRoots(r.chain.DB(), hashes); err != nil {
+		return fmt.Errorf("freezer: delete frozen state roots [%d,%d]: %w", start, end, err)
+	}
+	_, err = r.writeChainFreezerStateRootPruneStage(end)
+	return err
 }
 
 // loop is the goroutine. Fires once on Start so a fresh-install backlog

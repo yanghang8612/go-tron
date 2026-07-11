@@ -165,6 +165,9 @@ func (f *fakeChain) plantBlock(t *testing.T, n uint64) tcommon.Hash {
 	if err := writeTxInfosKV(f.db, n, txBlob); err != nil {
 		t.Fatalf("plantBlock(%d): write tx infos: %v", n, err)
 	}
+	if err := rawdb.WriteBlockStateRoot(f.db, hash, tcommon.BytesToHash(stateRoot)); err != nil {
+		t.Fatalf("plantBlock(%d): write state root: %v", n, err)
+	}
 	return hash
 }
 
@@ -374,6 +377,9 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezer); err != nil || !ok || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(32) {
 		t.Fatalf("StageChainFreezer row after freeze = %+v ok=%v err=%v, want hash-bound block32", row, ok, err)
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezerStateRootPrune); err != nil || !ok || row.BlockNum != 32 || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(32) {
+		t.Fatalf("StageChainFreezerStateRootPrune row after freeze = %+v ok=%v err=%v, want hash-bound block32", row, ok, err)
+	}
 	// KV rows for frozen blocks should be gone.
 	for n := uint64(0); n <= 32; n++ {
 		if v, err := fc.db.Get(blockKVKey(n)); err == nil && len(v) > 0 {
@@ -382,11 +388,85 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 		if v, err := fc.db.Get(txInfoBlockKVKey(n)); err == nil && len(v) > 0 {
 			t.Fatalf("Pebble still has tib-%d after freeze", n)
 		}
+		if root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(n)); root != nil {
+			t.Fatalf("Pebble still has state root for block %d after freeze: %x", n, root)
+		}
+	}
+	chainDB := rawdb.NewChainDB(fc.db, r.freezer)
+	if got := rawdb.ReadBlockStateRoot(chainDB, fc.ReadBlockHashByNumber(7)); got != tcommon.BytesToHash(stateRootBytes(7)) {
+		t.Fatalf("cold state root after freeze = %x, want %x", got, tcommon.BytesToHash(stateRootBytes(7)))
 	}
 	// KV rows for post-margin blocks should remain.
 	for n := uint64(33); n < 50; n++ {
 		if v, err := fc.db.Get(blockKVKey(n)); err != nil || len(v) == 0 {
 			t.Fatalf("Pebble lost b-%d (should still be hot)", n)
+		}
+		if root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(n)); root == nil {
+			t.Fatalf("Pebble lost state root for block %d (should still be hot)", n)
+		}
+	}
+}
+
+func TestOnePassPrunesLegacyFrozenStateRoots(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	const blocks = uint64(5)
+	for n := uint64(0); n < blocks; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(int64(blocks - 1))
+
+	f := newFreezer(t)
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < blocks; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, txInfosBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRootBytes(n)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed ancient rows: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync seeded ancient rows: %v", err)
+	}
+	// Model a database written by the previous freezer: block and tx-info
+	// rows have left Pebble, but the duplicate hash-keyed roots remain.
+	if err := rawdb.DeleteFrozenBlockRange(fc.db, 0, blocks-1); err != nil {
+		t.Fatalf("delete legacy frozen block rows: %v", err)
+	}
+
+	r := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  2,
+	})
+	for _, wantStage := range []uint64{1, 3, 4} {
+		frozen, err := r.OnePass()
+		if err != nil {
+			t.Fatalf("OnePass through legacy root migration to %d: %v", wantStage, err)
+		}
+		if frozen != 0 {
+			t.Fatalf("legacy root migration frozen=%d, want 0", frozen)
+		}
+		row, ok, err := rawdb.ReadStageProgressRow(fc.db, rawdb.StageChainFreezerStateRootPrune)
+		if err != nil || !ok || row.BlockNum != wantStage || !row.HasBlockHash || row.BlockHash != fc.ReadBlockHashByNumber(wantStage) {
+			t.Fatalf("legacy root stage after migration to %d = %+v ok=%v err=%v", wantStage, row, ok, err)
+		}
+		for n := uint64(0); n < blocks; n++ {
+			root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(n))
+			if n <= wantStage && root != nil {
+				t.Fatalf("legacy root for block %d remains after stage %d: %x", n, wantStage, root)
+			}
+			if n > wantStage && root == nil {
+				t.Fatalf("legacy root for block %d removed before stage %d", n, wantStage)
+			}
 		}
 	}
 }
@@ -555,6 +635,9 @@ func TestOnePassRejectsStateRootLookupErrorBeforeAppending(t *testing.T) {
 	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
 		t.Fatalf("hot block row after state-root lookup error = len %d err %v, want retained", len(v), err)
 	}
+	if root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(0)); root == nil {
+		t.Fatal("hot state root after state-root lookup error is missing, want retained")
+	}
 }
 
 func TestOnePassRejectsMalformedStateRootBeforeAppending(t *testing.T) {
@@ -588,6 +671,9 @@ func TestOnePassRejectsMalformedStateRootBeforeAppending(t *testing.T) {
 	}
 	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
 		t.Fatalf("hot block row after malformed state root = len %d err %v, want retained", len(v), err)
+	}
+	if root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(0)); root == nil {
+		t.Fatal("hot state root after malformed state root is missing, want retained")
 	}
 }
 

@@ -7,10 +7,11 @@
 // here next to the schema rather than reaching into private prefixes from
 // outside the package.
 //
-// The freezer runner owns only the num-keyed hot rows (`b-<num>`,
-// `tib-<num>`). Hash-keyed lookup rows (`bh-<hash>`, `tx-<hash>`,
-// `ti-<txid>`, `bsr-<hash>`) are pruned later only when a verified cold
-// chain-index sidecar covers the same chain-freezer range.
+// The freezer runner owns the num-keyed hot rows (`b-<num>`, `tib-<num>`) and
+// the hash-keyed state-root row (`bsr-<hash>`), because the latter has an
+// identical durable copy in the ancient `state_roots` table. Block/transaction
+// hash lookup rows (`bh-<hash>`, `tx-<hash>`, `ti-<txid>`) still require a
+// verified cold chain-index sidecar before they can leave Pebble.
 
 package rawdb
 
@@ -316,6 +317,93 @@ func DeleteFrozenBlockRange(db ethdb.KeyValueRangeDeleter, lo, hi uint64) error 
 		return err
 	}
 	return nil
+}
+
+// DeleteFrozenBlockRangeWithStateRoots removes frozen number-keyed block rows
+// plus their hash-keyed state-root rows. The caller must provide exactly the
+// canonical block hashes for [lo, hi], after the same roots are durable in the
+// ancient state_roots table. Keeping every delete in one batch prevents a
+// crash from leaving the b-/tib- cleanup ahead of the root cleanup or vice
+// versa; both outcomes are readable, but one atomic transition avoids a
+// permanent hot-root leak after normal freezer operation.
+func DeleteFrozenBlockRangeWithStateRoots(db ethdb.KeyValueStore, lo, hi uint64, blockHashes []common.Hash) error {
+	if db == nil {
+		return errors.New("rawdb: nil database while deleting frozen block range")
+	}
+	if lo > hi {
+		return nil
+	}
+	if len(blockHashes) == 0 || uint64(len(blockHashes)-1) != hi-lo {
+		return fmt.Errorf("rawdb: frozen block state-root hashes %d do not cover range [%d,%d]", len(blockHashes), lo, hi)
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		defer batch.Reset()
+		if err := deleteFrozenBlockRows(batch, lo, hi); err != nil {
+			return err
+		}
+		for _, hash := range blockHashes {
+			if err := batch.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	if err := DeleteFrozenBlockRange(db, lo, hi); err != nil {
+		return err
+	}
+	for _, hash := range blockHashes {
+		if err := db.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteFrozenBlockStateRoots removes only hash-keyed state-root rows whose
+// ancient copies are already known durable. It is used to incrementally clean
+// bsr- rows left by freezer versions that predate the combined freezer delete
+// batch. The caller owns the coverage proof and stage progress update.
+func DeleteFrozenBlockStateRoots(db ethdb.KeyValueStore, blockHashes []common.Hash) error {
+	if db == nil {
+		return errors.New("rawdb: nil database while deleting frozen block state roots")
+	}
+	if len(blockHashes) == 0 {
+		return nil
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		defer batch.Reset()
+		for _, hash := range blockHashes {
+			if err := batch.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	for _, hash := range blockHashes {
+		if err := db.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteFrozenBlockRows(writer ethdb.KeyValueWriter, lo, hi uint64) error {
+	if rangeDeleter, ok := writer.(ethdb.KeyValueRangeDeleter); ok {
+		return DeleteFrozenBlockRange(rangeDeleter, lo, hi)
+	}
+	for number := lo; ; number++ {
+		if err := writer.Delete(blockKey(number)); err != nil {
+			return err
+		}
+		if err := writer.Delete(txInfoBlockKey(number)); err != nil {
+			return err
+		}
+		if number == hi {
+			return nil
+		}
+	}
 }
 
 // BlockRangeBounds returns the prefix-encoded `b-<num>` half-open key

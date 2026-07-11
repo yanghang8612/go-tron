@@ -1045,8 +1045,14 @@ Status:
   historical block state root through freezer plus `chain-index`.
 - The live freezer runner now records `ChainFreezer` stage progress after it
   has durably appended num-keyed chain rows to ancient and deleted the covered
-  hot `b-<num>`/`tib-<num>` rows. Crash-leftover reconciliation advances the
-  same stage after sweeping rows that were already ancient before a restart.
+  hot `b-<num>`/`tib-<num>`/`bsr-<hash>` rows in one batch. State-root reads
+  retain their hot `bh-<hash>` to ancient fallback until a verified cold
+  chain-index can replace that reverse lookup. The hash-bound
+  `ChainFreezerStateRootPrune` stage incrementally migrates `bsr-<hash>` rows
+  left by earlier freezer versions, using the normal freezer batch size and
+  checking ancient root coverage before each delete. Crash-leftover
+  reconciliation advances `ChainFreezer` after sweeping rows that were already
+  ancient before a restart.
   On upgrade/restart it also backfills the stage from the local ancient head,
   so existing freezer coverage is visible even when no new blocks need freezing.
   Live freezer passes are now capped at the verified hash-bound `StageFinish`

@@ -255,7 +255,7 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 			t.Fatalf("%s progress after write = %+v ok=%v err=%v, want 12 hash", stage, row, ok, err)
 		}
 	}
-	for _, stage := range []StageID{StageChainFreezer, StageSyncInventory, StageSyncBodies, StageSyncBodiesReady, StageSyncImport, StageSyncExecution, StageSyncCommitment, StageSyncFinish, StageSnapshotEventLogBuild, StageSnapshotChainFreezerTailPrune} {
+	for _, stage := range []StageID{StageChainFreezer, StageChainFreezerStateRootPrune, StageSyncInventory, StageSyncBodies, StageSyncBodiesReady, StageSyncImport, StageSyncExecution, StageSyncCommitment, StageSyncFinish, StageSnapshotEventLogBuild, StageSnapshotChainFreezerTailPrune} {
 		if _, ok, err := ReadStageProgressRow(db, stage); err != nil || ok {
 			t.Fatalf("%s downloader progress should not be written by canonical helper: ok=%v err=%v", stage, ok, err)
 		}
@@ -303,6 +303,10 @@ func TestCheckStageProgressOrder(t *testing.T) {
 			BlockHash:    hashB,
 			HasBlockHash: true,
 		},
+		StageChainFreezerStateRootPrune: {
+			Stage:    StageChainFreezerStateRootPrune,
+			BlockNum: 21,
+		},
 		StageSnapshotChainLookupPrune: {
 			Stage:    StageSnapshotChainLookupPrune,
 			BlockNum: 23,
@@ -322,6 +326,7 @@ func TestCheckStageProgressOrder(t *testing.T) {
 		"Execution=6 ahead of Bodies=5",
 		"SnapshotBuild=21 ahead of Finish=20",
 		"SnapshotLatestBuild=22 ahead of Finish=20",
+		"ChainFreezerStateRootPrune=21 ahead of ChainFreezer=20",
 		"SnapshotChainLookupPrune=23 ahead of ChainFreezer=20",
 		"SnapshotEventLogBuild=24 ahead of Finish=20",
 		"SnapshotChainFreezerTailPrune=25 ahead of SnapshotChainLookupPrune=23",
@@ -363,6 +368,10 @@ func TestCheckStageProgressOrder(t *testing.T) {
 			Stage:    StageSnapshotBuild,
 			BlockNum: 12,
 		},
+		StageChainFreezerStateRootPrune: {
+			Stage:    StageChainFreezerStateRootPrune,
+			BlockNum: 8,
+		},
 		StageSnapshotChainLookupPrune: {
 			Stage:    StageSnapshotChainLookupPrune,
 			BlockNum: 8,
@@ -370,6 +379,7 @@ func TestCheckStageProgressOrder(t *testing.T) {
 	})
 	for _, want := range []string{
 		"SnapshotBuild requires Finish",
+		"ChainFreezerStateRootPrune requires ChainFreezer",
 		"SnapshotChainLookupPrune requires ChainFreezer",
 	} {
 		found := false
@@ -466,14 +476,15 @@ func TestPlanStageProgressPipelineCursor(t *testing.T) {
 		t.Fatalf("cursor = %+v, want incomplete pending tasks", cursor)
 	}
 	wantTasks := map[StageID]StageProgressPipelineTaskStatus{
-		StageBodies:                    StageProgressPipelineTaskBehind,
-		StageSnapshotBuild:             StageProgressPipelineTaskHashMismatch,
-		StageSnapshotLatestBuild:       StageProgressPipelineTaskMissing,
-		StageSnapshotEventLogBuild:     StageProgressPipelineTaskMissing,
-		StageSnapshotPrune:             StageProgressPipelineTaskMissing,
-		StageChainFreezer:              StageProgressPipelineTaskBehind,
-		StageSnapshotSectionBloomPrune: StageProgressPipelineTaskMissing,
-		StageSnapshotBalanceTracePrune: StageProgressPipelineTaskMissing,
+		StageBodies:                     StageProgressPipelineTaskBehind,
+		StageSnapshotBuild:              StageProgressPipelineTaskHashMismatch,
+		StageSnapshotLatestBuild:        StageProgressPipelineTaskMissing,
+		StageSnapshotEventLogBuild:      StageProgressPipelineTaskMissing,
+		StageSnapshotPrune:              StageProgressPipelineTaskMissing,
+		StageChainFreezer:               StageProgressPipelineTaskBehind,
+		StageChainFreezerStateRootPrune: StageProgressPipelineTaskMissing,
+		StageSnapshotSectionBloomPrune:  StageProgressPipelineTaskMissing,
+		StageSnapshotBalanceTracePrune:  StageProgressPipelineTaskMissing,
 	}
 	for stage, status := range wantTasks {
 		task, ok := stageProgressCursorTask(cursor.Tasks, stage)

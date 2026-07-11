@@ -212,6 +212,54 @@ func TestReadBlockRaw_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestDeleteFrozenBlockRangeWithStateRoots(t *testing.T) {
+	db := NewMemoryDatabase()
+	blocks := make([]*types.Block, 0, 2)
+	for number := uint64(0); number < 2; number++ {
+		block := types.NewBlockFromPB(newBlockProto(number, int64(10_000+number)))
+		if err := WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock(%d): %v", number, err)
+		}
+		if err := WriteTransactionInfosRaw(db, number, []byte{byte(number)}); err != nil {
+			t.Fatalf("WriteTransactionInfosRaw(%d): %v", number, err)
+		}
+		var root common.Hash
+		root[0] = byte(number + 1)
+		if err := WriteBlockStateRoot(db, block.Hash(), root); err != nil {
+			t.Fatalf("WriteBlockStateRoot(%d): %v", number, err)
+		}
+		blocks = append(blocks, block)
+	}
+	if err := DeleteFrozenBlockRangeWithStateRoots(db, 0, 1, []common.Hash{blocks[0].Hash(), blocks[1].Hash()}); err != nil {
+		t.Fatalf("DeleteFrozenBlockRangeWithStateRoots: %v", err)
+	}
+	for number, block := range blocks {
+		if _, err := db.Get(blockKey(uint64(number))); err == nil {
+			t.Fatalf("hot block %d survived frozen delete", number)
+		}
+		if _, err := db.Get(txInfoBlockKey(uint64(number))); err == nil {
+			t.Fatalf("hot tx info %d survived frozen delete", number)
+		}
+		if root := ReadBlockStateRootRaw(db, block.Hash()); root != nil {
+			t.Fatalf("hot state root %d survived frozen delete: %x", number, root)
+		}
+	}
+}
+
+func TestDeleteFrozenBlockRangeWithStateRootsRejectsMismatchedHashes(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := types.NewBlockFromPB(newBlockProto(0, 10_000))
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := DeleteFrozenBlockRangeWithStateRoots(db, 0, 0, nil); err == nil {
+		t.Fatal("DeleteFrozenBlockRangeWithStateRoots succeeded with missing hash, want error")
+	}
+	if _, err := db.Get(blockKey(0)); err != nil {
+		t.Fatalf("hot block after rejected frozen delete: %v", err)
+	}
+}
+
 // TestReadBlock_KVPath verifies that ReadBlock reads from the hot KV
 // store when no ancient entry exists (the slice-2 default with
 // NoopAncient).

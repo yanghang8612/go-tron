@@ -1767,6 +1767,7 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 		rawdb.StageSyncCommitment,
 		rawdb.StageSyncFinish,
 		rawdb.StageChainFreezer,
+		rawdb.StageChainFreezerStateRootPrune,
 		rawdb.StageSnapshotBuild,
 		rawdb.StageSnapshotLatestBuild,
 		rawdb.StageSnapshotEventLogBuild,
@@ -1940,7 +1941,7 @@ func dbStageStatusGroup(stage rawdb.StageID) string {
 		return "snapshot"
 	case rawdb.StageSnapshotHotPrune, rawdb.StageSnapshotPrune, rawdb.StageSnapshotChainLookupPrune, rawdb.StageSnapshotSectionBloomPrune, rawdb.StageSnapshotBalanceTracePrune, rawdb.StageSnapshotChainFreezerTailPrune:
 		return "prune"
-	case rawdb.StageChainFreezer:
+	case rawdb.StageChainFreezer, rawdb.StageChainFreezerStateRootPrune:
 		return "freezer"
 	default:
 		return "unknown"
