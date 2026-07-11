@@ -312,6 +312,10 @@ Status update:
   payload through the seekable `ReadAt` reader with a fixed buffer. This keeps
   compressed source records out of a resident decompressed segment while
   preserving the existing index/accessor offset remapping.
+- Compaction also two-pass streams source tx-range tables: it counts and then
+  writes merged block rows without retaining all source ranges, while preserving
+  the required merge of duplicate block ranges when a cold boundary cuts
+  through one block.
 - File-native history readers bound record and accessor-frame payload lengths
   by the actual file size before allocation, so corrupt cold files cannot force
   large transient buffers during range, block-range, keyed, or checker reads.

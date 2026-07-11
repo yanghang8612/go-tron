@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -297,22 +296,6 @@ func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, f
 		havePrevious = true
 		return true, nil
 	})
-}
-
-func writeStateDomainChangeBinaryTxRangeEntry(w io.Writer, row *rawdb.StateTxRange) error {
-	if row == nil {
-		return errors.New("snapshots: nil state tx range entry")
-	}
-	if row.EndTxNum < row.BeginTxNum {
-		return fmt.Errorf("snapshots: state tx range for block %d is inverted", row.BlockNum)
-	}
-	var raw [stateDomainChangeBinaryTxRangeSize]byte
-	binary.BigEndian.PutUint64(raw[0:8], row.BlockNum)
-	copy(raw[8:8+common.HashLength], row.BlockHash[:])
-	binary.BigEndian.PutUint64(raw[8+common.HashLength:16+common.HashLength], row.BeginTxNum)
-	binary.BigEndian.PutUint64(raw[16+common.HashLength:24+common.HashLength], row.EndTxNum)
-	_, err := w.Write(raw[:])
-	return err
 }
 
 func encodeStateDomainChangeBinaryRecordFrame(change *rawdb.StateDomainChange) ([]byte, error) {

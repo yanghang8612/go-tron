@@ -121,6 +121,51 @@ func TestCompactHistoryDomainReturnsGenericResult(t *testing.T) {
 	}
 }
 
+func TestCompactHistoryDomainMergesDuplicateBlockTxRanges(t *testing.T) {
+	dir := t.TempDir()
+	first := binaryStateDomainChange(1, 10, 1, "first")
+	second := binaryStateDomainChange(1, 11, 2, "second")
+	sharedRange := &rawdb.StateTxRange{
+		BlockNum:   1,
+		BlockHash:  first.BlockHash,
+		BeginTxNum: 10,
+		EndTxNum:   11,
+	}
+	write := func(fromTxNum, toTxNum uint64, change *rawdb.StateDomainChange) []SegmentRef {
+		t.Helper()
+		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, SegmentRef{
+			Dataset:   SegmentDatasetStateDomainChange,
+			Kind:      SegmentHistory,
+			FromTxNum: fromTxNum,
+			ToTxNum:   toTxNum,
+			Path:      stateDomainChangeHistorySegmentPath(fromTxNum, toTxNum),
+		}, []*rawdb.StateDomainChange{change}, []*rawdb.StateTxRange{sharedRange})
+		if err != nil {
+			t.Fatalf("write state-domain-change segment [%d,%d]: %v", fromTxNum, toTxNum, err)
+		}
+		return []SegmentRef{segRef, accessorRef, idxRef}
+	}
+	refs := append(write(10, 10, first), write(11, 11, second)...)
+	if err := PublishManifest(dir, NewManifest(10, 11, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	if err != nil {
+		t.Fatalf("compact split block history: %v", err)
+	}
+	merged := compactionRefByKind(t, result, SegmentHistory)
+	ranges, err := readStateDomainChangeBinaryTxRanges(dir, merged)
+	if err != nil {
+		t.Fatalf("read merged tx ranges: %v", err)
+	}
+	if len(ranges) != 1 {
+		t.Fatalf("merged tx ranges = %+v, want one row", ranges)
+	}
+	if got := ranges[0]; got.BlockNum != 1 || got.BlockHash != first.BlockHash || got.BeginTxNum != 10 || got.EndTxNum != 11 {
+		t.Fatalf("merged tx range = %+v, want block 1 [10,11]", got)
+	}
+}
+
 func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xee)
