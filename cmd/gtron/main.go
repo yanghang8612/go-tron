@@ -253,9 +253,10 @@ var (
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
 	}
 	syncImportBatchFlag = &cli.IntFlag{
-		Name:  "sync.import-batch",
-		Usage: "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
-		Value: tsync.MaxImportBatch,
+		Name:    "sync.import-batch",
+		Usage:   "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
+		Value:   tsync.MaxImportBatch,
+		EnvVars: []string{"GTRON_SYNC_IMPORT_BATCH"},
 	}
 	syncETLTempDirFlag = &cli.StringFlag{
 		Name:    "sync.etl.tempdir",

@@ -60,6 +60,23 @@ func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
 	}
 }
 
+func TestSyncImportBatchEnvironmentAlias(t *testing.T) {
+	t.Setenv("GTRON_SYNC_IMPORT_BATCH", "12")
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{syncImportBatchFlag}
+	var got int
+	app.Action = func(ctx *cli.Context) error {
+		got = makeConfig(ctx).SyncImportBatch
+		return nil
+	}
+	if err := app.Run([]string{"gtron"}); err != nil {
+		t.Fatalf("run sync import batch environment alias: %v", err)
+	}
+	if got != 12 {
+		t.Fatalf("SyncImportBatch environment value = %d, want 12", got)
+	}
+}
+
 func TestSyncTransactionLookupETLOptions(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{

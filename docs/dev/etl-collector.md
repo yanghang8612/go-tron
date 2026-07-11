@@ -228,7 +228,9 @@ gtron --datadir /path/to/datadir \
 
 `0` keeps the collector defaults; `GTRON_SYNC_ETL_TEMPDIR`,
 `GTRON_SYNC_ETL_BUFFER`, and `GTRON_SYNC_ETL_BATCH` provide the same runtime
-settings for managed deployments.
+settings for managed deployments. `GTRON_SYNC_IMPORT_BATCH` likewise sets the
+local staged-import chunk size (1-1024); it does not change the wire fetch batch
+of 100 blocks.
 
 Section bloom rebuild uses the same flags and rebuilds the java-tron
 `section-bloom` rows from stored `TransactionInfo.log` payloads:
