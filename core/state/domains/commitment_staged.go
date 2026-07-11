@@ -69,19 +69,7 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 // root that reflects exactly the current source rows, with no contribution from
 // branches left over from an earlier (e.g. pre-rewind) tip.
 func (s *rawdbBranchStore) clear() error {
-	var prefixes [][]byte
-	if err := rawdb.IterateCommitmentBranches(s.db, func(prefix, _ []byte) (bool, error) {
-		prefixes = append(prefixes, append([]byte(nil), prefix...))
-		return true, nil
-	}); err != nil {
-		return err
-	}
-	for _, prefix := range prefixes {
-		if err := rawdb.DeleteCommitmentBranch(s.db, prefix); err != nil {
-			return err
-		}
-	}
-	return nil
+	return rawdb.DeleteCommitmentBranches(s.db)
 }
 
 // stagedCommitmentStore is the LatestCommitmentStore implementation backed by the

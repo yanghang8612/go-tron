@@ -113,6 +113,79 @@ func TestCommitmentBranchMissing(t *testing.T) {
 	}
 }
 
+func TestDeleteCommitmentBranchesLeavesOtherKeyspaces(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := WriteCommitmentBranch(db, nil, []byte("root")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCommitmentBranch(db, []byte{0x0a}, []byte("branch")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("unrelated"), []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteCommitmentBranches(db); err != nil {
+		t.Fatalf("delete commitment branches: %v", err)
+	}
+
+	count := 0
+	if err := IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
+		count++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate commitment branches: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("commitment branch count = %d, want 0", count)
+	}
+	value, err := db.Get([]byte("unrelated"))
+	if err != nil || !bytes.Equal(value, []byte("keep")) {
+		t.Fatalf("unrelated value = %q, err = %v", value, err)
+	}
+}
+
+func TestDeleteCommitmentBranchesFallsBackToBoundedPointScan(t *testing.T) {
+	db := &noRangeCommitmentBranchStore{db: NewMemoryDatabase()}
+	for i := 0; i < resetScanBatch*2+1; i++ {
+		prefix := []byte{byte(i >> 8), byte(i)}
+		if err := WriteCommitmentBranch(db, prefix, []byte{byte(i)}); err != nil {
+			t.Fatalf("write branch %d: %v", i, err)
+		}
+	}
+	if err := DeleteCommitmentBranches(db); err != nil {
+		t.Fatalf("delete commitment branches: %v", err)
+	}
+	count := 0
+	if err := IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
+		count++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate commitment branches: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("commitment branch count = %d, want 0", count)
+	}
+}
+
+// noRangeCommitmentBranchStore intentionally exposes only the interfaces the
+// fallback needs; embedding KeyValueStore would promote DeleteRange and bypass
+// the bounded point-scan path.
+type noRangeCommitmentBranchStore struct {
+	db ethdb.KeyValueStore
+}
+
+func (s *noRangeCommitmentBranchStore) Put(key, value []byte) error {
+	return s.db.Put(key, value)
+}
+
+func (s *noRangeCommitmentBranchStore) Delete(key []byte) error {
+	return s.db.Delete(key)
+}
+
+func (s *noRangeCommitmentBranchStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return s.db.NewIterator(prefix, start)
+}
+
 func TestCommitmentBranchSurfacesStorageErrors(t *testing.T) {
 	db := NewMemoryDatabase()
 	prefix := []byte{0x01, 0x02}

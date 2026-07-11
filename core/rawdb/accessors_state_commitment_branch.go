@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -65,6 +66,71 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 func DeleteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte) error {
 	var buf [branchKeyStackBufLen]byte
 	return db.Delete(commitmentBranchKeyInto(buf[:0], prefix))
+}
+
+type commitmentBranchStore interface {
+	ethdb.KeyValueWriter
+	ethdb.Iteratee
+}
+
+// DeleteCommitmentBranches removes every row in the staged commitment branch
+// keyspace. Pebble handles the common case as one range tombstone. Backends
+// without range deletes, or which reject a large range, fall back to bounded
+// point-delete batches so a rebuild never holds the whole branch tree in memory.
+func DeleteCommitmentBranches(db commitmentBranchStore) error {
+	if deleter, ok := db.(ethdb.KeyValueRangeDeleter); ok {
+		if err := deleter.DeleteRange(stateCommitmentBranchPrefix, prefixUpperBound(stateCommitmentBranchPrefix)); err == nil {
+			return nil
+		} else if !errors.Is(err, ethdb.ErrTooManyKeys) {
+			return err
+		}
+	}
+	return deleteCommitmentBranchesByPointScan(db)
+}
+
+func deleteCommitmentBranchesByPointScan(db commitmentBranchStore) error {
+	for {
+		it := db.NewIterator(stateCommitmentBranchPrefix, nil)
+		keys := make([][]byte, 0, resetScanBatch)
+		for it.Next() {
+			keys = append(keys, append([]byte(nil), it.Key()...))
+			if len(keys) >= resetScanBatch {
+				break
+			}
+		}
+		err := it.Error()
+		it.Release()
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			return nil
+		}
+		if err := deleteCommitmentBranchKeys(db, keys); err != nil {
+			return err
+		}
+		if len(keys) < resetScanBatch {
+			return nil
+		}
+	}
+}
+
+func deleteCommitmentBranchKeys(db commitmentBranchStore, keys [][]byte) error {
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		for _, key := range keys {
+			if err := batch.Delete(key); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	for _, key := range keys {
+		if err := db.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // IterateCommitmentBranches iterates every branch row in the commitment
