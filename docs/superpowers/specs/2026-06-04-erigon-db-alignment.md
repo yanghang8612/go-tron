@@ -2066,6 +2066,12 @@ Status:
   address/topic filter before invoking API callbacks, so fallback cold readers
   that over-return rows cannot leak unrelated logs after hot receipts are
   pruned. A
+  Hot-path `TronBackend.GetLogs` keeps the stateful section-bloom decision pass
+  serial, then reads independent candidate block/`TransactionRet` pairs through
+  a bounded worker pool and merges them in ascending block order. It preserves
+  the serial path's first-height error boundary and per-block skip semantics for
+  missing or incomplete receipt coverage, so wider uncovered archive ranges no
+  longer serialize all hot reads.
   source audit now also rejects production API/business code that directly calls
   `EventLogRangeCovered*` coverage checks; archive log queries must use the
   single `IterateCoveredEventLogs` boundary so coverage and row iteration share

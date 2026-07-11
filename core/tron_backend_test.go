@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -1766,6 +1768,111 @@ func TestTronBackend_GetLogs_EmptyRange(t *testing.T) {
 	}
 	if logs == nil {
 		t.Fatal("GetLogs should return empty slice, not nil")
+	}
+}
+
+func TestTronBackend_GetLogsKeepsHotBlockOrderAcrossParallelScan(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	for number := uint64(1); number <= 4; number++ {
+		block, info := testBackendLogBlock(number, &corepb.TransactionInfo_Log{
+			Address: bytes20(byte(number)),
+			Data:    []byte{byte(number)},
+		})
+		if err := rawdb.WriteBlock(bc.db, block); err != nil {
+			t.Fatalf("WriteBlock block%d: %v", number, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(bc.db, number, []*corepb.TransactionInfo{info}); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock block%d: %v", number, err)
+		}
+		bc.currentBlock.Store(block)
+	}
+
+	from, to := uint64(1), uint64(4)
+	logs, err := (&TronBackend{chain: bc}).GetLogs(jsonrpc.LogFilter{FromBlock: &from, ToBlock: &to})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 4 {
+		t.Fatalf("GetLogs returned %d logs, want 4", len(logs))
+	}
+	for i, log := range logs {
+		blockNum := i + 1
+		if want := fmt.Sprintf("0x%x", blockNum); log.BlockNumber != want {
+			t.Fatalf("log %d block number = %s, want %s", i, log.BlockNumber, want)
+		}
+		if want := fmt.Sprintf("0x%02x", blockNum); log.Data != want {
+			t.Fatalf("log %d data = %s, want %s", i, log.Data, want)
+		}
+	}
+}
+
+func TestScanLogBlocksParallelKeepsInputOrder(t *testing.T) {
+	started := make(chan uint64, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	type result struct {
+		logs []*jsonrpc.RPCLog
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		logs, err := scanLogBlocks([]uint64{7, 8, 9, 10}, 2, func(blockNum uint64) ([]*jsonrpc.RPCLog, error) {
+			started <- blockNum
+			<-release
+			return []*jsonrpc.RPCLog{{BlockNumber: fmt.Sprintf("0x%x", blockNum)}}, nil
+		})
+		done <- result{logs: logs, err: err}
+	}()
+
+	for want := 0; want < 2; want++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("parallel log scanner did not start two workers")
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("scanLogBlocks: %v", got.err)
+		}
+		if len(got.logs) != 4 {
+			t.Fatalf("logs = %+v, want four ordered logs", got.logs)
+		}
+		for i, log := range got.logs {
+			want := fmt.Sprintf("0x%x", 7+i)
+			if log.BlockNumber != want {
+				t.Fatalf("log %d block number = %s, want %s", i, log.BlockNumber, want)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("parallel log scanner did not finish")
+	}
+}
+
+func TestScanLogBlocksReturnsFirstInputOrderError(t *testing.T) {
+	firstErr := fmt.Errorf("block 7 read failed")
+	laterErr := fmt.Errorf("block 9 read failed")
+	logs, err := scanLogBlocks([]uint64{7, 8, 9}, 3, func(blockNum uint64) ([]*jsonrpc.RPCLog, error) {
+		switch blockNum {
+		case 7:
+			return nil, firstErr
+		case 9:
+			return nil, laterErr
+		default:
+			return nil, nil
+		}
+	})
+	if err != firstErr {
+		t.Fatalf("scanLogBlocks error = %v, want first input error %v", err, firstErr)
+	}
+	if logs != nil {
+		t.Fatalf("scanLogBlocks logs = %+v, want nil on error", logs)
 	}
 }
 

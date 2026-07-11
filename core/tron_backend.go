@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -3840,9 +3841,8 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		return logs, nil
 	}
 
-	var logs []*jsonrpc.RPCLog
 	bloomMatcher := newSectionBloomLogMatcher(b.chain.chaindb, filter)
-
+	blockNums := make([]uint64, 0, toBlock-fromBlock+1)
 	for num := fromBlock; num <= toBlock; num++ {
 		if bloomMatcher != nil {
 			mayContain, err := bloomMatcher.mayContain(num)
@@ -3852,90 +3852,171 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 				continue
 			}
 		}
-		block, hasBlock, err := rawdb.ReadBlockStrict(b.chain.chaindb, num)
-		if err != nil {
-			return nil, err
-		}
-		if !hasBlock {
-			continue
-		}
-		blockHash := block.Hash()
-		infos, hasInfos, err := rawdb.ReadTransactionInfosByBlockStrict(b.chain.chaindb, num)
-		if err != nil {
-			return nil, err
-		}
-		if !hasInfos {
-			continue
-		}
-		if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
-			if errors.Is(err, rawdb.ErrIncompleteTransactionInfoCoverage) {
-				continue
-			}
-			return nil, err
-		}
-
-		logIndex := uint64(0)
-
-		for txIdx, info := range infos {
-			for _, l := range info.Log {
-				thisIndex := logIndex
-				logIndex++
-
-				// Address filter
-				if len(filter.Addresses) > 0 {
-					addr := logAddressFromRaw(l.Address)
-					match := false
-					for _, fa := range filter.Addresses {
-						if fa == addr {
-							match = true
-							break
-						}
-					}
-					if !match {
-						continue
-					}
-				}
-
-				// Topics filter
-				if !matchTopics(filter.Topics, l.Topics) {
-					continue
-				}
-
-				topics := make([]string, len(l.Topics))
-				for i, t := range l.Topics {
-					topics[i] = fmt.Sprintf("0x%064x", t)
-				}
-
-				// Recover the txHash from block transactions at txIdx
-				txHash := tcommon.Hash{}
-				txs := block.Transactions()
-				if txIdx < len(txs) {
-					txHash = txs[txIdx].Hash()
-				}
-
-				addrStart := 0
-				if len(l.Address) > 20 {
-					addrStart = len(l.Address) - 20
-				}
-				address := fmt.Sprintf("0x%x", l.Address[addrStart:])
-
-				logs = append(logs, &jsonrpc.RPCLog{
-					Address:          address,
-					Topics:           topics,
-					Data:             fmt.Sprintf("0x%x", l.Data),
-					BlockNumber:      fmt.Sprintf("0x%x", num),
-					TransactionHash:  fmt.Sprintf("0x%x", txHash),
-					TransactionIndex: fmt.Sprintf("0x%x", txIdx),
-					BlockHash:        fmt.Sprintf("0x%x", blockHash),
-					LogIndex:         fmt.Sprintf("0x%x", thisIndex),
-					Removed:          false,
-				})
-			}
-		}
+		blockNums = append(blockNums, num)
 	}
 
+	return scanHotLogsByBlock(b.chain.chaindb, blockNums, filter)
+}
+
+const (
+	minParallelLogScanBlocks  = 4
+	maxParallelLogScanWorkers = 8
+)
+
+// scanHotLogsByBlock scans independently readable hot/freezer blocks in
+// parallel while retaining ascending block order in the returned log stream.
+// Bloom matching remains outside this helper because its section cache is
+// deliberately stateful and must keep its existing serial fallback behavior.
+func scanHotLogsByBlock(db *rawdb.ChainDB, blockNums []uint64, filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+	return scanLogBlocks(blockNums, logScanWorkerCount(len(blockNums)), func(blockNum uint64) ([]*jsonrpc.RPCLog, error) {
+		return scanHotLogsAtBlock(db, blockNum, filter)
+	})
+}
+
+func logScanWorkerCount(blockCount int) int {
+	if blockCount < minParallelLogScanBlocks {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > maxParallelLogScanWorkers {
+		workers = maxParallelLogScanWorkers
+	}
+	if workers > blockCount {
+		workers = blockCount
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
+}
+
+// scanLogBlocks dispatches block-local scans to a bounded worker pool and
+// combines the results by input order. Returning the first input-order error
+// preserves the serial query's observable failure boundary even if a later
+// worker completes first.
+func scanLogBlocks(blockNums []uint64, workers int, scan func(uint64) ([]*jsonrpc.RPCLog, error)) ([]*jsonrpc.RPCLog, error) {
+	if len(blockNums) == 0 {
+		return []*jsonrpc.RPCLog{}, nil
+	}
+	if scan == nil {
+		return nil, errors.New("log scan callback is nil")
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(blockNums) {
+		workers = len(blockNums)
+	}
+
+	results := make([][]*jsonrpc.RPCLog, len(blockNums))
+	errs := make([]error, len(blockNums))
+	if workers == 1 {
+		for i, blockNum := range blockNums {
+			results[i], errs[i] = scan(blockNum)
+		}
+	} else {
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for worker := 0; worker < workers; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for index := range jobs {
+					results[index], errs[index] = scan(blockNums[index])
+				}
+			}()
+		}
+		for index := range blockNums {
+			jobs <- index
+		}
+		close(jobs)
+		wg.Wait()
+	}
+
+	var logs []*jsonrpc.RPCLog
+	for i := range results {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		logs = append(logs, results[i]...)
+	}
 	if logs == nil {
-		logs = []*jsonrpc.RPCLog{}
+		return []*jsonrpc.RPCLog{}, nil
+	}
+	return logs, nil
+}
+
+func scanHotLogsAtBlock(db *rawdb.ChainDB, num uint64, filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+	block, hasBlock, err := rawdb.ReadBlockStrict(db, num)
+	if err != nil {
+		return nil, err
+	}
+	if !hasBlock {
+		return nil, nil
+	}
+	blockHash := block.Hash()
+	infos, hasInfos, err := rawdb.ReadTransactionInfosByBlockStrict(db, num)
+	if err != nil {
+		return nil, err
+	}
+	if !hasInfos {
+		return nil, nil
+	}
+	if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
+		if errors.Is(err, rawdb.ErrIncompleteTransactionInfoCoverage) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	logs := make([]*jsonrpc.RPCLog, 0)
+	logIndex := uint64(0)
+	txs := block.Transactions()
+	for txIdx, info := range infos {
+		for _, l := range info.Log {
+			thisIndex := logIndex
+			logIndex++
+			if len(filter.Addresses) > 0 {
+				addr := logAddressFromRaw(l.Address)
+				match := false
+				for _, candidate := range filter.Addresses {
+					if candidate == addr {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+			}
+			if !matchTopics(filter.Topics, l.Topics) {
+				continue
+			}
+
+			topics := make([]string, len(l.Topics))
+			for i, topic := range l.Topics {
+				topics[i] = fmt.Sprintf("0x%064x", topic)
+			}
+			txHash := tcommon.Hash{}
+			if txIdx < len(txs) {
+				txHash = txs[txIdx].Hash()
+			}
+			addrStart := 0
+			if len(l.Address) > 20 {
+				addrStart = len(l.Address) - 20
+			}
+			logs = append(logs, &jsonrpc.RPCLog{
+				Address:          fmt.Sprintf("0x%x", l.Address[addrStart:]),
+				Topics:           topics,
+				Data:             fmt.Sprintf("0x%x", l.Data),
+				BlockNumber:      fmt.Sprintf("0x%x", num),
+				TransactionHash:  fmt.Sprintf("0x%x", txHash),
+				TransactionIndex: fmt.Sprintf("0x%x", txIdx),
+				BlockHash:        fmt.Sprintf("0x%x", blockHash),
+				LogIndex:         fmt.Sprintf("0x%x", thisIndex),
+				Removed:          false,
+			})
+		}
 	}
 	return logs, nil
 }
