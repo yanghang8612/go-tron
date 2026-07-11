@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -146,6 +147,72 @@ func TestStateDomainChangeHistorySegmentFiltersSameBlockByTxNum(t *testing.T) {
 	}
 	if len(seg.Changes) != 2 || seg.Changes[0].TxNum != begin+1 || seg.Changes[1].TxNum != begin+2 {
 		t.Fatalf("filtered changes = %+v, want txNums [%d,%d]", seg.Changes, begin+1, begin+2)
+	}
+}
+
+func TestManagerReadsHistoryFromTieredSnapshotDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory symlinks require elevated privileges on Windows")
+	}
+
+	dir := t.TempDir()
+	coldHistoryDir := t.TempDir()
+	if err := os.Symlink(coldHistoryDir, filepath.Join(dir, "history")); err != nil {
+		t.Fatalf("link cold history directory: %v", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x59}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 10, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   1,
+		BlockHash:  common.Hash{0x01},
+		TxNum:      10,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      owner,
+		Domain:     kvdomains.ContractStorage,
+		Key:        []byte("slot/a"),
+		NextExists: true,
+		Next:       []byte("value"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 10, "history/state-domain-change-10-10.seg")
+	if err != nil {
+		t.Fatalf("build tiered history: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 10, refs)); err != nil {
+		t.Fatalf("publish tiered manifest: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, refs[0].Path))
+	if err != nil {
+		t.Fatalf("resolve tiered history segment: %v", err)
+	}
+	resolvedColdHistoryDir, err := filepath.EvalSymlinks(coldHistoryDir)
+	if err != nil {
+		t.Fatalf("resolve cold history directory: %v", err)
+	}
+	if filepath.Dir(resolved) != resolvedColdHistoryDir {
+		t.Fatalf("history segment path = %s, want directory %s", resolved, resolvedColdHistoryDir)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open tiered manager: %v", err)
+	}
+	var changes []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByKey(10, 10, rawdb.StateFlatDomainKVLatest, owner, 0, kvdomains.ContractStorage, []byte("slot/a"), func(change *rawdb.StateDomainChange) (bool, error) {
+		changes = append(changes, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("read tiered history: %v", err)
+	}
+	if len(changes) != 1 || string(changes[0].Next) != "value" {
+		t.Fatalf("tiered history changes = %+v, want one value", changes)
 	}
 }
 

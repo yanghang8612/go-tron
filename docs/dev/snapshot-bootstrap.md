@@ -73,6 +73,44 @@ This verifies the signed catalog, chain identity, manifest checksum, registered
 segment families, file sizes, checksums, and format-aware segment checks. It
 does not write chain state or freezer data.
 
+## Storage Placement
+
+`--snapshot.dir` is a single logical snapshot root. The manifest and catalog
+remain at its root and every segment path is relative to it. Operators can use
+directory mounts or symlinks below that root to place cold immutable data on
+capacity storage while keeping mutable state and ETL work on fast local disk.
+
+For example, prepare the layout before fetching or building segments:
+
+```bash
+SNAPSHOT_ROOT=/fast/gtron/state-snapshots
+mkdir -p "$SNAPSHOT_ROOT" /cold/gtron/{history,chain,trace,log}
+ln -s /cold/gtron/history "$SNAPSHOT_ROOT/history"
+ln -s /cold/gtron/chain "$SNAPSHOT_ROOT/chain"
+ln -s /cold/gtron/trace "$SNAPSHOT_ROOT/trace"
+ln -s /cold/gtron/log "$SNAPSHOT_ROOT/log"
+```
+
+- Keep `manifest.json`, `snapshot-catalog.json`, `latest/`, and `commitment/`
+  on the fast snapshot root. `latest/` and `commitment/` participate in normal
+  state reads and runtime rebuilds.
+- `history/` contains archive state-history segments and their accessors;
+  `chain/` contains freezer and chain-index segments; `trace/` contains balance
+  trace segments; `log/` contains event-log and section-bloom segments. These
+  immutable families are suitable for capacity storage once their latency meets
+  the archive RPC workload.
+- Put `--snapshot.etl.tempdir`, `--sync.etl.tempdir`, and any
+  `--db.etl.tempdir` on fast local storage. ETL collectors create sorted runs
+  there and can temporarily require substantially more space than their final
+  segment.
+
+Do not move individual segment files after manifest publication. Move or mount
+the complete family directory, preserve the relative paths recorded in the
+manifest, and use the same `--snapshot.dir` for the node, snapshot commands,
+and DB maintenance commands. `--snapshot.reset` removes the entire configured
+snapshot root, so never point it at a shared capacity volume containing another
+node's segments.
+
 ## Fetch Then Restore
 
 For a fresh datadir where you want to inspect the downloaded files first:
