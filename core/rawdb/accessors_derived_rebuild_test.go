@@ -38,11 +38,16 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	// Leave block 3 without TransactionRet coverage. The rebuild must still
 	// terminate and rebuild its tx lookup row from the block body.
 	txID := infos1[1].Id
+	legacyInfo := proto.Clone(infos1[1]).(*corepb.TransactionInfo)
+	legacyInfo.Fee++
+	if err := WriteTransactionInfo(db, txID, legacyInfo); err != nil {
+		t.Fatalf("WriteTransactionInfo legacy row: %v", err)
+	}
 	if got := ReadTransactionIndex(db, txID); got != nil {
 		t.Fatalf("pre-rebuild tx index = %v, want nil", got)
 	}
-	if got := ReadTransactionInfo(db, txID); got != nil {
-		t.Fatalf("pre-rebuild tx info = %+v, want nil", got)
+	if got := ReadTransactionInfo(db, txID); got == nil || got.Fee != legacyInfo.Fee {
+		t.Fatalf("pre-rebuild tx info = %+v, want legacy fee %d", got, legacyInfo.Fee)
 	}
 
 	result, err := RebuildTransactionDerivedIndexesFromBlocks(db, db, 1, 3, etl.Options{
@@ -64,6 +69,9 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	}
 	if got := ReadTransactionInfo(db, txID); got == nil || got.Fee != infos1[1].Fee {
 		t.Fatalf("post-rebuild tx info = %+v, want fee %d", got, infos1[1].Fee)
+	}
+	if has, err := db.Has(txInfoKey(txID)); err != nil || has {
+		t.Fatalf("post-rebuild direct tx info row present=%v err=%v, want absent", has, err)
 	}
 	if got := ReadTransactionInfosByBlock(db, 2); len(got) != 1 || got[0].Fee != infos2[0].Fee {
 		t.Fatalf("post-rebuild infos by block2 = %+v, want one fee %d", got, infos2[0].Fee)

@@ -244,11 +244,12 @@ Status:
   advances canonical chain stages only when the restored StateTxRange at
   `visibleTxEnd` maps to a block whose body is available in hot KV or ancient
   freezer and whose hash matches the signed history boundary.
-- Chain-freezer restore also derives the legacy hot lookup indexes from the
-  verified segment payload: block hash to number (`bh-`), transaction hash to
-  block (`tx-`), and per-transaction info (`ti-`). This makes historical
-  block/transaction RPC usable after remote bootstrap even before a cold recsplit
-  style accessor lands.
+- Chain-freezer restore derives only the compact hot lookup indexes from the
+  verified segment payload: block hash to number (`bh-`) and transaction hash
+  to block (`tx-`). Historical receipt-by-ID reads then resolve through the
+  restored `tx-` row plus the authoritative ancient `TransactionRet` payload,
+  avoiding a duplicate hot `ti-` protobuf for every frozen transaction even
+  before a cold recsplit-style accessor lands.
 - `InstallCanonicalBoundaryFromVerifiedCatalog` exposes the signed-catalog
   boundary gate to non-CLI callers. It verifies catalog signature, chain
   identity, manifest checksum, and registered segment files before advancing
@@ -1038,11 +1039,11 @@ Status:
   rebuilt from verified freezer segment rows and can be safely retried: if the
   ancient rows already match the segment, restore skips append and rebuilds only
   the indexes.
-- Chain-freezer hot index restore now validates any embedded
-  `TransactionRet` payload against the canonical block transaction count, block
-  number, and tx hash order before writing per-tx `TransactionInfo` rows. This
-  keeps older snapshots that restore hot lookup/info rows from publishing
-  archive transaction metadata that does not match the frozen block body.
+- Chain-freezer hot index restore validates any embedded `TransactionRet`
+  payload against the canonical block transaction count, block number, and tx
+  hash order before publishing `tx-` rows. Receipt reads retain that verified
+  per-block payload as their only authority instead of materializing duplicate
+  per-tx `TransactionInfo` rows.
 - The snapshot build CLI can now add chain-freezer segments plus matching
   chain-index lookup sidecars from local ancient rows to the production
   manifest.
@@ -1839,14 +1840,14 @@ Status:
   account trace, balance trace, and section bloom rows. Future backfill commands
   can add rows in block execution order and still load the final rawdb stream in
   physical key order.
-- `rawdb.RebuildTransactionDerivedIndexesFromBlocks` now rebuilds transaction
-  reverse lookup, per-block `TransactionRet`, and per-tx `TransactionInfo` rows
-  from retained blocks plus hot or ancient per-block info rows through
-  `DerivedIndexCollector`. Blocks without retained `TransactionRet` can still
-  rebuild tx-hash reverse lookup rows from the canonical block body, but
-  present per-block info rows must match the canonical block transaction count,
-  block number, and tx hash order before the rebuild republishes per-block or
-  per-tx info rows.
+- `rawdb.RebuildTransactionDerivedIndexesFromBlocks` rebuilds transaction
+  reverse lookup and per-block `TransactionRet` rows from retained blocks plus
+  hot or ancient per-block info rows through `DerivedIndexCollector`. Blocks
+  without retained `TransactionRet` can still rebuild tx-hash reverse lookup
+  rows from the canonical block body, but present per-block info rows must match
+  the canonical block transaction count, block number, and tx hash order before
+  the rebuild republishes the authoritative per-block receipt row. It does not
+  reintroduce redundant per-tx `ti-` rows.
 - `rawdb.RebuildTransactionLookupFromBlocks` is the narrower recoverable
   `TxLookup` stage payload. Bulk sync persists canonical blocks and per-block
   `TransactionRet` rows first, then writes only `tx-<hash>` rows through sorted
@@ -2384,9 +2385,10 @@ Status:
   the lookup key, cold tx-info fallbacks must either carry no embedded block
   number or match the tx index's block, and backend block-number receipt queries
   validate any retained `TransactionRet` list against the canonical block
-  transaction count, block number, and tx hash order. The hot `TransactionInfo`
-  writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
-  check before new `ti-` rows can be written. Backend transaction-by-id/hash
+  transaction count, block number, and tx hash order. The legacy hot
+  `TransactionInfo` writer and the sorted `DerivedIndexCollector` explicit
+  per-tx helper retain the same id/key validation for compatibility tooling. Backend
+  transaction-by-id/hash
   reads use the strict tx lookup index plus strict block-body access, so
   `eth_getTransactionByHash` can return transactions after receipt rows are
   pruned and a corrupt freezer/hot block behind a valid transaction index

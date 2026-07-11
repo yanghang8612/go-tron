@@ -257,6 +257,15 @@ func pruneHotChainLookupsForFreezerSegment(db ethdb.KeyValueWriter, dir string, 
 				return err
 			}
 			result.TxIndexesDeleted++
+			if reader, ok := db.(ethdb.KeyValueReader); ok {
+				hasInfo, err := rawdb.HasHotTransactionInfo(reader, txHash[:])
+				if err != nil {
+					return err
+				}
+				if !hasInfo {
+					continue
+				}
+			}
 			if err := rawdb.DeleteTransactionInfo(db, txHash[:]); err != nil {
 				return err
 			}

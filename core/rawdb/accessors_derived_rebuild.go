@@ -18,11 +18,14 @@ import (
 var ErrIncompleteTransactionInfoCoverage = errors.New("rawdb: incomplete transaction info coverage")
 
 type RebuildTransactionDerivedIndexesResult struct {
-	FromBlock               uint64
-	ToBlock                 uint64
-	BlocksScanned           uint64
-	TransactionsIndexed     uint64
-	BlocksWithTxInfo        uint64
+	FromBlock           uint64
+	ToBlock             uint64
+	BlocksScanned       uint64
+	TransactionsIndexed uint64
+	BlocksWithTxInfo    uint64
+	// TransactionInfosIndexed counts receipt entries validated and published in
+	// per-block TransactionRet rows. It does not imply ti-<txid> rows were
+	// materialized; receipt-by-ID resolves through tx- plus tib-.
 	TransactionInfosIndexed uint64
 	ETL                     etl.Stats
 }
@@ -131,6 +134,9 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 			if err := collector.PutTransactionIndex(txHash[:], blockNum); err != nil {
 				return nil, err
 			}
+			if err := collector.DeleteTransactionInfo(txHash[:]); err != nil {
+				return nil, err
+			}
 			result.TransactionsIndexed++
 		}
 		infos, hasInfos, err := ReadTransactionInfosByBlockStrict(chain, blockNum)
@@ -145,15 +151,11 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 				return nil, err
 			}
 			result.BlocksWithTxInfo++
-			for _, info := range infos {
-				if info == nil || len(info.Id) == 0 {
-					continue
-				}
-				if err := collector.PutTransactionInfo(info.Id, info); err != nil {
-					return nil, err
-				}
-				result.TransactionInfosIndexed++
-			}
+			// Keep the one authoritative TransactionRet payload by block. Receipt
+			// reads resolve an individual transaction through tx- plus tib-, so
+			// rebuilding another full ti- protobuf for every transaction would
+			// only reintroduce the duplicate canonical write removed from sync.
+			result.TransactionInfosIndexed += uint64(len(infos))
 		}
 		if blockNum == toBlock {
 			break

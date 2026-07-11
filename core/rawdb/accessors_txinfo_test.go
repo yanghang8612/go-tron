@@ -44,6 +44,16 @@ func TestWriteReadTransactionInfo(t *testing.T) {
 	if got.Receipt.EnergyUsage != 500 {
 		t.Fatalf("energyUsage: got %d, want 500", got.Receipt.EnergyUsage)
 	}
+	if has, err := HasHotTransactionInfo(db, txID); err != nil || !has {
+		t.Fatalf("HasHotTransactionInfo = %v/%v, want true/nil", has, err)
+	}
+}
+
+func TestHasHotTransactionInfoRejectsMalformedKey(t *testing.T) {
+	db := NewMemoryChainDB()
+	if has, err := HasHotTransactionInfo(db, []byte{0x01}); err == nil || has || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("HasHotTransactionInfo malformed key = %v/%v, want false/hash length error", has, err)
+	}
 }
 
 func TestReadTransactionInfo_NotFound(t *testing.T) {

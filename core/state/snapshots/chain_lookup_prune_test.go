@@ -56,6 +56,15 @@ func TestPruneHotChainLookupsKeepsColdReads(t *testing.T) {
 	if got := rawdb.ReadBlockStateRoot(chainDB, block1.Hash()); got != stateRoot {
 		t.Fatalf("hot ReadBlockStateRoot = %x, want %x", got, stateRoot)
 	}
+	// New restores omit ti- rows, but prune must still reclaim one left by an
+	// older release without touching the ancient TransactionRet source.
+	infos := rawdb.ReadTransactionInfosByBlock(chainDB, 1)
+	if len(infos) != 1 {
+		t.Fatalf("legacy tx-info fixture = %+v, want one row", infos)
+	}
+	if err := rawdb.WriteTransactionInfo(hot, txHash[:], infos[0]); err != nil {
+		t.Fatalf("WriteTransactionInfo legacy fixture: %v", err)
+	}
 
 	result, err := PruneHotChainLookups(hot, snapshotDir, manifest)
 	if err != nil {
@@ -493,7 +502,7 @@ func TestPruneHotChainLookupsWithProgressWaitsForChainFreezerStage(t *testing.T)
 	if err != nil {
 		t.Fatalf("final PruneHotChainLookupsWithProgress: %v", err)
 	}
-	if !second.HasRange || second.FromBlock != 1 || second.ToBlock != 1 || second.TxIndexesDeleted != 1 || second.TxInfosDeleted != 1 {
+	if !second.HasRange || second.FromBlock != 1 || second.ToBlock != 1 || second.TxIndexesDeleted != 1 || second.TxInfosDeleted != 0 {
 		t.Fatalf("final prune result = %+v, want block1 tx lookups", second)
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block1.Hash() {
@@ -571,7 +580,7 @@ func TestChainLookupPruneLifecycleOnePassPrunesCoveredLookups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
 	}
-	if result == nil || !result.HasRange || result.ToBlock != 1 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 1 {
+	if result == nil || !result.HasRange || result.ToBlock != 1 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 0 {
 		t.Fatalf("OnePass result = %+v, want covered tx lookup prune through block 1", result)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(hot, rawdb.StageSnapshotChainLookupPrune); err != nil || !ok || got != 1 {

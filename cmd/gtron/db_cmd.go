@@ -78,7 +78,7 @@ func dbCommand() *cli.Command {
 		Subcommands: []*cli.Command{
 			{
 				Name:  "rebuild-tx-indexes",
-				Usage: "Rebuild transaction lookup/info indexes from retained blocks",
+				Usage: "Rebuild transaction lookups and per-block receipt rows from retained blocks",
 				Flags: []cli.Flag{
 					dataDirFlag,
 					dbCacheFlag,
@@ -1978,7 +1978,7 @@ func dbRebuildTxIndexesCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Transaction indexes rebuilt: blocks=[%d,%d] scanned=%d txIndexes=%d txInfoBlocks=%d txInfos=%d etlApplied=%d etlRuns=%d\n",
+	fmt.Printf("Transaction indexes rebuilt: blocks=[%d,%d] scanned=%d txIndexes=%d txInfoBlocks=%d txInfoEntries=%d etlApplied=%d etlRuns=%d\n",
 		result.FromBlock,
 		result.ToBlock,
 		result.BlocksScanned,

@@ -55,8 +55,11 @@ type RestoreVerifiedChainFreezerResult struct {
 	BlocksRestored       uint64
 	BlockIndexesRestored uint64
 	TxIndexesRestored    uint64
-	TxInfosRestored      uint64
-	ColdIndexSegments    uint64
+	// TxInfosRestored is retained for result compatibility. Current restores
+	// intentionally keep it zero: ancient TransactionRet rows are authoritative
+	// and no duplicate hot ti- rows are materialized.
+	TxInfosRestored   uint64
+	ColdIndexSegments uint64
 }
 
 type chainFreezerRow struct {
@@ -82,8 +85,9 @@ type RestoreChainFreezerSegmentResult struct {
 	BlocksRestored       uint64
 	BlockIndexesRestored uint64
 	TxIndexesRestored    uint64
-	TxInfosRestored      uint64
-	AlreadyInstalled     bool
+	// See RestoreVerifiedChainFreezerResult.TxInfosRestored.
+	TxInfosRestored  uint64
+	AlreadyInstalled bool
 }
 
 func ChainFreezerSegmentPath(fromBlock, toBlock uint64) string {
@@ -794,18 +798,11 @@ func restoreChainFreezerIndexesForRow(db ethdb.KeyValueWriter, row chainFreezerR
 		}
 		result.TxIndexesRestored++
 	}
-	if verified.txRet == nil {
-		return result, nil
-	}
-	for _, info := range verified.txRet.Transactioninfo {
-		if info == nil || len(info.Id) == 0 {
-			continue
-		}
-		if err := rawdb.WriteTransactionInfo(db, info.Id, info); err != nil {
-			return result, err
-		}
-		result.TxInfosRestored++
-	}
+	// TransactionRet is already restored into the ancient tx_infos table. A
+	// tx- lookup plus that per-block payload resolves receipt-by-ID without a
+	// second full TransactionInfo protobuf under ti-<txid> in hot Pebble.
+	// validateChainFreezerRowPayload has still verified the TransactionRet
+	// against the canonical block before this index is published.
 	return result, nil
 }
 

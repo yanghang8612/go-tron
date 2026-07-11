@@ -1951,6 +1951,13 @@ func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	if _, err := statesnapshots.RestoreChainFreezerIndexes(hot, snapshotDir, freezerRef); err != nil {
 		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
 	}
+	txRet := &corepb.TransactionRet{}
+	if err := proto.Unmarshal(txInfoRaw, txRet); err != nil {
+		t.Fatalf("unmarshal tx info: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(hot, 1, txRet.Transactioninfo); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
 	if err := rawdb.WriteBlockStateRoot(hot, block1.Hash(), stateRoot); err != nil {
 		t.Fatalf("WriteBlockStateRoot: %v", err)
 	}
@@ -1983,14 +1990,17 @@ func TestPruneVerifiedHotChainLookupsRequiresSignedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pruneVerifiedHotChainLookups: %v", err)
 	}
-	if result.ColdIndexSegments != 1 || result.MissingIndexSegments != 0 || result.BlockIndexesDeleted != 2 || result.StateRootsDeleted != 2 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 1 {
-		t.Fatalf("prune result = %+v, want one segment, 2 block/state roots, 1 tx index/info", result)
+	if result.ColdIndexSegments != 1 || result.MissingIndexSegments != 0 || result.BlockIndexesDeleted != 2 || result.StateRootsDeleted != 2 || result.TxIndexesDeleted != 1 || result.TxInfosDeleted != 0 {
+		t.Fatalf("prune result = %+v, want one segment, 2 block/state roots, 1 tx index, no legacy tx info", result)
 	}
 	if num := rawdb.ReadBlockNumber(hotOnly, block1.Hash()); num != nil {
 		t.Fatalf("hot ReadBlockNumber after prune = %v, want nil", num)
 	}
 	if info := rawdb.ReadTransactionInfo(hotOnly, txHash[:]); info != nil {
 		t.Fatalf("hot ReadTransactionInfo after prune = %+v, want nil", info)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 1); len(infos) != 1 || infos[0].Fee != 777 {
+		t.Fatalf("hot TransactionRet after prune = %+v, want one fee 777", infos)
 	}
 	if got := rawdb.ReadBlockStateRoot(hotOnly, block1.Hash()); got != (common.Hash{}) {
 		t.Fatalf("hot ReadBlockStateRoot after prune = %x, want zero", got)

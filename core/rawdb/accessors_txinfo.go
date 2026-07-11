@@ -29,6 +29,21 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 	return db.Put(txInfoKey(txID), data)
 }
 
+// HasHotTransactionInfo reports whether the legacy per-transaction
+// `ti-<txid>` row exists in the hot key-value store. It deliberately does not
+// consult per-block TransactionRet rows or cold indexes: callers use it only
+// to migrate or prune the redundant physical row without suppressing the
+// receipt-by-ID fallback path.
+func HasHotTransactionInfo(db ethdb.KeyValueReader, txID []byte) (bool, error) {
+	if err := validateTransactionHashKey(txID, "check hot transaction info"); err != nil {
+		return false, err
+	}
+	if db == nil {
+		return false, fmt.Errorf("rawdb: nil database during check hot transaction info")
+	}
+	return db.Has(txInfoKey(txID))
+}
+
 // ReadTransactionInfo retrieves a TransactionInfo by txID. The hot per-tx
 // `ti-<txid>` row is preferred; on a miss, a ChainDB with a cold chain-index
 // sidecar can resolve txID -> block number and scan that block's TransactionRet

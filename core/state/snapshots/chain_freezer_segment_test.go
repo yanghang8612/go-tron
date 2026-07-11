@@ -311,8 +311,8 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreChainFreezerSegmentToAncientWithOptions: %v", err)
 	}
-	if result.BlocksRestored != 2 || result.BlockIndexesRestored != 2 || result.TxIndexesRestored != 1 || result.TxInfosRestored != 1 {
-		t.Fatalf("restore result = %+v, want 2 blocks, 2 block indexes, 1 tx index, 1 tx info", result)
+	if result.BlocksRestored != 2 || result.BlockIndexesRestored != 2 || result.TxIndexesRestored != 1 || result.TxInfosRestored != 0 {
+		t.Fatalf("restore result = %+v, want 2 blocks, 2 block indexes, 1 tx index, no duplicate tx info", result)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(indexDB, rawdb.StageChainFreezer); err != nil || !ok || got != 1 {
 		t.Fatalf("StageChainFreezer after restore = %d ok=%v err=%v, want 1", got, ok, err)
@@ -331,6 +331,15 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	if infos := rawdb.ReadTransactionInfosByBlock(chainDB, 1); len(infos) != 1 || infos[0].Fee != 777 {
 		t.Fatalf("ReadTransactionInfosByBlock = %+v, want one fee 777", infos)
 	}
+	// The restored tx- row is the only per-transaction hot materialization.
+	// Removing it must make the receipt unavailable even though tx_infos remains
+	// readable from ancient; a surviving ti- row would incorrectly still answer.
+	if err := rawdb.DeleteTransactionIndex(indexDB, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex: %v", err)
+	}
+	if info := rawdb.ReadTransactionInfo(chainDB, txHash[:]); info != nil {
+		t.Fatalf("ReadTransactionInfo without tx lookup = %+v, want nil (no ti- row)", info)
+	}
 
 	second, err := RestoreChainFreezerSegmentToAncientWithOptions(dst, snapshotDir, ref, RestoreChainFreezerOptions{
 		IndexWriter:    indexDB,
@@ -339,7 +348,7 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent RestoreChainFreezerSegmentToAncientWithOptions: %v", err)
 	}
-	if !second.AlreadyInstalled || second.BlocksRestored != 0 || second.BlockIndexesRestored != 2 || second.TxIndexesRestored != 1 || second.TxInfosRestored != 1 {
+	if !second.AlreadyInstalled || second.BlocksRestored != 0 || second.BlockIndexesRestored != 2 || second.TxIndexesRestored != 1 || second.TxInfosRestored != 0 {
 		t.Fatalf("second restore result = %+v, want already installed plus rebuilt indexes", second)
 	}
 }
@@ -348,11 +357,11 @@ func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
 	defer src.Close()
-	block0 := canonicalBoundaryTestBlock(t, 0)
-	block1, _, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	block0, _, txInfoRaw0 := chainFreezerBlockWithTx(t, 0)
+	block1, _, txInfoRaw1 := chainFreezerBlockWithTx(t, 1)
 	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
-		{block: block0},
-		{block: block1, txInfosRaw: txInfoRaw},
+		{block: block0, txInfosRaw: txInfoRaw0},
+		{block: block1, txInfosRaw: txInfoRaw1},
 	})
 
 	snapshotDir := filepath.Join(root, "snapshot")
@@ -383,8 +392,8 @@ func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
 	}
-	if result.BlockIndexesRestored != 2 || result.TxIndexesRestored != 1 || result.TxInfosRestored != 1 {
-		t.Fatalf("restore result = %+v, want 2 block indexes, 1 tx index, 1 tx info", result)
+	if result.BlockIndexesRestored != 2 || result.TxIndexesRestored != 2 || result.TxInfosRestored != 0 {
+		t.Fatalf("restore result = %+v, want 2 block indexes, 2 tx indexes, no duplicate tx info", result)
 	}
 	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
 		t.Fatalf("chain-freezer index restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)

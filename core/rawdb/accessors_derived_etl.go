@@ -62,6 +62,19 @@ func (c *DerivedIndexCollector) PutTransactionInfo(txID []byte, info *corepb.Tra
 	return c.collector.Put(txInfoKey(txID), data)
 }
 
+// DeleteTransactionInfo removes a legacy per-transaction receipt row. Canonical
+// receipt reads resolve through tx- plus tib-, so offline rebuilds use this to
+// discard stale duplicate ti- rows while retaining the block-level payload.
+func (c *DerivedIndexCollector) DeleteTransactionInfo(txID []byte) error {
+	if c == nil || c.collector == nil {
+		return errors.New("rawdb: nil derived index collector")
+	}
+	if err := validateTransactionHashKey(txID, "collect transaction info delete"); err != nil {
+		return err
+	}
+	return c.collector.Delete(txInfoKey(txID))
+}
+
 func (c *DerivedIndexCollector) PutTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo) error {
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")

@@ -603,14 +603,13 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 		result.RestoredTxNum,
 	)
 	if freezerResult.HasRange {
-		fmt.Printf("Chain freezer restored: blocks=[%d,%d] count=%d coldIndexSegments=%d blockIndexes=%d txIndexes=%d txInfos=%d\n",
+		fmt.Printf("Chain freezer restored: blocks=[%d,%d] count=%d coldIndexSegments=%d blockIndexes=%d txIndexes=%d\n",
 			freezerResult.FromBlock,
 			freezerResult.ToBlock,
 			freezerResult.BlocksRestored,
 			freezerResult.ColdIndexSegments,
 			freezerResult.BlockIndexesRestored,
 			freezerResult.TxIndexesRestored,
-			freezerResult.TxInfosRestored,
 		)
 	} else {
 		fmt.Println("Chain freezer restored: no chain-freezer segments in snapshot.")

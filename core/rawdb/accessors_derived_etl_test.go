@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
@@ -72,6 +73,11 @@ func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
 	}
 
 	db := NewMemoryChainDB()
+	legacyInfo := proto.Clone(txInfo).(*corepb.TransactionInfo)
+	legacyInfo.Fee = 456
+	if err := WriteTransactionInfo(db, txID, legacyInfo); err != nil {
+		t.Fatalf("WriteTransactionInfo legacy row: %v", err)
+	}
 	collector2, err := NewDerivedIndexCollector(etl.Options{TempDir: tempDir, BufferLimit: 1})
 	if err != nil {
 		t.Fatalf("NewDerivedIndexCollector #2: %v", err)
@@ -80,8 +86,8 @@ func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
 	if err := collector2.PutTransactionIndex(txID, 9); err != nil {
 		t.Fatalf("PutTransactionIndex #2: %v", err)
 	}
-	if err := collector2.PutTransactionInfo(txID, txInfo); err != nil {
-		t.Fatalf("PutTransactionInfo #2: %v", err)
+	if err := collector2.DeleteTransactionInfo(txID); err != nil {
+		t.Fatalf("DeleteTransactionInfo #2: %v", err)
 	}
 	if err := collector2.PutTransactionInfosByBlock(9, []*corepb.TransactionInfo{txInfo}); err != nil {
 		t.Fatalf("PutTransactionInfosByBlock #2: %v", err)
@@ -94,6 +100,9 @@ func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
 	}
 	if got := ReadTransactionInfo(db, txID); got == nil || got.Fee != 123 {
 		t.Fatalf("ReadTransactionInfo = %+v, want fee 123", got)
+	}
+	if has, err := db.Has(txInfoKey(txID)); err != nil || has {
+		t.Fatalf("legacy direct tx info row present=%v err=%v, want absent", has, err)
 	}
 	if got := ReadTransactionInfosByBlock(db, 9); len(got) != 1 || got[0].Fee != 123 {
 		t.Fatalf("ReadTransactionInfosByBlock = %+v, want one fee 123", got)
@@ -126,6 +135,9 @@ func TestDerivedIndexCollectorRejectsInvalidRowsAndLifecycle(t *testing.T) {
 	}
 	if err := collector.PutTransactionIndex([]byte{0x34}, 7); err == nil {
 		t.Fatal("PutTransactionIndex accepted malformed transaction hash")
+	}
+	if err := collector.DeleteTransactionInfo([]byte{0x34}); err == nil {
+		t.Fatal("DeleteTransactionInfo accepted malformed transaction hash")
 	}
 	if err := collector.PutTransactionInfosByBlock(7, []*corepb.TransactionInfo{nil}); err == nil {
 		t.Fatal("PutTransactionInfosByBlock accepted nil transaction info")
