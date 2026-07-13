@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
@@ -235,14 +236,18 @@ func TestKZGPointEvaluationAddressIsOrdinaryOnMainnet(t *testing.T) {
 
 func TestKZGPointEvaluationFailureAndEnergy(t *testing.T) {
 	p := &kzgPointEvaluation{}
-	if _, used, err := p.Run(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost-1); err != ErrOutOfEnergy || used != kzgPointEvaluationCost-1 {
-		t.Fatalf("OOE: used=%d err=%v", used, err)
+	if ret, used, err := p.Run(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost-1); err != ErrOutOfEnergy || used != kzgPointEvaluationCost-1 || ret != nil {
+		t.Fatalf("OOE: ret=%x used=%d err=%v", ret, used, err)
 	}
-	if _, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength-1), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost {
-		t.Fatalf("invalid length: used=%d success=%v err=%v", used, success, err)
+	// java failures are Pair.of(false, DataWord.ZERO().getData()); the 32-byte
+	// zero payload is memorySaved into the caller's out-region like the
+	// shielded verify* failures.
+	wantZero := make([]byte, 32)
+	if ret, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength-1), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost || !bytes.Equal(ret, wantZero) {
+		t.Fatalf("invalid length: ret=%x used=%d success=%v err=%v", ret, used, success, err)
 	}
-	if _, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost {
-		t.Fatalf("mismatched hash: used=%d success=%v err=%v", used, success, err)
+	if ret, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost || !bytes.Equal(ret, wantZero) {
+		t.Fatalf("mismatched hash: ret=%x used=%d success=%v err=%v", ret, used, success, err)
 	}
 }
 

@@ -139,8 +139,11 @@ func (c *kzgPointEvaluation) RunWithStatus(_ *TVM, _ tcommon.Address, input []by
 	if energy < kzgPointEvaluationCost {
 		return nil, energy, false, ErrOutOfEnergy
 	}
+	// Every failure is java Pair.of(false, DataWord.ZERO().getData()): a 32-byte
+	// zero payload that callToPrecompiledAddress still memorySaves into the
+	// caller's out-region, like the shielded verify* precompiles.
 	if len(input) != kzgPointInputLength {
-		return nil, kzgPointEvaluationCost, false, nil
+		return make([]byte, 32), kzgPointEvaluationCost, false, nil
 	}
 
 	var versionedHash [32]byte
@@ -152,12 +155,12 @@ func (c *kzgPointEvaluation) RunWithStatus(_ *TVM, _ tcommon.Address, input []by
 	var commitment kzg4844.Commitment
 	copy(commitment[:], input[96:144])
 	if kzg4844.CalcBlobHashV1(sha256.New(), &commitment) != versionedHash {
-		return nil, kzgPointEvaluationCost, false, nil
+		return make([]byte, 32), kzgPointEvaluationCost, false, nil
 	}
 	var proof kzg4844.Proof
 	copy(proof[:], input[144:192])
 	if err := kzg4844.VerifyProof(commitment, point, claim, proof); err != nil {
-		return nil, kzgPointEvaluationCost, false, nil
+		return make([]byte, 32), kzgPointEvaluationCost, false, nil
 	}
 	return append([]byte(nil), kzgPointReturnValue...), kzgPointEvaluationCost, true, nil
 }

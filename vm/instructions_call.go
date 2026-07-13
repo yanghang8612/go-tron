@@ -22,15 +22,18 @@ func javaCallEnergyRequest(v *uint256.Int) uint64 {
 // Stack: [value, offset, size] → [addr]
 // writeCallReturn copies a sub-call's return data into the caller's memory. java
 // truncates regular-call returns to the requested out-size always (callToAddress →
-// memorySaveLimited), but a SUCCESSFUL precompile's return was written at FULL length
+// memorySaveLimited), but a precompile's return was written at FULL length
 // (extending MSIZE past out-size) until allow_tvm_selfdestruct_restriction switched it
-// to truncated (Program.callToPrecompiledAddress). Replicate that fork-gated precompile
+// to truncated (Program.callToPrecompiledAddress). That memorySave sits AFTER the
+// success/failure branch, so it applies to failure payloads (the 32-byte zero word
+// of Pair.of(false, ...)) exactly as to successful returns; only the not-enough-
+// energy branch skips it, and that path carries no payload. Replicate the fork-gated
 // behavior so pre-restriction blocks replay identically; everything else truncates.
 func (in *Interpreter) writeCallReturn(memory *Memory, toPrecompile bool, callErr error, retOff, retSz uint64, ret []byte) {
 	if len(ret) == 0 {
 		return
 	}
-	if toPrecompile && callErr == nil && !in.tvmConfig.SelfdestructRestrict {
+	if toPrecompile && (callErr == nil || callErr == errPrecompileFailure) && !in.tvmConfig.SelfdestructRestrict {
 		resizeMemory(memory, retOff, uint64(len(ret)))
 		memory.set(retOff, uint64(len(ret)), ret)
 		return

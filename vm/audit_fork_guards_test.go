@@ -68,9 +68,10 @@ func TestModExpCpuTimeGuardOutOfTime(t *testing.T) {
 
 // TestWriteCallReturnPrecompileTruncationGate locks the selfdestruct-restriction
 // gate on precompile return-data writeback (java Program.callToPrecompiledAddress):
-// pre-restriction a successful precompile's return was written at FULL length
-// (extending MSIZE past out-size); post-restriction it is truncated. Regular
-// (non-precompile) returns are always truncated.
+// pre-restriction a precompile's return — successful output or the zero-word
+// failure payload — was written at FULL length (extending MSIZE past out-size);
+// post-restriction it is truncated. Regular (non-precompile) returns are always
+// truncated.
 func TestWriteCallReturnPrecompileTruncationGate(t *testing.T) {
 	ret := []byte{1, 2, 3, 4, 5, 6, 7, 8} // 8 bytes; caller requests retSz=4
 
@@ -98,6 +99,27 @@ func TestWriteCallReturnPrecompileTruncationGate(t *testing.T) {
 	in3.writeCallReturn(mem3, false, nil, 0, 4, ret)
 	if got := mem3.getCopy(0, 8); !bytes.Equal(got, []byte{1, 2, 3, 4, 0, 0, 0, 0}) {
 		t.Fatalf("non-precompile: got %x, want truncated to 4", got)
+	}
+
+	// precompile FAILURE payload (java Pair.of(false, zero-word), memorySaved
+	// after the failure branch): pre-restriction full-length like success…
+	in4 := &Interpreter{tvmConfig: TVMConfig{}}
+	mem4 := newMemory()
+	resizeMemory(mem4, 0, 8)
+	mem4.set(0, 8, ret)
+	in4.writeCallReturn(mem4, true, errPrecompileFailure, 0, 4, make([]byte, 32))
+	if got := mem4.getCopy(0, 32); !bytes.Equal(got, make([]byte, 32)) {
+		t.Fatalf("pre-restriction precompile failure: got %x, want 32 zero bytes", got)
+	}
+
+	// …and post-restriction truncated to retSz (stale tail bytes survive).
+	in5 := &Interpreter{tvmConfig: TVMConfig{SelfdestructRestrict: true}}
+	mem5 := newMemory()
+	resizeMemory(mem5, 0, 8)
+	mem5.set(0, 8, ret)
+	in5.writeCallReturn(mem5, true, errPrecompileFailure, 0, 4, make([]byte, 32))
+	if got := mem5.getCopy(0, 8); !bytes.Equal(got, []byte{0, 0, 0, 0, 5, 6, 7, 8}) {
+		t.Fatalf("post-restriction precompile failure: got %x, want zeroed head only", got)
 	}
 }
 
