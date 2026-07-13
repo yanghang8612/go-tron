@@ -8,6 +8,7 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
@@ -110,6 +111,54 @@ func (c *dataCopy) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) (
 	out := make([]byte, len(input))
 	copy(out, input)
 	return out, cost, nil
+}
+
+// ── 0x02000a KZG point evaluation (EIP-4844) ─────────────────────────────────
+
+const (
+	kzgPointEvaluationCost = uint64(50_000)
+	kzgPointInputLength    = 192
+)
+
+var kzgPointReturnValue = tcommon.FromHex(
+	"0000000000000000000000000000000000000000000000000000000000001000" +
+		"73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001")
+
+// kzgPointEvaluation verifies a commitment opening and returns the field-
+// elements-per-blob constant plus the BLS scalar-field modulus. Nile enables
+// it with allow_tvm_blob and exposes it at TRON address 0x02000a.
+type kzgPointEvaluation struct{}
+
+func (c *kzgPointEvaluation) Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(tvm, caller, input, energy)
+	return ret, used, err
+}
+
+func (c *kzgPointEvaluation) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
+	if energy < kzgPointEvaluationCost {
+		return nil, energy, false, ErrOutOfEnergy
+	}
+	if len(input) != kzgPointInputLength {
+		return nil, kzgPointEvaluationCost, false, nil
+	}
+
+	var versionedHash [32]byte
+	copy(versionedHash[:], input[:32])
+	var point kzg4844.Point
+	copy(point[:], input[32:64])
+	var claim kzg4844.Claim
+	copy(claim[:], input[64:96])
+	var commitment kzg4844.Commitment
+	copy(commitment[:], input[96:144])
+	if kzg4844.CalcBlobHashV1(sha256.New(), &commitment) != versionedHash {
+		return nil, kzgPointEvaluationCost, false, nil
+	}
+	var proof kzg4844.Proof
+	copy(proof[:], input[144:192])
+	if err := kzg4844.VerifyProof(commitment, point, claim, proof); err != nil {
+		return nil, kzgPointEvaluationCost, false, nil
+	}
+	return append([]byte(nil), kzgPointReturnValue...), kzgPointEvaluationCost, true, nil
 }
 
 // ── 0x05 BigModExp ────────────────────────────────────────────────────────────

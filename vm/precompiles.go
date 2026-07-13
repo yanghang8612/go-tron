@@ -175,6 +175,14 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 			return &blake2F{}
 		}
 
+	// ── EIP-4844 point-evaluation precompile (AllowTvmBlob) ──────────────
+	// TRON remaps Ethereum's address(0x0a) to address(0x02000a), just as the
+	// compatibility precompiles above remap 0x03/0x09 into the 0x0200xx range.
+	case addrFromUint(0x02000a):
+		if cfg.Blob {
+			return &kzgPointEvaluation{}
+		}
+
 	// ── Osaka precompile (AllowTvmOsaka) ─────────────────────────────────
 	case addrFromUint(0x0100):
 		if cfg.Osaka {

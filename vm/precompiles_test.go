@@ -145,6 +145,75 @@ func TestPrecompileDataCopy(t *testing.T) {
 	}
 }
 
+// TestKZGPointEvaluationNile55610290 pins the first transaction whose missing
+// point-evaluation precompile accumulated the balance drift that surfaced at
+// Nile block 55,611,077. The input is the exact 192-byte payload assembled by
+// tx 3a3918db... from (versionedHash, z, y, commitment, proof).
+func TestKZGPointEvaluationNile55610290(t *testing.T) {
+	const inputHex = "01a327088bb2b13151449d8313c281d0006d12e8453e863637b746898b6ad5a6" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000010000000000000000000000000000000000000000000000000000000" +
+		"8f26f349339c68b33ce856aa2c05b8f89e7c23db0c00817550679998efcbd8f2464f9e1ea6c3172b0b750603d1e4ea38" +
+		"97d8c90897645ac9e31e8017981de0f9d0d5de4cec12899680ee4e810f4f7f56ac765e46a801f2f1046f8f305d33e27c"
+	input, err := hex.DecodeString(inputHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p := getPrecompile(addrFromUint(0x02000a), TVMConfig{}); p != nil {
+		t.Fatal("point-evaluation precompile must be disabled before allow_tvm_blob")
+	}
+	p := getPrecompile(addrFromUint(0x02000a), TVMConfig{Blob: true})
+	if p == nil {
+		t.Fatal("point-evaluation precompile missing with allow_tvm_blob")
+	}
+	out, used, err := p.Run(nullEVM(), zeroCaller, input, kzgPointEvaluationCost)
+	if err != nil {
+		t.Fatalf("valid Nile proof: %v", err)
+	}
+	if used != kzgPointEvaluationCost {
+		t.Fatalf("energy: got %d, want %d", used, kzgPointEvaluationCost)
+	}
+	want := "0000000000000000000000000000000000000000000000000000000000001000" +
+		"73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"
+	if got := hex.EncodeToString(out); got != want {
+		t.Fatalf("output: got %s, want %s", got, want)
+	}
+
+	// Exercise the production CALL dispatcher too. Before the fix this target
+	// was treated as an empty ordinary account: it consumed no 50k precompile
+	// energy, returned empty data, and emitted a bogus internal transaction.
+	tvm, _, _ := newTestTVMWithDB(t)
+	tvm.cfg.Blob = true
+	caller := tcommon.Address{0x41, 0xA4}
+	ret, remaining, err := tvm.Call(caller, addrFromUint(0x02000a), input, 60_000, 0)
+	if err != nil {
+		t.Fatalf("TVM.Call: %v", err)
+	}
+	if remaining != 10_000 {
+		t.Fatalf("remaining energy: got %d, want 10000", remaining)
+	}
+	if got := hex.EncodeToString(ret); got != want {
+		t.Fatalf("TVM.Call output: got %s, want %s", got, want)
+	}
+	if len(tvm.InternalTransactions) != 0 {
+		t.Fatalf("precompile call emitted %d internal transactions, want 0", len(tvm.InternalTransactions))
+	}
+}
+
+func TestKZGPointEvaluationFailureAndEnergy(t *testing.T) {
+	p := &kzgPointEvaluation{}
+	if _, used, err := p.Run(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost-1); err != ErrOutOfEnergy || used != kzgPointEvaluationCost-1 {
+		t.Fatalf("OOE: used=%d err=%v", used, err)
+	}
+	if _, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength-1), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost {
+		t.Fatalf("invalid length: used=%d success=%v err=%v", used, success, err)
+	}
+	if _, used, success, err := p.RunWithStatus(nullEVM(), zeroCaller, make([]byte, kzgPointInputLength), kzgPointEvaluationCost); err != nil || success || used != kzgPointEvaluationCost {
+		t.Fatalf("mismatched hash: used=%d success=%v err=%v", used, success, err)
+	}
+}
+
 func TestPrecompileOutOfEnergy(t *testing.T) {
 	p := &sha256hash{}
 	_, _, err := p.Run(nullEVM(), zeroCaller, []byte("test"), 1)
