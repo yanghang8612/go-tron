@@ -126,7 +126,8 @@ var kzgPointReturnValue = tcommon.FromHex(
 
 // kzgPointEvaluation verifies a commitment opening and returns the field-
 // elements-per-blob constant plus the BLS scalar-field modulus. Nile enables
-// it with allow_tvm_blob and exposes it at TRON address 0x02000a.
+// it with allow_tvm_blob and exposes it at TRON address 0x02000a; mainnet
+// continues to treat that address as an ordinary account.
 type kzgPointEvaluation struct{}
 
 func (c *kzgPointEvaluation) Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {

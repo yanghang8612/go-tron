@@ -242,6 +242,7 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 		cfg.Tracer = fileTracer
 	}
 	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
+	evm.GenesisHash = b.chain.effectiveGenesisHash()
 	// BLOCKHASH/CHAINID need chain data; route through the ancient-aware
 	// lookup so constant calls see the same hashes as block execution.
 	evm.SetDB(b.chain.vmKV(b.chain.buffer))
@@ -304,6 +305,7 @@ func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value in
 	tvmCfg.Tracer = tracer
 
 	evm := vm.NewTVM(statedbCopy, dp, owner, blockNum, blockTime, tcommon.Address{}, 1, tvmCfg)
+	evm.GenesisHash = b.chain.effectiveGenesisHash()
 	evm.SetDB(b.chain.vmKV(b.chain.buffer))
 
 	// The tracer captures the full execution; a revert/VM error is surfaced

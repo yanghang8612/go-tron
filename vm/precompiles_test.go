@@ -160,10 +160,10 @@ func TestKZGPointEvaluationNile55610290(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if p := getPrecompile(addrFromUint(0x02000a), TVMConfig{}); p != nil {
+	if p := getPrecompile(addrFromUint(0x02000a), TVMConfig{}, params.NileGenesisHash); p != nil {
 		t.Fatal("point-evaluation precompile must be disabled before allow_tvm_blob")
 	}
-	p := getPrecompile(addrFromUint(0x02000a), TVMConfig{Blob: true})
+	p := getPrecompile(addrFromUint(0x02000a), TVMConfig{Blob: true}, params.NileGenesisHash)
 	if p == nil {
 		t.Fatal("point-evaluation precompile missing with allow_tvm_blob")
 	}
@@ -185,6 +185,7 @@ func TestKZGPointEvaluationNile55610290(t *testing.T) {
 	// energy, returned empty data, and emitted a bogus internal transaction.
 	tvm, _, _ := newTestTVMWithDB(t)
 	tvm.cfg.Blob = true
+	tvm.GenesisHash = params.NileGenesisHash
 	caller := tcommon.Address{0x41, 0xA4}
 	ret, remaining, err := tvm.Call(caller, addrFromUint(0x02000a), input, 60_000, 0)
 	if err != nil {
@@ -198,6 +199,37 @@ func TestKZGPointEvaluationNile55610290(t *testing.T) {
 	}
 	if len(tvm.InternalTransactions) != 0 {
 		t.Fatalf("precompile call emitted %d internal transactions, want 0", len(tvm.InternalTransactions))
+	}
+}
+
+func TestKZGPointEvaluationAddressIsOrdinaryOnMainnet(t *testing.T) {
+	addr := addrFromUint(0x02000a)
+	mainnetGenesis := tcommon.HexToHash("00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc")
+	if p := getPrecompile(addr, TVMConfig{Blob: true}, mainnetGenesis); p != nil {
+		t.Fatal("0x02000a must not become a precompile on mainnet")
+	}
+
+	// Pin the runtime path too: with allow_tvm_blob enabled on mainnet, code
+	// deployed at 0x02000a must execute as an ordinary smart contract.
+	tvm, statedb, _ := newTestTVMWithDB(t)
+	tvm.cfg.Blob = true
+	tvm.GenesisHash = mainnetGenesis
+	statedb.CreateAccount(addr, corepb.AccountType_Contract)
+	statedb.SetCode(addr, []byte{
+		byte(PUSH1), 0x2a,
+		byte(PUSH1), 0x00,
+		byte(MSTORE),
+		byte(PUSH1), 0x20,
+		byte(PUSH1), 0x00,
+		byte(RETURN),
+	})
+
+	ret, _, err := tvm.Call(tcommon.Address{0x41, 0xa4}, addr, nil, 60_000, 0)
+	if err != nil {
+		t.Fatalf("ordinary mainnet contract call: %v", err)
+	}
+	if len(ret) != 32 || ret[31] != 0x2a {
+		t.Fatalf("ordinary mainnet contract output: %x", ret)
 	}
 }
 
@@ -266,7 +298,7 @@ func TestShieldedPrecompilesReturnJavaFailurePayload(t *testing.T) {
 		{name: "merkle", addr: 0x01000004, cost: 500, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := getPrecompile(addrFromUint(tc.addr), TVMConfig{ShieldedToken: true})
+			p := getPrecompile(addrFromUint(tc.addr), TVMConfig{ShieldedToken: true}, tcommon.Hash{})
 			if p == nil {
 				t.Fatal("expected shielded precompile")
 			}
@@ -350,10 +382,10 @@ func TestShieldedTRC20TrustedNileReplayFallback(t *testing.T) {
 
 func TestP256VerifyPrecompileOsakaGateAndValidVector(t *testing.T) {
 	addr := addrFromUint(0x0100)
-	if p := getPrecompile(addr, TVMConfig{}); p != nil {
+	if p := getPrecompile(addr, TVMConfig{}, tcommon.Hash{}); p != nil {
 		t.Fatalf("P256VERIFY should be disabled before Osaka, got %T", p)
 	}
-	p := getPrecompile(addr, TVMConfig{Osaka: true})
+	p := getPrecompile(addr, TVMConfig{Osaka: true}, tcommon.Hash{})
 	if p == nil {
 		t.Fatal("expected P256VERIFY when Osaka is active")
 	}

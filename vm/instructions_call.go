@@ -279,7 +279,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	}
 	stack.push(&success)
 
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -344,7 +344,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -396,7 +396,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -448,7 +448,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {

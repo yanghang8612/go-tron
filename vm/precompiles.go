@@ -5,6 +5,7 @@ import (
 
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // PrecompiledContract is the interface for precompiled contracts.
@@ -44,8 +45,9 @@ func addrFromUint(n uint64) tcommon.Address {
 }
 
 // getPrecompile returns the precompiled contract for addr given the current fork
-// configuration, or nil if addr is not a precompile (or its fork gate is inactive).
-func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
+// configuration and chain identity, or nil if addr is not a precompile (or its
+// fork gate is inactive).
+func getPrecompile(addr tcommon.Address, cfg TVMConfig, genesisHash tcommon.Hash) PrecompiledContract {
 	switch addr {
 	// ── Standard TVM precompiles (always active) ─────────────────────────
 	case addrFromUint(0x01):
@@ -179,7 +181,9 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	// TRON remaps Ethereum's address(0x0a) to address(0x02000a), just as the
 	// compatibility precompiles above remap 0x03/0x09 into the 0x0200xx range.
 	case addrFromUint(0x02000a):
-		if cfg.Blob {
+		// This remapping was deployed only on Nile. On mainnet, 0x02000a
+		// remains an ordinary account even if allow_tvm_blob is active.
+		if cfg.Blob && genesisHash == params.NileGenesisHash {
 			return &kzgPointEvaluation{}
 		}
 

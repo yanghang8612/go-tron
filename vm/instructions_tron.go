@@ -154,7 +154,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, err
 	}
 
-	in.writeCallReturn(mem, getPrecompile(addr, in.tvm.cfg) != nil, err, retOff, retSz, ret)
+	in.writeCallReturn(mem, getPrecompile(addr, in.tvm.cfg, in.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		in.returnData = nil
 	} else {

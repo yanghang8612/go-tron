@@ -92,9 +92,10 @@ window refresh + recovery precision (8,825,873), over-depleted burn
 skip-write (9,220,578), call depth 64 (11,359,658), per-frame returndata
 buffer (14,151,095), BLOCKHASH vs freezer pruning (16,745,722), precompile
 endowment (18,112,819), point-at-infinity recovery (18,278,266), BLOCKHASH
-vs async commit (10,552,292), and the allow_tvm_blob KZG point-evaluation
+vs async commit (10,552,292), and Nile's allow_tvm_blob KZG point-evaluation
 precompile at TRON address 0x02000a (55,611,077; first divergent fee/return
-at 55,610,290).
+at 55,610,290). The 0x02000a mapping is Nile-only; mainnet treats it as an
+ordinary account even when allow_tvm_blob is active.
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline

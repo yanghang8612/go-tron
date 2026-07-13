@@ -93,7 +93,7 @@ Each flag corresponds to a java-tron proposal ID and a `DynamicProperties` strin
 | `AllowTvmCompatibility` | `allow_tvm_compatibility` | 48 | VM: backwards compat |
 | `AllowDynamicEnergy` | `allow_dynamic_energy` | 70 | VM: dynamic energy pricing |
 | `AllowTvmBigInteger` | `allow_tvm_big_integer` | 78 | VM: big-integer precompile |
-| `AllowTvmBlob` | `allow_tvm_blob` | 83 | VM: EIP-4844 blob precompile |
+| `AllowTvmBlob` | `allow_tvm_blob` | 83 | VM: blob opcodes; Nile-only EIP-4844 precompile at 0x02000a |
 | `AllowNewResourceModel` | `allow_new_resource_model` | 18 | (already exists) |
 | `AllowEnergyAdjustment` | `allow_energy_adjustment` | 66 | VM energy fee adjustment |
 | `AllowTvmCancun` | `allow_tvm_cancun` | 82 | VM: Cancun-era opcodes (TLOAD, TSTORE, MCOPY) |

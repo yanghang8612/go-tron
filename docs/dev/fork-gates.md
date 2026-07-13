@@ -37,7 +37,7 @@ The machinery behind each column:
 | `AllowDynamicEnergy` | `allow_dynamic_energy` | 72 | — | |
 | `AllowNewResourceModel` | `allow_new_resource_model` | 51 | — | Freeze V2 + V1 rejection gate |
 | `AllowEnergyAdjustment` | `allow_energy_adjustment` | 81 | — | |
-| `AllowTvmBlob` | `allow_tvm_blob` | 89 | — | |
+| `AllowTvmBlob` | `allow_tvm_blob` | 89 | — | 0x02000a precompile mapping is Nile-only; mainnet keeps an ordinary address |
 | `AllowTvmCancun` | `allow_tvm_cancun` | 83 | — | |
 
 ## Aliases — one proposal flips multiple flags

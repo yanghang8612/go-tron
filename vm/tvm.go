@@ -287,7 +287,7 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 // Returns nil for non-precompile targets; java's plain-contract path
 // auto-creates the recipient instead.
 func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) error {
-	if getPrecompile(addr, tvm.cfg) == nil {
+	if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
 		return nil
 	}
 	if !tvm.StateDB.AccountExists(addr) {
@@ -773,7 +773,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		// BEFORE entering callToAddress (OperationActions.java:1034-1042),
 		// so precompile addresses never reach `createAccountIfNotExist` —
 		// guard with the same precompile check to preserve wire format.
-		if getPrecompile(addr, tvm.cfg) == nil {
+		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
 		}
 		if tvm.StateDB.GetBalance(caller) < value {
@@ -799,7 +799,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	}
 
 	// Check for precompiled contract
-	if p := getPrecompile(addr, tvm.cfg); p != nil {
+	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
 		if err != nil {
 			tvm.RevertLogs(logSnap)
@@ -889,7 +889,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		// (OperationActions.java:1034-1042 → callToPrecompiledAddress) and
 		// don't materialize the destination account; skip the helper to
 		// preserve that wire format.
-		if getPrecompile(addr, tvm.cfg) == nil {
+		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
 		}
 		if tvm.StateDB.GetBalance(caller) < value {
@@ -914,7 +914,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		tvm.StateDB.AddBalance(addr, value)
 	}
 	if tokenValue > 0 && tokenID > 0 {
-		if getPrecompile(addr, tvm.cfg) == nil {
+		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
 		}
 		if tvm.StateDB.GetTRC10Balance(caller, tokenID) < tokenValue {
@@ -941,7 +941,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			// → spend-all) instead of the swallowed ErrInsufficientBalance.
 			// Plain-contract/plain-address targets are pre-created above by
 			// maybeCreateNormalAccountForValueTransfer, so they never reach here.
-			if getPrecompile(addr, tvm.cfg) != nil {
+			if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) != nil {
 				tvm.RevertLogs(logSnap)
 				tvm.StateDB.RevertToSnapshot(snap)
 				return nil, 0, ErrPrecompileTransferFailure
@@ -957,7 +957,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	}
 
 	// Check for precompiled contract
-	if p := getPrecompile(addr, tvm.cfg); p != nil {
+	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
 		if err != nil {
 			tvm.RevertLogs(logSnap)
@@ -1052,7 +1052,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 		return nil, energy, ErrDepthExceeded
 	}
 
-	if p := getPrecompile(addr, tvm.cfg); p != nil {
+	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
 		if err != nil {
 			return nil, 0, err
@@ -1128,7 +1128,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 		return nil, energy, ErrDepthExceeded
 	}
 
-	if p := getPrecompile(addr, tvm.cfg); p != nil {
+	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
 		if err != nil {
 			return nil, 0, err
