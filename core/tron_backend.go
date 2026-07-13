@@ -681,12 +681,18 @@ func (b *TronBackend) dynamicPropertiesAt(reader *state.PersistentHistoryReader,
 	return dp, nil
 }
 
+// GetChainParameters returns the chain parameters under java-tron's
+// Wallet.getChainParameters key names and order. Internal DP counters
+// (latest_block_header_number, burn_trx_amount, ...) are not exposed.
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
-	dynProps := b.chain.DynProps()
-	all := dynProps.All()
-	params := make([]tronapi.ChainParameter, 0, len(all))
-	for k, v := range all {
-		params = append(params, tronapi.ChainParameter{Key: k, Value: v})
+	all := b.chain.DynProps().All()
+	keys := state.ChainParameterKeys()
+	params := make([]tronapi.ChainParameter, 0, len(keys))
+	for _, javaKey := range keys {
+		params = append(params, tronapi.ChainParameter{
+			Key:   javaKey,
+			Value: all[state.JavaGetterToGoKey(javaKey)],
+		})
 	}
 	return params
 }

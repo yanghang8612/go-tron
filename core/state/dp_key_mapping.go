@@ -121,3 +121,96 @@ var javaGetterToGoKeyMap = map[string]string{
 func JavaGetterToGoKey(javaGetter string) string {
 	return javaGetterToGoKeyMap[javaGetter]
 }
+
+// javaChainParameterOrder is the exact key list and emission order of
+// java-tron's Wallet.getChainParameters() at GreatVoyage-v4.8.1 (verified
+// against a live v4.8.1 Nile node on 2026-07-13). /wallet/getchainparameters
+// and the GetChainParameters gRPC must emit exactly these keys in this order.
+// Keys present in javaGetterToGoKeyMap but not listed here (the v4.8.2 gates,
+// getMarketQuantityLimit) are translatable but not part of java's response.
+// When java-tron extends the list in a release, append here in java's order.
+var javaChainParameterOrder = []string{
+	"getMaintenanceTimeInterval",
+	"getAccountUpgradeCost",
+	"getCreateAccountFee",
+	"getTransactionFee",
+	"getAssetIssueFee",
+	"getWitnessPayPerBlock",
+	"getWitnessStandbyAllowance",
+	"getCreateNewAccountFeeInSystemContract",
+	"getCreateNewAccountBandwidthRate",
+	"getAllowCreationOfContracts",
+	"getRemoveThePowerOfTheGr",
+	"getEnergyFee",
+	"getExchangeCreateFee",
+	"getMaxCpuTimeOfOneTx",
+	"getAllowUpdateAccountName",
+	"getAllowSameTokenName",
+	"getAllowDelegateResource",
+	"getTotalEnergyLimit",
+	"getAllowTvmTransferTrc10",
+	"getTotalEnergyCurrentLimit",
+	"getAllowMultiSign",
+	"getAllowAdaptiveEnergy",
+	"getTotalEnergyTargetLimit",
+	"getTotalEnergyAverageUsage",
+	"getUpdateAccountPermissionFee",
+	"getMultiSignFee",
+	"getAllowAccountStateRoot",
+	"getAllowProtoFilterNum",
+	"getAllowTvmConstantinople",
+	"getAllowTvmSolidity059",
+	"getAllowTvmIstanbul",
+	"getAllowShieldedTRC20Transaction",
+	"getForbidTransferToContract",
+	"getAdaptiveResourceLimitTargetRatio",
+	"getAdaptiveResourceLimitMultiplier",
+	"getChangeDelegation",
+	"getWitness127PayPerBlock",
+	"getAllowMarketTransaction",
+	"getMarketSellFee",
+	"getMarketCancelFee",
+	"getAllowPBFT",
+	"getAllowTransactionFeePool",
+	"getMaxFeeLimit",
+	"getAllowOptimizeBlackHole",
+	"getAllowNewResourceModel",
+	"getAllowTvmFreeze",
+	"getAllowTvmVote",
+	"getAllowTvmLondon",
+	"getAllowTvmCompatibleEvm",
+	"getAllowAccountAssetOptimization",
+	"getFreeNetLimit",
+	"getTotalNetLimit",
+	"getAllowHigherLimitForMaxCpuTimeOfOneTx",
+	"getAllowAssetOptimization",
+	"getAllowNewReward",
+	"getMemoFee",
+	"getAllowDelegateOptimization",
+	"getUnfreezeDelayDays",
+	"getAllowOptimizedReturnValueOfChainId",
+	"getAllowDynamicEnergy",
+	"getDynamicEnergyThreshold",
+	"getDynamicEnergyIncreaseFactor",
+	"getDynamicEnergyMaxFactor",
+	"getAllowTvmShangHai",
+	"getAllowCancelAllUnfreezeV2",
+	"getMaxDelegateLockPeriod",
+	"getAllowOldRewardOpt",
+	"getAllowEnergyAdjustment",
+	"getMaxCreateAccountTxSize",
+	"getAllowStrictMath",
+	"getConsensusLogicOptimization",
+	"getAllowTvmCancun",
+	"getAllowTvmBlob",
+	"getAllowTvmSelfdestructRestriction",
+	"getProposalExpireTime",
+}
+
+// ChainParameterKeys returns the java-tron Wallet.getChainParameters key
+// list in java's emission order. The result is a fresh copy.
+func ChainParameterKeys() []string {
+	keys := make([]string, len(javaChainParameterOrder))
+	copy(keys, javaChainParameterOrder)
+	return keys
+}

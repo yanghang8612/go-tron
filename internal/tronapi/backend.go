@@ -37,9 +37,12 @@ type AccountResource struct {
 	StorageLimit         int64 `json:"storageLimit,omitempty"`
 }
 
+// ChainParameter mirrors one entry of java-tron's ChainParameters proto.
+// Value carries omitempty to reproduce java's JsonFormat quirk: an entry
+// whose value is 0 serializes without a "value" field.
 type ChainParameter struct {
 	Key   string `json:"key"`
-	Value int64  `json:"value"`
+	Value int64  `json:"value,omitempty"`
 }
 
 type WitnessInfo struct {
