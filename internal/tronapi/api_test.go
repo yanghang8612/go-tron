@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,8 @@ type stubBackend struct {
 	// Proposal output divergence test (D-4): canned proposals returned
 	// from ListProposals / ListProposalsPaginated / GetProposalByID.
 	proposals []*tronapi.ProposalInfo
+	// Canned chain parameters returned from GetChainParameters.
+	chainParams []tronapi.ChainParameter
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -96,7 +99,7 @@ func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountR
 func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return nil }
+func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return s.chainParams }
 func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
 func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
 func (s *stubBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
@@ -1169,5 +1172,33 @@ func TestBroadcastTransactionValidateSuccess(t *testing.T) {
 	}
 	if result["code"] != "SUCCESS" {
 		t.Fatalf("expected code=SUCCESS, got %v", result["code"])
+	}
+}
+
+// TestGetChainParametersJavaShape pins the wire shape of
+// /wallet/getchainparameters to java-tron's: camelCase java getter keys, and
+// java's omit-zero quirk where an entry with value 0 serializes without a
+// "value" field (negative values like getRemoveThePowerOfTheGr's -1 are kept).
+func TestGetChainParametersJavaShape(t *testing.T) {
+	stub := &stubBackend{chainParams: []tronapi.ChainParameter{
+		{Key: "getEnergyFee", Value: 420},
+		{Key: "getAllowTvmBlob", Value: 0},
+		{Key: "getRemoveThePowerOfTheGr", Value: -1},
+	}}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getchainparameters", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST getchainparameters: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	want := `{"chainParameter":[{"key":"getEnergyFee","value":420},{"key":"getAllowTvmBlob"},{"key":"getRemoveThePowerOfTheGr","value":-1}]}`
+	if got := strings.TrimSpace(string(body)); got != want {
+		t.Fatalf("getchainparameters body mismatch\n got: %s\nwant: %s", got, want)
 	}
 }
