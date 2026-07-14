@@ -426,6 +426,6 @@ func markPendingLocked(ss *SyncService, ps *syncPeerState, bid types.BlockID) {
 	ps.inflight = 1
 	ps.pending = map[tcommon.Hash]uint64{bid.Hash: bid.Num}
 	ps.pendingIDs = map[tcommon.Hash]types.BlockID{bid.Hash: bid}
-	ps.requestedHashes[bid.Hash] = struct{}{}
+	ps.requestedHashes[bid.Hash] = bid.Num
 	ss.requested[bid.Hash] = ps.peer.ID()
 }

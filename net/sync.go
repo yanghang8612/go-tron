@@ -25,11 +25,14 @@ import (
 // tests under net/ untouched until Slice 6 deletes net/sync.go entirely;
 // at that point every remaining reference moves to tsync.* directly.
 const (
-	maxChainInventorySize   = tsync.MaxChainInventorySize
-	maxFetchBatch           = tsync.MaxFetchBatch
-	maxParallelSyncPeers    = tsync.MaxParallelSyncPeers
-	minFetchRequestInterval = tsync.MinFetchRequestInterval
-	peerJoinAttemptInterval = 2 * time.Second
+	maxChainInventorySize     = tsync.MaxChainInventorySize
+	maxFetchBatch             = tsync.MaxFetchBatch
+	maxParallelSyncPeers      = tsync.MaxParallelSyncPeers
+	minFetchRequestInterval   = tsync.MinFetchRequestInterval
+	maxBufferedRunaheadBlocks = tsync.MaxBufferedRunaheadBlocks
+	maxBufferedRunaheadBytes  = tsync.MaxBufferedRunaheadBytes
+	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
+	peerJoinAttemptInterval   = 2 * time.Second
 )
 
 type syncDiagnostics struct {
@@ -50,8 +53,15 @@ type syncPeerState struct {
 	pendingIDs map[tcommon.Hash]types.BlockID
 
 	// requestedHashes mirrors java-tron's syncBlockIdCache rule: never ask the
-	// same peer for the same block hash twice, even after a timeout.
-	requestedHashes map[tcommon.Hash]struct{}
+	// same peer for the same block hash twice, even after a timeout. Values
+	// carry the block number so entries below minFetchNum can be pruned —
+	// java rejects fetches under that floor (FetchInvDataMsgHandler's
+	// minBlockNum check) before its duplicate check, and its dup cache holds
+	// at most 2×SYNC_FETCH_BATCH_NUM entries, so a pruned hash can never be
+	// legally re-fetched from this peer. Without the prune the map grows by
+	// one entry per block for the whole session (1.81 GB live observed on
+	// the Nile node mid re-sync).
+	requestedHashes map[tcommon.Hash]uint64
 
 	lastInventoryNum uint64
 	minFetchNum      uint64
@@ -132,12 +142,16 @@ type SyncService struct {
 	// rather than mutating the shared package global from a defer.
 	fetchTimeout time.Duration
 
-	peers         map[string]*syncPeerState
-	requested     map[tcommon.Hash]string
-	retryList     []types.BlockID
-	blockBuffer   map[uint64]bufferedSyncBlock
-	bufferedHash  map[tcommon.Hash]struct{}
-	blockPath     map[uint64]tcommon.Hash
+	peers        map[string]*syncPeerState
+	requested    map[tcommon.Hash]string
+	retryList    []types.BlockID
+	blockBuffer  map[uint64]bufferedSyncBlock
+	bufferedHash map[tcommon.Hash]struct{}
+	blockPath    map[uint64]tcommon.Hash
+	// bufferedBytes tracks the raw wire bytes currently held in blockBuffer.
+	// It gates far-ahead fetching against MaxBufferedRunaheadBytes so the
+	// buffer's heap footprint stays bounded at full-block eras.
+	bufferedBytes int64
 	targetHeadNum uint64
 	// syncedTipNum is the drain cursor: the highest block this session has
 	// popped for import. Under async-commit depth>2 the committed CurrentBlock
@@ -413,6 +427,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = make(map[uint64]tcommon.Hash)
+	ss.bufferedBytes = 0
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
 	ss.syncedTipNum = ss.targetHeadNum
 	ss.stats.InitSession(now)
@@ -451,7 +466,7 @@ func (ss *SyncService) addPeerStateLocked(peer *p2p.Peer) (*syncPeerState, bool)
 		peer:            peer,
 		pending:         make(map[tcommon.Hash]uint64),
 		pendingIDs:      make(map[tcommon.Hash]types.BlockID),
-		requestedHashes: make(map[tcommon.Hash]struct{}),
+		requestedHashes: make(map[tcommon.Hash]uint64),
 	}
 	ss.peers[peer.ID()] = ps
 	if ss.syncPeer == nil {
@@ -709,6 +724,23 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			} else {
 				ps.minFetchNum = 0
 			}
+			// Prune the never-re-ask set below the window floor. java-tron
+			// rejects any sync fetch under minBlockNum before it even
+			// consults its per-peer duplicate cache (which itself holds at
+			// most 2×SYNC_FETCH_BATCH_NUM entries), and canFetch never
+			// assigns bids under minFetchNum — so entries below the floor
+			// can never be re-fetched from this peer and remembering them
+			// is pure growth: one entry per synced block for the whole
+			// session (1.81 GB live on the Nile node). Keeping
+			// [minFetchNum, lastInventoryNum] retains a superset of what
+			// the remote's dup cache can still enforce.
+			if ps.minFetchNum > 0 {
+				for h, num := range ps.requestedHashes {
+					if num < ps.minFetchNum {
+						delete(ps.requestedHashes, h)
+					}
+				}
+			}
 			target := uint64(last.Number)
 			if inv.RemainNum > 0 {
 				target += uint64(inv.RemainNum)
@@ -766,15 +798,16 @@ func (ss *SyncService) fetchNextBatch() {
 func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
 	ss.ensureSessionMapsLocked()
 	var out []outboundSyncRequest
+	headNum := ss.chain.CurrentBlock().Number()
 	for _, ps := range ss.peers {
 		if ps == nil || ps.peer == nil || ps.done || ps.chainRequested || ps.inflight > 0 {
 			continue
 		}
-		ss.assignRetryLocked(ps)
-		batch := ss.nextFetchBatchLocked(ps)
+		ss.assignRetryLocked(ps, headNum)
+		batch := ss.nextFetchBatchLocked(ps, headNum)
 		if len(batch) == 0 {
 			if !ps.done {
-				if ps.lastInventoryNum > ss.chain.CurrentBlock().Number() {
+				if ps.lastInventoryNum > headNum {
 					// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
 					// summary tail is below the last inventory tip it sent us
 					// on this peer (lastSyncNum > lastNum). Wait until the
@@ -792,7 +825,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 					}
 					syncLog.Trace("Sync peer waiting for local head",
 						"peer", ps.peer.ID(),
-						"head", ss.chain.CurrentBlock().Number(),
+						"head", headNum,
 						"inventoryTip", ps.lastInventoryNum)
 					continue
 				}
@@ -815,7 +848,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		for _, bid := range batch {
 			ps.pending[bid.Hash] = bid.Num
 			ps.pendingIDs[bid.Hash] = bid
-			ps.requestedHashes[bid.Hash] = struct{}{}
+			ps.requestedHashes[bid.Hash] = bid.Num
 			ss.requested[bid.Hash] = ps.peer.ID()
 		}
 		ps.nextFetchAt = now.Add(minFetchRequestInterval)
@@ -825,13 +858,43 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 	return out
 }
 
-func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
+// withinRunaheadBudgetLocked reports whether bid may be requested now. Two
+// independent budgets bound the fetch runahead past the local head:
+//
+//   - MaxBufferedRunaheadBlocks caps the number span outright;
+//   - once the raw sync buffer holds MaxBufferedRunaheadBytes, only the
+//     near-head AlwaysFetchRunaheadBlocks strip stays fetchable, so the
+//     contiguous drain keeps getting the blocks right ahead of the head
+//     while far-ahead fetching pauses.
+//
+// Over-budget bids stay queued (fetchList / retryList) and become fetchable
+// again as the head advances or the buffer drains — backpressure, never a
+// drop, so nothing is re-downloaded. This is the local complement of the
+// remote window java-tron already enforces on us (FetchInvDataMsgHandler
+// rejects fetches outside lastSyncBlockId − 2×SYNC_FETCH_BATCH_NUM ..
+// lastSyncBlockId); without it the buffer's heap footprint is unbounded
+// (a ~2.8M-block, 2.5 GB runahead was observed live on the Nile node).
+func (ss *SyncService) withinRunaheadBudgetLocked(bid types.BlockID, headNum uint64) bool {
+	if bid.Num > headNum+maxBufferedRunaheadBlocks {
+		return false
+	}
+	if ss.bufferedBytes >= maxBufferedRunaheadBytes && bid.Num > headNum+alwaysFetchRunaheadBlocks {
+		return false
+	}
+	return true
+}
+
+func (ss *SyncService) assignRetryLocked(ps *syncPeerState, headNum uint64) {
 	if len(ss.retryList) == 0 {
 		return
 	}
 	keep := ss.retryList[:0]
 	for _, bid := range ss.retryList {
 		if ss.hasBlockOrRequestLocked(bid) {
+			continue
+		}
+		if !ss.withinRunaheadBudgetLocked(bid, headNum) {
+			keep = append(keep, bid)
 			continue
 		}
 		if !ps.canFetch(bid) {
@@ -857,13 +920,20 @@ func (ps *syncPeerState) canFetch(bid types.BlockID) bool {
 	return bid.Num >= ps.minFetchNum && bid.Num <= ps.lastInventoryNum
 }
 
-func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
+func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, headNum uint64) []types.BlockID {
 	if len(ps.fetchList) == 0 {
 		return nil
 	}
 	batch := make([]types.BlockID, 0, maxFetchBatch)
 	remaining := ps.fetchList[:0]
 	for _, bid := range ps.fetchList {
+		// Budget first: it is the cheapest check and must run before
+		// reserveBlockPathLocked so a parked bid acquires no reservation
+		// side effects while it waits for the head to advance.
+		if !ss.withinRunaheadBudgetLocked(bid, headNum) {
+			remaining = append(remaining, bid)
+			continue
+		}
 		if ss.hasBlockOrRequestLocked(bid) {
 			continue
 		}
@@ -1039,13 +1109,15 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 					"number", blockNum, "hash", blockHash, "kept", existing.hash, "peer", peer.ID())
 			}
 		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
-			ss.blockBuffer[blockNum] = bufferedSyncBlock{
+			entry := bufferedSyncBlock{
 				raw:  bufferRawBlockBytes(block, raw),
 				hash: blockHash,
 				num:  blockNum,
 				peer: peer,
 			}
+			ss.blockBuffer[blockNum] = entry
 			ss.bufferedHash[blockHash] = struct{}{}
+			ss.bufferedBytes += int64(len(entry.raw))
 		}
 	}
 	var out []outboundSyncRequest
@@ -1230,6 +1302,15 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		// needs the reservation.
 		delete(ss.blockPath, next)
 		delete(ss.bufferedHash, buffered.hash)
+		// Return the entry's bytes to the runahead budget. Clamp at zero:
+		// tests seed blockBuffer directly without going through HandleBlock,
+		// and a fail-open budget (fetching resumes) beats a fail-closed one
+		// if the pairing is ever broken.
+		if n := int64(len(buffered.raw)); ss.bufferedBytes > n {
+			ss.bufferedBytes -= n
+		} else {
+			ss.bufferedBytes = 0
+		}
 		batch.buffered = append(batch.buffered, buffered)
 		next++
 	}
@@ -1631,6 +1712,7 @@ func (ss *SyncService) doReset() {
 	ss.blockBuffer = nil
 	ss.bufferedHash = nil
 	ss.blockPath = nil
+	ss.bufferedBytes = 0
 	ss.targetHeadNum = 0
 	ss.syncedTipNum = 0
 	ss.bufferWaitStart = time.Time{}

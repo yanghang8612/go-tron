@@ -19,7 +19,31 @@ const (
 	// MaxParallelSyncPeers caps how many peers participate in a single
 	// sync session at once.
 	MaxParallelSyncPeers = 8
+
+	// MaxBufferedRunaheadBlocks caps how far past the local head the fetch
+	// scheduler admits sync-block requests. The per-peer window protocol
+	// already bounds a healthy session to roughly one CHAIN_INVENTORY
+	// window (MaxChainInventorySize) per peer past the head; this cap is
+	// the local defense-in-depth that keeps the raw sync buffer's number
+	// span bounded no matter how windows are granted (a ~2.8M-block,
+	// 2.5 GB runahead was observed live on the Nile node — the GC-spiral
+	// driver). Over-budget bids stay queued and become fetchable as the
+	// head advances; they are never dropped.
+	MaxBufferedRunaheadBlocks = 20000
+
+	// AlwaysFetchRunaheadBlocks is the near-head strip that stays
+	// fetchable even when the byte budget below is exhausted, so the
+	// contiguous drain can always fill holes right ahead of the head and
+	// never starves. Two in-flight batches deep.
+	AlwaysFetchRunaheadBlocks = 2 * MaxFetchBatch
 )
+
+// MaxBufferedRunaheadBytes caps the raw wire bytes held in the sync
+// buffer before far-ahead fetching pauses (blocks within
+// AlwaysFetchRunaheadBlocks of the head are exempt). At full-block eras
+// (~200 KB raw) this binds long before MaxBufferedRunaheadBlocks does,
+// keeping the buffer's heap footprint bounded on every workload.
+const MaxBufferedRunaheadBytes = 512 << 20
 
 // MinFetchRequestInterval stays just below java-tron's 3/s FETCH_INV_DATA
 // limiter while preserving a one-request-at-a-time contract per peer.

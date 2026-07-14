@@ -122,7 +122,7 @@ func TestFetchTimeoutWithStalledRetriesRestartsSession(t *testing.T) {
 	staleState.fetchSeq = 7
 	staleState.pending = map[tcommon.Hash]uint64{missing.Hash: missing.Num}
 	staleState.pendingIDs = map[tcommon.Hash]types.BlockID{missing.Hash: missing}
-	staleState.requestedHashes[missing.Hash] = struct{}{}
+	staleState.requestedHashes[missing.Hash] = missing.Num
 	ss.requested[missing.Hash] = stale.ID()
 	remainingState.done = true
 	ss.mu.Unlock()
