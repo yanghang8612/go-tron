@@ -97,7 +97,8 @@ precompile at TRON address 0x02000a (55,611,077; first 50k-charged call — and
 so first divergent fee — at 55,609,940, the tester contract deployed at
 55,609,930, so resume/snapshot points must be ≤ 55,609,929). The 0x02000a
 mapping is Nile-only; mainnet treats it as an ordinary account even when
-allow_tvm_blob is active.
+allow_tvm_blob is active; CREATE/CREATE2 success words retaining the 0x41
+TRON prefix (59,652,963).
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline

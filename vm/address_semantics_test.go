@@ -72,7 +72,7 @@ func TestEnvironmentAddressOpcodesKeepTronPrefixBeforeMultiSign(t *testing.T) {
 	assertFullAddressWord(t, ret[64:96], origin)
 }
 
-func TestCreateReturnsTwentyByteAddressWord(t *testing.T) {
+func TestCreateReturnsFullTronAddressWord(t *testing.T) {
 	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
 	caller := tcommon.Address{0x41, 0x01}
 	parent := tcommon.Address{0x41, 0x02}
@@ -92,10 +92,63 @@ func TestCreateReturnsTwentyByteAddressWord(t *testing.T) {
 	}
 	result := stack.pop()
 	addr := uint256ToAddress(&result)
-	want := addressToUint256(addr)
-	if result.Cmp(&want) != 0 {
-		t.Fatalf("CREATE stack result contains TRON prefix: got %064x want %064x", result.Bytes32(), want.Bytes32())
+	word := result.Bytes32()
+	assertFullAddressWord(t, word[:], addr)
+}
+
+func TestCreate2ReturnsFullTronAddressWord(t *testing.T) {
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	caller := tcommon.Address{0x41, 0x01}
+	parent := tcommon.Address{0x41, 0x02}
+
+	mem := newMemory()
+	initCode := []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}
+	mem.set(0, uint64(len(initCode)), initCode)
+
+	stack := newStack()
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(uint64(len(initCode))))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+	contract := NewContract(caller, parent, 0, 1_000_000)
+
+	if _, err := opCreate2(nil, tvm.interpreter, contract, mem, stack); err != nil {
+		t.Fatalf("opCreate2: %v", err)
 	}
+	result := stack.pop()
+	addr := uint256ToAddress(&result)
+	word := result.Bytes32()
+	assertFullAddressWord(t, word[:], addr)
+}
+
+// TestNile59652963Create3ProxyReturnsPrefixedCreateWord pins tx fb246091...
+// from the first divergent block. Its CREATE3 proxy returns CREATE's stack word
+// verbatim; java includes 0x41 in that word, causing the outer Solidity address
+// decoder to reject the non-zero high bits and REVERT. Dropping 0x41 made gtron
+// incorrectly decode the address and report SUCCESS.
+func TestNile59652963Create3ProxyReturnsPrefixedCreateWord(t *testing.T) {
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm.SetRootTransactionID(tcommon.HexToHash("fb246091644e7d1473033985ed58da3cbf60021bbfbd70e4277760b32bac9154"))
+	// The preceding CREATE2 and CALL have advanced java's transaction-global
+	// nonce to 2 before the proxy executes CREATE.
+	tvm.Nonce = 2
+
+	proxy := mustAddressFromHex(t, "41f0f35f4a92a3370bfb8f304fa7b7ffa0fd954f1c")
+	proxyCode, err := hex.DecodeString("60806040523615602657366000803736600034f0801560215760005260206000f35b600080fd5b00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statedb.CreateAccount(proxy, corepb.AccountType_Contract)
+	statedb.SetCode(proxy, proxyCode)
+
+	// A minimal successful constructor is sufficient: TRON CREATE addresses
+	// depend on root txid + nonce, not init-code hash.
+	ret, _, err := tvm.Call(tcommon.Address{0x41, 0xc1}, proxy, []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}, 1_000_000, 0)
+	if err != nil {
+		t.Fatalf("CREATE3 proxy call: %v", err)
+	}
+	want := mustAddressFromHex(t, "41e30fb62eaf6cd36b4be663db0430fe5e9b4b933e")
+	assertFullAddressWord(t, ret, want)
 }
 
 func TestCreateAddressMatchesJavaRootTransactionNonce(t *testing.T) {

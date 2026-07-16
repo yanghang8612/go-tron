@@ -99,7 +99,11 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	if err != nil {
 		result.Clear()
 	} else {
-		result = addressToUint256(addr)
+		// java-tron pushes new DataWord(newAddress), where newAddress is the
+		// full 21-byte TRON address returned by sha3omit12 (including 0x41).
+		// Unlike ADDRESS/CALLER/ORIGIN, this CREATE result is not affected by
+		// allow_multi_sign's 20-byte compatibility mode.
+		result = addressToUint256WithPrefix(addr)
 	}
 	stack.push(&result)
 	// CREATE resets the return buffer UNCONDITIONALLY before the call
@@ -187,7 +191,9 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	if err != nil {
 		result.Clear()
 	} else {
-		result = addressToUint256(addr)
+		// createContract2 shares java createContractImpl's success path, which
+		// pushes the complete 21-byte TRON address into the DataWord.
+		result = addressToUint256WithPrefix(addr)
 	}
 	stack.push(&result)
 	// CREATE2 resets the return buffer only under Osaka (java-tron
