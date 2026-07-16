@@ -65,13 +65,19 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 
 	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
 	// activates. Mirrors java-tron Manager.processBlock's per-tx
-	// rejectExchangeTransaction call (master 45e3bf88ca). Pre-fork blocks
-	// retain replay safety because PassVersion returns false until the
-	// version-bitmap quorum is met. java-tron evaluates this gate against
-	// the prev block's timestamp (the DP value during processTransaction),
-	// so we pass prevBlockTime here for parity.
+	// rejectExchangeTransaction call (master 45e3bf88ca). Nile had already
+	// assigned wire version 33 to its earlier release-v4.8.1 deployment when
+	// upstream later introduced VERSION_4_8_0_1 as 33. Nile therefore rolled
+	// the exchange-disable feature out under version 34; treating its old v33
+	// blocks as VERSION_4_8_0_1 rejects canonical pre-rollout transactions
+	// (first observed at Nile block 63,172,360). Mainnet keeps upstream's v33
+	// gate. java-tron evaluates the gate against the previous block timestamp.
+	exchangeRejectVersion := int32(33)
+	if genesisHash == params.NileGenesisHash {
+		exchangeRejectVersion = 34
+	}
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
-		forkPassCache.Pass(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
+		forkPassCache.Pass(statedb, exchangeRejectVersion, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
 	}
 	// java-tron Manager.validateCommon applies the synthetic "clear ret +

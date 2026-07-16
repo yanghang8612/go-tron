@@ -451,6 +451,39 @@ func TestApplyTransaction_ExchangeRejectedAfterFork(t *testing.T) {
 	}
 }
 
+func TestApplyTransaction_ExchangeNileUsesVersion34(t *testing.T) {
+	run := func(t *testing.T, passedVersion int32) error {
+		t.Helper()
+		statedb := newTestState(t)
+		dynProps := state.NewDynamicProperties()
+		db := ethrawdb.NewMemoryDatabase()
+		stats := make([]byte, 27)
+		for i := 0; i < 22; i++ { // v34 requires ceil(80% * 27) = 22
+			stats[i] = forks.VoteUpgrade
+		}
+		statedb.WriteForkStats(passedVersion, stats)
+
+		_, err := applyTransaction(
+			statedb, dynProps, makeExchangeTransactionTx(1),
+			1_700_000_000_000, true, 0, 1_700_000_000_000, 1,
+			db, nil, params.DefaultBlockNumForEnergyLimit, params.NileGenesisHash,
+			tcommon.Address{}, false, false, true, nil, nil,
+		)
+		return err
+	}
+
+	// Historical Nile version 33 was release-v4.8.1, before the exchange
+	// disable patch. The transaction may fail later because this focused test
+	// does not seed exchange state, but it must not hit the fork rejection.
+	if err := run(t, 33); errors.Is(err, ErrExchangeRejected) {
+		t.Fatalf("historical Nile v33 must allow exchange transaction, got %v", err)
+	}
+
+	if err := run(t, 34); !errors.Is(err, ErrExchangeRejected) {
+		t.Fatalf("Nile v34 must reject exchange transaction, got %v", err)
+	}
+}
+
 // TestApplyTransaction_ExchangePassesPreFork asserts that with no v33
 // votes, the early reject does not fire — preserving replay safety for
 // historical pre-fork blocks. Whether the actuator itself succeeds is
