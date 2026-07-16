@@ -29,6 +29,7 @@ const (
 	// only the trailing 20 bytes; the corpus uses the 20-byte form in requests.
 	freezeOwnerAddr21    = "0x411020304050607080900010203040506070809000"
 	freezeContractAddr21 = "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0"
+	freezeContractAddr20 = "0xa0b0c0d0e0f000102030405060708090a0b0c0d0"
 
 	// freezeAccountHex (20-byte form) is used for getBalance/getCode/getStorageAt.
 	freezeAccountHex = "0x4101020304050607080900010203040506070809"

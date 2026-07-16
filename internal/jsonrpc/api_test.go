@@ -27,6 +27,8 @@ type stubBackend struct {
 	txIndex     int
 	txInfo      *corepb.TransactionInfo
 	callResult  []byte
+	gotCallFrom *common.Address
+	gotCallTo   *common.Address
 	logs        []*jsonrpc.RPCLog
 	gasPrice    int64
 	peerCount   int
@@ -87,6 +89,8 @@ func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionI
 	return s.txInfo, nil
 }
 func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) ([]byte, error) {
+	s.gotCallFrom = from
+	s.gotCallTo = to
 	return s.callResult, nil
 }
 func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
@@ -254,17 +258,45 @@ func TestEthCall(t *testing.T) {
 	// stub returns 32-byte ABI-encoded uint256(1)
 	ret := make([]byte, 32)
 	ret[31] = 1
-	srv := newTestServer(t, &stubBackend{callResult: ret})
+	backend := &stubBackend{callResult: ret}
+	srv := newTestServer(t, backend)
 	defer srv.Close()
+	const toBody = "4101020304050607080900010203040506070809"
 	resp := rpcCall(t, srv, "eth_call", []interface{}{
 		map[string]interface{}{
-			"to":   "0x4101020304050607080900010203040506070809",
+			"to":   "0x" + toBody,
 			"data": "0x70a08231000000000000000000000000000000000000000000000000000000000000000",
 		},
 		"latest",
 	})
 	if _, ok := resp["result"].(string); !ok {
 		t.Fatalf("eth_call result should be a hex string, got %v", resp["result"])
+	}
+	if backend.gotCallTo == nil {
+		t.Fatal("eth_call did not forward the to address")
+	}
+	wantTo := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, common.FromHex(toBody)...))
+	if *backend.gotCallTo != wantTo {
+		t.Fatalf("eth_call to = %x, want java-tron-compatible %x", *backend.gotCallTo, wantTo)
+	}
+}
+
+func TestEthCallRejectsInvalidAddress(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	body := bytes.NewBufferString(`{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x420102030405060708090a0b0c0d0e0f1011121314"},"latest"],"id":1}`)
+	httpResp, err := http.Post(srv.URL, "application/json", body)
+	if err != nil {
+		t.Fatalf("POST eth_call: %v", err)
+	}
+	defer httpResp.Body.Close()
+	var resp map[string]interface{}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode eth_call error: %v", err)
+	}
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok || errObj["code"] != float64(-32602) {
+		t.Fatalf("invalid address error = %#v, want code -32602", resp["error"])
 	}
 }
 

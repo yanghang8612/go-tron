@@ -6,7 +6,7 @@
     "method": "eth_getLogs",
     "params": [
       {
-        "address": "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0",
+        "address": "0xa0b0c0d0e0f000102030405060708090a0b0c0d0",
         "fromBlock": "0x0",
         "toBlock": "latest",
         "topics": [

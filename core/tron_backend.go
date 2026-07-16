@@ -1849,7 +1849,11 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 					addr := tcommon.BytesToAddress(l.Address[addrStart:])
 					match := false
 					for _, fa := range filter.Addresses {
-						if fa == addr {
+						// JSON-RPC log filters are Ethereum-shaped 20-byte
+						// addresses. Compare rooted account identities so the
+						// canonical 0x41 prefix used internally cannot affect
+						// matching against receipt logs, which store only 20 bytes.
+						if fa.AccountID() == addr.AccountID() {
 							match = true
 							break
 						}

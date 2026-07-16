@@ -95,7 +95,10 @@ func (e *EthAPI) Accounts() []string { return []string{} }
 // GetBalance serves eth_getBalance: the SUN balance scaled by 1e12 (to wei-like
 // 18-decimal units) as 0x-hex. The optional block tag selects live vs archive.
 func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseCompatibleAddress(addrHex)
+	if err != nil {
+		return "", err
+	}
 	blockNum, isLatest, err := e.resolveBlock(block)
 	if err != nil {
 		return "", err
@@ -118,7 +121,10 @@ func (e *EthAPI) GetTransactionCount(_ string, _ *string) string { return "0x0" 
 
 // GetCode serves eth_getCode: the contract bytecode as 0x-hex (live or archive).
 func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseCompatibleAddress(addrHex)
+	if err != nil {
+		return "", err
+	}
 	blockNum, isLatest, err := e.resolveBlock(block)
 	if err != nil {
 		return "", err
@@ -137,7 +143,10 @@ func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
 // slot as 0x-hex (live or archive). The slot is right-aligned into 32 bytes,
 // matching the legacy handler.
 func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, error) {
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseCompatibleAddress(addrHex)
+	if err != nil {
+		return "", err
+	}
 	var slot common.Hash
 	slotBytes := common.FromHex(slotHex)
 	if len(slotBytes) > 32 {
@@ -168,10 +177,16 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 	}
 	var from *common.Address
 	if tx.From != "" {
-		a := common.BytesToAddress(common.FromHex(tx.From))
+		a, err := parseCompatibleAddress(tx.From)
+		if err != nil {
+			return "", err
+		}
 		from = &a
 	}
-	to := common.BytesToAddress(common.FromHex(tx.To))
+	to, err := parseCompatibleAddress(tx.To)
+	if err != nil {
+		return "", err
+	}
 	result, err := e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
 	if err != nil {
 		return "", err
@@ -185,11 +200,17 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 	var from, to *common.Address
 	if tx.From != "" {
-		a := common.BytesToAddress(common.FromHex(tx.From))
+		a, err := parseCompatibleAddress(tx.From)
+		if err != nil {
+			return "", err
+		}
 		from = &a
 	}
 	if tx.To != "" {
-		a := common.BytesToAddress(common.FromHex(tx.To))
+		a, err := parseCompatibleAddress(tx.To)
+		if err != nil {
+			return "", err
+		}
 		to = &a
 	}
 	energy, err := e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
@@ -305,15 +326,11 @@ func (e *EthAPI) toLogFilter(filterObj logFilterArgs) (LogFilter, error) {
 
 	// address: string or []string
 	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
-		var addrStr string
-		var addrSlice []string
-		if json.Unmarshal(filterObj.Address, &addrStr) == nil {
-			filter.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
-		} else if json.Unmarshal(filterObj.Address, &addrSlice) == nil {
-			for _, a := range addrSlice {
-				filter.Addresses = append(filter.Addresses, common.BytesToAddress(common.FromHex(a)))
-			}
+		addresses, err := parseFilterAddresses(filterObj.Address)
+		if err != nil {
+			return filter, err
 		}
+		filter.Addresses = addresses
 	}
 
 	// topics: [topic0, topic1, ...] where each is null | string | []string

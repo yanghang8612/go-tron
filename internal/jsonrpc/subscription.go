@@ -256,15 +256,11 @@ func parseLogFilterObject(raw json.RawMessage) (LogFilter, error) {
 		}
 	}
 	if len(obj.Address) > 0 && string(obj.Address) != "null" {
-		var addrStr string
-		var addrSlice []string
-		if json.Unmarshal(obj.Address, &addrStr) == nil {
-			lf.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
-		} else if json.Unmarshal(obj.Address, &addrSlice) == nil {
-			for _, a := range addrSlice {
-				lf.Addresses = append(lf.Addresses, common.BytesToAddress(common.FromHex(a)))
-			}
+		addresses, err := parseFilterAddresses(obj.Address)
+		if err != nil {
+			return LogFilter{}, err
 		}
+		lf.Addresses = addresses
 	}
 	if len(obj.Topics) > 0 && string(obj.Topics) != "null" {
 		var rawTopics []json.RawMessage

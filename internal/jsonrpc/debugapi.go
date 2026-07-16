@@ -34,10 +34,16 @@ func (d *DebugAPI) TraceCall(tx callArgs, block *string, config *tracers.TraceCo
 	}
 	var from *common.Address
 	if tx.From != "" {
-		a := common.BytesToAddress(common.FromHex(tx.From))
+		a, err := parseCompatibleAddress(tx.From)
+		if err != nil {
+			return nil, err
+		}
 		from = &a
 	}
-	to := common.BytesToAddress(common.FromHex(tx.To))
+	to, err := parseCompatibleAddress(tx.To)
+	if err != nil {
+		return nil, err
+	}
 	blockNumber, err := d.resolveTraceBlock(block)
 	if err != nil {
 		return nil, err

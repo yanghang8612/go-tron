@@ -24,7 +24,7 @@ func debugServer(t *testing.T, be jsonrpc.Backend) *httptest.Server {
 	return ts
 }
 
-const debugTestAddr = "0x410102030405060708090a0b0c0d0e0f1011121314"
+const debugTestAddr = "0x0102030405060708090a0b0c0d0e0f1011121314"
 
 func TestDebugAPI_TraceCallRoutesAndParses(t *testing.T) {
 	be := &stubBackend{traceResult: map[string]interface{}{"failed": true, "structLogs": []interface{}{}}}
@@ -40,7 +40,7 @@ func TestDebugAPI_TraceCallRoutesAndParses(t *testing.T) {
 	if be.gotTraceTo == nil {
 		t.Fatal("'to' not forwarded to backend")
 	}
-	wantTo := common.BytesToAddress(common.FromHex(debugTestAddr))
+	wantTo := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, common.FromHex(debugTestAddr)...))
 	if *be.gotTraceTo != wantTo {
 		t.Fatalf("to: got %x, want %x", be.gotTraceTo[:], wantTo[:])
 	}
@@ -60,6 +60,18 @@ func TestDebugAPI_TraceCallRoutesAndParses(t *testing.T) {
 	}
 	if got["failed"] != true {
 		t.Fatalf("backend trace result not echoed: %s", result)
+	}
+}
+
+func TestDebugAPI_TraceCallRejectsInvalidTronPrefix(t *testing.T) {
+	be := &stubBackend{}
+	ts := debugServer(t, be)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"debug_traceCall","params":[` +
+		`{"to":"0x420102030405060708090a0b0c0d0e0f1011121314"},"latest",null]}`
+	_, errObj := postRPC(t, ts.URL, body)
+	if errObj == nil || errObj.Code != -32602 {
+		t.Fatalf("invalid address error = %+v, want code -32602", errObj)
 	}
 }
 

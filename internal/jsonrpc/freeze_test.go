@@ -79,6 +79,7 @@ type requestSpec struct {
 func freezeSpecs() []requestSpec {
 	acct := freezeAccountHex
 	contract := freezeContractAddr21
+	logContract := freezeContractAddr20
 	blockHash := freezeBlockHashHex()
 	txHash := freezeTxHashHex()
 	// Topic from the seeded log, used to exercise topic parsing in eth_getLogs.
@@ -128,7 +129,7 @@ func freezeSpecs() []requestSpec {
 			map[string]interface{}{
 				"fromBlock": "0x0",
 				"toBlock":   "latest",
-				"address":   contract,
+				"address":   logContract,
 				"topics":    []interface{}{topic},
 			},
 		}},

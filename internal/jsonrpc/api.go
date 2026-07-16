@@ -181,6 +181,9 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 	}
 
 	if err != nil {
+		if coded, ok := err.(interface{ ErrorCode() int }); ok {
+			return errResp(id, coded.ErrorCode(), err.Error())
+		}
 		return errResp(id, codeInternal, err.Error())
 	}
 	return rpcResponse{JSONRPC: "2.0", Result: result, ID: id}
@@ -229,15 +232,11 @@ func (api *API) ethNewFilter(params json.RawMessage) (interface{}, error) {
 		}
 	}
 	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
-		var addrStr string
-		var addrSlice []string
-		if json.Unmarshal(filterObj.Address, &addrStr) == nil {
-			lf.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
-		} else if json.Unmarshal(filterObj.Address, &addrSlice) == nil {
-			for _, a := range addrSlice {
-				lf.Addresses = append(lf.Addresses, common.BytesToAddress(common.FromHex(a)))
-			}
+		addresses, err := parseFilterAddresses(filterObj.Address)
+		if err != nil {
+			return nil, err
 		}
+		lf.Addresses = addresses
 	}
 	if len(filterObj.Topics) > 0 && string(filterObj.Topics) != "null" {
 		var rawTopics []json.RawMessage
@@ -314,12 +313,18 @@ func (api *API) ethEstimateGas(params json.RawMessage) (interface{}, error) {
 	}
 	var from *common.Address
 	if txObj.From != "" {
-		a := common.BytesToAddress(common.FromHex(txObj.From))
+		a, err := parseCompatibleAddress(txObj.From)
+		if err != nil {
+			return nil, err
+		}
 		from = &a
 	}
 	var to *common.Address
 	if txObj.To != "" {
-		a := common.BytesToAddress(common.FromHex(txObj.To))
+		a, err := parseCompatibleAddress(txObj.To)
+		if err != nil {
+			return nil, err
+		}
 		to = &a
 	}
 	data := common.FromHex(txObj.Data)
@@ -451,7 +456,10 @@ func (api *API) ethGetBalance(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	addr := common.BytesToAddress(common.FromHex(p[0]))
+	addr, err := parseCompatibleAddress(p[0])
+	if err != nil {
+		return nil, err
+	}
 	blockNum, isLatest, err := api.resolveBlockArg(p, 1)
 	if err != nil {
 		return nil, err
@@ -475,7 +483,10 @@ func (api *API) ethGetCode(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	addr := common.BytesToAddress(common.FromHex(p[0]))
+	addr, err := parseCompatibleAddress(p[0])
+	if err != nil {
+		return nil, err
+	}
 	blockNum, isLatest, err := api.resolveBlockArg(p, 1)
 	if err != nil {
 		return nil, err
@@ -494,7 +505,10 @@ func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	addr := common.BytesToAddress(common.FromHex(p[0]))
+	addr, err := parseCompatibleAddress(p[0])
+	if err != nil {
+		return nil, err
+	}
 	var slot common.Hash
 	slotBytes := common.FromHex(p[1])
 	if len(slotBytes) > 32 {
@@ -537,10 +551,16 @@ func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
 
 	var from *common.Address
 	if txObj.From != "" {
-		a := common.BytesToAddress(common.FromHex(txObj.From))
+		a, err := parseCompatibleAddress(txObj.From)
+		if err != nil {
+			return nil, err
+		}
 		from = &a
 	}
-	to := common.BytesToAddress(common.FromHex(txObj.To))
+	to, err := parseCompatibleAddress(txObj.To)
+	if err != nil {
+		return nil, err
+	}
 
 	data := common.FromHex(txObj.Data)
 
@@ -689,15 +709,11 @@ func (api *API) ethGetLogs(params json.RawMessage) (interface{}, error) {
 
 	// Parse address: string or []string
 	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
-		var addrStr string
-		var addrSlice []string
-		if json.Unmarshal(filterObj.Address, &addrStr) == nil {
-			filter.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
-		} else if json.Unmarshal(filterObj.Address, &addrSlice) == nil {
-			for _, a := range addrSlice {
-				filter.Addresses = append(filter.Addresses, common.BytesToAddress(common.FromHex(a)))
-			}
+		addresses, err := parseFilterAddresses(filterObj.Address)
+		if err != nil {
+			return nil, err
 		}
+		filter.Addresses = addresses
 	}
 
 	// Parse topics: [topic0, topic1, ...] where each element is null | string | []string
