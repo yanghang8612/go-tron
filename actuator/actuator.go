@@ -6,8 +6,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm"
 )
@@ -96,7 +98,32 @@ func (ctx *Context) PassVersion(version int32) bool {
 	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
 		return false
 	}
+	if ctx.passVersion(version) {
+		return true
+	}
+
+	// Nile activated the release-v4.8.1 feature set while java-tron's enum
+	// still assigned VERSION_4_8_1 the wire value 33. Upstream later inserted
+	// VERSION_4_8_0_1 at 33 and renumbered VERSION_4_8_1 to 34 before merging
+	// that release to master. Historical Nile blocks therefore legitimately
+	// gate v4.8.1 behavior on 33 (not 34); mainnet was never deployed with the
+	// old numbering and must continue to require 34.
+	if version == 34 && ctx.isNile() {
+		return ctx.passVersion(33)
+	}
+	return false
+}
+
+func (ctx *Context) passVersion(version int32) bool {
 	return ctx.ForkPassCache.Pass(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+}
+
+func (ctx *Context) isNile() bool {
+	genesisHash := ctx.GenesisHash
+	if genesisHash == (common.Hash{}) && ctx.DB != nil {
+		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
+	}
+	return genesisHash == params.NileGenesisHash
 }
 
 func (ctx *Context) ResourceTime() int64 {

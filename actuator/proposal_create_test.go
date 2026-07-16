@@ -5,6 +5,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -130,6 +131,35 @@ func TestProposalCreateValidatesParameterRange(t *testing.T) {
 	}
 }
 
+func TestProposalCreateNileHistoricalV481VersionAlias(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		94: 1, // ALLOW_TVM_SELFDESTRUCT_RESTRICTION
+	})
+	ctx.PrevBlockTime = 1_765_177_005_000
+	ctx.BlockNumber = 62_912_024
+	markProposalForkVersionPassed(t, ctx, 33)
+
+	// Mainnet/current java-tron numbering still requires VERSION_4_8_1=34.
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected version 33 to be insufficient off Nile")
+	}
+
+	// Nile deployed release-v4.8.1 while its wire value was still 33.
+	ctx.GenesisHash = params.NileGenesisHash
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("historical Nile v4.8.1 proposal rejected: %v", err)
+	}
+}
+
+func TestProposalCreateMainnetV481StillRequiresVersion34(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{94: 1})
+	ctx.PrevBlockTime = 1_765_177_005_000
+	markProposalForkVersionPassed(t, ctx, 34)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("current VERSION_4_8_1 proposal rejected: %v", err)
+	}
+}
+
 func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
 	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
 		27: 1, // ALLOW_SHIELDED_TRANSACTION, accepted by Nile at block 1,628,391 only.
@@ -139,7 +169,7 @@ func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
 		t.Fatal("expected historical shielded proposal to be rejected off Nile")
 	}
 
-	ctx.GenesisHash = proposalNileGenesisHash
+	ctx.GenesisHash = params.NileGenesisHash
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate historical Nile proposal failed: %v", err)
 	}
@@ -151,7 +181,7 @@ func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
 
 	ctx, act = newProposalCreateValidationContext(t, map[int64]int64{27: 0})
 	ctx.BlockNumber = proposalNileShieldedActivationBlock
-	ctx.GenesisHash = proposalNileGenesisHash
+	ctx.GenesisHash = params.NileGenesisHash
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected historical shielded proposal to require value 1")
 	}
@@ -166,7 +196,7 @@ func TestProposalCreateAcceptsHistoricalNileShieldedTrc20Activation(t *testing.T
 		t.Fatal("expected historical shielded TRC20 proposal to be rejected off Nile")
 	}
 
-	ctx.GenesisHash = proposalNileGenesisHash
+	ctx.GenesisHash = params.NileGenesisHash
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate historical Nile shielded TRC20 proposal failed: %v", err)
 	}
@@ -178,7 +208,7 @@ func TestProposalCreateAcceptsHistoricalNileShieldedTrc20Activation(t *testing.T
 
 	ctx, act = newProposalCreateValidationContext(t, map[int64]int64{39: 0})
 	ctx.BlockNumber = proposalNileShieldedTrc20Block
-	ctx.GenesisHash = proposalNileGenesisHash
+	ctx.GenesisHash = params.NileGenesisHash
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected historical shielded TRC20 proposal to require value 1")
 	}

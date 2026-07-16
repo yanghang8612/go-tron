@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 const (
@@ -27,8 +25,6 @@ const (
 	proposalNileShieldedActivationBlock  uint64 = 1_628_391
 	proposalNileShieldedTrc20Block       uint64 = 6_360_101
 )
-
-var proposalNileGenesisHash = common.HexToHash("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
 
 func validateProposalParameter(ctx *Context, id, value int64) error {
 	if ctx == nil || ctx.DynProps == nil {
@@ -252,22 +248,14 @@ func isHistoricalNileShieldedActivation(ctx *Context) bool {
 	if ctx == nil || ctx.BlockNumber != proposalNileShieldedActivationBlock {
 		return false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == proposalNileGenesisHash
+	return ctx.isNile()
 }
 
 func isHistoricalNileShieldedTrc20Activation(ctx *Context) bool {
 	if ctx == nil || ctx.BlockNumber != proposalNileShieldedTrc20Block {
 		return false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == proposalNileGenesisHash
+	return ctx.isNile()
 }
 
 var proposalRequiredVersion = map[int64]int32{
