@@ -844,7 +844,25 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 
 	if err != nil {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
-		tvm.RevertLogs(logSnap)
+		if err == ErrJVMStackOverflow {
+			// Java accumulates internal transactions per ProgramResult and merges
+			// them only after a child call returns. StackOverflowError unwinds the
+			// JVM before those recursive child results can be merged, leaving only
+			// the current call visible to its parent. gtron stores them globally,
+			// so collapse the unmerged tail explicitly while preserving this
+			// frame's own internal transaction.
+			if tvm.Depth > 0 && len(tvm.InternalTransactions) > internalTxSnap+1 {
+				tvm.InternalTransactions = tvm.InternalTransactions[:internalTxSnap+1]
+			}
+			// RuntimeImpl retains logs already merged into the entry result before
+			// a JVM StackOverflowError. Nested frames still discard their own tail;
+			// the entry frame preserves the earlier sibling logs for the receipt.
+			if tvm.Depth > 0 {
+				tvm.RevertLogs(logSnap)
+			}
+		} else {
+			tvm.RevertLogs(logSnap)
+		}
 		tvm.StateDB.RevertToSnapshot(snap)
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err

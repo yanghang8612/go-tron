@@ -2,6 +2,7 @@ package vm
 
 import (
 	"github.com/holiman/uint256"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // javaCallEnergyRequest mirrors java Program.getCallEnergy's FULL 256-bit compare
@@ -175,6 +176,25 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	// ErrDepthExceeded → push 0).
 	if interpreter.tvmConfig.CpuTimeGuard && !interpreter.tvmConfig.Compatibility && !interpreter.tvmConfig.Osaka && interpreter.tvm.Depth > maxCallDepth {
 		return nil, ErrAlreadyTimeOut
+	}
+	// Before VERSION_4_8_1_1, java-tron's CREATE2 depth check only called the
+	// (then inert) CPU-time guard. This allowed CREATE2 to enter a constructor
+	// beyond Program.MAX_DEPTH. A constructor callback could then bypass
+	// callToAddress's equality-only depth check and recurse until the JVM raised
+	// StackOverflowError. Signed blocks carry that canonical contractRet; when
+	// replay reaches this exact legacy escape hatch, reproduce the fatal result
+	// instead of letting Go's stricter depth guard turn it into SUCCESS.
+	//
+	// Keep this receipt-assisted branch narrowly pre-guard and non-compatible:
+	// VERSION_4_8_1_1 must remain OUT_OF_TIME, while Compatibility/Osaka fail
+	// CREATE2 gracefully. Pending/local execution never trusts transaction ret.
+	if !interpreter.tvmConfig.CpuTimeGuard &&
+		!interpreter.tvmConfig.Compatibility &&
+		!interpreter.tvmConfig.Osaka &&
+		interpreter.tvm.Depth > maxCallDepth &&
+		interpreter.tvm.TrustTransactionRet &&
+		interpreter.tvm.ExpectedContractRet == corepb.Transaction_Result_JVM_STACK_OVER_FLOW {
+		return nil, ErrJVMStackOverflow
 	}
 	ret, addr, remainingEnergy, err := interpreter.tvm.create2WithVersion(
 		contract.Address, addressSeed, code, energyForCall, val, salt, contract.Version,

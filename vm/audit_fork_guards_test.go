@@ -46,6 +46,53 @@ func TestCreate2DepthCpuTimeGuardOutOfTime(t *testing.T) {
 	}
 }
 
+func TestCreate2LegacyJVMStackOverflowReplayGate(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x01}
+	context := tcommon.Address{0x41, 0x02}
+	push4 := func(s *Stack) {
+		s.push(uint256.NewInt(0)) // salt
+		s.push(uint256.NewInt(0)) // size
+		s.push(uint256.NewInt(0)) // offset
+		s.push(uint256.NewInt(0)) // value
+	}
+
+	newReplay := func(cfg TVMConfig, expected corepb.Transaction_ResultContractResult) (*TVM, *Stack) {
+		tvm, _, _ := newTestTVMForCreate(t, cfg, nil)
+		tvm.Depth = maxCallDepth + 1
+		tvm.TrustTransactionRet = true
+		tvm.ExpectedContractRet = expected
+		stack := newStack()
+		push4(stack)
+		return tvm, stack
+	}
+
+	legacy, stack := newReplay(TVMConfig{Constantinople: true}, corepb.Transaction_Result_JVM_STACK_OVER_FLOW)
+	if _, err := opCreate2(nil, legacy.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), stack); err != ErrJVMStackOverflow {
+		t.Fatalf("legacy canonical replay: got %v, want ErrJVMStackOverflow", err)
+	}
+
+	// The receipt is only an oracle while replaying signed blocks. A pending
+	// execution and a canonical SUCCESS receipt retain the old local behavior.
+	pending, pendingStack := newReplay(TVMConfig{Constantinople: true}, corepb.Transaction_Result_JVM_STACK_OVER_FLOW)
+	pending.TrustTransactionRet = false
+	if _, err := opCreate2(nil, pending.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), pendingStack); err == ErrJVMStackOverflow {
+		t.Fatal("pending execution must not trust contractRet")
+	}
+	success, successStack := newReplay(TVMConfig{Constantinople: true}, corepb.Transaction_Result_SUCCESS)
+	if _, err := opCreate2(nil, success.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), successStack); err == ErrJVMStackOverflow {
+		t.Fatal("SUCCESS receipt must not be rewritten")
+	}
+
+	guarded, guardedStack := newReplay(TVMConfig{Constantinople: true, CpuTimeGuard: true}, corepb.Transaction_Result_JVM_STACK_OVER_FLOW)
+	if _, err := opCreate2(nil, guarded.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), guardedStack); err != ErrAlreadyTimeOut {
+		t.Fatalf("VERSION_4_8_1_1 precedence: got %v, want ErrAlreadyTimeOut", err)
+	}
+	osaka, osakaStack := newReplay(TVMConfig{Constantinople: true, CpuTimeGuard: true, Osaka: true}, corepb.Transaction_Result_JVM_STACK_OVER_FLOW)
+	if _, err := opCreate2(nil, osaka.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), osakaStack); err != nil {
+		t.Fatalf("Osaka precedence: got %v, want graceful CREATE2 failure", err)
+	}
+}
+
 func TestCreate2OsakaGracefulAtMaxDepth(t *testing.T) {
 	caller := tcommon.Address{0x41, 0x01}
 	context := tcommon.Address{0x41, 0x02}
