@@ -81,6 +81,29 @@ func TestPassVersion_V4_8_0_1_LowerRate(t *testing.T) {
 	}
 }
 
+func TestPassVersion_ChainSpecificRateOverride(t *testing.T) {
+	db := gerawdb.NewMemoryDatabase()
+	stats := make([]byte, 27)
+	for i := 0; i < 19; i++ {
+		stats[i] = VoteUpgrade
+	}
+	rawdb.WriteForkStats(db, 33, stats)
+
+	if !PassVersionFromStoreWithRate(rawDBForkStatsReader{db: db}, 33, blockTimeAfterFork(33), maintenanceInterval, 70) {
+		t.Fatal("19/27 must pass Nile/mainnet 70% override")
+	}
+	if PassVersionFromStoreWithRate(rawDBForkStatsReader{db: db}, 33, blockTimeAfterFork(33), maintenanceInterval, 80) {
+		t.Fatal("19/27 must not pass Nile VERSION_4_8_1 80% override")
+	}
+	for i := 19; i < 22; i++ {
+		stats[i] = VoteUpgrade
+	}
+	rawdb.WriteForkStats(db, 33, stats)
+	if !PassVersionFromStoreWithRate(rawDBForkStatsReader{db: db}, 33, blockTimeAfterFork(33), maintenanceInterval, 80) {
+		t.Fatal("22/27 must pass Nile VERSION_4_8_1 80% override")
+	}
+}
+
 func TestPassVersion_LegacyVersionStrictAllSlots(t *testing.T) {
 	// Version <= Version4_0 (16) requires every slot voting upgrade.
 	db := gerawdb.NewMemoryDatabase()

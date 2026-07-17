@@ -26,6 +26,8 @@ type TVMConfig struct {
 	SelfdestructRestrict bool // allow_tvm_selfdestruct_restriction
 	Prague               bool // allow_tvm_prague
 	Osaka                bool // allow_tvm_osaka: CLZ, P256VERIFY
+	FnDsa512             bool // allow_fn_dsa_512: PQ signatures/precompiles
+	MlDsa44              bool // allow_ml_dsa_44: PQ signatures/precompiles
 	// HigherLimitForMaxCpuTimeOfOneTx mirrors java-tron proposal #65
 	// (`allow_higher_limit_for_max_cpu_time_of_one_tx`). When active,
 	// java-tron's `OperationRegistry.adjustMemOperations` rebases
@@ -93,6 +95,8 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		SelfdestructRestrict: isActive(forks.AllowTvmSelfdestructRestriction),
 		Prague:               isActive(forks.AllowTvmPrague),
 		Osaka:                isActive(forks.AllowTvmOsaka),
+		FnDsa512:             dp != nil && dp.AllowFnDsa512(),
+		MlDsa44:              dp != nil && dp.AllowMlDsa44(),
 		// AllowHigherLimitForMaxCpuTimeOfOneTx is read directly off DP.
 		// It is governed by proposal #65 but does not have an `AllowFlag`
 		// entry — only the VM consumes it, and the gating is on the DP

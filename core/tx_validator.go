@@ -3,10 +3,12 @@ package core
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,6 +39,7 @@ var (
 	ErrUnauthorizedSigner        = errors.New("signer not in permission key set")
 	ErrInvalidTxSignature        = errors.New("invalid transaction signature")
 	ErrDuplicateSignature        = errors.New("transaction has duplicate signer")
+	ErrSignatureWeightOverflow   = errors.New("signature weight overflow")
 	// ErrShieldedUnexpectedSignature mirrors java TransactionCapsule
 	// .validateSignature: a transfer FROM a shielded address (no transparent
 	// owner) must carry NO transparent ECDSA signatures.
@@ -75,12 +78,16 @@ var (
 // "has signed twice". We always scan ALL signatures (no early return when
 // threshold is met) so a duplicate or unauthorized signer trailing a
 // satisfied threshold still rejects the tx.
-func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigByAddress bool) error {
+func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigByAddress bool, dynProps ...*state.DynamicProperties) error {
 	if err := ValidateContractCount(tx); err != nil {
 		return err
 	}
 	pb := tx.Proto()
 	contract := pb.RawData.Contract[0]
+	var dp *state.DynamicProperties
+	if len(dynProps) != 0 {
+		dp = dynProps[0]
+	}
 
 	ownerBytes, isShielded, err := extractContractOwner(contract)
 	if err != nil {
@@ -92,7 +99,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		// still REJECTS a shielded-source tx that carries transparent signatures
 		// ("there should be no signatures ... when transfer from shielded address");
 		// gtron previously skipped envelope validation entirely, accepting it.
-		if len(tx.Proto().GetSignature()) > 0 {
+		if len(tx.Proto().GetSignature()) > 0 || len(tx.Proto().GetPqAuthSig()) > 0 {
 			return ErrShieldedUnexpectedSignature
 		}
 		return nil
@@ -103,7 +110,8 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	ownerAddr := tcommon.BytesToAddress(ownerBytes)
 
 	sigs := tx.Signatures()
-	if len(sigs) == 0 {
+	pqSigs := pb.GetPqAuthSig()
+	if len(sigs)+len(pqSigs) == 0 {
 		return ErrNoSignature
 	}
 
@@ -117,10 +125,17 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		// (account creation pays bandwidth out of pocket). Any non-Owner
 		// permission_id fails: there's no record of an active permission
 		// for a never-seen account.
-		if permID != 0 {
+		switch permID {
+		case 0:
+			perm = types.MakeDefaultOwnerPermission(ownerAddr)
+		case 2:
+			if dp == nil {
+				return ErrPermissionNotFound
+			}
+			perm = types.MakeDefaultActivePermission(ownerAddr, dp.ActiveDefaultOperations())
+		default:
 			return ErrPermissionNotFound
 		}
-		perm = types.MakeDefaultOwnerPermission(ownerAddr)
 	} else {
 		perm = types.PermissionByID(account, permID)
 		if perm == nil {
@@ -146,13 +161,16 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	// distinct signers to clear the threshold, the math can't work out and
 	// extra signatures only waste bandwidth + dust the recovered-address
 	// set. java-tron has the same guard.
-	if len(sigs) > len(perm.Keys) {
+	if len(sigs)+len(pqSigs) > len(perm.Keys) {
 		return ErrTooManySignatures
 	}
 
-	addrs, err := tx.RecoverSigners()
-	if err != nil {
-		return ErrInvalidTxSignature
+	var addrs []tcommon.Address
+	if len(sigs) != 0 {
+		addrs, err = tx.RecoverSigners()
+		if err != nil {
+			return ErrInvalidTxSignature
+		}
 	}
 
 	// Mirrors java-tron TransactionCapsule.getCurrentWeight: scan every
@@ -188,12 +206,56 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		if w == 0 {
 			return ErrUnauthorizedSigner
 		}
+		if w > 0 && totalWeight > math.MaxInt64-w {
+			return ErrSignatureWeightOverflow
+		}
+		totalWeight += w
+	}
+
+	// PQ signatures use the same permission key set and contribute the same
+	// weights as ECDSA signatures. Their derived address must be unique across
+	// both schemes, so a hybrid transaction cannot count the same permission
+	// key twice. java-tron enables each scheme independently by proposal.
+	digest := tx.Hash()
+	for _, auth := range pqSigs {
+		if dp == nil || !pqTxSchemeAllowed(auth.GetScheme(), dp) {
+			return ErrInvalidTxSignature
+		}
+		addr, err := pq.Address(auth.GetScheme(), auth.GetPublicKey())
+		if err != nil {
+			return ErrInvalidTxSignature
+		}
+		if _, duplicate := seenAddr[addr]; duplicate {
+			return ErrDuplicateSignature
+		}
+		seenAddr[addr] = struct{}{}
+		w := types.KeyWeight(perm, addr)
+		if w == 0 {
+			return ErrUnauthorizedSigner
+		}
+		if err := pq.Validate(auth, addr, digest[:]); err != nil {
+			return ErrInvalidTxSignature
+		}
+		if w > 0 && totalWeight > math.MaxInt64-w {
+			return ErrSignatureWeightOverflow
+		}
 		totalWeight += w
 	}
 	if totalWeight < perm.Threshold {
 		return ErrInsufficientWeight
 	}
 	return nil
+}
+
+func pqTxSchemeAllowed(scheme corepb.PQScheme, dp *state.DynamicProperties) bool {
+	switch scheme {
+	case corepb.PQScheme_FN_DSA_512:
+		return dp.AllowFnDsa512()
+	case corepb.PQScheme_ML_DSA_44:
+		return dp.AllowMlDsa44()
+	default:
+		return false
+	}
 }
 
 func ValidateTxRetCount(tx *types.Transaction) error {

@@ -171,8 +171,9 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	// recursion vector with no effective depth cap on mainnet — unbounded recursion
 	// (state fork vs java's OUT_OF_TIME, and potential node stack overflow). Abort the
 	// tx with OUT_OF_TIME (ErrAlreadyTimeOut → spend-all) at depth, except on the
-	// compatibleEvm path (create2WithVersion's graceful ErrDepthExceeded → push 0).
-	if interpreter.tvmConfig.CpuTimeGuard && !interpreter.tvmConfig.Compatibility && interpreter.tvm.Depth > maxCallDepth {
+	// compatibleEvm/Osaka paths (create2WithVersion's graceful
+	// ErrDepthExceeded → push 0).
+	if interpreter.tvmConfig.CpuTimeGuard && !interpreter.tvmConfig.Compatibility && !interpreter.tvmConfig.Osaka && interpreter.tvm.Depth > maxCallDepth {
 		return nil, ErrAlreadyTimeOut
 	}
 	ret, addr, remainingEnergy, err := interpreter.tvm.create2WithVersion(

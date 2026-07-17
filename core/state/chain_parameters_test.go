@@ -3,9 +3,8 @@ package state
 import "testing"
 
 // javaWalletChainParameterKeys pins the exact key set and emission order of
-// java-tron's Wallet.getChainParameters() at GreatVoyage-v4.8.1, cross-checked
-// against a live v4.8.1 Nile node's /wallet/getchainparameters response
-// (2026-07-13). The wallet API must emit exactly these keys in this order —
+// java-tron's Wallet.getChainParameters() at GreatVoyage-v4.8.2. The wallet
+// API must emit exactly these keys in this order —
 // no snake_case DP keys, no internal counters like latest_block_header_number.
 var javaWalletChainParameterKeys = []string{
 	"getMaintenanceTimeInterval",
@@ -83,6 +82,12 @@ var javaWalletChainParameterKeys = []string{
 	"getAllowTvmBlob",
 	"getAllowTvmSelfdestructRestriction",
 	"getProposalExpireTime",
+	"getAllowTvmOsaka",
+	"getAllowTvmPrague",
+	"getAllowHardenResourceCalculation",
+	"getAllowHardenExchangeCalculation",
+	"getAllowFnDsa512",
+	"getAllowMlDsa44",
 }
 
 func TestChainParameterKeysPinJavaWalletList(t *testing.T) {
@@ -113,16 +118,10 @@ func TestChainParameterKeysResolveToDefaults(t *testing.T) {
 }
 
 func TestJavaGetterMapExtrasAreDocumented(t *testing.T) {
-	// Translation entries java-tron v4.8.1 does NOT emit from
-	// Wallet.getChainParameters: the v4.8.2 gates (not yet released on the
-	// target networks) and MARKET_QUANTITY_LIMIT (governance-settable but
-	// never part of the getchainparameters response).
+	// MARKET_QUANTITY_LIMIT is governance-settable but java-tron does not emit
+	// it from Wallet.getChainParameters.
 	wantExtras := map[string]bool{
-		"getAllowTvmOsaka":                  true,
-		"getAllowTvmPrague":                 true,
-		"getAllowHardenResourceCalculation": true,
-		"getAllowHardenExchangeCalculation": true,
-		"getMarketQuantityLimit":            true,
+		"getMarketQuantityLimit": true,
 	}
 	emitted := make(map[string]bool, len(javaWalletChainParameterKeys))
 	for _, k := range ChainParameterKeys() {

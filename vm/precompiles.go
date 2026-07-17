@@ -6,6 +6,7 @@ import (
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // PrecompiledContract is the interface for precompiled contracts.
@@ -191,6 +192,28 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig, genesisHash tcommon.Hash
 	case addrFromUint(0x0100):
 		if cfg.Osaka {
 			return &p256Verify{}
+		}
+
+	// ── PQ1 precompiles ───────────────────────────────────────────────────
+	case addrFromUint(0x02000016):
+		if cfg.FnDsa512 {
+			return &verifyFnDsa512{}
+		}
+	case addrFromUint(0x02000017):
+		if cfg.FnDsa512 {
+			return &batchValidatePQ{scheme: corepb.PQScheme_FN_DSA_512}
+		}
+	case addrFromUint(0x02000018):
+		if cfg.MlDsa44 {
+			return &verifyMlDsa44{}
+		}
+	case addrFromUint(0x02000019):
+		if cfg.MlDsa44 {
+			return &batchValidatePQ{scheme: corepb.PQScheme_ML_DSA_44}
+		}
+	case addrFromUint(0x0200001a):
+		if cfg.FnDsa512 || cfg.MlDsa44 {
+			return &validateMultiPQSig{}
 		}
 	}
 	return nil

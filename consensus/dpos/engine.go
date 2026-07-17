@@ -32,6 +32,9 @@ func (d *DPoS) VerifyHeader(chain consensus.ChainReader, block *types.Block) err
 // parallel pre-verification pass in core; satisfies the optional
 // headerSignaturePrewarmer interface there via duck typing.
 func (d *DPoS) PrewarmHeaderSignature(block *types.Block) {
+	if block != nil && block.Proto().GetBlockHeader().GetPqAuthSig() != nil {
+		return
+	}
 	_, _ = block.CachedRecoveredWitness(recoverWitness)
 }
 

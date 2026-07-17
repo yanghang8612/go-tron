@@ -160,6 +160,73 @@ func TestProposalCreateMainnetV481StillRequiresVersion34(t *testing.T) {
 	}
 }
 
+func TestProposalCreateNileMarketTransactionParity(t *testing.T) {
+	const nileMarketProposalTime int64 = 1_767_005_424_000
+
+	newContext := func(value int64) (*Context, *ProposalCreateActuator) {
+		ctx, act := newProposalCreateValidationContext(t, map[int64]int64{44: value})
+		ctx.GenesisHash = params.NileGenesisHash
+		ctx.PrevBlockTime = nileMarketProposalTime
+		markProposalForkVersionPassed(t, ctx, 19)
+		return ctx, act
+	}
+
+	// Nile block 63,519,431 / tx 5001743e...ba998 created proposal
+	// #20071 with {44:1} after VERSION_4_8_1 had already passed as wire
+	// version 33. Current Nile java-tron accepts it (the proposal later
+	// expired DISAPPROVED), so replay must not inherit mainnet's upper gate.
+	ctx, act := newContext(1)
+	markProposalForkVersionPassed(t, ctx, 33)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("Nile post-v4.8.1 market-enable proposal rejected: %v", err)
+	}
+
+	// Nile later approved proposal #20188 with {44:0}; the deactivation value
+	// is legal only after Nile VERSION_4_8_1.
+	ctx, act = newContext(0)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected Nile market-disable proposal before v4.8.1 to be rejected")
+	}
+	markProposalForkVersionPassed(t, ctx, 33)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("Nile post-v4.8.1 market-disable proposal rejected: %v", err)
+	}
+
+	ctx, act = newContext(2)
+	markProposalForkVersionPassed(t, ctx, 33)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected Nile market proposal value outside {0,1} to be rejected")
+	}
+}
+
+func TestProposalCreateMainnetMarketTransactionRemainsRetired(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{44: 1})
+	ctx.PrevBlockTime = 1_767_005_424_000
+	markProposalForkVersionPassed(t, ctx, 19)
+	markProposalForkVersionPassed(t, ctx, 34)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected mainnet proposal 44 after VERSION_4_8_1 to remain rejected")
+	}
+}
+
+func TestProposalCreateV482ParametersRequireVersion36(t *testing.T) {
+	for _, id := range []int64{95, 96, 97, 98} {
+		value := int64(1)
+		ctx, act := newProposalCreateValidationContext(t, map[int64]int64{id: value})
+		ctx.PrevBlockTime = 1_780_000_000_000
+		ctx.DynProps.SetAllowTvmShanghai(true) // prerequisite for proposal 95
+		markProposalForkVersionPassed(t, ctx, 35)
+		if err := act.Validate(ctx); err == nil {
+			t.Fatalf("proposal %d accepted at VERSION_4_8_1_1; want VERSION_4_8_2 gate", id)
+		}
+
+		markProposalForkVersionPassed(t, ctx, 36)
+		if err := act.Validate(ctx); err != nil {
+			t.Fatalf("proposal %d rejected after VERSION_4_8_2: %v", id, err)
+		}
+	}
+}
+
 func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
 	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
 		27: 1, // ALLOW_SHIELDED_TRANSACTION, accepted by Nile at block 1,628,391 only.

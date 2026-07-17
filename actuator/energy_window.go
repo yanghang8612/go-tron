@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -82,7 +83,7 @@ func computeEnergyIncrease(rawWindow int64, optimized bool, lastUsage, usage, la
 			new(big.Int).Mul(big.NewInt(remainUsage), big.NewInt(remainWindowSize)),
 			new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)),
 		)
-		nw = new(big.Int).Quo(bi, big.NewInt(newUsage)).Int64()
+		nw = common.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(newUsage)), "energy window size")
 	} else {
 		nw = (remainUsage*remainWindowSize + usage*windowSize) / newUsage
 	}
@@ -145,9 +146,9 @@ func divideCeilInt(num, den int64) int64 {
 // energyGetUsage1 mirrors java ResourceProcessor.getUsage(usage, windowSize).
 func energyGetUsage1(usage, windowSize int64, harden bool) int64 {
 	if harden {
-		return new(big.Int).Quo(
+		return common.BigInt64Exact(new(big.Int).Quo(
 			new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)),
-			big.NewInt(resourcePrecisionForEnergy)).Int64()
+			big.NewInt(resourcePrecisionForEnergy)), "energy usage")
 	}
 	return usage * windowSize / resourcePrecisionForEnergy
 }
@@ -159,7 +160,7 @@ func energyGetUsage2(oldUsage, oldWindowSize, newUsage, newWindowSize int64, har
 			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(oldWindowSize)),
 			new(big.Int).Mul(big.NewInt(newUsage), big.NewInt(newWindowSize)),
 		)
-		return new(big.Int).Quo(bi, big.NewInt(resourcePrecisionForEnergy)).Int64()
+		return common.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(resourcePrecisionForEnergy)), "combined energy usage")
 	}
 	return (oldUsage*oldWindowSize + newUsage*newWindowSize) / resourcePrecisionForEnergy
 }

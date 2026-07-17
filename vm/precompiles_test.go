@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
@@ -84,6 +85,52 @@ func TestPrecompileECRecoverJavaParity(t *testing.T) {
 	dirty[0] = 0x01
 	if out, _, _ := p.Run(nullEVM(), zeroCaller, build(dirty), 10000); len(out) != 0 {
 		t.Fatalf("dirty v-word high byte must return empty (java validateV), got %x", out)
+	}
+}
+
+func TestMlDsa44PrecompileAndGate(t *testing.T) {
+	addr := addrFromUint(0x02000018)
+	if p := getPrecompile(addr, TVMConfig{}, tcommon.Hash{}); p != nil {
+		t.Fatalf("ML-DSA precompile active before proposal: %T", p)
+	}
+	p := getPrecompile(addr, TVMConfig{MlDsa44: true}, tcommon.Hash{})
+	if p == nil {
+		t.Fatal("ML-DSA precompile missing after proposal")
+	}
+	var seed [mldsa44.SeedSize]byte
+	for i := range seed {
+		seed[i] = byte(0xa0 + i)
+	}
+	pk, sk := mldsa44.NewKeyFromSeed(&seed)
+	pkBytes, err := pk.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := sha256.Sum256([]byte("java-tron PQ1 ML-DSA-44"))
+	sig := make([]byte, mldsa44.SignatureSize)
+	if err := mldsa44.SignTo(sk, msg[:], nil, false, sig); err != nil {
+		t.Fatal(err)
+	}
+	input := make([]byte, 0, len(msg)+len(sig)+len(pkBytes))
+	input = append(input, msg[:]...)
+	input = append(input, sig...)
+	input = append(input, pkBytes...)
+	out, used, err := p.Run(nullEVM(), zeroCaller, input, 3000)
+	if err != nil || used != 3000 || len(out) != 32 || out[31] != 1 {
+		t.Fatalf("ML-DSA verify: out=%x used=%d err=%v", out, used, err)
+	}
+	input[32] ^= 1
+	out, used, err = p.Run(nullEVM(), zeroCaller, input, 3000)
+	if err != nil || used != 3000 || len(out) != 32 || out[31] != 0 {
+		t.Fatalf("invalid ML-DSA verify: out=%x used=%d err=%v", out, used, err)
+	}
+}
+
+func TestPQPrecompileAddressesRemainOrdinaryWhenDisabled(t *testing.T) {
+	for addr := uint64(0x02000016); addr <= 0x0200001a; addr++ {
+		if p := getPrecompile(addrFromUint(addr), TVMConfig{}, params.NileGenesisHash); p != nil {
+			t.Fatalf("PQ address %#x active without proposal: %T", addr, p)
+		}
 	}
 }
 

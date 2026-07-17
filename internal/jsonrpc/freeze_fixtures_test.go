@@ -128,6 +128,7 @@ func buildFreezeLogs(block *types.Block) []*jsonrpc.RPCLog {
 			Topics:           []string{"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"},
 			Data:             "0x01020304",
 			BlockNumber:      "0x64",
+			BlockTimestamp:   "0x6553f100",
 			TransactionHash:  hex0x(txHash[:]),
 			TransactionIndex: "0x0",
 			BlockHash:        hex0x(blockHash[:]),

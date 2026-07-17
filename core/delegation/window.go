@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -81,7 +82,7 @@ func computeResourceIncrease(rawWindow int64, optimized bool, lastUsage, usage, 
 			new(big.Int).Mul(big.NewInt(remainUsage), big.NewInt(remainWindowSize)),
 			new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)),
 		)
-		nw = new(big.Int).Quo(bi, big.NewInt(newUsage)).Int64()
+		nw = tcommon.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(newUsage)), "delegation resource window size")
 	} else {
 		nw = (remainUsage*remainWindowSize + usage*windowSize) / newUsage
 	}
@@ -99,7 +100,7 @@ func computeResourceIncrease(rawWindow int64, optimized bool, lastUsage, usage, 
 //	ownerRaw/Opt  = the owner's window after its own recovery (computeResourceIncrease)
 //	recvRaw/Opt   = the receiver's window after its recovery
 //	newOwnerUsage = ownerUsage + transferUsage (caller-checked > 0)
-func combineOwnerWindow(ownerUsage, ownerRaw int64, ownerOpt bool, transferUsage, recvRaw int64, recvOpt bool, newOwnerUsage int64, cancelAllV2 bool) (int64, bool) {
+func combineOwnerWindow(ownerUsage, ownerRaw int64, ownerOpt bool, transferUsage, recvRaw int64, recvOpt bool, newOwnerUsage int64, harden, cancelAllV2 bool) (int64, bool) {
 	windowSize := int64(params.WindowSizeSlots)
 	if cancelAllV2 {
 		ownerWin := windowSizeV2View(ownerRaw, ownerOpt)
@@ -110,7 +111,16 @@ func combineOwnerWindow(ownerUsage, ownerRaw int64, ownerOpt bool, transferUsage
 		if recvWin < 0 {
 			recvWin = 0
 		}
-		nw := divideCeil(ownerUsage*ownerWin+transferUsage*recvWin, newOwnerUsage)
+		var nw int64
+		if harden {
+			bi := new(big.Int).Add(
+				new(big.Int).Mul(big.NewInt(ownerUsage), big.NewInt(ownerWin)),
+				new(big.Int).Mul(big.NewInt(transferUsage), big.NewInt(recvWin)),
+			)
+			nw = divideCeilBig(bi, big.NewInt(newOwnerUsage))
+		} else {
+			nw = divideCeil(ownerUsage*ownerWin+transferUsage*recvWin, newOwnerUsage)
+		}
 		if maxWindow := windowSize * params.WindowSizePrecision; nw > maxWindow {
 			nw = maxWindow
 		}
@@ -124,7 +134,16 @@ func combineOwnerWindow(ownerUsage, ownerRaw int64, ownerOpt bool, transferUsage
 	if recvWin < 0 {
 		recvWin = 0
 	}
-	nw := (ownerUsage*ownerWin + transferUsage*recvWin) / newOwnerUsage
+	var nw int64
+	if harden {
+		bi := new(big.Int).Add(
+			new(big.Int).Mul(big.NewInt(ownerUsage), big.NewInt(ownerWin)),
+			new(big.Int).Mul(big.NewInt(transferUsage), big.NewInt(recvWin)),
+		)
+		nw = tcommon.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(newOwnerUsage)), "delegation owner window")
+	} else {
+		nw = (ownerUsage*ownerWin + transferUsage*recvWin) / newOwnerUsage
+	}
 	return nw, ownerOpt // setNewWindowSize leaves optimized untouched
 }
 
@@ -163,7 +182,7 @@ func windowSizeV2View(raw int64, optimized bool) int64 {
 
 func getUsage1(usage, windowSize int64, harden bool) int64 {
 	if harden {
-		return new(big.Int).Quo(new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)), big.NewInt(resourcePrecision)).Int64()
+		return tcommon.BigInt64Exact(new(big.Int).Quo(new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)), big.NewInt(resourcePrecision)), "delegation resource usage")
 	}
 	return usage * windowSize / resourcePrecision
 }
@@ -174,7 +193,7 @@ func getUsage2(oldUsage, oldWindowSize, newUsage, newWindowSize int64, harden bo
 			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(oldWindowSize)),
 			new(big.Int).Mul(big.NewInt(newUsage), big.NewInt(newWindowSize)),
 		)
-		return new(big.Int).Quo(bi, big.NewInt(resourcePrecision)).Int64()
+		return tcommon.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(resourcePrecision)), "delegation combined resource usage")
 	}
 	return (oldUsage*oldWindowSize + newUsage*newWindowSize) / resourcePrecision
 }
@@ -192,5 +211,5 @@ func divideCeilBig(num, den *big.Int) int64 {
 	if r.Sign() > 0 {
 		q.Add(q, big.NewInt(1))
 	}
-	return q.Int64()
+	return tcommon.BigInt64Exact(q, "delegation divideCeil")
 }

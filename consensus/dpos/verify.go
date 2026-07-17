@@ -9,7 +9,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -98,14 +100,6 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 		}
 	}
 
-	// Recover through the block's memo so a parallel pre-verification pass can
-	// move this ECDSA recovery off the serial critical path. On a cache miss
-	// (e.g. fork-replay blocks the pre-pass never saw) this computes inline via
-	// recoverWitness — identical result either way.
-	witness, err := block.CachedRecoveredWitness(recoverWitness)
-	if err != nil {
-		return ErrInvalidSignature
-	}
 	// java-tron's Manager.pushBlock → BlockCapsule.validateSignature compares
 	// the recovered signer to the witness account's authorized block-signing
 	// address (not the schedule). With AllowMultiSign off — and for every SR
@@ -131,8 +125,39 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 			expectedSigner = r.WitnessPermissionSigner(block.WitnessAddress())
 		}
 	}
-	if witness != expectedSigner {
+
+	// PQ1 makes the legacy witness_signature and pq_auth_sig mutually
+	// exclusive. A PQ signature is accepted only after its scheme's proposal
+	// has become effective; the public key is also bound to the witness
+	// permission address before its signature is verified over the same
+	// SHA256(BlockHeader.raw) digest used by legacy ECDSA.
+	header := block.Proto().GetBlockHeader()
+	hasLegacy := len(header.GetWitnessSignature()) != 0
+	hasPQ := header.GetPqAuthSig() != nil
+	if hasLegacy == hasPQ {
 		return ErrInvalidSignature
+	}
+	if hasPQ {
+		auth := header.GetPqAuthSig()
+		if !pqSchemeAllowed(auth.GetScheme(), dp) {
+			return ErrInvalidSignature
+		}
+		data, err := proto.Marshal(header.GetRawData())
+		if err != nil {
+			return ErrInvalidSignature
+		}
+		digest := sha256.Sum256(data)
+		if err := pq.Validate(auth, expectedSigner, digest[:]); err != nil {
+			return ErrInvalidSignature
+		}
+	} else {
+		// Recover through the block's memo so a parallel pre-verification pass
+		// can move ECDSA recovery off the serial critical path. On a cache miss
+		// this computes inline via recoverWitness — identical result either way.
+		witness, err := block.CachedRecoveredWitness(recoverWitness)
+		if err != nil || witness != expectedSigner {
+			return ErrInvalidSignature
+		}
 	}
 
 	// Schedule slot for this block. java-tron's DposService.validBlock calls
@@ -182,6 +207,17 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 		return ErrInvalidWitness
 	}
 	return nil
+}
+
+func pqSchemeAllowed(scheme corepb.PQScheme, dp *state.DynamicProperties) bool {
+	switch scheme {
+	case corepb.PQScheme_FN_DSA_512:
+		return dp.AllowFnDsa512()
+	case corepb.PQScheme_ML_DSA_44:
+		return dp.AllowMlDsa44()
+	default:
+		return false
+	}
 }
 
 func recoverWitness(block *types.Block) (common.Address, error) {

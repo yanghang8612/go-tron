@@ -23,6 +23,7 @@ var activeProposalTypes = []int64{
 	70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
 	81, 82, 83, 87, 88, 89,
 	92, 94, 95, 96, 97, 98,
+	1000, 1001,
 }
 
 func TestProposalParamKey_AllActiveTypesMapped(t *testing.T) {
@@ -46,7 +47,7 @@ func TestProposalParamKey_UnknownReturnsEmpty(t *testing.T) {
 		// must not map to anything in go-tron.
 		28, 34, 42, 43, 58,
 		// Far outside the defined range.
-		1000, -1,
+		1002, -1,
 	}
 	for _, id := range cases {
 		if key := forks.ProposalParamKey(id); key != "" {
@@ -67,15 +68,14 @@ func TestProposalParamKey_HistoricalNileShieldedActivationMapped(t *testing.T) {
 }
 
 // TestProposalParamKey_NewerProposalsMapped guards the recently-added
-// java-tron ProposalType entries (v4.8.x). These are not yet referenced
-// by gtron execution paths (no consumers in actuator/vm), but the
-// proposal-side-effect dispatcher must still drop the value into DP so
-// that mainnet activation isn't silently lost.
+// java-tron ProposalType entries (v4.8.x and Nile PQ1).
 func TestProposalParamKey_NewerProposalsMapped(t *testing.T) {
 	want := map[int64]string{
-		95: "allow_tvm_prague",
-		97: "allow_harden_resource_calculation",
-		98: "allow_harden_exchange_calculation",
+		95:   "allow_tvm_prague",
+		97:   "allow_harden_resource_calculation",
+		98:   "allow_harden_exchange_calculation",
+		1000: "allow_fn_dsa_512",
+		1001: "allow_ml_dsa_44",
 	}
 	for id, expect := range want {
 		if got := forks.ProposalParamKey(id); got != expect {

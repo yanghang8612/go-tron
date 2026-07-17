@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -168,6 +169,24 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
 
 	if contractCreatesNewAccount(statedb, tx) {
+		if dynProps.ConsensusLogicOptimization() {
+			// java subtracts signature payload reservations before applying
+			// max_create_account_tx_size: 65 bytes per ECDSA signature and the
+			// scheme-specific maximum embedded PQAuthSig wire size.
+			stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
+			stripped.Ret = nil
+			createSize := int64(proto.Size(stripped) - 65*len(stripped.GetSignature()))
+			for _, auth := range stripped.GetPqAuthSig() {
+				wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())
+				if !ok {
+					return nil, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
+				}
+				createSize -= int64(wireSize)
+			}
+			if createSize > dynProps.MaxCreateAccountTxSize() {
+				return nil, fmt.Errorf("create account transaction size %d exceeds maximum %d", createSize, dynProps.MaxCreateAccountTxSize())
+			}
+		}
 		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, prevBlockTime, resourceTime)
 	}
 

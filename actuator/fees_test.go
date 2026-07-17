@@ -209,6 +209,26 @@ func TestConsumeMultiSignFee_skipped_single_sig(t *testing.T) {
 	}
 }
 
+func TestConsumeMultiSignFeeCountsPQSignatures(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	seedAccount(statedb, owner, 10_000_000)
+	ctx := setupContext(t, statedb, makeTransferTxWithSigs(1, 2, 1_000, 0))
+	ctx.Tx.Proto().Signature = nil
+	ctx.Tx.Proto().PqAuthSig = []*corepb.PQAuthSig{
+		{Scheme: corepb.PQScheme_FN_DSA_512},
+		{Scheme: corepb.PQScheme_FN_DSA_512},
+	}
+	ctx.DynProps.SetMultiSignFee(1_000_000)
+	charged, err := ConsumeMultiSignFee(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charged != 1_000_000 || ctx.State.GetBalance(owner) != 9_000_000 {
+		t.Fatalf("PQ multi-sign charge=%d balance=%d", charged, ctx.State.GetBalance(owner))
+	}
+}
+
 // TestConsumeMultiSignFee_charged_regardless_of_allow_multisign locks java
 // parity: Manager.consumeMultiSignFee charges on signatureCount > 1 with NO
 // AllowMultiSign guard (MULTI_SIGN_FEE is 1_000_000 from genesis in both impls).

@@ -2,8 +2,11 @@ package types
 
 import (
 	"crypto/sha256"
+	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // MerkleRoot returns the root of a binary Merkle tree built over the given
@@ -43,4 +46,19 @@ func MerkleRoot(leaves []common.Hash) common.Hash {
 		level = next
 	}
 	return level[0]
+}
+
+// TransactionMerkleRoot hashes each transaction's complete protobuf bytes
+// (raw_data, signatures and ret) before applying MerkleRoot. This is distinct
+// from Transaction.Hash(), which is the txid and hashes raw_data only.
+func TransactionMerkleRoot(transactions []*corepb.Transaction) (common.Hash, error) {
+	leaves := make([]common.Hash, len(transactions))
+	for i, tx := range transactions {
+		data, err := proto.Marshal(tx)
+		if err != nil {
+			return common.Hash{}, fmt.Errorf("marshal transaction %d: %w", i, err)
+		}
+		leaves[i] = sha256.Sum256(data)
+	}
+	return MerkleRoot(leaves), nil
 }

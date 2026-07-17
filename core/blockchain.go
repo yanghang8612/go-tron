@@ -982,6 +982,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	//     pruned by the caller on the returned error.
 	// Skipped when bc.engine is nil (test path; see SetEngine).
 	if bc.engine != nil {
+		if err := block.ValidateTransactionMerkleRoot(); err != nil {
+			return err
+		}
 		if err := bc.engine.VerifyHeaderWithDynProps(headerParentChainReader{bc, current, statedb}, block, dynProps); err != nil {
 			return err
 		}
@@ -1027,6 +1030,19 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}()
 	if err := stagePipeline.Advance(rawdb.StageHeaders, rawdb.StageBodies); err != nil {
 		return err
+	}
+
+	// PQ1 bounds expensive post-quantum transactions independently of block
+	// byte size. java-tron rejects any received block containing more than
+	// 1000 transactions with at least one pq_auth_sig entry.
+	pqTxCount := 0
+	for _, tx := range block.Proto().GetTransactions() {
+		if len(tx.GetPqAuthSig()) != 0 {
+			pqTxCount++
+			if pqTxCount > 1000 {
+				return fmt.Errorf("post-quantum transaction count exceeds 1000")
+			}
+		}
 	}
 
 	// Sapling commitment-tree lifecycle: java-tron resets CURRENT_TREE from
@@ -1186,7 +1202,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records and governance side-effects live in rooted
 			// StateDB domains.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb), bc.proposalCache); err != nil {
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb), bc.proposalCache, bc.effectiveGenesisHash()); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			// ProcessProposals may have recorded terminal marks against state
@@ -2276,7 +2292,7 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	dynProps := bc.DynProps()
 	multiSigByAddress := forks.PassVersionFromStore(statedb, 27,
 		dynProps.LatestBlockHeaderTimestamp(), dynProps.MaintenanceTimeInterval())
-	if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress, dynProps); err != nil {
 		return err
 	}
 	// TAPOS reads the recent-block ring from rawdb (no state opening

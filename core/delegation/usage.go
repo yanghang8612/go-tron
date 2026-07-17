@@ -129,7 +129,7 @@ func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, own
 	if newOwnerUsage == 0 {
 		finalRaw, finalOpt = zeroOwnerWindow(ownerNewOpt, cancelAllV2)
 	} else {
-		finalRaw, finalOpt = combineOwnerWindow(ownerRecovered, ownerNewRaw, ownerNewOpt, transferUsage, recvRawWindow, recvOptimized, newOwnerUsage, cancelAllV2)
+		finalRaw, finalOpt = combineOwnerWindow(ownerRecovered, ownerNewRaw, ownerNewOpt, transferUsage, recvRawWindow, recvOptimized, newOwnerUsage, harden, cancelAllV2)
 	}
 	writeResState(statedb, owner, resource, newOwnerUsage, finalRaw, finalOpt, now)
 }

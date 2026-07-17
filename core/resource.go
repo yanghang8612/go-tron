@@ -198,7 +198,7 @@ func divideCeilBig(numerator, denominator *big.Int) int64 {
 	if r.Sign() > 0 {
 		q.Add(q, big.NewInt(1))
 	}
-	return q.Int64()
+	return tcommon.BigInt64Exact(q, "resource divideCeil")
 }
 
 func bigMulDivInt64(a, b, c int64) int64 {
@@ -208,5 +208,5 @@ func bigMulDivInt64(a, b, c int64) int64 {
 func bigMulDivBigInt64(a, b, c *big.Int) int64 {
 	n := new(big.Int).Mul(a, b)
 	n.Quo(n, c)
-	return n.Int64()
+	return tcommon.BigInt64Exact(n, "resource multiply/divide")
 }

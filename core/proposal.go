@@ -7,6 +7,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 const version3_6_5 int32 = 9
@@ -20,8 +21,19 @@ const version3_6_5 int32 = 9
 // rooted SystemProposal KV (Phase 3d), java-tron's revoking ProposalStore. db
 // remains the Reader+Writer for non-rooted chain/runtime data needed by future
 // side effects; mutable state writes go through statedb typed stores.
-func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, cache *proposalScanCache) error {
+func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, cache *proposalScanCache, genesisHashOpt ...tcommon.Hash) error {
 	activeCount := len(activeWitnesses)
+	genesisHash := tcommon.Hash{}
+	if len(genesisHashOpt) != 0 {
+		genesisHash = genesisHashOpt[0]
+	}
+	isNile := genesisHash == params.NileGenesisHash
+	// Nile reused wire version 33 for VERSION_4_8_1. Once that fork passed,
+	// its ProposalService changed proposal 44 from the historical guarded
+	// 0->1 activation into an unguarded market-disable operation that always
+	// writes 0. Keeping this conditional on both network and fork preserves
+	// replay of Nile's 2020 proposal #5023 while matching proposal #20188.
+	nileMarketDisable := isNile && forks.PassVersionFromStoreWithRate(statedb, 33, maintenanceTime, dynProps.MaintenanceTimeInterval(), 80)
 	ids := statedb.ReadProposalIndex()
 	// java ProposalController.processProposals iterates DESCENDING from
 	// latestProposalNum. ReadProposalIndex returns ascending (AppendProposalIndex
@@ -80,12 +92,16 @@ func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.D
 				if name == "" {
 					continue
 				}
+				if k == 44 && nileMarketDisable {
+					dynProps.Set(name, 0)
+					continue
+				}
 				if isGuardedParam(k) && oldValues[k] != 0 {
 					continue
 				}
 				dynProps.Set(name, p.Parameters[k])
 			}
-			applyProposalSideEffects(db, p, dynProps, fc, maintenanceTime, statedb, oldValues)
+			applyProposalSideEffects(db, p, dynProps, fc, maintenanceTime, statedb, oldValues, nileMarketDisable)
 			p.State = rawdb.ProposalStateApproved
 		} else {
 			p.State = rawdb.ProposalStateCanceled
@@ -162,7 +178,7 @@ func snapshotGuardedParams(dp *state.DynamicProperties, params map[int64]int64) 
 // `oldValues` carries the pre-proposal DP values for guarded paramIDs (see
 // `guardedParams`). When oldValues[id] is non-zero, java skips the entire
 // case body — both the DP save and the side-effect — so we do the same.
-func applyProposalSideEffects(db kvReadWriter, p *rawdb.Proposal, dynProps *state.DynamicProperties, fc *forks.ForkController, maintenanceTime int64, statedb *state.StateDB, oldValues map[int64]int64) {
+func applyProposalSideEffects(db kvReadWriter, p *rawdb.Proposal, dynProps *state.DynamicProperties, fc *forks.ForkController, maintenanceTime int64, statedb *state.StateDB, oldValues map[int64]int64, nileMarketDisable bool) {
 	wasZero := func(id int64) bool {
 		return oldValues[id] == 0
 	}
@@ -243,6 +259,13 @@ func applyProposalSideEffects(db kvReadWriter, p *rawdb.Proposal, dynProps *stat
 			// value is 0 (the validator accepts 0|1). Mirror that.
 			dynProps.AddSystemContractAndSetPermission(49)
 		case 44: // ALLOW_MARKET_TRANSACTION → enables MarketSellAsset (52), MarketCancelOrder (53)
+			if nileMarketDisable {
+				// Nile's post-VERSION_4_8_1 handler is intentionally unguarded and
+				// always saves 0; the generic parameter loop performed that save.
+				dynProps.AddSystemContractAndSetPermission(52)
+				dynProps.AddSystemContractAndSetPermission(53)
+				break
+			}
 			// java guards on getAllowMarketTransaction()==0 and adds the
 			// permission bits regardless of `value` (validator forces 1
 			// anyway). Mirror that: only run on the first activation.

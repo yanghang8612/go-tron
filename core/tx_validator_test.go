@@ -5,16 +5,40 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func mlDsaSigner(t *testing.T, message []byte) ([]byte, []byte, tcommon.Address) {
+	t.Helper()
+	var seed [mldsa44.SeedSize]byte
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	pk, sk := mldsa44.NewKeyFromSeed(&seed)
+	pkBytes, err := pk.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := make([]byte, mldsa44.SignatureSize)
+	if err := mldsa44.SignTo(sk, message, nil, false, sig); err != nil {
+		t.Fatal(err)
+	}
+	addr, err := pq.Address(corepb.PQScheme_ML_DSA_44, pkBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pkBytes, sig, addr
+}
 
 // newValidatorState builds an in-memory StateDB suitable for unit-testing
 // ValidateTxEnvelope. A live DynamicProperties is wired so the default
@@ -102,6 +126,36 @@ func TestValidateTxEnvelope_DefaultPermission_NewAccount(t *testing.T) {
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
 	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept, got %v", err)
+	}
+}
+
+func TestValidateTxEnvelope_MlDsa44Permission(t *testing.T) {
+	statedb, dp := newValidatorState(t)
+	dp.SetAllowMlDsa44(true)
+	_, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	tx := buildTransferTx(t, owner, recipient, 100, 2)
+	hash := tx.Hash()
+	pk, sig, signer := mlDsaSigner(t, hash[:])
+
+	ops := make([]byte, 32)
+	transferOp := int(corepb.Transaction_Contract_TransferContract)
+	ops[transferOp/8] |= 1 << uint(transferOp%8)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetPermissions(owner, types.MakeDefaultOwnerPermission(owner), nil, []*corepb.Permission{{
+		Type: corepb.Permission_Active, Id: 2, Threshold: 1, Operations: ops,
+		Keys: []*corepb.Key{{Address: signer.Bytes(), Weight: 1}},
+	}})
+	tx.Proto().PqAuthSig = []*corepb.PQAuthSig{{
+		Scheme: corepb.PQScheme_ML_DSA_44, PublicKey: pk, Signature: sig,
+	}}
+	if err := ValidateTxEnvelope(tx, statedb, true, dp); err != nil {
+		t.Fatalf("valid ML-DSA transaction rejected: %v", err)
+	}
+
+	dp.SetAllowMlDsa44(false)
+	if err := ValidateTxEnvelope(tx, statedb, true, dp); !errors.Is(err, ErrInvalidTxSignature) {
+		t.Fatalf("disabled ML-DSA scheme: got %v", err)
 	}
 }
 

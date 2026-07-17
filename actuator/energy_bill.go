@@ -448,10 +448,9 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 	totalLimit := dp.TotalEnergyCurrentLimit()
 	weight := frozen / params.TRXPrecision
 	if dp.AllowHardenResourceCalculation() {
-		// java BigInteger ...divide(...).longValueExact(): truncating a*b/c.
-		// Reachable in-VM limits stay within int64, so this matches java exactly;
-		// java's longValueExact would throw (reject) on > int64, which bigMulDivInt64
-		// does not reproduce — tracked separately as low-risk B-2.
+		// java BigInteger ...divide(...).longValueExact(): truncating a*b/c
+		// with an exact int64 conversion. The helper raises the same typed
+		// arithmetic failure when the result is out of range.
 		return bigMulDivInt64(weight, totalLimit, totalWeight)
 	}
 	return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
@@ -464,7 +463,7 @@ func divideCeilBigInt(numerator, denominator *big.Int) int64 {
 	if r.Sign() > 0 {
 		q.Add(q, big.NewInt(1))
 	}
-	return q.Int64()
+	return common.BigInt64Exact(q, "energy divideCeil")
 }
 
 func bigMulDivInt64(a, b, c int64) int64 {
@@ -474,5 +473,5 @@ func bigMulDivInt64(a, b, c int64) int64 {
 func bigMulDivBigInt64(a, b, c *big.Int) int64 {
 	n := new(big.Int).Mul(a, b)
 	n.Quo(n, c)
-	return n.Int64()
+	return common.BigInt64Exact(n, "energy multiply/divide")
 }

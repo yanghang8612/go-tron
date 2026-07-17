@@ -251,14 +251,18 @@ func (s *SolidityServer) GetCanDelegatedMaxSize(_ context.Context, in *apipb.Can
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.CanDelegateResource(addr, 0, corepb.ResourceCode(in.Type))
+	info, err := canDelegateWithPQ(s.backend, addr, corepb.ResourceCode(in.Type), in.GetPqScheme())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if info == nil {
 		return &apipb.CanDelegatedMaxSizeResponseMessage{}, nil
 	}
-	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: info.CanDelegateSize}, nil
+	maxSize := info.CanDelegateSize
+	if maxSize < 1_000_000 {
+		maxSize = 0
+	}
+	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: maxSize}, nil
 }
 
 func (s *SolidityServer) GetAvailableUnfreezeCount(_ context.Context, in *apipb.GetAvailableUnfreezeCountRequestMessage) (*apipb.GetAvailableUnfreezeCountResponseMessage, error) {

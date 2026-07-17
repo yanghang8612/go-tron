@@ -511,7 +511,7 @@ func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Addres
 
 // Create2 deploys a new contract with a deterministic address.
 func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.cfg.Compatibility && tvm.Depth > maxCallDepth {
+	if (tvm.cfg.Compatibility || tvm.cfg.Osaka) && tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
@@ -522,7 +522,7 @@ func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, valu
 }
 
 func (tvm *TVM) create2WithVersion(caller, addressSeed tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte, version int32) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.cfg.Compatibility && tvm.Depth > maxCallDepth {
+	if (tvm.cfg.Compatibility || tvm.cfg.Osaka) && tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 

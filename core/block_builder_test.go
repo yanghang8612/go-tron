@@ -59,8 +59,36 @@ func TestBuildBlock_EmptyPool(t *testing.T) {
 	if len(block.Transactions()) != 0 {
 		t.Fatalf("expected 0 transactions, got %d", len(block.Transactions()))
 	}
+	if got := block.Proto().BlockHeader.RawData.TxTrieRoot; len(got) != tcommon.HashLength || tcommon.BytesToHash(got) != (tcommon.Hash{}) {
+		t.Fatalf("empty block txTrieRoot: got %x, want 32 zero bytes", got)
+	}
+	if err := block.ValidateTransactionMerkleRoot(); err != nil {
+		t.Fatalf("builder emitted invalid transaction merkle root: %v", err)
+	}
 	if got := block.Version(); got != params.BlockVersion {
 		t.Fatalf("block version: want %d, got %d", params.BlockVersion, got)
+	}
+}
+
+func TestBuildBlock_UsesChainConfiguredVersion(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	cfg := *params.MainnetChainConfig
+	cfg.BlockVersion = 37
+	genesis := &params.Genesis{Config: &cfg, Accounts: []params.GenesisAccount{{Address: testProcessorAddr(1), Balance: 1}}}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, sdb, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := BuildBlock(bc, txpool.New(), testProcessorAddr(0xff), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Block.Version(); got != 37 {
+		t.Fatalf("block version: got %d, want chain-configured 37", got)
 	}
 }
 

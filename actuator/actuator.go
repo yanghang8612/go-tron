@@ -109,7 +109,7 @@ func (ctx *Context) PassVersion(version int32) bool {
 	// gate v4.8.1 behavior on 33 (not 34); mainnet was never deployed with the
 	// old numbering and must continue to require 34.
 	if version == 34 && ctx.isNile() {
-		return ctx.passVersion(33)
+		return forks.PassVersionFromStoreWithRate(ctx.State, 33, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval(), 80)
 	}
 	return false
 }

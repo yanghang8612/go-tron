@@ -17,6 +17,13 @@ enum AccountType {
   Contract = 2;
 }
 
+// Post-quantum signature scheme identifier used by PQAuthSig.
+enum PQScheme {
+  UNKNOWN_PQ_SCHEME = 0;
+  FN_DSA_512 = 1;
+  ML_DSA_44 = 2;
+}
+
 // AccountId, (name, address) use name, (null, address) use address, (name, null) use name,
 message AccountId {
   bytes name = 1;
@@ -243,6 +250,13 @@ message Account {
 message Key {
   bytes address = 1;
   int64 weight = 2;
+}
+
+// Per-signer post-quantum authentication witness for a transaction or block.
+message PQAuthSig {
+  PQScheme scheme = 1;
+  bytes public_key = 2;
+  bytes signature = 3;
 }
 
 message DelegatedResource {
@@ -509,6 +523,7 @@ message Transaction {
   // only support size = 1,  repeated list here for muti-sig extension
   repeated bytes signature = 2;
   repeated Result ret = 5;
+  repeated PQAuthSig pq_auth_sig = 6;
 }
 
 message TransactionInfo {
@@ -575,6 +590,7 @@ message BlockHeader {
   }
   raw raw_data = 1;
   bytes witness_signature = 2;
+  PQAuthSig pq_auth_sig = 3;
 }
 
 // block
@@ -688,6 +704,7 @@ message HelloMessage {
   int32 nodeType = 9;
   int64 lowestBlockNum = 10;
   bytes codeVersion = 11;
+  PQAuthSig pq_auth_sig = 12;
 }
 
 message InternalTransaction {

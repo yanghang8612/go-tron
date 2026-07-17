@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	"github.com/tronprotocol/go-tron/params"
@@ -948,29 +950,63 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 }
 
 func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	return b.CanDelegateResourceWithPQ(addr, amount, resource, corepb.PQScheme_UNKNOWN_PQ_SCHEME)
+}
+
+// CanDelegateResourceWithPQ mirrors Wallet.calcCanDelegated*MaxSize. The
+// result is constrained by the account's recovered resource usage, not by the
+// amount it has already delegated; for bandwidth, reserve the estimated wire
+// cost of the next DelegateResource transaction and its requested signature
+// scheme.
+func (b *TronBackend) CanDelegateResourceWithPQ(addr tcommon.Address, amount int64, resource corepb.ResourceCode, scheme corepb.PQScheme) (*tronapi.CanDelegateInfo, error) {
 	root := b.chain.HeadStateRoot()
 	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	maxSize := statedb.GetFrozenV2Amount(addr, resource)
-
-	// Compute already-delegated amount from the delegation index.
-	var delegated int64
-	for _, receiver := range statedb.ReadDelegationIndex(addr) {
-		dr := statedb.ReadDelegatedResource(addr, receiver)
-		if dr == nil {
-			continue
-		}
-		switch resource {
-		case corepb.ResourceCode_BANDWIDTH:
-			delegated += dr.FrozenBalanceForBandwidth
-		case corepb.ResourceCode_ENERGY:
-			delegated += dr.FrozenBalanceForEnergy
-		}
+	acct := statedb.GetAccount(addr)
+	if acct == nil {
+		return &tronapi.CanDelegateInfo{Balance: amount}, nil
 	}
-
-	canDelegate := maxSize - delegated
+	dp := b.chain.DynProps()
+	now := HeadSlot(dp.LatestBlockHeaderTimestamp(), b.chain.GenesisTimestamp())
+	harden := dp.AllowHardenResourceCalculation()
+	cancelAll := dp.SupportCancelAllUnfreezeV2()
+	maxSize := acct.GetFrozenV2Amount(resource)
+	var usageBalance int64
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		usage := statedb.GetNetUsage(addr)
+		last := statedb.GetLatestConsumeTime(addr)
+		if dp.SupportUnfreezeDelay() {
+			usage, _, _ = computeResourceIncrease(acct.RawNetWindowSize(), acct.NetWindowOptimized(), usage, 0, last, now, harden, cancelAll)
+		} else {
+			usage = recoverUsageForDP(usage, last, now, dp)
+		}
+		usage += estimateDelegateBandwidthSize(dp, maxSize, scheme)
+		usageBalance = resourceUsageToBalance(usage, dp.TotalNetWeight(), dp.TotalNetLimit())
+		usageBalance -= acct.TotalFrozenBandwidth()
+		usageBalance -= acct.AcquiredDelegatedFrozenBandwidth()
+		usageBalance -= acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+	case corepb.ResourceCode_ENERGY:
+		usage := statedb.GetEnergyUsage(addr)
+		last := statedb.GetLatestConsumeTimeForEnergy(addr)
+		if dp.SupportUnfreezeDelay() {
+			usage, _, _ = computeResourceIncrease(acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized(), usage, 0, last, now, harden, cancelAll)
+		} else {
+			usage = recoverUsageForDP(usage, last, now, dp)
+		}
+		usageBalance = resourceUsageToBalance(usage, dp.TotalEnergyWeight(), dp.TotalEnergyCurrentLimit())
+		usageBalance -= acct.FrozenEnergyAmount()
+		usageBalance -= acct.AcquiredDelegatedFrozenEnergy()
+		usageBalance -= acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+	default:
+		maxSize = 0
+	}
+	if usageBalance < 0 {
+		usageBalance = 0
+	}
+	canDelegate := maxSize - usageBalance
 	if canDelegate < 0 {
 		canDelegate = 0
 	}
@@ -979,6 +1015,35 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 		CanDelegateSize: canDelegate,
 		Balance:         amount,
 	}, nil
+}
+
+func resourceUsageToBalance(usage, totalWeight, totalLimit int64) int64 {
+	if usage <= 0 || totalWeight <= 0 {
+		return 0
+	}
+	if totalLimit <= 0 {
+		return math.MaxInt64
+	}
+	// Preserve java Wallet's explicit double ratio and truncating cast.
+	return int64(float64(usage*trxPrecision) * (float64(totalWeight) / float64(totalLimit)))
+}
+
+func estimateDelegateBandwidthSize(dp *state.DynamicProperties, balance int64, scheme corepb.PQScheme) int64 {
+	first := &contractpb.DelegateResourceContract{Balance: balance, Lock: true}
+	if dp.SupportMaxDelegateLockPeriod() {
+		first.LockPeriod = dp.MaxDelegateLockPeriod()
+	}
+	base := &contractpb.DelegateResourceContract{Balance: trxPrecision}
+	extra := proto.Size(first) - proto.Size(base)
+	if extra < 0 {
+		extra = 0
+	}
+	const delegateCostBaseSize = 275
+	size := int64(delegateCostBaseSize + extra)
+	if overhead, ok := pq.AuthSigWireSizeUpperBound(scheme); ok {
+		size += int64(overhead)
+	}
+	return size
 }
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
@@ -1831,6 +1896,7 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 			continue
 		}
 		blockHash := block.Hash()
+		blockTimestamp := fmt.Sprintf("0x%x", block.Timestamp()/1000)
 		infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, num)
 
 		logIndex := uint64(0)
@@ -1891,6 +1957,7 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 					Topics:           topics,
 					Data:             fmt.Sprintf("0x%x", l.Data),
 					BlockNumber:      fmt.Sprintf("0x%x", num),
+					BlockTimestamp:   blockTimestamp,
 					TransactionHash:  fmt.Sprintf("0x%x", txHash),
 					TransactionIndex: fmt.Sprintf("0x%x", txIdx),
 					BlockHash:        fmt.Sprintf("0x%x", blockHash),

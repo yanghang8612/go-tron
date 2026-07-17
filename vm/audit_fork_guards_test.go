@@ -46,6 +46,24 @@ func TestCreate2DepthCpuTimeGuardOutOfTime(t *testing.T) {
 	}
 }
 
+func TestCreate2OsakaGracefulAtMaxDepth(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x01}
+	context := tcommon.Address{0x41, 0x02}
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, CpuTimeGuard: true, Osaka: true}, nil)
+	tvm.Depth = maxCallDepth + 1
+	stack := newStack()
+	stack.push(uint256.NewInt(0)) // salt
+	stack.push(uint256.NewInt(0)) // size
+	stack.push(uint256.NewInt(0)) // offset
+	stack.push(uint256.NewInt(0)) // value
+	if _, err := opCreate2(nil, tvm.interpreter, NewContract(caller, context, 0, 1_000_000), newMemory(), stack); err != nil {
+		t.Fatalf("Osaka CREATE2 at MAX_DEPTH must push zero, got %v", err)
+	}
+	if got := stack.pop(); !got.IsZero() {
+		t.Fatalf("Osaka CREATE2 at MAX_DEPTH pushed %x, want zero", got.Bytes32())
+	}
+}
+
 // TestModExpCpuTimeGuardOutOfTime locks the VERSION_4_8_1_1 guard ported from
 // java-tron PrecompiledContracts.ModExp → MUtil.checkCPUTimeForModExp: the
 // degenerate input baseLen==0 && modLen==0 && expLen>1024 aborts with OUT_OF_TIME

@@ -46,7 +46,7 @@ func TestComputeResourceIncrease_MatchesValidatedCore(t *testing.T) {
 // unDelegateIncrease: (ownerUsage*ownerWindow + transferUsage*recvWindow)/newOwnerUsage.
 func TestCombineOwnerWindow_V1(t *testing.T) {
 	// (300*20000 + 100*10000) / 400 = 7_000_000 / 400 = 17500.
-	raw, opt := combineOwnerWindow(300, 20000, false, 100, 10000, false, 400, false)
+	raw, opt := combineOwnerWindow(300, 20000, false, 100, 10000, false, 400, false, false)
 	if raw != 17500 || opt {
 		t.Fatalf("V1 combine: got (%d,%v), want (17500,false)", raw, opt)
 	}
@@ -57,7 +57,7 @@ func TestCombineOwnerWindow_V1(t *testing.T) {
 func TestCombineOwnerWindow_V2(t *testing.T) {
 	// ceil((300*20_000_000 + 100*10_000_000) / 400) = ceil(7_000_000_000/400) = 17_500_000
 	// < 28_800*1000 = 28_800_000 → no clamp.
-	raw, opt := combineOwnerWindow(300, 20_000_000, true, 100, 10_000_000, true, 400, true)
+	raw, opt := combineOwnerWindow(300, 20_000_000, true, 100, 10_000_000, true, 400, false, true)
 	if raw != 17_500_000 || !opt {
 		t.Fatalf("V2 combine: got (%d,%v), want (17500000,true)", raw, opt)
 	}

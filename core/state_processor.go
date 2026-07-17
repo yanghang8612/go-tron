@@ -58,9 +58,26 @@ func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynPr
 	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
 }
 
-func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (*actuator.Result, error) {
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
+	var revertOnOverflow func()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if overflow, ok := tcommon.ArithmeticOverflowFromPanic(recovered); ok {
+				if revertOnOverflow != nil {
+					revertOnOverflow()
+				}
+				result = nil
+				err = overflow
+				return
+			}
+			panic(recovered)
+		}
+	}()
 	if err := ValidateContractCount(tx); err != nil {
 		return nil, err
+	}
+	if forkPassCache == nil {
+		forkPassCache = forks.NewVersionPassCache()
 	}
 
 	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
@@ -72,12 +89,14 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	// blocks as VERSION_4_8_0_1 rejects canonical pre-rollout transactions
 	// (first observed at Nile block 63,172,360). Mainnet keeps upstream's v33
 	// gate. java-tron evaluates the gate against the previous block timestamp.
-	exchangeRejectVersion := int32(33)
+	exchangeRejected := forkPassCache.Pass(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval())
 	if genesisHash == params.NileGenesisHash {
-		exchangeRejectVersion = 34
+		// Nile wire v34 is VERSION_4_8_0_1 at a 70% quorum; mainnet wire
+		// v34 is VERSION_4_8_1 at 80%. The common version table describes
+		// mainnet, so evaluate this Nile-only gate with its deployed rate.
+		exchangeRejected = forks.PassVersionFromStoreWithRate(statedb, 34, prevBlockTime, dynProps.MaintenanceTimeInterval(), 70)
 	}
-	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
-		forkPassCache.Pass(statedb, exchangeRejectVersion, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
+	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract && exchangeRejected {
 		return nil, ErrExchangeRejected
 	}
 	// java-tron Manager.validateCommon applies the synthetic "clear ret +
@@ -156,7 +175,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		// key from raw signature bytes to recovered address. We mirror by
 		// passing the fork-pass result through.
 		multiSigByAddress := forkPassCache.Pass(statedb, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
-		if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
+		if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress, dynProps); err != nil {
 			return nil, fmt.Errorf("validate envelope: %w", err)
 		}
 		// TAPOS read goes through the same buffered db that landed
@@ -181,6 +200,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		statedb.RevertToSnapshot(txSnap)
 		dynProps.Restore(dpProps, dpDirty)
 	}
+	revertOnOverflow = revertTx
 
 	resourceTime := ctx.ResourceTime()
 	// Diagnostic (cross-impl parity), non-consensus: snapshot the owner's
@@ -207,7 +227,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("memo fee: %w", err)
 	}
 
-	result, err := act.Execute(ctx)
+	result, err = act.Execute(ctx)
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("execute: %w", err)

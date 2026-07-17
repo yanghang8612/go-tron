@@ -6,13 +6,74 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestVerifyHeader_MlDsa44WitnessPermission(t *testing.T) {
+	var seed [mldsa44.SeedSize]byte
+	for i := range seed {
+		seed[i] = byte(0x40 + i)
+	}
+	pk, sk := mldsa44.NewKeyFromSeed(&seed)
+	pkBytes, err := pk.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := pq.Address(corepb.PQScheme_ML_DSA_44, pkBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	parent := genesisAt(0)
+	raw := &corepb.BlockHeaderRaw{
+		Number: 1, Timestamp: 3000, ParentHash: parent.Hash().Bytes(), WitnessAddress: witness.Bytes(),
+	}
+	rawBytes, err := proto.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(rawBytes)
+	sig := make([]byte, mldsa44.SignatureSize)
+	if err := mldsa44.SignTo(sk, digest[:], nil, false, sig); err != nil {
+		t.Fatal(err)
+	}
+	block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{
+		RawData: raw,
+		PqAuthSig: &corepb.PQAuthSig{
+			Scheme: corepb.PQScheme_ML_DSA_44, PublicKey: pkBytes, Signature: sig,
+		},
+	}})
+	dp := state.NewDynamicProperties()
+	dp.SetAllowMultiSign(true)
+	dp.SetAllowMlDsa44(true)
+	chain := &mockChainReader{
+		currentBlock: parent, genesisTime: 0, witnesses: []common.Address{witness}, dp: dp,
+		permSigner: func(common.Address) common.Address { return signer },
+	}
+	if err := VerifyHeaderWithDynProps(chain, block, dp); err != nil {
+		t.Fatalf("valid ML-DSA witness block rejected: %v", err)
+	}
+	dp.SetAllowMlDsa44(false)
+	if err := VerifyHeaderWithDynProps(chain, block, dp); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("disabled ML-DSA scheme: got %v", err)
+	}
+	dp.SetAllowMlDsa44(true)
+	block.Proto().BlockHeader.WitnessSignature = make([]byte, 65)
+	if err := VerifyHeaderWithDynProps(chain, block, dp); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("dual block signatures: got %v", err)
+	}
+}
 
 // buildBlock constructs a minimal types.Block with the given header fields
 // and a deliberately invalid 65-byte signature so recoverWitness returns

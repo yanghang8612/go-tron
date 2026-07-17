@@ -36,3 +36,18 @@ func PassVersionFromStore(store ForkStatsReader, version int32, latestBlockTime,
 	stats := store.ReadForkStats(version)
 	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
 }
+
+// PassVersionFromStoreWithRate evaluates a wire version with a chain-specific
+// quorum rate. Nile assigned different releases to wire versions 33 and 34
+// before those enum values were finalised on mainnet, so their rates are also
+// reversed (v33=80%, v34=70%). The stored bitmap remains keyed by the raw wire
+// version; only the quorum parameter is overridden.
+func PassVersionFromStoreWithRate(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64, hardForkRate int) bool {
+	vp, ok := lookupVersion(version)
+	if !ok {
+		return false
+	}
+	vp.HardForkRate = hardForkRate
+	stats := store.ReadForkStats(version)
+	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
+}

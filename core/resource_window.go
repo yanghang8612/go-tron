@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -85,7 +86,7 @@ func computeResourceIncrease(rawWindow int64, optimized bool, lastUsage, usage, 
 			new(big.Int).Mul(big.NewInt(remainUsage), big.NewInt(remainWindowSize)),
 			new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)),
 		)
-		nw = new(big.Int).Quo(bi, big.NewInt(newUsage)).Int64()
+		nw = tcommon.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(newUsage)), "resource window size")
 	} else {
 		nw = (remainUsage*remainWindowSize + usage*windowSize) / newUsage
 	}
@@ -120,9 +121,9 @@ func resWindowSizeV2View(raw int64, optimized bool) int64 {
 // resGetUsage1 mirrors java ResourceProcessor.getUsage(usage, windowSize).
 func resGetUsage1(usage, windowSize int64, harden bool) int64 {
 	if harden {
-		return new(big.Int).Quo(
+		return tcommon.BigInt64Exact(new(big.Int).Quo(
 			new(big.Int).Mul(big.NewInt(usage), big.NewInt(windowSize)),
-			big.NewInt(resourcePrecision)).Int64()
+			big.NewInt(resourcePrecision)), "resource usage")
 	}
 	return usage * windowSize / resourcePrecision
 }
@@ -134,7 +135,7 @@ func resGetUsage2(oldUsage, oldWindowSize, newUsage, newWindowSize int64, harden
 			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(oldWindowSize)),
 			new(big.Int).Mul(big.NewInt(newUsage), big.NewInt(newWindowSize)),
 		)
-		return new(big.Int).Quo(bi, big.NewInt(resourcePrecision)).Int64()
+		return tcommon.BigInt64Exact(new(big.Int).Quo(bi, big.NewInt(resourcePrecision)), "combined resource usage")
 	}
 	return (oldUsage*oldWindowSize + newUsage*newWindowSize) / resourcePrecision
 }

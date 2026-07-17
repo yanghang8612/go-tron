@@ -5,12 +5,66 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func leafHash(b byte) common.Hash {
 	var h common.Hash
 	h[31] = b
 	return h
+}
+
+func TestTransactionMerkleRootHashesFullProto(t *testing.T) {
+	tx := &corepb.Transaction{
+		RawData:   &corepb.TransactionRaw{Timestamp: 1234},
+		Signature: [][]byte{{1, 2, 3}},
+		Ret:       []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}},
+	}
+	encoded, err := proto.Marshal(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := common.Hash(sha256.Sum256(encoded))
+	got, err := TransactionMerkleRoot([]*corepb.Transaction{tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("transaction merkle leaf: got %x, want full-proto hash %x", got, want)
+	}
+
+	raw, err := proto.Marshal(tx.RawData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == common.Hash(sha256.Sum256(raw)) {
+		t.Fatal("transaction merkle leaf must not use the raw_data-only txid")
+	}
+}
+
+func TestBlockValidateTransactionMerkleRoot(t *testing.T) {
+	tx := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7}}
+	root, err := TransactionMerkleRoot([]*corepb.Transaction{tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 9, TxTrieRoot: root.Bytes()}},
+		Transactions: []*corepb.Transaction{tx},
+	})
+	if err := block.ValidateTransactionMerkleRoot(); err != nil {
+		t.Fatalf("valid root rejected: %v", err)
+	}
+
+	block.Proto().BlockHeader.RawData.TxTrieRoot[0] ^= 0xff
+	if err := block.ValidateTransactionMerkleRoot(); err == nil {
+		t.Fatal("mismatching root accepted")
+	}
+	block.Proto().BlockHeader.RawData.TxTrieRoot = nil
+	if err := block.ValidateTransactionMerkleRoot(); err == nil {
+		t.Fatal("missing 32-byte root accepted")
+	}
 }
 
 // TestMerkleRoot_Empty: java-tron stores 32 bytes of zero in `tx_trie_root`

@@ -96,6 +96,8 @@ var javaGetterToGoKeyMap = map[string]string{
 	"getAllowUpdateAccountName":             "allow_update_account_name",
 	"getAllowHardenResourceCalculation":     "allow_harden_resource_calculation",
 	"getAllowHardenExchangeCalculation":     "allow_harden_exchange_calculation",
+	"getAllowFnDsa512":                      "allow_fn_dsa_512",
+	"getAllowMlDsa44":                       "allow_ml_dsa_44",
 	"getConsensusLogicOptimization":         "consensus_logic_optimization",
 	"getDynamicEnergyIncreaseFactor":        "dynamic_energy_increase_factor",
 	"getDynamicEnergyMaxFactor":             "dynamic_energy_max_factor",
@@ -123,10 +125,9 @@ func JavaGetterToGoKey(javaGetter string) string {
 }
 
 // javaChainParameterOrder is the exact key list and emission order of
-// java-tron's Wallet.getChainParameters() at GreatVoyage-v4.8.1 (verified
-// against a live v4.8.1 Nile node on 2026-07-13). /wallet/getchainparameters
+// java-tron's Wallet.getChainParameters() at GreatVoyage-v4.8.2. /wallet/getchainparameters
 // and the GetChainParameters gRPC must emit exactly these keys in this order.
-// Keys present in javaGetterToGoKeyMap but not listed here (the v4.8.2 gates,
+// Keys present in javaGetterToGoKeyMap but not listed here (currently only
 // getMarketQuantityLimit) are translatable but not part of java's response.
 // When java-tron extends the list in a release, append here in java's order.
 var javaChainParameterOrder = []string{
@@ -205,6 +206,12 @@ var javaChainParameterOrder = []string{
 	"getAllowTvmBlob",
 	"getAllowTvmSelfdestructRestriction",
 	"getProposalExpireTime",
+	"getAllowTvmOsaka",
+	"getAllowTvmPrague",
+	"getAllowHardenResourceCalculation",
+	"getAllowHardenExchangeCalculation",
+	"getAllowFnDsa512",
+	"getAllowMlDsa44",
 }
 
 // ChainParameterKeys returns the java-tron Wallet.getChainParameters key

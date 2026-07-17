@@ -443,14 +443,29 @@ func (s *Server) GetCanDelegatedMaxSize(_ context.Context, in *apipb.CanDelegate
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
 	resource := corepb.ResourceCode(in.Type)
-	info, err := s.backend.CanDelegateResource(addr, 0, resource)
+	info, err := canDelegateWithPQ(s.backend, addr, resource, in.GetPqScheme())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if info == nil {
 		return &apipb.CanDelegatedMaxSizeResponseMessage{}, nil
 	}
-	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: info.CanDelegateSize}, nil
+	maxSize := info.CanDelegateSize
+	if maxSize < 1_000_000 {
+		maxSize = 0
+	}
+	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: maxSize}, nil
+}
+
+type pqCanDelegateBackend interface {
+	CanDelegateResourceWithPQ(common.Address, int64, corepb.ResourceCode, corepb.PQScheme) (*tronapi.CanDelegateInfo, error)
+}
+
+func canDelegateWithPQ(backend tronapi.Backend, addr common.Address, resource corepb.ResourceCode, scheme corepb.PQScheme) (*tronapi.CanDelegateInfo, error) {
+	if pqBackend, ok := backend.(pqCanDelegateBackend); ok {
+		return pqBackend.CanDelegateResourceWithPQ(addr, 0, resource, scheme)
+	}
+	return backend.CanDelegateResource(addr, 0, resource)
 }
 
 // GetAvailableUnfreezeCount returns the number of remaining unfreeze slots.

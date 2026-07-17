@@ -23,6 +23,7 @@
           "address": "0xa0b0c0d0e0f000102030405060708090a0b0c0d0",
           "blockHash": "0x0000000000000064524e207f2a2ceae5c1d814fb378a66cd03d3bb00945a573a",
           "blockNumber": "0x64",
+          "blockTimestamp": "0x6553f100",
           "data": "0x01020304",
           "logIndex": "0x0",
           "removed": false,

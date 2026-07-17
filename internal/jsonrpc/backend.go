@@ -22,6 +22,7 @@ type RPCLog struct {
 	Topics           []string `json:"topics"`
 	Data             string   `json:"data"`
 	BlockNumber      string   `json:"blockNumber"`
+	BlockTimestamp   string   `json:"blockTimestamp"`
 	TransactionHash  string   `json:"transactionHash"`
 	TransactionIndex string   `json:"transactionIndex"`
 	BlockHash        string   `json:"blockHash"`

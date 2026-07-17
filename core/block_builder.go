@@ -14,7 +14,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
-	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -28,7 +27,17 @@ type BuildResult struct {
 // BuildBlock assembles a new block from pending transactions.
 // Failing transactions are skipped rather than aborting the block.
 // The returned block is unsigned — call SignBlock separately.
-func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address, timestamp int64) (*BuildResult, error) {
+func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address, timestamp int64) (buildResult *BuildResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if overflow, ok := tcommon.ArithmeticOverflowFromPanic(recovered); ok {
+				buildResult = nil
+				err = overflow
+				return
+			}
+			panic(recovered)
+		}
+	}()
 	parent := bc.CurrentBlock()
 
 	// Open StateDB from parent's state root (side store keyed by block
@@ -85,6 +94,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction
 	var failedTxIDs []tcommon.Hash
+	pqTxCount := 0
 	blockNum := parent.Number() + 1
 
 	// The block being built has not yet committed, so the chain head
@@ -96,6 +106,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	accountStateMark := statedb.JournalMark()
 
 	for _, tx := range pendingTxs {
+		if len(tx.Proto().GetPqAuthSig()) != 0 && pqTxCount >= 1000 {
+			continue
+		}
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
@@ -109,6 +122,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
+		if len(txPB.GetPqAuthSig()) != 0 {
+			pqTxCount++
+		}
 		statedb.FinalizeTransaction()
 		// Producer builds a single block: nothing to amortize, so no fork-pass
 		// cache (the block-apply path threads bc.versionPassCache instead).
@@ -145,7 +161,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// nil cache: the producer builds a single block, not a replay of many
 		// boundaries, so the terminal-skip cache has nothing to amortise. Result
 		// is identical to the cached path (the cache only elides redundant reads).
-		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb), nil); err != nil {
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb), nil, bc.effectiveGenesisHash()); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{
@@ -187,12 +203,17 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	}
 
 	// Construct the block
+	txTrieRoot, err := types.TransactionMerkleRoot(appliedTxProtos)
+	if err != nil {
+		return nil, fmt.Errorf("transaction merkle root: %w", err)
+	}
 	raw := &corepb.BlockHeaderRaw{
 		Number:         int64(blockNum),
 		Timestamp:      timestamp,
 		ParentHash:     parent.Hash().Bytes(),
 		WitnessAddress: witnessAddr.Bytes(),
-		Version:        params.BlockVersion,
+		Version:        bc.config.EffectiveBlockVersion(),
+		TxTrieRoot:     txTrieRoot.Bytes(),
 	}
 	if dynProps.AllowAccountStateRoot() {
 		raw.AccountStateRoot = accountStateRoot.Bytes()

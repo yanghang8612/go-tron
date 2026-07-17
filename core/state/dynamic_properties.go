@@ -166,6 +166,8 @@ var defaultProps = map[string]int64{
 	"allow_update_account_name":                     0,
 	"allow_harden_resource_calculation":             0,
 	"allow_harden_exchange_calculation":             0,
+	"allow_fn_dsa_512":                              0,
+	"allow_ml_dsa_44":                               0,
 	"consensus_logic_optimization":                  0,
 	"dynamic_energy_increase_factor":                0,
 	"dynamic_energy_max_factor":                     0,
@@ -1456,6 +1458,20 @@ func (dp *DynamicProperties) AllowHardenExchangeCalculation() bool {
 }
 func (dp *DynamicProperties) SetAllowHardenExchangeCalculation(v bool) {
 	boolSet(dp, "allow_harden_exchange_calculation", v)
+}
+
+func (dp *DynamicProperties) AllowFnDsa512() bool {
+	return boolGet(dp, "allow_fn_dsa_512")
+}
+func (dp *DynamicProperties) SetAllowFnDsa512(v bool) {
+	boolSet(dp, "allow_fn_dsa_512", v)
+}
+
+func (dp *DynamicProperties) AllowMlDsa44() bool {
+	return boolGet(dp, "allow_ml_dsa_44")
+}
+func (dp *DynamicProperties) SetAllowMlDsa44(v bool) {
+	boolSet(dp, "allow_ml_dsa_44", v)
 }
 
 // RemoveThePowerOfTheGr mirrors java-tron's getRemoveThePowerOfTheGr,

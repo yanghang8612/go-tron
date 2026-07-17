@@ -89,12 +89,13 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 
 	// Gather logs from block transactions for log and subscription filters.
 	var logs []*RPCLog
+	logIndex := uint64(0)
 	for i, tx := range block.Transactions() {
 		info, err := fm.backend.GetTransactionInfo(tx.Hash())
 		if err != nil || info == nil {
 			continue
 		}
-		for li, l := range info.Log {
+		for _, l := range info.Log {
 			topics := make([]string, len(l.Topics))
 			for ti, t := range l.Topics {
 				topics[ti] = hexBytes(t)
@@ -105,12 +106,14 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 				Topics:           topics,
 				Data:             hexBytes(l.Data),
 				BlockNumber:      hexUint64(block.Number()),
+				BlockTimestamp:   hexUint64(uint64(block.Timestamp() / 1000)),
 				TransactionHash:  "0x" + hex.EncodeToString(txHash[:]),
 				TransactionIndex: hexUint64(uint64(i)),
 				BlockHash:        hashHex,
-				LogIndex:         hexUint64(uint64(li)),
+				LogIndex:         hexUint64(logIndex),
 				Removed:          false,
 			})
+			logIndex++
 		}
 	}
 

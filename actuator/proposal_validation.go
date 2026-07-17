@@ -33,7 +33,7 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 	if forks.ProposalParamKey(id) == "" {
 		return fmt.Errorf("bad chain parameter id %d", id)
 	}
-	if err := validateProposalForkGate(ctx, id); err != nil {
+	if err := validateProposalForkGate(ctx, id, value); err != nil {
 		return err
 	}
 	dp := ctx.DynProps
@@ -43,7 +43,17 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 		return validateProposalRange(id, value, proposalMaintenanceIntervalMinMillis, proposalMaintenanceIntervalMaxMillis)
 	case 1, 2, 3, 4, 5, 6, 7, 8, 17, 19, 31, 73:
 		return validateProposalRange(id, value, 0, proposalLongValue)
-	case 9, 14, 15, 16, 20, 21, 40, 41, 44, 51, 53, 60, 63, 65, 66, 69, 71, 76:
+	case 9, 14, 15, 16, 20, 21, 40, 41, 51, 53, 60, 63, 65, 66, 69, 71, 76:
+		return validateProposalOne(id, value)
+	case 44:
+		// Mainnet retired ALLOW_MARKET_TRANSACTION after VERSION_4_8_1 and
+		// only ever accepted the activation value 1. Nile deliberately kept
+		// value 1 valid and later added value 0 so the market contracts could
+		// be disabled by governance. The fork gate above makes value 0 legal
+		// only after Nile's historical VERSION_4_8_1 (wire version 33).
+		if ctx.isNile() {
+			return validateProposalZeroOrOne(id, value)
+		}
 		return validateProposalOne(id, value)
 	case 10:
 		if dp.RemoveThePowerOfTheGr() == -1 {
@@ -239,6 +249,22 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 			return fmt.Errorf("allow_harden_exchange_calculation has already been set to %d", value)
 		}
 		return nil
+	case 1000:
+		if err := validateProposalZeroOrOne(id, value); err != nil {
+			return err
+		}
+		if dp.AllowFnDsa512() == (value == 1) {
+			return fmt.Errorf("allow_fn_dsa_512 has already been set to %d", value)
+		}
+		return nil
+	case 1001:
+		if err := validateProposalZeroOrOne(id, value); err != nil {
+			return err
+		}
+		if dp.AllowMlDsa44() == (value == 1) {
+			return fmt.Errorf("allow_ml_dsa_44 has already been set to %d", value)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -279,10 +305,11 @@ var proposalRequiredVersion = map[int64]int32{
 	87: 31,
 	83: 32, 88: 32, 89: 32,
 	92: 34, 94: 34,
-	95: 35, 96: 35, 97: 35, 98: 35,
+	95: 36, 96: 36, 97: 36, 98: 36,
+	1000: 37, 1001: 37,
 }
 
-func validateProposalForkGate(ctx *Context, id int64) error {
+func validateProposalForkGate(ctx *Context, id, value int64) error {
 	switch id {
 	case 17:
 		if !proposalPassVersion(ctx, 5) || proposalPassVersion(ctx, 6) {
@@ -290,6 +317,12 @@ func validateProposalForkGate(ctx *Context, id int64) error {
 		}
 		return nil
 	case 44:
+		if ctx.isNile() {
+			if !proposalPassVersion(ctx, 19) || (value == 0 && !proposalPassVersion(ctx, 34)) {
+				return fmt.Errorf("bad chain parameter id %d", id)
+			}
+			return nil
+		}
 		if !proposalPassVersion(ctx, 19) || proposalPassVersion(ctx, 34) {
 			return fmt.Errorf("bad chain parameter id %d", id)
 		}

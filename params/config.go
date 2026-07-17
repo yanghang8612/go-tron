@@ -6,10 +6,14 @@ type ChainConfig struct {
 	ChainID     int64
 	P2PVersion  int32
 	GenesisHash common.Hash
-	P2PPort     int
-	HTTPPort    int
-	GRPCPort    int
-	JSONRPCPort int
+	// BlockVersion is written by witnesses into BlockHeader.raw.version.
+	// Zero selects params.BlockVersion. It is chain-configurable because Nile
+	// may advertise testnet-only software versions that mainnet must not claim.
+	BlockVersion int32
+	P2PPort      int
+	HTTPPort     int
+	GRPCPort     int
+	JSONRPCPort  int
 	// Java-tron config key: enery.limit.block.num.
 	// A nil pointer means the java-tron default.
 	BlockNumForEnergyLimit *int64
@@ -75,6 +79,13 @@ func (c *ChainConfig) EnergyLimitForkBlockNum() int64 {
 	return DefaultBlockNumForEnergyLimit
 }
 
+func (c *ChainConfig) EffectiveBlockVersion() int32 {
+	if c != nil && c.BlockVersion != 0 {
+		return c.BlockVersion
+	}
+	return BlockVersion
+}
+
 // EffectiveHistoryMode returns the resolved retention mode: blank /
 // unrecognised values normalise to HistoryModeFull so the pruner is always
 // conservative by default. Archive/snap operators must opt in explicitly.
@@ -112,6 +123,7 @@ func (c *ChainConfig) EffectiveStateCommitmentMode() string {
 
 var MainnetChainConfig = &ChainConfig{
 	ChainID:                1,
+	BlockVersion:           BlockVersion,
 	P2PVersion:             11111,
 	P2PPort:                18888,
 	HTTPPort:               8090,
@@ -121,7 +133,11 @@ var MainnetChainConfig = &ChainConfig{
 }
 
 var NileChainConfig = &ChainConfig{
-	ChainID:                3448148188,
+	ChainID: 3448148188,
+	// Nile's PQ1 build advertises VERSION_4_8_2_PQ1 while mainnet remains on
+	// VERSION_4_8_2. Keep this chain-specific: version 37 and its PQ proposals
+	// are Nile-only until java-tron deploys them elsewhere.
+	BlockVersion:           37,
 	GenesisHash:            NileGenesisHash,
 	P2PVersion:             201910292,
 	P2PPort:                18888,

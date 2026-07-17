@@ -3,6 +3,7 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -10,6 +11,8 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+var ErrInvalidTransactionMerkleRoot = errors.New("block transaction merkle root mismatch")
 
 // BlockID combines a block hash with its number. The first 8 bytes of the hash
 // are overwritten with the big-endian block number.
@@ -96,6 +99,35 @@ func (b *Block) AccountStateRoot() common.Hash {
 		return common.Hash{}
 	}
 	return common.BytesToHash(b.pb.BlockHeader.RawData.AccountStateRoot)
+}
+
+func (b *Block) TransactionMerkleRoot() common.Hash {
+	if b.pb.BlockHeader == nil || b.pb.BlockHeader.RawData == nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(b.pb.BlockHeader.RawData.TxTrieRoot)
+}
+
+// ValidateTransactionMerkleRoot mirrors java-tron's
+// BlockCapsule.validateMerkleRoot. Normal blocks must carry exactly 32 bytes,
+// including the all-zero root for an empty transaction list.
+func (b *Block) ValidateTransactionMerkleRoot() error {
+	if b.pb.BlockHeader == nil || b.pb.BlockHeader.RawData == nil {
+		return fmt.Errorf("%w: missing block header", ErrInvalidTransactionMerkleRoot)
+	}
+	encoded := b.pb.BlockHeader.RawData.TxTrieRoot
+	if len(encoded) != common.HashLength {
+		return fmt.Errorf("%w for block %d: root length %d, want %d", ErrInvalidTransactionMerkleRoot, b.Number(), len(encoded), common.HashLength)
+	}
+	actual, err := TransactionMerkleRoot(b.pb.Transactions)
+	if err != nil {
+		return fmt.Errorf("%w for block %d: %v", ErrInvalidTransactionMerkleRoot, b.Number(), err)
+	}
+	expected := common.BytesToHash(encoded)
+	if actual != expected {
+		return fmt.Errorf("%w for block %d: expected %x, actual %x", ErrInvalidTransactionMerkleRoot, b.Number(), expected, actual)
+	}
+	return nil
 }
 
 func (b *Block) Version() int32 {

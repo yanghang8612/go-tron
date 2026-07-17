@@ -76,10 +76,19 @@ func TestRecoverBandwidthPartialWindow(t *testing.T) {
 	}
 }
 
-func TestRecoverUsageHardenedAvoidsOverflow(t *testing.T) {
-	got := recoverUsageWithHarden(math.MaxInt64, 0, int64(params.WindowSizeSlots/2), true)
-	if got <= 0 {
-		t.Fatalf("hardened recovered usage should stay positive, got %d", got)
+func TestRecoverUsageHardenedDetectsOutOfRange(t *testing.T) {
+	defer func() {
+		if _, ok := tcommon.ArithmeticOverflowFromPanic(recover()); !ok {
+			t.Fatal("hardened recovery must panic with ArithmeticOverflowError")
+		}
+	}()
+	recoverUsageWithHarden(math.MaxInt64/10, 9_990, 9_995, true)
+}
+
+func TestRecoverUsageHardenedAcceptsIntermediateOverflowWhenResultFits(t *testing.T) {
+	got := recoverUsageWithHarden(math.MaxInt64/100, 9_990, 9_995, true)
+	if got < 0 {
+		t.Fatalf("hardened recovered usage must remain non-negative, got %d", got)
 	}
 }
 

@@ -96,6 +96,29 @@ func TestInsertBlock_RejectsWrongSigner(t *testing.T) {
 	}
 }
 
+func TestInsertBlock_RejectsTransactionMerkleRootMismatch(t *testing.T) {
+	bc, key, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := BuildBlock(bc, txpool.New(), bc.ActiveWitnesses()[0], int64(params.BlockProducedInterval))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := result.Block
+	block.Proto().BlockHeader.RawData.TxTrieRoot[0] = 1
+	block.ResetHash()
+	if err := SignBlock(block, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.InsertBlock(block); !errors.Is(err, types.ErrInvalidTransactionMerkleRoot) {
+		t.Fatalf("expected transaction merkle root rejection, got %v", err)
+	}
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("chain head advanced after bad merkle root: %d", got)
+	}
+}
+
 // TestInsertBlock_RejectsUnscheduledWitness covers the ErrInvalidWitness
 // branch: a self-consistent block (signer == block.WitnessAddress) from an
 // address that simply isn't in the active witness set / isn't the witness

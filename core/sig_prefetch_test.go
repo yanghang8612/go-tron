@@ -81,7 +81,7 @@ func benchPrewarm(b *testing.B, minTxs int) {
 				pbTxs[j] = &corepb.Transaction{RawData: rawPB, Signature: [][]byte{rt.sig}}
 			}
 			out[blk] = types.NewBlockFromPB(&corepb.Block{
-				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(blk + 1)}},
+				BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(blk + 1)}},
 				Transactions: pbTxs,
 			})
 		}
@@ -409,14 +409,16 @@ func TestPrewarm_IdenticalReject_BadHeaderSig(t *testing.T) {
 		ts := int64(h) * int64(params.BlockProducedInterval)
 		if h == badHeight {
 			parent := bc.CurrentBlock()
-			blk := types.NewBlockFromPB(&corepb.Block{
+			pb := &corepb.Block{
 				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
 					Number:         int64(h),
 					Timestamp:      ts,
 					ParentHash:     parent.Hash().Bytes(),
 					WitnessAddress: witnessAddr.Bytes(),
 				}},
-			})
+			}
+			setTestBlockTransactionMerkleRoot(t, pb)
+			blk := types.NewBlockFromPB(pb)
 			if err := SignBlock(blk, wrongKey); err != nil { // wrong header signer
 				t.Fatalf("sign bad-header block: %v", err)
 			}
@@ -488,7 +490,7 @@ func produceBatchWithBadTx(t *testing.T, genesis *params.Genesis, witnessKey *ec
 		if h == badHeight {
 			// Hand-build the bad block on the producer's current head.
 			parent := bc.CurrentBlock()
-			blk := types.NewBlockFromPB(&corepb.Block{
+			pb := &corepb.Block{
 				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
 					Number:         int64(h),
 					Timestamp:      ts,
@@ -496,7 +498,9 @@ func produceBatchWithBadTx(t *testing.T, genesis *params.Genesis, witnessKey *ec
 					WitnessAddress: witnessAddr.Bytes(),
 				}},
 				Transactions: []*corepb.Transaction{badTx.Proto()},
-			})
+			}
+			setTestBlockTransactionMerkleRoot(t, pb)
+			blk := types.NewBlockFromPB(pb)
 			if err := SignBlock(blk, witnessKey); err != nil {
 				t.Fatalf("sign bad block: %v", err)
 			}
@@ -526,4 +530,13 @@ func produceBatchWithBadTx(t *testing.T, genesis *params.Genesis, witnessKey *ec
 		out = append(out, b)
 	}
 	return out
+}
+
+func setTestBlockTransactionMerkleRoot(t *testing.T, block *corepb.Block) {
+	t.Helper()
+	root, err := types.TransactionMerkleRoot(block.Transactions)
+	if err != nil {
+		t.Fatalf("transaction merkle root: %v", err)
+	}
+	block.BlockHeader.RawData.TxTrieRoot = root.Bytes()
 }

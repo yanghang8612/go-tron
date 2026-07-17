@@ -826,6 +826,17 @@ func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index
 	} else {
 		result["to"] = nil
 	}
+	if len(tx.GetPqAuthSig()) != 0 {
+		pqSigs := make([]map[string]string, 0, len(tx.GetPqAuthSig()))
+		for _, auth := range tx.GetPqAuthSig() {
+			pqSigs = append(pqSigs, map[string]string{
+				"scheme":    auth.GetScheme().String(),
+				"publicKey": hexBytes(auth.GetPublicKey()),
+				"signature": hexBytes(auth.GetSignature()),
+			})
+		}
+		result["pqAuthSigList"] = pqSigs
+	}
 	return result
 }
 
@@ -886,6 +897,7 @@ func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.Transac
 			"topics":           topics,
 			"data":             hexBytes(l.Data),
 			"blockNumber":      hexUint64(block.Number()),
+			"blockTimestamp":   hexUint64(uint64(block.Timestamp() / 1000)),
 			"transactionHash":  hexHash(hash),
 			"transactionIndex": hexUint64(uint64(index)),
 			"blockHash":        hexHash(block.Hash()),

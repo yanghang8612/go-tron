@@ -5,8 +5,10 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // Tests covering the proposal-side fixes from
@@ -244,6 +246,55 @@ func TestProcessProposals_M3_MarketTransactionAddsBits52_53(t *testing.T) {
 	}
 	if bit := (afterOps[53/8] >> (53 % 8)) & 1; bit != 1 {
 		t.Fatalf("bit 53 should be set after #44 v=1, got %08b at byte 6", afterOps[6])
+	}
+}
+
+func TestProcessProposals_NileMarketDisableAfterV481(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.Set("allow_market_transaction", 1)
+
+	stats := make([]byte, 27)
+	for i := range stats {
+		stats[i] = 1
+	}
+	statedb.WriteForkStats(33, stats)
+	fc := forks.NewForkControllerFromState(statedb)
+
+	p := approvedProposal(0, map[int64]int64{44: 0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 1_769_139_600_000, fc, nil, params.NileGenesisHash); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	if got := dp.AllowMarketTransaction(); got {
+		t.Fatal("Nile proposal #20188 must disable market transactions")
+	}
+	afterOps := dp.ActiveDefaultOperations()
+	for _, id := range []int{52, 53} {
+		if bit := (afterOps[id/8] >> (id % 8)) & 1; bit != 1 {
+			t.Fatalf("permission bit %d should be set by Nile market handler", id)
+		}
+	}
+}
+
+func TestProcessProposals_NileHistoricalMarketActivationBeforeV481(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.Set("allow_market_transaction", 0)
+
+	p := approvedProposal(0, map[int64]int64{44: 1})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	fc := forks.NewForkControllerFromState(statedb) // v33 deliberately absent
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 1_603_866_000_000, fc, nil, params.NileGenesisHash); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !dp.AllowMarketTransaction() {
+		t.Fatal("historical Nile proposal #5023 must still activate market transactions")
 	}
 }
 
