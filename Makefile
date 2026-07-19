@@ -1,4 +1,4 @@
-.PHONY: gtron gtron-pure gtron-replay all test test-sapling lint proto clean fixtures fixtures-list \
+.PHONY: gtron gtron-pure gtron-replay db-compare all test test-sapling lint proto clean fixtures fixtures-list \
         conformance-replay conformance-replay-exit-gate txsign system-test-flows \
         system-test-cross system-test-cross-flows zksnark-deps gtron-sapling
 
@@ -20,6 +20,10 @@ gtron-pure:
 gtron-replay:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/gtron-replay ./cmd/gtron-replay
 	@echo "Done building gtron-replay."
+
+db-compare:
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/db-compare ./cmd/db-compare
+	@echo "Done building db-compare."
 
 all: gtron
 

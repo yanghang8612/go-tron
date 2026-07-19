@@ -119,6 +119,14 @@ type SyncService struct {
 	chain   *core.BlockChain
 	handler *TronHandler
 
+	// stopAtHeight is an operator-supplied audit boundary. When configured,
+	// the downloader never requests or imports a block above the boundary and
+	// engages the same sticky pause gate once the boundary is committed. The
+	// two atomics allow the setting to be installed before Start (the normal
+	// CLI path) or while a sync is active without adding another lock order.
+	stopAtHeight     atomic.Uint64
+	stopAtConfigured atomic.Bool
+
 	drainMu    sync.Mutex
 	drainCond  *sync.Cond
 	draining   bool
@@ -268,6 +276,7 @@ func (ss *SyncService) onApplyStats(_ *types.Block, s core.ApplyStats) {
 // Start launches the isolation watchdog goroutine.
 func (ss *SyncService) Start() {
 	ss.stopping.Store(false)
+	ss.pauseIfStopHeightReached()
 	if ss.watchdog != nil {
 		ss.watchdog.Start()
 	}
@@ -347,6 +356,38 @@ func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, 
 	return ss.pause.Status()
 }
 
+// ErrSyncStopHeightReached is recorded in PausedStatus when an operator
+// configured audit boundary has been reached. It is intentionally distinct
+// from an InsertBlock error so status consumers can tell a planned pause from
+// a consensus/execution failure with errors.Is.
+var ErrSyncStopHeightReached = errors.New("configured sync stop height reached")
+
+// SetStopAtHeight configures an inclusive sync boundary. Block height is
+// imported, blocks above height are never requested, and sync then remains
+// paused until process restart. Reusing the sticky pause gate also prevents
+// broadcast blocks from advancing the chain while an operator inspects it.
+func (ss *SyncService) SetStopAtHeight(height uint64) {
+	ss.stopAtHeight.Store(height)
+	ss.stopAtConfigured.Store(true)
+	ss.pauseIfStopHeightReached()
+}
+
+func (ss *SyncService) configuredStopHeight() (uint64, bool) {
+	if !ss.stopAtConfigured.Load() {
+		return 0, false
+	}
+	return ss.stopAtHeight.Load(), true
+}
+
+func (ss *SyncService) pauseIfStopHeightReached() bool {
+	height, configured := ss.configuredStopHeight()
+	if !configured || ss.chain.CurrentBlock().Number() < height {
+		return false
+	}
+	ss.pauseAtStopHeight(height)
+	return true
+}
+
 // BuildChainSummary returns the exponentially-spaced summary of our
 // chain used in SYNC_BLOCK_CHAIN messages. Slice 1 of the SyncService
 // refactor moved the implementation to net/sync/downloader; the wrapper
@@ -368,6 +409,9 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 		return
 	}
 	if ss.stopping.Load() {
+		return
+	}
+	if ss.pauseIfStopHeightReached() {
 		return
 	}
 	if ss.pause.Paused() {
@@ -688,8 +732,12 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}
 	ps.chainRequested = false
 	headNum := ss.chain.CurrentBlock().Number()
+	stopHeight, stopConfigured := ss.configuredStopHeight()
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
+		if stopConfigured && num > stopHeight {
+			continue
+		}
 		hash := tcommon.BytesToHash(bid.Hash)
 		if num <= headNum {
 			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
@@ -744,6 +792,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			target := uint64(last.Number)
 			if inv.RemainNum > 0 {
 				target += uint64(inv.RemainNum)
+			}
+			if stopConfigured && target > stopHeight {
+				target = stopHeight
 			}
 			if target > ss.targetHeadNum {
 				ss.targetHeadNum = target
@@ -1253,6 +1304,23 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.recordImportedBatch(batch, applied, insertElapsed)
+		if stopHeight, configured := ss.configuredStopHeight(); configured && batch.buffered[applied-1].num >= stopHeight {
+			// A deep InsertSession publishes CurrentBlock only when Finish drains
+			// its commit worker. Settle it before latching the audit pause so the
+			// database head is guaranteed to be exactly the requested height.
+			if sess != nil {
+				if ferr := sess.Finish(); ferr != nil {
+					ss.pauseSync(lastPeer, stopHeight, ferr)
+					paused = true
+					sess = nil
+					break
+				}
+				sess = nil
+			}
+			ss.pauseAtStopHeight(stopHeight)
+			paused = true
+			break
+		}
 	}
 	// Settle the session on any loop-exit path (not-syncing / paused / error
 	// break). The empty-batch path already finished it above (sess == nil there).
@@ -1288,6 +1356,9 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 	next++
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
+		if stopHeight, configured := ss.configuredStopHeight(); configured && next > stopHeight {
+			break
+		}
 		buffered, ok := ss.blockBuffer[next]
 		if !ok {
 			break
@@ -1430,6 +1501,17 @@ func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
+}
+
+func (ss *SyncService) pauseAtStopHeight(height uint64) {
+	err := fmt.Errorf("%w: %d", ErrSyncStopHeightReached, height)
+	ss.pause.Enter(height, err)
+	ss.mu.Lock()
+	ss.doReset()
+	ss.mu.Unlock()
+	syncLog.Info("Sync stopped at configured height",
+		"height", height,
+		"hint", "stop the node before opening its database with db-compare; remove --sync.stop-at to resume")
 }
 
 func (ss *SyncService) estimatedRemainLocked() int64 {

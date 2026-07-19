@@ -217,6 +217,10 @@ var (
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
 	}
+	syncStopAtFlag = &cli.Uint64Flag{
+		Name:  "sync.stop-at",
+		Usage: "Pause block sync after importing this height (inclusive), for database parity audits",
+	}
 )
 
 var app = &cli.App{
@@ -263,6 +267,7 @@ var app = &cli.App{
 		freezerMarginFlag,
 		freezerBatchFlag,
 		syncRestartFromFlag,
+		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
@@ -505,6 +510,15 @@ func gtron(ctx *cli.Context) error {
 	broadcaster := tnet.NewBroadcastService(nil)
 	handler := tnet.NewTronHandler(bc, pool, broadcaster)
 	syncService := tnet.NewSyncService(bc, handler)
+	if ctx.IsSet("sync.stop-at") {
+		stopHeight := ctx.Uint64("sync.stop-at")
+		if bc.CurrentBlock().Number() > stopHeight {
+			closeStores()
+			return fmt.Errorf("--sync.stop-at %d is below current head %d", stopHeight, bc.CurrentBlock().Number())
+		}
+		syncService.SetStopAtHeight(stopHeight)
+		log.Info("Sync stop height configured", "height", stopHeight)
+	}
 	handler.SetSyncService(syncService)
 
 	nodeID, err := node.LoadOrCreateNodeID(cfg.DataDir)

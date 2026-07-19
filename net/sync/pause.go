@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// PauseGate is the sticky-pause flag. Set on any InsertBlock failure
-// during sync; once set, all sync entry points (StartSync, watchdog
+// PauseGate is the sticky-pause flag. Set on any InsertBlock failure or an
+// operator-configured audit boundary during sync; once set, all sync entry points (StartSync, watchdog
 // checkIsolation, tryFindSyncPeer, drainBufferedBlocks, onPeerFetchReady)
 // short-circuit until process restart. Peers are NOT disconnected —
 // gtron is more likely the culprit than a peer (re-impl racing toward

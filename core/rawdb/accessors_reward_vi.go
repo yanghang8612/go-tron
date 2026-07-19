@@ -48,3 +48,15 @@ func ReadRewardVi(db ethdb.KeyValueReader, cycle int64, addr []byte) *big.Int {
 func DeleteRewardVi(db ethdb.KeyValueWriter, cycle int64, addr []byte) error {
 	return db.Delete(rewardViKey(cycle, addr))
 }
+
+// RewardViIsDoneStateKey exposes the logical key used by the rooted
+// SystemReward domain. It is primarily useful to migration/audit tooling that
+// must compare java-tron's dedicated reward-vi store with the rooted layout.
+func RewardViIsDoneStateKey() []byte {
+	return rewardViIsDoneKey()
+}
+
+// RewardViStateKey returns the rooted logical key for one cached VI row.
+func RewardViStateKey(cycle int64, addr []byte) []byte {
+	return rewardViKey(cycle, addr)
+}
