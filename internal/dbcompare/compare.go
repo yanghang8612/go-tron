@@ -26,6 +26,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -363,7 +364,7 @@ func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report
 	if err := c.compareBlock(gtron, java); err != nil {
 		return nil, err
 	}
-	if err := c.compareProperties(statedb, dp, java.Properties); err != nil {
+	if err := c.compareProperties(gtron, statedb, dp, java.Properties); err != nil {
 		return nil, err
 	}
 	if err := c.compareAccounts(gtron, statedb, java.Account); err != nil {
@@ -522,7 +523,7 @@ func (c *comparer) compareBlock(gtron ethdb.KeyValueStore, java *JavaStores) err
 	return nil
 }
 
-func (c *comparer) compareProperties(sdb *state.StateDB, dp *state.DynamicProperties, java ethdb.KeyValueStore) error {
+func (c *comparer) compareProperties(gtron ethdb.KeyValueStore, sdb *state.StateDB, dp *state.DynamicProperties, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "properties", Scope: "state", Present: true}
 	defer c.trackStore(&r)()
 	javaKeys := make(map[string][]byte)
@@ -533,7 +534,7 @@ func (c *comparer) compareProperties(sdb *state.StateDB, dp *state.DynamicProper
 	for it.Next() {
 		progress.Add(1)
 		name := normalizePropertyKey(it.Key())
-		value := append([]byte(nil), it.Value()...)
+		value := normalizeJavaPropertyValue(name, it.Value())
 		javaKeys[name] = value
 		var want []byte
 		switch {
@@ -594,21 +595,25 @@ func (c *comparer) compareProperties(sdb *state.StateDB, dp *state.DynamicProper
 	if err := it.Error(); err != nil {
 		return err
 	}
-	for _, name := range dp.Keys() {
+	// Reverse-check only values that are actually persisted. DynamicProperties
+	// contains a full defaults table, but a default that was never written is
+	// not a gtron-only state row.
+	gtronKeys := make(map[string]struct{})
+	if err := sdb.IterateAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, nil,
+		func(key, _ []byte) (bool, error) {
+			gtronKeys[string(key)] = struct{}{}
+			return true, nil
+		}); err != nil {
+		return err
+	}
+	rawdb.IterateDynamicProperties(gtron, func(name string, _ []byte) {
+		gtronKeys[name] = struct{}{}
+	})
+	for name := range gtronKeys {
 		if _, ok := javaKeys[name]; !ok {
 			r.MissingJava++
-			c.addDiff("properties", name, "missing_java", "known gtron property has no normalized java key")
+			c.addDiff("properties", name, "missing_java", "persisted gtron property has no normalized java key")
 		}
-	}
-	for _, name := range dp.StringKeys() {
-		if _, ok := javaKeys[name]; !ok {
-			r.MissingJava++
-			c.addDiff("properties", name, "missing_java", "known gtron string property has no normalized java key")
-		}
-	}
-	if _, ok := javaKeys["latest_block_header_hash"]; !ok {
-		r.MissingJava++
-		c.addDiff("properties", "latest_block_header_hash", "missing_java", "head hash property missing")
 	}
 	return nil
 }
@@ -677,6 +682,12 @@ func normalizeAccountForStoreComparison(account *corepb.Account) *corepb.Account
 	cloned.Asset = nil
 	cloned.AssetV2 = nil
 	cloned.AssetOptimized = false
+	// Java protobuf serialization may preserve an explicitly-present empty
+	// AccountResource while Go protobuf decoding represents it as nil (and vice
+	// versa). The two carry identical logical account state.
+	if cloned.AccountResource != nil && proto.Equal(cloned.AccountResource, &corepb.Account_AccountResource{}) {
+		cloned.AccountResource = nil
+	}
 	return cloned
 }
 
@@ -792,9 +803,25 @@ func compareContractJob(gtron ethdb.KeyValueStore, job contractComparisonJob) co
 		result.detail = err.Error()
 		return result
 	}
-	// java-tron ContractStore strips ABI into the dedicated AbiStore. ABI is
-	// compared independently, so its physical placement must not make every
-	// contract metadata row look different.
+	codeHash, accountOK, err := state.ReadCommittedAccountCodeHash(gtron, addr)
+	if err != nil {
+		result.kind = contractInvalidGtron
+		result.detail = err.Error()
+		return result
+	}
+	if !accountOK {
+		result.kind = contractInvalidGtron
+		result.detail = "contract account envelope not found"
+		return result
+	}
+	// java-tron ContractStore keeps code_hash in SmartContract. go-tron stores
+	// the same logical value in StateAccountV2, so project it into the decoded
+	// gtron metadata before comparing. ABI is compared independently.
+	if codeHash == (tcommon.Hash{}) {
+		got.CodeHash = nil
+	} else {
+		got.CodeHash = codeHash.Bytes()
+	}
 	want.Abi = nil
 	got.Abi = nil
 	if proto.Equal(want, got) {
@@ -951,10 +978,31 @@ func (c *comparer) compareCode(sdb *state.StateDB, java ethdb.KeyValueStore) err
 
 func normalizePropertyKey(key []byte) string {
 	name := strings.ToLower(strings.TrimSpace(string(key)))
-	if name == "total_create_witness_fee" {
+	switch name {
+	case "total_create_witness_fee":
 		return "total_create_witness_cost"
+	case "allow_tvm_solidity_059":
+		return "allow_tvm_solidity059"
 	}
 	return name
+}
+
+func normalizeJavaPropertyValue(name string, value []byte) []byte {
+	out := append([]byte(nil), value...)
+	if name != "block_filled_slots" {
+		return out
+	}
+	for i, b := range out {
+		switch b {
+		case '0':
+			out[i] = 0
+		case '1':
+			out[i] = 1
+		default:
+			return append([]byte(nil), value...)
+		}
+	}
+	return out
 }
 
 func (c *comparer) addProtoDiff(store, key string, java, gtron proto.Message) {

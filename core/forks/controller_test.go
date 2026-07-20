@@ -203,6 +203,66 @@ func TestForkController_Update_RebuildsOnWitnessCountChange(t *testing.T) {
 	}
 }
 
+func TestForkController_UpdateJavaTouchesCurrentAndExistingFutureOnly(t *testing.T) {
+	store := newCountingForkStore()
+	fc := NewForkControllerFromStore(store)
+	future := make([]byte, 27)
+	future[3] = VoteUpgrade
+	store.WriteForkStats(36, future)
+	store.writes = 0
+
+	latest, advanced := fc.UpdateJava(35, 3, 27, 0, blockTimeAfterFork(35), maintenanceInterval)
+	if advanced || latest != 0 {
+		t.Fatalf("latest=%d advanced=%t, want 0 false", latest, advanced)
+	}
+	if got := fc.Stats(35); len(got) != 27 || got[3] != VoteUpgrade {
+		t.Fatalf("current stats = %v", got)
+	}
+	if got := fc.Stats(36); got[3] != VoteDowngrade {
+		t.Fatalf("future slot was not downgraded: %v", got)
+	}
+	if got := fc.Stats(34); got != nil {
+		t.Fatalf("lower version was materialized before current passed: %v", got)
+	}
+}
+
+func TestForkController_UpdateJavaAdvancesVersionOnBlockAfterQuorum(t *testing.T) {
+	store := newCountingForkStore()
+	fc := NewForkControllerFromStore(store)
+	stats := make([]byte, 27)
+	for i := 0; i < 19; i++ { // v35 threshold is ceil(70% * 27)
+		stats[i] = VoteUpgrade
+	}
+	store.WriteForkStats(35, stats)
+
+	latest, advanced := fc.UpdateJava(35, 19, 27, 0, blockTimeAfterFork(35), maintenanceInterval)
+	if !advanced || latest != 35 {
+		t.Fatalf("latest=%d advanced=%t, want 35 true", latest, advanced)
+	}
+	lower := fc.Stats(34)
+	if len(lower) != 27 {
+		t.Fatalf("lower stats len=%d, want 27", len(lower))
+	}
+	for i, vote := range lower {
+		if vote != VoteUpgrade {
+			t.Fatalf("lower slot %d=%d, want upgrade", i, vote)
+		}
+	}
+	// The activation block does not add its own slot; java returns immediately.
+	if got := fc.Stats(35); got[19] != VoteDowngrade {
+		t.Fatalf("activation block unexpectedly recorded current slot: %v", got)
+	}
+}
+
+func TestForkController_UpdateJavaSkipsAtOrBelowLatestVersion(t *testing.T) {
+	store := newCountingForkStore()
+	fc := NewForkControllerFromStore(store)
+	latest, advanced := fc.UpdateJava(35, 0, 27, 35, blockTimeAfterFork(35), maintenanceInterval)
+	if advanced || latest != 35 || store.writes != 0 {
+		t.Fatalf("latest=%d advanced=%t writes=%d", latest, advanced, store.writes)
+	}
+}
+
 type countingForkStore struct {
 	data       map[int32][]byte
 	reads      int

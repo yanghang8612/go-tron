@@ -20,3 +20,19 @@ func ReadCommittedContractMetadataBytes(db ethdb.KeyValueReader, addr tcommon.Ad
 	}
 	return rawdb.ReadStateKVLatest(db, addr, generation, kvdomains.ContractMetadata, contractMetaKVKey)
 }
+
+// ReadCommittedAccountCodeHash reads the code-hash edge stored in the flat
+// account envelope without hydrating a StateDB. Contract metadata comparison
+// uses this because java-tron keeps code_hash in SmartContract while go-tron
+// keeps it in StateAccountV2 and stores bytecode by hash.
+func ReadCommittedAccountCodeHash(db ethdb.KeyValueReader, addr tcommon.Address) (tcommon.Hash, bool, error) {
+	raw, ok, err := rawdb.ReadStateAccountLatest(db, addr)
+	if err != nil || !ok {
+		return tcommon.Hash{}, ok, err
+	}
+	envelope, err := DecodeStateAccountV2(raw)
+	if err != nil {
+		return tcommon.Hash{}, true, err
+	}
+	return envelope.CodeHash, true, nil
+}

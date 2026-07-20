@@ -42,7 +42,11 @@ checking gtron-only rows. Pass `--quiet` to suppress these progress logs.
 The paths may point directly to `gtron/chaindata` and `database` instead. Exit
 status is 0 for no mismatch, 1 for state differences, and 2 for an operational
 error (including either head not exactly matching `--height`). `--max-diffs`
-caps retained details without changing mismatch counts.
+caps retained details without changing mismatch counts. When `--json` is
+redirected to a regular file, the file is refreshed during the run;
+`--live-max-diffs` (default 1000) caps only those intermediate snapshots so a
+large final diagnostic set is not re-marshaled every five seconds. The final
+JSON still retains up to `--max-diffs` details.
 
 The comparer enumerates every LevelDB directory in the java-tron input before
 it compares data. A directory must be classified as a supported state store,
@@ -78,12 +82,15 @@ The `contract` adapter compares serialized metadata bytes first. Exact matches
 avoid unmarshalling both `SmartContract` messages; rows whose encoding differs
 still fall back to protobuf semantic comparison. Inline ABI is excluded from
 that fallback because java-tron moves it to the independently compared `abi`
-store. Equivalent protobuf encodings and ABI physical placement are therefore
-not reported as contract mismatches. Contract rows are validated by a
-bounded parallel worker pool. `--workers=0` selects up to eight workers from
-`GOMAXPROCS`; pass `--workers=N` to select an explicit value up to 64. Java
-LevelDB iteration remains sequential, while copied batches perform concurrent
-read-only gtron Pebble lookups and are merged back in original key order.
+store. Likewise, java-tron's inline `SmartContract.code_hash` is compared with
+go-tron's `StateAccountV2.CodeHash`; bytecode itself remains independently
+checked in `code`. Equivalent logical state is therefore not reported merely
+because the two clients place ABI or code-hash data differently. Contract rows
+are validated by a bounded parallel worker pool. `--workers=0` selects up to
+eight workers from `GOMAXPROCS`; pass `--workers=N` to select an explicit value
+up to 64. Java LevelDB iteration remains sequential, while copied batches
+perform concurrent read-only gtron Pebble lookups and are merged back in
+original key order.
 
 `storage-row` is compared in both directions. The tool builds a temporary
 Pebble index under the OS temporary directory so a Nile contract-storage dump

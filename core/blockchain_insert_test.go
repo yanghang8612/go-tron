@@ -458,7 +458,9 @@ func TestBlockChain_InsertBlockUpdatesForkStats(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i, witness := range []tcommon.Address{w1, w2} {
+	// Java records the two quorum votes first, then advances VERSION_NUMBER and
+	// fills lower versions on the following block.
+	for i, witness := range []tcommon.Address{w1, w2, w1} {
 		parent := bc.CurrentBlock()
 		block := types.NewBlockFromPB(&corepb.Block{
 			BlockHeader: &corepb.BlockHeader{

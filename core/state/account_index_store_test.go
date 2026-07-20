@@ -43,6 +43,17 @@ func TestAccountNameIndexRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBlackholeAddressUsesGenesisNameIndex(t *testing.T) {
+	sdb := newTestStateDB(t)
+	nileBlackhole := testAddr(0x42)
+	if err := sdb.WriteAccountNameIndex([]byte("Blackhole"), nileBlackhole); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.BlackholeAddress(); got != nileBlackhole {
+		t.Fatalf("blackhole address = %s, want %s", got.Hex(), nileBlackhole.Hex())
+	}
+}
+
 // TestAccountIdIndexCaseInsensitive ports the java-parity case-insensitivity
 // contract from the old flat accessor: ids are lower-cased at the store
 // boundary, so any-case lookups resolve the same entry.

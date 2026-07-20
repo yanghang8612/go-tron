@@ -5,6 +5,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // Account name/ID uniqueness indexes are rooted into the reserved system
@@ -60,6 +61,18 @@ func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 		return nil
 	}
 	return raw
+}
+
+// BlackholeAddress resolves the chain-specific genesis Blackhole account.
+// Nile and mainnet use different addresses; the rooted genesis name index is
+// the same source already used by TVM execution. The mainnet constant remains
+// a compatibility fallback for unit tests and legacy databases without the
+// index row.
+func (s *StateDB) BlackholeAddress() tcommon.Address {
+	if raw := s.ReadAccountNameIndex([]byte("Blackhole")); len(raw) == tcommon.AddressLength {
+		return tcommon.BytesToAddress(raw)
+	}
+	return params.BlackholeAddress
 }
 
 // HasAccountNameIndex reports whether accountName is registered. Mirrors

@@ -16,8 +16,9 @@ import (
 // rooted SystemForkVote domain; the rawdb-backed constructor remains for tests
 // and compatibility readers that do not have a StateDB handle.
 //
-// Callers: producer path feeds it via Update(blockVersion, slot, n); reader
-// paths query via Pass. IsActive composes Pass with a DP soft-flag check —
+// The block pipeline feeds it via UpdateJava; Update remains a low-level
+// bitmap helper used by focused tests. Reader paths query via Pass. IsActive
+// composes Pass with a DP soft-flag check —
 // see IsActive below.
 //
 // Not thread-safe for concurrent Update — the block-processing pipeline is
@@ -135,6 +136,78 @@ func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
 	}
 }
 
+// UpdateJava applies java-tron's ForkController.update state machine and
+// returns the VERSION_NUMBER value the caller must persist. In particular,
+// java updates only the block's current version bitmap; lower versions are
+// filled only after the current version already passed on a previous block,
+// and higher versions are downgraded only when their bitmap already exists.
+//
+// latestBlockTime is the current block timestamp (java calls update after
+// updateDynamicProperties). latestVersion is DynamicProperties.VERSION_NUMBER.
+func (fc *ForkController) UpdateJava(blockVersion int32, slot, witnessCount int, latestVersion int32, latestBlockTime, maintenanceIntervalMs int64) (int32, bool) {
+	if blockVersion < KnownVersions[0].Value || latestVersion >= blockVersion {
+		return latestVersion, false
+	}
+	if slot < 0 || slot >= witnessCount {
+		return latestVersion, false
+	}
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	// downgrade(version, slot): do not materialize a missing future bitmap.
+	for _, vp := range KnownVersions {
+		if vp.Value <= blockVersion || fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
+			continue
+		}
+		stats := fc.store.ReadForkStats(vp.Value)
+		if stats == nil || slot >= len(stats) || stats[slot] == VoteDowngrade {
+			continue
+		}
+		stats = append([]byte(nil), stats...)
+		stats[slot] = VoteDowngrade
+		fc.store.WriteForkStats(vp.Value, stats)
+	}
+
+	stats := fc.store.ReadForkStats(blockVersion)
+	if len(stats) != witnessCount {
+		stats = make([]byte, witnessCount)
+	} else {
+		stats = append([]byte(nil), stats...)
+	}
+	// Java evaluates pass(version) before recording this block's vote. The
+	// block after quorum is therefore the one that advances VERSION_NUMBER.
+	if fc.passLocked(blockVersion, latestBlockTime, maintenanceIntervalMs) {
+		for _, vp := range KnownVersions {
+			if vp.Value >= blockVersion || fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
+				continue
+			}
+			lower := fc.store.ReadForkStats(vp.Value)
+			if len(lower) == 0 {
+				lower = make([]byte, len(stats))
+			} else {
+				lower = append([]byte(nil), lower...)
+			}
+			changed := false
+			for i := range lower {
+				if lower[i] != VoteUpgrade {
+					lower[i] = VoteUpgrade
+					changed = true
+				}
+			}
+			if changed {
+				fc.store.WriteForkStats(vp.Value, lower)
+			}
+		}
+		return blockVersion, true
+	}
+
+	if stats[slot] != VoteUpgrade {
+		stats[slot] = VoteUpgrade
+		fc.store.WriteForkStats(blockVersion, stats)
+	}
+	return latestVersion, false
+}
+
 // Pass reports whether `version` is activated given `latestBlockTime` (ms).
 // For versions > VERSION_4_0, both (a) latestBlockTime >= HardForkTime
 // ceil-aligned to the maintenance interval and (b) >= ceil(rate% * length)
@@ -189,9 +262,9 @@ func (fc *ForkController) Stats(version int32) []byte {
 	return fc.store.ReadForkStats(version)
 }
 
-// Reset clears the bitmap for every known version that has not yet
-// activated. Called at maintenance-period boundaries to rebuild vote
-// tallies against the new active witness set.
+// Reset clears each existing bitmap that has not yet activated. Called at
+// maintenance-period boundaries to rebuild vote tallies against the new active
+// witness set. Missing versions stay missing, matching java-tron.
 //
 // Unlike java-tron's downgrade(), this does NOT try to preserve slot
 // votes across witness-set churn — the next round of Updates will
@@ -200,6 +273,9 @@ func (fc *ForkController) Reset(latestBlockTime, maintenanceIntervalMs int64, wi
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	for _, vp := range KnownVersions {
+		if fc.store.ReadForkStats(vp.Value) == nil {
+			continue
+		}
 		if fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
 			continue
 		}

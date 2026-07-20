@@ -62,6 +62,10 @@ func DefaultNileGenesis() *Genesis {
 			// 0.1 ZEN. Existing Nile DBs kept the old value; live historical
 			// ShieldedTransfer tx infos report shielded_transaction_fee=10000000.
 			"shielded_transaction_fee": 10000000,
+			// Nile's deployed genesis also used the legacy 10 ZEN create-account
+			// shielded fee; java-tron's later missing-store default does not
+			// retroactively change existing Nile databases.
+			"shielded_transaction_create_account_fee": 10000000,
 		},
 	}
 }

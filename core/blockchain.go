@@ -1296,7 +1296,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
 	bc.updateSolidifiedBlock(statedb, block.WitnessAddress(), int64(block.Number()), dynProps)
-	bc.updateFork(statedb, block)
+	bc.updateFork(statedb, block, dynProps)
 	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("stage tapos ref: %w", err)
 	}
@@ -2240,7 +2240,7 @@ func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
 	}
 }
 
-func (bc *BlockChain) updateFork(statedb *state.StateDB, block *types.Block) {
+func (bc *BlockChain) updateFork(statedb *state.StateDB, block *types.Block, dynProps *state.DynamicProperties) {
 	active := bc.ActiveWitnesses()
 	slot := -1
 	for i, witness := range active {
@@ -2252,7 +2252,14 @@ func (bc *BlockChain) updateFork(statedb *state.StateDB, block *types.Block) {
 	if slot < 0 {
 		return
 	}
-	bc.forkControllerForState(statedb).Update(block.Version(), slot, len(active))
+	latestVersion := int32(dynProps.VersionNumber())
+	updatedVersion, advanced := bc.forkControllerForState(statedb).UpdateJava(
+		block.Version(), slot, len(active), latestVersion,
+		dynProps.LatestBlockHeaderTimestamp(), dynProps.MaintenanceTimeInterval(),
+	)
+	if advanced {
+		dynProps.SetVersionNumber(int64(updatedVersion))
+	}
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic

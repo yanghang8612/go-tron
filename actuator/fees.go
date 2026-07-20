@@ -5,7 +5,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -25,7 +24,7 @@ func burnFee(ctx *Context, owner common.Address, fee int64) error {
 	if forks.IsActive(forks.AllowBlackholeOptimization, ctx.BlockNumber, ctx.DynProps) {
 		ctx.DynProps.AddBurnTrx(fee)
 	} else {
-		ctx.State.AddBalance(params.BlackholeAddress, fee)
+		ctx.State.AddBalance(ctx.State.BlackholeAddress(), fee)
 	}
 	return nil
 }

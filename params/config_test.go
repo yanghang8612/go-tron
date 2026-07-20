@@ -109,4 +109,11 @@ func TestNileGenesis_ShieldedTransactionFeeBootstrap(t *testing.T) {
 	if got != 10000000 {
 		t.Fatalf("DefaultNileGenesis shielded_transaction_fee: got %d, want 10000000", got)
 	}
+	createFee, ok := g.DynamicProperties["shielded_transaction_create_account_fee"]
+	if !ok {
+		t.Fatal("DefaultNileGenesis.DynamicProperties missing shielded_transaction_create_account_fee")
+	}
+	if createFee != 10000000 {
+		t.Fatalf("DefaultNileGenesis shielded_transaction_create_account_fee: got %d, want 10000000", createFee)
+	}
 }

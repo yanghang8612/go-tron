@@ -56,3 +56,16 @@ func TestLiveJSONOutputReplacesSnapshot(t *testing.T) {
 		t.Fatalf("final report = %+v", got)
 	}
 }
+
+func TestLiveReportSnapshotCapsDifferencesWithoutMutatingFinalReport(t *testing.T) {
+	report := &dbcompare.Report{
+		Differences: []dbcompare.Difference{{Key: "1"}, {Key: "2"}, {Key: "3"}},
+	}
+	snapshot := liveReportSnapshot(report, 2)
+	if len(snapshot.Differences) != 2 || snapshot.Differences[1].Key != "2" {
+		t.Fatalf("snapshot differences = %+v", snapshot.Differences)
+	}
+	if len(report.Differences) != 3 {
+		t.Fatalf("source report was mutated: %+v", report.Differences)
+	}
+}

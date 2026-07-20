@@ -19,12 +19,17 @@ func main() {
 		javaPath  = flag.String("java", "", "java-tron output-directory or database path (node must be stopped)")
 		height    = flag.Uint64("height", 0, "exact height expected at both database heads")
 		maxDiffs  = flag.Int("max-diffs", 100, "maximum detailed differences retained in output")
+		liveDiffs = flag.Int("live-max-diffs", 1000, "maximum detailed differences written to each in-progress JSON snapshot")
 		jsonOut   = flag.Bool("json", false, "write the full report as JSON")
 		oneWay    = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
 		workers   = flag.Int("workers", 0, "parallel contract comparison workers (0=auto, maximum 64)")
 		quiet     = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
+	if *maxDiffs < 0 || *liveDiffs < 0 {
+		fmt.Fprintln(os.Stderr, "--max-diffs and --live-max-diffs must be non-negative")
+		os.Exit(2)
+	}
 	if *gtronPath == "" || *javaPath == "" {
 		fmt.Fprintln(os.Stderr, "--gtron and --java are required")
 		flag.Usage()
@@ -78,7 +83,7 @@ func main() {
 		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay, Workers: *workers,
 		Progress: func(event dbcompare.ProgressEvent) {
 			if liveJSON != nil && event.Snapshot != nil && progressWriteErr == nil {
-				progressWriteErr = liveJSON.Write(event.Snapshot)
+				progressWriteErr = liveJSON.Write(liveReportSnapshot(event.Snapshot, *liveDiffs))
 			}
 			if *quiet {
 				return
@@ -192,6 +197,22 @@ func (o *liveJSONOutput) Write(value any) error {
 		return io.ErrShortWrite
 	}
 	return nil
+}
+
+// liveReportSnapshot bounds the expensive, repeatedly-marshaled diagnostics in
+// an in-progress file. Store mismatch counters remain authoritative and the
+// final write still contains up to --max-diffs details.
+func liveReportSnapshot(report *dbcompare.Report, maxDifferences int) *dbcompare.Report {
+	if report == nil {
+		return nil
+	}
+	snapshot := *report
+	limit := len(report.Differences)
+	if limit > maxDifferences {
+		limit = maxDifferences
+	}
+	snapshot.Differences = append([]dbcompare.Difference(nil), report.Differences[:limit]...)
+	return &snapshot
 }
 
 func fatal(action string, err error) {

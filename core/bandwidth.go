@@ -8,7 +8,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto/pq"
-	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -243,7 +242,7 @@ func routeBandwidthFee(statedb *state.StateDB, dynProps *state.DynamicProperties
 		dynProps.AddBurnTrx(fee)
 		return
 	}
-	statedb.AddBalance(params.BlackholeAddress, fee)
+	statedb.AddBalance(statedb.BlackholeAddress(), fee)
 }
 
 // contractCreatesNewAccount mirrors java-tron's
@@ -420,7 +419,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	if dynProps.AllowBlackHoleOptimization() {
 		dynProps.AddBurnTrx(fee)
 	} else {
-		statedb.AddBalance(params.BlackholeAddress, fee)
+		statedb.AddBalance(statedb.BlackholeAddress(), fee)
 	}
 	dynProps.AddTotalCreateAccountCost(fee)
 	return &BandwidthResult{NetFee: fee}, nil

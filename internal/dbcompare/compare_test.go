@@ -23,11 +23,23 @@ func TestNormalizePropertyKey(t *testing.T) {
 		"LATEST_SOLIDIFIED_BLOCK_NUM": "latest_solidified_block_num",
 		" ALLOW_SAME_TOKEN_NAME":      "allow_same_token_name",
 		"TOTAL_CREATE_WITNESS_FEE":    "total_create_witness_cost",
+		"ALLOW_TVM_SOLIDITY_059":      "allow_tvm_solidity059",
 	}
 	for input, want := range tests {
 		if got := normalizePropertyKey([]byte(input)); got != want {
 			t.Errorf("normalizePropertyKey(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestNormalizeJavaBlockFilledSlots(t *testing.T) {
+	got := normalizeJavaPropertyValue("block_filled_slots", []byte("1010"))
+	if !slices.Equal(got, []byte{1, 0, 1, 0}) {
+		t.Fatalf("normalized slots = %v", got)
+	}
+	invalid := []byte{'1', 2}
+	if got := normalizeJavaPropertyValue("block_filled_slots", invalid); !slices.Equal(got, invalid) {
+		t.Fatalf("invalid slots changed: %v", got)
 	}
 }
 
@@ -83,6 +95,15 @@ func TestNormalizeAccountIgnoresSplitAssetStorageFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeAccountIgnoresEmptyAccountResourcePresence(t *testing.T) {
+	without := &corepb.Account{Address: address(1)}
+	withEmpty := proto.Clone(without).(*corepb.Account)
+	withEmpty.AccountResource = &corepb.Account_AccountResource{}
+	if !proto.Equal(normalizeAccountForStoreComparison(without), normalizeAccountForStoreComparison(withEmpty)) {
+		t.Fatal("empty account_resource presence was not normalized")
+	}
+}
+
 func TestUnknownJavaPropertyIsMismatchNotSkip(t *testing.T) {
 	gtron := rawdb.NewMemoryDatabase()
 	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
@@ -95,7 +116,7 @@ func TestUnknownJavaPropertyIsMismatchNotSkip(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &comparer{opts: Options{MaxDifferences: 10}, report: new(Report)}
-	if err := c.compareProperties(sdb, state.NewDynamicProperties(), java); err != nil {
+	if err := c.compareProperties(gtron, sdb, state.NewDynamicProperties(), java); err != nil {
 		t.Fatal(err)
 	}
 	result := c.report.Stores[0]
@@ -182,6 +203,38 @@ func TestCompareContractsIgnoresInlineABIPlacement(t *testing.T) {
 	sdb.SetContract(addr, contract)
 	javaContract := proto.Clone(contract).(*contractpb.SmartContract)
 	javaContract.Abi = nil // java ContractStore moves ABI to the separate store.
+	writeJavaProto(t, java, addr.Bytes(), javaContract)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 2}, report: new(Report)}
+	if err := c.compareContracts(gtron, java); err != nil {
+		t.Fatal(err)
+	}
+	got := c.report.Stores[0]
+	if got.Compared != 1 || got.Equal != 1 || got.Mismatches() != 0 {
+		t.Fatalf("contract result = %+v", got)
+	}
+}
+
+func TestCompareContractsProjectsCodeHashFromAccountEnvelope(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New([32]byte{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := rawdb.NewMemoryDatabase()
+	addr := tcommon.BytesToAddress(address(1))
+	contract := &contractpb.SmartContract{
+		OriginAddress: addr.Bytes(), ContractAddress: addr.Bytes(), Name: "code-hash-placement",
+	}
+	sdb.SetContract(addr, contract)
+	code := []byte{0x60, 0x00, 0x60, 0x01}
+	sdb.SetCode(addr, code)
+	javaContract := proto.Clone(contract).(*contractpb.SmartContract)
+	javaContract.CodeHash = tcommon.Keccak256(code).Bytes()
 	writeJavaProto(t, java, addr.Bytes(), javaContract)
 	if _, err := sdb.Commit(); err != nil {
 		t.Fatal(err)

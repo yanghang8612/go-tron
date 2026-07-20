@@ -414,7 +414,7 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 			return nil, err
 		}
 	}
-	ctx.State.AddTRC10Balance(params.BlackholeAddress, zenID, fee)
+	ctx.State.AddTRC10Balance(ctx.State.BlackholeAddress(), zenID, fee)
 
 	if !feeOnlyReplay {
 		// Record spend nullifiers to prevent double-spend
