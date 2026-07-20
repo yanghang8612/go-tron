@@ -65,11 +65,13 @@ func main() {
 			case "skip":
 				logger.Printf("[%s] skip detail=%s", event.Store, event.Detail)
 			case "progress":
-				logger.Printf("[%s] progress rows=%d elapsed=%s stage=%s", event.Store, event.Rows, elapsed, event.Detail)
+				r := event.Result
+				logger.Printf("[%s] progress rows=%d elapsed=%s stage=%s compared=%d equal=%d different=%d missing_gtron=%d missing_java=%d invalid=%d skipped=%d mismatches=%d",
+					event.Store, event.Rows, elapsed, event.Detail, r.Compared, r.Equal, r.Different, r.MissingGtron, r.MissingJava, r.Invalid, r.Skipped, r.Mismatches())
 			case "done":
 				r := event.Result
-				logger.Printf("[%s] done elapsed=%s compared=%d equal=%d different=%d missing_gtron=%d missing_java=%d invalid=%d skipped=%d",
-					event.Store, elapsed, r.Compared, r.Equal, r.Different, r.MissingGtron, r.MissingJava, r.Invalid, r.Skipped)
+				logger.Printf("[%s] done elapsed=%s compared=%d equal=%d different=%d missing_gtron=%d missing_java=%d invalid=%d skipped=%d mismatches=%d",
+					event.Store, elapsed, r.Compared, r.Equal, r.Different, r.MissingGtron, r.MissingJava, r.Invalid, r.Skipped, r.Mismatches())
 			case "info":
 				logger.Printf("%s", event.Detail)
 			}

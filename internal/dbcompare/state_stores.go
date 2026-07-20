@@ -29,7 +29,7 @@ func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore
 	if java == nil {
 		return nil
 	}
-	progress := c.newProgressCounter(name, "comparing java rows")
+	progress := c.newProgressCounter(&r, "comparing java rows")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
@@ -63,7 +63,7 @@ func (c *comparer) compareProtoStore(name, scope string, java ethdb.KeyValueStor
 	if java == nil {
 		return nil
 	}
-	progress := c.newProgressCounter(name, "comparing java rows")
+	progress := c.newProgressCounter(&r, "comparing java rows")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
@@ -399,7 +399,7 @@ func (c *comparer) compareNullifiers(sdb *state.StateDB, java ethdb.KeyValueStor
 	if java == nil {
 		return nil
 	}
-	progress := c.newProgressCounter(r.Name, "comparing java nullifiers")
+	progress := c.newProgressCounter(&r, "comparing java nullifiers")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
@@ -520,7 +520,7 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	var lastOwner tcommon.Address
 	var lastGeneration uint64
 	haveOwner := false
-	indexProgress := c.newProgressCounter(r.Name, "building gtron storage index")
+	indexProgress := c.newProgressCounter(&r, "building gtron storage index")
 	err = rawdb.IterateStateKVLatestDomainRows(gtron, kvdomains.ContractStorage, func(row rawdb.StateKVLatestRow) (bool, error) {
 		indexProgress.Add(1)
 		if !haveOwner || row.Owner != lastOwner {
@@ -558,7 +558,7 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	}
 
 	deletes := index.NewBatch()
-	javaProgress := c.newProgressCounter(r.Name, "comparing java storage rows")
+	javaProgress := c.newProgressCounter(&r, "comparing java storage rows")
 	it := java.NewIterator(nil, nil)
 	for it.Next() {
 		javaProgress.Add(1)
@@ -599,7 +599,7 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 		}
 	}
 	deletes.Close()
-	reverseProgress := c.newProgressCounter(r.Name, "checking gtron-only storage rows")
+	reverseProgress := c.newProgressCounter(&r, "checking gtron-only storage rows")
 	remaining := index.NewIterator(nil, nil)
 	defer remaining.Release()
 	for remaining.Next() {

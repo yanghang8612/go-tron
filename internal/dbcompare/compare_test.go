@@ -30,8 +30,10 @@ func TestNormalizePropertyKey(t *testing.T) {
 
 func TestCompareByteStoreReportsProgressLifecycle(t *testing.T) {
 	java := rawdb.NewMemoryDatabase()
-	if err := java.Put([]byte("key"), []byte("value")); err != nil {
-		t.Fatal(err)
+	for _, key := range []string{"key-1", "key-2"} {
+		if err := java.Put([]byte(key), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var events []ProgressEvent
 	c := &comparer{
@@ -56,7 +58,7 @@ func TestCompareByteStoreReportsProgressLifecycle(t *testing.T) {
 	if !slices.Equal(phases, []string{"start", "progress", "done"}) {
 		t.Fatalf("progress phases = %v, want start, progress, done", phases)
 	}
-	if events[1].Rows != 1 || events[2].Result.Equal != 1 {
+	if events[1].Rows != 1 || events[1].Result.Equal != 1 || events[2].Result.Equal != 2 {
 		t.Fatalf("progress events = %+v", events)
 	}
 }
