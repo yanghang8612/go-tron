@@ -792,6 +792,11 @@ func compareContractJob(gtron ethdb.KeyValueStore, job contractComparisonJob) co
 		result.detail = err.Error()
 		return result
 	}
+	// java-tron ContractStore strips ABI into the dedicated AbiStore. ABI is
+	// compared independently, so its physical placement must not make every
+	// contract metadata row look different.
+	want.Abi = nil
+	got.Abi = nil
 	if proto.Equal(want, got) {
 		result.kind = contractEqual
 		return result
@@ -953,17 +958,27 @@ func normalizePropertyKey(key []byte) string {
 }
 
 func (c *comparer) addProtoDiff(store, key string, java, gtron proto.Message) {
+	if c.differenceLimitReached() {
+		return
+	}
 	detail := cmp.Diff(java, gtron, protocmp.Transform())
 	c.addDiff(store, key, "different", truncate(detail, maxDetailLen))
 }
 
 func (c *comparer) addByteDiff(store, key string, java, gtron []byte) {
+	if c.differenceLimitReached() {
+		return
+	}
 	c.addDiff(store, key, "different", fmt.Sprintf("java(len=%d sha256=%x value=%s) gtron(len=%d sha256=%x value=%s)",
 		len(java), sha256.Sum256(java), shortHex(java), len(gtron), sha256.Sum256(gtron), shortHex(gtron)))
 }
 
+func (c *comparer) differenceLimitReached() bool {
+	return len(c.report.Differences) >= c.opts.MaxDifferences
+}
+
 func (c *comparer) addDiff(store, key, kind, detail string) {
-	if len(c.report.Differences) >= c.opts.MaxDifferences {
+	if c.differenceLimitReached() {
 		return
 	}
 	c.report.Differences = append(c.report.Differences, Difference{Store: store, Key: key, Kind: kind, Detail: detail})

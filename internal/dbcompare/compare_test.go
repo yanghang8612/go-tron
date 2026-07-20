@@ -164,6 +164,52 @@ func TestCompareContractsUsesSerializedEqualityFastPath(t *testing.T) {
 	}
 }
 
+func TestCompareContractsIgnoresInlineABIPlacement(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New([32]byte{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := rawdb.NewMemoryDatabase()
+	addr := tcommon.BytesToAddress(address(1))
+	contract := &contractpb.SmartContract{
+		OriginAddress:   addr.Bytes(),
+		ContractAddress: addr.Bytes(),
+		Name:            "abi-placement",
+		Abi:             &contractpb.SmartContract_ABI{Entrys: []*contractpb.SmartContract_ABI_Entry{{Name: "f"}}},
+	}
+	sdb.SetContract(addr, contract)
+	javaContract := proto.Clone(contract).(*contractpb.SmartContract)
+	javaContract.Abi = nil // java ContractStore moves ABI to the separate store.
+	writeJavaProto(t, java, addr.Bytes(), javaContract)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 2}, report: new(Report)}
+	if err := c.compareContracts(gtron, java); err != nil {
+		t.Fatal(err)
+	}
+	got := c.report.Stores[0]
+	if got.Compared != 1 || got.Equal != 1 || got.Mismatches() != 0 {
+		t.Fatalf("contract result = %+v", got)
+	}
+}
+
+func TestAddProtoDiffSkipsFormattingAfterLimit(t *testing.T) {
+	c := &comparer{
+		opts:   Options{MaxDifferences: 1},
+		report: &Report{Differences: []Difference{{Store: "existing"}}},
+	}
+	// Nil messages would panic inside cmp/protocmp transformation. Reaching
+	// this assertion proves the cap is checked before expensive formatting.
+	c.addProtoDiff("contract", "key", nil, nil)
+	if len(c.report.Differences) != 1 {
+		t.Fatalf("differences = %d, want 1", len(c.report.Differences))
+	}
+}
+
 func TestJavaHeadAcceptsJavaMixedCasePropertyKey(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	var value [8]byte

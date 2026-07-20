@@ -76,8 +76,10 @@ physical optimization because the moved balances are checked independently in
 
 The `contract` adapter compares serialized metadata bytes first. Exact matches
 avoid unmarshalling both `SmartContract` messages; rows whose encoding differs
-still fall back to protobuf semantic comparison, so equivalent protobuf
-encodings are not reported as mismatches. Contract rows are validated by a
+still fall back to protobuf semantic comparison. Inline ABI is excluded from
+that fallback because java-tron moves it to the independently compared `abi`
+store. Equivalent protobuf encodings and ABI physical placement are therefore
+not reported as contract mismatches. Contract rows are validated by a
 bounded parallel worker pool. `--workers=0` selects up to eight workers from
 `GOMAXPROCS`; pass `--workers=N` to select an explicit value up to 64. Java
 LevelDB iteration remains sequential, while copied batches perform concurrent
