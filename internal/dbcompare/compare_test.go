@@ -61,6 +61,10 @@ func TestCompareByteStoreReportsProgressLifecycle(t *testing.T) {
 	if events[1].Rows != 1 || events[1].Result.Equal != 1 || events[2].Result.Equal != 2 {
 		t.Fatalf("progress events = %+v", events)
 	}
+	if events[1].Snapshot == nil || events[1].Snapshot.Progress == nil ||
+		events[1].Snapshot.Progress.CurrentResult == nil || events[1].Snapshot.Progress.CurrentResult.Equal != 1 {
+		t.Fatalf("progress snapshot = %+v", events[1].Snapshot)
+	}
 }
 
 func TestNormalizeAccountIgnoresSplitAssetStorageFields(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -34,8 +35,25 @@ func main() {
 			logger.Printf(format, args...)
 		}
 	}
+	liveJSON, err := newLiveJSONOutput(os.Stdout, *jsonOut)
+	if err != nil {
+		fatal("prepare live JSON output", err)
+	}
+	writeInitialJSON := func(stage string) {
+		if liveJSON == nil {
+			return
+		}
+		snapshot := &dbcompare.Report{
+			Height: *height, Stores: []dbcompare.StoreResult{},
+			Progress: &dbcompare.ReportProgress{Phase: "opening", Stage: stage},
+		}
+		if err := liveJSON.Write(snapshot); err != nil {
+			fatal("write live JSON report", err)
+		}
+	}
 
 	gtronDir := dbcompare.ResolveGtronChainDataDir(*gtronPath)
+	writeInitialJSON("opening gtron database")
 	logf("opening gtron database path=%s", gtronDir)
 	gtron, err := rawdb.NewPebbleDB(gtronDir, 64, 64)
 	if err != nil {
@@ -44,6 +62,7 @@ func main() {
 	defer gtron.Close()
 	logf("opened gtron database")
 	javaDir := dbcompare.ResolveJavaDatabaseDir(*javaPath)
+	writeInitialJSON("opening java-tron stores")
 	logf("opening java-tron stores path=%s", javaDir)
 	java, err := dbcompare.OpenJavaStores(*javaPath)
 	if err != nil {
@@ -51,10 +70,15 @@ func main() {
 	}
 	defer java.Close()
 	logf("opened java-tron stores discovered=%d", len(java.Discovered()))
+	writeInitialJSON("starting comparison")
+	var progressWriteErr error
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
 		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay,
 		Progress: func(event dbcompare.ProgressEvent) {
+			if liveJSON != nil && event.Snapshot != nil && progressWriteErr == nil {
+				progressWriteErr = liveJSON.Write(event.Snapshot)
+			}
 			if *quiet {
 				return
 			}
@@ -80,13 +104,22 @@ func main() {
 	if err != nil {
 		fatal("compare databases", err)
 	}
+	if progressWriteErr != nil {
+		fatal("write live JSON report", progressWriteErr)
+	}
 	report.Sort()
 	logf("comparison complete stores=%d mismatches=%d state_coverage_complete=%t", len(report.Stores), report.Mismatches(), report.StateCoverageComplete)
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(report); err != nil {
-			fatal("encode report", err)
+		if liveJSON != nil {
+			if err := liveJSON.Write(report); err != nil {
+				fatal("write final JSON report", err)
+			}
+		} else {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(report); err != nil {
+				fatal("encode report", err)
+			}
 		}
 	} else {
 		fmt.Printf("height=%d gtron_head=%d java_head=%d state_coverage_complete=%t mismatches=%d\n",
@@ -115,6 +148,49 @@ func main() {
 	if report.Mismatches() != 0 {
 		os.Exit(1)
 	}
+}
+
+// liveJSONOutput periodically replaces a redirected regular file with the
+// latest complete JSON snapshot. Pipes and terminals keep the traditional
+// single final JSON document behavior.
+type liveJSONOutput struct {
+	file *os.File
+}
+
+func newLiveJSONOutput(file *os.File, enabled bool) (*liveJSONOutput, error) {
+	if !enabled {
+		return nil, nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	return &liveJSONOutput{file: file}, nil
+}
+
+func (o *liveJSONOutput) Write(value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := o.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := o.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	n, err := o.file.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func fatal(action string, err error) {

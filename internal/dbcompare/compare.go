@@ -36,15 +36,16 @@ const maxDetailLen = 4096
 const defaultProgressInterval = 5 * time.Second
 
 // ProgressEvent reports comparison lifecycle and long-running scan progress.
-// Callbacks are synchronous and must return quickly. CLI callers should write
-// them to stderr so JSON/stdout remains machine-readable.
+// Callbacks are synchronous and must return quickly. Snapshot is an immutable
+// point-in-time report suitable for refreshing a live JSON output file.
 type ProgressEvent struct {
-	Phase   string
-	Store   string
-	Rows    uint64
-	Elapsed time.Duration
-	Detail  string
-	Result  StoreResult
+	Phase    string
+	Store    string
+	Rows     uint64
+	Elapsed  time.Duration
+	Detail   string
+	Result   StoreResult
+	Snapshot *Report
 }
 
 // Options controls comparison scope and retained diagnostic output.
@@ -83,15 +84,28 @@ func (s StoreResult) Mismatches() uint64 {
 }
 
 type Report struct {
-	Height                 uint64        `json:"height"`
-	GtronHead              uint64        `json:"gtron_head"`
-	JavaHead               uint64        `json:"java_head"`
-	StateCoverageComplete  bool          `json:"state_coverage_complete"`
-	UnsupportedStateStores []string      `json:"unsupported_state_stores,omitempty"`
-	UnclassifiedStores     []string      `json:"unclassified_stores,omitempty"`
-	ExcludedStores         []string      `json:"excluded_non_state_stores,omitempty"`
-	Stores                 []StoreResult `json:"stores"`
-	Differences            []Difference  `json:"differences,omitempty"`
+	Height                 uint64          `json:"height"`
+	GtronHead              uint64          `json:"gtron_head"`
+	JavaHead               uint64          `json:"java_head"`
+	StateCoverageComplete  bool            `json:"state_coverage_complete"`
+	UnsupportedStateStores []string        `json:"unsupported_state_stores,omitempty"`
+	UnclassifiedStores     []string        `json:"unclassified_stores,omitempty"`
+	ExcludedStores         []string        `json:"excluded_non_state_stores,omitempty"`
+	Stores                 []StoreResult   `json:"stores"`
+	Differences            []Difference    `json:"differences,omitempty"`
+	Progress               *ReportProgress `json:"progress,omitempty"`
+}
+
+// ReportProgress describes the point-in-time state of an in-progress JSON
+// snapshot. It is omitted from the final report.
+type ReportProgress struct {
+	Phase         string       `json:"phase"`
+	Store         string       `json:"store,omitempty"`
+	Stage         string       `json:"stage,omitempty"`
+	Rows          uint64       `json:"rows"`
+	ElapsedMillis int64        `json:"elapsed_ms"`
+	CurrentResult *StoreResult `json:"current_result,omitempty"`
+	Mismatches    uint64       `json:"mismatches"`
 }
 
 func (r *Report) Mismatches() uint64 {
@@ -230,17 +244,41 @@ type progressCounter struct {
 
 func (c *comparer) emitProgress(event ProgressEvent) {
 	if c.opts.Progress != nil {
+		event.Snapshot = c.progressSnapshot(event)
 		c.opts.Progress(event)
 	}
 }
 
-func (c *comparer) beginStore(name string, present bool) time.Time {
+func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
+	snapshot := *c.report
+	snapshot.UnsupportedStateStores = append([]string(nil), c.report.UnsupportedStateStores...)
+	snapshot.UnclassifiedStores = append([]string(nil), c.report.UnclassifiedStores...)
+	snapshot.ExcludedStores = append([]string(nil), c.report.ExcludedStores...)
+	snapshot.Stores = append([]StoreResult(nil), c.report.Stores...)
+	snapshot.Differences = append([]Difference(nil), c.report.Differences...)
+	if event.Result.Name != "" && event.Phase != "done" {
+		snapshot.Stores = append(snapshot.Stores, event.Result)
+	}
+	snapshot.Progress = &ReportProgress{
+		Phase: event.Phase, Store: event.Store, Stage: event.Detail, Rows: event.Rows,
+		ElapsedMillis: event.Elapsed.Milliseconds(),
+	}
+	if event.Result.Name != "" {
+		current := event.Result
+		snapshot.Progress.CurrentResult = &current
+	}
+	snapshot.Progress.Mismatches = snapshot.Mismatches()
+	snapshot.Sort()
+	return &snapshot
+}
+
+func (c *comparer) beginStore(result StoreResult) time.Time {
 	started := time.Now()
-	if !present {
-		c.emitProgress(ProgressEvent{Phase: "skip", Store: name, Detail: "java store absent"})
+	if !result.Present {
+		c.emitProgress(ProgressEvent{Phase: "skip", Store: result.Name, Detail: "java store absent", Result: result})
 		return started
 	}
-	c.emitProgress(ProgressEvent{Phase: "start", Store: name})
+	c.emitProgress(ProgressEvent{Phase: "start", Store: result.Name, Result: result})
 	return started
 }
 
@@ -255,7 +293,7 @@ func (c *comparer) finishStore(result StoreResult, started time.Time) {
 }
 
 func (c *comparer) trackStore(result *StoreResult) func() {
-	started := c.beginStore(result.Name, result.Present)
+	started := c.beginStore(*result)
 	return func() {
 		c.report.Stores = append(c.report.Stores, *result)
 		c.finishStore(*result, started)
@@ -357,7 +395,7 @@ func (c *comparer) reportUnsupportedStateStores(java *JavaStores) error {
 		}
 		db := java.Store(spec.Name)
 		result := StoreResult{Name: spec.Name, Scope: spec.Scope, Present: db != nil}
-		started := c.beginStore(result.Name, result.Present)
+		started := c.beginStore(result)
 		if db != nil {
 			progress := c.newProgressCounter(&result, "counting unsupported java rows")
 			it := db.NewIterator(nil, nil)

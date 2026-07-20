@@ -24,10 +24,18 @@ build/bin/db-compare \
 ```
 
 Progress is enabled by default and is written to stderr, so `--json` stdout
-remains valid JSON when redirected. The command logs database opening, the
-height guard, every store's start/skip/completion summary, and a row count plus
-the current equal/different/missing/invalid/mismatch totals for long-running
-scans every five seconds. This includes each phase of
+remains valid JSON when redirected. When stdout is redirected to a regular
+file as in the example, that file is replaced with the latest complete report
+snapshot on every progress event instead of remaining empty until completion.
+The snapshot's `progress` object identifies the current store/stage, processed
+rows, elapsed time, current store result, and total mismatches. The final
+rewrite removes `progress` and leaves the normal final report schema. Pipes and
+terminals still receive only one final JSON document.
+
+The command logs database opening, the height guard, every store's
+start/skip/completion summary, and a row count plus the current
+equal/different/missing/invalid/mismatch totals for long-running scans every
+five seconds. This includes each phase of
 `storage-row`: building the temporary gtron index, comparing Java rows, and
 checking gtron-only rows. Pass `--quiet` to suppress these progress logs.
 
