@@ -74,6 +74,11 @@ not skipped. The account comparison normalizes java-tron's account-asset
 physical optimization because the moved balances are checked independently in
 `account-asset`.
 
+The `contract` adapter compares serialized metadata bytes first. Exact matches
+avoid unmarshalling both `SmartContract` messages; rows whose encoding differs
+still fall back to protobuf semantic comparison, so equivalent protobuf
+encodings are not reported as mismatches.
+
 `storage-row` is compared in both directions. The tool builds a temporary
 Pebble index under the OS temporary directory so a Nile contract-storage dump
 does not need to fit in memory; plan for temporary free disk roughly equal to

@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -127,6 +129,31 @@ func TestCompareAccountsDetectsValueAndReverseSetDifferences(t *testing.T) {
 	got := c.report.Stores[0]
 	if got.Compared != 2 || got.Equal != 1 || got.Different != 1 || got.MissingJava != 1 {
 		t.Fatalf("account result = %+v", got)
+	}
+}
+
+func TestCompareContractsUsesSerializedEqualityFastPath(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New([32]byte{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.BytesToAddress(address(9))
+	contract := &contractpb.SmartContract{
+		OriginAddress: addr.Bytes(), ContractAddress: addr.Bytes(), Name: "fast-path",
+	}
+	sdb.SetContract(addr, contract)
+	java := rawdb.NewMemoryDatabase()
+	writeJavaProto(t, java, addr.Bytes(), contract)
+
+	c := &comparer{opts: Options{MaxDifferences: 10}, report: new(Report)}
+	if err := c.compareContracts(sdb, java); err != nil {
+		t.Fatal(err)
+	}
+	got := c.report.Stores[0]
+	if got.Compared != 1 || got.Equal != 1 || got.Mismatches() != 0 {
+		t.Fatalf("contract result = %+v", got)
 	}
 }
 

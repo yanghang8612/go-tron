@@ -291,6 +291,30 @@ func TestStateDBContractMeta(t *testing.T) {
 	if got == nil || got.Name != "test" {
 		t.Fatal("contract meta mismatch")
 	}
+	raw, ok, err := sdb.GetContractMetadataBytes(addr)
+	if err != nil || !ok {
+		t.Fatalf("GetContractMetadataBytes = ok=%t err=%v", ok, err)
+	}
+	var decoded contractpb.SmartContract
+	if err := proto.Unmarshal(raw, &decoded); err != nil || !proto.Equal(&decoded, meta) {
+		t.Fatalf("GetContractMetadataBytes decoded = %v err=%v, want %v", &decoded, err, meta)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok, err = reloaded.GetContractMetadataBytes(addr)
+	if err != nil || !ok {
+		t.Fatalf("reloaded GetContractMetadataBytes = ok=%t err=%v", ok, err)
+	}
+	decoded.Reset()
+	if err := proto.Unmarshal(raw, &decoded); err != nil || !proto.Equal(&decoded, meta) {
+		t.Fatalf("reloaded GetContractMetadataBytes decoded = %v err=%v, want %v", &decoded, err, meta)
+	}
 }
 
 func TestStateDBContractRuntimeStateRoundTrip(t *testing.T) {

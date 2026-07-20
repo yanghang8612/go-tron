@@ -2412,6 +2412,27 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	return obj.contractMeta
 }
 
+// GetContractMetadataBytes returns serialized contract metadata without
+// unmarshalling committed data or populating the contract metadata cache.
+// Dirty in-memory metadata is marshalled so the result matches GetContract.
+func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, false, nil
+	}
+	if obj.contractMetaDirty {
+		if obj.contractMeta == nil {
+			return nil, false, nil
+		}
+		data, err := proto.Marshal(obj.contractMeta)
+		if err != nil {
+			return nil, false, err
+		}
+		return data, true, nil
+	}
+	return s.readAccountKVLatest(addr, obj.accountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
+}
+
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
 	obj := s.GetOrCreateAccount(addr)

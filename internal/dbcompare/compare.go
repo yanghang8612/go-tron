@@ -712,31 +712,54 @@ func (c *comparer) compareWitnesses(sdb *state.StateDB, java ethdb.KeyValueStore
 func (c *comparer) compareContracts(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "contract", Scope: "state", Present: true}
 	defer c.trackStore(&r)()
-	progress := c.newProgressCounter(&r, "comparing java contracts")
+	progress := c.newProgressCounter(&r, "comparing java contracts (raw-byte fast path)")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
 		progress.Add(1)
+		key := append([]byte(nil), it.Key()...)
+		if len(key) != tcommon.AddressLength {
+			r.Invalid++
+			c.addDiff("contract", printableKey(key), "invalid_java_key", fmt.Sprintf("contract address is %d bytes, want %d", len(key), tcommon.AddressLength))
+			continue
+		}
+		addr := tcommon.BytesToAddress(key)
+		gotRaw, ok, err := sdb.GetContractMetadataBytes(addr)
+		if err != nil {
+			r.Invalid++
+			c.addDiff("contract", hex.EncodeToString(key), "invalid_gtron", err.Error())
+			continue
+		}
+		if ok && bytes.Equal(it.Value(), gotRaw) {
+			r.Compared++
+			r.Equal++
+			continue
+		}
+
 		var want contractpb.SmartContract
 		if err := proto.Unmarshal(it.Value(), &want); err != nil {
 			r.Invalid++
-			c.addDiff("contract", printableKey(it.Key()), "invalid_java", err.Error())
+			c.addDiff("contract", printableKey(key), "invalid_java", err.Error())
 			continue
 		}
-		addr := tcommon.BytesToAddress(want.ContractAddress)
-		got := sdb.GetContract(addr)
-		if got == nil {
+		if !ok {
 			r.MissingGtron++
 			c.addDiff("contract", hex.EncodeToString(addr.Bytes()), "missing_gtron", "contract metadata not found")
 			continue
 		}
-		r.Compared++
-		if proto.Equal(&want, got) {
-			r.Equal++
-		} else {
-			r.Different++
-			c.addProtoDiff("contract", hex.EncodeToString(addr.Bytes()), &want, got)
+		var got contractpb.SmartContract
+		if err := proto.Unmarshal(gotRaw, &got); err != nil {
+			r.Invalid++
+			c.addDiff("contract", hex.EncodeToString(key), "invalid_gtron", err.Error())
+			continue
 		}
+		r.Compared++
+		if proto.Equal(&want, &got) {
+			r.Equal++
+			continue
+		}
+		r.Different++
+		c.addProtoDiff("contract", hex.EncodeToString(addr.Bytes()), &want, &got)
 	}
 	return it.Error()
 }
