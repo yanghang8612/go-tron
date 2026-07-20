@@ -25,13 +25,15 @@ type protoLookup func(key []byte, java proto.Message) (gtron proto.Message, pres
 
 func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore, lookup byteLookup) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
+	progress := c.newProgressCounter(name, "comparing java rows")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		key := append([]byte(nil), it.Key()...)
 		got, ok, err := lookup(key)
 		if err != nil {
@@ -57,13 +59,15 @@ func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore
 
 func (c *comparer) compareProtoStore(name, scope string, java ethdb.KeyValueStore, newMessage func() proto.Message, lookup protoLookup) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
+	progress := c.newProgressCounter(name, "comparing java rows")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		key := append([]byte(nil), it.Key()...)
 		want := newMessage()
 		if err := proto.Unmarshal(it.Value(), want); err != nil {
@@ -391,13 +395,15 @@ func decodeJavaMarketKey(key []byte, withPrice bool) ([]byte, []byte, [16]byte, 
 
 func (c *comparer) compareNullifiers(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "nullifier", Scope: "state", Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
+	progress := c.newProgressCounter(r.Name, "comparing java nullifiers")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		if !sdb.HasNullifier(it.Key()) {
 			r.MissingGtron++
 			c.addDiff("nullifier", printableKey(it.Key()), "missing_gtron", "spent nullifier not found")
@@ -495,7 +501,7 @@ func (c *comparer) compareRewardVI(sdb *state.StateDB, java ethdb.KeyValueStore)
 
 func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "storage-row", Scope: "state", Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
@@ -514,7 +520,9 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	var lastOwner tcommon.Address
 	var lastGeneration uint64
 	haveOwner := false
+	indexProgress := c.newProgressCounter(r.Name, "building gtron storage index")
 	err = rawdb.IterateStateKVLatestDomainRows(gtron, kvdomains.ContractStorage, func(row rawdb.StateKVLatestRow) (bool, error) {
+		indexProgress.Add(1)
 		if !haveOwner || row.Owner != lastOwner {
 			lastOwner, haveOwner = row.Owner, true
 			generation, ok, err := rawdb.ReadStateKVGeneration(gtron, row.Owner)
@@ -550,8 +558,10 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	}
 
 	deletes := index.NewBatch()
+	javaProgress := c.newProgressCounter(r.Name, "comparing java storage rows")
 	it := java.NewIterator(nil, nil)
 	for it.Next() {
+		javaProgress.Add(1)
 		key := append([]byte(nil), it.Key()...)
 		got, getErr := index.Get(key)
 		if getErr != nil {
@@ -589,9 +599,11 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 		}
 	}
 	deletes.Close()
+	reverseProgress := c.newProgressCounter(r.Name, "checking gtron-only storage rows")
 	remaining := index.NewIterator(nil, nil)
 	defer remaining.Release()
 	for remaining.Next() {
+		reverseProgress.Add(1)
 		r.MissingJava++
 		c.addDiff("storage-row", printableKey(remaining.Key()), "missing_java", "gtron current ContractStorage row has no java storage-row entry")
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -24,6 +25,39 @@ func TestNormalizePropertyKey(t *testing.T) {
 		if got := normalizePropertyKey([]byte(input)); got != want {
 			t.Errorf("normalizePropertyKey(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestCompareByteStoreReportsProgressLifecycle(t *testing.T) {
+	java := rawdb.NewMemoryDatabase()
+	if err := java.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	var events []ProgressEvent
+	c := &comparer{
+		opts: Options{
+			ProgressInterval: time.Nanosecond,
+			Progress: func(event ProgressEvent) {
+				events = append(events, event)
+			},
+		},
+		report: new(Report),
+	}
+	if err := c.compareByteStore("test-store", "state", java, func(key []byte) ([]byte, bool, error) {
+		return []byte("value"), true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	phases := make([]string, len(events))
+	for i, event := range events {
+		phases[i] = event.Phase
+	}
+	if !slices.Equal(phases, []string{"start", "progress", "done"}) {
+		t.Fatalf("progress phases = %v, want start, progress, done", phases)
+	}
+	if events[1].Rows != 1 || events[2].Result.Equal != 1 {
+		t.Fatalf("progress events = %+v", events)
 	}
 }
 

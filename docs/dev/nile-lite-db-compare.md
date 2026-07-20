@@ -23,6 +23,13 @@ build/bin/db-compare \
   --json > db-compare-12345678.json
 ```
 
+Progress is enabled by default and is written to stderr, so `--json` stdout
+remains valid JSON when redirected. The command logs database opening, the
+height guard, every store's start/skip/completion summary, and a row count for
+long-running scans every five seconds. This includes each phase of
+`storage-row`: building the temporary gtron index, comparing Java rows, and
+checking gtron-only rows. Pass `--quiet` to suppress these progress logs.
+
 The paths may point directly to `gtron/chaindata` and `database` instead. Exit
 status is 0 for no mismatch, 1 for state differences, and 2 for an operational
 error (including either head not exactly matching `--height`). `--max-diffs`

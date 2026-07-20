@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -32,11 +33,27 @@ import (
 
 const maxDetailLen = 4096
 
+const defaultProgressInterval = 5 * time.Second
+
+// ProgressEvent reports comparison lifecycle and long-running scan progress.
+// Callbacks are synchronous and must return quickly. CLI callers should write
+// them to stderr so JSON/stdout remains machine-readable.
+type ProgressEvent struct {
+	Phase   string
+	Store   string
+	Rows    uint64
+	Elapsed time.Duration
+	Detail  string
+	Result  StoreResult
+}
+
 // Options controls comparison scope and retained diagnostic output.
 type Options struct {
-	Height          uint64
-	MaxDifferences  int
-	ReverseAccounts bool
+	Height           uint64
+	MaxDifferences   int
+	ReverseAccounts  bool
+	Progress         func(ProgressEvent)
+	ProgressInterval time.Duration
 }
 
 // Difference is one retained mismatch. Counts in StoreResult are authoritative;
@@ -201,6 +218,73 @@ type comparer struct {
 	report *Report
 }
 
+type progressCounter struct {
+	c       *comparer
+	store   string
+	detail  string
+	started time.Time
+	last    time.Time
+	rows    uint64
+}
+
+func (c *comparer) emitProgress(event ProgressEvent) {
+	if c.opts.Progress != nil {
+		c.opts.Progress(event)
+	}
+}
+
+func (c *comparer) beginStore(name string, present bool) time.Time {
+	started := time.Now()
+	if !present {
+		c.emitProgress(ProgressEvent{Phase: "skip", Store: name, Detail: "java store absent"})
+		return started
+	}
+	c.emitProgress(ProgressEvent{Phase: "start", Store: name})
+	return started
+}
+
+func (c *comparer) finishStore(result StoreResult, started time.Time) {
+	if !result.Present {
+		return
+	}
+	rows := result.Compared + result.MissingGtron + result.Invalid + result.Skipped
+	c.emitProgress(ProgressEvent{
+		Phase: "done", Store: result.Name, Rows: rows, Elapsed: time.Since(started), Result: result,
+	})
+}
+
+func (c *comparer) trackStore(result *StoreResult) func() {
+	started := c.beginStore(result.Name, result.Present)
+	return func() {
+		c.report.Stores = append(c.report.Stores, *result)
+		c.finishStore(*result, started)
+	}
+}
+
+func (c *comparer) newProgressCounter(store, detail string) *progressCounter {
+	now := time.Now()
+	return &progressCounter{c: c, store: store, detail: detail, started: now, last: now}
+}
+
+func (p *progressCounter) Add(delta uint64) {
+	p.rows += delta
+	if p.c.opts.Progress == nil {
+		return
+	}
+	interval := p.c.opts.ProgressInterval
+	if interval <= 0 {
+		interval = defaultProgressInterval
+	}
+	now := time.Now()
+	if now.Sub(p.last) < interval {
+		return
+	}
+	p.last = now
+	p.c.emitProgress(ProgressEvent{
+		Phase: "progress", Store: p.store, Rows: p.rows, Elapsed: now.Sub(p.started), Detail: p.detail,
+	})
+}
+
 func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report, error) {
 	if opts.MaxDifferences <= 0 {
 		opts.MaxDifferences = 100
@@ -217,6 +301,9 @@ func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report
 		return nil, err
 	}
 	c.report.GtronHead, c.report.JavaHead = gtronHead, javaHead
+	c.emitProgress(ProgressEvent{
+		Phase: "info", Detail: fmt.Sprintf("height guard requested=%d gtron=%d java=%d", opts.Height, gtronHead, javaHead),
+	})
 	if gtronHead != opts.Height || javaHead != opts.Height {
 		return nil, fmt.Errorf("height guard failed: requested=%d gtron_head=%d java_head=%d", opts.Height, gtronHead, javaHead)
 	}
@@ -267,9 +354,12 @@ func (c *comparer) reportUnsupportedStateStores(java *JavaStores) error {
 		}
 		db := java.Store(spec.Name)
 		result := StoreResult{Name: spec.Name, Scope: spec.Scope, Present: db != nil}
+		started := c.beginStore(result.Name, result.Present)
 		if db != nil {
+			progress := c.newProgressCounter(result.Name, "counting unsupported java rows")
 			it := db.NewIterator(nil, nil)
 			for it.Next() {
+				progress.Add(1)
 				result.Skipped++
 			}
 			err := it.Error()
@@ -279,6 +369,7 @@ func (c *comparer) reportUnsupportedStateStores(java *JavaStores) error {
 			}
 		}
 		c.report.Stores = append(c.report.Stores, result)
+		c.finishStore(result, started)
 	}
 	return nil
 }
@@ -350,7 +441,7 @@ func javaHead(db ethdb.KeyValueStore) (uint64, error) {
 
 func (c *comparer) compareBlock(gtron ethdb.KeyValueStore, java *JavaStores) error {
 	r := StoreResult{Name: "block", Scope: "chain", Present: true}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	var num [8]byte
 	binary.BigEndian.PutUint64(num[:], c.opts.Height)
 	javaID, err := java.BlockIndex.Get(num[:])
@@ -389,12 +480,14 @@ func (c *comparer) compareBlock(gtron ethdb.KeyValueStore, java *JavaStores) err
 
 func (c *comparer) compareProperties(sdb *state.StateDB, dp *state.DynamicProperties, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "properties", Scope: "state", Present: true}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	javaKeys := make(map[string][]byte)
 	forkController := forks.NewForkControllerFromState(sdb)
+	progress := c.newProgressCounter(r.Name, "comparing java properties")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		name := normalizePropertyKey(it.Key())
 		value := append([]byte(nil), it.Value()...)
 		javaKeys[name] = value
@@ -478,10 +571,12 @@ func (c *comparer) compareProperties(sdb *state.StateDB, dp *state.DynamicProper
 
 func (c *comparer) compareAccounts(gtron ethdb.KeyValueStore, sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "account", Scope: "state", Present: true}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
+	progress := c.newProgressCounter(r.Name, "comparing java accounts")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		var want corepb.Account
 		if err := proto.Unmarshal(it.Value(), &want); err != nil {
 			r.Invalid++
@@ -511,7 +606,9 @@ func (c *comparer) compareAccounts(gtron ethdb.KeyValueStore, sdb *state.StateDB
 	if !c.opts.ReverseAccounts {
 		return nil
 	}
+	reverseProgress := c.newProgressCounter(r.Name, "checking gtron-only accounts")
 	return rawdb.IterateStateAccountLatest(gtron, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+		reverseProgress.Add(1)
 		if tcommon.IsSystemAccount(row.Owner) {
 			return true, nil
 		}
@@ -541,10 +638,12 @@ func normalizeAccountForStoreComparison(account *corepb.Account) *corepb.Account
 
 func (c *comparer) compareWitnesses(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "witness", Scope: "state", Present: true}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
+	progress := c.newProgressCounter(r.Name, "comparing java witnesses")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		var want corepb.Witness
 		if err := proto.Unmarshal(it.Value(), &want); err != nil {
 			r.Invalid++
@@ -571,10 +670,12 @@ func (c *comparer) compareWitnesses(sdb *state.StateDB, java ethdb.KeyValueStore
 
 func (c *comparer) compareContracts(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "contract", Scope: "state", Present: true}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
+	progress := c.newProgressCounter(r.Name, "comparing java contracts")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		var want contractpb.SmartContract
 		if err := proto.Unmarshal(it.Value(), &want); err != nil {
 			r.Invalid++
@@ -601,13 +702,15 @@ func (c *comparer) compareContracts(sdb *state.StateDB, java ethdb.KeyValueStore
 
 func (c *comparer) compareABIs(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "abi", Scope: "state", Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
+	progress := c.newProgressCounter(r.Name, "comparing java ABIs")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		var want contractpb.SmartContract_ABI
 		if err := proto.Unmarshal(it.Value(), &want); err != nil {
 			r.Invalid++
@@ -634,13 +737,15 @@ func (c *comparer) compareABIs(sdb *state.StateDB, java ethdb.KeyValueStore) err
 
 func (c *comparer) compareCode(sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "code", Scope: "state", Present: java != nil}
-	defer func() { c.report.Stores = append(c.report.Stores, r) }()
+	defer c.trackStore(&r)()
 	if java == nil {
 		return nil
 	}
+	progress := c.newProgressCounter(r.Name, "comparing java code rows")
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
 	for it.Next() {
+		progress.Add(1)
 		addr := tcommon.BytesToAddress(it.Key())
 		got := sdb.GetCode(addr)
 		r.Compared++

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/internal/dbcompare"
@@ -18,6 +20,7 @@ func main() {
 		maxDiffs  = flag.Int("max-diffs", 100, "maximum detailed differences retained in output")
 		jsonOut   = flag.Bool("json", false, "write the full report as JSON")
 		oneWay    = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
+		quiet     = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
 	if *gtronPath == "" || *javaPath == "" {
@@ -25,26 +28,58 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	logger := log.New(os.Stderr, "db-compare ", log.LstdFlags)
+	logf := func(format string, args ...any) {
+		if !*quiet {
+			logger.Printf(format, args...)
+		}
+	}
 
 	gtronDir := dbcompare.ResolveGtronChainDataDir(*gtronPath)
+	logf("opening gtron database path=%s", gtronDir)
 	gtron, err := rawdb.NewPebbleDB(gtronDir, 64, 64)
 	if err != nil {
 		fatal("open gtron database (stop gtron first)", err)
 	}
 	defer gtron.Close()
+	logf("opened gtron database")
+	javaDir := dbcompare.ResolveJavaDatabaseDir(*javaPath)
+	logf("opening java-tron stores path=%s", javaDir)
 	java, err := dbcompare.OpenJavaStores(*javaPath)
 	if err != nil {
 		fatal("open java-tron database (stop java-tron first)", err)
 	}
 	defer java.Close()
+	logf("opened java-tron stores discovered=%d", len(java.Discovered()))
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
 		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay,
+		Progress: func(event dbcompare.ProgressEvent) {
+			if *quiet {
+				return
+			}
+			elapsed := event.Elapsed.Round(time.Millisecond)
+			switch event.Phase {
+			case "start":
+				logger.Printf("[%s] start", event.Store)
+			case "skip":
+				logger.Printf("[%s] skip detail=%s", event.Store, event.Detail)
+			case "progress":
+				logger.Printf("[%s] progress rows=%d elapsed=%s stage=%s", event.Store, event.Rows, elapsed, event.Detail)
+			case "done":
+				r := event.Result
+				logger.Printf("[%s] done elapsed=%s compared=%d equal=%d different=%d missing_gtron=%d missing_java=%d invalid=%d skipped=%d",
+					event.Store, elapsed, r.Compared, r.Equal, r.Different, r.MissingGtron, r.MissingJava, r.Invalid, r.Skipped)
+			case "info":
+				logger.Printf("%s", event.Detail)
+			}
+		},
 	})
 	if err != nil {
 		fatal("compare databases", err)
 	}
 	report.Sort()
+	logf("comparison complete stores=%d mismatches=%d state_coverage_complete=%t", len(report.Stores), report.Mismatches(), report.StateCoverageComplete)
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
