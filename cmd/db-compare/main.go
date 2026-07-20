@@ -21,6 +21,7 @@ func main() {
 		maxDiffs  = flag.Int("max-diffs", 100, "maximum detailed differences retained in output")
 		jsonOut   = flag.Bool("json", false, "write the full report as JSON")
 		oneWay    = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
+		workers   = flag.Int("workers", 0, "parallel contract comparison workers (0=auto, maximum 64)")
 		quiet     = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
@@ -74,7 +75,7 @@ func main() {
 	var progressWriteErr error
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
-		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay,
+		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay, Workers: *workers,
 		Progress: func(event dbcompare.ProgressEvent) {
 			if liveJSON != nil && event.Snapshot != nil && progressWriteErr == nil {
 				progressWriteErr = liveJSON.Write(event.Snapshot)

@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -53,6 +55,7 @@ type Options struct {
 	Height           uint64
 	MaxDifferences   int
 	ReverseAccounts  bool
+	Workers          int
 	Progress         func(ProgressEvent)
 	ProgressInterval time.Duration
 }
@@ -369,7 +372,7 @@ func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report
 	if err := c.compareWitnesses(statedb, java.Witness); err != nil {
 		return nil, err
 	}
-	if err := c.compareContracts(statedb, java.Contract); err != nil {
+	if err := c.compareContracts(gtron, java.Contract); err != nil {
 		return nil, err
 	}
 	if err := c.compareABIs(statedb, java.ABI); err != nil {
@@ -709,58 +712,173 @@ func (c *comparer) compareWitnesses(sdb *state.StateDB, java ethdb.KeyValueStore
 	return it.Error()
 }
 
-func (c *comparer) compareContracts(sdb *state.StateDB, java ethdb.KeyValueStore) error {
+type contractComparisonKind uint8
+
+const (
+	contractEqual contractComparisonKind = iota
+	contractDifferent
+	contractMissingGtron
+	contractInvalidJavaKey
+	contractInvalidJava
+	contractInvalidGtron
+)
+
+type contractComparisonJob struct {
+	slot  int
+	key   []byte
+	value []byte
+}
+
+type contractComparisonResult struct {
+	slot   int
+	kind   contractComparisonKind
+	key    string
+	detail string
+	want   *contractpb.SmartContract
+	got    *contractpb.SmartContract
+}
+
+func (c *comparer) contractWorkerCount() int {
+	workers := c.opts.Workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+		if workers > 8 {
+			workers = 8
+		}
+	}
+	if workers < 1 {
+		return 1
+	}
+	if workers > 64 {
+		return 64
+	}
+	return workers
+}
+
+func compareContractJob(gtron ethdb.KeyValueStore, job contractComparisonJob) contractComparisonResult {
+	result := contractComparisonResult{slot: job.slot, key: hex.EncodeToString(job.key)}
+	if len(job.key) != tcommon.AddressLength {
+		result.kind = contractInvalidJavaKey
+		result.key = printableKey(job.key)
+		result.detail = fmt.Sprintf("contract address is %d bytes, want %d", len(job.key), tcommon.AddressLength)
+		return result
+	}
+	addr := tcommon.BytesToAddress(job.key)
+	gotRaw, ok, err := state.ReadCommittedContractMetadataBytes(gtron, addr)
+	if err != nil {
+		result.kind = contractInvalidGtron
+		result.detail = err.Error()
+		return result
+	}
+	if ok && bytes.Equal(job.value, gotRaw) {
+		result.kind = contractEqual
+		return result
+	}
+
+	want := new(contractpb.SmartContract)
+	if err := proto.Unmarshal(job.value, want); err != nil {
+		result.kind = contractInvalidJava
+		result.detail = err.Error()
+		return result
+	}
+	if !ok {
+		result.kind = contractMissingGtron
+		result.detail = "contract metadata not found"
+		return result
+	}
+	got := new(contractpb.SmartContract)
+	if err := proto.Unmarshal(gotRaw, got); err != nil {
+		result.kind = contractInvalidGtron
+		result.detail = err.Error()
+		return result
+	}
+	if proto.Equal(want, got) {
+		result.kind = contractEqual
+		return result
+	}
+	result.kind = contractDifferent
+	result.want, result.got = want, got
+	return result
+}
+
+func (c *comparer) applyContractResult(r *StoreResult, result contractComparisonResult) {
+	switch result.kind {
+	case contractEqual:
+		r.Compared++
+		r.Equal++
+	case contractDifferent:
+		r.Compared++
+		r.Different++
+		c.addProtoDiff("contract", result.key, result.want, result.got)
+	case contractMissingGtron:
+		r.MissingGtron++
+		c.addDiff("contract", result.key, "missing_gtron", result.detail)
+	case contractInvalidJavaKey:
+		r.Invalid++
+		c.addDiff("contract", result.key, "invalid_java_key", result.detail)
+	case contractInvalidJava:
+		r.Invalid++
+		c.addDiff("contract", result.key, "invalid_java", result.detail)
+	case contractInvalidGtron:
+		r.Invalid++
+		c.addDiff("contract", result.key, "invalid_gtron", result.detail)
+	}
+}
+
+func (c *comparer) compareContracts(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "contract", Scope: "state", Present: true}
 	defer c.trackStore(&r)()
-	progress := c.newProgressCounter(&r, "comparing java contracts (raw-byte fast path)")
+	workers := c.contractWorkerCount()
+	batchSize := workers * 32
+	stage := fmt.Sprintf("comparing java contracts (raw-byte fast path, workers=%d)", workers)
+	c.emitProgress(ProgressEvent{Phase: "info", Store: r.Name, Detail: fmt.Sprintf("contract parallel workers=%d batch_size=%d", workers, batchSize)})
+	progress := c.newProgressCounter(&r, stage)
+
+	jobs := make(chan contractComparisonJob, batchSize)
+	results := make(chan contractComparisonResult, batchSize)
+	var workersWG sync.WaitGroup
+	workersWG.Add(workers)
+	for range workers {
+		go func() {
+			defer workersWG.Done()
+			for job := range jobs {
+				results <- compareContractJob(gtron, job)
+			}
+		}()
+	}
+	defer func() {
+		close(jobs)
+		workersWG.Wait()
+	}()
+
+	processBatch := func(batch []contractComparisonJob) {
+		for _, job := range batch {
+			jobs <- job
+		}
+		ordered := make([]contractComparisonResult, len(batch))
+		for range batch {
+			result := <-results
+			ordered[result.slot] = result
+		}
+		for _, result := range ordered {
+			progress.Add(1)
+			c.applyContractResult(&r, result)
+		}
+	}
+
 	it := java.NewIterator(nil, nil)
 	defer it.Release()
+	batch := make([]contractComparisonJob, 0, batchSize)
 	for it.Next() {
-		progress.Add(1)
-		key := append([]byte(nil), it.Key()...)
-		if len(key) != tcommon.AddressLength {
-			r.Invalid++
-			c.addDiff("contract", printableKey(key), "invalid_java_key", fmt.Sprintf("contract address is %d bytes, want %d", len(key), tcommon.AddressLength))
-			continue
+		batch = append(batch, contractComparisonJob{
+			slot: len(batch), key: append([]byte(nil), it.Key()...), value: append([]byte(nil), it.Value()...),
+		})
+		if len(batch) == batchSize {
+			processBatch(batch)
+			batch = batch[:0]
 		}
-		addr := tcommon.BytesToAddress(key)
-		gotRaw, ok, err := sdb.GetContractMetadataBytes(addr)
-		if err != nil {
-			r.Invalid++
-			c.addDiff("contract", hex.EncodeToString(key), "invalid_gtron", err.Error())
-			continue
-		}
-		if ok && bytes.Equal(it.Value(), gotRaw) {
-			r.Compared++
-			r.Equal++
-			continue
-		}
-
-		var want contractpb.SmartContract
-		if err := proto.Unmarshal(it.Value(), &want); err != nil {
-			r.Invalid++
-			c.addDiff("contract", printableKey(key), "invalid_java", err.Error())
-			continue
-		}
-		if !ok {
-			r.MissingGtron++
-			c.addDiff("contract", hex.EncodeToString(addr.Bytes()), "missing_gtron", "contract metadata not found")
-			continue
-		}
-		var got contractpb.SmartContract
-		if err := proto.Unmarshal(gotRaw, &got); err != nil {
-			r.Invalid++
-			c.addDiff("contract", hex.EncodeToString(key), "invalid_gtron", err.Error())
-			continue
-		}
-		r.Compared++
-		if proto.Equal(&want, &got) {
-			r.Equal++
-			continue
-		}
-		r.Different++
-		c.addProtoDiff("contract", hex.EncodeToString(addr.Bytes()), &want, &got)
 	}
+	processBatch(batch)
 	return it.Error()
 }
 

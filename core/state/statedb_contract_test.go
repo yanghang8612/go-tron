@@ -315,6 +315,14 @@ func TestStateDBContractMeta(t *testing.T) {
 	if err := proto.Unmarshal(raw, &decoded); err != nil || !proto.Equal(&decoded, meta) {
 		t.Fatalf("reloaded GetContractMetadataBytes decoded = %v err=%v, want %v", &decoded, err, meta)
 	}
+	raw, ok, err = ReadCommittedContractMetadataBytes(sdb.db.DiskDB(), addr)
+	if err != nil || !ok {
+		t.Fatalf("ReadCommittedContractMetadataBytes = ok=%t err=%v", ok, err)
+	}
+	decoded.Reset()
+	if err := proto.Unmarshal(raw, &decoded); err != nil || !proto.Equal(&decoded, meta) {
+		t.Fatalf("ReadCommittedContractMetadataBytes decoded = %v err=%v, want %v", &decoded, err, meta)
+	}
 }
 
 func TestStateDBContractRuntimeStateRoundTrip(t *testing.T) {

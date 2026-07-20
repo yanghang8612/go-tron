@@ -2,6 +2,7 @@ package dbcompare
 
 import (
 	"encoding/binary"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -139,20 +140,26 @@ func TestCompareContractsUsesSerializedEqualityFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := tcommon.BytesToAddress(address(9))
-	contract := &contractpb.SmartContract{
-		OriginAddress: addr.Bytes(), ContractAddress: addr.Bytes(), Name: "fast-path",
-	}
-	sdb.SetContract(addr, contract)
 	java := rawdb.NewMemoryDatabase()
-	writeJavaProto(t, java, addr.Bytes(), contract)
+	const contracts = 64
+	for i := 1; i <= contracts; i++ {
+		addr := tcommon.BytesToAddress(address(byte(i)))
+		contract := &contractpb.SmartContract{
+			OriginAddress: addr.Bytes(), ContractAddress: addr.Bytes(), Name: fmt.Sprintf("fast-path-%d", i),
+		}
+		sdb.SetContract(addr, contract)
+		writeJavaProto(t, java, addr.Bytes(), contract)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
 
-	c := &comparer{opts: Options{MaxDifferences: 10}, report: new(Report)}
-	if err := c.compareContracts(sdb, java); err != nil {
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 4}, report: new(Report)}
+	if err := c.compareContracts(gtron, java); err != nil {
 		t.Fatal(err)
 	}
 	got := c.report.Stores[0]
-	if got.Compared != 1 || got.Equal != 1 || got.Mismatches() != 0 {
+	if got.Compared != contracts || got.Equal != contracts || got.Mismatches() != 0 {
 		t.Fatalf("contract result = %+v", got)
 	}
 }

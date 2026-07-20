@@ -77,7 +77,11 @@ physical optimization because the moved balances are checked independently in
 The `contract` adapter compares serialized metadata bytes first. Exact matches
 avoid unmarshalling both `SmartContract` messages; rows whose encoding differs
 still fall back to protobuf semantic comparison, so equivalent protobuf
-encodings are not reported as mismatches.
+encodings are not reported as mismatches. Contract rows are validated by a
+bounded parallel worker pool. `--workers=0` selects up to eight workers from
+`GOMAXPROCS`; pass `--workers=N` to select an explicit value up to 64. Java
+LevelDB iteration remains sequential, while copied batches perform concurrent
+read-only gtron Pebble lookups and are merged back in original key order.
 
 `storage-row` is compared in both directions. The tool builds a temporary
 Pebble index under the OS temporary directory so a Nile contract-storage dump
