@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 
@@ -182,6 +183,36 @@ func TestSetupGenesisBlock_WitnessAccountsCreated(t *testing.T) {
 		if !sdb.IsWitness(gw.Address) {
 			t.Errorf("witness %s: account.IsWitness=false after genesis", gw.Address.Hex())
 		}
+	}
+}
+
+func TestSetupGenesisBlock_BlackholePermissionMigration(t *testing.T) {
+	genesis := params.DefaultNileGenesis()
+	var blackhole common.Address
+	for _, account := range genesis.Accounts {
+		if account.AccountName == "Blackhole" {
+			blackhole = account.Address
+			break
+		}
+	}
+	if blackhole.IsEmpty() {
+		t.Fatal("Nile genesis Blackhole account not found")
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb, err := state.New(rawdb.ReadGenesisStateRoot(diskdb), state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := sdb.GetAccount(blackhole)
+	if account == nil || account.OwnerPermission() == nil || len(account.OwnerPermission().Keys) != 1 {
+		t.Fatalf("Blackhole owner permission not installed: %+v", account)
+	}
+	wantKey := (common.Address{0x41}).Bytes()
+	if !bytes.Equal(account.OwnerPermission().Keys[0].Address, wantKey) {
+		t.Fatalf("Blackhole permission key = %x, want zero address %x", account.OwnerPermission().Keys[0].Address, wantKey)
 	}
 }
 

@@ -481,14 +481,30 @@ func (c *comparer) compareMarket(sdb *state.StateDB, java *JavaStores) error {
 	}
 	return c.compareProtoStore("market_pair_price_to_order", "state", java.Store("market_pair_price_to_order"),
 		func() proto.Message { return new(corepb.MarketOrderIdList) },
-		func(key []byte, _ proto.Message) (proto.Message, bool, error) {
+		func(key []byte, javaValue proto.Message) (proto.Message, bool, error) {
 			sell, buy, price, err := decodeJavaMarketKey(key, true)
 			if err != nil {
 				return nil, false, err
 			}
 			got := sdb.ReadMarketOrderBook(sell, buy, price)
+			if got == nil && isJavaMarketHeadSentinel(price, javaValue) {
+				// java-tron persists one empty zero-price row as the linked-list
+				// sentinel for every pair it has ever created. go-tron keeps the
+				// same logical ordering in a materialized MarketPriceList instead,
+				// so the empty Java-only sentinel is representation metadata, not
+				// missing consensus state.
+				return javaValue, true, nil
+			}
 			return got, got != nil, nil
 		})
+}
+
+func isJavaMarketHeadSentinel(price [16]byte, value proto.Message) bool {
+	if price != [16]byte{} {
+		return false
+	}
+	list, ok := value.(*corepb.MarketOrderIdList)
+	return ok && len(list.Head) == 0 && len(list.Tail) == 0
 }
 
 func decodeJavaMarketKey(key []byte, withPrice bool) ([]byte, []byte, [16]byte, error) {
@@ -564,6 +580,8 @@ func (c *comparer) compareProposals(sdb *state.StateDB, java ethdb.KeyValueStore
 			switch row.State {
 			case rawdb.ProposalStateApproved:
 				stateValue = corepb.Proposal_APPROVED
+			case rawdb.ProposalStateDisapproved:
+				stateValue = corepb.Proposal_DISAPPROVED
 			case rawdb.ProposalStateCanceled:
 				stateValue = corepb.Proposal_CANCELED
 			}

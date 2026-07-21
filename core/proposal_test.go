@@ -44,7 +44,7 @@ func TestProcessProposals_Approved(t *testing.T) {
 	}
 }
 
-func TestProcessProposals_Canceled(t *testing.T) {
+func TestProcessProposals_Disapproved(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
@@ -65,8 +65,8 @@ func TestProcessProposals_Canceled(t *testing.T) {
 	}
 
 	got := statedb.ReadProposal(0)
-	if got.State != rawdb.ProposalStateCanceled {
-		t.Fatalf("expected CANCELED, got %d", got.State)
+	if got.State != rawdb.ProposalStateDisapproved {
+		t.Fatalf("expected DISAPPROVED, got %d", got.State)
 	}
 	// Parameter should NOT have changed (mainnet default is 32000000).
 	if dynProps.WitnessPayPerBlock() != 32000000 {

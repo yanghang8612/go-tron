@@ -190,6 +190,15 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 			obj.Account().SetAccountName(ga.AccountName)
 			namedAccounts = append(namedAccounts, namedGenesisAccount{name: []byte(ga.AccountName), owner: ga.Address})
 		}
+		if ga.AccountName == "Blackhole" {
+			// java-tron Manager.resetBlackholeAccountPermission runs during
+			// startup and installs an Owner permission whose key is the chain's
+			// zero address (not the Blackhole account itself). Apply the same
+			// one-time migration while materializing genesis so Nile's distinct
+			// Blackhole address is handled without a mainnet constant.
+			zeroAddress := tcommon.Address{0x41}
+			statedb.SetPermissions(ga.Address, types.MakeDefaultOwnerPermission(zeroAddress), nil, nil)
+		}
 		if ga.Balance != 0 {
 			obj.Account().SetBalance(ga.Balance)
 		}

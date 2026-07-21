@@ -398,6 +398,27 @@ func TestDynamicProperties_StringNotInAll(t *testing.T) {
 	_ = strings.Contains
 }
 
+func TestDynamicPropertiesStartupMigrationMarkers(t *testing.T) {
+	dp := NewDynamicProperties()
+	for _, key := range []string{
+		"token_update_done",
+		"abi_move_done",
+		"energy_price_history_done",
+		"bandwidth_price_history_done",
+		"set_blackhole_account_permission",
+		"turkish_key_migration_done",
+	} {
+		if got, ok := dp.Get(key); !ok || got != 1 {
+			t.Errorf("%s = %d, %v; want 1, true", key, got, ok)
+		}
+	}
+	for _, key := range []string{"allow_receipts_merkle_root", "allow_tvm_asset_issue", "allow_tvm_stake"} {
+		if got, ok := dp.Get(key); !ok || got != 0 {
+			t.Errorf("%s = %d, %v; want 0, true", key, got, ok)
+		}
+	}
+}
+
 func TestBlockFilledSlots_DefaultFull(t *testing.T) {
 	// Mirror java-tron DynamicPropertiesStore.java:722-724
 	// (Arrays.fill(blockFilledSlots, 1)): genesis ring is all-1s so a

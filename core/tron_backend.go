@@ -867,6 +867,8 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 		switch p.State {
 		case rawdb.ProposalStateApproved:
 			stateStr = "APPROVED"
+		case rawdb.ProposalStateDisapproved:
+			stateStr = "DISAPPROVED"
 		case rawdb.ProposalStateCanceled:
 			stateStr = "CANCELED"
 		}
@@ -1469,6 +1471,8 @@ func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	switch p.State {
 	case rawdb.ProposalStateApproved:
 		stateStr = "APPROVED"
+	case rawdb.ProposalStateDisapproved:
+		stateStr = "DISAPPROVED"
 	case rawdb.ProposalStateCanceled:
 		stateStr = "CANCELED"
 	}

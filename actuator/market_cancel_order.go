@@ -112,7 +112,6 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 4: Update order state
-	order.SellTokenQuantityReturn = order.SellTokenQuantityRemain
 	order.SellTokenQuantityRemain = 0
 	order.State = corepb.MarketOrder_CANCELED
 

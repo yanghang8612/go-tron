@@ -236,9 +236,9 @@ func (j *JavaStores) Close() error {
 }
 
 type comparer struct {
-	opts               Options
-	report             *Report
-	differencesByStore map[string]int
+	opts                   Options
+	report                 *Report
+	differencesByStoreKind map[string]int
 }
 
 type progressCounter struct {
@@ -268,7 +268,7 @@ func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
 	if c.opts.ProgressMaxDifferences != nil && differenceLimit > *c.opts.ProgressMaxDifferences {
 		differenceLimit = *c.opts.ProgressMaxDifferences
 	}
-	snapshot.Differences = sampleDifferencesByStore(c.report.Differences, differenceLimit)
+	snapshot.Differences = sampleDifferencesByStoreKind(c.report.Differences, differenceLimit)
 	if event.Result.Name != "" && event.Phase != "done" {
 		snapshot.Stores = append(snapshot.Stores, event.Result)
 	}
@@ -285,10 +285,10 @@ func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
 	return &snapshot
 }
 
-// sampleDifferencesByStore fills a bounded live snapshot round-robin across
-// stores. A single early database with millions of mismatches therefore cannot
-// hide every later store from the JSON file while comparison is still running.
-func sampleDifferencesByStore(differences []Difference, limit int) []Difference {
+// sampleDifferencesByStoreKind fills a bounded live snapshot round-robin across
+// store+kind groups. A run of early missing_gtron rows therefore cannot hide
+// later "different" rows from the same store (or every later store).
+func sampleDifferencesByStoreKind(differences []Difference, limit int) []Difference {
 	if limit <= 0 || len(differences) == 0 {
 		return nil
 	}
@@ -298,19 +298,20 @@ func sampleDifferencesByStore(differences []Difference, limit int) []Difference 
 	order := make([]string, 0)
 	groups := make(map[string][]Difference)
 	for _, difference := range differences {
-		if _, ok := groups[difference.Store]; !ok {
-			order = append(order, difference.Store)
+		group := differenceGroup(difference.Store, difference.Kind)
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
 		}
-		groups[difference.Store] = append(groups[difference.Store], difference)
+		groups[group] = append(groups[group], difference)
 	}
 	out := make([]Difference, 0, limit)
 	for row := 0; len(out) < limit; row++ {
 		added := false
-		for _, store := range order {
-			if row >= len(groups[store]) {
+		for _, group := range order {
+			if row >= len(groups[group]) {
 				continue
 			}
-			out = append(out, groups[store][row])
+			out = append(out, groups[group][row])
 			added = true
 			if len(out) == limit {
 				break
@@ -322,6 +323,30 @@ func sampleDifferencesByStore(differences []Difference, limit int) []Difference 
 	}
 	return out
 }
+
+// sampleDifferencesPerStore caps each store while round-robining its kinds.
+// addDiff retains at most one per-kind budget, so this second-stage cap stays
+// small while still guaranteeing representation of every observed kind.
+func sampleDifferencesPerStore(differences []Difference, limit int) []Difference {
+	if limit <= 0 || len(differences) == 0 {
+		return append([]Difference(nil), differences...)
+	}
+	storeOrder := make([]string, 0)
+	stores := make(map[string][]Difference)
+	for _, difference := range differences {
+		if _, ok := stores[difference.Store]; !ok {
+			storeOrder = append(storeOrder, difference.Store)
+		}
+		stores[difference.Store] = append(stores[difference.Store], difference)
+	}
+	out := make([]Difference, 0, len(storeOrder)*limit)
+	for _, store := range storeOrder {
+		out = append(out, sampleDifferencesByStoreKind(stores[store], limit)...)
+	}
+	return out
+}
+
+func differenceGroup(store, kind string) string { return store + "\x00" + kind }
 
 func (c *comparer) beginStore(result StoreResult) time.Time {
 	started := time.Now()
@@ -1054,7 +1079,7 @@ func normalizeJavaPropertyValue(name string, value []byte) []byte {
 }
 
 func (c *comparer) addProtoDiff(store, key string, java, gtron proto.Message) {
-	if c.differenceLimitReached(store) {
+	if c.differenceLimitReached(store, "different") {
 		return
 	}
 	detail := cmp.Diff(java, gtron, protocmp.Transform())
@@ -1062,38 +1087,41 @@ func (c *comparer) addProtoDiff(store, key string, java, gtron proto.Message) {
 }
 
 func (c *comparer) addByteDiff(store, key string, java, gtron []byte) {
-	if c.differenceLimitReached(store) {
+	if c.differenceLimitReached(store, "different") {
 		return
 	}
 	c.addDiff(store, key, "different", fmt.Sprintf("java(len=%d sha256=%x value=%s) gtron(len=%d sha256=%x value=%s)",
 		len(java), sha256.Sum256(java), shortHex(java), len(gtron), sha256.Sum256(gtron), shortHex(gtron)))
 }
 
-func (c *comparer) differenceLimitReached(store string) bool {
+func (c *comparer) differenceLimitReached(store, kind string) bool {
 	// With a per-store budget, retain each store's candidates first and apply
 	// the global cap round-robin after every store has been visited. Otherwise
 	// comparison order would let early stores exhaust the global budget.
 	if c.opts.MaxDifferencesPerStore <= 0 && len(c.report.Differences) >= c.opts.MaxDifferences {
 		return true
 	}
-	return c.opts.MaxDifferencesPerStore > 0 && c.differencesByStore[store] >= c.opts.MaxDifferencesPerStore
+	return c.opts.MaxDifferencesPerStore > 0 && c.differencesByStoreKind[differenceGroup(store, kind)] >= c.opts.MaxDifferencesPerStore
 }
 
 func (c *comparer) finalizeDifferenceSamples() {
+	if c.opts.MaxDifferencesPerStore > 0 {
+		c.report.Differences = sampleDifferencesPerStore(c.report.Differences, c.opts.MaxDifferencesPerStore)
+	}
 	if len(c.report.Differences) > c.opts.MaxDifferences {
-		c.report.Differences = sampleDifferencesByStore(c.report.Differences, c.opts.MaxDifferences)
+		c.report.Differences = sampleDifferencesByStoreKind(c.report.Differences, c.opts.MaxDifferences)
 	}
 }
 
 func (c *comparer) addDiff(store, key, kind, detail string) {
-	if c.differenceLimitReached(store) {
+	if c.differenceLimitReached(store, kind) {
 		return
 	}
 	c.report.Differences = append(c.report.Differences, Difference{Store: store, Key: key, Kind: kind, Detail: detail})
-	if c.differencesByStore == nil {
-		c.differencesByStore = make(map[string]int)
+	if c.differencesByStoreKind == nil {
+		c.differencesByStoreKind = make(map[string]int)
 	}
-	c.differencesByStore[store]++
+	c.differencesByStoreKind[differenceGroup(store, kind)]++
 }
 
 func shortHex(b []byte) string {

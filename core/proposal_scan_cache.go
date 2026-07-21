@@ -3,7 +3,7 @@ package core
 import "sync"
 
 // proposalScanCache remembers the set of proposal IDs that have reached a
-// terminal (APPROVED/CANCELED) state on the canonical chain, so the
+// terminal (APPROVED/DISAPPROVED/CANCELED) state on the canonical chain, so the
 // per-maintenance ProcessProposals scan can skip re-reading and re-decoding
 // them. On a long fast-sync the proposal index grows without bound while only a
 // handful of proposals are ever PENDING at a boundary; without this cache every

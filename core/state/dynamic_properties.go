@@ -193,10 +193,22 @@ var defaultProps = map[string]int64{
 
 	// §1.6: freeze/supply/bandwidth/accounting keys missing from earlier
 	// backfills. Defaults verified against java-tron DynamicPropertiesStore.
-	// The "done" flags track whether the one-time price-history loader has
-	// run (0 = not yet, 1 = done); default 0 matches java-tron's initial state.
-	"energy_price_history_done":     0,
-	"bandwidth_price_history_done":  0,
+	// java-tron seeds these migration markers at 0 in DynamicPropertiesStore,
+	// then completes the corresponding startup migrations before accepting a
+	// block. go-tron writes the already-migrated representation directly, so
+	// its post-start/genesis state must carry the completed value.
+	"token_update_done":                1,
+	"abi_move_done":                    1,
+	"energy_price_history_done":        1,
+	"bandwidth_price_history_done":     1,
+	"set_blackhole_account_permission": 1,
+	"turkish_key_migration_done":       1,
+	// Obsolete java-tron flags remain in long-lived Nile databases even though
+	// their proposal/runtime code was later removed. They were config-defaulted
+	// to zero and are retained here solely for state-store compatibility.
+	"allow_receipts_merkle_root":    0,
+	"allow_tvm_asset_issue":         0,
+	"allow_tvm_stake":               0,
 	"max_frozen_time":               3,
 	"min_frozen_time":               3,
 	"max_frozen_supply_number":      10,

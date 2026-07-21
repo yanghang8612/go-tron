@@ -12,7 +12,7 @@ import (
 
 const version3_6_5 int32 = 9
 
-// ProcessProposals checks all pending proposals and approves or cancels them
+// ProcessProposals checks all pending proposals and approves or disapproves them
 // based on the approval count vs active SR count.
 // activeWitnesses is the current active super-representative set; only approvals
 // from current witnesses are counted (matches java-tron's hasMostApprovals logic).
@@ -104,7 +104,7 @@ func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.D
 			applyProposalSideEffects(db, p, dynProps, fc, maintenanceTime, statedb, oldValues, nileMarketDisable)
 			p.State = rawdb.ProposalStateApproved
 		} else {
-			p.State = rawdb.ProposalStateCanceled
+			p.State = rawdb.ProposalStateDisapproved
 		}
 		if err := statedb.WriteProposal(id, p); err != nil {
 			return err

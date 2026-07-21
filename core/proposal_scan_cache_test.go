@@ -34,7 +34,7 @@ func seedProposalScanState(t *testing.T, proposals []*rawdb.Proposal) (*state.St
 
 // TestProcessProposalsScanCacheMarksTerminalSkipsPending locks the cache
 // bookkeeping: a maintenance scan records every proposal that reached a
-// terminal (APPROVED/CANCELED) state and never records one that stays PENDING.
+// terminal (APPROVED/DISAPPROVED/CANCELED) state and never records one that stays PENDING.
 func TestProcessProposalsScanCacheMarksTerminalSkipsPending(t *testing.T) {
 	w1 := tcommon.Address{0x41, 0x01}
 	w2 := tcommon.Address{0x41, 0x02}
@@ -42,10 +42,10 @@ func TestProcessProposalsScanCacheMarksTerminalSkipsPending(t *testing.T) {
 
 	const maint = int64(1000)
 	approved := &rawdb.Proposal{ID: 1, Parameters: map[int64]int64{9: 1}, ExpirationTime: maint - 1, Approvals: []tcommon.Address{w1}, State: rawdb.ProposalStatePending}
-	canceled := &rawdb.Proposal{ID: 2, Parameters: map[int64]int64{13: 50}, ExpirationTime: maint - 1, Approvals: nil, State: rawdb.ProposalStatePending}
+	disapproved := &rawdb.Proposal{ID: 2, Parameters: map[int64]int64{13: 50}, ExpirationTime: maint - 1, Approvals: nil, State: rawdb.ProposalStatePending}
 	pending := &rawdb.Proposal{ID: 3, Parameters: map[int64]int64{14: 1}, ExpirationTime: maint + 100, Approvals: []tcommon.Address{w1}, State: rawdb.ProposalStatePending}
 
-	statedb, dp, db := seedProposalScanState(t, []*rawdb.Proposal{approved, canceled, pending})
+	statedb, dp, db := seedProposalScanState(t, []*rawdb.Proposal{approved, disapproved, pending})
 
 	cache := newProposalScanCache()
 	if err := ProcessProposals(db, statedb, dp, active, maint, nil, cache); err != nil {
@@ -56,7 +56,7 @@ func TestProcessProposalsScanCacheMarksTerminalSkipsPending(t *testing.T) {
 		t.Error("approved proposal 1 should be cached as terminal")
 	}
 	if !cache.isTerminal(2) {
-		t.Error("canceled proposal 2 should be cached as terminal")
+		t.Error("disapproved proposal 2 should be cached as terminal")
 	}
 	if cache.isTerminal(3) {
 		t.Error("still-pending proposal 3 must NOT be cached as terminal")
@@ -73,7 +73,7 @@ func runTwoBoundaryScenario(t *testing.T, cache *proposalScanCache) (map[int64]i
 	w2 := tcommon.Address{0x41, 0x02}
 	active := []tcommon.Address{w1, w2} // threshold = 2*7/10 = 1
 
-	// Boundary 1 at t=1000: P1 approved (sets #9), P2 canceled (0 approvals),
+	// Boundary 1 at t=1000: P1 approved (sets #9), P2 disapproved (0 approvals),
 	// P3 not yet expired (stays pending).
 	p1 := &rawdb.Proposal{ID: 1, Parameters: map[int64]int64{9: 1}, ExpirationTime: 999, Approvals: []tcommon.Address{w1}, State: rawdb.ProposalStatePending}
 	p2 := &rawdb.Proposal{ID: 2, Parameters: map[int64]int64{13: 50}, ExpirationTime: 999, Approvals: nil, State: rawdb.ProposalStatePending}
@@ -110,7 +110,7 @@ func runTwoBoundaryScenario(t *testing.T, cache *proposalScanCache) (map[int64]i
 	dpv := make(map[string]int64)
 	// allow_* keys default to 0, so == 1 proves the approved proposal applied;
 	// max_cpu_time_of_one_tx defaults to 50 (java parity) and belongs to the
-	// canceled P2 — tracked only to assert cached/uncached equivalence on it.
+	// disapproved P2 — tracked only to assert cached/uncached equivalence on it.
 	for _, name := range []string{"allow_creation_of_contracts", "max_cpu_time_of_one_tx", "allow_update_account_name", "allow_delegate_resource"} {
 		v, _ := dp.Get(name)
 		dpv[name] = v
@@ -127,7 +127,7 @@ func TestProcessProposalsScanCacheEquivalentToUncached(t *testing.T) {
 
 	wantStates := map[int64]int32{
 		1: rawdb.ProposalStateApproved,
-		2: rawdb.ProposalStateCanceled,
+		2: rawdb.ProposalStateDisapproved,
 		3: rawdb.ProposalStateApproved,
 		4: rawdb.ProposalStateApproved,
 	}
@@ -151,7 +151,7 @@ func TestProcessProposalsScanCacheEquivalentToUncached(t *testing.T) {
 		}
 	}
 	// The core safety property: every touched DP key is identical with and
-	// without the cache (including max_cpu_time_of_one_tx, whose canceled P2
+	// without the cache (including max_cpu_time_of_one_tx, whose disapproved P2
 	// must NOT have moved it off the default under either path).
 	for name := range uncachedDP {
 		if cachedDP[name] != uncachedDP[name] {

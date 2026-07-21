@@ -169,8 +169,8 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	if order.SellTokenQuantityRemain != 0 {
 		t.Fatalf("SellTokenQuantityRemain: want 0, got %d", order.SellTokenQuantityRemain)
 	}
-	if order.SellTokenQuantityReturn != 100 {
-		t.Fatalf("SellTokenQuantityReturn: want 100, got %d", order.SellTokenQuantityReturn)
+	if order.SellTokenQuantityReturn != 0 {
+		t.Fatalf("SellTokenQuantityReturn: want 0 (java cancel semantics), got %d", order.SellTokenQuantityReturn)
 	}
 	mao := statedb.ReadMarketAccountOrder(owner[:])
 	if mao.Count != 0 || len(mao.Orders) != 0 || mao.TotalCount != 1 {

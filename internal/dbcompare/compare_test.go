@@ -451,6 +451,20 @@ func TestDecodeJavaMarketKey(t *testing.T) {
 	}
 }
 
+func TestJavaMarketHeadSentinelRecognition(t *testing.T) {
+	if !isJavaMarketHeadSentinel([16]byte{}, &corepb.MarketOrderIdList{}) {
+		t.Fatal("empty zero-price row should be recognized as Java head sentinel")
+	}
+	var price [16]byte
+	price[15] = 1
+	if isJavaMarketHeadSentinel(price, &corepb.MarketOrderIdList{}) {
+		t.Fatal("non-zero price must not be treated as a head sentinel")
+	}
+	if isJavaMarketHeadSentinel([16]byte{}, &corepb.MarketOrderIdList{Head: []byte{1}}) {
+		t.Fatal("non-empty zero-price order list must still be compared")
+	}
+}
+
 func TestDelegationLogicalKeyAcceptsNegativeBrokerageCycle(t *testing.T) {
 	addr := address(0x7a)
 	key := []byte(fmt.Sprintf("-1-%x-brokerage", addr))
@@ -478,8 +492,9 @@ func TestDifferenceRetentionCapsEachStoreIndependently(t *testing.T) {
 	if len(c.report.Differences) != 4 {
 		t.Fatalf("retained differences = %d, want 4", len(c.report.Differences))
 	}
-	if c.differencesByStore["delegation"] != 2 || c.differencesByStore["contract-state"] != 2 {
-		t.Fatalf("per-store counts = %v", c.differencesByStore)
+	if c.differencesByStoreKind[differenceGroup("delegation", "different")] != 2 ||
+		c.differencesByStoreKind[differenceGroup("contract-state", "different")] != 2 {
+		t.Fatalf("per-store-kind counts = %v", c.differencesByStoreKind)
 	}
 	c.finalizeDifferenceSamples()
 	if len(c.report.Differences) != 3 {
@@ -491,6 +506,30 @@ func TestDifferenceRetentionCapsEachStoreIndependently(t *testing.T) {
 	}
 	if stores["delegation"] == 0 || stores["contract-state"] == 0 {
 		t.Fatalf("global samples did not preserve both stores: %v", stores)
+	}
+}
+
+func TestDifferenceRetentionPreservesKindsWithinStore(t *testing.T) {
+	c := &comparer{
+		opts:   Options{MaxDifferences: 10, MaxDifferencesPerStore: 4},
+		report: new(Report),
+	}
+	for i := range 10 {
+		c.addDiff("delegation", fmt.Sprintf("missing-%d", i), "missing_gtron", "")
+	}
+	for i := range 3 {
+		c.addDiff("delegation", fmt.Sprintf("different-%d", i), "different", "")
+	}
+	c.finalizeDifferenceSamples()
+	if len(c.report.Differences) != 4 {
+		t.Fatalf("differences = %d, want 4", len(c.report.Differences))
+	}
+	kinds := map[string]int{}
+	for _, difference := range c.report.Differences {
+		kinds[difference.Kind]++
+	}
+	if kinds["missing_gtron"] != 2 || kinds["different"] != 2 {
+		t.Fatalf("kind samples = %v, want two of each", kinds)
 	}
 }
 
