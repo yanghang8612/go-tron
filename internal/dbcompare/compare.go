@@ -53,12 +53,13 @@ type ProgressEvent struct {
 
 // Options controls comparison scope and retained diagnostic output.
 type Options struct {
-	Height           uint64
-	MaxDifferences   int
-	ReverseAccounts  bool
-	Workers          int
-	Progress         func(ProgressEvent)
-	ProgressInterval time.Duration
+	Height                 uint64
+	MaxDifferences         int
+	ReverseAccounts        bool
+	Workers                int
+	Progress               func(ProgressEvent)
+	ProgressInterval       time.Duration
+	ProgressMaxDifferences *int
 }
 
 // Difference is one retained mismatch. Counts in StoreResult are authoritative;
@@ -259,7 +260,11 @@ func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
 	snapshot.UnclassifiedStores = append([]string(nil), c.report.UnclassifiedStores...)
 	snapshot.ExcludedStores = append([]string(nil), c.report.ExcludedStores...)
 	snapshot.Stores = append([]StoreResult(nil), c.report.Stores...)
-	snapshot.Differences = append([]Difference(nil), c.report.Differences...)
+	differenceLimit := len(c.report.Differences)
+	if c.opts.ProgressMaxDifferences != nil && differenceLimit > *c.opts.ProgressMaxDifferences {
+		differenceLimit = *c.opts.ProgressMaxDifferences
+	}
+	snapshot.Differences = append([]Difference(nil), c.report.Differences[:differenceLimit]...)
 	if event.Result.Name != "" && event.Phase != "done" {
 		snapshot.Stores = append(snapshot.Stores, event.Result)
 	}
@@ -749,7 +754,7 @@ type contractComparisonResult struct {
 	got    *contractpb.SmartContract
 }
 
-func (c *comparer) contractWorkerCount() int {
+func (c *comparer) workerCount() int {
 	workers := c.opts.Workers
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
@@ -860,7 +865,7 @@ func (c *comparer) applyContractResult(r *StoreResult, result contractComparison
 func (c *comparer) compareContracts(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "contract", Scope: "state", Present: true}
 	defer c.trackStore(&r)()
-	workers := c.contractWorkerCount()
+	workers := c.workerCount()
 	batchSize := workers * 32
 	stage := fmt.Sprintf("comparing java contracts (raw-byte fast path, workers=%d)", workers)
 	c.emitProgress(ProgressEvent{Phase: "info", Store: r.Name, Detail: fmt.Sprintf("contract parallel workers=%d batch_size=%d", workers, batchSize)})

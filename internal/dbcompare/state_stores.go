@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -22,6 +23,21 @@ import (
 
 type byteLookup func(key []byte) (value []byte, present bool, err error)
 type protoLookup func(key []byte, java proto.Message) (gtron proto.Message, present bool, err error)
+
+type byteComparisonJob struct {
+	slot  int
+	key   []byte
+	value []byte
+}
+
+type byteComparisonResult struct {
+	slot    int
+	key     []byte
+	want    []byte
+	got     []byte
+	present bool
+	err     error
+}
 
 func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore, lookup byteLookup) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
@@ -54,6 +70,90 @@ func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore
 			c.addByteDiff(name, printableKey(key), it.Value(), got)
 		}
 	}
+	return it.Error()
+}
+
+// compareByteStoreParallel retains Java iterator order while running the
+// independent gtron point lookups concurrently. This is intended for very
+// large byte stores such as java-tron's delegation/reward history, where tens
+// of millions of serial Pebble Gets otherwise dominate the audit.
+func (c *comparer) compareByteStoreParallel(name, scope string, java ethdb.KeyValueStore, lookup byteLookup) error {
+	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
+	defer c.trackStore(&r)()
+	if java == nil {
+		return nil
+	}
+
+	workers := c.workerCount()
+	batchSize := workers * 256
+	stage := fmt.Sprintf("comparing java rows (workers=%d)", workers)
+	c.emitProgress(ProgressEvent{Phase: "info", Store: name, Detail: fmt.Sprintf("byte-store parallel workers=%d batch_size=%d", workers, batchSize)})
+	progress := c.newProgressCounter(&r, stage)
+
+	jobs := make(chan byteComparisonJob, batchSize)
+	results := make(chan byteComparisonResult, batchSize)
+	var workersWG sync.WaitGroup
+	workersWG.Add(workers)
+	for range workers {
+		go func() {
+			defer workersWG.Done()
+			for job := range jobs {
+				got, present, err := lookup(job.key)
+				results <- byteComparisonResult{
+					slot: job.slot, key: job.key, want: job.value,
+					got: got, present: present, err: err,
+				}
+			}
+		}()
+	}
+
+	processBatch := func(batch []byteComparisonJob) {
+		for _, job := range batch {
+			jobs <- job
+		}
+		ordered := make([]byteComparisonResult, len(batch))
+		for range batch {
+			result := <-results
+			ordered[result.slot] = result
+		}
+		for _, result := range ordered {
+			progress.Add(1)
+			key := printableKey(result.key)
+			if result.err != nil {
+				r.Invalid++
+				c.addDiff(name, key, "invalid_java_key", result.err.Error())
+				continue
+			}
+			if !result.present {
+				r.MissingGtron++
+				c.addDiff(name, key, "missing_gtron", "corresponding gtron state row not found")
+				continue
+			}
+			r.Compared++
+			if bytes.Equal(result.want, result.got) {
+				r.Equal++
+			} else {
+				r.Different++
+				c.addByteDiff(name, key, result.want, result.got)
+			}
+		}
+	}
+
+	it := java.NewIterator(nil, nil)
+	defer it.Release()
+	batch := make([]byteComparisonJob, 0, batchSize)
+	for it.Next() {
+		batch = append(batch, byteComparisonJob{
+			slot: len(batch), key: append([]byte(nil), it.Key()...), value: append([]byte(nil), it.Value()...),
+		})
+		if len(batch) == batchSize {
+			processBatch(batch)
+			batch = batch[:0]
+		}
+	}
+	processBatch(batch)
+	close(jobs)
+	workersWG.Wait()
 	return it.Error()
 }
 
@@ -261,7 +361,11 @@ func (c *comparer) compareDelegatedResourceIndexes(sdb *state.StateDB, java ethd
 }
 
 func (c *comparer) compareDelegation(sdb *state.StateDB, java ethdb.KeyValueStore) error {
-	return c.compareByteStore("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
+	// Hydrate the shared system account before workers begin. Subsequent
+	// GetAccountKV calls only read the cached envelope and immutable latest
+	// state, avoiding concurrent cache population inside StateDB.
+	_ = sdb.GetAccount(tcommon.SystemAccountAddress)
+	return c.compareByteStoreParallel("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
 		logical, err := delegationLogicalKey(key)
 		if err != nil {
 			return nil, false, err

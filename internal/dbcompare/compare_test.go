@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,119 @@ func TestCompareByteStoreReportsProgressLifecycle(t *testing.T) {
 	if events[1].Snapshot == nil || events[1].Snapshot.Progress == nil ||
 		events[1].Snapshot.Progress.CurrentResult == nil || events[1].Snapshot.Progress.CurrentResult.Equal != 1 {
 		t.Fatalf("progress snapshot = %+v", events[1].Snapshot)
+	}
+}
+
+func TestProgressSnapshotCapsDifferencesBeforeCopyAndSort(t *testing.T) {
+	const retained = 100_000
+	differences := make([]Difference, retained)
+	for i := range differences {
+		differences[i] = Difference{Store: "delegation", Key: fmt.Sprintf("%06d", retained-i)}
+	}
+	limit := 10
+	c := &comparer{
+		opts:   Options{ProgressMaxDifferences: &limit},
+		report: &Report{Differences: differences},
+	}
+
+	snapshot := c.progressSnapshot(ProgressEvent{Phase: "progress", Store: "delegation"})
+	if len(snapshot.Differences) != limit {
+		t.Fatalf("snapshot differences=%d, want %d", len(snapshot.Differences), limit)
+	}
+	if len(c.report.Differences) != retained {
+		t.Fatalf("source differences=%d, want %d", len(c.report.Differences), retained)
+	}
+	if snapshot.Differences[0].Key != "099991" || snapshot.Differences[limit-1].Key != "100000" {
+		t.Fatalf("bounded snapshot was not deterministically sorted: first=%s last=%s",
+			snapshot.Differences[0].Key, snapshot.Differences[limit-1].Key)
+	}
+}
+
+func TestCompareByteStoreParallelPreservesCounts(t *testing.T) {
+	java := rawdb.NewMemoryDatabase()
+	for i := 0; i < 8; i++ {
+		if err := java.Put([]byte{byte(i)}, []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	go func() {
+		for i := 0; i < 4; i++ {
+			<-started
+		}
+		close(release)
+	}()
+	var calls atomic.Int32
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 4}, report: new(Report)}
+	err := c.compareByteStoreParallel("parallel", "state", java, func(key []byte) ([]byte, bool, error) {
+		if calls.Add(1) <= 4 {
+			started <- struct{}{}
+			<-release
+		}
+		switch key[0] {
+		case 1:
+			return []byte("different"), true, nil
+		case 2:
+			return nil, false, nil
+		case 3:
+			return nil, false, fmt.Errorf("bad key")
+		default:
+			return []byte{key[0]}, true, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := c.report.Stores[0]
+	if result.Compared != 6 || result.Equal != 5 || result.Different != 1 ||
+		result.MissingGtron != 1 || result.Invalid != 1 {
+		t.Fatalf("parallel result=%+v", result)
+	}
+	if len(c.report.Differences) != 3 {
+		t.Fatalf("differences=%d, want 3", len(c.report.Differences))
+	}
+}
+
+func TestCompareDelegationParallelStateReads(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New(tcommon.Hash{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := rawdb.NewMemoryDatabase()
+	const rows = 256
+	for i := 0; i < rows; i++ {
+		cycle := int64(i + 1)
+		addr := address(byte(i))
+		if err := sdb.WriteCycleReward(cycle, addr, cycle*10); err != nil {
+			t.Fatal(err)
+		}
+		var value [8]byte
+		binary.BigEndian.PutUint64(value[:], uint64(cycle*10))
+		key := []byte(fmt.Sprintf("%d-%x-reward", cycle, addr))
+		if err := java.Put(key, value[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.New(root, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 8}, report: new(Report)}
+	if err := c.compareDelegation(reopened, java); err != nil {
+		t.Fatal(err)
+	}
+	result := c.report.Stores[0]
+	if result.Compared != rows || result.Equal != rows || result.Mismatches() != 0 {
+		t.Fatalf("delegation result=%+v", result)
 	}
 }
 

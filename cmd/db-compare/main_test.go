@@ -69,3 +69,36 @@ func TestLiveReportSnapshotCapsDifferencesWithoutMutatingFinalReport(t *testing.
 		t.Fatalf("source report was mutated: %+v", report.Differences)
 	}
 }
+
+func TestLiveProgressWriterCoalescesAndFlushesLatestSnapshot(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "progress-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	output, err := newLiveJSONOutput(file, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newLiveProgressWriter(output)
+	for rows := uint64(1); rows <= 100; rows++ {
+		writer.Submit(&dbcompare.Report{
+			Progress: &dbcompare.ReportProgress{Phase: "progress", Store: "delegation", Rows: rows},
+		})
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got dbcompare.Report
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("live JSON is invalid: %v\n%s", err, data)
+	}
+	if got.Progress == nil || got.Progress.Rows != 100 {
+		t.Fatalf("latest progress was not flushed: %+v", got.Progress)
+	}
+}

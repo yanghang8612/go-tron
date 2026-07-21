@@ -22,7 +22,7 @@ func main() {
 		liveDiffs = flag.Int("live-max-diffs", 1000, "maximum detailed differences written to each in-progress JSON snapshot")
 		jsonOut   = flag.Bool("json", false, "write the full report as JSON")
 		oneWay    = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
-		workers   = flag.Int("workers", 0, "parallel contract comparison workers (0=auto, maximum 64)")
+		workers   = flag.Int("workers", 0, "parallel comparison workers for large stores (0=auto, maximum 64)")
 		quiet     = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
@@ -77,13 +77,15 @@ func main() {
 	defer java.Close()
 	logf("opened java-tron stores discovered=%d", len(java.Discovered()))
 	writeInitialJSON("starting comparison")
-	var progressWriteErr error
+	progressJSON := newLiveProgressWriter(liveJSON)
+	progressDifferenceLimit := *liveDiffs
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
 		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay, Workers: *workers,
+		ProgressMaxDifferences: &progressDifferenceLimit,
 		Progress: func(event dbcompare.ProgressEvent) {
-			if liveJSON != nil && event.Snapshot != nil && progressWriteErr == nil {
-				progressWriteErr = liveJSON.Write(liveReportSnapshot(event.Snapshot, *liveDiffs))
+			if event.Snapshot != nil {
+				progressJSON.Submit(liveReportSnapshot(event.Snapshot, *liveDiffs))
 			}
 			if *quiet {
 				return
@@ -108,10 +110,11 @@ func main() {
 		},
 	})
 	if err != nil {
+		_ = progressJSON.Close()
 		fatal("compare databases", err)
 	}
-	if progressWriteErr != nil {
-		fatal("write live JSON report", progressWriteErr)
+	if err := progressJSON.Close(); err != nil {
+		fatal("write live JSON report", err)
 	}
 	report.Sort()
 	logf("comparison complete stores=%d mismatches=%d state_coverage_complete=%t", len(report.Stores), report.Mismatches(), report.StateCoverageComplete)
@@ -161,6 +164,63 @@ func main() {
 // single final JSON document behavior.
 type liveJSONOutput struct {
 	file *os.File
+}
+
+// liveProgressWriter keeps JSON serialization and file replacement off the
+// comparison hot path. Its single-slot queue coalesces stale snapshots: a slow
+// disk should delay visibility of progress, never database comparison itself.
+type liveProgressWriter struct {
+	output *liveJSONOutput
+	queue  chan *dbcompare.Report
+	done   chan struct{}
+	err    error
+}
+
+func newLiveProgressWriter(output *liveJSONOutput) *liveProgressWriter {
+	w := &liveProgressWriter{output: output}
+	if output == nil {
+		return w
+	}
+	w.queue = make(chan *dbcompare.Report, 1)
+	w.done = make(chan struct{})
+	go func() {
+		defer close(w.done)
+		for snapshot := range w.queue {
+			if w.err == nil {
+				w.err = w.output.Write(snapshot)
+			}
+		}
+	}()
+	return w
+}
+
+func (w *liveProgressWriter) Submit(snapshot *dbcompare.Report) {
+	if w == nil || w.output == nil || snapshot == nil {
+		return
+	}
+	select {
+	case w.queue <- snapshot:
+		return
+	default:
+	}
+	// Replace an obsolete queued snapshot without waiting for the writer.
+	select {
+	case <-w.queue:
+	default:
+	}
+	select {
+	case w.queue <- snapshot:
+	default:
+	}
+}
+
+func (w *liveProgressWriter) Close() error {
+	if w == nil || w.output == nil {
+		return nil
+	}
+	close(w.queue)
+	<-w.done
+	return w.err
 }
 
 func newLiveJSONOutput(file *os.File, enabled bool) (*liveJSONOutput, error) {

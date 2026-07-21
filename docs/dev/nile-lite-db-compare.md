@@ -45,8 +45,10 @@ error (including either head not exactly matching `--height`). `--max-diffs`
 caps retained details without changing mismatch counts. When `--json` is
 redirected to a regular file, the file is refreshed during the run;
 `--live-max-diffs` (default 1000) caps only those intermediate snapshots so a
-large final diagnostic set is not re-marshaled every five seconds. The final
-JSON still retains up to `--max-diffs` details.
+large final diagnostic set is not copied, sorted, or re-marshaled every five
+seconds. Live JSON serialization runs asynchronously and coalesces stale
+snapshots, so a slow output disk cannot stall the database scan. The final JSON
+still retains up to `--max-diffs` details.
 
 The comparer enumerates every LevelDB directory in the java-tron input before
 it compares data. A directory must be classified as a supported state store,
@@ -86,11 +88,12 @@ store. Likewise, java-tron's inline `SmartContract.code_hash` is compared with
 go-tron's `StateAccountV2.CodeHash`; bytecode itself remains independently
 checked in `code`. Equivalent logical state is therefore not reported merely
 because the two clients place ABI or code-hash data differently. Contract rows
-are validated by a bounded parallel worker pool. `--workers=0` selects up to
-eight workers from `GOMAXPROCS`; pass `--workers=N` to select an explicit value
-up to 64. Java LevelDB iteration remains sequential, while copied batches
-perform concurrent read-only gtron Pebble lookups and are merged back in
-original key order.
+are validated by a bounded parallel worker pool; the very large `delegation`
+reward-history store uses the same ordered parallel point-lookup model.
+`--workers=0` selects up to eight workers from `GOMAXPROCS`; pass `--workers=N`
+to select an explicit value up to 64. Java LevelDB iteration remains
+sequential, while copied batches perform concurrent read-only gtron Pebble
+lookups and are merged back in original key order.
 
 `storage-row` is compared in both directions. The tool builds a temporary
 Pebble index under the OS temporary directory so a Nile contract-storage dump
