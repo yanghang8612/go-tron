@@ -18,8 +18,10 @@ var javaStoreSpecs = []javaStoreSpec{
 	{Name: "abi", Scope: "state", State: true, Compare: true},
 	{Name: "account", Scope: "state", Required: true, State: true, Compare: true},
 	{Name: "account-asset", Scope: "state", State: true, Compare: true},
+	{Name: "account-asset-issue", Scope: "state-index", State: true, Compare: true},
 	{Name: "account-index", Scope: "state", State: true, Compare: true},
 	{Name: "accountid-index", Scope: "state", State: true, Compare: true},
+	{Name: "accountTrie", Scope: "state-derived", State: true, Compare: true},
 	{Name: "asset-issue", Scope: "state", State: true, Compare: true},
 	{Name: "asset-issue-v2", Scope: "state", State: true, Compare: true},
 	{Name: "code", Scope: "state", State: true, Compare: true},
@@ -31,6 +33,7 @@ var javaStoreSpecs = []javaStoreSpec{
 	{Name: "exchange", Scope: "state", State: true, Compare: true},
 	{Name: "exchange-v2", Scope: "state", State: true, Compare: true},
 	{Name: "IncrementalMerkleTree", Scope: "state", State: true, Compare: true},
+	{Name: "IncrementalMerkleVoucher", Scope: "state-cache", State: true, Compare: true},
 	{Name: "market_account", Scope: "state", State: true, Compare: true},
 	{Name: "market_order", Scope: "state", State: true, Compare: true},
 	{Name: "market_pair_price_to_order", Scope: "state", State: true, Compare: true},
@@ -49,9 +52,6 @@ var javaStoreSpecs = []javaStoreSpec{
 
 	// These stores exist in newer java-tron builds but go-tron has no matching
 	// state model yet. Presence is therefore a hard incomplete-coverage result.
-	{Name: "accountTrie", Scope: "unsupported-state", State: true},
-	{Name: "account-asset-issue", Scope: "unsupported-state", State: true},
-	{Name: "IncrementalMerkleVoucher", Scope: "unsupported-state", State: true},
 	{Name: "staker", Scope: "unsupported-state", State: true},
 	{Name: "staker-index", Scope: "unsupported-state", State: true},
 	{Name: "tracker", Scope: "unsupported-state", State: true},

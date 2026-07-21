@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/google/go-cmp/cmp"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -19,10 +20,13 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 type byteLookup func(key []byte) (value []byte, present bool, err error)
 type protoLookup func(key []byte, java proto.Message) (gtron proto.Message, present bool, err error)
+type byteValueComparator func(key, java, gtron []byte) (equal bool, detail string, err error)
+type byteRowClassifier func(key []byte) string
 
 type byteComparisonJob struct {
 	slot  int
@@ -78,10 +82,35 @@ func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore
 // large byte stores such as java-tron's delegation/reward history, where tens
 // of millions of serial Pebble Gets otherwise dominate the audit.
 func (c *comparer) compareByteStoreParallel(name, scope string, java ethdb.KeyValueStore, lookup byteLookup) error {
+	return c.compareByteStoreParallelDetailed(name, scope, java, lookup, nil, nil)
+}
+
+func (c *comparer) compareByteStoreParallelDetailed(
+	name, scope string,
+	java ethdb.KeyValueStore,
+	lookup byteLookup,
+	compare byteValueComparator,
+	classify byteRowClassifier,
+) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
 	defer c.trackStore(&r)()
+	if classify != nil {
+		r.Breakdown = make(map[string]*StoreBreakdown)
+	}
 	if java == nil {
 		return nil
+	}
+	categoryResult := func(key []byte) (string, *StoreBreakdown) {
+		if classify == nil {
+			return "", nil
+		}
+		category := classify(key)
+		result := r.Breakdown[category]
+		if result == nil {
+			result = new(StoreBreakdown)
+			r.Breakdown[category] = result
+		}
+		return category, result
 	}
 
 	workers := c.workerCount()
@@ -119,22 +148,60 @@ func (c *comparer) compareByteStoreParallel(name, scope string, java ethdb.KeyVa
 		for _, result := range ordered {
 			progress.Add(1)
 			key := printableKey(result.key)
+			category, categoryStats := categoryResult(result.key)
 			if result.err != nil {
 				r.Invalid++
-				c.addDiff(name, key, "invalid_java_key", result.err.Error())
+				if categoryStats != nil {
+					categoryStats.Invalid++
+				}
+				c.addCategorizedDiff(name, key, "invalid_java_key", category, result.err.Error())
 				continue
 			}
 			if !result.present {
 				r.MissingGtron++
-				c.addDiff(name, key, "missing_gtron", "corresponding gtron state row not found")
+				if categoryStats != nil {
+					categoryStats.MissingGtron++
+				}
+				c.addCategorizedDiff(name, key, "missing_gtron", category, "corresponding gtron state row not found")
 				continue
 			}
 			r.Compared++
-			if bytes.Equal(result.want, result.got) {
+			if categoryStats != nil {
+				categoryStats.Compared++
+			}
+			equal := bytes.Equal(result.want, result.got)
+			detail := ""
+			var err error
+			if !equal && compare != nil {
+				equal, detail, err = compare(result.key, result.want, result.got)
+			}
+			if err != nil {
+				r.Invalid++
+				r.Compared--
+				if categoryStats != nil {
+					categoryStats.Invalid++
+					categoryStats.Compared--
+				}
+				c.addCategorizedDiff(name, key, "invalid_value", category, err.Error())
+				continue
+			}
+			if equal {
 				r.Equal++
+				if categoryStats != nil {
+					categoryStats.Equal++
+				}
 			} else {
 				r.Different++
-				c.addByteDiff(name, key, result.want, result.got)
+				if categoryStats != nil {
+					categoryStats.Different++
+				}
+				if detail != "" {
+					c.addCategorizedDiff(name, key, "different", category, truncate(detail, maxDetailLen))
+				} else if category == "" {
+					c.addByteDiff(name, key, result.want, result.got)
+				} else if !c.differenceLimitReached(name, "different", category) {
+					c.addCategorizedDiff(name, key, "different", category, byteDiffDetail(result.want, result.got))
+				}
 			}
 		}
 	}
@@ -202,6 +269,12 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		func() error { return c.compareAccountIndex(sdb, java.Store("account-index"), false) },
 		func() error { return c.compareAccountIndex(sdb, java.Store("accountid-index"), true) },
 		func() error { return c.compareAccountAssets(sdb, java.Store("account-asset")) },
+		func() error {
+			return c.compareJavaOnlyCompatibilityStore("account-asset-issue", "state-index", java.Store("account-asset-issue"))
+		},
+		func() error {
+			return c.compareJavaOnlyCompatibilityStore("accountTrie", "state-derived", java.Store("accountTrie"))
+		},
 		func() error { return c.compareAssetIssues(sdb, java.Store("asset-issue"), false) },
 		func() error { return c.compareAssetIssues(sdb, java.Store("asset-issue-v2"), true) },
 		func() error { return c.compareContractStates(sdb, java.Store("contract-state")) },
@@ -215,6 +288,9 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		func() error { return c.compareMarket(sdb, java) },
 		func() error { return c.compareNullifiers(sdb, java.Store("nullifier")) },
 		func() error { return c.compareMerkleTrees(sdb, java.Store("IncrementalMerkleTree")) },
+		func() error {
+			return c.compareJavaOnlyCompatibilityStore("IncrementalMerkleVoucher", "state-cache", java.Store("IncrementalMerkleVoucher"))
+		},
 		func() error { return c.compareProposals(sdb, java.Store("proposal")) },
 		func() error { return c.compareRecentBlocks(gtron, java.Store("recent-block")) },
 		func() error { return c.compareRewardVI(gtron, java.Store("reward-vi")) },
@@ -230,6 +306,17 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		}
 	}
 	return nil
+}
+
+// compareJavaOnlyCompatibilityStore closes the coverage gap for java-tron
+// stores that are empty on the audited Nile lite database and for which gtron
+// has no physical equivalent. Presence alone is supported; any future Java row
+// is retained as an explicit missing_gtron mismatch instead of being skipped or
+// silently declared equal.
+func (c *comparer) compareJavaOnlyCompatibilityStore(name, scope string, java ethdb.KeyValueStore) error {
+	return c.compareByteStore(name, scope, java, func([]byte) ([]byte, bool, error) {
+		return nil, false, nil
+	})
 }
 
 func (c *comparer) compareAccountIndex(sdb *state.StateDB, java ethdb.KeyValueStore, id bool) error {
@@ -365,13 +452,47 @@ func (c *comparer) compareDelegation(sdb *state.StateDB, java ethdb.KeyValueStor
 	// GetAccountKV calls only read the cached envelope and immutable latest
 	// state, avoiding concurrent cache population inside StateDB.
 	_ = sdb.GetAccount(tcommon.SystemAccountAddress)
-	return c.compareByteStoreParallel("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
+	return c.compareByteStoreParallelDetailed("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
 		logical, err := delegationLogicalKey(key)
 		if err != nil {
 			return nil, false, err
 		}
 		return sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
-	})
+	}, compareDelegationValue, delegationRowCategory)
+}
+
+func compareDelegationValue(key, java, gtron []byte) (bool, string, error) {
+	if delegationRowCategory(key) != "account-vote" {
+		return false, "", nil
+	}
+	var want corepb.Account
+	if err := proto.Unmarshal(java, &want); err != nil {
+		return false, "", fmt.Errorf("decode java account-vote: %w", err)
+	}
+	var got corepb.Account
+	if err := proto.Unmarshal(gtron, &got); err != nil {
+		return false, "", fmt.Errorf("decode gtron account-vote: %w", err)
+	}
+	if proto.Equal(&want, &got) {
+		return true, "", nil
+	}
+	return false, cmp.Diff(&want, &got, protocmp.Transform()), nil
+}
+
+func delegationRowCategory(key []byte) string {
+	if len(key) == tcommon.AddressLength && key[0] == tcommon.AddressPrefixMainnet {
+		return "begin-cycle"
+	}
+	text := string(key)
+	if strings.HasPrefix(text, "end-") {
+		return "end-cycle"
+	}
+	for _, category := range []string{"account-vote", "brokerage", "reward", "vote", "vi"} {
+		if strings.HasSuffix(text, "-"+category) {
+			return category
+		}
+	}
+	return "unknown"
 }
 
 func delegationLogicalKey(key []byte) ([]byte, error) {

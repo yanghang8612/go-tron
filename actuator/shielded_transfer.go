@@ -29,10 +29,12 @@ const (
 
 	// Nile's first Sapling-era shielded transfers were produced while
 	// java-tron was still changing proof/sign-hash handling. Until the full
-	// historical verifier is ported, replay signed Nile blocks in fee-only mode
-	// from the first observed shielded block forward: preserve transparent ZEN
-	// and fee accounting, but do not trust or persist anonymous note state.
-	historicalNileShieldedFeeOnlyStartBlock = 1_685_186
+	// historical verifier is ported, trust java-tron's successful contractRet
+	// from the first observed shielded block forward for proof/anchor validation.
+	// Execution must still persist nullifiers, note commitments, and the Merkle
+	// tree: those are java-tron consensus state even when verification is
+	// bypassed during historical replay.
+	historicalNileShieldedProofCompatStartBlock = 1_685_186
 
 	// These first observed Nile shielded transfers predate java-tron's
 	// ShieldedTransactionCreateAccountFee logic. Even transparent-out transfers
@@ -167,7 +169,7 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 		}
 	}
 
-	feeOnlyReplay := isHistoricalNileShieldedFeeOnlyReplay(ctx)
+	proofCompatReplay := isHistoricalNileShieldedProofCompatReplay(ctx)
 
 	// Check for double spends
 	seenNullifiers := make(map[string]struct{}, len(c.SpendDescription))
@@ -180,7 +182,7 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 			return errors.New("duplicate sapling nullifiers in this transaction")
 		}
 		seenNullifiers[key] = struct{}{}
-		if !feeOnlyReplay {
+		if !proofCompatReplay {
 			if !ctx.State.HasIncrMerkleTree(spend.Anchor) {
 				return errors.New("Rt is invalid.")
 			}
@@ -225,12 +227,12 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 
 	txHash := ctx.Tx.Hash()
 	txID := txHash.Bytes()
-	skipProofVerification := feeOnlyReplay
+	skipProofVerification := proofCompatReplay
 	if cached, ok := ctx.State.ReadZKProofResult(txID); ok {
 		if cached {
 			return nil
 		}
-		if feeOnlyReplay || isHistoricalShieldedProofCompatAllowed(ctx, txHash) {
+		if proofCompatReplay || isHistoricalShieldedProofCompatAllowed(ctx, txHash) {
 			skipProofVerification = true
 		} else {
 			return errors.New("record is fail, skip proof")
@@ -279,8 +281,8 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 	return ctx.State.WriteZKProofResult(txID, true)
 }
 
-func isHistoricalNileShieldedFeeOnlyReplay(ctx *Context) bool {
-	if ctx == nil || ctx.BlockNumber < historicalNileShieldedFeeOnlyStartBlock {
+func isHistoricalNileShieldedProofCompatReplay(ctx *Context) bool {
+	if ctx == nil || ctx.BlockNumber < historicalNileShieldedProofCompatStartBlock {
 		return false
 	}
 	ret, ok := expectedContractRet(ctx)
@@ -298,7 +300,7 @@ func usesHistoricalNileShieldedSingleFee(ctx *Context) bool {
 	if ctx == nil || ctx.BlockNumber > historicalNileShieldedSingleFeeEndBlock {
 		return false
 	}
-	return isHistoricalNileShieldedFeeOnlyReplay(ctx)
+	return isHistoricalNileShieldedProofCompatReplay(ctx)
 }
 
 func isHistoricalShieldedProofCompatAllowed(ctx *Context, txHash common.Hash) bool {
@@ -401,7 +403,6 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 
 	zenID := ctx.DynProps.ZenTokenID()
 	fee := a.calcFee(ctx, c)
-	feeOnlyReplay := isHistoricalNileShieldedFeeOnlyReplay(ctx)
 
 	// Deduct ZEN from transparent sender. The shielded fee is credited to
 	// Blackhole and removed from the pool adjustment, matching java-tron.
@@ -416,40 +417,40 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	ctx.State.AddTRC10Balance(ctx.State.BlackholeAddress(), zenID, fee)
 
-	if !feeOnlyReplay {
-		// Record spend nullifiers to prevent double-spend
-		for _, spend := range c.SpendDescription {
-			if len(spend.Nullifier) == 0 {
-				continue
-			}
-			if err := ctx.State.WriteNullifier(spend.Nullifier); err != nil {
-				return nil, err
-			}
+	// Record spend nullifiers to prevent double-spend. Historical proof
+	// compatibility changes validation only; java-tron still committed this
+	// anonymous state for every successful transaction.
+	for _, spend := range c.SpendDescription {
+		if len(spend.Nullifier) == 0 {
+			continue
 		}
+		if err := ctx.State.WriteNullifier(spend.Nullifier); err != nil {
+			return nil, err
+		}
+	}
 
-		// Record note commitments. Two stores are updated:
-		//   1. AppendNoteCommitment writes the sequential cm index store
-		//      (java-tron's NoteCommitmentStore — used by wallet APIs).
-		//   2. MerkleContainer.AppendCommitment appends to the Sapling
-		//      incremental commitment tree (CURRENT_TREE) so the next block's
-		//      spend anchors can be validated.
-		//
-		// The tree state was reset from LAST_TREE before tx execution (see
-		// BlockChain.applyBlock) and is promoted back into LAST_TREE after
-		// the tx loop succeeds.
-		merkle := zksnark.NewMerkleContainer(ctx.State)
-		for _, recv := range c.ReceiveDescription {
-			if len(recv.NoteCommitment) == 0 {
-				continue
-			}
-			if err := ctx.State.AppendNoteCommitment(recv.NoteCommitment); err != nil {
-				return nil, err
-			}
-			var cm zksnark.PedersenHash
-			copy(cm[:], recv.NoteCommitment)
-			if err := merkle.AppendCommitment(cm); err != nil {
-				return nil, fmt.Errorf("append commitment to merkle tree: %w", err)
-			}
+	// Record note commitments. Two stores are updated:
+	//   1. AppendNoteCommitment writes the sequential cm index store
+	//      (java-tron's NoteCommitmentStore — used by wallet APIs).
+	//   2. MerkleContainer.AppendCommitment appends to the Sapling
+	//      incremental commitment tree (CURRENT_TREE) so the next block's
+	//      spend anchors can be validated.
+	//
+	// The tree state was reset from LAST_TREE before tx execution (see
+	// BlockChain.applyBlock) and is promoted back into LAST_TREE after
+	// the tx loop succeeds.
+	merkle := zksnark.NewMerkleContainer(ctx.State)
+	for _, recv := range c.ReceiveDescription {
+		if len(recv.NoteCommitment) == 0 {
+			continue
+		}
+		if err := ctx.State.AppendNoteCommitment(recv.NoteCommitment); err != nil {
+			return nil, err
+		}
+		var cm zksnark.PedersenHash
+		copy(cm[:], recv.NoteCommitment)
+		if err := merkle.AppendCommitment(cm); err != nil {
+			return nil, fmt.Errorf("append commitment to merkle tree: %w", err)
 		}
 	}
 

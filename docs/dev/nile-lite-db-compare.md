@@ -65,8 +65,8 @@ silently adding state that the audit does not inspect.
 
 The full supported state-store set is:
 
-- account state: `account`, `account-asset`, `account-index`,
-  `accountid-index`;
+- account state: `account`, `account-asset`, `account-asset-issue`,
+  `account-index`, `accountid-index`, `accountTrie`;
 - witness/governance: `witness`, `witness_schedule`, `votes`, `proposal`,
   `properties`;
 - assets and exchanges: `asset-issue`, `asset-issue-v2`, `exchange`,
@@ -77,7 +77,8 @@ The full supported state-store set is:
 - market: `market_account`, `market_order`, `market_pair_to_price`,
   `market_pair_price_to_order`;
 - shielded/TAPOS state and indexes: `nullifier`, `zkProof`,
-  `IncrementalMerkleTree`, `tree-block-index`, `recent-block`.
+  `IncrementalMerkleTree`, `IncrementalMerkleVoucher`,
+  `tree-block-index`, `recent-block`.
 
 Java `FORK_VERSION_*` and `FORK_CONTROLLER<version>` rows are checked against
 gtron's rooted fork controller. Unknown dynamic-property rows are mismatches,
@@ -100,6 +101,14 @@ to select an explicit value up to 64. Java LevelDB iteration remains
 sequential, while copied batches perform concurrent read-only gtron Pebble
 lookups and are merged back in original key order.
 
+The `delegation` result includes a live `breakdown` for `begin-cycle`,
+`end-cycle`, `account-vote`, `brokerage`, `reward`, `vote`, `vi`, and malformed
+`unknown` rows. Retained differences carry the same `category`, so sampling is
+balanced across both mismatch kind and logical subtype. `account-vote` values
+are decoded as `Account` protobufs and compared semantically; protobuf map-entry
+serialization order is ignored, while real field differences are emitted as a
+field-level protobuf diff.
+
 `storage-row` is compared in both directions. The tool builds a temporary
 Pebble index under the OS temporary directory so a Nile contract-storage dump
 does not need to fit in memory; plan for temporary free disk roughly equal to
@@ -107,14 +116,13 @@ the live storage-row data size. Accounts are also scanned in both directions
 by default. Stores absent from a particular lite package are reported as
 `present=false` and do not make coverage incomplete.
 
-Current java-tron builds may contain `accountTrie`, `account-asset-issue`,
-`IncrementalMerkleVoucher`, `staker`, `staker-index`, or `tracker`. go-tron has
-no equivalent state model for these stores yet. If
-any is present, it is reported in `unsupported_state_stores` and the audit
-cannot pass. Its row count is still emitted as `skipped` in the per-store
-result, so the report shows whether the unsupported store is empty or carries
-data. This is intentional: implementing or explicitly scoping that state comes
-before claiming parity.
+The audited Nile lite database contains the physical directories
+`accountTrie`, `account-asset-issue`, and `IncrementalMerkleVoucher`, but they
+are empty at the target head. They are inspected as compatibility stores: an
+empty store passes, while any future Java row is reported as `missing_gtron`
+until go-tron has an equivalent physical model. `staker`, `staker-index`, and
+`tracker` remain unsupported state stores; if any is present, it is reported in
+`unsupported_state_stores` and the audit cannot claim complete coverage.
 
 The following discovered stores are classified but excluded from the mutable
 head-state result: chain data (`block`, `block-index`, `trans`), history/audit

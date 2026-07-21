@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 
@@ -336,7 +337,7 @@ func TestHistoricalShieldedProofCompatEntriesRequireMatchingRet(t *testing.T) {
 	}
 }
 
-func TestHistoricalNileShieldedFeeOnlyReplayCoversKnownFailureBlocks(t *testing.T) {
+func TestHistoricalNileShieldedProofCompatReplayCoversKnownFailureBlocks(t *testing.T) {
 	for _, entry := range historicalShieldedProofCompatEntries {
 		ctx := &Context{
 			BlockNumber:         entry.blockNumber,
@@ -346,21 +347,21 @@ func TestHistoricalNileShieldedFeeOnlyReplayCoversKnownFailureBlocks(t *testing.
 				ContractRet: entry.contractRet,
 			}}}),
 		}
-		if !isHistoricalNileShieldedFeeOnlyReplay(ctx) {
-			t.Fatalf("known Nile shielded block should use fee-only replay: block=%d tx=%s", entry.blockNumber, entry.txHash)
+		if !isHistoricalNileShieldedProofCompatReplay(ctx) {
+			t.Fatalf("known Nile shielded block should use proof-compatible replay: block=%d tx=%s", entry.blockNumber, entry.txHash)
 		}
 	}
 }
 
-func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.T) {
-	nullifier := fixedShieldedBytes("historical fee-only nullifier", zcElementSize)
+func TestHistoricalNileShieldedProofCompatReplaySkipsAnonymousValidation(t *testing.T) {
+	nullifier := fixedShieldedBytes("historical proof-compatible nullifier", zcElementSize)
 	c := &contractpb.ShieldedTransferContract{
 		SpendDescription: []*contractpb.SpendDescription{{
 			Nullifier: nullifier,
 			Anchor:    fixedShieldedBytes("missing historical anchor", zcElementSize),
 		}},
 		ReceiveDescription: []*contractpb.ReceiveDescription{{
-			NoteCommitment: fixedShieldedBytes("historical fee-only cm", zcElementSize),
+			NoteCommitment: fixedShieldedBytes("historical proof-compatible cm", zcElementSize),
 		}},
 	}
 	ctx := setupShieldedCtx(t, c)
@@ -376,14 +377,14 @@ func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.
 	}
 
 	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
-		t.Fatalf("historical Nile fee-only replay should skip anonymous validation: %v", err)
+		t.Fatalf("historical Nile proof-compatible replay should skip anonymous validation: %v", err)
 	}
 	if cached, ok := ctx.State.ReadZKProofResult(ctx.Tx.Hash().Bytes()); !ok || !cached {
 		t.Fatalf("proof cache: got (%v,%v), want (true,true)", cached, ok)
 	}
 }
 
-func TestHistoricalNileShieldedFeeOnlyReplayExecuteVisibleAccountingByShape(t *testing.T) {
+func TestHistoricalNileShieldedProofCompatReplayPersistsStateByShape(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x11}
 	to := tcommon.Address{0x41, 0x22}
 
@@ -482,25 +483,25 @@ func TestHistoricalNileShieldedFeeOnlyReplayExecuteVisibleAccountingByShape(t *t
 				t.Fatalf("pool value: want %d, got %d", tc.wantPool, got)
 			}
 			for _, spend := range tc.contract.SpendDescription {
-				if ctx.State.HasNullifier(spend.Nullifier) {
-					t.Fatal("historical fee-only replay must not persist nullifiers")
+				if !ctx.State.HasNullifier(spend.Nullifier) {
+					t.Fatal("historical proof-compatible replay must persist nullifiers")
 				}
 			}
-			if got := ctx.State.NoteCommitmentCount(); got != 0 {
-				t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
+			if got, want := ctx.State.NoteCommitmentCount(), int64(len(tc.contract.ReceiveDescription)); got != want {
+				t.Fatalf("note commitment count: got %d, want %d", got, want)
 			}
 		})
 	}
 }
 
-func TestHistoricalNileShieldedFeeOnlyReplayRequiresTrustedSuccessRet(t *testing.T) {
+func TestHistoricalNileShieldedProofCompatReplayRequiresTrustedSuccessRet(t *testing.T) {
 	c := &contractpb.ShieldedTransferContract{
 		SpendDescription: []*contractpb.SpendDescription{{
-			Nullifier: fixedShieldedBytes("historical fee-only nullifier", zcElementSize),
+			Nullifier: fixedShieldedBytes("historical proof-compatible nullifier", zcElementSize),
 			Anchor:    fixedShieldedBytes("missing historical anchor", zcElementSize),
 		}},
 		ReceiveDescription: []*contractpb.ReceiveDescription{{
-			NoteCommitment: fixedShieldedBytes("historical fee-only cm", zcElementSize),
+			NoteCommitment: fixedShieldedBytes("historical proof-compatible cm", zcElementSize),
 		}},
 	}
 	ctx := setupShieldedCtx(t, c)
@@ -513,7 +514,7 @@ func TestHistoricalNileShieldedFeeOnlyReplayRequiresTrustedSuccessRet(t *testing
 
 	err := (&ShieldedTransferActuator{}).Validate(ctx)
 	if err == nil {
-		t.Fatal("untrusted ret should not enable historical Nile fee-only replay")
+		t.Fatal("untrusted ret should not enable historical Nile proof-compatible replay")
 	}
 	if err.Error() != "Rt is invalid." {
 		t.Fatalf("unexpected error: %v", err)
@@ -629,9 +630,9 @@ func TestShieldedTransferExecuteTransparentOut(t *testing.T) {
 	}
 }
 
-func TestHistoricalNileShieldedFeeOnlyReplayExecuteKeepsVisibleAccountingOnly(t *testing.T) {
-	nullifier := fixedShieldedBytes("historical fee-only nullifier", zcElementSize)
-	commitment := fixedShieldedBytes("historical fee-only cm", zcElementSize)
+func TestHistoricalNileShieldedProofCompatReplayPersistsAnonymousState(t *testing.T) {
+	nullifier := fixedShieldedBytes("historical proof-compatible nullifier", zcElementSize)
+	commitment := fixedShieldedBytes("historical proof-compatible cm", zcElementSize)
 	c := &contractpb.ShieldedTransferContract{
 		SpendDescription: []*contractpb.SpendDescription{{
 			Nullifier: nullifier,
@@ -660,14 +661,18 @@ func TestHistoricalNileShieldedFeeOnlyReplayExecuteKeepsVisibleAccountingOnly(t 
 	if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != 10_000_000 {
 		t.Fatalf("blackhole ZEN balance: want 10000000, got %d", got)
 	}
-	if ctx.State.HasNullifier(nullifier) {
-		t.Fatal("historical fee-only replay must not persist nullifiers")
+	if !ctx.State.HasNullifier(nullifier) {
+		t.Fatal("historical proof-compatible replay must persist nullifiers")
 	}
-	if got := ctx.State.NoteCommitmentCount(); got != 0 {
-		t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
+	if got := ctx.State.NoteCommitmentCount(); got != 1 {
+		t.Fatalf("note commitment count: got %d, want 1", got)
 	}
-	if got := ctx.State.ReadNoteCommitment(0); got != nil {
-		t.Fatalf("historical fee-only replay persisted commitment: %x", got)
+	if got := ctx.State.ReadNoteCommitment(0); !bytes.Equal(got, commitment) {
+		t.Fatalf("note commitment: got %x, want %x", got, commitment)
+	}
+	current := ctx.State.ReadCurrentMerkleTree()
+	if current == nil || current.Left == nil || !bytes.Equal(current.Left.Content, commitment) {
+		t.Fatalf("current Merkle tree did not retain commitment: %+v", current)
 	}
 	if got := ctx.DynProps.TotalShieldedPoolValue(); got != 900_000 {
 		t.Fatalf("pool value: want 900000, got %d", got)

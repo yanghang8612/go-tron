@@ -68,23 +68,36 @@ type Options struct {
 // Options.MaxDifferencesPerStore so an early high-volume store cannot consume
 // every diagnostic slot.
 type Difference struct {
-	Store  string `json:"store"`
-	Key    string `json:"key"`
-	Kind   string `json:"kind"`
-	Detail string `json:"detail,omitempty"`
+	Store    string `json:"store"`
+	Key      string `json:"key"`
+	Kind     string `json:"kind"`
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
-type StoreResult struct {
-	Name         string `json:"name"`
-	Scope        string `json:"scope"`
+// StoreBreakdown splits a large heterogeneous physical store into logical
+// row categories. delegation uses this to keep account-vote, brokerage,
+// reward, vote, vi, and cycle-marker counts independently visible.
+type StoreBreakdown struct {
 	Compared     uint64 `json:"compared"`
 	Equal        uint64 `json:"equal"`
 	Different    uint64 `json:"different"`
 	MissingGtron uint64 `json:"missing_gtron"`
-	MissingJava  uint64 `json:"missing_java"`
 	Invalid      uint64 `json:"invalid"`
-	Skipped      uint64 `json:"skipped"`
-	Present      bool   `json:"present"`
+}
+
+type StoreResult struct {
+	Name         string                     `json:"name"`
+	Scope        string                     `json:"scope"`
+	Compared     uint64                     `json:"compared"`
+	Equal        uint64                     `json:"equal"`
+	Different    uint64                     `json:"different"`
+	MissingGtron uint64                     `json:"missing_gtron"`
+	MissingJava  uint64                     `json:"missing_java"`
+	Invalid      uint64                     `json:"invalid"`
+	Skipped      uint64                     `json:"skipped"`
+	Present      bool                       `json:"present"`
+	Breakdown    map[string]*StoreBreakdown `json:"breakdown,omitempty"`
 }
 
 func (s StoreResult) Mismatches() uint64 {
@@ -263,21 +276,21 @@ func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
 	snapshot.UnsupportedStateStores = append([]string(nil), c.report.UnsupportedStateStores...)
 	snapshot.UnclassifiedStores = append([]string(nil), c.report.UnclassifiedStores...)
 	snapshot.ExcludedStores = append([]string(nil), c.report.ExcludedStores...)
-	snapshot.Stores = append([]StoreResult(nil), c.report.Stores...)
+	snapshot.Stores = cloneStoreResults(c.report.Stores)
 	differenceLimit := len(c.report.Differences)
 	if c.opts.ProgressMaxDifferences != nil && differenceLimit > *c.opts.ProgressMaxDifferences {
 		differenceLimit = *c.opts.ProgressMaxDifferences
 	}
 	snapshot.Differences = sampleDifferencesByStoreKind(c.report.Differences, differenceLimit)
 	if event.Result.Name != "" && event.Phase != "done" {
-		snapshot.Stores = append(snapshot.Stores, event.Result)
+		snapshot.Stores = append(snapshot.Stores, cloneStoreResult(event.Result))
 	}
 	snapshot.Progress = &ReportProgress{
 		Phase: event.Phase, Store: event.Store, Stage: event.Detail, Rows: event.Rows,
 		ElapsedMillis: event.Elapsed.Milliseconds(),
 	}
 	if event.Result.Name != "" {
-		current := event.Result
+		current := cloneStoreResult(event.Result)
 		snapshot.Progress.CurrentResult = &current
 	}
 	snapshot.Progress.Mismatches = snapshot.Mismatches()
@@ -285,9 +298,32 @@ func (c *comparer) progressSnapshot(event ProgressEvent) *Report {
 	return &snapshot
 }
 
+func cloneStoreResults(results []StoreResult) []StoreResult {
+	out := make([]StoreResult, len(results))
+	for i, result := range results {
+		out[i] = cloneStoreResult(result)
+	}
+	return out
+}
+
+func cloneStoreResult(result StoreResult) StoreResult {
+	if result.Breakdown != nil {
+		breakdown := make(map[string]*StoreBreakdown, len(result.Breakdown))
+		for category, stats := range result.Breakdown {
+			if stats == nil {
+				continue
+			}
+			cloned := *stats
+			breakdown[category] = &cloned
+		}
+		result.Breakdown = breakdown
+	}
+	return result
+}
+
 // sampleDifferencesByStoreKind fills a bounded live snapshot round-robin across
-// store+kind groups. A run of early missing_gtron rows therefore cannot hide
-// later "different" rows from the same store (or every later store).
+// store+kind+category groups. A run of early missing_gtron rows therefore
+// cannot hide later "different" rows or later logical subtypes.
 func sampleDifferencesByStoreKind(differences []Difference, limit int) []Difference {
 	if limit <= 0 || len(differences) == 0 {
 		return nil
@@ -298,7 +334,7 @@ func sampleDifferencesByStoreKind(differences []Difference, limit int) []Differe
 	order := make([]string, 0)
 	groups := make(map[string][]Difference)
 	for _, difference := range differences {
-		group := differenceGroup(difference.Store, difference.Kind)
+		group := differenceGroup(difference.Store, difference.Kind, difference.Category)
 		if _, ok := groups[group]; !ok {
 			order = append(order, group)
 		}
@@ -346,7 +382,13 @@ func sampleDifferencesPerStore(differences []Difference, limit int) []Difference
 	return out
 }
 
-func differenceGroup(store, kind string) string { return store + "\x00" + kind }
+func differenceGroup(store, kind string, category ...string) string {
+	group := store + "\x00" + kind
+	if len(category) != 0 && category[0] != "" {
+		group += "\x00" + category[0]
+	}
+	return group
+}
 
 func (c *comparer) beginStore(result StoreResult) time.Time {
 	started := time.Now()
@@ -1090,18 +1132,23 @@ func (c *comparer) addByteDiff(store, key string, java, gtron []byte) {
 	if c.differenceLimitReached(store, "different") {
 		return
 	}
-	c.addDiff(store, key, "different", fmt.Sprintf("java(len=%d sha256=%x value=%s) gtron(len=%d sha256=%x value=%s)",
-		len(java), sha256.Sum256(java), shortHex(java), len(gtron), sha256.Sum256(gtron), shortHex(gtron)))
+	c.addDiff(store, key, "different", byteDiffDetail(java, gtron))
 }
 
-func (c *comparer) differenceLimitReached(store, kind string) bool {
+func byteDiffDetail(java, gtron []byte) string {
+	return fmt.Sprintf("java(len=%d sha256=%x value=%s) gtron(len=%d sha256=%x value=%s)",
+		len(java), sha256.Sum256(java), shortHex(java), len(gtron), sha256.Sum256(gtron), shortHex(gtron))
+}
+
+func (c *comparer) differenceLimitReached(store, kind string, category ...string) bool {
 	// With a per-store budget, retain each store's candidates first and apply
 	// the global cap round-robin after every store has been visited. Otherwise
 	// comparison order would let early stores exhaust the global budget.
 	if c.opts.MaxDifferencesPerStore <= 0 && len(c.report.Differences) >= c.opts.MaxDifferences {
 		return true
 	}
-	return c.opts.MaxDifferencesPerStore > 0 && c.differencesByStoreKind[differenceGroup(store, kind)] >= c.opts.MaxDifferencesPerStore
+	return c.opts.MaxDifferencesPerStore > 0 &&
+		c.differencesByStoreKind[differenceGroup(store, kind, category...)] >= c.opts.MaxDifferencesPerStore
 }
 
 func (c *comparer) finalizeDifferenceSamples() {
@@ -1114,14 +1161,20 @@ func (c *comparer) finalizeDifferenceSamples() {
 }
 
 func (c *comparer) addDiff(store, key, kind, detail string) {
-	if c.differenceLimitReached(store, kind) {
+	c.addCategorizedDiff(store, key, kind, "", detail)
+}
+
+func (c *comparer) addCategorizedDiff(store, key, kind, category, detail string) {
+	if c.differenceLimitReached(store, kind, category) {
 		return
 	}
-	c.report.Differences = append(c.report.Differences, Difference{Store: store, Key: key, Kind: kind, Detail: detail})
+	c.report.Differences = append(c.report.Differences, Difference{
+		Store: store, Key: key, Kind: kind, Category: category, Detail: detail,
+	})
 	if c.differencesByStoreKind == nil {
 		c.differencesByStoreKind = make(map[string]int)
 	}
-	c.differencesByStoreKind[differenceGroup(store, kind)]++
+	c.differencesByStoreKind[differenceGroup(store, kind, category)]++
 }
 
 func shortHex(b []byte) string {

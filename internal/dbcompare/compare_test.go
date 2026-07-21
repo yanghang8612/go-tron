@@ -1,9 +1,11 @@
 package dbcompare
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -193,6 +196,121 @@ func TestCompareDelegationParallelStateReads(t *testing.T) {
 	result := c.report.Stores[0]
 	if result.Compared != rows || result.Equal != rows || result.Mismatches() != 0 {
 		t.Fatalf("delegation result=%+v", result)
+	}
+}
+
+func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New(tcommon.Hash{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := rawdb.NewMemoryDatabase()
+	addr := address(0x44)
+
+	base, err := proto.Marshal(&corepb.Account{Address: addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendAsset := func(out []byte, key string, value uint64) []byte {
+		entry := protowire.AppendTag(nil, 1, protowire.BytesType)
+		entry = protowire.AppendString(entry, key)
+		entry = protowire.AppendTag(entry, 2, protowire.VarintType)
+		entry = protowire.AppendVarint(entry, value)
+		out = protowire.AppendTag(out, 6, protowire.BytesType)
+		return protowire.AppendBytes(out, entry)
+	}
+	javaSemantic := appendAsset(appendAsset(append([]byte(nil), base...), "A", 1), "B", 2)
+	gtronSemantic := appendAsset(appendAsset(append([]byte(nil), base...), "B", 2), "A", 1)
+	if bytes.Equal(javaSemantic, gtronSemantic) {
+		t.Fatal("test requires distinct protobuf map-entry ordering")
+	}
+	if err := sdb.WriteCycleAccountVote(1, addr, gtronSemantic); err != nil {
+		t.Fatal(err)
+	}
+	if err := java.Put([]byte(fmt.Sprintf("1-%x-account-vote", addr)), javaSemantic); err != nil {
+		t.Fatal(err)
+	}
+
+	javaDifferent, err := proto.Marshal(&corepb.Account{
+		Address: addr, Votes: []*corepb.Vote{{VoteAddress: address(1), VoteCount: 7}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gtronDifferent, err := proto.Marshal(&corepb.Account{
+		Address: addr, Votes: []*corepb.Vote{{VoteAddress: address(1), VoteCount: 8}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.WriteCycleAccountVote(2, addr, gtronDifferent); err != nil {
+		t.Fatal(err)
+	}
+	if err := java.Put([]byte(fmt.Sprintf("2-%x-account-vote", addr)), javaDifferent); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sdb.WriteCycleReward(3, addr, 30); err != nil {
+		t.Fatal(err)
+	}
+	var reward [8]byte
+	binary.BigEndian.PutUint64(reward[:], 30)
+	if err := java.Put([]byte(fmt.Sprintf("3-%x-reward", addr)), reward[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := java.Put([]byte(fmt.Sprintf("-1-%x-brokerage", addr)), []byte{0, 0, 0, 20}); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.New(root, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &comparer{
+		opts:   Options{MaxDifferences: 10, MaxDifferencesPerStore: 10, Workers: 2},
+		report: new(Report),
+	}
+	if err := c.compareDelegation(reopened, java); err != nil {
+		t.Fatal(err)
+	}
+	result := c.report.Stores[0]
+	if result.Compared != 3 || result.Equal != 2 || result.Different != 1 || result.MissingGtron != 1 {
+		t.Fatalf("delegation result=%+v", result)
+	}
+	accountVote := result.Breakdown["account-vote"]
+	if accountVote == nil || accountVote.Compared != 2 || accountVote.Equal != 1 || accountVote.Different != 1 {
+		t.Fatalf("account-vote breakdown=%+v", accountVote)
+	}
+	brokerage := result.Breakdown["brokerage"]
+	if brokerage == nil || brokerage.MissingGtron != 1 {
+		t.Fatalf("brokerage breakdown=%+v", brokerage)
+	}
+	rewardStats := result.Breakdown["reward"]
+	if rewardStats == nil || rewardStats.Equal != 1 {
+		t.Fatalf("reward breakdown=%+v", rewardStats)
+	}
+	if len(c.report.Differences) != 2 {
+		t.Fatalf("differences=%+v", c.report.Differences)
+	}
+	for _, difference := range c.report.Differences {
+		switch difference.Category {
+		case "account-vote":
+			if difference.Kind != "different" || !strings.Contains(difference.Detail, "vote_count") {
+				t.Fatalf("account-vote difference=%+v", difference)
+			}
+		case "brokerage":
+			if difference.Kind != "missing_gtron" {
+				t.Fatalf("brokerage difference=%+v", difference)
+			}
+		default:
+			t.Fatalf("unexpected difference=%+v", difference)
+		}
 	}
 }
 
@@ -414,6 +532,29 @@ func TestEverySupportedStateStoreHasAnAdapter(t *testing.T) {
 		if spec.State && spec.Compare && !slices.Contains(got, spec.Name) {
 			t.Errorf("supported state store %q has no invoked adapter", spec.Name)
 		}
+	}
+}
+
+func TestCompareJavaOnlyCompatibilityStoreRequiresEmptyJavaStore(t *testing.T) {
+	java := rawdb.NewMemoryDatabase()
+	c := &comparer{opts: Options{MaxDifferences: 10}, report: new(Report)}
+	if err := c.compareJavaOnlyCompatibilityStore("accountTrie", "state-derived", java); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.report.Stores[0]; !got.Present || got.Mismatches() != 0 {
+		t.Fatalf("empty compatibility store result=%+v", got)
+	}
+
+	java = rawdb.NewMemoryDatabase()
+	if err := java.Put([]byte("node"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	c = &comparer{opts: Options{MaxDifferences: 10}, report: new(Report)}
+	if err := c.compareJavaOnlyCompatibilityStore("accountTrie", "state-derived", java); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.report.Stores[0]; got.MissingGtron != 1 || got.Mismatches() != 1 {
+		t.Fatalf("non-empty compatibility store result=%+v", got)
 	}
 }
 
