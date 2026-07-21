@@ -451,6 +451,49 @@ func TestDecodeJavaMarketKey(t *testing.T) {
 	}
 }
 
+func TestDelegationLogicalKeyAcceptsNegativeBrokerageCycle(t *testing.T) {
+	addr := address(0x7a)
+	key := []byte(fmt.Sprintf("-1-%x-brokerage", addr))
+	got, err := delegationLogicalKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := rawdb.CycleBrokerageStateKey(-1, addr)
+	if string(got) != string(want) {
+		t.Fatalf("logical key = %x, want %x", got, want)
+	}
+}
+
+func TestDifferenceRetentionCapsEachStoreIndependently(t *testing.T) {
+	c := &comparer{
+		opts:   Options{MaxDifferences: 3, MaxDifferencesPerStore: 2},
+		report: new(Report),
+	}
+	for i := range 4 {
+		c.addDiff("delegation", fmt.Sprint(i), "different", "")
+	}
+	for i := range 3 {
+		c.addDiff("contract-state", fmt.Sprint(i), "different", "")
+	}
+	if len(c.report.Differences) != 4 {
+		t.Fatalf("retained differences = %d, want 4", len(c.report.Differences))
+	}
+	if c.differencesByStore["delegation"] != 2 || c.differencesByStore["contract-state"] != 2 {
+		t.Fatalf("per-store counts = %v", c.differencesByStore)
+	}
+	c.finalizeDifferenceSamples()
+	if len(c.report.Differences) != 3 {
+		t.Fatalf("globally retained differences = %d, want 3", len(c.report.Differences))
+	}
+	stores := map[string]int{}
+	for _, difference := range c.report.Differences {
+		stores[difference.Store]++
+	}
+	if stores["delegation"] == 0 || stores["contract-state"] == 0 {
+		t.Fatalf("global samples did not preserve both stores: %v", stores)
+	}
+}
+
 func address(last byte) []byte {
 	addr := make([]byte, 21)
 	addr[0] = 0x41

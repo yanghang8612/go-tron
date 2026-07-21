@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -250,11 +251,40 @@ func applyRewardVI(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPro
 		return
 	}
 	curCycle := dp.CurrentCycleNumber()
+	// RewardViCalService is a node-local derived cache in java-tron. During a
+	// full replay we can build the identical history incrementally instead of
+	// rescanning every witness/cycle when proposal #59/#67 activates. Keep
+	// caching from cycle 1 while the effective cycle is still unknown, stop at
+	// effectiveCycle-1, then write java's one-byte completion sentinel.
+	effectiveCycle := dp.NewRewardAlgorithmEffectiveCycle()
+	const unsetEffectiveCycle = int64(9_223_372_036_854_775_807)
+	if curCycle >= 1 && (effectiveCycle == unsetEffectiveCycle || curCycle < effectiveCycle) {
+		for _, w := range ws {
+			accumulateRewardVICache(db, statedb, curCycle, w.addr.Bytes(), w.votes)
+		}
+	}
+	if effectiveCycle > 1 && curCycle == effectiveCycle-1 {
+		rawdb.WriteRewardViIsDone(db)
+	}
 	if dp.UseNewRewardAlgorithm() {
 		for _, w := range ws {
 			accumulateWitnessVi(statedb, curCycle, w.addr.Bytes(), w.votes)
 		}
 	}
+}
+
+func accumulateRewardVICache(db kvReadWriter, statedb *state.StateDB, cycle int64, addr []byte, voteCount int64) {
+	preVi := rawdb.ReadRewardVi(db, cycle-1, addr)
+	rewardValue := statedb.ReadCycleReward(cycle, addr)
+	if rewardValue == 0 || voteCount == 0 {
+		if preVi.Sign() != 0 {
+			rawdb.WriteRewardVi(db, cycle, addr, preVi)
+		}
+		return
+	}
+	delta := new(big.Int).Mul(big.NewInt(rewardValue), reward.DecimalOfViReward)
+	delta.Quo(delta, big.NewInt(voteCount))
+	rawdb.WriteRewardVi(db, cycle, addr, new(big.Int).Add(preVi, delta))
 }
 
 // applyRewardCycleSnapshot mirrors the final change_delegation step in

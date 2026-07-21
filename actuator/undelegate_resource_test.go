@@ -90,7 +90,7 @@ func TestUnDelegateResourceExecute(t *testing.T) {
 	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+	if err := ctx.State.WriteDrAccountIndexDelegate(true, owner[:], receiver[:], 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,6 +110,12 @@ func TestUnDelegateResourceExecute(t *testing.T) {
 	// Owner's frozen restored
 	if ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH) != 1000000 {
 		t.Fatal("frozen balance not restored")
+	}
+	if got := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:]); got != nil {
+		t.Fatalf("V2 from index should be removed: %+v", got)
+	}
+	if got := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2To, receiver[:], owner[:]); got != nil {
+		t.Fatalf("V2 to index should be removed: %+v", got)
 	}
 }
 
@@ -141,7 +147,7 @@ func TestUnDelegateResource_AllowsUnlockedWhenLockedBucketStillFuture(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+	if err := ctx.State.WriteDrAccountIndexDelegate(true, owner[:], receiver[:], 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,8 +165,8 @@ func TestUnDelegateResource_AllowsUnlockedWhenLockedBucketStillFuture(t *testing
 	if locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true); locked == nil || locked.FrozenBalanceForBandwidth != 500_000 {
 		t.Fatalf("future locked bucket should remain: %+v", locked)
 	}
-	if receivers := ctx.State.ReadDelegationIndex(owner); len(receivers) != 1 || receivers[0] != receiver {
-		t.Fatalf("delegation index should remain while locked bucket exists: %v", receivers)
+	if got := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:]); got == nil {
+		t.Fatal("delegation index should remain while locked bucket exists")
 	}
 }
 
@@ -192,7 +198,7 @@ func TestUnDelegateResource_MovesExpiredLockedBucketBeforeSubtract(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+	if err := ctx.State.WriteDrAccountIndexDelegate(true, owner[:], receiver[:], 1); err != nil {
 		t.Fatal(err)
 	}
 

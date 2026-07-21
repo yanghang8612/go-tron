@@ -74,8 +74,8 @@ func TestBlockContainsShieldedTransfer(t *testing.T) {
 	}
 }
 
-// TestShouldMaintainShieldedMerkleTree exercises the small helper that fans
-// the activation gate out to both applyBlock call sites. Truth table:
+// TestShouldRequireShieldedBackend exercises the safety gate for builds that
+// do not include the Sapling backend. Truth table:
 //
 //	dp.AllowShieldedTransaction │ blockHasShielded │ want
 //	───────────────────────────┼──────────────────┼─────
@@ -87,7 +87,7 @@ func TestBlockContainsShieldedTransfer(t *testing.T) {
 // The "either alone is enough" half-plane is the critical bit — a regression
 // that ANDed the two would silently desync LAST_TREE / MerkleTreeIndexStore
 // density from java-tron once the chain crosses the proposal-27 activation.
-func TestShouldMaintainShieldedMerkleTree(t *testing.T) {
+func TestShouldRequireShieldedBackend(t *testing.T) {
 	transferAny, err := anypb.New(&contractpb.TransferContract{})
 	if err != nil {
 		t.Fatal(err)
@@ -129,23 +129,20 @@ func TestShouldMaintainShieldedMerkleTree(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dp := state.NewDynamicProperties()
 			dp.SetAllowShieldedTransaction(tc.dpActivated)
-			if got := shouldMaintainShieldedMerkleTree(dp, makeBlock(tc.blockShielded)); got != tc.want {
-				t.Fatalf("shouldMaintainShieldedMerkleTree: got %v, want %v", got, tc.want)
+			if got := shouldRequireShieldedBackend(dp, makeBlock(tc.blockShielded)); got != tc.want {
+				t.Fatalf("shouldRequireShieldedBackend: got %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestApplyBlockShieldedMerkleLifecycle is the activation-boundary parity test
-// for the Sapling commitment-tree gate in applyBlock. It pins three points
+// TestApplyBlockShieldedMerkleLifecycle is the lifecycle parity test for the
+// Sapling commitment tree in applyBlock. It pins three points
 // against java-tron's MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree
 // contract:
 //
 //  1. Pre-activation block (allow_shielded_transaction = 0, no shielded tx)
-//     leaves MerkleTreeIndexStore[blockNum] untouched and the
-//     IncrementalMerkleTreeStore empty. This is the perf-regression guard:
-//     a regression that flipped the gate to "always on" would burn a
-//     librustzcash cgocall per block on chains that never use shielded.
+//     still writes MerkleTreeIndexStore[blockNum], exactly as java-tron does.
 //
 //  2. Activation block (allow_shielded_transaction = 1 from genesis) lands
 //     the first MerkleTreeIndexStore[blockNum] entry and root-indexes the
@@ -215,7 +212,10 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 		return statedb
 	}
 
-	t.Run("pre-activation block writes nothing", func(t *testing.T) {
+	t.Run("pre-activation block writes index", func(t *testing.T) {
+		if !zksnark.Available() {
+			t.Skipf("Pedersen backend not built (rebuild with -tags=sapling): %v", zksnark.ErrPedersenUnimplemented)
+		}
 		bc := newChain(t, false)
 
 		block1 := buildTestBlock(bc, witnessAddr, 3000)
@@ -223,8 +223,8 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 			t.Fatalf("InsertBlock(block1): %v", err)
 		}
 
-		if got := openHeadState(t, bc).ReadMerkleTreeRootByBlock(1); got != nil {
-			t.Errorf("MerkleTreeIndexStore[1] should be absent pre-activation, got %x", got)
+		if got := openHeadState(t, bc).ReadMerkleTreeRootByBlock(1); len(got) != 32 {
+			t.Errorf("MerkleTreeIndexStore[1] root length = %d, want 32", len(got))
 		}
 	})
 

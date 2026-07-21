@@ -50,6 +50,8 @@ var javaStoreSpecs = []javaStoreSpec{
 	// These stores exist in newer java-tron builds but go-tron has no matching
 	// state model yet. Presence is therefore a hard incomplete-coverage result.
 	{Name: "accountTrie", Scope: "unsupported-state", State: true},
+	{Name: "account-asset-issue", Scope: "unsupported-state", State: true},
+	{Name: "IncrementalMerkleVoucher", Scope: "unsupported-state", State: true},
 	{Name: "staker", Scope: "unsupported-state", State: true},
 	{Name: "staker-index", Scope: "unsupported-state", State: true},
 	{Name: "tracker", Scope: "unsupported-state", State: true},
@@ -66,7 +68,10 @@ var javaStoreSpecs = []javaStoreSpec{
 	{Name: "balance-trace", Scope: "history"},
 	{Name: "section-bloom", Scope: "index"},
 	{Name: "pbft-sign-data", Scope: "finality-metadata"},
+	{Name: "common-database", Scope: "finality-metadata"},
 	{Name: "common", Scope: "node-metadata"},
+	{Name: "peers", Scope: "node-metadata"},
+	{Name: "block_KDB", Scope: "runtime-fork-cache"},
 	{Name: "recent-transaction", Scope: "runtime-cache"},
 	{Name: "trans-cache", Scope: "runtime-cache"},
 	{Name: "checkpoint", Scope: "recovery-wal"},

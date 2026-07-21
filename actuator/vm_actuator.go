@@ -311,6 +311,16 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	result.ContractRet = 1 // SUCCESS
 
 	ctx.State.SetContract(contractAddr, sc)
+	// java-tron RepositoryImpl.commitContractCache creates the dedicated ABI
+	// row alongside ContractStore on first commit. Keep the ABI in its own
+	// state domain as well as in the compatibility contract metadata payload.
+	abi := sc.GetAbi()
+	if abi == nil {
+		abi = &contractpb.SmartContract_ABI{}
+	}
+	if err := ctx.State.WriteContractABI(contractAddr, abi); err != nil {
+		return nil, fmt.Errorf("write contract ABI: %w", err)
+	}
 
 	return result, nil
 }

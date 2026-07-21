@@ -217,7 +217,7 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		func() error { return c.compareMerkleTrees(sdb, java.Store("IncrementalMerkleTree")) },
 		func() error { return c.compareProposals(sdb, java.Store("proposal")) },
 		func() error { return c.compareRecentBlocks(gtron, java.Store("recent-block")) },
-		func() error { return c.compareRewardVI(sdb, java.Store("reward-vi")) },
+		func() error { return c.compareRewardVI(gtron, java.Store("reward-vi")) },
 		func() error { return c.compareStorageRows(gtron, java.Store("storage-row")) },
 		func() error { return c.compareTreeBlockIndex(sdb, java.Store("tree-block-index")) },
 		func() error { return c.compareVotes(sdb, java.Store("votes")) },
@@ -386,19 +386,32 @@ func delegationLogicalKey(key []byte) ([]byte, error) {
 		}
 		return rawdb.EndCycleStateKey(addr), nil
 	}
-	parts := strings.Split(text, "-")
-	if len(parts) < 3 {
+	var suffix string
+	var prefix string
+	for _, candidate := range []string{"account-vote", "brokerage", "reward", "vote", "vi"} {
+		marker := "-" + candidate
+		if strings.HasSuffix(text, marker) {
+			suffix = candidate
+			prefix = strings.TrimSuffix(text, marker)
+			break
+		}
+	}
+	if suffix == "" {
 		return nil, fmt.Errorf("unknown delegation key %q", text)
 	}
-	cycle, err := strconv.ParseInt(parts[0], 10, 64)
+	separator := strings.LastIndexByte(prefix, '-')
+	if separator < 0 {
+		return nil, fmt.Errorf("unknown delegation key %q", text)
+	}
+	cycleText, addressText := prefix[:separator], prefix[separator+1:]
+	cycle, err := strconv.ParseInt(cycleText, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid delegation cycle: %w", err)
 	}
-	addr, err := hex.DecodeString(parts[1])
+	addr, err := hex.DecodeString(addressText)
 	if err != nil || len(addr) != tcommon.AddressLength {
-		return nil, fmt.Errorf("invalid delegation address %q", parts[1])
+		return nil, fmt.Errorf("invalid delegation address %q", addressText)
 	}
-	suffix := strings.Join(parts[2:], "-")
 	switch suffix {
 	case "reward":
 		return rawdb.CycleRewardStateKey(cycle, addr), nil
@@ -573,10 +586,13 @@ func (c *comparer) compareRecentBlocks(gtron ethdb.KeyValueStore, java ethdb.Key
 	})
 }
 
-func (c *comparer) compareRewardVI(sdb *state.StateDB, java ethdb.KeyValueStore) error {
+func (c *comparer) compareRewardVI(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore) error {
 	return c.compareByteStore("reward-vi", "state-cache", java, func(key []byte) ([]byte, bool, error) {
 		if len(key) == 1 && key[0] == 0 {
-			return sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.RewardViIsDoneStateKey())
+			if !rawdb.IsRewardViDone(gtron) {
+				return nil, false, nil
+			}
+			return []byte{0x01}, true, nil
 		}
 		parts := strings.Split(string(key), "-")
 		if len(parts) != 3 || parts[2] != "vi" {
@@ -590,16 +606,17 @@ func (c *comparer) compareRewardVI(sdb *state.StateDB, java ethdb.KeyValueStore)
 		if err != nil || len(addr) != tcommon.AddressLength {
 			return nil, false, fmt.Errorf("invalid reward-vi address %q", parts[1])
 		}
-		value, ok, err := sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.RewardViStateKey(cycle, addr))
-		if err != nil || !ok {
-			return value, ok, err
+		value := rawdb.ReadRewardVi(gtron, cycle, addr)
+		if value.Sign() == 0 {
+			return nil, false, nil
 		}
+		raw := value.Bytes()
 		// Java BigInteger.toByteArray adds a leading sign byte when needed;
 		// normalize positive values before byte comparison.
-		if len(value) > 0 && value[0]&0x80 != 0 {
-			value = append([]byte{0}, value...)
+		if len(raw) > 0 && raw[0]&0x80 != 0 {
+			raw = append([]byte{0}, raw...)
 		}
-		return value, true, nil
+		return raw, true, nil
 	})
 }
 

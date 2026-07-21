@@ -42,13 +42,18 @@ checking gtron-only rows. Pass `--quiet` to suppress these progress logs.
 The paths may point directly to `gtron/chaindata` and `database` instead. Exit
 status is 0 for no mismatch, 1 for state differences, and 2 for an operational
 error (including either head not exactly matching `--height`). `--max-diffs`
-caps retained details without changing mismatch counts. When `--json` is
+(default 10000) caps retained details globally without changing mismatch
+counts. `--max-diffs-per-store` (default 100) additionally reserves an
+independent sample budget for each store, so a large early mismatch such as
+`delegation` cannot consume every detail before `contract-state` is reached.
+Set it to 0 to disable the per-store cap. When `--json` is
 redirected to a regular file, the file is refreshed during the run;
 `--live-max-diffs` (default 1000) caps only those intermediate snapshots so a
 large final diagnostic set is not copied, sorted, or re-marshaled every five
 seconds. Live JSON serialization runs asynchronously and coalesces stale
-snapshots, so a slow output disk cannot stall the database scan. The final JSON
-still retains up to `--max-diffs` details.
+snapshots, so a slow output disk cannot stall the database scan. Intermediate
+samples are selected round-robin across stores. The final JSON still retains
+up to `--max-diffs` details and up to `--max-diffs-per-store` for each store.
 
 The comparer enumerates every LevelDB directory in the java-tron input before
 it compares data. A directory must be classified as a supported state store,
@@ -102,8 +107,9 @@ the live storage-row data size. Accounts are also scanned in both directions
 by default. Stores absent from a particular lite package are reported as
 `present=false` and do not make coverage incomplete.
 
-Current java-tron builds may contain `accountTrie`, `staker`, `staker-index`,
-or `tracker`. go-tron has no equivalent state model for these stores yet. If
+Current java-tron builds may contain `accountTrie`, `account-asset-issue`,
+`IncrementalMerkleVoucher`, `staker`, `staker-index`, or `tracker`. go-tron has
+no equivalent state model for these stores yet. If
 any is present, it is reported in `unsupported_state_stores` and the audit
 cannot pass. Its row count is still emitted as `skipped` in the per-store
 result, so the report shows whether the unsupported store is empty or carries
@@ -114,11 +120,20 @@ The following discovered stores are classified but excluded from the mutable
 head-state result: chain data (`block`, `block-index`, `trans`), history/audit
 data (`transactionHistoryStore`, `transactionRetStore`, `account-trace`,
 `balance-trace`), derived indexes/finality metadata (`section-bloom`,
-`pbft-sign-data`, `common`), runtime caches (`recent-transaction`,
-`trans-cache`), and recovery WALs (`checkpoint`, `tmp`). The requested head
+`pbft-sign-data`, `common`, `common-database`), node metadata (`peers`), runtime
+caches (`recent-transaction`, `trans-cache`, `block_KDB`), and recovery WALs
+(`checkpoint`, `check-point-v2`, `tmp`). The requested head
 block is still compared through `block` + `block-index` as the height/content
 guard.
 
 The Java input must use LevelDB. A RocksDB lite package is detected as an open
 error; convert it with java-tron's Toolkit or export a LevelDB lite package
 before comparing.
+
+## Rebuilding after parity fixes
+
+The comparer never repairs either database. Fixes that change replay-time
+writes (contract ABI/code hash, Stake 2.0 indexes, shielded trees, or the
+reward-vi cache) do not retroactively rewrite an existing gtron datadir.
+Rebuild from genesis before using a new report as proof of full-state parity;
+rewinding only to the target height leaves earlier missing rows unchanged.

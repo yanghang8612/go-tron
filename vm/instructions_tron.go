@@ -1406,7 +1406,11 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	// writes the UNLOCKED record (java createDbKeyV2(owner, receiver, false) —
 	// the opcode has no lock parameter), so without this the per-pair state that
 	// UNDELEGATERESOURCE / getDelegatedResource read back would be absent.
-	if err := tvmWriteDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount); err != nil {
+	var indexTimestamp int64
+	if in.tvm.DynProps != nil {
+		indexTimestamp = in.tvm.DynProps.LatestBlockHeaderTimestamp()
+	}
+	if err := tvmWriteDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount, indexTimestamp); err != nil {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1419,7 +1423,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 // delegateResource): add `amount` to the owner→receiver UNLOCKED
 // DelegatedResourceV2 record and register the receiver in the owner's
 // delegation index. Aggregate balances are updated by the caller.
-func tvmWriteDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) error {
+func tvmWriteDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount, timestamp int64) error {
 	dr := sdb.ReadDelegatedResourceV2(owner, receiver, false)
 	if dr == nil {
 		dr = &rawdb.DelegatedResource{From: owner, To: receiver}
@@ -1432,13 +1436,7 @@ func tvmWriteDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address,
 	if err := sdb.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
 		return err
 	}
-	receivers := sdb.ReadDelegationIndex(owner)
-	for _, r := range receivers {
-		if r == receiver {
-			return nil
-		}
-	}
-	return sdb.WriteDelegationIndex(owner, append(receivers, receiver))
+	return sdb.WriteDrAccountIndexDelegate(true, owner[:], receiver[:], timestamp)
 }
 
 // ── 0xDF UNDELEGATERESOURCE ───────────────────────────────────────────────────
@@ -1545,14 +1543,7 @@ func tvmReduceDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address
 	// Remove the index entry only when no record remains for this pair.
 	if sdb.ReadDelegatedResourceV2(owner, receiver, false) == nil &&
 		sdb.ReadDelegatedResourceV2(owner, receiver, true) == nil {
-		receivers := sdb.ReadDelegationIndex(owner)
-		out := receivers[:0]
-		for _, r := range receivers {
-			if r != receiver {
-				out = append(out, r)
-			}
-		}
-		return sdb.WriteDelegationIndex(owner, out)
+		return sdb.WriteDrAccountIndexUnDelegate(true, owner[:], receiver[:])
 	}
 	return nil
 }

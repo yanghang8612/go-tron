@@ -6,6 +6,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -230,5 +231,25 @@ func TestAccumulateWitnessVi_AddsToPrevious(t *testing.T) {
 	want := new(big.Int).Mul(big.NewInt(8), reward.DecimalOfViReward)
 	if got.Cmp(want) != 0 {
 		t.Fatalf("vi: got %s, want %s", got.String(), want.String())
+	}
+}
+
+func TestAccumulateRewardVICacheMatchesHistoricalMigration(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	addr := []byte{0x41, 0x33}
+	if err := statedb.WriteCycleReward(1, addr, 1_000); err != nil {
+		t.Fatal(err)
+	}
+	accumulateRewardVICache(db, statedb, 1, addr, 200)
+	want := new(big.Int).Mul(big.NewInt(5), reward.DecimalOfViReward)
+	if got := tronrawdb.ReadRewardVi(db, 1, addr); got.Cmp(want) != 0 {
+		t.Fatalf("cycle 1 cache = %s, want %s", got, want)
+	}
+
+	// Java forwards a non-zero previous VI through rewardless cycles.
+	accumulateRewardVICache(db, statedb, 2, addr, 200)
+	if got := tronrawdb.ReadRewardVi(db, 2, addr); got.Cmp(want) != 0 {
+		t.Fatalf("cycle 2 cache = %s, want forwarded %s", got, want)
 	}
 }

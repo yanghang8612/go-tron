@@ -1045,32 +1045,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 	}
 
-	// Sapling commitment-tree lifecycle: java-tron resets CURRENT_TREE from
-	// LAST_TREE before every block, then saves CURRENT_TREE as best after the
-	// tx loop. Default pure-Go builds don't have the Pedersen backend needed
-	// to compute roots; fail clearly once the chain can observe shielded txs
-	// instead of silently producing an unusable anchor store.
-	//
-	// Gate the Reset/Save pair on whether shielded txs are actually possible
-	// for this block — either the chain has activated AllowShieldedTransaction
-	// or the block carries a shielded transfer. Pre-activation the work is
-	// pure waste: GetBest() returns the empty tree (LAST_TREE has never been
-	// written), Reset writes a marshalled-empty proto whose len==0 so the next
-	// ReadLastMerkleTree treats it as absent again, and SaveCurrentAsBest's
-	// fast-path therefore never fires — so every block was paying a cgocall
-	// into librustzcash to hash an empty tree. Profile on a Nile soak showed
-	// this loop burning ~20% of CPU at h≈890k. Once a proposal activates
-	// shielded, the gate flips on and the regular path resumes.
-	//
-	// The gate is shared across both call sites here and after ProcessBlock
-	// via shouldMaintainShieldedMerkleTree; drift between them would silently
-	// desynchronise the LAST_TREE / MerkleTreeIndexStore density invariant.
-	shieldedActive := shouldMaintainShieldedMerkleTree(dynProps, block)
+	// Sapling commitment-tree lifecycle: java-tron performs this pair for
+	// every block, including all pre-activation transparent blocks. That makes
+	// MerkleTreeIndexStore dense from genesis. The previous activation gate
+	// omitted tens of millions of index rows and could not compare equal.
+	shieldedRequired := shouldRequireShieldedBackend(dynProps, block)
 	shieldedMerkleAvailable := zksnark.Available()
-	if !shieldedMerkleAvailable && shieldedActive {
+	if !shieldedMerkleAvailable && shieldedRequired {
 		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
 	}
-	if shieldedMerkleAvailable && shieldedActive {
+	if shieldedMerkleAvailable {
 		if err := zksnark.NewMerkleContainer(statedb).ResetCurrent(); err != nil {
 			return fmt.Errorf("reset shielded merkle tree: %w", err)
 		}
@@ -1131,14 +1115,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// across blocks that do not append receive commitments.
 	// Mirrors java-tron Manager.processBlock → MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree.
 	//
-	// Gated on shieldedActive for the same reason as ResetCurrent above —
-	// pre-activation this loop computes the root of the empty tree (a cgocall
-	// into librustzcash) every block and immediately discards it. Reuse the
-	// local computed via shouldMaintainShieldedMerkleTree above; do not
-	// re-inline the AllowShieldedTransaction / blockContainsShieldedTransfer
-	// disjunction here — drift between the two call sites would silently
-	// break the java-tron LAST_TREE / MerkleTreeIndexStore density invariant.
-	if shieldedMerkleAvailable && shieldedActive {
+	if shieldedMerkleAvailable {
 		if err := zksnark.NewMerkleContainer(statedb).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
@@ -2319,9 +2296,8 @@ func (bc *BlockChain) DynProps() *state.DynamicProperties {
 }
 
 // blockContainsShieldedTransfer reports whether any tx in the block is a
-// ShieldedTransferContract. Used by applyBlock to gate the Sapling
-// commitment-tree reset/save lifecycle so blocks without shielded receives
-// don't churn CURRENT_TREE / LAST_TREE.
+// ShieldedTransferContract. It determines when a build without the Sapling
+// backend must stop rather than accepting a block it cannot validate.
 func blockContainsShieldedTransfer(block *types.Block) bool {
 	for _, tx := range block.Transactions() {
 		if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
@@ -2331,14 +2307,10 @@ func blockContainsShieldedTransfer(block *types.Block) bool {
 	return false
 }
 
-// shouldMaintainShieldedMerkleTree reports whether this block needs the
-// Sapling commitment-tree lifecycle (ResetCurrent before tx execution,
-// SaveCurrentAsBest after). Mirrors java-tron's implicit gate — chain has
-// activated AllowShieldedTransaction, or the block carries a shielded
-// transfer. Centralised so the call sites in applyBlock cannot drift: a
-// mismatched pair would silently desync LAST_TREE / MerkleTreeIndexStore
-// from java-tron's invariant of one entry per post-activation block.
-func shouldMaintainShieldedMerkleTree(dp *state.DynamicProperties, block *types.Block) bool {
+// shouldRequireShieldedBackend reports whether proceeding without the Sapling
+// backend would become consensus-unsafe. Builds with the backend still run the
+// reset/save lifecycle for every block to mirror java-tron exactly.
+func shouldRequireShieldedBackend(dp *state.DynamicProperties, block *types.Block) bool {
 	return dp.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)
 }
 

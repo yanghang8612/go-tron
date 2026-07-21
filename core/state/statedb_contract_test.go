@@ -425,6 +425,28 @@ func TestStateDBContractABIRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateDBEmptyContractCodeKeepsEmptyCodeHash(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x2a}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, nil)
+
+	if got, want := sdb.GetCodeHash(addr), tcommon.Keccak256(nil); got != want {
+		t.Fatalf("empty contract code hash = %x, want %x", got, want)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := reloaded.GetCodeHash(addr), tcommon.Keccak256(nil); got != want {
+		t.Fatalf("persisted empty contract code hash = %x, want %x", got, want)
+	}
+}
+
 func TestStateDBContractABIIgnoresFutureFlatMirror(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)

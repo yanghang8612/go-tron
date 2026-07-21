@@ -153,9 +153,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 
 	if ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false) == nil &&
 		ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true) == nil {
-		receivers := ctx.State.ReadDelegationIndex(ownerAddr)
-		receivers = removeAddress(receivers, receiverAddr)
-		if err := ctx.State.WriteDelegationIndex(ownerAddr, receivers); err != nil {
+		if err := ctx.State.WriteDrAccountIndexUnDelegate(true, ownerAddr[:], receiverAddr[:]); err != nil {
 			return nil, err
 		}
 	}

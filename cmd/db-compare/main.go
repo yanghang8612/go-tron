@@ -15,19 +15,20 @@ import (
 
 func main() {
 	var (
-		gtronPath = flag.String("gtron", "", "gtron --datadir or gtron/chaindata path (node must be stopped)")
-		javaPath  = flag.String("java", "", "java-tron output-directory or database path (node must be stopped)")
-		height    = flag.Uint64("height", 0, "exact height expected at both database heads")
-		maxDiffs  = flag.Int("max-diffs", 100, "maximum detailed differences retained in output")
-		liveDiffs = flag.Int("live-max-diffs", 1000, "maximum detailed differences written to each in-progress JSON snapshot")
-		jsonOut   = flag.Bool("json", false, "write the full report as JSON")
-		oneWay    = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
-		workers   = flag.Int("workers", 0, "parallel comparison workers for large stores (0=auto, maximum 64)")
-		quiet     = flag.Bool("quiet", false, "suppress progress logs written to stderr")
+		gtronPath  = flag.String("gtron", "", "gtron --datadir or gtron/chaindata path (node must be stopped)")
+		javaPath   = flag.String("java", "", "java-tron output-directory or database path (node must be stopped)")
+		height     = flag.Uint64("height", 0, "exact height expected at both database heads")
+		maxDiffs   = flag.Int("max-diffs", 10000, "maximum detailed differences retained in output")
+		storeDiffs = flag.Int("max-diffs-per-store", 100, "maximum detailed differences retained for each store (0 disables per-store cap)")
+		liveDiffs  = flag.Int("live-max-diffs", 1000, "maximum detailed differences written to each in-progress JSON snapshot")
+		jsonOut    = flag.Bool("json", false, "write the full report as JSON")
+		oneWay     = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
+		workers    = flag.Int("workers", 0, "parallel comparison workers for large stores (0=auto, maximum 64)")
+		quiet      = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
-	if *maxDiffs < 0 || *liveDiffs < 0 {
-		fmt.Fprintln(os.Stderr, "--max-diffs and --live-max-diffs must be non-negative")
+	if *maxDiffs < 0 || *storeDiffs < 0 || *liveDiffs < 0 {
+		fmt.Fprintln(os.Stderr, "--max-diffs, --max-diffs-per-store and --live-max-diffs must be non-negative")
 		os.Exit(2)
 	}
 	if *gtronPath == "" || *javaPath == "" {
@@ -81,7 +82,8 @@ func main() {
 	progressDifferenceLimit := *liveDiffs
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
-		Height: *height, MaxDifferences: *maxDiffs, ReverseAccounts: !*oneWay, Workers: *workers,
+		Height: *height, MaxDifferences: *maxDiffs, MaxDifferencesPerStore: *storeDiffs,
+		ReverseAccounts: !*oneWay, Workers: *workers,
 		ProgressMaxDifferences: &progressDifferenceLimit,
 		Progress: func(event dbcompare.ProgressEvent) {
 			if event.Snapshot != nil {

@@ -98,6 +98,11 @@ func TestDelegateResourceExecute(t *testing.T) {
 	if locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true); locked != nil {
 		t.Fatalf("locked bucket should not exist for unlocked delegation: %+v", locked)
 	}
+	from := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:])
+	to := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2To, receiver[:], owner[:])
+	if from == nil || to == nil || from.GetTimestamp() != ctx.PrevBlockTime || to.GetTimestamp() != ctx.PrevBlockTime {
+		t.Fatalf("directional V2 index missing or timestamp mismatch: from=%+v to=%+v", from, to)
+	}
 }
 
 // TestDelegateResourceExecute_DoesNotRecoverOwnerUsage pins the fix: java

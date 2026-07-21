@@ -186,12 +186,10 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	receivers := ctx.State.ReadDelegationIndex(ownerAddr)
-	if !containsAddress(receivers, receiverAddr) {
-		receivers = append(receivers, receiverAddr)
-		if err := ctx.State.WriteDelegationIndex(ownerAddr, receivers); err != nil {
-			return nil, err
-		}
+	// Stake 2.0 uses java-tron's directional V2 index: 0x03 owner→receiver
+	// and 0x04 receiver→owner. Re-delegation refreshes both timestamps.
+	if err := ctx.State.WriteDrAccountIndexDelegate(true, ownerAddr[:], receiverAddr[:], ctx.PrevBlockTime); err != nil {
+		return nil, err
 	}
 
 	return &Result{Fee: 0, ContractRet: 1}, nil

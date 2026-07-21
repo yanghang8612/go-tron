@@ -88,7 +88,10 @@ func (s *stateObject) Account() *types.Account { return s.account }
 func (s *stateObject) setCode(code []byte) {
 	if len(code) == 0 {
 		s.code = nil
-		s.codeHash = tcommon.Hash{}
+		// java-tron RepositoryImpl.saveCode always records Hash.sha3(code)
+		// once Constantinople is active, including for an empty runtime.  A
+		// zero hash means "not recorded"; it is not the hash of empty code.
+		s.codeHash = tcommon.Keccak256(nil)
 	} else {
 		s.code = make([]byte, len(code))
 		copy(s.code, code)

@@ -125,6 +125,9 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 			OriginAddress: owner[:],
 			Bytecode:      bytecode,
 			Name:          "TestContract",
+			Abi: &contractpb.SmartContract_ABI{Entrys: []*contractpb.SmartContract_ABI_Entry{{
+				Name: "ping", Type: contractpb.SmartContract_ABI_Entry_Function,
+			}}},
 		},
 	}
 
@@ -142,6 +145,10 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	// EnergyFee split is filled in by PayEnergyBill in state_processor.
 	if result.EnergyUsageTotal <= 0 {
 		t.Fatal("expected non-zero EnergyUsageTotal")
+	}
+	contractAddr := generateContractAddress(ctx.Tx, owner)
+	if got := ctx.State.ReadContractABI(contractAddr); !proto.Equal(got, csc.NewContract.Abi) {
+		t.Fatalf("dedicated ABI = %v, want %v", got, csc.NewContract.Abi)
 	}
 	t.Logf("Create energy total: %d", result.EnergyUsageTotal)
 }

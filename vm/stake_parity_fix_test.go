@@ -7,6 +7,7 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -119,9 +120,10 @@ func TestDelegateOpcodeWritesPerPairRecordAndIndex(t *testing.T) {
 	if dr.FrozenBalanceForEnergy != 40*tvmTRXPrecision {
 		t.Fatalf("per-pair record energy: got %d, want %d", dr.FrozenBalanceForEnergy, 40*tvmTRXPrecision)
 	}
-	idx := statedb.ReadDelegationIndex(owner)
-	if len(idx) != 1 || idx[0] != receiver {
-		t.Fatalf("delegation index: got %v, want [%x]", idx, receiver)
+	from := statedb.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:])
+	to := statedb.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2To, receiver[:], owner[:])
+	if from == nil || to == nil {
+		t.Fatalf("directional delegation index missing: from=%+v to=%+v", from, to)
 	}
 }
 
@@ -249,8 +251,8 @@ func TestUnDelegateOpcodeReadsPerPairRecord(t *testing.T) {
 	if dr := statedb.ReadDelegatedResourceV2(owner, receiver, false); dr != nil {
 		t.Fatalf("per-pair record should be deleted at zero, got %+v", dr)
 	}
-	if idx := statedb.ReadDelegationIndex(owner); len(idx) != 0 {
-		t.Fatalf("delegation index should be empty, got %v", idx)
+	if idx := statedb.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:]); idx != nil {
+		t.Fatalf("delegation index should be empty, got %+v", idx)
 	}
 	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 100*tvmTRXPrecision {
 		t.Fatalf("owner frozen fully restored: got %d, want %d", got, 100*tvmTRXPrecision)
