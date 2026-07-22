@@ -165,6 +165,45 @@ func TestCommitmentTrie_DeterministicAcrossOrder(t *testing.T) {
 		t.Fatalf("root differs across input order: %x vs %x", root1, root2)
 	}
 	assertRowSetsEqual(t, store1.rowSet(), store2.rowSet())
+
+	// Production commitment updates arrive coalesced and sorted by raw key.
+	// Exercise that fast path against the same order-independent oracle.
+	sorted := append([]Update(nil), updates...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i].Key, sorted[j].Key) < 0
+	})
+	store3 := newMapBranchStore()
+	root3, err := newCommitmentTrie(store3).Fold(sorted)
+	if err != nil {
+		t.Fatalf("Fold sorted: %v", err)
+	}
+	if root1 != root3 {
+		t.Fatalf("root differs on sorted fast path: %x vs %x", root1, root3)
+	}
+	assertRowSetsEqual(t, store1.rowSet(), store3.rowSet())
+}
+
+func TestCommitmentTrie_LastWriterWinsWithinFold(t *testing.T) {
+	key := []byte("duplicate-key")
+	wantStore := newMapBranchStore()
+	want, err := newCommitmentTrie(wantStore).Fold([]Update{put(key, []byte("final"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotStore := newMapBranchStore()
+	got, err := newCommitmentTrie(gotStore).Fold([]Update{
+		put(key, []byte("old")),
+		del(key),
+		put(key, []byte("final")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("last-writer root = %x, want %x", got, want)
+	}
+	assertRowSetsEqual(t, gotStore.rowSet(), wantStore.rowSet())
 }
 
 func TestCommitmentTrie_IncrementalEqualsBatch(t *testing.T) {

@@ -2,11 +2,60 @@ package domains
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/rand"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"golang.org/x/crypto/sha3"
 )
+
+func referenceLegacyKeccak(parts ...[]byte) common.Hash {
+	h := sha3.NewLegacyKeccak256()
+	for _, part := range parts {
+		_, _ = h.Write(part)
+	}
+	var out common.Hash
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func TestCommitmentHashFastPathsMatchReference(t *testing.T) {
+	key := []byte("commitment-key")
+	value := []byte("commitment-value")
+	var keyLen, valueLen [8]byte
+	binary.BigEndian.PutUint64(keyLen[:], uint64(len(key)))
+	binary.BigEndian.PutUint64(valueLen[:], uint64(len(value)))
+
+	pathDigest := referenceLegacyKeccak(keyLen[:], key)
+	var wantPath [pathLen]byte
+	for i, b := range pathDigest {
+		wantPath[2*i] = b >> 4
+		wantPath[2*i+1] = b & 0x0f
+	}
+	if got := keyPath(key); got != wantPath {
+		t.Fatalf("keyPath = %x, want %x", got, wantPath)
+	}
+
+	wantLeaf := referenceLegacyKeccak([]byte{0x00}, keyLen[:], key, valueLen[:], value)
+	if got := leafValueHash(key, value); got != wantLeaf {
+		t.Fatalf("leafValueHash = %x, want %x", got, wantLeaf)
+	}
+
+	hashChild := common.Hash{0x11, 0x22}
+	leafChild := common.Hash{0x33, 0x44}
+	var branch BranchData
+	branch.SetHashChild(2, hashChild)
+	branch.SetLeafChild(9, []byte("ignored-by-node-hash"), leafChild)
+	wantNode := referenceLegacyKeccak(
+		[]byte{0x01},
+		[]byte{0x02}, hashChild[:],
+		[]byte{0x09}, leafChild[:],
+	)
+	if got := branch.nodeHash(); got != wantNode {
+		t.Fatalf("nodeHash = %x, want %x", got, wantNode)
+	}
+}
 
 func TestBranchDataRoundTrip(t *testing.T) {
 	var b BranchData

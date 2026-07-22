@@ -67,14 +67,21 @@ type bufferedBranchStore struct {
 	// arena; a branch near a busy subtrie root is rebuilt once per op passing
 	// through it, so a large fold appended thousands of stale encodings — a >10x
 	// allocation blowup that made the parallel path lose to sequential at high op
-	// counts. Overwriting by value removes it.)
+	// counts. Overwriting removes it.)
 	//
-	// Storing the decoded BranchData by value rather than its encoding is safe
-	// even though the caller returns the source *child to branchPool right after
+	// Map values are pooled pointers rather than BranchData values. BranchData is
+	// roughly 1.5 KiB; storing it inline makes every map bucket large and forces
+	// the runtime to copy those large values again while a growing map evacuates
+	// buckets. A pointer-sized map plus one pool-borrowed destination per distinct
+	// prefix keeps re-PUT overwrite semantics while reusing the large objects
+	// across folds.
+	//
+	// Copying the decoded BranchData into the pooled destination is safe even
+	// though the caller returns its source *child to branchPool immediately after
 	// PutBranch: a branch's only reference-typed field is leafKey, which is
 	// write-once — SetLeafChild always allocates a fresh slice and nothing mutates
-	// leafKey in place — so the shared backing arrays outlive the pool reuse.
-	puts map[string]BranchData
+	// leafKey in place — so the shared backing arrays outlive the source reuse.
+	puts map[string]*BranchData
 	dels map[string]struct{} // prefix -> tombstone
 }
 
@@ -88,7 +95,7 @@ func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error)
 		return BranchData{}, false, nil
 	}
 	if b, ok := s.puts[k]; ok {
-		return b, true, nil
+		return *b, true, nil
 	}
 	return s.base.GetBranch(prefix)
 }
@@ -100,7 +107,7 @@ func (s *bufferedBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (boo
 		return false, nil
 	}
 	if b, ok := s.puts[k]; ok {
-		*dst = b
+		*dst = *b
 		return true, nil
 	}
 	return s.base.GetBranchInto(prefix, dst)
@@ -110,20 +117,26 @@ func (s *bufferedBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	k := string(prefix)
 	delete(s.dels, k)
 	if s.puts == nil {
-		s.puts = make(map[string]BranchData)
+		s.puts = make(map[string]*BranchData)
 	}
-	// Value copy, overwriting any prior buffered state for this prefix. Safe to
-	// retain even though the caller returns the source *child to branchPool right
-	// after: leafKey (the only slice field) is write-once, so the shared backing
-	// arrays stay valid. The encode is deferred to flush, once per surviving
-	// prefix, instead of on every re-PUT.
-	s.puts[k] = b
+	// Reuse the already-borrowed destination on re-PUT. This avoids both a fresh
+	// large object and map-bucket churn for hot upper branches rebuilt repeatedly
+	// during one fold.
+	dst := s.puts[k]
+	if dst == nil {
+		dst = borrowBranch()
+		s.puts[k] = dst
+	}
+	*dst = b
 	return nil
 }
 
 func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 	k := string(prefix)
-	delete(s.puts, k)
+	if b := s.puts[k]; b != nil {
+		returnBranch(b)
+		delete(s.puts, k)
+	}
 	if s.dels == nil {
 		s.dels = make(map[string]struct{})
 	}
@@ -137,6 +150,11 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 // iteration only makes the emitted write stream deterministic. Each surviving
 // branch is encoded here exactly once (inside base.PutBranch).
 func (s *bufferedBranchStore) flush(base branchStore) error {
+	// A buffered store is single-use: after applyRootParallel flushes it, no
+	// caller reads it again. Return every large BranchData destination even when
+	// the base write fails so the next fold can reuse the storage.
+	defer s.releasePuts()
+
 	if len(s.dels) > 0 {
 		keys := make([]string, 0, len(s.dels))
 		for k := range s.dels {
@@ -156,12 +174,19 @@ func (s *bufferedBranchStore) flush(base branchStore) error {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			if err := base.PutBranch([]byte(k), s.puts[k]); err != nil {
+			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func (s *bufferedBranchStore) releasePuts() {
+	for k, b := range s.puts {
+		returnBranch(b)
+		delete(s.puts, k)
+	}
 }
 
 // applyRootParallel is the parallel counterpart of apply at the root (prefix nil,
@@ -226,6 +251,9 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		}
 		group := grouped[starts[nb] : starts[nb]+n]
 		buf := newBufferedBranchStore(t.store)
+		// flush releases successful buffers itself; this fallback also releases
+		// every sibling buffer if any parallel fold or an earlier flush fails.
+		defer buf.releasePuts()
 		buffers[nb] = buf
 		// Each subtrie folds sequentially against its private buffer.
 		sub := &commitmentTrie{store: buf}

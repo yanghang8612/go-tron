@@ -114,10 +114,14 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
-	base    ethdb.KeyValueReader
-	mu      sync.RWMutex
-	flushMu sync.Mutex
-	layers  []*layer
+	base ethdb.KeyValueReader
+	// baseReadCache is populated only through GetNoCopyCached, the optional
+	// commitment-branch read path. Overlay layers always win; flush invalidates
+	// changed base keys and Discard clears the cache before reset/unwind.
+	baseReadCache *baseReadCache
+	mu            sync.RWMutex
+	flushMu       sync.Mutex
+	layers        []*layer
 	// inflight holds begun-but-uncommitted layers, oldest→newest. The newest
 	// is the foreground's active layer. Empty or length 1 under the default
 	// maxInflight==1; the async commit worker raises maxInflight to allow a
@@ -146,6 +150,23 @@ type bufferBatch struct {
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
 	return &Buffer{base: base}
+}
+
+// SetBaseReadCacheSize configures the bounded durable-base read cache used by
+// GetNoCopyCached. It must be called before the buffer begins concurrent use;
+// passing zero disables the cache. The cache is intentionally opt-in at the
+// blockbuffer layer because only commitment branch reads use the cached API.
+func (b *Buffer) SetBaseReadCacheSize(sizeBytes int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	old := b.baseReadCache
+	b.baseReadCache = newBaseReadCache(sizeBytes)
+	b.mu.Unlock()
+	if old != nil {
+		old.clear()
+	}
 }
 
 // NewBatch creates a write batch whose operations are owned by the active layer
@@ -612,6 +633,9 @@ func (b *Buffer) Discard() {
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:0]
+	if b.baseReadCache != nil {
+		b.baseReadCache.clear()
+	}
 }
 
 // PendingBlocks returns the block hashes for currently-pending committed
@@ -697,6 +721,17 @@ func (b *Buffer) Get(key []byte) ([]byte, error) {
 // field it retains and never holds the input past the decode. Reads that fall
 // through to the base reader use the base's own (copying) Get.
 func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
+	return b.getNoCopy(key, false)
+}
+
+// GetNoCopyCached is GetNoCopy plus a bounded cache for reads that fall all the
+// way through to the durable base. rawdb's commitment branch accessor detects
+// this optional method; ordinary buffer reads remain uncached.
+func (b *Buffer) GetNoCopyCached(key []byte) ([]byte, error) {
+	return b.getNoCopy(key, true)
+}
+
+func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	// lookup keeps the map index allocation-free (string(key) in the index
 	// expression is elided by the compiler), so this read stays alloc-free on a
 	// buffer hit — it returns the layer's internal slice directly. b.mu.RLock
@@ -725,11 +760,24 @@ func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 			return v, nil
 		}
 	}
+	cache := b.baseReadCache
 	b.mu.RUnlock()
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
-	return b.base.Get(key)
+	var cacheEpoch uint64
+	if cacheBase && cache != nil {
+		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			return value, nil
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	value, err := b.base.Get(key)
+	if err != nil || !cacheBase || cache == nil {
+		return value, err
+	}
+	return cache.setIfEpoch(key, value, cacheEpoch), nil
 }
 
 // Has reports whether key exists, honoring tombstones. Safe to call
@@ -815,8 +863,12 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 	defer b.mu.Unlock()
 	for _, l := range b.layers {
 		if err := flushLayer(l, w); err != nil {
+			if b.baseReadCache != nil {
+				b.baseReadCache.clear()
+			}
 			return err
 		}
+		b.invalidateBaseReadCacheLayer(l)
 	}
 	for i := range b.layers {
 		b.layers[i] = nil
@@ -889,6 +941,9 @@ func (b *Buffer) FlushUpTo(
 	}
 	flushed, err := flushLayers(snapshot[:eligible], w)
 	if err != nil {
+		// A failed batch may have been applied partially by the backend. Clear the
+		// whole cache rather than guessing which base values became durable.
+		b.clearBaseReadCache()
 		// Drop whatever we already flushed before surfacing the error, so a
 		// retry doesn't re-write those layers.
 		b.dropFlushedPrefix(flushed)
@@ -897,6 +952,7 @@ func (b *Buffer) FlushUpTo(
 	if flushed == 0 {
 		return nil
 	}
+	b.invalidateBaseReadCacheLayers(snapshot[:flushed])
 
 	// Step 3: drop the flushed prefix under the write lock.
 	b.dropFlushedPrefix(flushed)

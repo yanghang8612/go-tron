@@ -16,21 +16,48 @@ import (
 // keccakPool reuses sha3.NewLegacyKeccak256 hashers across fold passes. A
 // single Nile-sync segment allocates ~16 GB of hashers via this constructor
 // (1 per nodeHash/keyPath/leafValueHash call); the pool turns those into
-// Reset-and-reuse and cuts that source of GC pressure to near zero. Safe
-// because the commitment fold is single-threaded per commit (see Fold below),
-// and the borrow/return cycle is strictly nested inside each hash function.
+// Reset-and-reuse and cuts that source of GC pressure to near zero. sync.Pool
+// is safe across the parallel root's subtrie workers, and each borrow/return
+// cycle remains strictly local to one hash invocation.
 var keccakPool = sync.Pool{
-	New: func() any { return sha3.NewLegacyKeccak256() },
+	New: func() any {
+		return &pooledKeccak{keccakState: sha3.NewLegacyKeccak256().(keccakState)}
+	},
 }
 
-func borrowKeccak() hash.Hash {
-	h := keccakPool.Get().(hash.Hash)
+// keccakState exposes the sponge's destructive Read fast-path. hash.Hash.Sum
+// must preserve the absorb state, so x/crypto clones the entire ~200-byte
+// Keccak state on every call. These hashers are exclusively borrowed for one
+// digest and Reset before reuse, letting Read write the digest directly into
+// the caller's fixed buffer without that clone/allocation.
+type keccakState interface {
+	hash.Hash
+	Read([]byte) (int, error)
+}
+
+// pooledKeccak keeps the tiny Write inputs in the same heap object as the
+// pooled sponge. Local [1]byte/[8]byte arrays passed through hash.Hash.Write's
+// interface escape on the fold hot path; reusing these fields removes those
+// per-domain-byte, per-nibble and per-length objects.
+type pooledKeccak struct {
+	keccakState
+	byteBuf [1]byte
+	lenBuf  [8]byte
+}
+
+func borrowKeccak() *pooledKeccak {
+	h := keccakPool.Get().(*pooledKeccak)
 	h.Reset()
 	return h
 }
 
-func returnKeccak(h hash.Hash) {
+func returnKeccak(h *pooledKeccak) {
 	keccakPool.Put(h)
+}
+
+func writeKeccakByte(h *pooledKeccak, b byte) {
+	h.byteBuf[0] = b
+	_, _ = h.Write(h.byteBuf[:])
 }
 
 // encodeBufPool reuses byte buffers for BranchData.Encode output during a fold.
@@ -65,8 +92,7 @@ func returnEncodeBuf(bp *[]byte) {
 // insertIntoEmpty / applyOnLeaf call frame. linkChild consumes the data
 // (PutBranch copies the value, DelBranch only uses the prefix) and never
 // retains the pointer past return. Recursive descent borrows separate objects
-// per level. sync.Pool is goroutine-safe; the fold itself is single-threaded
-// per commit.
+// per level, and sync.Pool is safe across the parallel root's workers.
 var branchPool = sync.Pool{
 	New: func() any { return new(BranchData) },
 }
@@ -150,6 +176,20 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 		present:     true,
 		kind:        kindLeaf,
 		leafKey:     append([]byte(nil), key...),
+		leafValHash: valHash,
+	}
+}
+
+// setLeafChildStable is the fold-internal counterpart of SetLeafChild for a key
+// whose backing bytes are already owned by the fold or an existing BranchData.
+// Every such source remains referenced until the branch is synchronously
+// persisted (and a retaining test store keeps the slice itself), so a second
+// defensive key copy only adds allocation without strengthening lifetime.
+func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
+	b.children[nibble] = branchChild{
+		present:     true,
+		kind:        kindLeaf,
+		leafKey:     key,
 		leafValHash: valHash,
 	}
 }
@@ -386,13 +426,13 @@ func (b *BranchData) onlyChildNibble() uint8 {
 func (b *BranchData) nodeHash() common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
-	_, _ = h.Write([]byte{0x01})
+	writeKeccakByte(h, 0x01)
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
 		if !c.present {
 			continue
 		}
-		_, _ = h.Write([]byte{i})
+		writeKeccakByte(h, i)
 		if c.kind == kindHash {
 			_, _ = h.Write(c.hashVal[:])
 		} else {
@@ -400,7 +440,7 @@ func (b *BranchData) nodeHash() common.Hash {
 		}
 	}
 	var out common.Hash
-	h.Sum(out[:0])
+	_, _ = h.Read(out[:])
 	return out
 }
 
@@ -533,33 +573,48 @@ func buildOps(updates []Update) ([]op, error) {
 	if len(updates) == 0 {
 		return nil, nil
 	}
-	byKey := make(map[string]Update, len(updates))
-	for _, u := range updates {
-		if len(u.Key) == 0 {
+	// The production orchestrator hands staged Update the output of
+	// rawdb.CoalesceStateCommitmentUpdates: keys are unique and strictly sorted.
+	// Recognize that contract in one allocation-free scan and skip rebuilding a
+	// second last-writer-wins map here. Direct Fold callers may still provide
+	// arbitrary order or duplicates; those retain the general fallback below.
+	strictlySorted := true
+	for i := range updates {
+		if len(updates[i].Key) == 0 {
 			return nil, errors.New("commitment_tree: empty update key")
 		}
+		if strictlySorted && i > 0 && bytes.Compare(updates[i-1].Key, updates[i].Key) >= 0 {
+			strictlySorted = false
+		}
+	}
+	if strictlySorted {
+		ops := make([]op, 0, len(updates))
+		for _, u := range updates {
+			ops = append(ops, resolveOp(u))
+		}
+		sortOps(ops)
+		return ops, nil
+	}
+
+	byKey := make(map[string]Update, len(updates))
+	for _, u := range updates {
 		byKey[string(u.Key)] = u
 	}
 	ops := make([]op, 0, len(byKey))
 	for _, u := range byKey {
-		o := op{key: append([]byte(nil), u.Key...), delete: u.Delete}
-		o.path = keyPath(u.Key)
-		if !u.Delete {
-			o.valHash = leafValueHash(u.Key, u.Value)
-		}
-		ops = append(ops, o)
+		ops = append(ops, resolveOp(u))
 	}
-	sort.Slice(ops, func(i, j int) bool {
-		for n := 0; n < pathLen; n++ {
-			if ops[i].path[n] != ops[j].path[n] {
-				return ops[i].path[n] < ops[j].path[n]
-			}
-		}
-		// Identical paths would mean a keccak collision across distinct keys;
-		// break ties on the raw key for total determinism.
-		return string(ops[i].key) < string(ops[j].key)
-	})
+	sortOps(ops)
 	return ops, nil
+}
+
+func resolveOp(u Update) op {
+	o := op{key: append([]byte(nil), u.Key...), delete: u.Delete}
+	o.path = keyPath(u.Key)
+	if !u.Delete {
+		o.valHash = leafValueHash(u.Key, u.Value)
+	}
+	return o
 }
 
 // apply processes all ops that pass through the branch at prefix/depth and
@@ -637,13 +692,13 @@ func (t *commitmentTrie) applyNibble(prefix []byte, depth int, branch *BranchDat
 
 // insertIntoEmpty fills an absent slot nb with the surviving puts in group.
 func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
-	puts := livePuts(group)
+	puts := livePutsInPlace(group)
 	switch len(puts) {
 	case 0:
 		// Deletes into an empty slot are no-ops.
 		return nil
 	case 1:
-		branch.SetLeafChild(nb, puts[0].key, puts[0].valHash)
+		branch.setLeafChildStable(nb, puts[0].key, puts[0].valHash)
 		return nil
 	default:
 		// Build a fresh child subtree rooted at childPrefix, borrowing the
@@ -661,7 +716,6 @@ func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPref
 // applyOnLeaf resolves group against an existing leaf child at nb.
 func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
 	existKey, existVH := branch.leafChildAt(nb)
-	existPath := keyPath(existKey)
 
 	// Collect surviving entries under this slot via a small-set linear scan.
 	// The original implementation used map[string]op{}, which heap-allocates
@@ -672,7 +726,12 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 	// for at most ~all 16 sibling-nibble slots).
 	var stack [16]op
 	survivors := stack[:0]
-	survivors = append(survivors, op{path: existPath, key: existKey, valHash: existVH})
+	// Delay hashing the existing key. The overwhelmingly common path updates or
+	// deletes that same leaf, in which case the incoming op already carries its
+	// path (or no path is needed). Only a split with the old leaf still present
+	// needs its path for the recursive sort/descent.
+	survivors = append(survivors, op{key: existKey, valHash: existVH})
+	existingNeedsPath := true
 
 	for _, o := range group {
 		// Linear find by raw-key byte equality.
@@ -685,6 +744,9 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 		}
 		if o.delete {
 			if idx >= 0 {
+				if idx == 0 {
+					existingNeedsPath = false
+				}
 				// Swap-remove (order irrelevant — sorted below if we recurse).
 				last := len(survivors) - 1
 				survivors[idx] = survivors[last]
@@ -693,6 +755,9 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 			continue
 		}
 		if idx >= 0 {
+			if idx == 0 {
+				existingNeedsPath = false
+			}
 			survivors[idx] = o
 		} else {
 			survivors = append(survivors, o)
@@ -706,9 +771,12 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 	case 1:
 		// Exactly one survivor → leaf child.
 		only := survivors[0]
-		branch.SetLeafChild(nb, only.key, only.valHash)
+		branch.setLeafChildStable(nb, only.key, only.valHash)
 		return nil
 	default:
+		if existingNeedsPath {
+			survivors[0].path = keyPath(existKey)
+		}
 		// Multiple survivors → build a child subtree in a separate frame.
 		// Keeping the recursive apply/sortOps calls out of this function frame is
 		// what lets the survivors `stack` array above stay on the stack: Go's
@@ -791,7 +859,7 @@ func (t *commitmentTrie) linkChild(branch *BranchData, nb uint8, childPrefix []b
 				return err
 			}
 			k, vh := child.leafChildAt(cn)
-			branch.SetLeafChild(nb, k, vh)
+			branch.setLeafChildStable(nb, k, vh)
 			return nil
 		}
 		// Single HASH child is a valid (extension-like) node; keep it.
@@ -803,16 +871,18 @@ func (t *commitmentTrie) linkChild(branch *BranchData, nb uint8, childPrefix []b
 	return nil
 }
 
-// livePuts returns the surviving puts in a group after applying last-writer-wins
-// per key and dropping deletes. Within a single Fold the group has already been
-// coalesced per key, so there is at most one op per key here.
-func livePuts(group []op) []op {
-	out := make([]op, 0, len(group))
+// livePutsInPlace compacts the surviving puts to the front of group after
+// dropping deletes. Groups always alias fold-owned scratch (never caller input),
+// so reusing that storage avoids a heap slice at every descent into an empty
+// slot. Within a Fold the group is already coalesced per key.
+func livePutsInPlace(group []op) []op {
+	out := group[:0]
 	for _, o := range group {
 		if !o.delete {
 			out = append(out, o)
 		}
 	}
+	clear(group[len(out):])
 	return out
 }
 
@@ -842,7 +912,7 @@ func keyPath(key []byte) [pathLen]byte {
 	defer returnKeccak(h)
 	writeLen8Prefixed(h, key)
 	var sum common.Hash
-	h.Sum(sum[:0])
+	_, _ = h.Read(sum[:])
 	var out [pathLen]byte
 	for i := 0; i < common.HashLength; i++ {
 		out[2*i] = sum[i] >> 4
@@ -856,19 +926,18 @@ func keyPath(key []byte) [pathLen]byte {
 func leafValueHash(key, value []byte) common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
-	_, _ = h.Write([]byte{0x00})
+	writeKeccakByte(h, 0x00)
 	writeLen8Prefixed(h, key)
 	writeLen8Prefixed(h, value)
 	var out common.Hash
-	h.Sum(out[:0])
+	_, _ = h.Read(out[:])
 	return out
 }
 
 // writeLen8Prefixed writes an 8-byte big-endian length followed by the bytes,
 // matching the convention used elsewhere for commitment hashing.
-func writeLen8Prefixed(h interface{ Write([]byte) (int, error) }, data []byte) {
-	var lenBuf [8]byte
-	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
-	_, _ = h.Write(lenBuf[:])
+func writeLen8Prefixed(h *pooledKeccak, data []byte) {
+	binary.BigEndian.PutUint64(h.lenBuf[:], uint64(len(data)))
+	_, _ = h.Write(h.lenBuf[:])
 	_, _ = h.Write(data)
 }

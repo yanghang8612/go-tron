@@ -190,7 +190,7 @@ func TestCompareDelegationParallelStateReads(t *testing.T) {
 	}
 
 	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 8}, report: new(Report)}
-	if err := c.compareDelegation(reopened, java); err != nil {
+	if err := c.compareDelegation(gtron, reopened, java); err != nil {
 		t.Fatal(err)
 	}
 	result := c.report.Stores[0]
@@ -260,11 +260,21 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 	if err := java.Put([]byte(fmt.Sprintf("3-%x-reward", addr)), reward[:]); err != nil {
 		t.Fatal(err)
 	}
-	if err := java.Put([]byte(fmt.Sprintf("-1-%x-brokerage", addr)), []byte{0, 0, 0, 20}); err != nil {
+	if err := sdb.WriteWitnessBrokerage(tcommon.BytesToAddress(addr), 33); err != nil {
 		t.Fatal(err)
 	}
-	var zeroReward [8]byte
-	if err := java.Put([]byte(fmt.Sprintf("4-%x-reward", addr)), zeroReward[:]); err != nil {
+	if err := java.Put([]byte(fmt.Sprintf("-1-%x-brokerage", addr)), []byte{0, 0, 0, 33}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.WriteCycleReward(4, addr, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteCycleRewardPending(gtron, 4, map[tcommon.Address]int64{tcommon.BytesToAddress(addr): 6}); err != nil {
+		t.Fatal(err)
+	}
+	var pendingReward [8]byte
+	binary.BigEndian.PutUint64(pendingReward[:], 9)
+	if err := java.Put([]byte(fmt.Sprintf("4-%x-reward", addr)), pendingReward[:]); err != nil {
 		t.Fatal(err)
 	}
 	var nonDefaultReward [8]byte
@@ -288,7 +298,7 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 		opts:   Options{MaxDifferences: 10, MaxDifferencesPerStore: 10, Workers: 2},
 		report: new(Report),
 	}
-	if err := c.compareDelegation(reopened, java); err != nil {
+	if err := c.compareDelegation(gtron, reopened, java); err != nil {
 		t.Fatal(err)
 	}
 	result := c.report.Stores[0]
@@ -451,6 +461,37 @@ func TestCompareContractsIgnoresInlineABIPlacement(t *testing.T) {
 	sdb.SetContract(addr, contract)
 	javaContract := proto.Clone(contract).(*contractpb.SmartContract)
 	javaContract.Abi = nil // java ContractStore moves ABI to the separate store.
+	javaContract.CodeHash = tcommon.Keccak256(nil).Bytes()
+	writeJavaProto(t, java, addr.Bytes(), javaContract)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &comparer{opts: Options{MaxDifferences: 10, Workers: 2}, report: new(Report)}
+	if err := c.compareContracts(gtron, java); err != nil {
+		t.Fatal(err)
+	}
+	got := c.report.Stores[0]
+	if got.Compared != 1 || got.Equal != 1 || got.Mismatches() != 0 {
+		t.Fatalf("contract result = %+v", got)
+	}
+}
+
+func TestCompareContractsProjectsEmptyCodeHashFromAccountEnvelope(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
+	sdb, err := state.New([32]byte{}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := rawdb.NewMemoryDatabase()
+	addr := tcommon.BytesToAddress(address(1))
+	contract := &contractpb.SmartContract{
+		OriginAddress: addr.Bytes(), ContractAddress: addr.Bytes(), Name: "empty-code-hash",
+	}
+	sdb.SetContract(addr, contract)
+	javaContract := proto.Clone(contract).(*contractpb.SmartContract)
+	javaContract.CodeHash = tcommon.Keccak256(nil).Bytes()
 	writeJavaProto(t, java, addr.Bytes(), javaContract)
 	if _, err := sdb.Commit(); err != nil {
 		t.Fatal(err)

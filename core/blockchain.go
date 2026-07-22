@@ -514,6 +514,18 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
 }
 
+// SetCommitmentBranchCacheSize configures the bounded durable-base cache used
+// only by commitment branch reads. It must be called before block insertion or
+// any other concurrent use of the chain; gtron wires it immediately after
+// construction. The cache lives below rewindable buffer layers, invalidates
+// flushed mutations, and is cleared by buffer reset/unwind.
+func (bc *BlockChain) SetCommitmentBranchCacheSize(sizeBytes int) {
+	if bc == nil || bc.buffer == nil {
+		return
+	}
+	bc.buffer.SetBaseReadCacheSize(sizeBytes)
+}
+
 func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOptions {
 	return state.CommitOptions{}
 }

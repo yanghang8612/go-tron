@@ -165,6 +165,11 @@ var (
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
 		Value: -1,
 	}
+	stateCommitmentCacheFlag = &cli.IntFlag{
+		Name:  "state.commitment.cache",
+		Usage: "Generation-safe commitment branch base-read cache size in MiB (0 disables)",
+		Value: 128,
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
@@ -256,6 +261,7 @@ var app = &cli.App{
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
+		stateCommitmentCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
 		dbHandlesFlag,
@@ -429,11 +435,22 @@ func gtron(ctx *cli.Context) error {
 	} else {
 		log.Info("State trie node cache disabled")
 	}
+	commitmentCacheMiB := ctx.Int("state.commitment.cache")
+	if commitmentCacheMiB < 0 {
+		closeStores()
+		return fmt.Errorf("--state.commitment.cache must be >= 0")
+	}
 	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
+	}
+	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
+	if commitmentCacheMiB > 0 {
+		log.Info("Commitment branch base-read cache enabled", "cacheMiB", commitmentCacheMiB)
+	} else {
+		log.Info("Commitment branch base-read cache disabled")
 	}
 	// Async/pipelined commit is OFF by default and DELIBERATELY not a
 	// chain-config / proposal value (it changes only the internal commit

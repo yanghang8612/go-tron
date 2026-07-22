@@ -2862,6 +2862,15 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 	if err != nil {
 		return nil, false, err
 	}
+	data, err := encodeAccountLatestObjectFromProto(obj, accBytes, flatRoot)
+	return data, true, err
+}
+
+// encodeAccountLatestObjectFromProto wraps an already-serialized account in its
+// flat latest-domain envelope. Callers that also need the raw account bytes can
+// reuse the same deterministic protobuf encoding instead of marshaling maps a
+// second time.
+func encodeAccountLatestObjectFromProto(obj *stateObject, accBytes []byte, flatRoot bool) ([]byte, error) {
 	accountKVRoot := obj.accountKVRoot
 	if flatRoot {
 		accountKVRoot = EmptyKVRoot
@@ -2875,9 +2884,9 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 	}
 	data, err := envelope.Encode()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return data, true, nil
+	return data, nil
 }
 
 func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
@@ -3502,9 +3511,13 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	var prev []byte
 	var prevLatest []byte
 	if obj != nil && obj.account != nil {
-		prev, _ = obj.account.Marshal()
-		if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
-			prevLatest = latest
+		var err error
+		prev, err = obj.account.Marshal()
+		if err == nil && !obj.deleted && !obj.selfDestructed {
+			latest, err := encodeAccountLatestObjectFromProto(obj, prev, true)
+			if err == nil {
+				prevLatest = latest
+			}
 		}
 		obj.accountDirty = true
 	}

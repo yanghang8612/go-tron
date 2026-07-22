@@ -933,7 +933,11 @@ func compareContractJob(gtron ethdb.KeyValueStore, job contractComparisonJob) co
 	// the same logical value in StateAccountV2, so project it into the decoded
 	// gtron metadata before comparing. ABI is compared independently.
 	if codeHash == (tcommon.Hash{}) {
-		got.CodeHash = nil
+		// Existing contracts without bytecode use java-tron's EXTCODEHASH
+		// semantics: Keccak256(empty), not an absent hash. StateAccountV2 keeps
+		// zero as the compact physical representation and StateDB.GetCodeHash
+		// performs the same projection at runtime.
+		got.CodeHash = tcommon.Keccak256(nil).Bytes()
 	} else {
 		got.CodeHash = codeHash.Bytes()
 	}

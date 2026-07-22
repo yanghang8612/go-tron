@@ -107,6 +107,72 @@ func (v *LayerView) Get(key []byte) ([]byte, error) {
 	return b.base.Get(key)
 }
 
+// GetNoCopy is Get without the defensive value copy for hits in the bound or
+// committed layers. It deliberately has the same visibility as Get — the bound
+// layer first, then committed layers newest-first, never another in-flight
+// layer — and falls back to the base reader unchanged.
+//
+// The returned slice aliases immutable-by-replacement layer storage and must be
+// consumed before the same key is written again. The commitment fold does
+// exactly that: it decodes the branch immediately and copies every retained
+// field. Implementing this optional rawdb fast-path on LayerView matters for
+// async commit, where every fold is bound to a specific in-flight layer rather
+// than reading through Buffer.GetNoCopy directly.
+func (v *LayerView) GetNoCopy(key []byte) ([]byte, error) {
+	return v.getNoCopy(key, false)
+}
+
+// GetNoCopyCached is GetNoCopy plus the Buffer's bounded durable-base cache.
+// It is consumed specifically by rawdb commitment branch reads; the bound and
+// committed overlays still take precedence and are never inserted into the
+// base cache.
+func (v *LayerView) GetNoCopyCached(key []byte) ([]byte, error) {
+	return v.getNoCopy(key, true)
+}
+
+func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
+	b := v.b
+	b.mu.RLock()
+	val, found, tomb := v.l.lookup(key)
+	if tomb {
+		b.mu.RUnlock()
+		return nil, ErrNotFound
+	}
+	if found {
+		b.mu.RUnlock()
+		return val, nil
+	}
+	for i := len(b.layers) - 1; i >= 0; i-- {
+		val, found, tomb := b.layers[i].lookup(key)
+		if tomb {
+			b.mu.RUnlock()
+			return nil, ErrNotFound
+		}
+		if found {
+			b.mu.RUnlock()
+			return val, nil
+		}
+	}
+	cache := b.baseReadCache
+	b.mu.RUnlock()
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	var cacheEpoch uint64
+	if cacheBase && cache != nil {
+		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			return value, nil
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	value, err := b.base.Get(key)
+	if err != nil || !cacheBase || cache == nil {
+		return value, err
+	}
+	return cache.setIfEpoch(key, value, cacheEpoch), nil
+}
+
 // Has reports existence over [bound layer, committed stack, base].
 func (v *LayerView) Has(key []byte) (bool, error) {
 	b := v.b

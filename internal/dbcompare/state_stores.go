@@ -282,7 +282,7 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		func() error {
 			return c.compareDelegatedResourceIndexes(sdb, java.Store("DelegatedResourceAccountIndex"))
 		},
-		func() error { return c.compareDelegation(sdb, java.Store("delegation")) },
+		func() error { return c.compareDelegation(gtron, sdb, java.Store("delegation")) },
 		func() error { return c.compareExchanges(sdb, java.Store("exchange"), false) },
 		func() error { return c.compareExchanges(sdb, java.Store("exchange-v2"), true) },
 		func() error { return c.compareMarket(sdb, java) },
@@ -447,18 +447,64 @@ func (c *comparer) compareDelegatedResourceIndexes(sdb *state.StateDB, java ethd
 		})
 }
 
-func (c *comparer) compareDelegation(sdb *state.StateDB, java ethdb.KeyValueStore) error {
+func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.StateDB, java ethdb.KeyValueStore) error {
 	// Hydrate the shared system account before workers begin. Subsequent
 	// GetAccountKV calls only read the cached envelope and immutable latest
 	// state, avoiding concurrent cache population inside StateDB.
 	_ = sdb.GetAccount(tcommon.SystemAccountAddress)
+	pendingCycle, pendingRewards, pendingPresent, err := rawdb.ReadCycleRewardPending(gtron)
+	if err != nil {
+		return fmt.Errorf("read pending cycle rewards: %w", err)
+	}
+	currentBrokerage, err := preloadCurrentBrokerage(sdb, java)
+	if err != nil {
+		return err
+	}
 	return c.compareByteStoreParallelDetailed("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
+		category := delegationRowCategory(key)
+		var cycle int64
+		var addr []byte
+		if category == "reward" || category == "brokerage" {
+			var suffix string
+			var err error
+			cycle, addr, suffix, err = parseDelegationCycleKey(key)
+			if err != nil {
+				return nil, false, err
+			}
+			if suffix != category {
+				return nil, false, fmt.Errorf("delegation category %q does not match suffix %q", category, suffix)
+			}
+		}
+		if category == "brokerage" && cycle == -1 {
+			brokerage, ok := currentBrokerage[tcommon.BytesToAddress(addr)]
+			if !ok {
+				return nil, false, fmt.Errorf("current brokerage row was not preloaded")
+			}
+			var encoded [4]byte
+			binary.BigEndian.PutUint32(encoded[:], uint32(int32(brokerage)))
+			return encoded[:], true, nil
+		}
 		logical, err := delegationLogicalKey(key)
 		if err != nil {
 			return nil, false, err
 		}
 		value, present, err := sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
-		if err != nil || present {
+		if err != nil {
+			return value, present, err
+		}
+		if category == "reward" && pendingPresent && cycle == pendingCycle {
+			if present && len(value) != 8 {
+				return value, true, nil
+			}
+			base := decodeBigEndianInt64(value, present)
+			pending := pendingRewards[tcommon.BytesToAddress(addr)]
+			if present || pending != 0 {
+				var encoded [8]byte
+				binary.BigEndian.PutUint64(encoded[:], uint64(base+pending))
+				return encoded[:], true, nil
+			}
+		}
+		if present {
 			return value, present, err
 		}
 		// java-tron may materialize getter defaults while go-tron leaves the
@@ -475,6 +521,38 @@ func (c *comparer) compareDelegation(sdb *state.StateDB, java ethdb.KeyValueStor
 			return nil, false, nil
 		}
 	}, compareDelegationValue, delegationRowCategory)
+}
+
+func preloadCurrentBrokerage(sdb *state.StateDB, java ethdb.KeyValueStore) (map[tcommon.Address]int64, error) {
+	const currentBrokeragePrefix = "-1-"
+	values := make(map[tcommon.Address]int64)
+	if java == nil {
+		return values, nil
+	}
+	it := java.NewIterator([]byte(currentBrokeragePrefix), nil)
+	defer it.Release()
+	for it.Next() {
+		cycle, addr, suffix, err := parseDelegationCycleKey(it.Key())
+		if err != nil {
+			return nil, err
+		}
+		if cycle != -1 || suffix != "brokerage" {
+			continue
+		}
+		address := tcommon.BytesToAddress(addr)
+		values[address] = sdb.ReadWitnessBrokerage(address)
+	}
+	if err := it.Error(); err != nil {
+		return nil, fmt.Errorf("scan current brokerage rows: %w", err)
+	}
+	return values, nil
+}
+
+func decodeBigEndianInt64(value []byte, present bool) int64 {
+	if !present || len(value) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(value))
 }
 
 func compareDelegationValue(key, java, gtron []byte) (bool, string, error) {
@@ -523,31 +601,9 @@ func delegationLogicalKey(key []byte) ([]byte, error) {
 		}
 		return rawdb.EndCycleStateKey(addr), nil
 	}
-	var suffix string
-	var prefix string
-	for _, candidate := range []string{"account-vote", "brokerage", "reward", "vote", "vi"} {
-		marker := "-" + candidate
-		if strings.HasSuffix(text, marker) {
-			suffix = candidate
-			prefix = strings.TrimSuffix(text, marker)
-			break
-		}
-	}
-	if suffix == "" {
-		return nil, fmt.Errorf("unknown delegation key %q", text)
-	}
-	separator := strings.LastIndexByte(prefix, '-')
-	if separator < 0 {
-		return nil, fmt.Errorf("unknown delegation key %q", text)
-	}
-	cycleText, addressText := prefix[:separator], prefix[separator+1:]
-	cycle, err := strconv.ParseInt(cycleText, 10, 64)
+	cycle, addr, suffix, err := parseDelegationCycleKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("invalid delegation cycle: %w", err)
-	}
-	addr, err := hex.DecodeString(addressText)
-	if err != nil || len(addr) != tcommon.AddressLength {
-		return nil, fmt.Errorf("invalid delegation address %q", addressText)
+		return nil, err
 	}
 	switch suffix {
 	case "reward":
@@ -563,6 +619,36 @@ func delegationLogicalKey(key []byte) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unknown delegation suffix %q", suffix)
 	}
+}
+
+func parseDelegationCycleKey(key []byte) (int64, []byte, string, error) {
+	text := string(key)
+	var suffix, prefix string
+	for _, candidate := range []string{"account-vote", "brokerage", "reward", "vote", "vi"} {
+		marker := "-" + candidate
+		if strings.HasSuffix(text, marker) {
+			suffix = candidate
+			prefix = strings.TrimSuffix(text, marker)
+			break
+		}
+	}
+	if suffix == "" {
+		return 0, nil, "", fmt.Errorf("unknown delegation key %q", text)
+	}
+	separator := strings.LastIndexByte(prefix, '-')
+	if separator < 0 {
+		return 0, nil, "", fmt.Errorf("unknown delegation key %q", text)
+	}
+	cycleText, addressText := prefix[:separator], prefix[separator+1:]
+	cycle, err := strconv.ParseInt(cycleText, 10, 64)
+	if err != nil {
+		return 0, nil, "", fmt.Errorf("invalid delegation cycle: %w", err)
+	}
+	addr, err := hex.DecodeString(addressText)
+	if err != nil || len(addr) != tcommon.AddressLength {
+		return 0, nil, "", fmt.Errorf("invalid delegation address %q", addressText)
+	}
+	return cycle, addr, suffix, nil
 }
 
 func (c *comparer) compareExchanges(sdb *state.StateDB, java ethdb.KeyValueStore, v2 bool) error {

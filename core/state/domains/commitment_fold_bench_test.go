@@ -1,9 +1,11 @@
 package domains
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"sort"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -35,6 +37,10 @@ func rawdbBase() branchStore { return newRawdbBranchStore(rawdb.NewMemoryDatabas
 // parallel=false it characterizes the sequential fold; with parallel=true it
 // measures the actual speedup and reveals the crossover size.
 func benchFoldIncremental(b *testing.B, parallel bool, newBase func() branchStore) {
+	benchFoldIncrementalInput(b, parallel, false, newBase)
+}
+
+func benchFoldIncrementalInput(b *testing.B, parallel, sortByRawKey bool, newBase func() branchStore) {
 	const base = 100_000
 	store := newBase()
 	trie := newCommitmentTrie(store)
@@ -47,6 +53,11 @@ func benchFoldIncremental(b *testing.B, parallel bool, newBase func() branchStor
 
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
 		batch := buildRandomPuts(rand.New(rand.NewSource(int64(1000+n))), n)
+		if sortByRawKey {
+			sort.Slice(batch, func(i, j int) bool {
+				return bytes.Compare(batch[i].Key, batch[j].Key) < 0
+			})
+		}
 		if _, err := trie.Fold(batch); err != nil {
 			b.Fatal(err)
 		}
@@ -69,6 +80,39 @@ func BenchmarkFoldSeqMap(b *testing.B)   { benchFoldIncremental(b, false, mapBas
 func BenchmarkFoldParMap(b *testing.B)   { benchFoldIncremental(b, true, mapBase) }
 func BenchmarkFoldSeqRawdb(b *testing.B) { benchFoldIncremental(b, false, rawdbBase) }
 func BenchmarkFoldParRawdb(b *testing.B) { benchFoldIncremental(b, true, rawdbBase) }
+
+// BenchmarkFoldParRawdbCoalesced matches the production staged-store input:
+// last-writer-wins has already run and the raw keys are strictly sorted.
+func BenchmarkFoldParRawdbCoalesced(b *testing.B) {
+	benchFoldIncrementalInput(b, true, true, rawdbBase)
+}
+
+// BenchmarkBuildOps isolates the production coalesced+raw-key-sorted fast path
+// from the arbitrary-order fallback that must retain last-writer-wins semantics.
+func BenchmarkBuildOps(b *testing.B) {
+	const n = 1024
+	unsorted := buildRandomPuts(rand.New(rand.NewSource(99)), n)
+	sorted := append([]Update(nil), unsorted...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i].Key, sorted[j].Key) < 0
+	})
+	for _, tc := range []struct {
+		name    string
+		updates []Update
+	}{
+		{name: "sorted-coalesced", updates: sorted},
+		{name: "arbitrary-order", updates: unsorted},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := buildOps(tc.updates); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 // benchFoldCrossover sweeps small batch sizes against a DEEP pre-populated trie
 // to locate the sequential→parallel crossover op count — the data that justifies

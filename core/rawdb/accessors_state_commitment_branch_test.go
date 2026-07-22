@@ -3,7 +3,31 @@ package rawdb
 import (
 	"bytes"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+type cachedNoCopyProbe struct {
+	ethdb.KeyValueReader
+	getCalls    int
+	noCopyCalls int
+	cachedCalls int
+}
+
+func (p *cachedNoCopyProbe) Get(key []byte) ([]byte, error) {
+	p.getCalls++
+	return p.KeyValueReader.Get(key)
+}
+
+func (p *cachedNoCopyProbe) GetNoCopy(key []byte) ([]byte, error) {
+	p.noCopyCalls++
+	return p.KeyValueReader.Get(key)
+}
+
+func (p *cachedNoCopyProbe) GetNoCopyCached(key []byte) ([]byte, error) {
+	p.cachedCalls++
+	return p.KeyValueReader.Get(key)
+}
 
 func TestCommitmentBranchRoundTrip(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -106,5 +130,23 @@ func TestCommitmentBranchMissing(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("missing engine state read: expected not found")
+	}
+}
+
+func TestReadCommitmentBranchNoCopy_PrefersCachedReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x01, 0x02, 0x03}
+	want := []byte{0xaa, 0xbb, 0xcc}
+	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
+		t.Fatal(err)
+	}
+	probe := &cachedNoCopyProbe{KeyValueReader: db}
+	got, ok, err := ReadCommitmentBranchNoCopy(probe, prefix)
+	if err != nil || !ok || !bytes.Equal(got, want) {
+		t.Fatalf("ReadCommitmentBranchNoCopy = (%x,%v,%v)", got, ok, err)
+	}
+	if probe.cachedCalls != 1 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
+		t.Fatalf("reader calls cached/noCopy/Get = %d/%d/%d, want 1/0/0",
+			probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
 	}
 }

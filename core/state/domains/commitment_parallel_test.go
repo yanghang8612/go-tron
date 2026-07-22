@@ -113,6 +113,7 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	firstSlot := buf.puts[string(prefix)]
 	var final BranchData
 	final.SetHashChild(1, common.Hash{0xbb})
 	final.SetLeafChild(2, []byte{0x05}, common.Hash{0xcc})
@@ -121,6 +122,9 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 	}
 	if len(buf.puts) != 1 {
 		t.Fatalf("re-PUT must overwrite: buffer holds %d entries, want 1", len(buf.puts))
+	}
+	if buf.puts[string(prefix)] != firstSlot {
+		t.Fatal("re-PUT replaced its pooled destination instead of reusing it")
 	}
 	got, ok, err := buf.GetBranch(prefix)
 	if err != nil || !ok {
@@ -143,6 +147,9 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 
 	if err := buf.flush(base); err != nil {
 		t.Fatal(err)
+	}
+	if len(buf.puts) != 0 {
+		t.Fatalf("flush retained %d pooled branches, want 0", len(buf.puts))
 	}
 	if rows := base.rowSet(); len(rows) != 2 {
 		t.Fatalf("flush emitted %d rows, want 2 (one per distinct prefix)", len(rows))
