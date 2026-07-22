@@ -34,7 +34,10 @@ func (s *StateDB) JavaAccountStateRoot(parentRoot tcommon.Hash, mark int) (tcomm
 		mark = s.journal.length()
 	}
 	for _, entry := range s.journal.entries[mark:] {
-		if change, ok := entry.(accountChange); ok {
+		switch change := entry.(type) {
+		case accountChange:
+			touched[change.address] = struct{}{}
+		case accountScalarChange:
 			touched[change.address] = struct{}{}
 		}
 	}

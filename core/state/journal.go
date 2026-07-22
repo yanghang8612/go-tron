@@ -22,6 +22,68 @@ type accountChange struct {
 	prevSelfDestruct bool
 }
 
+// accountScalarChange is the compact history-disabled pre-image for the hot
+// Account fields changed by balance and resource accounting. These fields are
+// deliberately captured as one group: the first scalar write in a snapshot
+// interval records one cheap undo entry and subsequent scalar writes coalesce
+// into it. Any non-scalar Account mutation still appends accountChange, so
+// map/repeated/message fields retain the full deterministic protobuf rollback
+// path.
+type accountScalarChange struct {
+	address   tcommon.Address
+	prevProto []byte
+
+	balance            int64
+	allowance          int64
+	latestWithdrawTime int64
+
+	netUsage              int64
+	latestOperationTime   int64
+	latestConsumeTime     int64
+	freeNetUsage          int64
+	latestConsumeFreeTime int64
+	netWindowSize         int64
+	netWindowOptimized    bool
+
+	accountResourcePresent     bool
+	energyUsage                int64
+	latestConsumeTimeForEnergy int64
+	energyWindowSize           int64
+	energyWindowOptimized      bool
+}
+
+func (e accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj == nil || obj.account == nil {
+		return
+	}
+	pb := obj.account.Proto()
+	pb.Balance = e.balance
+	pb.Allowance = e.allowance
+	pb.LatestWithdrawTime = e.latestWithdrawTime
+	pb.NetUsage = e.netUsage
+	pb.LatestOprationTime = e.latestOperationTime
+	pb.LatestConsumeTime = e.latestConsumeTime
+	pb.FreeNetUsage = e.freeNetUsage
+	pb.LatestConsumeFreeTime = e.latestConsumeFreeTime
+	pb.NetWindowSize = e.netWindowSize
+	pb.NetWindowOptimized = e.netWindowOptimized
+	if e.accountResourcePresent {
+		if pb.AccountResource == nil {
+			pb.AccountResource = &corepb.Account_AccountResource{}
+		}
+		pb.AccountResource.EnergyUsage = e.energyUsage
+		pb.AccountResource.LatestConsumeTimeForEnergy = e.latestConsumeTimeForEnergy
+		pb.AccountResource.EnergyWindowSize = e.energyWindowSize
+		pb.AccountResource.EnergyWindowOptimized = e.energyWindowOptimized
+	} else {
+		pb.AccountResource = nil
+	}
+	obj.accountProto = e.prevProto
+	obj.dirty = true
+	obj.accountDirty = true
+}
+
 func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	if e.prev == nil {
 		delete(stateObjects, e.address)

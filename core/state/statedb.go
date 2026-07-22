@@ -98,11 +98,11 @@ type StateDB struct {
 
 	journal   *journal
 	snapshots []int // journal length at each snapshot
-	// accountJournalPos remembers the most recent accountChange entry for each
-	// address. journalAccount uses it to avoid repeatedly serializing the same
-	// map-rich Account within one snapshot/history interval. Positions are
-	// validated against the live journal before reuse, so entries truncated by
-	// RevertToSnapshot cannot become false hits after the slice grows again.
+	// accountJournalPos remembers the most recent full or scalar Account journal
+	// entry for each address. Account journal helpers use it to coalesce writes
+	// within one snapshot/history interval. Positions are validated against the
+	// live journal before reuse, so entries truncated by RevertToSnapshot cannot
+	// become false hits after the slice grows again.
 	accountJournalPos map[tcommon.Address]int
 
 	// transientStorage holds EIP-1153 (Cancun) TLOAD/TSTORE slots for the
@@ -854,7 +854,7 @@ func (s *StateDB) GetBalance(addr tcommon.Address) int64 {
 // AddBalance adds amount to the account's balance.
 func (s *StateDB) AddBalance(addr tcommon.Address, amount int64) {
 	obj := s.GetOrCreateAccount(addr)
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() + amount)
 	obj.markDirty()
 }
@@ -868,7 +868,7 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 	if obj.account.Balance() < amount {
 		return ErrInsufficientBalance
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() - amount)
 	obj.markDirty()
 	return nil
@@ -1959,7 +1959,7 @@ func (s *StateDB) SetAllowance(addr tcommon.Address, allowance int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetAllowance(allowance)
 	obj.markDirty()
 }
@@ -1970,7 +1970,7 @@ func (s *StateDB) AddAllowance(addr tcommon.Address, amount int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
 	obj.markDirty()
 }
@@ -2018,7 +2018,7 @@ func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestWithdrawTime(t)
 	obj.markDirty()
 }
@@ -2050,7 +2050,7 @@ func (s *StateDB) SetNetUsage(addr tcommon.Address, usage int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetNetUsage(usage)
 	obj.markDirty()
 }
@@ -2070,7 +2070,7 @@ func (s *StateDB) SetLatestOperationTime(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestOperationTime(t)
 	obj.markDirty()
 }
@@ -2090,7 +2090,7 @@ func (s *StateDB) SetLatestConsumeTime(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestConsumeTime(t)
 	obj.markDirty()
 }
@@ -2110,7 +2110,7 @@ func (s *StateDB) SetFreeNetUsage(addr tcommon.Address, usage int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetFreeNetUsage(usage)
 	obj.markDirty()
 }
@@ -2130,7 +2130,7 @@ func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestConsumeFreeTime(t)
 	obj.markDirty()
 }
@@ -2222,7 +2222,7 @@ func (s *StateDB) SetEnergyUsage(addr tcommon.Address, usage int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetEnergyUsage(usage)
 	obj.markDirty()
 }
@@ -2242,7 +2242,7 @@ func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestConsumeTimeForEnergy(t)
 	obj.markDirty()
 }
@@ -2255,7 +2255,7 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetEnergyWindow(raw, optimized)
 	obj.markDirty()
 }
@@ -2268,7 +2268,7 @@ func (s *StateDB) SetNetWindow(addr tcommon.Address, raw int64, optimized bool) 
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
+	s.journalAccountScalars(addr, obj)
 	obj.account.SetNetWindow(raw, optimized)
 	obj.markDirty()
 }
@@ -3556,6 +3556,68 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 		}
 		s.accountJournalPos[addr] = pos
 	}
+}
+
+// journalAccountScalars records a structured pre-image for balance/resource
+// fields when temporal history is disabled. History capture must retain the
+// complete deterministic Account and flat-envelope bytes for every tx, so it
+// intentionally falls back to journalAccount unchanged.
+func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) {
+	if s.changeSet.enabled {
+		s.journalAccount(addr, obj)
+		return
+	}
+	if obj == nil || obj.account == nil {
+		return
+	}
+	obj.accountDirty = true
+	if boundary, ok := s.accountJournalBoundary(); ok {
+		if pos, exists := s.accountJournalPos[addr]; exists && pos >= boundary && pos < s.journal.length() {
+			switch change := s.journal.entries[pos].(type) {
+			case accountChange:
+				if change.address == addr {
+					obj.invalidateAccountProto()
+					return
+				}
+			case accountScalarChange:
+				if change.address == addr {
+					obj.invalidateAccountProto()
+					return
+				}
+			}
+		}
+	}
+	pb := obj.account.Proto()
+	change := accountScalarChange{
+		address:                addr,
+		prevProto:              obj.accountProto,
+		balance:                pb.Balance,
+		allowance:              pb.Allowance,
+		latestWithdrawTime:     pb.LatestWithdrawTime,
+		netUsage:               pb.NetUsage,
+		latestOperationTime:    pb.LatestOprationTime,
+		latestConsumeTime:      pb.LatestConsumeTime,
+		freeNetUsage:           pb.FreeNetUsage,
+		latestConsumeFreeTime:  pb.LatestConsumeFreeTime,
+		netWindowSize:          pb.NetWindowSize,
+		netWindowOptimized:     pb.NetWindowOptimized,
+		accountResourcePresent: pb.AccountResource != nil,
+	}
+	if resource := pb.AccountResource; resource != nil {
+		change.energyUsage = resource.EnergyUsage
+		change.latestConsumeTimeForEnergy = resource.LatestConsumeTimeForEnergy
+		change.energyWindowSize = resource.EnergyWindowSize
+		change.energyWindowOptimized = resource.EnergyWindowOptimized
+	}
+	pos := s.journal.length()
+	s.journal.append(change)
+	if len(s.snapshots) > 0 {
+		if s.accountJournalPos == nil {
+			s.accountJournalPos = make(map[tcommon.Address]int)
+		}
+		s.accountJournalPos[addr] = pos
+	}
+	obj.invalidateAccountProto()
 }
 
 // accountJournalBoundary returns the earliest journal position whose account
