@@ -45,8 +45,9 @@ func (w *blockingWriter) Delete(key []byte) error { return nil }
 
 type countingBatcher struct {
 	ethdb.KeyValueStore
-	batches atomic.Int32
-	writes  atomic.Int32
+	batches  atomic.Int32
+	writes   atomic.Int32
+	sizeHint atomic.Int64
 }
 
 func (w *countingBatcher) NewBatch() ethdb.Batch {
@@ -59,6 +60,7 @@ func (w *countingBatcher) NewBatch() ethdb.Batch {
 
 func (w *countingBatcher) NewBatchWithSize(size int) ethdb.Batch {
 	w.batches.Add(1)
+	w.sizeHint.Store(int64(size))
 	return &countingBatch{
 		Batch:  w.KeyValueStore.NewBatchWithSize(size),
 		writes: &w.writes,
@@ -209,6 +211,42 @@ func BenchmarkBufferBatchWrite(b *testing.B) {
 		}
 		batch.Close()
 	}
+}
+
+func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
+	db, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { db.Close() })
+
+	l := newLayer(bufHash(1), 1)
+	value := bytes.Repeat([]byte{0xcd}, 1024)
+	for i := 0; i < 2048; i++ {
+		l.writes[fmt.Sprintf("flush-key-%04d", i)] = value
+	}
+	_, encodedSize := layerWriteStats(l)
+
+	b.Run("unsized", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			batch := db.NewBatch()
+			if err := writeLayer(l, batch); err != nil {
+				b.Fatal(err)
+			}
+			closeBatch(batch)
+		}
+	})
+	b.Run("sized", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			batch := db.NewBatchWithSize(encodedSize)
+			if err := writeLayer(l, batch); err != nil {
+				b.Fatal(err)
+			}
+			closeBatch(batch)
+		}
+	})
 }
 
 func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
@@ -679,6 +717,11 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	}
 	if got := dst.writes.Load(); got != 1 {
 		t.Fatalf("batch Write calls = %d, want 1", got)
+	}
+	// Each Set record is kind(1), key length(1), key(1), value length(1),
+	// value(1), plus the one 12-byte Pebble batch header.
+	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+3*5); got != want {
+		t.Fatalf("batch size hint = %d, want exact encoded size %d", got, want)
 	}
 	got, err := dst.Get([]byte("k"))
 	if err != nil {

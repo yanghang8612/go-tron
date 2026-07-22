@@ -59,7 +59,10 @@ type layer struct {
 	deletes   map[string]struct{}
 }
 
-const maxFlushBatchValueSize = 1 << 20
+const (
+	maxFlushBatchValueSize   = 1 << 20
+	maxFlushBatchEncodedSize = 1 << 20
+)
 
 func newLayer(hash common.Hash, number uint64) *layer {
 	return &layer{
@@ -984,7 +987,8 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
-		batch := batcher.NewBatch()
+		_, encodedSize := layerWriteStats(l)
+		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize)
 		defer closeBatch(batch)
 		if err := writeLayer(l, batch); err != nil {
 			return err
@@ -1010,11 +1014,40 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		return flushed, nil
 	}
 
-	batch := batcher.NewBatch()
+	sizes := make([]layerBatchSize, len(layers))
+	maxEncodedSize := 0
+	queuedValueSize := 0
+	queuedEncodedSize := pebbleBatchHeaderSize
+	for i, l := range layers {
+		valueSize, encodedSize := layerWriteStats(l)
+		sizes[i] = layerBatchSize{value: valueSize, encoded: encodedSize}
+		if queuedValueSize > 0 && (queuedValueSize+valueSize > maxFlushBatchValueSize ||
+			queuedEncodedSize+encodedSize > maxFlushBatchEncodedSize) {
+			if queuedEncodedSize > maxEncodedSize {
+				maxEncodedSize = queuedEncodedSize
+			}
+			queuedValueSize = 0
+			queuedEncodedSize = pebbleBatchHeaderSize
+		}
+		queuedValueSize += valueSize
+		queuedEncodedSize += encodedSize
+		if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
+			if queuedEncodedSize > maxEncodedSize {
+				maxEncodedSize = queuedEncodedSize
+			}
+			queuedValueSize = 0
+			queuedEncodedSize = pebbleBatchHeaderSize
+		}
+	}
+	if queuedValueSize > 0 && queuedEncodedSize > maxEncodedSize {
+		maxEncodedSize = queuedEncodedSize
+	}
+	batch := batcher.NewBatchWithSize(maxEncodedSize)
 	defer closeBatch(batch)
 
 	flushed := 0
 	queuedLayers := 0
+	queuedEncodedSize = pebbleBatchHeaderSize
 	flushQueued := func() error {
 		if queuedLayers == 0 {
 			return nil
@@ -1024,12 +1057,14 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		}
 		flushed += queuedLayers
 		queuedLayers = 0
+		queuedEncodedSize = pebbleBatchHeaderSize
 		batch.Reset()
 		return nil
 	}
 
-	for _, l := range layers {
-		if queuedLayers > 0 && batch.ValueSize()+layerWriteSize(l) > maxFlushBatchValueSize {
+	for i, l := range layers {
+		if queuedLayers > 0 && (batch.ValueSize()+sizes[i].value > maxFlushBatchValueSize ||
+			queuedEncodedSize+sizes[i].encoded > maxFlushBatchEncodedSize) {
 			if err := flushQueued(); err != nil {
 				return flushed, err
 			}
@@ -1038,7 +1073,8 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 			return flushed, err
 		}
 		queuedLayers++
-		if batch.ValueSize() >= maxFlushBatchValueSize {
+		queuedEncodedSize += sizes[i].encoded
+		if batch.ValueSize() >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
 			if err := flushQueued(); err != nil {
 				return flushed, err
 			}
@@ -1065,15 +1101,42 @@ func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 }
 
 func layerWriteSize(l *layer) int {
+	size, _ := layerWriteStats(l)
+	return size
+}
+
+const pebbleBatchHeaderSize = 12
+
+type layerBatchSize struct {
+	value   int
+	encoded int
+}
+
+// layerWriteStats returns both ethdb's logical ValueSize and the encoded
+// Pebble batch record size. Pebble records use one kind byte followed by
+// uvarint-framed keys and values; deletes omit the value. Supplying this exact
+// encoded size up front avoids Batch.grow repeatedly copying a megabyte-scale
+// flush batch. The 12-byte batch header is added once by the caller.
+func layerWriteStats(l *layer) (valueSize, encodedSize int) {
 	if l == nil {
-		return 0
+		return 0, 0
 	}
-	size := 0
 	for k, v := range l.writes {
-		size += len(k) + len(v)
+		valueSize += len(k) + len(v)
+		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
 	}
 	for k := range l.deletes {
-		size += len(k)
+		valueSize += len(k)
+		encodedSize += 1 + uvarintSize(len(k)) + len(k)
+	}
+	return valueSize, encodedSize
+}
+
+func uvarintSize(v int) int {
+	size := 1
+	for v >= 1<<7 {
+		v >>= 7
+		size++
 	}
 	return size
 }

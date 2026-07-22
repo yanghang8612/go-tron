@@ -37,6 +37,11 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		} else {
 			obj.account = acc
 		}
+		// accountChange pre-images are produced by deterministicAccountProto,
+		// so the restored object can reuse the exact bytes until its next
+		// mutation. The journal owns the backing slice for as long as the object
+		// can reference it, including after the entry is removed on revert.
+		obj.accountProto = e.prev
 		obj.dirty = true
 		obj.accountDirty = true
 		obj.deleted = e.prevDeleted

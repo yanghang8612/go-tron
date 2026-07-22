@@ -544,6 +544,7 @@ type domainChangeSetCapture struct {
 // carries the generic-KV generation and code hash alongside the account proto.
 type AccountSnapshot struct {
 	Account             *types.Account
+	AccountProto        []byte
 	AccountKVRoot       tcommon.Hash
 	AccountKVGeneration uint64
 	CodeHash            tcommon.Hash
@@ -738,6 +739,7 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 		return
 	}
 	obj := newStateObject(addr, snapshot.Account)
+	obj.accountProto = snapshot.AccountProto
 	obj.accountKVRoot = snapshot.AccountKVRoot
 	obj.accountKVGeneration = snapshot.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
@@ -776,6 +778,7 @@ func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapsho
 	}
 	return &AccountSnapshot{
 		Account:             obj.account,
+		AccountProto:        obj.accountProto,
 		AccountKVRoot:       obj.accountKVRoot,
 		AccountKVGeneration: obj.accountKVGeneration,
 		CodeHash:            obj.codeHash,
@@ -1995,6 +1998,7 @@ func (s *StateDB) AddAllowanceFinalReward(addr tcommon.Address, amount int64) {
 		})
 	}
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
+	obj.invalidateAccountProto()
 	obj.accountDirty = true
 	obj.markDirty()
 }
@@ -2672,6 +2676,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			data, _ := obj.account.Marshal()
 			acc, _ := types.UnmarshalAccount(data)
 			newObj.account = acc
+			newObj.accountProto = data
 		}
 		for k, v := range obj.storage {
 			newObj.storage[k] = v
@@ -2864,7 +2869,7 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
 		return nil, false, nil
 	}
-	accBytes, err := obj.account.Marshal()
+	accBytes, err := obj.deterministicAccountProto()
 	if err != nil {
 		return nil, false, err
 	}
@@ -3518,6 +3523,7 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	if boundary, ok := s.accountJournalBoundary(); ok {
 		if pos, exists := s.accountJournalPos[addr]; exists && pos >= boundary && pos < s.journal.length() {
 			if change, valid := s.journal.entries[pos].(accountChange); valid && change.address == addr {
+				obj.invalidateAccountProto()
 				return
 			}
 		}
@@ -3526,13 +3532,14 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	var prevLatest []byte
 	if obj != nil && obj.account != nil {
 		var err error
-		prev, err = obj.account.Marshal()
+		prev, err = obj.deterministicAccountProto()
 		if err == nil && !obj.deleted && !obj.selfDestructed {
 			latest, err := encodeAccountLatestObjectFromProto(obj, prev, true)
 			if err == nil {
 				prevLatest = latest
 			}
 		}
+		obj.invalidateAccountProto()
 	}
 	pos := s.journal.length()
 	s.journal.append(accountChange{

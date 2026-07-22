@@ -12,7 +12,14 @@ import (
 type stateObject struct {
 	address tcommon.Address
 	account *types.Account
-	dirty   bool
+	// accountProto caches the deterministic protobuf bytes for the current
+	// account value. It is populated when history/commit serialization already
+	// pays that cost and invalidated before every account mutation. Keeping it
+	// on the object lets the next transaction touching a hot account reuse the
+	// previous transaction's post-image as its pre-image without sorting all
+	// protobuf map fields again.
+	accountProto []byte
+	dirty        bool
 	// accountDirty tracks protobuf-account envelope changes separately from
 	// rooted KV/storage/code changes so net-zero KV overlays can skip account
 	// trie updates at commit.
@@ -46,6 +53,27 @@ type stateObject struct {
 	// Copy) so that markDirty can record this object's address without the
 	// StateDB needing to scan. nil for detached objects (none ever mutated).
 	dirtySet map[tcommon.Address]struct{}
+}
+
+func (s *stateObject) deterministicAccountProto() ([]byte, error) {
+	if s == nil || s.account == nil {
+		return nil, nil
+	}
+	if s.accountProto != nil {
+		return s.accountProto, nil
+	}
+	data, err := s.account.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	s.accountProto = data
+	return data, nil
+}
+
+func (s *stateObject) invalidateAccountProto() {
+	if s != nil {
+		s.accountProto = nil
+	}
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {

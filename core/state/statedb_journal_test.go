@@ -8,6 +8,12 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
+)
+
+var (
+	benchmarkAccountBytes []byte
+	benchmarkAccountProto *corepb.Account
 )
 
 func newMapRichJournalAccount(addr tcommon.Address, entries int) *stateObject {
@@ -218,6 +224,59 @@ func TestJournalAccountDomainFlushStartsNewPreimageInterval(t *testing.T) {
 	}
 }
 
+func TestJournalAccountReusesAndInvalidatesDeterministicProto(t *testing.T) {
+	addr := testAddr(0x84)
+	obj := newMapRichJournalAccount(addr, 8)
+	cached, err := obj.deterministicAccountProto()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb := &StateDB{journal: newJournal()}
+
+	sdb.journalAccount(addr, obj)
+	change := sdb.journal.entries[0].(accountChange)
+	if len(change.prev) == 0 || &change.prev[0] != &cached[0] {
+		t.Fatal("journal did not reuse the cached deterministic account bytes")
+	}
+	if obj.accountProto != nil {
+		t.Fatal("journal left the account proto cache valid across a mutation")
+	}
+}
+
+func TestAccountProtoCacheTracksEncodeAndRevert(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x85)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 100)
+	sdb.resetJournal()
+	obj := sdb.getStateObject(addr)
+
+	if _, exists, err := encodeAccountLatestObject(obj, true); err != nil || !exists {
+		t.Fatalf("prime account proto cache: exists=%v err=%v", exists, err)
+	}
+	if obj.accountProto == nil {
+		t.Fatal("account encoding did not populate the proto cache")
+	}
+
+	snap := sdb.Snapshot()
+	sdb.AddBalance(addr, 10)
+	if obj.accountProto != nil {
+		t.Fatal("account mutation did not invalidate the proto cache")
+	}
+	sdb.RevertToSnapshot(snap)
+	obj = sdb.getStateObject(addr)
+	if obj.accountProto == nil {
+		t.Fatal("account revert did not restore the deterministic proto cache")
+	}
+	restored, err := types.UnmarshalAccount(obj.accountProto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Balance() != 100 || obj.account.Balance() != 100 {
+		t.Fatalf("restored balances proto=%d object=%d, want 100", restored.Balance(), obj.account.Balance())
+	}
+}
+
 func BenchmarkJournalAccountMapRich(b *testing.B) {
 	addr := testAddr(0x7b)
 	obj := newMapRichJournalAccount(addr, 64)
@@ -244,4 +303,43 @@ func BenchmarkJournalAccountMapRichRepeatedSnapshot(b *testing.B) {
 			sdb.journalAccount(addr, obj)
 		}
 	}
+}
+
+func BenchmarkJournalAccountMapRichCached(b *testing.B) {
+	addr := testAddr(0x86)
+	obj := newMapRichJournalAccount(addr, 64)
+	cached, err := obj.account.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	sdb := &StateDB{journal: newJournal()}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sdb.journal.entries = sdb.journal.entries[:0]
+		obj.accountProto = cached
+		sdb.journalAccount(addr, obj)
+	}
+}
+
+func BenchmarkAccountSnapshotStrategies(b *testing.B) {
+	obj := newMapRichJournalAccount(testAddr(0x83), 64)
+	b.Run("deterministic-marshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkAccountBytes, _ = obj.account.Marshal()
+		}
+	})
+	b.Run("marshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkAccountBytes, _ = proto.Marshal(obj.account.Proto())
+		}
+	})
+	b.Run("clone", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkAccountProto = proto.Clone(obj.account.Proto()).(*corepb.Account)
+		}
+	})
 }
