@@ -11,7 +11,7 @@ import (
 // Interpreter executes TVM bytecode.
 type Interpreter struct {
 	tvm        *TVM
-	table      JumpTable
+	table      *JumpTable
 	readOnly   bool   // static call mode
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
@@ -38,7 +38,7 @@ type Interpreter struct {
 func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 	return &Interpreter{
 		tvm:       tvm,
-		table:     newJumpTable(),
+		table:     &sharedJumpTable,
 		tvmConfig: cfg,
 	}
 }

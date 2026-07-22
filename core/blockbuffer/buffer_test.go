@@ -3,6 +3,7 @@ package blockbuffer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -163,6 +164,51 @@ func TestBufferBatchWritesActiveLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustNotFound(t, b, []byte("k2"))
+}
+
+func TestBufferBatchOwnsValuesAfterWrite(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+
+	value := []byte("original")
+	batch := b.NewBatch()
+	if err := batch.Put([]byte("key"), value); err != nil {
+		t.Fatal(err)
+	}
+	copy(value, "mutated!")
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	batch.Reset()
+	batch.Close()
+
+	mustGet(t, b, []byte("key"), []byte("original"))
+}
+
+func BenchmarkBufferBatchWrite(b *testing.B) {
+	buffer := New(rawdb.NewMemoryDatabase())
+	buffer.BeginBlock(bufHash(1), 1)
+	keys := make([][]byte, 128)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("batch-key-%03d", i))
+	}
+	value := bytes.Repeat([]byte{0xab}, 1024)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(keys) * len(value)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := buffer.NewBatchWithSize(len(keys) * (len(value) + 16))
+		for _, key := range keys {
+			if err := batch.Put(key, value); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatal(err)
+		}
+		batch.Close()
+	}
 }
 
 func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {

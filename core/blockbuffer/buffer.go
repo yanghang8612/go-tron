@@ -255,7 +255,10 @@ func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
 		return
 	}
 	delete(target.deletes, k)
-	target.writes[k] = append([]byte(nil), op.value...)
+	// Put already copied the caller's value into storage owned by the batch.
+	// Batches never mutate those bytes, so the layer can retain that owned
+	// slice directly instead of allocating and copying it a second time.
+	target.writes[k] = op.value
 }
 
 func bufferBatchOpSize(op bufferBatchOp) int {

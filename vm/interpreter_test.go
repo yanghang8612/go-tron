@@ -15,6 +15,33 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+var benchmarkInterpreterSink *Interpreter
+
+func BenchmarkNewInterpreter(b *testing.B) {
+	tvm := new(TVM)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkInterpreterSink = NewInterpreter(tvm, TVMConfig{})
+	}
+}
+
+func TestInterpretersShareImmutableJumpTable(t *testing.T) {
+	first := NewInterpreter(new(TVM), TVMConfig{})
+	second := NewInterpreter(new(TVM), TVMConfig{Constantinople: true, Istanbul: true})
+	if first.table != second.table {
+		t.Fatal("interpreters should share the immutable opcode table")
+	}
+	if first.table[SHL] == nil || first.table[SHL].enabledFn == nil {
+		t.Fatal("shared table lost Constantinople opcode metadata")
+	}
+	if first.table[SHL].enabledFn(first.tvmConfig) {
+		t.Fatal("SHL unexpectedly enabled for the pre-Constantinople config")
+	}
+	if !second.table[SHL].enabledFn(second.tvmConfig) {
+		t.Fatal("SHL unexpectedly disabled for the Constantinople config")
+	}
+}
+
 func newTestEVM(t *testing.T) *TVM {
 	return newTestEVMWithConfig(t, TVMConfig{})
 }

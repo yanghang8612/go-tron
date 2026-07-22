@@ -16,6 +16,13 @@ type operation struct {
 // JumpTable is the dispatch table mapping opcodes to operations.
 type JumpTable [256]*operation
 
+// sharedJumpTable is immutable after package initialization. Fork gates live
+// in operation.enabledFn and evaluate each Interpreter's TVMConfig at runtime,
+// so every TVM instance can safely share the opcode metadata and closures.
+// Building this table per transaction allocated hundreds of operation objects
+// and generated PUSH/DUP/SWAP/LOG closures on the historical-sync hot path.
+var sharedJumpTable = newJumpTable()
+
 // newJumpTable creates the standard jump table with all supported opcodes.
 func newJumpTable() JumpTable {
 	var tbl JumpTable
