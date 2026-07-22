@@ -235,6 +235,33 @@ type DynamicProperties struct {
 	stringDirty           map[string]struct{}
 	latestBlockHeaderHash common.Hash
 	hashDirty             bool
+
+	// journal stores only properties actually changed while a snapshot is
+	// active. Historical sync takes one block snapshot plus one nested snapshot
+	// per transaction; copying the entire ~130-key property map at every one of
+	// those boundaries was a major allocation hotspot even though a normal
+	// transaction changes only a handful of counters.
+	journal   []dynamicPropertyChange
+	snapshots []int
+}
+
+type dynamicPropertyChangeKind uint8
+
+const (
+	dynamicIntChange dynamicPropertyChangeKind = iota
+	dynamicStringChange
+	dynamicHashChange
+)
+
+type dynamicPropertyChange struct {
+	kind dynamicPropertyChangeKind
+	key  string
+
+	intValue    int64
+	stringValue string
+	hashValue   common.Hash
+	existed     bool
+	dirty       bool
 }
 
 // NewDynamicProperties creates a DynamicProperties with default values.
@@ -480,6 +507,17 @@ func DefaultDPInt64(key string) (int64, bool) {
 func (dp *DynamicProperties) Set(key string, value int64) {
 	if current, ok := dp.props[key]; ok && current == value {
 		return
+	}
+	if len(dp.snapshots) > 0 {
+		previous, existed := dp.props[key]
+		_, dirty := dp.dirty[key]
+		dp.journal = append(dp.journal, dynamicPropertyChange{
+			kind:     dynamicIntChange,
+			key:      key,
+			intValue: previous,
+			existed:  existed,
+			dirty:    dirty,
+		})
 	}
 	dp.props[key] = value
 	dp.dirty[key] = struct{}{}
@@ -949,6 +987,13 @@ func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 	if dp.latestBlockHeaderHash == h {
 		return
 	}
+	if len(dp.snapshots) > 0 {
+		dp.journal = append(dp.journal, dynamicPropertyChange{
+			kind:      dynamicHashChange,
+			hashValue: dp.latestBlockHeaderHash,
+			dirty:     dp.hashDirty,
+		})
+	}
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
 }
@@ -1062,31 +1107,78 @@ func (dp *DynamicProperties) All() map[string]int64 {
 	return result
 }
 
-// Snapshot captures dynamic properties and dirty flags so transaction-scoped
-// validation/execution failures can roll back DP mutations together with
-// StateDB journal entries.
-func (dp *DynamicProperties) Snapshot() (map[string]int64, map[string]struct{}) {
-	props := make(map[string]int64, len(dp.props))
-	for k, v := range dp.props {
-		props[k] = v
-	}
-	dirty := make(map[string]struct{}, len(dp.dirty))
-	for k, v := range dp.dirty {
-		dirty[k] = v
-	}
-	return props, dirty
+// Snapshot returns an ID that can be passed to RevertToSnapshot or
+// CommitSnapshot. Changes are journaled lazily, so taking a snapshot allocates
+// no maps and rollback work is proportional to the number of changed keys.
+func (dp *DynamicProperties) Snapshot() int {
+	id := len(dp.snapshots)
+	dp.snapshots = append(dp.snapshots, len(dp.journal))
+	return id
 }
 
-// Restore resets dynamic properties to a snapshot returned by Snapshot.
-func (dp *DynamicProperties) Restore(props map[string]int64, dirty map[string]struct{}) {
-	dp.props = make(map[string]int64, len(props))
-	for k, v := range props {
-		dp.props[k] = v
+// RevertToSnapshot restores every dynamic-property mutation made since id.
+// Like StateDB.RevertToSnapshot, it also discards id and all snapshots nested
+// inside it.
+func (dp *DynamicProperties) RevertToSnapshot(id int) {
+	if id < 0 || id >= len(dp.snapshots) {
+		return
 	}
-	dp.dirty = make(map[string]struct{}, len(dirty))
-	for k, v := range dirty {
-		dp.dirty[k] = v
+	journalLen := dp.snapshots[id]
+	for i := len(dp.journal) - 1; i >= journalLen; i-- {
+		change := dp.journal[i]
+		switch change.kind {
+		case dynamicIntChange:
+			if change.existed {
+				dp.props[change.key] = change.intValue
+			} else {
+				delete(dp.props, change.key)
+			}
+			if change.dirty {
+				dp.dirty[change.key] = struct{}{}
+			} else {
+				delete(dp.dirty, change.key)
+			}
+		case dynamicStringChange:
+			if change.existed {
+				dp.stringProps[change.key] = change.stringValue
+			} else {
+				delete(dp.stringProps, change.key)
+			}
+			if change.dirty {
+				dp.stringDirty[change.key] = struct{}{}
+			} else {
+				delete(dp.stringDirty, change.key)
+			}
+		case dynamicHashChange:
+			dp.latestBlockHeaderHash = change.hashValue
+			dp.hashDirty = change.dirty
+		}
 	}
+	clear(dp.journal[journalLen:])
+	dp.journal = dp.journal[:journalLen]
+	dp.snapshots = dp.snapshots[:id]
+}
+
+// CommitSnapshot accepts the changes made since id. When id is the outermost
+// snapshot the undo log is no longer reachable and is cleared. Committing a
+// nested transaction snapshot keeps its entries so an enclosing block
+// snapshot can still roll back the whole block.
+func (dp *DynamicProperties) CommitSnapshot(id int) {
+	if id < 0 || id >= len(dp.snapshots) {
+		return
+	}
+	// Snapshots are committed from the inside out. Refuse to remove a marker
+	// that still has live children, since their index IDs would otherwise move.
+	if id != len(dp.snapshots)-1 {
+		return
+	}
+	if id == 0 {
+		clear(dp.journal)
+		dp.journal = dp.journal[:0]
+		dp.snapshots = dp.snapshots[:0]
+		return
+	}
+	dp.snapshots = dp.snapshots[:id]
 }
 
 // ---------------------------------------------------------------------------
@@ -1784,6 +1876,17 @@ func (dp *DynamicProperties) GetString(key string) (string, bool) {
 func (dp *DynamicProperties) SetString(key string, value string) {
 	if current, ok := dp.stringProps[key]; ok && current == value {
 		return
+	}
+	if len(dp.snapshots) > 0 {
+		previous, existed := dp.stringProps[key]
+		_, dirty := dp.stringDirty[key]
+		dp.journal = append(dp.journal, dynamicPropertyChange{
+			kind:        dynamicStringChange,
+			key:         key,
+			stringValue: previous,
+			existed:     existed,
+			dirty:       dirty,
+		})
 	}
 	dp.stringProps[key] = value
 	dp.stringDirty[key] = struct{}{}

@@ -195,10 +195,10 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	txSnap := statedb.Snapshot()
-	dpProps, dpDirty := dynProps.Snapshot()
+	dpSnap := dynProps.Snapshot()
 	revertTx := func() {
 		statedb.RevertToSnapshot(txSnap)
-		dynProps.Restore(dpProps, dpDirty)
+		dynProps.RevertToSnapshot(dpSnap)
 	}
 	revertOnOverflow = revertTx
 
@@ -262,6 +262,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	result.OwnerFrozenForNet = ownerSnap.FrozenForNet
 	result.OwnerFrozenForEnergy = ownerSnap.FrozenForEnergy
 
+	dynProps.CommitSnapshot(dpSnap)
 	return result, nil
 }
 
@@ -507,11 +508,13 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
-	dpProps, dpDirty := dynProps.Snapshot()
+	dpSnap := dynProps.Snapshot()
 	defer func() {
 		if err != nil {
 			statedb.RevertToSnapshot(blockSnap)
-			dynProps.Restore(dpProps, dpDirty)
+			dynProps.RevertToSnapshot(dpSnap)
+		} else {
+			dynProps.CommitSnapshot(dpSnap)
 		}
 	}()
 
