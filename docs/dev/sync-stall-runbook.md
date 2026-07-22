@@ -86,7 +86,7 @@ result code. Corollaries:
 
 ## 3. Known divergence classes (check before re-deriving)
 
-Past stalls, each with a `replay Nile <block>` test pinned in-tree:
+Past stalls, each with a network/block replay test pinned in-tree:
 shielded proof layout (6,498,505), COINBASE=witness (7,799,482), energy
 window refresh + recovery precision (8,825,873), over-depleted burn
 skip-write (9,220,578), call depth 64 (11,359,658), per-frame returndata
@@ -98,7 +98,9 @@ so first divergent fee — at 55,609,940, the tester contract deployed at
 55,609,930, so resume/snapshot points must be ≤ 55,609,929). The 0x02000a
 mapping is Nile-only; mainnet treats it as an ordinary account even when
 allow_tvm_blob is active; CREATE/CREATE2 success words retaining the 0x41
-TRON prefix (59,652,963).
+TRON prefix (59,652,963); pre-Solidity059 internal TRX transfer to an
+accountless recipient, which must spend all energy and record UNKNOWN rather
+than implicitly create the recipient (mainnet 3,422,904).
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline

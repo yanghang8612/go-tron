@@ -49,6 +49,14 @@ var (
 	ErrPrecompileTransferFailure = errors.New("transfer failure")
 )
 
+// ErrValidateForSmartContract models the pre-Constantinople exception thrown
+// by java-tron Program.callToAddress when an internal TRX transfer fails
+// validation. In particular, before allow_tvm_solidity059 a contract could not
+// create a missing recipient account. The raw BytecodeExecutionException
+// escapes the CALL frame, consumes all remaining energy, and RuntimeImpl maps
+// it to contractResult.UNKNOWN.
+var ErrValidateForSmartContract = errors.New("validateForSmartContract failure")
+
 type invalidJumpError struct {
 	pc uint64
 }
@@ -66,6 +74,20 @@ type stackOverflowError struct{}
 
 type outOfMemoryError struct {
 	op OpCode
+}
+
+// transferValidationError preserves java-tron's post-Constantinople runtime
+// message while still classifying the failure as TRANSFER_FAILED.
+type transferValidationError struct {
+	reason string
+}
+
+func (e transferValidationError) Error() string {
+	return "transfer trx failed: " + e.reason
+}
+
+func (e transferValidationError) Is(target error) bool {
+	return target == ErrTransferFailed
 }
 
 type outOfEnergyError struct {
@@ -168,6 +190,7 @@ func shouldPropagateCallError(err error) bool {
 		errors.Is(err, ErrPrecompiledContract) ||
 		errors.Is(err, ErrPrecompileUnknown) ||
 		errors.Is(err, ErrPrecompileTransferFailure) ||
+		errors.Is(err, ErrValidateForSmartContract) ||
 		isTransferFailure(err)
 }
 

@@ -9,6 +9,7 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // newTestTVMForCreate spins up a TVM with a real DynamicProperties so the
@@ -201,38 +202,73 @@ func TestCreateAccountWithTime_FromCALL_NoMultiSign(t *testing.T) {
 	}
 }
 
-// TestCreateAccountWithTime_FromCALL_PreSolidity059 locks the fork gate:
-// before Solidity059 activation, CALL-with-value to a non-existent address
-// still credits balance (java's pre-solidity059 behavior at
-// Program.java:1875-1881 skips the create-with-time branch entirely) — but
-// the auto-created account leaves create_time at 0 and has no default
-// permissions, matching java's pre-fork wire format.
-func TestCreateAccountWithTime_FromCALL_PreSolidity059(t *testing.T) {
+// TestMainnet3422904AccountlessCALLReplay pins the historical java-tron rule
+// exposed by mainnet block 3,422,904, tx
+// 83c9027402b795d6ad1938de2bba75cd8376e7bf16becb3592dee307d4708dae.
+// Before allow_tvm_solidity059, Program.callToAddress did not create a missing
+// recipient. validateForSmartContract rejected the internal transfer and the
+// uncaught BytecodeExecutionException consumed all energy and produced
+// contractResult.UNKNOWN.
+func TestMainnet3422904AccountlessCALLReplay(t *testing.T) {
 	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Solidity059: false}, func(dp *state.DynamicProperties) {
 		dp.SetLatestBlockHeaderTimestamp(1_700_000_000_000)
 		dp.SetAllowMultiSign(true)
 	})
 
+	caller := tcommon.BytesToAddress(tcommon.FromHex("41233a6bff36b2c1c1d142a0e4cebc443e4b0f1a76"))
+	contractAddr := tcommon.BytesToAddress(tcommon.FromHex("41dc24f51f6c8667b7e3b417e2f78da3662e80b2a9"))
+	dest := tcommon.BytesToAddress(tcommon.FromHex("416e056020ee8874013af0d7777ba45d6e60c4c9ae"))
+	sdb.CreateAccount(caller, corepb.AccountType_Normal)
+	sdb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	sdb.AddBalance(contractAddr, 50_000_000)
+
+	// CALL(gas=2300, to=dest, value=11 TRX, empty input/output); STOP.
+	code := []byte{
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(PUSH4), 0x00, 0xa7, 0xd8, 0xc0,
+		byte(PUSH20),
+	}
+	code = append(code, dest[1:]...)
+	code = append(code, byte(PUSH2), 0x08, 0xfc, byte(CALL), byte(STOP))
+	sdb.SetCode(contractAddr, code)
+
+	_, left, err := tvm.Call(caller, contractAddr, nil, 1_000_000, 0)
+	if !errors.Is(err, ErrValidateForSmartContract) {
+		t.Fatalf("Call error: got %v, want validateForSmartContract failure", err)
+	}
+	if left != 0 {
+		t.Fatalf("remaining energy: got %d, want 0", left)
+	}
+	if sdb.AccountExists(dest) {
+		t.Fatal("missing recipient must not be implicitly created before Solidity059")
+	}
+	if got := sdb.GetBalance(contractAddr); got != 50_000_000 {
+		t.Fatalf("contract balance after failed call: got %d, want 50000000", got)
+	}
+}
+
+func TestCALLWithValue_ConstantinopleBeforeSolidity059ReturnsTransferFailed(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
 	caller := tcommon.Address{0x41, 0x01}
-	dest := tcommon.Address{0x41, 0xAA, 0xBB, 0xCE}
-	sdb.AddBalance(caller, 100_000_000)
+	dest := tcommon.Address{0x41, 0xAA, 0xBB, 0xCF}
+	sdb.CreateAccount(caller, corepb.AccountType_Contract)
+	sdb.AddBalance(caller, 50_000_000)
 
-	if _, _, err := tvm.Call(caller, dest, nil, 1_000_000, 50_000_000); err != nil {
-		t.Fatalf("Call: %v", err)
+	_, left, err := tvm.Call(caller, dest, nil, 100_000, 11_000_000)
+	if !errors.Is(err, ErrTransferFailed) {
+		t.Fatalf("Call error: got %v, want TRANSFER_FAILED classification", err)
 	}
-
-	acc := sdb.GetAccount(dest)
-	if acc == nil {
-		t.Fatal("dest account should exist (auto-created via AddBalance)")
+	if got, want := err.Error(), "transfer trx failed: Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract."; got != want {
+		t.Fatalf("Call error message: got %q, want %q", got, want)
 	}
-	if acc.CreateTime() != 0 {
-		t.Fatalf("create_time pre-Solidity059: got %d, want 0 (fork gate must be off)", acc.CreateTime())
+	if left != 100_000 {
+		t.Fatalf("remaining energy: got %d, want refunded 100000", left)
 	}
-	if acc.OwnerPermission() != nil {
-		t.Fatal("Owner permission must NOT be installed pre-Solidity059")
-	}
-	if len(acc.ActivePermission()) != 0 {
-		t.Fatal("Active permission must be empty pre-Solidity059")
+	if sdb.AccountExists(dest) {
+		t.Fatal("missing recipient must not be implicitly created before Solidity059")
 	}
 }
 

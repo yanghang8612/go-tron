@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 	"sort"
 	"strconv"
@@ -275,6 +276,38 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 	}
 }
 
+// validateAndPrepareTRXEndowment mirrors java-tron Program.callToAddress's
+// value-transfer validation. Before allow_tvm_solidity059, a missing ordinary
+// recipient is a validation failure rather than an implicitly-created empty
+// account. Before allow_tvm_constantinople that failure is an uncaught
+// BytecodeExecutionException (UNKNOWN + spend-all); after Constantinople it is
+// a TransferException (TRANSFER_FAILED + message-energy refund). Solidity059
+// explicitly creates the recipient before validation and therefore succeeds.
+//
+// The caller checks its own balance first, matching Program.callToAddress's
+// early soft-failure path. Any account creation here is protected by the CALL
+// snapshot and is reverted by the caller on a later error.
+func (tvm *TVM) validateAndPrepareTRXEndowment(caller, addr tcommon.Address, value int64) error {
+	if caller == addr {
+		return ErrTransferFailed
+	}
+
+	if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) != nil {
+		return tvm.validatePrecompileEndowment(addr, value)
+	}
+
+	tvm.maybeCreateNormalAccountForValueTransfer(addr)
+	if !tvm.StateDB.AccountExists(addr) {
+		if !tvm.cfg.Constantinople {
+			return ErrValidateForSmartContract
+		}
+		return transferValidationError{
+			reason: "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract.",
+		}
+	}
+	return nil
+}
+
 // validatePrecompileEndowment mirrors the transfer leg of java-tron
 // Program.callToPrecompiledAddress for a TRX endowment: MUtil.transfer ->
 // VMUtils.validateForSmartContract requires the TARGET account to already
@@ -284,8 +317,9 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 // throws BytecodeExecutionException("transfer failure") in java — which is
 // not a TransferException, so VM.play spends ALL energy and the receipt
 // records UNKNOWN (Nile block 18,112,819, contract "Test".test(address(2))).
-// Returns nil for non-precompile targets; java's plain-contract path
-// auto-creates the recipient instead.
+// Returns nil for non-precompile targets; java's ordinary-address path is
+// handled separately by validateAndPrepareTRXEndowment, including the
+// Solidity059 account-creation gate.
 func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) error {
 	if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
 		return nil
@@ -767,29 +801,18 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 
 	if value > 0 {
-		// java-tron Program.callToAddress (Program.java:1081-1083):
-		// createAccountIfNotExist is gated on TRX endowment > 0. Java
-		// dispatches precompile targets to `callToPrecompiledAddress`
-		// BEFORE entering callToAddress (OperationActions.java:1034-1042),
-		// so precompile addresses never reach `createAccountIfNotExist` —
-		// guard with the same precompile check to preserve wire format.
-		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
-			tvm.maybeCreateNormalAccountForValueTransfer(addr)
-		}
 		if tvm.StateDB.GetBalance(caller) < value {
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
 		}
-		if caller == addr {
+		if err := tvm.validateAndPrepareTRXEndowment(caller, addr, value); err != nil {
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, energy, ErrTransferFailed
-		}
-		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
-			tvm.RevertLogs(logSnap)
-			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, 0, err
+			if errors.Is(err, ErrValidateForSmartContract) || errors.Is(err, ErrPrecompileTransferFailure) {
+				return nil, 0, err
+			}
+			return nil, energy, err
 		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
@@ -901,29 +924,18 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 
 	if value > 0 {
-		// Mirror java-tron `endowment > 0` gate for TRX value transfers
-		// (Program.java:1081-1083). Precompile-targeted calls take a
-		// different java dispatch path
-		// (OperationActions.java:1034-1042 → callToPrecompiledAddress) and
-		// don't materialize the destination account; skip the helper to
-		// preserve that wire format.
-		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil {
-			tvm.maybeCreateNormalAccountForValueTransfer(addr)
-		}
 		if tvm.StateDB.GetBalance(caller) < value {
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
 		}
-		if caller == addr {
+		if err := tvm.validateAndPrepareTRXEndowment(caller, addr, value); err != nil {
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, energy, ErrTransferFailed
-		}
-		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
-			tvm.RevertLogs(logSnap)
-			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, 0, err
+			if errors.Is(err, ErrValidateForSmartContract) || errors.Is(err, ErrPrecompileTransferFailure) {
+				return nil, 0, err
+			}
+			return nil, energy, err
 		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
