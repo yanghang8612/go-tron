@@ -14,6 +14,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -728,6 +729,75 @@ func TestDifferenceRetentionPreservesKindsWithinStore(t *testing.T) {
 	}
 	if kinds["missing_gtron"] != 2 || kinds["different"] != 2 {
 		t.Fatalf("kind samples = %v, want two of each", kinds)
+	}
+}
+
+func TestCompareStorageRowsIncludesOwnerDiagnostics(t *testing.T) {
+	gtron := rawdb.NewMemoryDatabase()
+	javaRows := rawdb.NewMemoryDatabase()
+	javaContracts := rawdb.NewMemoryDatabase()
+	owner := tcommon.BytesToAddress(address(0x2a))
+	trxHash := bytes.Repeat([]byte{0x7b}, len(tcommon.Hash{}))
+	meta := &contractpb.SmartContract{
+		ContractAddress: owner.Bytes(),
+		OriginAddress:   owner.Bytes(),
+		Version:         1,
+		TrxHash:         trxHash,
+	}
+	writeJavaProto(t, javaContracts, owner.Bytes(), meta)
+
+	seed := append(append([]byte(nil), owner.Bytes()...), trxHash...)
+	prefix := tcommon.Keccak256(seed)
+	rowKey := func(last byte) []byte {
+		key := make([]byte, len(tcommon.Hash{}))
+		copy(key, prefix[:storageRowOwnerPrefixBytes])
+		key[len(key)-1] = last
+		return key
+	}
+	differentKey, missingGtronKey, missingJavaKey := rowKey(1), rowKey(2), rowKey(3)
+	javaDifferent, gtronDifferent := bytes.Repeat([]byte{0x41}, 32), bytes.Repeat([]byte{0x01}, 32)
+	javaMissing, gtronMissing := bytes.Repeat([]byte{0xaa}, 32), bytes.Repeat([]byte{0xbb}, 32)
+	if err := javaRows.Put(differentKey, javaDifferent); err != nil {
+		t.Fatal(err)
+	}
+	if err := javaRows.Put(missingGtronKey, javaMissing); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(gtron, owner, 0, kvdomains.ContractStorage, differentKey, gtronDifferent); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(gtron, owner, 0, kvdomains.ContractStorage, missingJavaKey, gtronMissing); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &comparer{opts: Options{MaxDifferences: 10, MaxDifferencesPerStore: 10}, report: new(Report)}
+	if err := c.compareStorageRows(gtron, javaRows, javaContracts); err != nil {
+		t.Fatal(err)
+	}
+	result := c.report.Stores[0]
+	if result.Compared != 1 || result.Different != 1 || result.MissingGtron != 1 || result.MissingJava != 1 {
+		t.Fatalf("storage-row result = %+v", result)
+	}
+	if len(c.report.Differences) != 3 {
+		t.Fatalf("retained differences = %d, want 3", len(c.report.Differences))
+	}
+	byKind := make(map[string]Difference)
+	for _, difference := range c.report.Differences {
+		byKind[difference.Kind] = difference
+		for _, want := range []string{"owner=" + owner.Hex(), "version=1", "trx_hash=" + fmt.Sprintf("%x", trxHash)} {
+			if !strings.Contains(difference.Detail, want) {
+				t.Fatalf("%s detail %q missing %q", difference.Kind, difference.Detail, want)
+			}
+		}
+	}
+	if detail := byKind["different"].Detail; !strings.Contains(detail, "value="+fmt.Sprintf("%x", javaDifferent)) || !strings.Contains(detail, "value="+fmt.Sprintf("%x", gtronDifferent)) {
+		t.Fatalf("different detail does not contain both values: %q", detail)
+	}
+	if detail := byKind["missing_gtron"].Detail; !strings.Contains(detail, "value="+fmt.Sprintf("%x", javaMissing)) || !strings.Contains(detail, "gtron(missing)") {
+		t.Fatalf("missing_gtron detail = %q", detail)
+	}
+	if detail := byKind["missing_java"].Detail; !strings.Contains(detail, "java(missing)") || !strings.Contains(detail, "value="+fmt.Sprintf("%x", gtronMissing)) {
+		t.Fatalf("missing_java detail = %q", detail)
 	}
 }
 

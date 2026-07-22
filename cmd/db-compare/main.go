@@ -24,6 +24,7 @@ func main() {
 		jsonOut    = flag.Bool("json", false, "write the full report as JSON")
 		oneWay     = flag.Bool("java-only-accounts", false, "skip reverse detection of accounts present only in gtron")
 		workers    = flag.Int("workers", 0, "parallel comparison workers for large stores (0=auto, maximum 64)")
+		onlyStore  = flag.String("only-store", "", "compare only one diagnostic store (currently: storage-row)")
 		quiet      = flag.Bool("quiet", false, "suppress progress logs written to stderr")
 	)
 	flag.Parse()
@@ -34,6 +35,10 @@ func main() {
 	if *gtronPath == "" || *javaPath == "" {
 		fmt.Fprintln(os.Stderr, "--gtron and --java are required")
 		flag.Usage()
+		os.Exit(2)
+	}
+	if *onlyStore != "" && *onlyStore != "storage-row" {
+		fmt.Fprintf(os.Stderr, "unsupported --only-store %q (currently only storage-row is supported)\n", *onlyStore)
 		os.Exit(2)
 	}
 	logger := log.New(os.Stderr, "db-compare ", log.LstdFlags)
@@ -82,7 +87,7 @@ func main() {
 	progressDifferenceLimit := *liveDiffs
 
 	report, err := dbcompare.Compare(gtron, java, dbcompare.Options{
-		Height: *height, MaxDifferences: *maxDiffs, MaxDifferencesPerStore: *storeDiffs,
+		Height: *height, OnlyStore: *onlyStore, MaxDifferences: *maxDiffs, MaxDifferencesPerStore: *storeDiffs,
 		ReverseAccounts: !*oneWay, Workers: *workers,
 		ProgressMaxDifferences: &progressDifferenceLimit,
 		Progress: func(event dbcompare.ProgressEvent) {
@@ -152,7 +157,7 @@ func main() {
 			fmt.Printf("\n[%s] %s %s\n%s\n", d.Store, d.Kind, d.Key, d.Detail)
 		}
 	}
-	if !report.StateCoverageComplete {
+	if !report.StateCoverageComplete && *onlyStore == "" {
 		fmt.Fprintln(os.Stderr, "state-store coverage is incomplete; see unsupported_state_stores/unclassified_stores")
 		os.Exit(2)
 	}

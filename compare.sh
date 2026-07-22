@@ -31,6 +31,7 @@ WORKERS="${WORKERS:-8}"
 MAX_DIFFS="${MAX_DIFFS:-100000}"
 MAX_DIFFS_PER_STORE="${MAX_DIFFS_PER_STORE:-500}"
 LIVE_MAX_DIFFS="${LIVE_MAX_DIFFS:-1000}"
+ONLY_STORE="${ONLY_STORE:-}"
 
 JSON_FILE="$RESULT_DIR/db-compare.json"
 LOG_FILE="$RESULT_DIR/db-compare.log"
@@ -89,6 +90,7 @@ run_compare() {
   echo "repo=$REPO_DIR branch=$BRANCH height=$HEIGHT"
   echo "gtron=$GTRON_DB"
   echo "java=$JAVA_DB"
+  [[ -n "$ONLY_STORE" ]] && echo "only_store=$ONLY_STORE"
 
   if [[ ! -d "$GTRON_DB" ]]; then
     echo "gtron database directory not found: $GTRON_DB"
@@ -114,6 +116,10 @@ run_compare() {
 
   echo "[$(date '+%F %T')] starting database comparison"
   echo "running" > "$STATUS_FILE"
+  local only_store_args=()
+  if [[ -n "$ONLY_STORE" ]]; then
+    only_store_args=(--only-store "$ONLY_STORE")
+  fi
   set +e
   "$BIN_FILE" \
     --height "$HEIGHT" \
@@ -124,6 +130,7 @@ run_compare() {
     --max-diffs "$MAX_DIFFS" \
     --max-diffs-per-store "$MAX_DIFFS_PER_STORE" \
     --live-max-diffs "$LIVE_MAX_DIFFS" \
+    "${only_store_args[@]}" \
     > "$JSON_FILE"
   local rc=$?
   set -e

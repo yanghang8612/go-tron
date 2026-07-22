@@ -54,6 +54,7 @@ type ProgressEvent struct {
 // Options controls comparison scope and retained diagnostic output.
 type Options struct {
 	Height                 uint64
+	OnlyStore              string
 	MaxDifferences         int
 	MaxDifferencesPerStore int
 	ReverseAccounts        bool
@@ -108,6 +109,7 @@ type Report struct {
 	Height                 uint64          `json:"height"`
 	GtronHead              uint64          `json:"gtron_head"`
 	JavaHead               uint64          `json:"java_head"`
+	SelectedStore          string          `json:"selected_store,omitempty"`
 	StateCoverageComplete  bool            `json:"state_coverage_complete"`
 	UnsupportedStateStores []string        `json:"unsupported_state_stores,omitempty"`
 	UnclassifiedStores     []string        `json:"unclassified_stores,omitempty"`
@@ -448,7 +450,10 @@ func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report
 	if opts.MaxDifferences <= 0 {
 		opts.MaxDifferences = 100
 	}
-	c := &comparer{opts: opts, report: &Report{Height: opts.Height}}
+	if opts.OnlyStore != "" && opts.OnlyStore != "storage-row" {
+		return nil, fmt.Errorf("unsupported --only-store %q", opts.OnlyStore)
+	}
+	c := &comparer{opts: opts, report: &Report{Height: opts.Height, SelectedStore: opts.OnlyStore}}
 	c.auditJavaStoreCoverage(java)
 
 	gtronHead, err := gtronHead(gtron)
@@ -465,6 +470,13 @@ func Compare(gtron ethdb.KeyValueStore, java *JavaStores, opts Options) (*Report
 	})
 	if gtronHead != opts.Height || javaHead != opts.Height {
 		return nil, fmt.Errorf("height guard failed: requested=%d gtron_head=%d java_head=%d", opts.Height, gtronHead, javaHead)
+	}
+	if opts.OnlyStore == "storage-row" {
+		if err := c.compareStorageRows(gtron, java.Store("storage-row"), java.Store("contract")); err != nil {
+			return nil, err
+		}
+		c.finalizeDifferenceSamples()
+		return c.report, nil
 	}
 
 	disk := rawdb.WrapKeyValueStore(gtron)
@@ -1140,8 +1152,11 @@ func (c *comparer) addByteDiff(store, key string, java, gtron []byte) {
 }
 
 func byteDiffDetail(java, gtron []byte) string {
-	return fmt.Sprintf("java(len=%d sha256=%x value=%s) gtron(len=%d sha256=%x value=%s)",
-		len(java), sha256.Sum256(java), shortHex(java), len(gtron), sha256.Sum256(gtron), shortHex(gtron))
+	return fmt.Sprintf("java(%s) gtron(%s)", byteSideDetail(java), byteSideDetail(gtron))
+}
+
+func byteSideDetail(value []byte) string {
+	return fmt.Sprintf("len=%d sha256=%x value=%s", len(value), sha256.Sum256(value), shortHex(value))
 }
 
 func (c *comparer) differenceLimitReached(store, kind string, category ...string) bool {

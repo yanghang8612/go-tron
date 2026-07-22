@@ -294,7 +294,7 @@ func (c *comparer) compareAdditionalStateStores(gtron ethdb.KeyValueStore, sdb *
 		func() error { return c.compareProposals(sdb, java.Store("proposal")) },
 		func() error { return c.compareRecentBlocks(gtron, java.Store("recent-block")) },
 		func() error { return c.compareRewardVI(gtron, java.Store("reward-vi")) },
-		func() error { return c.compareStorageRows(gtron, java.Store("storage-row")) },
+		func() error { return c.compareStorageRows(gtron, java.Store("storage-row"), java.Store("contract")) },
 		func() error { return c.compareTreeBlockIndex(sdb, java.Store("tree-block-index")) },
 		func() error { return c.compareVotes(sdb, java.Store("votes")) },
 		func() error { return c.compareWitnessSchedule(gtron, sdb, java.Store("witness_schedule")) },
@@ -861,7 +861,113 @@ func (c *comparer) compareRewardVI(gtron ethdb.KeyValueStore, java ethdb.KeyValu
 	})
 }
 
-func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore) error {
+const storageRowOwnerPrefixBytes = 16
+
+func storageRowBytesZero(value []byte) bool {
+	for _, b := range value {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func storageRowOwnerIndexKey(rowKey []byte) []byte {
+	if len(rowKey) < storageRowOwnerPrefixBytes {
+		return nil
+	}
+	key := make([]byte, 1+storageRowOwnerPrefixBytes)
+	key[0] = 0xff
+	copy(key[1:], rowKey[:storageRowOwnerPrefixBytes])
+	return key
+}
+
+func storageRowIndexedValue(owner tcommon.Address, value []byte) []byte {
+	indexed := make([]byte, 0, tcommon.AddressLength+len(value))
+	indexed = append(indexed, owner[:]...)
+	return append(indexed, value...)
+}
+
+func splitStorageRowIndexedValue(indexed []byte) (tcommon.Address, []byte, error) {
+	if len(indexed) < tcommon.AddressLength {
+		return tcommon.Address{}, nil, fmt.Errorf("storage-row index value is %d bytes, want at least %d", len(indexed), tcommon.AddressLength)
+	}
+	return tcommon.BytesToAddress(indexed[:tcommon.AddressLength]), indexed[tcommon.AddressLength:], nil
+}
+
+func storageRowOwnerDetail(index ethdb.KeyValueReader, rowKey []byte) string {
+	ownerKey := storageRowOwnerIndexKey(rowKey)
+	if ownerKey == nil {
+		return ""
+	}
+	detail, err := index.Get(ownerKey)
+	if err != nil {
+		return ""
+	}
+	return string(detail)
+}
+
+func storageRowDetailPrefix(index ethdb.KeyValueReader, rowKey []byte, fallback tcommon.Address) string {
+	if detail := storageRowOwnerDetail(index, rowKey); detail != "" {
+		return detail + " "
+	}
+	if !fallback.IsEmpty() {
+		return fmt.Sprintf("owner=%s ", fallback.Hex())
+	}
+	return ""
+}
+
+func indexJavaStorageRowOwners(index ethdb.KeyValueStore, contracts ethdb.KeyValueStore, progress *progressCounter) error {
+	if contracts == nil {
+		return nil
+	}
+	batch := index.NewBatch()
+	defer batch.Close()
+	it := contracts.NewIterator(nil, nil)
+	defer it.Release()
+	for it.Next() {
+		progress.Add(1)
+		var meta contractpb.SmartContract
+		if err := proto.Unmarshal(it.Value(), &meta); err != nil {
+			continue
+		}
+		addressBytes := it.Key()
+		if len(addressBytes) != tcommon.AddressLength {
+			addressBytes = meta.GetContractAddress()
+		}
+		if len(addressBytes) != tcommon.AddressLength {
+			continue
+		}
+		seed := append([]byte(nil), addressBytes...)
+		if trxHash := meta.GetTrxHash(); !storageRowBytesZero(trxHash) {
+			seed = append(seed, trxHash...)
+		}
+		addressHash := tcommon.Keccak256(seed)
+		ownerKey := storageRowOwnerIndexKey(addressHash[:])
+		detail := fmt.Sprintf("owner=%x version=%d", addressBytes, meta.GetVersion())
+		if trxHash := meta.GetTrxHash(); !storageRowBytesZero(trxHash) {
+			detail += fmt.Sprintf(" trx_hash=%x", trxHash)
+		}
+		if err := batch.Put(ownerKey, []byte(detail)); err != nil {
+			return err
+		}
+		if batch.ValueSize() >= 16<<20 {
+			if err := batch.Write(); err != nil {
+				return err
+			}
+			batch.Reset()
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	if batch.ValueSize() > 0 {
+		return batch.Write()
+	}
+	return nil
+}
+
+func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyValueStore, contracts ethdb.KeyValueStore) error {
 	r := StoreResult{Name: "storage-row", Scope: "state", Present: java != nil}
 	defer c.trackStore(&r)()
 	if java == nil {
@@ -877,6 +983,10 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 		return fmt.Errorf("open storage-row comparison index: %w", err)
 	}
 	defer index.Close()
+	ownerProgress := c.newProgressCounter(&r, "indexing java storage owners")
+	if err := indexJavaStorageRowOwners(index, contracts, ownerProgress); err != nil {
+		return fmt.Errorf("build storage-row owner index: %w", err)
+	}
 
 	batch := index.NewBatch()
 	var lastOwner tcommon.Address
@@ -900,7 +1010,7 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 		if row.Generation != lastGeneration {
 			return true, nil
 		}
-		if err := batch.Put(row.Key, row.Value); err != nil {
+		if err := batch.Put(row.Key, storageRowIndexedValue(row.Owner, row.Value)); err != nil {
 			return false, err
 		}
 		if batch.ValueSize() >= 16<<20 {
@@ -925,18 +1035,28 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	for it.Next() {
 		javaProgress.Add(1)
 		key := append([]byte(nil), it.Key()...)
-		got, getErr := index.Get(key)
+		indexed, getErr := index.Get(key)
 		if getErr != nil {
 			r.MissingGtron++
-			c.addDiff("storage-row", printableKey(key), "missing_gtron", "row key not found in current ContractStorage generation")
+			detail := storageRowDetailPrefix(index, key, tcommon.Address{}) +
+				fmt.Sprintf("java(%s) gtron(missing); row key not found in current ContractStorage generation", byteSideDetail(it.Value()))
+			c.addDiff("storage-row", printableKey(key), "missing_gtron", detail)
 			continue
+		}
+		owner, got, splitErr := splitStorageRowIndexedValue(indexed)
+		if splitErr != nil {
+			it.Release()
+			return splitErr
 		}
 		r.Compared++
 		if bytes.Equal(it.Value(), got) {
 			r.Equal++
 		} else {
 			r.Different++
-			c.addByteDiff("storage-row", printableKey(key), it.Value(), got)
+			if !c.differenceLimitReached("storage-row", "different") {
+				detail := storageRowDetailPrefix(index, key, owner) + byteDiffDetail(it.Value(), got)
+				c.addDiff("storage-row", printableKey(key), "different", detail)
+			}
 		}
 		if err := deletes.Delete(key); err != nil {
 			it.Release()
@@ -965,9 +1085,18 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	remaining := index.NewIterator(nil, nil)
 	defer remaining.Release()
 	for remaining.Next() {
+		if len(remaining.Key()) != len(tcommon.Hash{}) {
+			continue
+		}
 		reverseProgress.Add(1)
+		owner, value, err := splitStorageRowIndexedValue(remaining.Value())
+		if err != nil {
+			return err
+		}
 		r.MissingJava++
-		c.addDiff("storage-row", printableKey(remaining.Key()), "missing_java", "gtron current ContractStorage row has no java storage-row entry")
+		detail := storageRowDetailPrefix(index, remaining.Key(), owner) +
+			fmt.Sprintf("java(missing) gtron(%s); current ContractStorage row has no java storage-row entry", byteSideDetail(value))
+		c.addDiff("storage-row", printableKey(remaining.Key()), "missing_java", detail)
 	}
 	return remaining.Error()
 }
