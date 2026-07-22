@@ -42,6 +42,15 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 		}
 	}
 
+	// java-tron's accountStore.get returns a detached AccountCapsule. Later
+	// adjustAllowance calls read and write a different capsule, so the
+	// account-vote row saved at the end contains the allowance from before this
+	// settlement. StateDB returns a mutable cached account instead; serialize it
+	// now so AddAllowance below cannot leak the newly paid reward into the
+	// historical snapshot.
+	currentVotes := voteEntriesFromAccount(acct)
+	accountVoteSnapshot := marshalAccountVote(acct)
+
 	// Finalize the most-recent recorded-but-not-yet-settled cycle.
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
 		if votes := readSnapshotVotes(statedb, beginCycle, addr); len(votes) > 0 {
@@ -55,7 +64,6 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 
 	endCycle = currentCycle
 
-	currentVotes := voteEntriesFromAccount(acct)
 	if len(currentVotes) == 0 {
 		_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle+1)
 		return
@@ -70,8 +78,8 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 
 	_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle)
 	_ = statedb.WriteEndCycle(addr.Bytes(), endCycle+1)
-	if snap := marshalAccountVote(acct); snap != nil {
-		_ = statedb.WriteCycleAccountVote(endCycle, addr.Bytes(), snap)
+	if accountVoteSnapshot != nil {
+		_ = statedb.WriteCycleAccountVote(endCycle, addr.Bytes(), accountVoteSnapshot)
 	}
 }
 

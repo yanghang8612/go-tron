@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestWithdrawReward_SkipsWhenChangeDelegationOff(t *testing.T) {
@@ -64,6 +65,17 @@ func TestWithdrawReward_SettlesPendingReward(t *testing.T) {
 	}
 	if got := statedb.ReadEndCycle(voter.Bytes()); got != 11 {
 		t.Fatalf("endCycle: got %d, want 11", got)
+	}
+
+	// java-tron snapshots the detached account capsule loaded before reward
+	// settlement. The live account has the new allowance, but account-vote must
+	// retain the pre-settlement value.
+	var snapshot corepb.Account
+	if err := proto.Unmarshal(statedb.ReadCycleAccountVote(10, voter.Bytes()), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot.GetAllowance(); got != 0 {
+		t.Fatalf("snapshot allowance: got %d, want pre-settlement value 0", got)
 	}
 }
 

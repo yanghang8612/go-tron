@@ -30,7 +30,7 @@ func WriteRewardVi(db ethdb.KeyValueWriter, cycle int64, addr []byte, vi *big.In
 	if vi == nil || vi.Sign() == 0 {
 		return
 	}
-	_ = db.Put(rewardViKey(cycle, addr), vi.Bytes())
+	_ = db.Put(rewardViKey(cycle, addr), EncodeJavaNonNegativeBigInteger(vi))
 }
 
 // ReadRewardVi returns the cumulative VI stored for (cycle, addr). Returns

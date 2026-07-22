@@ -263,6 +263,18 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 	if err := java.Put([]byte(fmt.Sprintf("-1-%x-brokerage", addr)), []byte{0, 0, 0, 20}); err != nil {
 		t.Fatal(err)
 	}
+	var zeroReward [8]byte
+	if err := java.Put([]byte(fmt.Sprintf("4-%x-reward", addr)), zeroReward[:]); err != nil {
+		t.Fatal(err)
+	}
+	var nonDefaultReward [8]byte
+	binary.BigEndian.PutUint64(nonDefaultReward[:], 9)
+	if err := java.Put([]byte(fmt.Sprintf("5-%x-reward", addr)), nonDefaultReward[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := java.Put([]byte(fmt.Sprintf("6-%x-brokerage", addr)), []byte{0, 0, 0, 33}); err != nil {
+		t.Fatal(err)
+	}
 
 	root, err := sdb.Commit()
 	if err != nil {
@@ -280,7 +292,7 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := c.report.Stores[0]
-	if result.Compared != 3 || result.Equal != 2 || result.Different != 1 || result.MissingGtron != 1 {
+	if result.Compared != 7 || result.Equal != 4 || result.Different != 3 || result.MissingGtron != 0 {
 		t.Fatalf("delegation result=%+v", result)
 	}
 	accountVote := result.Breakdown["account-vote"]
@@ -288,14 +300,14 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 		t.Fatalf("account-vote breakdown=%+v", accountVote)
 	}
 	brokerage := result.Breakdown["brokerage"]
-	if brokerage == nil || brokerage.MissingGtron != 1 {
+	if brokerage == nil || brokerage.Compared != 2 || brokerage.Equal != 1 || brokerage.Different != 1 || brokerage.MissingGtron != 0 {
 		t.Fatalf("brokerage breakdown=%+v", brokerage)
 	}
 	rewardStats := result.Breakdown["reward"]
-	if rewardStats == nil || rewardStats.Equal != 1 {
+	if rewardStats == nil || rewardStats.Compared != 3 || rewardStats.Equal != 2 || rewardStats.Different != 1 || rewardStats.MissingGtron != 0 {
 		t.Fatalf("reward breakdown=%+v", rewardStats)
 	}
-	if len(c.report.Differences) != 2 {
+	if len(c.report.Differences) != 3 {
 		t.Fatalf("differences=%+v", c.report.Differences)
 	}
 	for _, difference := range c.report.Differences {
@@ -305,8 +317,12 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 				t.Fatalf("account-vote difference=%+v", difference)
 			}
 		case "brokerage":
-			if difference.Kind != "missing_gtron" {
+			if difference.Kind != "different" || difference.Key != fmt.Sprintf("6-%x-brokerage", addr) {
 				t.Fatalf("brokerage difference=%+v", difference)
+			}
+		case "reward":
+			if difference.Kind != "different" || difference.Key != fmt.Sprintf("5-%x-reward", addr) {
+				t.Fatalf("reward difference=%+v", difference)
 			}
 		default:
 			t.Fatalf("unexpected difference=%+v", difference)

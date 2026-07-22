@@ -457,7 +457,23 @@ func (c *comparer) compareDelegation(sdb *state.StateDB, java ethdb.KeyValueStor
 		if err != nil {
 			return nil, false, err
 		}
-		return sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
+		value, present, err := sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
+		if err != nil || present {
+			return value, present, err
+		}
+		// java-tron may materialize getter defaults while go-tron leaves the
+		// equivalent state row absent. Return the encoded defaults so the normal
+		// byte comparison still reports non-default Java values as differences.
+		switch delegationRowCategory(key) {
+		case "reward":
+			return make([]byte, 8), true, nil
+		case "brokerage":
+			var encoded [4]byte
+			binary.BigEndian.PutUint32(encoded[:], uint32(rawdb.DefaultBrokerage))
+			return encoded[:], true, nil
+		default:
+			return nil, false, nil
+		}
 	}, compareDelegationValue, delegationRowCategory)
 }
 

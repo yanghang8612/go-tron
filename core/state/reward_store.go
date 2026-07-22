@@ -205,10 +205,7 @@ func (s *StateDB) ReadWitnessVI(cycle int64, addr []byte) *big.Int {
 }
 
 func (s *StateDB) WriteWitnessVI(cycle int64, addr []byte, vi *big.Int) error {
-	if vi == nil {
-		vi = new(big.Int)
-	}
-	return s.writeSystemReward(rawdb.WitnessVIStateKey(cycle, addr), vi.Bytes())
+	return s.writeSystemReward(rawdb.WitnessVIStateKey(cycle, addr), rawdb.EncodeJavaNonNegativeBigInteger(vi))
 }
 
 func (s *StateDB) ReadCycleBrokerage(cycle int64, addr []byte) int {

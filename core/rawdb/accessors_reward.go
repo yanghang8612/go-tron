@@ -75,14 +75,33 @@ func ReadWitnessVI(db ethdb.KeyValueReader, cycle int64, addr []byte) *big.Int {
 	if len(data) == 0 {
 		return new(big.Int)
 	}
-	// Java-tron uses BigInteger.toByteArray (two's-complement, big-endian,
-	// with sign bit). Mirror that format exactly.
+	// VI is non-negative. A leading zero byte written by Java to preserve the
+	// sign is therefore safe to decode as an unsigned magnitude.
 	return new(big.Int).SetBytes(data)
+}
+
+// EncodeJavaNonNegativeBigInteger mirrors BigInteger.toByteArray for the
+// non-negative values used by java-tron's VI stores. Java writes one zero byte
+// for zero and prepends a zero sign byte when the magnitude's high bit is set.
+func EncodeJavaNonNegativeBigInteger(value *big.Int) []byte {
+	if value == nil || value.Sign() == 0 {
+		return []byte{0}
+	}
+	if value.Sign() < 0 {
+		panic("cannot encode negative value as non-negative Java BigInteger")
+	}
+	magnitude := value.Bytes()
+	if magnitude[0]&0x80 == 0 {
+		return magnitude
+	}
+	encoded := make([]byte, len(magnitude)+1)
+	copy(encoded[1:], magnitude)
+	return encoded
 }
 
 // WriteWitnessVI stores the accumulated VI for a witness at a cycle.
 func WriteWitnessVI(db ethdb.KeyValueWriter, cycle int64, addr []byte, vi *big.Int) {
-	_ = db.Put(delegRewardKey(cycle, addr, "vi"), vi.Bytes())
+	_ = db.Put(delegRewardKey(cycle, addr, "vi"), EncodeJavaNonNegativeBigInteger(vi))
 }
 
 // ---- per-cycle brokerage snapshot --------------------------------------
