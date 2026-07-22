@@ -104,6 +104,120 @@ func TestJournalAccountDeletedObjectOmitsLatestEnvelope(t *testing.T) {
 	}
 }
 
+func TestJournalAccountCoalescesWithinSnapshot(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x7d)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 100)
+	sdb.resetJournal()
+
+	snap := sdb.Snapshot()
+	sdb.AddBalance(addr, 10)
+	sdb.AddBalance(addr, 20)
+	sdb.SetAllowance(addr, 30)
+	if got := len(sdb.journal.entries); got != 1 {
+		t.Fatalf("journal entries = %d, want one account pre-image", got)
+	}
+	if got := sdb.GetBalance(addr); got != 130 {
+		t.Fatalf("balance before revert = %d, want 130", got)
+	}
+	sdb.RevertToSnapshot(snap)
+	if got := sdb.GetBalance(addr); got != 100 {
+		t.Fatalf("balance after revert = %d, want 100", got)
+	}
+	if got := sdb.GetAllowance(addr); got != 0 {
+		t.Fatalf("allowance after revert = %d, want 0", got)
+	}
+}
+
+func TestJournalAccountNestedSnapshotsKeepIndependentPreimages(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x7e)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 100)
+	sdb.resetJournal()
+
+	outer := sdb.Snapshot()
+	sdb.AddBalance(addr, 10)
+	inner := sdb.Snapshot()
+	sdb.AddBalance(addr, 20)
+	sdb.SetAllowance(addr, 30)
+	if got := len(sdb.journal.entries); got != 2 {
+		t.Fatalf("journal entries = %d, want one per snapshot", got)
+	}
+
+	sdb.RevertToSnapshot(inner)
+	if got := sdb.GetBalance(addr); got != 110 {
+		t.Fatalf("balance after inner revert = %d, want 110", got)
+	}
+	if got := sdb.GetAllowance(addr); got != 0 {
+		t.Fatalf("allowance after inner revert = %d, want 0", got)
+	}
+	sdb.RevertToSnapshot(outer)
+	if got := sdb.GetBalance(addr); got != 100 {
+		t.Fatalf("balance after outer revert = %d, want 100", got)
+	}
+}
+
+func TestJournalAccountRejectsStalePositionAfterRevert(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addrA := testAddr(0x7f)
+	addrB := testAddr(0x80)
+	for _, addr := range []tcommon.Address{addrA, addrB} {
+		sdb.GetOrCreateAccount(addr)
+		sdb.AddBalance(addr, 100)
+	}
+	sdb.resetJournal()
+
+	outer := sdb.Snapshot()
+	sdb.AddBalance(addrA, 1)
+	inner := sdb.Snapshot()
+	sdb.AddBalance(addrA, 2)
+	sdb.RevertToSnapshot(inner)
+
+	// Reuse addrA's now-stale journal slot with another account. The position
+	// cache must validate the entry's address instead of treating the numeric
+	// slot as a hit after the journal grows again.
+	sdb.AddBalance(addrB, 3)
+	sdb.AddBalance(addrA, 4)
+	if got := len(sdb.journal.entries); got != 3 {
+		t.Fatalf("journal entries after stale-slot reuse = %d, want 3", got)
+	}
+	sdb.RevertToSnapshot(outer)
+	if got := sdb.GetBalance(addrA); got != 100 {
+		t.Fatalf("addrA balance after revert = %d, want 100", got)
+	}
+	if got := sdb.GetBalance(addrB); got != 100 {
+		t.Fatalf("addrB balance after revert = %d, want 100", got)
+	}
+}
+
+func TestJournalAccountDomainFlushStartsNewPreimageInterval(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x81)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 100)
+	sdb.resetJournal()
+	sdb.changeSet.enabled = true
+	sdb.changeSet.captureAtCommit = false
+
+	_ = sdb.Snapshot()
+	sdb.AddBalance(addr, 10)
+	sdb.changeSet.journalMark = sdb.journal.length() // prior tx published
+	sdb.AddBalance(addr, 20)
+	if got := len(sdb.journal.entries); got != 2 {
+		t.Fatalf("journal entries across domain flush = %d, want 2", got)
+	}
+	second := sdb.journal.entries[1].(accountChange)
+	prev, err := types.UnmarshalAccount(second.prev)
+	if err != nil {
+		t.Fatalf("decode second pre-image: %v", err)
+	}
+	if got := prev.Balance(); got != 110 {
+		t.Fatalf("second interval pre-image balance = %d, want 110", got)
+	}
+}
+
 func BenchmarkJournalAccountMapRich(b *testing.B) {
 	addr := testAddr(0x7b)
 	obj := newMapRichJournalAccount(addr, 64)
@@ -113,5 +227,21 @@ func BenchmarkJournalAccountMapRich(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sdb.journal.entries = sdb.journal.entries[:0]
 		sdb.journalAccount(addr, obj)
+	}
+}
+
+func BenchmarkJournalAccountMapRichRepeatedSnapshot(b *testing.B) {
+	addr := testAddr(0x82)
+	obj := newMapRichJournalAccount(addr, 64)
+	sdb := &StateDB{journal: newJournal()}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sdb.journal.entries = sdb.journal.entries[:0]
+		sdb.snapshots = append(sdb.snapshots[:0], 0)
+		clear(sdb.accountJournalPos)
+		for range 8 {
+			sdb.journalAccount(addr, obj)
+		}
 	}
 }

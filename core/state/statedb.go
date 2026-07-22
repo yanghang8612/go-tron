@@ -98,6 +98,12 @@ type StateDB struct {
 
 	journal   *journal
 	snapshots []int // journal length at each snapshot
+	// accountJournalPos remembers the most recent accountChange entry for each
+	// address. journalAccount uses it to avoid repeatedly serializing the same
+	// map-rich Account within one snapshot/history interval. Positions are
+	// validated against the live journal before reuse, so entries truncated by
+	// RevertToSnapshot cannot become false hits after the slice grows again.
+	accountJournalPos map[tcommon.Address]int
 
 	// transientStorage holds EIP-1153 (Cancun) TLOAD/TSTORE slots for the
 	// current transaction, keyed by (contract address, slot) — the same
@@ -1503,7 +1509,7 @@ func (s *StateDB) Snapshot() int {
 // journal walk a precise undo would require. See the dirtyWitnesses
 // field doc for the design rationale.
 func (s *StateDB) RevertToSnapshot(id int) {
-	if id >= len(s.snapshots) {
+	if id < 0 || id >= len(s.snapshots) {
 		return
 	}
 	journalLen := s.snapshots[id]
@@ -3175,8 +3181,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		// any accidental sync commit fold normally.
 		s.capturedFold = &CapturedCommit{updates: touchUpdates, repair: s.commitmentRepair()}
 		s.deferFold = false
-		s.journal = newJournal()
-		s.snapshots = s.snapshots[:0]
+		s.resetJournal()
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -3188,8 +3193,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		return tcommon.Hash{}, stats, err
 	}
 	s.originRoot = ethcommon.Hash(root)
-	s.journal = newJournal()
-	s.snapshots = s.snapshots[:0]
+	s.resetJournal()
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil
@@ -3508,6 +3512,16 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 
 // journalAccount records the current state of an account for revert.
 func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
+	if obj != nil && obj.account != nil {
+		obj.accountDirty = true
+	}
+	if boundary, ok := s.accountJournalBoundary(); ok {
+		if pos, exists := s.accountJournalPos[addr]; exists && pos >= boundary && pos < s.journal.length() {
+			if change, valid := s.journal.entries[pos].(accountChange); valid && change.address == addr {
+				return
+			}
+		}
+	}
 	var prev []byte
 	var prevLatest []byte
 	if obj != nil && obj.account != nil {
@@ -3519,8 +3533,8 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 				prevLatest = latest
 			}
 		}
-		obj.accountDirty = true
 	}
+	pos := s.journal.length()
 	s.journal.append(accountChange{
 		address:          addr,
 		prev:             prev,
@@ -3529,6 +3543,34 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 		prevCreated:      obj != nil && obj.created,
 		prevSelfDestruct: obj != nil && obj.selfDestructed,
 	})
+	if len(s.snapshots) > 0 {
+		if s.accountJournalPos == nil {
+			s.accountJournalPos = make(map[tcommon.Address]int)
+		}
+		s.accountJournalPos[addr] = pos
+	}
+}
+
+// accountJournalBoundary returns the earliest journal position whose account
+// pre-images still belong to the current rollback/history interval. Snapshot
+// boundaries protect nested TVM calls. The temporal-history mark advances
+// after each transaction is published, so a later mutation must append a new
+// accountChange even if an older live snapshot still covers the address.
+func (s *StateDB) accountJournalBoundary() (int, bool) {
+	if len(s.snapshots) == 0 {
+		return 0, false
+	}
+	boundary := s.snapshots[len(s.snapshots)-1]
+	if s.changeSet.enabled && !s.changeSet.captureAtCommit && s.changeSet.journalMark > boundary {
+		boundary = s.changeSet.journalMark
+	}
+	return boundary, true
+}
+
+func (s *StateDB) resetJournal() {
+	s.journal = newJournal()
+	s.snapshots = s.snapshots[:0]
+	clear(s.accountJournalPos)
 }
 
 // journalWitness records the current witness state for revert.
