@@ -36,9 +36,18 @@ var errInfinity = errors.New("recovered pubkey is the point at infinity")
 // than reject the block. Any OTHER recovery failure (malformed R, r/s out of
 // range) is a genuine bad signature that java also rejects, so it propagates.
 func SigToAddressJavaCompat(hash, recoverySig []byte) (common.Address, error) {
-	pub, err := SigToPub(hash, recoverySig)
+	// Ecrecover returns the uncompressed SEC public key directly. Compared with
+	// SigToPub + PubkeyToAddress this avoids converting the native secp256k1 key
+	// to ecdsa.PublicKey/big.Int only to serialize it back to the same 65 bytes.
+	// It also preserves geth's build-specific acceleration: libsecp256k1 under
+	// cgo and the decred implementation on pure-Go builds.
+	pubBytes, err := ethcrypto.Ecrecover(hash, recoverySig)
 	if err == nil {
-		return PubkeyToAddress(pub), nil
+		digest := ethcrypto.Keccak256Hash(pubBytes[1:])
+		var addr common.Address
+		addr[0] = common.AddressPrefixMainnet
+		copy(addr[1:], digest[12:])
+		return addr, nil
 	}
 	if recoveryYieldsInfinity(hash, recoverySig) {
 		var addr common.Address
@@ -55,17 +64,17 @@ func SigToAddressJavaCompat(hash, recoverySig []byte) (common.Address, error) {
 // BouncyCastle SEC1 §4.1.6 steps and surfaces the infinity case as a distinct
 // error rather than a generic failure.
 func recoveryYieldsInfinity(hash, recoverySig []byte) bool {
-	if len(recoverySig) != 65 {
+	if len(recoverySig) != ethcrypto.SignatureLength {
 		return false
 	}
-	recid := recoverySig[64]
+	recid := recoverySig[ethcrypto.RecoveryIDOffset]
 	if recid > 3 {
 		return false
 	}
 	// decred RecoverCompact wants a header byte of 27+recid (uncompressed).
-	compact := make([]byte, 65)
+	var compact [ethcrypto.SignatureLength]byte
 	compact[0] = 27 + recid
-	copy(compact[1:], recoverySig[:64])
-	_, _, err := decdsa.RecoverCompact(compact, hash)
+	copy(compact[1:], recoverySig[:ethcrypto.RecoveryIDOffset])
+	_, _, err := decdsa.RecoverCompact(compact[:], hash)
 	return err != nil && err.Error() == errInfinity.Error()
 }

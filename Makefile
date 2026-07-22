@@ -5,10 +5,14 @@
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
 GOFLAGS =
-# Default to pure-Go builds. go-ethereum's cgo secp256k1 wrapper compiles a
-# vendored C lib and can stall on small servers; callers can override with
-# `make CGO_ENABLED=1 ...` when they explicitly want cgo.
+# Non-Sapling utility targets default to pure Go. The production gtron target
+# uses gtron-sapling below, which explicitly enables cgo for librustzcash and
+# accelerated secp256k1 recovery.
 CGO_ENABLED ?= 0
+# Sapling needs cgo. Its production build also uses go-ethereum's bundled
+# libsecp256k1 for signature recovery; operators that specifically need the
+# slower pure-Go secp path can override with SAPLING_TAGS='sapling gofuzz'.
+SAPLING_TAGS ?= sapling
 
 gtron: gtron-sapling
 
@@ -31,7 +35,7 @@ test:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO) test ./... -count=1 -timeout 300s
 
 test-sapling:
-	CGO_ENABLED=1 $(GO) test -tags='sapling gofuzz' ./... -count=1 -timeout 300s
+	CGO_ENABLED=1 $(GO) test -tags='$(SAPLING_TAGS)' ./... -count=1 -timeout 300s
 
 lint:
 	golangci-lint run ./...
@@ -126,14 +130,15 @@ zksnark-deps:
 	cd third_party/librustzcash && cargo build --release --manifest-path librustzcash/Cargo.toml
 	@echo "Built third_party/librustzcash/target/release/librustzcash.{a,so,dylib}"
 
-# Sapling-enabled gtron build. Needs CGO_ENABLED=1 for the librustzcash C ABI,
-# but forces go-ethereum onto its pure-Go secp256k1/ecrecover path with the
-# `gofuzz` tag. Without this tag, go-ethereum compiles vendored libsecp256k1
-# when cgo is on, which is slow and has stalled on small build servers.
+# Sapling-enabled gtron build. CGO_ENABLED=1 serves both the librustzcash C ABI
+# and go-ethereum's bundled libsecp256k1 recovery path. The latter is several
+# times faster than pure Go during historical sync. Set
+# SAPLING_TAGS='sapling gofuzz' to opt out of libsecp256k1 when diagnosing a C
+# toolchain problem.
 gtron-sapling:
 	@if [ ! -f third_party/librustzcash/target/release/librustzcash.a ]; then \
 		echo "Sapling static library missing - run \`make zksnark-deps\` before building gtron."; \
 		exit 1; \
 	fi
-	CGO_ENABLED=1 $(GO) build -tags='sapling gofuzz' $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
+	CGO_ENABLED=1 $(GO) build -tags='$(SAPLING_TAGS)' $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron with Sapling support."

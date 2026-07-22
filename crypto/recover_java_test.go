@@ -64,3 +64,43 @@ func TestSigToAddressJavaCompatGarbageStillErrors(t *testing.T) {
 		t.Fatal("all-zero signature must error, not resolve to the ghost address")
 	}
 }
+
+func BenchmarkSigToAddressJavaCompat(b *testing.B) {
+	key, err := ethcrypto.GenerateKey()
+	if err != nil {
+		b.Fatal(err)
+	}
+	hash := ethcrypto.Keccak256([]byte("gtron signature recovery benchmark"))
+	sig, err := ethcrypto.Sign(hash, key)
+	if err != nil {
+		b.Fatal(err)
+	}
+	want := PubkeyToAddress(&key.PublicKey)
+
+	for _, tc := range []struct {
+		name string
+		fn   func([]byte, []byte) (common.Address, error)
+	}{
+		{name: "direct-address", fn: SigToAddressJavaCompat},
+		{name: "legacy-pubkey-roundtrip", fn: func(hash, sig []byte) (common.Address, error) {
+			pub, err := SigToPub(hash, sig)
+			if err != nil {
+				return common.Address{}, err
+			}
+			return PubkeyToAddress(pub), nil
+		}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				got, err := tc.fn(hash, sig)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if got != want {
+					b.Fatalf("recovered address = %x, want %x", got, want)
+				}
+			}
+		})
+	}
+}
