@@ -169,6 +169,11 @@ type SyncService struct {
 	// drain pop the whole buffered run in one pass. Equals CurrentBlock when
 	// async commit is off (the production default), so that path is unchanged.
 	syncedTipNum uint64
+	// bufferPrunedTipNum is the highest effective sync tip through which stale
+	// blockBuffer/blockPath entries have been defensively removed. HandleBlock
+	// never admits entries at or behind the effective tip, so each height range
+	// needs scanning at most once even while CurrentBlock lags async execution.
+	bufferPrunedTipNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
 	// StartSync / checkIsolation / tryFindSyncPeer all short-circuit; the
@@ -474,6 +479,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.bufferedBytes = 0
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
 	ss.syncedTipNum = ss.targetHeadNum
+	ss.bufferPrunedTipNum = ss.targetHeadNum
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
@@ -496,6 +502,61 @@ func (ss *SyncService) ensureSessionMapsLocked() {
 	if ss.blockPath == nil {
 		ss.blockPath = make(map[uint64]tcommon.Hash)
 	}
+}
+
+// effectiveSyncTipLocked returns the highest height already owned by this sync
+// session. CurrentBlock is the durable/published tip; syncedTipNum may be ahead
+// while a deep InsertSession has popped blocks for import but its async commit
+// worker has not published them yet. Admission, request de-duplication and
+// runahead budgeting must use the maximum or stale responses can be copied back
+// into blockBuffer behind the drain cursor and remain there forever.
+func (ss *SyncService) effectiveSyncTipLocked() uint64 {
+	tip := ss.chain.CurrentBlock().Number()
+	if ss.syncedTipNum > tip {
+		tip = ss.syncedTipNum
+	}
+	return tip
+}
+
+// removeBufferedBlockLocked removes one raw entry and all of its accounting.
+// Keeping deletion in one helper prevents defensive stale cleanup and normal
+// contiguous drain from drifting on bufferedBytes/bufferedHash/blockPath.
+func (ss *SyncService) removeBufferedBlockLocked(num uint64) (bufferedSyncBlock, bool) {
+	buffered, ok := ss.blockBuffer[num]
+	if !ok {
+		return bufferedSyncBlock{}, false
+	}
+	delete(ss.blockBuffer, num)
+	delete(ss.bufferedHash, buffered.hash)
+	delete(ss.blockPath, num)
+	if n := int64(len(buffered.raw)); n >= ss.bufferedBytes {
+		ss.bufferedBytes = 0
+	} else {
+		ss.bufferedBytes -= n
+	}
+	return buffered, true
+}
+
+// pruneStaleSyncStateLocked drops buffer entries and path reservations at or
+// behind tip. Such entries cannot be reached by the contiguous drain, which
+// starts at effectiveSyncTipLocked()+1. The monotonic watermark avoids a full
+// buffer scan on every received block; HandleBlock's admission gate guarantees
+// no entry can later appear below an already-pruned tip.
+func (ss *SyncService) pruneStaleSyncStateLocked(tip uint64) {
+	if tip <= ss.bufferPrunedTipNum {
+		return
+	}
+	for num := range ss.blockBuffer {
+		if num <= tip {
+			ss.removeBufferedBlockLocked(num)
+		}
+	}
+	for num := range ss.blockPath {
+		if num <= tip {
+			delete(ss.blockPath, num)
+		}
+	}
+	ss.bufferPrunedTipNum = tip
 }
 
 func (ss *SyncService) addPeerStateLocked(peer *p2p.Peer) (*syncPeerState, bool) {
@@ -731,7 +792,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 	ps.chainRequested = false
-	headNum := ss.chain.CurrentBlock().Number()
+	committedHeadNum := ss.chain.CurrentBlock().Number()
+	effectiveTipNum := ss.effectiveSyncTipLocked()
+	ss.pruneStaleSyncStateLocked(effectiveTipNum)
 	stopHeight, stopConfigured := ss.configuredStopHeight()
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
@@ -739,7 +802,14 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			continue
 		}
 		hash := tcommon.BytesToHash(bid.Hash)
-		if num <= headNum {
+		// Preserve the existing committed-chain fork check, but never requeue a
+		// height already handed to the active async insert session. It is not
+		// necessarily visible through CurrentBlock/GetBlockByNumber yet.
+		if num > committedHeadNum && num <= effectiveTipNum {
+			delete(ss.blockPath, num)
+			continue
+		}
+		if num <= committedHeadNum {
 			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
 				continue
 			}
@@ -849,16 +919,18 @@ func (ss *SyncService) fetchNextBatch() {
 func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
 	ss.ensureSessionMapsLocked()
 	var out []outboundSyncRequest
-	headNum := ss.chain.CurrentBlock().Number()
+	committedHeadNum := ss.chain.CurrentBlock().Number()
+	effectiveTipNum := ss.effectiveSyncTipLocked()
+	ss.pruneStaleSyncStateLocked(effectiveTipNum)
 	for _, ps := range ss.peers {
 		if ps == nil || ps.peer == nil || ps.done || ps.chainRequested || ps.inflight > 0 {
 			continue
 		}
-		ss.assignRetryLocked(ps, headNum)
-		batch := ss.nextFetchBatchLocked(ps, headNum)
+		ss.assignRetryLocked(ps, effectiveTipNum)
+		batch := ss.nextFetchBatchLocked(ps, effectiveTipNum)
 		if len(batch) == 0 {
 			if !ps.done {
-				if ps.lastInventoryNum > headNum {
+				if ps.lastInventoryNum > committedHeadNum {
 					// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
 					// summary tail is below the last inventory tip it sent us
 					// on this peer (lastSyncNum > lastNum). Wait until the
@@ -876,7 +948,8 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 					}
 					syncLog.Trace("Sync peer waiting for local head",
 						"peer", ps.peer.ID(),
-						"head", headNum,
+						"head", committedHeadNum,
+						"effectiveTip", effectiveTipNum,
 						"inventoryTip", ps.lastInventoryNum)
 					continue
 				}
@@ -910,7 +983,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 }
 
 // withinRunaheadBudgetLocked reports whether bid may be requested now. Two
-// independent budgets bound the fetch runahead past the local head:
+// independent budgets bound the fetch runahead past the effective sync tip:
 //
 //   - MaxBufferedRunaheadBlocks caps the number span outright;
 //   - once the raw sync buffer holds MaxBufferedRunaheadBytes, only the
@@ -925,17 +998,17 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 // rejects fetches outside lastSyncBlockId − 2×SYNC_FETCH_BATCH_NUM ..
 // lastSyncBlockId); without it the buffer's heap footprint is unbounded
 // (a ~2.8M-block, 2.5 GB runahead was observed live on the Nile node).
-func (ss *SyncService) withinRunaheadBudgetLocked(bid types.BlockID, headNum uint64) bool {
-	if bid.Num > headNum+maxBufferedRunaheadBlocks {
+func (ss *SyncService) withinRunaheadBudgetLocked(bid types.BlockID, effectiveTipNum uint64) bool {
+	if bid.Num > effectiveTipNum+maxBufferedRunaheadBlocks {
 		return false
 	}
-	if ss.bufferedBytes >= maxBufferedRunaheadBytes && bid.Num > headNum+alwaysFetchRunaheadBlocks {
+	if ss.bufferedBytes >= maxBufferedRunaheadBytes && bid.Num > effectiveTipNum+alwaysFetchRunaheadBlocks {
 		return false
 	}
 	return true
 }
 
-func (ss *SyncService) assignRetryLocked(ps *syncPeerState, headNum uint64) {
+func (ss *SyncService) assignRetryLocked(ps *syncPeerState, effectiveTipNum uint64) {
 	if len(ss.retryList) == 0 {
 		return
 	}
@@ -944,7 +1017,7 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState, headNum uint64) {
 		if ss.hasBlockOrRequestLocked(bid) {
 			continue
 		}
-		if !ss.withinRunaheadBudgetLocked(bid, headNum) {
+		if !ss.withinRunaheadBudgetLocked(bid, effectiveTipNum) {
 			keep = append(keep, bid)
 			continue
 		}
@@ -971,7 +1044,7 @@ func (ps *syncPeerState) canFetch(bid types.BlockID) bool {
 	return bid.Num >= ps.minFetchNum && bid.Num <= ps.lastInventoryNum
 }
 
-func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, headNum uint64) []types.BlockID {
+func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, effectiveTipNum uint64) []types.BlockID {
 	if len(ps.fetchList) == 0 {
 		return nil
 	}
@@ -981,7 +1054,7 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, headNum uint64) [
 		// Budget first: it is the cheapest check and must run before
 		// reserveBlockPathLocked so a parked bid acquires no reservation
 		// side effects while it waits for the head to advance.
-		if !ss.withinRunaheadBudgetLocked(bid, headNum) {
+		if !ss.withinRunaheadBudgetLocked(bid, effectiveTipNum) {
 			remaining = append(remaining, bid)
 			continue
 		}
@@ -1005,6 +1078,15 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, headNum uint64) [
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
+	committedHeadNum := ss.chain.CurrentBlock().Number()
+	effectiveTipNum := ss.effectiveSyncTipLocked()
+	if bid.Num > committedHeadNum && bid.Num <= effectiveTipNum {
+		// Any reservation at an async-applied height is obsolete, including a
+		// conflicting one left by a request that was assigned before the cursor
+		// advanced.
+		delete(ss.blockPath, bid.Num)
+		return true
+	}
 	if ss.blockPathConflictsLocked(bid) {
 		return true
 	}
@@ -1014,13 +1096,17 @@ func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
 	if _, ok := ss.bufferedHash[bid.Hash]; ok {
 		return true
 	}
-	headNum := ss.chain.CurrentBlock().Number()
-	if bid.Num <= headNum {
+	if bid.Num <= committedHeadNum {
 		if existing := ss.chain.GetBlockByNumber(bid.Num); existing != nil && existing.Hash() == bid.Hash {
+			ss.releaseBlockPathLocked(bid)
 			return true
 		}
 	}
-	return ss.chain.HasBlockInKhaosDB(bid.Hash)
+	if ss.chain.HasBlockInKhaosDB(bid.Hash) {
+		ss.releaseBlockPathLocked(bid)
+		return true
+	}
+	return false
 }
 
 func (ss *SyncService) blockPathConflictsLocked(bid types.BlockID) bool {
@@ -1040,6 +1126,12 @@ func (ss *SyncService) reserveBlockPathLocked(bid types.BlockID) bool {
 	}
 	ss.blockPath[bid.Num] = bid.Hash
 	return true
+}
+
+func (ss *SyncService) releaseBlockPathLocked(bid types.BlockID) {
+	if hash, ok := ss.blockPath[bid.Num]; ok && hash == bid.Hash {
+		delete(ss.blockPath, bid.Num)
+	}
 }
 
 func (ss *SyncService) sendOutboundRequests(out []outboundSyncRequest) {
@@ -1152,7 +1244,9 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	if !batchDone {
 		ss.armPeerFetchTimerLocked(ps)
 	}
-	if blockNum > ss.chain.CurrentBlock().Number() {
+	effectiveTipNum := ss.effectiveSyncTipLocked()
+	ss.pruneStaleSyncStateLocked(effectiveTipNum)
+	if blockNum > effectiveTipNum {
 		bid := types.BlockID{Hash: blockHash, Num: blockNum}
 		if existing, ok := ss.blockBuffer[blockNum]; ok {
 			if existing.hash != blockHash {
@@ -1170,6 +1264,11 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 			ss.bufferedHash[blockHash] = struct{}{}
 			ss.bufferedBytes += int64(len(entry.raw))
 		}
+	} else {
+		// A request can already be on the wire when another peer advances the
+		// applied cursor. Complete its request bookkeeping above, and release
+		// the now-stale path without disturbing a different fork reservation.
+		ss.releaseBlockPathLocked(types.BlockID{Hash: blockHash, Num: blockNum})
 	}
 	var out []outboundSyncRequest
 	if batchDone {
@@ -1349,44 +1448,29 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 	// block we already imported and deleted from the buffer — which would break
 	// the drain after a single batch. syncedTipNum tracks what we've popped and
 	// equals CurrentBlock when async commit is off, keeping that path unchanged.
-	next := ss.chain.CurrentBlock().Number()
-	if ss.syncedTipNum > next {
-		next = ss.syncedTipNum
-	}
+	next := ss.effectiveSyncTipLocked()
+	ss.pruneStaleSyncStateLocked(next)
 	next++
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
 		if stopHeight, configured := ss.configuredStopHeight(); configured && next > stopHeight {
 			break
 		}
-		buffered, ok := ss.blockBuffer[next]
+		buffered, ok := ss.removeBufferedBlockLocked(next)
 		if !ok {
 			break
 		}
 		batch.bufferWaits = append(batch.bufferWaits, ss.endBufferWaitLocked(next, now))
-		delete(ss.blockBuffer, next)
-		// Drop the path reservation too. Without this blockPath grows by one
-		// entry per synced block for the whole session (never pruned until
-		// Stop) — a ~1 GB leak on a from-genesis re-sync. Once a block is
-		// popped for insertion the canonical chain (or the sticky pause on
-		// failure) owns that number, so the fork-conflict guard no longer
-		// needs the reservation.
-		delete(ss.blockPath, next)
-		delete(ss.bufferedHash, buffered.hash)
-		// Return the entry's bytes to the runahead budget. Clamp at zero:
-		// tests seed blockBuffer directly without going through HandleBlock,
-		// and a fail-open budget (fetching resumes) beats a fail-closed one
-		// if the pairing is ever broken.
-		if n := int64(len(buffered.raw)); ss.bufferedBytes > n {
-			ss.bufferedBytes -= n
-		} else {
-			ss.bufferedBytes = 0
-		}
 		batch.buffered = append(batch.buffered, buffered)
 		next++
 	}
 	if popped := next - 1; popped > ss.syncedTipNum {
 		ss.syncedTipNum = popped
+	}
+	if ss.syncedTipNum > ss.bufferPrunedTipNum {
+		// The newly covered range consists exactly of entries removed above;
+		// future late responses are rejected by HandleBlock admission.
+		ss.bufferPrunedTipNum = ss.syncedTipNum
 	}
 	return batch
 }
@@ -1797,6 +1881,7 @@ func (ss *SyncService) doReset() {
 	ss.bufferedBytes = 0
 	ss.targetHeadNum = 0
 	ss.syncedTipNum = 0
+	ss.bufferPrunedTipNum = 0
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
 }

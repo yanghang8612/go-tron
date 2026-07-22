@@ -16,7 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func makeTestChain(t *testing.T) *core.BlockChain {
+func makeTestChain(t testing.TB) *core.BlockChain {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)

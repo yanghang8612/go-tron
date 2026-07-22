@@ -134,6 +134,45 @@ func TestFetchTimeoutWithStalledRetriesRestartsSession(t *testing.T) {
 	}
 }
 
+// TestPeerRemovalDoesNotRetryAppliedRequest covers an in-flight response that
+// becomes obsolete while CurrentBlock still lags. Failover must neither retry
+// it nor retain its path reservation; later peers start strictly after the
+// effective sync tip.
+func TestPeerRemovalDoesNotRetryAppliedRequest(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	stale, closeStale := testPeer(t, "applied-stale-peer")
+	defer closeStale()
+	remaining, closeRemaining := testPeer(t, "applied-remaining-peer")
+	defer closeRemaining()
+
+	applied := runaheadBid(3)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	staleState, _ := ss.addPeerStateLocked(stale)
+	remainingState, _ := ss.addPeerStateLocked(remaining)
+	remainingState.chainRequested = true
+	markPendingLocked(ss, staleState, applied)
+	ss.syncedTipNum = 5
+	ss.bufferPrunedTipNum = 5
+	ss.removePeerStateLocked(stale.ID(), true)
+	_, pathKept := ss.blockPath[applied.Num]
+	_, requested := ss.requested[applied.Hash]
+	retries := len(ss.retryList)
+	retryList := append([]types.BlockID(nil), ss.retryList...)
+	ss.mu.Unlock()
+
+	if retries != 0 {
+		t.Fatalf("applied request was queued for retry: %v", retryList)
+	}
+	if pathKept {
+		t.Fatal("applied request retained its blockPath reservation after peer removal")
+	}
+	if requested {
+		t.Fatal("applied request retained global requested state after peer removal")
+	}
+}
+
 // TestSyncPeerDisconnectFailover verifies that when the active sync peer
 // disconnects, the sync service aborts the stalled sync and immediately
 // retries with an alternate peer that has the same blocks.

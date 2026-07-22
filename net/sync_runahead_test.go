@@ -137,6 +137,32 @@ func TestFetchResumesBeyondStripAfterBufferDrains(t *testing.T) {
 	}
 }
 
+// TestRunaheadBudgetUsesEffectiveTip verifies async-commit progress opens the
+// same forward window as committed progress. Otherwise a lagging CurrentBlock
+// parks otherwise-valid work behind the runahead cap and can stall the pipeline.
+func TestRunaheadBudgetUsesEffectiveTip(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "runahead-effective-tip")
+	defer closePeer()
+
+	effectiveTip := uint64(100)
+	edge := runaheadBid(effectiveTip + maxBufferedRunaheadBlocks)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.syncedTipNum = effectiveTip
+	ps, _ := ss.addPeerStateLocked(peer)
+	ps.lastInventoryNum = edge.Num
+	ps.fetchList = []types.BlockID{edge}
+	out := ss.fillFetchSlotsLocked(time.Now())
+	ss.mu.Unlock()
+
+	if len(out) != 1 || out[0].chain || len(out[0].blocks) != 1 || out[0].blocks[0] != edge {
+		t.Fatalf("edge bid relative to effective tip should be requested, got %+v", out)
+	}
+}
+
 // TestBufferedBytesTrackBufferLifecycle pins the bufferedBytes accounting the
 // byte budget relies on: HandleBlock adds the stored raw length exactly once
 // (conflicting duplicates at the same number add nothing), the drain pop

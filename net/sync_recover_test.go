@@ -102,10 +102,9 @@ func TestFillFetchSlotsRearmsOnWaitingForLocalHead(t *testing.T) {
 }
 
 // TestPopBufferedSyncBatchUsesDrainCursor is the regression for the depth>2
-// drain-cursor stall: when the committed head lags the applied tip (the cursor),
-// popBufferedSyncBatchLocked must pop the next contiguous run from the cursor,
-// not from CurrentBlock+1 (which names an already-imported, deleted entry and
-// would break the drain after one batch).
+// drain-cursor stall and stale-buffer leak: when the committed head lags the
+// applied tip, the pop must discard stale entries behind the cursor (including
+// every accounting index) and still drain the next contiguous run.
 func TestPopBufferedSyncBatchUsesDrainCursor(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
@@ -117,15 +116,19 @@ func TestPopBufferedSyncBatchUsesDrainCursor(t *testing.T) {
 	// Simulate async-commit depth>2 lag: 50 blocks applied (cursor at head+50)
 	// while the committed head is still `head`.
 	ss.syncedTipNum = head + 50
-	// A stale entry at CurrentBlock+1 that a committed-head cursor would pop
-	// first, plus the real next run past the drain cursor.
+	// A stale entry at CurrentBlock+1 that can never be reached from the applied
+	// cursor, plus the real next run past that cursor.
 	stale := stubBlock(int64(head+1), bc.CurrentBlock().Hash())
-	ss.blockBuffer[head+1] = bufferedSyncBlock{hash: stale.Hash(), num: head + 1}
+	staleRaw := []byte("stale raw block bytes")
+	ss.blockBuffer[head+1] = bufferedSyncBlock{raw: staleRaw, hash: stale.Hash(), num: head + 1}
 	ss.bufferedHash[stale.Hash()] = struct{}{}
+	ss.blockPath[head+1] = stale.Hash()
+	ss.bufferedBytes = int64(len(staleRaw))
 	for n := head + 51; n <= head+53; n++ {
 		b := stubBlock(int64(n), tcommon.Hash{byte(n), byte(n >> 8)})
 		ss.blockBuffer[n] = bufferedSyncBlock{hash: b.Hash(), num: n}
 		ss.bufferedHash[b.Hash()] = struct{}{}
+		ss.blockPath[n] = b.Hash()
 	}
 
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
@@ -136,11 +139,141 @@ func TestPopBufferedSyncBatchUsesDrainCursor(t *testing.T) {
 	if batch.buffered[0].num != head+51 {
 		t.Fatalf("first popped = #%d, want #%d (cursor+1, not CurrentBlock+1)", batch.buffered[0].num, head+51)
 	}
-	if _, ok := ss.blockBuffer[head+1]; !ok {
-		t.Fatal("stale entry at CurrentBlock+1 was popped — cursor ignored the async-commit lag")
+	if _, ok := ss.blockBuffer[head+1]; ok {
+		t.Fatal("stale entry behind the applied cursor was retained")
+	}
+	if _, ok := ss.bufferedHash[stale.Hash()]; ok {
+		t.Fatal("stale bufferedHash entry was retained")
+	}
+	if _, ok := ss.blockPath[head+1]; ok {
+		t.Fatal("stale blockPath reservation was retained")
+	}
+	if ss.bufferedBytes != 0 {
+		t.Fatalf("bufferedBytes=%d after stale cleanup and contiguous pop, want 0", ss.bufferedBytes)
 	}
 	if ss.syncedTipNum != head+53 {
 		t.Fatalf("drain cursor = %d, want %d (advanced past the popped run)", ss.syncedTipNum, head+53)
+	}
+}
+
+// TestChainInventorySkipsAppliedAheadOfCommitted verifies request admission
+// during async commit lag. Heights owned by the active insert session must not
+// be queued or reserved again merely because CurrentBlock has not published
+// them; the first height after the effective tip remains fetchable.
+func TestChainInventorySkipsAppliedAheadOfCommitted(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "applied-inventory")
+	defer closePeer()
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ss.syncedTipNum = 5 // CurrentBlock is still genesis (#0).
+	ss.mu.Unlock()
+
+	ss.HandleChainInventory(peer, testChainInventoryPayload(t, 1, 6, 0))
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if len(ps.pending) != 1 {
+		t.Fatalf("pending=%v, want only the block after the effective tip", ps.pending)
+	}
+	for _, num := range ps.pending {
+		if num != 6 {
+			t.Fatalf("requested stale block #%d while effective tip is #5", num)
+		}
+	}
+	for num := uint64(1); num <= 5; num++ {
+		if _, ok := ss.blockPath[num]; ok {
+			t.Fatalf("stale inventory reserved blockPath[%d]", num)
+		}
+	}
+}
+
+// TestHandleBlockDropsAppliedRawWithoutBuffering covers requests that were
+// already in flight when the applied cursor advanced. Their responses still
+// complete peer accounting, but must not copy raw bytes or recreate any buffer
+// index behind the cursor, even when that height range was already pruned.
+func TestHandleBlockDropsAppliedRawWithoutBuffering(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "applied-response")
+	defer closePeer()
+
+	old := stubBlock(3, tcommon.Hash{0xaa})
+	oldRaw := make([]byte, 1<<20)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ss.syncedTipNum = 5 // Simulate applied #1..#5 with CurrentBlock still #0.
+	ss.bufferPrunedTipNum = 5
+	ss.targetHeadNum = 6
+	ps.chainRequested = true // Keep the synthetic session alive for inspection.
+	markPendingLocked(ss, ps, old.ID())
+	ss.mu.Unlock()
+
+	if !ss.HandleBlock(peer, old, oldRaw) {
+		t.Fatal("HandleBlock should consume the stale requested response")
+	}
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if len(ss.blockBuffer) != 0 || len(ss.bufferedHash) != 0 {
+		t.Fatalf("stale raw state retained: buffer=%d hashes=%d", len(ss.blockBuffer), len(ss.bufferedHash))
+	}
+	if ss.bufferedBytes != 0 {
+		t.Fatalf("bufferedBytes=%d after stale response, want 0", ss.bufferedBytes)
+	}
+	if _, ok := ss.blockPath[old.Number()]; ok {
+		t.Fatal("stale response retained its blockPath reservation")
+	}
+	if _, ok := ss.requested[old.Hash()]; ok {
+		t.Fatal("stale response retained global requested state")
+	}
+	if ps.inflight != 0 || len(ps.pending) != 0 || len(ps.pendingIDs) != 0 {
+		t.Fatalf("peer request accounting not completed: inflight=%d pending=%d ids=%d",
+			ps.inflight, len(ps.pending), len(ps.pendingIDs))
+	}
+}
+
+// BenchmarkHandleBlockDropsAppliedRaw measures the leak-sensitive receive path.
+// The 1 MiB raw payload is intentionally much larger than a typical block: its
+// size must not affect allocations once the height is behind the applied tip.
+func BenchmarkHandleBlockDropsAppliedRaw(b *testing.B) {
+	bc := makeTestChain(b)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(b, "applied-response-bench")
+	defer closePeer()
+
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	bid := block.ID()
+	raw := make([]byte, 1<<20)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ss.syncedTipNum = 1
+	ss.bufferPrunedTipNum = 1
+	ss.targetHeadNum = 2
+	ps.chainRequested = true
+	ss.mu.Unlock()
+
+	b.SetBytes(int64(len(raw)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ss.mu.Lock()
+		ss.blockPath[bid.Num] = bid.Hash
+		ps.inflight = 1
+		ps.pending[bid.Hash] = bid.Num
+		ps.pendingIDs[bid.Hash] = bid
+		ps.requestedHashes[bid.Hash] = bid.Num
+		ss.requested[bid.Hash] = peer.ID()
+		ss.mu.Unlock()
+
+		ss.HandleBlock(peer, block, raw)
 	}
 }
 

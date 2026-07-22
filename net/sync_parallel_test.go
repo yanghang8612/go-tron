@@ -352,7 +352,7 @@ func TestShouldJoinAvailablePeersThrottle(t *testing.T) {
 	}
 }
 
-func testPeer(t *testing.T, id string) (*p2p.Peer, func()) {
+func testPeer(t testing.TB, id string) (*p2p.Peer, func()) {
 	t.Helper()
 	c1, c2 := gnet.Pipe()
 	return p2p.NewPeer(c1, id, false, nil), func() {
