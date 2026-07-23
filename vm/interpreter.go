@@ -17,6 +17,7 @@ type Interpreter struct {
 	tvmConfig  TVMConfig
 	currentOp  OpCode
 	energyErr  error
+	pc         uint64 // per-frame program counter; saved/restored across nested Run calls
 
 	// Dynamic-energy state — reset at the top of each Run call.
 	// factor is the effective multiplier (DynamicEnergyFactorDecimal == 1.0×).
@@ -47,10 +48,14 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	tracer := in.tvmConfig.Tracer
 	var (
-		pc    uint64 = 0
-		mem          = newMemory()
-		stack        = newStack()
+		pc    = &in.pc
+		mem   = acquireExecutionMemory()
+		stack = acquireExecutionStack()
 	)
+	defer releaseExecutionMemory(mem)
+	defer releaseExecutionStack(stack)
+	parentPC := *pc
+	*pc = 0
 	parentFactor, parentRawEnergyUsed := in.factor, in.rawEnergyUsed
 	// The return-data buffer is per-frame state: java-tron gives every
 	// Program its own returnDataBuffer, so RETURNDATASIZE is 0 at frame
@@ -63,6 +68,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	parentReturnData := in.returnData
 	in.returnData = nil
 	defer func() {
+		*pc = parentPC
 		in.factor = parentFactor
 		in.rawEnergyUsed = parentRawEnergyUsed
 		in.returnData = parentReturnData
@@ -89,16 +95,16 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
 	}
 	for {
-		if pc >= uint64(len(contract.Code)) {
+		if *pc >= uint64(len(contract.Code)) {
 			break
 		}
 
-		op := contract.GetOp(pc)
+		op := contract.GetOp(*pc)
 		operation := in.table[op]
 		if operation == nil {
 			opErr := newInvalidOpCodeError(op)
 			if tracer != nil {
-				in.traceState(tracer, pc, op, contract.Energy, 0, mem, stack, contract, opErr)
+				in.traceState(tracer, *pc, op, contract.Energy, 0, mem, stack, contract, opErr)
 			}
 			return nil, opErr
 		}
@@ -109,7 +115,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 		// Remaining energy before this opcode's charges; the tracer reports it as
 		// the step's "gas" and the energyBefore-energyAfter delta as the cost.
-		pcStart := pc
+		pcStart := *pc
 		energyBefore := contract.Energy
 
 		// Fork gate
@@ -122,14 +128,15 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		}
 
 		// Stack validation
-		if stack.len() < operation.minStack {
-			opErr := newStackUnderflowError(operation.minStack, stack.len())
+		stackLen := stack.len()
+		if stackLen < operation.minStack {
+			opErr := newStackUnderflowError(operation.minStack, stackLen)
 			if tracer != nil {
 				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
 			}
 			return nil, opErr
 		}
-		if stack.len()-operation.minStack+operationStackReturns(op, operation) > stackLimit {
+		if stackLen > operation.maxInputStack {
 			opErr := newStackOverflowError()
 			if tracer != nil {
 				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
@@ -168,7 +175,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		}
 
 		// Execute
-		ret, err := operation.execute(&pc, in, contract, mem, stack)
+		ret, err := operation.execute(pc, in, contract, mem, stack)
 
 		if tracer != nil {
 			in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, preStack, contract, err)
@@ -195,7 +202,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			return ret, nil
 		}
 
-		pc++
+		(*pc)++
 	}
 
 	if in.tvmConfig.DynamicEnergy {

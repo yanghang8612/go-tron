@@ -110,6 +110,21 @@ func newBlockProto(num uint64, ts int64) *corepb.Block {
 	}
 }
 
+func TestReadBlockHashRawMatchesCanonicalBlockHash(t *testing.T) {
+	pb := newBlockProto(77, 123456)
+	pb.Transactions = []*corepb.Transaction{{
+		RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{0xab}, 1024)},
+	}}
+	block := types.NewBlockFromPB(pb)
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ReadBlockHashRaw(data), block.Hash(); got != want {
+		t.Fatalf("ReadBlockHashRaw = %x, want %x", got, want)
+	}
+}
+
 // TestReadBlock_AncientFallthrough verifies that ReadBlock prefers the
 // freezer when an entry exists at the requested number, even when the
 // KV side is empty.

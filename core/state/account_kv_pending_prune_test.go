@@ -40,6 +40,64 @@ func pruneTestVal(n int) []byte {
 
 func zeroGeneration(tcommon.Address) (uint64, error) { return 0, nil }
 
+var benchmarkAccountKVLatestPending accountKVLatestPending
+
+func BenchmarkAccountKVLatestPendingOverlay(b *testing.B) {
+	owner := pruneTestOwner(1)
+	domain := kvdomains.ContractStorage
+	logicalKey := bytes.Repeat([]byte{0x7f}, 32)
+	value := bytes.Repeat([]byte{0x42}, 32)
+
+	b.Run("overwrite", func(b *testing.B) {
+		writer := &accountKVLatestBatch{}
+		b.ReportAllocs()
+		for range b.N {
+			writer.rememberPut(owner, 7, domain, logicalKey, value)
+		}
+	})
+
+	b.Run("lookup", func(b *testing.B) {
+		writer := &accountKVLatestBatch{}
+		writer.rememberPut(owner, 7, domain, logicalKey, value)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			benchmarkAccountKVLatestPending = writer.pending[pruneKVKey(owner, domain, logicalKey)]
+		}
+	})
+}
+
+func TestAccountKVLatestPendingStructuredKeysPreserveIdentity(t *testing.T) {
+	writer := &accountKVLatestBatch{}
+	owner := pruneTestOwner(1)
+	alias := owner
+	alias[0] = 0xa0 // rooted state identifies accounts by the 20-byte AccountID
+	domain := kvdomains.ContractStorage
+	logicalKey := []byte("slot/original")
+	originalKey := append([]byte(nil), logicalKey...)
+	value := []byte("value/original")
+	originalValue := append([]byte(nil), value...)
+
+	writer.rememberPut(owner, 7, domain, logicalKey, value)
+	writer.rememberAccountLatestPut(owner, value)
+	writer.rememberKVGenerationPut(owner, 7)
+	logicalKey[0] = 'X'
+	value[0] = 'X'
+
+	if got, ok, err := writer.readLatest(alias, 7, domain, originalKey); err != nil || !ok || !bytes.Equal(got, originalValue) {
+		t.Fatalf("readLatest via AccountID alias = %q ok=%v err=%v, want %q", got, ok, err, originalValue)
+	}
+	if _, ok, err := writer.readLatest(owner, 7, domain, logicalKey); err != nil || ok {
+		t.Fatalf("readLatest via mutated caller key ok=%v err=%v, want absent", ok, err)
+	}
+	if got, ok, err := writer.readAccountLatest(alias); err != nil || !ok || !bytes.Equal(got, originalValue) {
+		t.Fatalf("readAccountLatest via AccountID alias = %q ok=%v err=%v, want %q", got, ok, err, originalValue)
+	}
+	if got, ok, err := writer.readKVGeneration(alias); err != nil || !ok || got != 7 {
+		t.Fatalf("readKVGeneration via AccountID alias = %d ok=%v err=%v, want 7", got, ok, err)
+	}
+}
+
 // newPruneTestWriter builds a latest-domain writer backed by a real block buffer
 // so flushUpTo/flushCommitted exercise the genuine WriteUpTo/WriteCommitted/
 // NewestCommittedNumber layer-batch path.
@@ -52,8 +110,8 @@ func newPruneTestWriter(t *testing.T, maxInflight int) (*accountKVLatestBatch, *
 	return writer, buf
 }
 
-func pruneKVKey(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) string {
-	return string(accountKVLatestPendingKey(owner, 0, domain, key))
+func pruneKVKey(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) accountKVLatestPendingMapKey {
+	return accountKVLatestPendingKey(owner, 0, domain, key)
 }
 
 // TestAccountKVLatestBatchBoundsPendingUnderDeepPipeline drives a deep commit

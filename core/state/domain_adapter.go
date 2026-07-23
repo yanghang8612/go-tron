@@ -1,8 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"context"
-	"sort"
+	"slices"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -103,15 +104,15 @@ type DomainCommitmentState struct {
 	state        *StateDB
 	generation   statedomains.GenerationResolver
 	latestReader domainCommitmentLatestReader
-	touches      map[string]domainCommitmentTouch
+	touches      map[domainCommitmentTouch]struct{}
 }
 
 type domainCommitmentTouch struct {
 	flatDomain rawdb.StateFlatDomain
-	owner      tcommon.Address
+	owner      tcommon.AccountID
 	generation uint64
 	domain     kvdomains.KVDomain
-	key        []byte
+	key        string
 }
 
 type domainCommitmentLatestReader interface {
@@ -164,7 +165,7 @@ func NewDomainCommitmentStateWithGenerationResolver(s *StateDB, generation state
 	return &DomainCommitmentState{
 		state:      s,
 		generation: generation,
-		touches:    make(map[string]domainCommitmentTouch),
+		touches:    make(map[domainCommitmentTouch]struct{}),
 	}
 }
 
@@ -222,14 +223,14 @@ func (d *DomainCommitmentState) iterateKVLatestPrefix(owner tcommon.Address, gen
 func (d *DomainCommitmentState) recordAccountLatestTouch(owner tcommon.Address) {
 	d.recordTouch(domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainAccountLatest,
-		owner:      owner,
+		owner:      owner.AccountID(),
 	})
 }
 
 func (d *DomainCommitmentState) recordKVGenerationTouch(owner tcommon.Address) {
 	d.recordTouch(domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainKVGeneration,
-		owner:      owner,
+		owner:      owner.AccountID(),
 	})
 }
 
@@ -238,92 +239,120 @@ func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitm
 		return nil, nil
 	}
 	reader := d.latestReaderOrDefault()
-	keys := make([]string, 0, len(d.touches))
-	for key := range d.touches {
-		keys = append(keys, key)
+	updates := make([]rawdb.StateCommitmentUpdate, 0, len(d.touches))
+	accountTouchCount := 0
+	for touch := range d.touches {
+		if touch.flatDomain == rawdb.StateFlatDomainAccountLatest {
+			accountTouchCount++
+		}
 	}
-	sort.Strings(keys)
-	updates := make([]rawdb.StateCommitmentUpdate, 0, len(keys))
-	for _, key := range keys {
-		touch := d.touches[key]
-		update, err := d.latestUpdateFromTouch(reader, touch)
+	accountKeyArena := make([]byte, 0, accountTouchCount*rawdb.StateAccountLatestCommitmentKeySize())
+	for touch := range d.touches {
+		var accountCommitmentKey []byte
+		if touch.flatDomain == rawdb.StateFlatDomainAccountLatest {
+			start := len(accountKeyArena)
+			owner := touch.owner.Address(tcommon.AddressPrefixMainnet)
+			accountKeyArena = rawdb.AppendStateAccountLatestCommitmentKey(accountKeyArena, owner)
+			accountCommitmentKey = accountKeyArena[start:len(accountKeyArena):len(accountKeyArena)]
+		}
+		update, err := d.latestUpdateFromTouch(reader, touch, accountCommitmentKey)
 		if err != nil {
 			return nil, err
 		}
 		updates = append(updates, update)
 	}
+	slices.SortFunc(updates, func(a, b rawdb.StateCommitmentUpdate) int {
+		return bytes.Compare(a.Key, b.Key)
+	})
 	return updates, nil
 }
 
-func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLatestReader, touch domainCommitmentTouch) (rawdb.StateCommitmentUpdate, error) {
+func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLatestReader, touch domainCommitmentTouch, accountCommitmentKey []byte) (rawdb.StateCommitmentUpdate, error) {
+	owner := touch.owner.Address(tcommon.AddressPrefixMainnet)
 	switch touch.flatDomain {
 	case rawdb.StateFlatDomainAccountLatest:
-		commitmentKey := rawdb.StateAccountLatestCommitmentKey(touch.owner)
-		value, ok, err := reader.AccountLatest(touch.owner)
+		commitmentKey := accountCommitmentKey
+		if len(commitmentKey) == 0 {
+			commitmentKey = rawdb.StateAccountLatestCommitmentKey(owner)
+		}
+		value, ok, err := reader.AccountLatest(owner)
 		if err != nil {
 			return rawdb.StateCommitmentUpdate{}, err
 		}
 		if ok {
-			return rawdb.NewStateCommitmentPut(commitmentKey, value), nil
+			return rawdb.NewStateCommitmentPutOwned(commitmentKey, value), nil
 		}
-		return rawdb.NewStateCommitmentDelete(commitmentKey), nil
+		return rawdb.NewStateCommitmentDeleteOwned(commitmentKey), nil
 	case rawdb.StateFlatDomainKVGeneration:
-		commitmentKey := rawdb.StateKVGenerationCommitmentKey(touch.owner)
-		generation, ok, err := reader.KVGeneration(touch.owner)
+		commitmentKey := rawdb.StateKVGenerationCommitmentKey(owner)
+		generation, ok, err := reader.KVGeneration(owner)
 		if err != nil {
 			return rawdb.StateCommitmentUpdate{}, err
 		}
 		if ok {
-			return rawdb.NewStateCommitmentPut(commitmentKey, rawdb.EncodeStateKVGenerationValue(generation)), nil
+			return rawdb.NewStateCommitmentPutOwned(commitmentKey, rawdb.EncodeStateKVGenerationValue(generation)), nil
 		}
-		return rawdb.NewStateCommitmentDelete(commitmentKey), nil
+		return rawdb.NewStateCommitmentDeleteOwned(commitmentKey), nil
 	case rawdb.StateFlatDomainKVLatest:
-		commitmentKey := rawdb.StateKVLatestCommitmentKey(touch.owner, touch.generation, touch.domain, touch.key)
-		value, ok, err := reader.KVLatest(touch.owner, touch.generation, touch.domain, touch.key)
+		logicalKey := []byte(touch.key)
+		commitmentKey := rawdb.StateKVLatestCommitmentKey(owner, touch.generation, touch.domain, logicalKey)
+		value, ok, err := reader.KVLatest(owner, touch.generation, touch.domain, logicalKey)
 		if err != nil {
 			return rawdb.StateCommitmentUpdate{}, err
 		}
 		if ok {
-			return rawdb.NewStateCommitmentPut(commitmentKey, rawdb.EncodeStateKVLatestValue(value)), nil
+			return rawdb.NewStateCommitmentPutOwned(commitmentKey, rawdb.EncodeStateKVLatestValue(value)), nil
 		}
-		return rawdb.NewStateCommitmentDelete(commitmentKey), nil
+		return rawdb.NewStateCommitmentDeleteOwned(commitmentKey), nil
 	default:
 		return rawdb.StateCommitmentUpdate{}, nil
 	}
 }
 
 func (d *DomainCommitmentState) recordKVLatestTouch(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) {
+	ownerID := owner.AccountID()
+	// A transaction can update the same storage slot many times. Probe with a
+	// temporary string conversion first; the compiler keeps this map lookup
+	// allocation-free. Only a genuinely new touch needs an immutable key copy.
+	if d.hasKVLatestTouch(ownerID, generation, domain, key) {
+		return
+	}
 	d.recordTouch(domainCommitmentTouch{
+		flatDomain: rawdb.StateFlatDomainKVLatest,
+		owner:      ownerID,
+		generation: generation,
+		domain:     domain,
+		key:        string(key),
+	})
+}
+
+func (d *DomainCommitmentState) hasKVLatestTouch(owner tcommon.AccountID, generation uint64, domain kvdomains.KVDomain, key []byte) bool {
+	if d == nil {
+		return false
+	}
+	_, ok := d.touches[domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainKVLatest,
 		owner:      owner,
 		generation: generation,
 		domain:     domain,
-		key:        append([]byte(nil), key...),
-	})
+		key:        string(key),
+	}]
+	return ok
 }
 
 func (d *DomainCommitmentState) recordTouch(touch domainCommitmentTouch) {
 	if d == nil {
 		return
 	}
-	commitmentKey := domainCommitmentKey(touch)
-	if len(commitmentKey) == 0 {
+	switch touch.flatDomain {
+	case rawdb.StateFlatDomainAccountLatest, rawdb.StateFlatDomainKVGeneration, rawdb.StateFlatDomainKVLatest:
+	default:
 		return
 	}
-	d.touches[string(commitmentKey)] = touch
-}
-
-func domainCommitmentKey(touch domainCommitmentTouch) []byte {
-	switch touch.flatDomain {
-	case rawdb.StateFlatDomainAccountLatest:
-		return rawdb.StateAccountLatestCommitmentKey(touch.owner)
-	case rawdb.StateFlatDomainKVGeneration:
-		return rawdb.StateKVGenerationCommitmentKey(touch.owner)
-	case rawdb.StateFlatDomainKVLatest:
-		return rawdb.StateKVLatestCommitmentKey(touch.owner, touch.generation, touch.domain, touch.key)
-	default:
-		return nil
+	if d.touches == nil {
+		d.touches = make(map[domainCommitmentTouch]struct{})
 	}
+	d.touches[touch] = struct{}{}
 }
 
 func (d *DomainCommitmentState) resolveGeneration(owner tcommon.Address) (uint64, error) {

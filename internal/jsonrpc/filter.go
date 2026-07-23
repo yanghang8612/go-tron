@@ -84,36 +84,45 @@ func (fm *FilterManager) run() {
 }
 
 func (fm *FilterManager) fanOut(block *types.Block) {
+	blockDemand, logDemand := fm.eventDemand()
+	if !blockDemand && !logDemand {
+		return
+	}
+
 	blockHash := block.Hash()
 	hashHex := "0x" + hex.EncodeToString(blockHash[:])
 
-	// Gather logs from block transactions for log and subscription filters.
+	// Receipts are persisted protobuf objects and expensive to read/decode. Only
+	// touch them when at least one poll or WebSocket log consumer exists; block
+	// filters and newHeads subscriptions need the header alone.
 	var logs []*RPCLog
-	logIndex := uint64(0)
-	for i, tx := range block.Transactions() {
-		info, err := fm.backend.GetTransactionInfo(tx.Hash())
-		if err != nil || info == nil {
-			continue
-		}
-		for _, l := range info.Log {
-			topics := make([]string, len(l.Topics))
-			for ti, t := range l.Topics {
-				topics[ti] = hexBytes(t)
+	if logDemand {
+		logIndex := uint64(0)
+		for i, tx := range block.Transactions() {
+			info, err := fm.backend.GetTransactionInfo(tx.Hash())
+			if err != nil || info == nil {
+				continue
 			}
-			txHash := tx.Hash()
-			logs = append(logs, &RPCLog{
-				Address:          hex20(l.Address),
-				Topics:           topics,
-				Data:             hexBytes(l.Data),
-				BlockNumber:      hexUint64(block.Number()),
-				BlockTimestamp:   hexUint64(uint64(block.Timestamp() / 1000)),
-				TransactionHash:  "0x" + hex.EncodeToString(txHash[:]),
-				TransactionIndex: hexUint64(uint64(i)),
-				BlockHash:        hashHex,
-				LogIndex:         hexUint64(logIndex),
-				Removed:          false,
-			})
-			logIndex++
+			for _, l := range info.Log {
+				topics := make([]string, len(l.Topics))
+				for ti, t := range l.Topics {
+					topics[ti] = hexBytes(t)
+				}
+				txHash := tx.Hash()
+				logs = append(logs, &RPCLog{
+					Address:          hex20(l.Address),
+					Topics:           topics,
+					Data:             hexBytes(l.Data),
+					BlockNumber:      hexUint64(block.Number()),
+					BlockTimestamp:   hexUint64(uint64(block.Timestamp() / 1000)),
+					TransactionHash:  "0x" + hex.EncodeToString(txHash[:]),
+					TransactionIndex: hexUint64(uint64(i)),
+					BlockHash:        hashHex,
+					LogIndex:         hexUint64(logIndex),
+					Removed:          false,
+				})
+				logIndex++
+			}
 		}
 	}
 
@@ -135,6 +144,33 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 	if fm.subMgr != nil {
 		fm.subMgr.notify(block, logs)
 	}
+}
+
+// eventDemand snapshots whether the next block has header and/or log
+// consumers. Each map is inspected under its owning mutex. A filter or
+// subscription created concurrently after this snapshot is linearized after
+// the current block; once creation returns, every later fanOut observes it.
+func (fm *FilterManager) eventDemand() (block, logs bool) {
+	fm.mu.Lock()
+	for _, f := range fm.filters {
+		switch f.kind {
+		case filterKindBlock:
+			block = true
+		case filterKindLog:
+			logs = true
+		}
+		if block && logs {
+			break
+		}
+	}
+	fm.mu.Unlock()
+
+	if fm.subMgr != nil {
+		subBlock, subLogs := fm.subMgr.eventDemand()
+		block = block || subBlock
+		logs = logs || subLogs
+	}
+	return block, logs
 }
 
 func (fm *FilterManager) gc() {

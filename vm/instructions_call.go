@@ -49,6 +49,19 @@ func (in *Interpreter) writeCallReturn(memory *Memory, toPrecompile bool, callEr
 	memory.set(retOff, copyLen, ret[:copyLen])
 }
 
+// callFrameInput returns the caller-memory range used as a nested frame's
+// calldata/initcode. Ordinary bytecode frames consume the input synchronously
+// and treat it as read-only, so they can borrow caller memory. Keep an owned
+// copy when tracing (the Tracer interface historically receives stable input)
+// or calling a precompile: some precompiles return an input subslice directly,
+// and returnData must not alias mutable caller memory after the call returns.
+func callFrameInput(interpreter *Interpreter, memory *Memory, offset, size int64, toPrecompile bool) []byte {
+	if interpreter.tvmConfig.Tracer != nil || toPrecompile {
+		return memory.getCopy(offset, size)
+	}
+	return memory.getPtr(offset, size)
+}
+
 func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	value, offset, size := stack.pop(), stack.pop(), stack.pop()
 	off, sz, memCost, err := checkedMemoryExpansionCostWords(memory, &offset, &size, CREATE)
@@ -72,7 +85,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	}
 	resizeMemory(memory, off, sz)
 
-	code := memory.getCopy(int64(off), int64(sz))
+	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
 		return nil, ErrEndowmentOutOfRange
@@ -151,7 +164,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		return nil, ErrOutOfEnergy
 	}
 
-	code := memory.getCopy(int64(off), int64(sz))
+	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
 		return nil, ErrEndowmentOutOfRange
@@ -296,7 +309,8 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		return nil, ErrEndowmentOutOfRange
 	}
 
-	input := memory.getCopy(int64(inOff), int64(inSz))
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.Call(contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -309,7 +323,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	}
 	stack.push(&success)
 
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, toPrecompile, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -362,7 +376,8 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, ErrEndowmentOutOfRange
 	}
 
-	input := memory.getCopy(int64(inOff), int64(inSz))
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val, val)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -374,7 +389,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, toPrecompile, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -414,7 +429,8 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 
-	input := memory.getCopy(int64(inOff), int64(inSz))
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value, 0)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -426,7 +442,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, toPrecompile, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {
@@ -466,7 +482,8 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 
-	input := memory.getCopy(int64(inOff), int64(inSz))
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.StaticCall(contract.Address, addr, input, gas)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -478,7 +495,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 		success.SetOne()
 	}
 	stack.push(&success)
-	interpreter.writeCallReturn(memory, getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
+	interpreter.writeCallReturn(memory, toPrecompile, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		interpreter.returnData = nil
 	} else {

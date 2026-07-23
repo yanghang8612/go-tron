@@ -1,10 +1,42 @@
 package vm
 
-import "github.com/holiman/uint256"
+import (
+	"sync"
+
+	"github.com/holiman/uint256"
+)
 
 // Memory is byte-addressable, word-aligned expandable memory.
 type Memory struct {
 	store []byte
+}
+
+const maxPooledMemoryCapacity = 256 << 10
+
+var executionMemoryPool = sync.Pool{
+	New: func() any { return newMemory() },
+}
+
+func acquireExecutionMemory() *Memory {
+	memory := executionMemoryPool.Get().(*Memory)
+	memory.store = memory.store[:0]
+	return memory
+}
+
+func releaseExecutionMemory(memory *Memory) {
+	if memory == nil {
+		return
+	}
+	if cap(memory.store) > maxPooledMemoryCapacity {
+		memory.store = nil
+	} else {
+		// A new EVM frame observes zero-filled memory. Clear before pooling so a
+		// later frame can grow into the retained capacity without seeing bytes
+		// from its predecessor.
+		clear(memory.store)
+		memory.store = memory.store[:0]
+	}
+	executionMemoryPool.Put(memory)
 }
 
 func newMemory() *Memory {
@@ -65,7 +97,24 @@ func (m *Memory) resize(size uint64) {
 	if uint64(len(m.store)) >= size {
 		return
 	}
-	newStore := make([]byte, size)
+	if size <= uint64(cap(m.store)) {
+		oldLen := len(m.store)
+		m.store = m.store[:size]
+		clear(m.store[oldLen:])
+		return
+	}
+	// Keep the logical length exact (energy accounting and MSIZE observe len),
+	// but grow backing capacity geometrically. Exact-capacity allocation made
+	// incremental MSTORE/MSTORE8 expansion reallocate and copy the entire memory
+	// on every word, turning a linear bytecode walk into quadratic work.
+	newCap := cap(m.store) * 2
+	if newCap < 64 {
+		newCap = 64
+	}
+	if uint64(newCap) < size {
+		newCap = int(size)
+	}
+	newStore := make([]byte, int(size), newCap)
 	copy(newStore, m.store)
 	m.store = newStore
 }

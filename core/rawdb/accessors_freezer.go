@@ -57,29 +57,25 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
-// ReadBlockHashByNumber returns the canonical block hash for the given
-// block number. Slice 1 stores `bh-<hash>` only as a reverse index, so the
-// forward lookup walks: read the block proto under `b-<num>` and
-// recompute the hash. Returns the zero hash when the block is unknown.
-//
-// The freezer pass uses this to resolve the `bsr-<hash>` key for each
-// block in the freeze range — `bsr-<hash>` is the hash-keyed state-root
-// row that the freezer copies into the num-keyed `state_roots` ancient
-// table. Once the freezer has caught up the row also gets deleted from
-// Pebble.
-//
-// Cost: one Pebble Get + one proto Unmarshal + Hash() per call. Hot enough
-// for a per-block freezer pass; not intended for VM/RPC hot paths.
+// ReadBlockHashRaw returns the canonical block hash from bytes previously
+// loaded by ReadBlockRaw. It scans only BlockHeader.RawData and skips all
+// transaction messages without decoding them.
+func ReadBlockHashRaw(data []byte) common.Hash {
+	hash, err := types.BlockHashFromRaw(data)
+	if err != nil {
+		return common.Hash{}
+	}
+	return hash
+}
+
+// ReadBlockHashByNumber remains for rare callers that do not already hold the
+// block bytes. The freezer runner uses ReadBlockHashRaw on its existing read.
 func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return common.Hash{}
 	}
-	block, err := types.UnmarshalBlock(data)
-	if err != nil {
-		return common.Hash{}
-	}
-	return block.Hash()
+	return ReadBlockHashRaw(data)
 }
 
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under
@@ -148,4 +144,3 @@ func BlockRangeBounds(lo, hi uint64) (start, limit []byte) {
 	}
 	return blockKey(lo), blockKey(endBlock)
 }
-

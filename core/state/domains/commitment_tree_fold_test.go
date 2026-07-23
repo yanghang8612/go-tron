@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // mapBranchStore is an in-memory branchStore test double keyed by the packed
@@ -17,6 +18,35 @@ type mapBranchStore struct {
 
 func newMapBranchStore() *mapBranchStore {
 	return &mapBranchStore{m: make(map[string]BranchData)}
+}
+
+func TestFoldDoesNotRetainUpdateBuffers(t *testing.T) {
+	store := newRawdbBranchStore(rawdb.NewMemoryDatabase())
+	trie := newCommitmentTrie(store)
+	updates := []Update{
+		{Key: []byte("account-a"), Value: []byte("value-a")},
+		{Key: []byte("account-b"), Value: []byte("value-b")},
+		{Key: []byte("account-c"), Value: []byte("value-c")},
+	}
+	want, err := trie.Fold(updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range updates {
+		for j := range updates[i].Key {
+			updates[i].Key[j] ^= 0xff
+		}
+		for j := range updates[i].Value {
+			updates[i].Value[j] ^= 0xff
+		}
+	}
+	got, err := trie.Fold(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("persisted root changed after caller buffer mutation: got %x, want %x", got, want)
+	}
 }
 
 func (s *mapBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {

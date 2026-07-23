@@ -5,12 +5,13 @@ type executionFunc func(pc *uint64, interpreter *Interpreter, contract *Contract
 
 // operation represents a single opcode's metadata.
 type operation struct {
-	execute    executionFunc
-	energyCost uint64               // static energy cost (0 means dynamic)
-	minStack   int                  // minimum stack items required
-	maxStack   int                  // maximum stack items after execution
-	writes     bool                 // true if this opcode modifies state
-	enabledFn  func(TVMConfig) bool // nil means always enabled
+	execute       executionFunc
+	energyCost    uint64               // static energy cost (0 means dynamic)
+	minStack      int                  // minimum stack items required
+	maxStack      int                  // legacy table metadata; not used for validation
+	maxInputStack int                  // largest pre-execution stack that cannot overflow
+	writes        bool                 // true if this opcode modifies state
+	enabledFn     func(TVMConfig) bool // nil means always enabled
 }
 
 // JumpTable is the dispatch table mapping opcodes to operations.
@@ -248,6 +249,17 @@ func newJumpTable() JumpTable {
 		minStack: 3, maxStack: 1022, writes: true, enabledFn: stakingV2}
 	tbl[UNDELEGATERESOURCE] = &operation{execute: opUnDelegateResource, energyCost: EnergyUnDelegateResource,
 		minStack: 3, maxStack: 1022, writes: true, enabledFn: stakingV2}
+
+	// Convert opcode shape into the exact pre-execution overflow threshold once
+	// at process startup. The interpreter used to classify every opcode through
+	// operationStackReturns' large switch on every execution step.
+	for opcode, operation := range tbl {
+		if operation == nil {
+			continue
+		}
+		returns := operationStackReturns(OpCode(opcode), operation)
+		operation.maxInputStack = stackLimit + operation.minStack - returns
+	}
 
 	return tbl
 }

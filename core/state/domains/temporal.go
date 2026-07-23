@@ -153,7 +153,11 @@ func (tx *SharedDomainTx) Flush(ctx context.Context) error {
 		return err
 	}
 	if recorder, ok := tx.commitment.(CommitmentMutationRecorder); ok {
-		if err := recorder.RecordCommitmentMutations(ctx, tx.Mutations()); err != nil {
+		// The recorder consumes mutations synchronously and copies the logical
+		// keys it retains. Passing the overlay-owned view avoids cloning every
+		// key/value solely to enumerate them before the same Flush call discards
+		// the overlay.
+		if err := recorder.RecordCommitmentMutations(ctx, tx.overlay.mutationsView()); err != nil {
 			return err
 		}
 	}

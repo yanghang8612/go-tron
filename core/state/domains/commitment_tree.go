@@ -9,24 +9,26 @@ import (
 	"sort"
 	"sync"
 
+	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/tronprotocol/go-tron/common"
-	"golang.org/x/crypto/sha3"
 )
 
-// keccakPool reuses sha3.NewLegacyKeccak256 hashers across fold passes. A
+// keccakPool reuses Legacy Keccak-256 hashers across fold passes. A
 // single Nile-sync segment allocates ~16 GB of hashers via this constructor
 // (1 per nodeHash/keyPath/leafValueHash call); the pool turns those into
 // Reset-and-reuse and cuts that source of GC pressure to near zero. sync.Pool
 // is safe across the parallel root's subtrie workers, and each borrow/return
-// cycle remains strictly local to one hash invocation.
+// cycle remains strictly local to one hash invocation. go-ethereum's hasher is
+// byte-identical to x/crypto's legacy implementation and provides an amd64
+// Keccak-f assembly path, which is the production deployment architecture.
 var keccakPool = sync.Pool{
 	New: func() any {
-		return &pooledKeccak{keccakState: sha3.NewLegacyKeccak256().(keccakState)}
+		return &pooledKeccak{keccakState: gethkeccak.NewLegacyKeccak256().(keccakState)}
 	},
 }
 
 // keccakState exposes the sponge's destructive Read fast-path. hash.Hash.Sum
-// must preserve the absorb state, so x/crypto clones the entire ~200-byte
+// must preserve the absorb state, so the implementation clones its ~200-byte
 // Keccak state on every call. These hashers are exclusively borrowed for one
 // digest and Reset before reuse, letting Read write the digest directly into
 // the caller's fixed buffer without that clone/allocation.
@@ -43,6 +45,16 @@ type pooledKeccak struct {
 	keccakState
 	byteBuf [1]byte
 	lenBuf  [8]byte
+	// digestBuf is the target of the interface-dispatched Read call. Passing a
+	// function-local [32]byte through that interface makes it escape; reading
+	// into pooled storage and copying into the return value keeps hash results
+	// allocation-free.
+	digestBuf [common.HashLength]byte
+	// nodeBuf holds the largest possible branch-hash preimage:
+	// domain byte + 16 * (nibble byte + 32-byte child hash). Keeping it on the
+	// pooled object avoids a per-node escape while letting nodeHash absorb the
+	// whole preimage in one Write instead of up to 33 tiny Writes.
+	nodeBuf [1 + 16*(1+common.HashLength)]byte
 }
 
 func borrowKeccak() *pooledKeccak {
@@ -58,6 +70,12 @@ func returnKeccak(h *pooledKeccak) {
 func writeKeccakByte(h *pooledKeccak, b byte) {
 	h.byteBuf[0] = b
 	_, _ = h.Write(h.byteBuf[:])
+}
+
+func readKeccakHash(h *pooledKeccak) (out common.Hash) {
+	_, _ = h.Read(h.digestBuf[:])
+	copy(out[:], h.digestBuf[:])
+	return out
 }
 
 // encodeBufPool reuses byte buffers for BranchData.Encode output during a fold.
@@ -142,11 +160,10 @@ const (
 
 // branchChild holds one present child entry of a hex-trie branch node.
 type branchChild struct {
-	present     bool
-	kind        uint8
-	hashVal     common.Hash // valid when kind == kindHash
-	leafKey     []byte      // valid when kind == kindLeaf
-	leafValHash common.Hash // valid when kind == kindLeaf
+	present   bool
+	kind      uint8
+	valueHash common.Hash // child hash or leaf value hash, selected by kind
+	leafKey   []byte      // valid when kind == kindLeaf
 }
 
 // BranchData represents a hex (16-way) trie branch node.  A branch has up to
@@ -163,9 +180,9 @@ type BranchData struct {
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 	b.children[nibble] = branchChild{
-		present: true,
-		kind:    kindHash,
-		hashVal: h,
+		present:   true,
+		kind:      kindHash,
+		valueHash: h,
 	}
 }
 
@@ -173,24 +190,24 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
 	b.children[nibble] = branchChild{
-		present:     true,
-		kind:        kindLeaf,
-		leafKey:     append([]byte(nil), key...),
-		leafValHash: valHash,
+		present:   true,
+		kind:      kindLeaf,
+		leafKey:   append([]byte(nil), key...),
+		valueHash: valHash,
 	}
 }
 
-// setLeafChildStable is the fold-internal counterpart of SetLeafChild for a key
-// whose backing bytes are already owned by the fold or an existing BranchData.
-// Every such source remains referenced until the branch is synchronously
-// persisted (and a retaining test store keeps the slice itself), so a second
-// defensive key copy only adds allocation without strengthening lifetime.
+// setLeafChildStable is the fold-internal counterpart of SetLeafChild. Its key
+// comes from the synchronous Fold input or an existing BranchData and remains
+// referenced until the branch store has encoded/copied it. Every store in this
+// package obeys that contract, so a second defensive copy only adds allocation
+// without strengthening lifetime.
 func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
 	b.children[nibble] = branchChild{
-		present:     true,
-		kind:        kindLeaf,
-		leafKey:     key,
-		leafValHash: valHash,
+		present:   true,
+		kind:      kindLeaf,
+		leafKey:   key,
+		valueHash: valHash,
 	}
 }
 
@@ -254,13 +271,13 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 		}
 		dst = append(dst, c.kind)
 		if c.kind == kindHash {
-			dst = append(dst, c.hashVal[:]...)
+			dst = append(dst, c.valueHash[:]...)
 		} else {
 			var uvBuf [binary.MaxVarintLen64]byte
 			n := binary.PutUvarint(uvBuf[:], uint64(len(c.leafKey)))
 			dst = append(dst, uvBuf[:n]...)
 			dst = append(dst, c.leafKey...)
-			dst = append(dst, c.leafValHash[:]...)
+			dst = append(dst, c.valueHash[:]...)
 		}
 	}
 	return dst
@@ -295,8 +312,20 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 
 // DecodeBranchDataInto is DecodeBranchData written directly into *dst (zeroed
 // first). Used by GetBranchInto on the bulk-sync hot path to avoid the
-// return-by-value copy of the ~1.5 KB BranchData struct.
+// return-by-value copy of the ~1 KiB BranchData struct.
 func DecodeBranchDataInto(data []byte, dst *BranchData) error {
+	return decodeBranchDataInto(data, dst, true)
+}
+
+// decodeBranchDataIntoNoCopy is the fold reader's allocation-free variant.
+// Leaf keys alias data; callers must keep data alive and immutable until dst is
+// no longer used. rawdbBranchStore satisfies this with owned Get results or
+// immutable-by-replacement blockbuffer/cache values.
+func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
+	return decodeBranchDataInto(data, dst, false)
+}
+
+func decodeBranchDataInto(data []byte, dst *BranchData, copyLeafKeys bool) error {
 	*dst = BranchData{}
 	if len(data) < 2 {
 		return errors.New("commitment_tree: input too short for childMask")
@@ -323,7 +352,7 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 			var h common.Hash
 			copy(h[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
-			dst.children[i] = branchChild{present: true, kind: kindHash, hashVal: h}
+			dst.children[i] = branchChild{present: true, kind: kindHash, valueHash: h}
 
 		case kindLeaf:
 			// Decode keyLen via Uvarint; bound by remaining slice length.
@@ -335,7 +364,10 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 			if keyLen > uint64(len(rest)) {
 				return errors.New("commitment_tree: keyLen exceeds remaining input")
 			}
-			key := append([]byte(nil), rest[:keyLen]...)
+			key := rest[:keyLen]
+			if copyLeafKeys {
+				key = append([]byte(nil), key...)
+			}
 			rest = rest[keyLen:]
 			if len(rest) < common.HashLength {
 				return errors.New("commitment_tree: truncated at leaf valHash")
@@ -344,10 +376,10 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 			copy(vh[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
 			dst.children[i] = branchChild{
-				present:     true,
-				kind:        kindLeaf,
-				leafKey:     key,
-				leafValHash: vh,
+				present:   true,
+				kind:      kindLeaf,
+				leafKey:   key,
+				valueHash: vh,
 			}
 
 		default:
@@ -381,13 +413,13 @@ func (b *BranchData) childKindAt(nibble uint8) uint8 {
 
 // hashChildAt returns the stored 32-byte hash of a hash child at nibble.
 func (b *BranchData) hashChildAt(nibble uint8) common.Hash {
-	return b.children[nibble].hashVal
+	return b.children[nibble].valueHash
 }
 
 // leafChildAt returns the key and value hash of a leaf child at nibble.
 func (b *BranchData) leafChildAt(nibble uint8) (key []byte, valHash common.Hash) {
 	c := &b.children[nibble]
-	return c.leafKey, c.leafValHash
+	return c.leafKey, c.valueHash
 }
 
 // clearChild removes any child at nibble.
@@ -426,22 +458,24 @@ func (b *BranchData) onlyChildNibble() uint8 {
 func (b *BranchData) nodeHash() common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
-	writeKeccakByte(h, 0x01)
+	h.nodeBuf[0] = 0x01
+	off := 1
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
 		if !c.present {
 			continue
 		}
-		writeKeccakByte(h, i)
+		h.nodeBuf[off] = i
+		off++
 		if c.kind == kindHash {
-			_, _ = h.Write(c.hashVal[:])
+			copy(h.nodeBuf[off:], c.valueHash[:])
 		} else {
-			_, _ = h.Write(c.leafValHash[:])
+			copy(h.nodeBuf[off:], c.valueHash[:])
 		}
+		off += common.HashLength
 	}
-	var out common.Hash
-	_, _ = h.Read(out[:])
-	return out
+	_, _ = h.Write(h.nodeBuf[:off])
+	return readKeccakHash(h)
 }
 
 // ----------------------------------------------------------------------------
@@ -453,7 +487,7 @@ func (b *BranchData) nodeHash() common.Hash {
 type branchStore interface {
 	GetBranch(prefix []byte) (BranchData, bool, error)
 	// GetBranchInto reads a branch into *dst (zeroed first). The hot fold path
-	// uses this with a pool-borrowed *BranchData so the ~1.5 KB struct stays
+	// uses this with a pool-borrowed *BranchData so the ~1 KiB struct stays
 	// out of the heap.
 	GetBranchInto(prefix []byte, dst *BranchData) (bool, error)
 	PutBranch(prefix []byte, b BranchData) error
@@ -524,7 +558,11 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 		if t.parallelMinOps > 0 && len(ops) >= t.parallelMinOps {
 			rootPtr, err = t.applyRootParallel(rootPtr, ops)
 		} else {
-			rootPtr, err = t.apply(nil, 0, rootPtr, ops)
+			// Every recursive prefix is at most pathLen bytes. Reusing this
+			// fold-local path stack avoids one allocation at every trie level;
+			// stores consume/copy prefixes synchronously and never retain it.
+			var path [pathLen]byte
+			rootPtr, err = t.apply(path[:0], 0, rootPtr, ops)
 		}
 		if err != nil {
 			return common.Hash{}, err
@@ -609,7 +647,11 @@ func buildOps(updates []Update) ([]op, error) {
 }
 
 func resolveOp(u Update) op {
-	o := op{key: append([]byte(nil), u.Key...), delete: u.Delete}
+	// Fold is synchronous and every branch-store implementation consumes or
+	// copies leaf keys before Fold returns. Borrowing the input key for that
+	// interval avoids one allocation per update; persisted branch encodings do
+	// not alias the caller's Update buffers.
+	o := op{key: u.Key, delete: u.Delete}
 	o.path = keyPath(u.Key)
 	if !u.Delete {
 		o.valHash = leafValueHash(u.Key, u.Value)
@@ -814,7 +856,7 @@ func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefi
 }
 
 // applyOnHash resolves group against an existing hash child (a child subtree) at
-// nb. The child branch is borrowed from branchPool so the per-descent ~1.5 KB
+// nb. The child branch is borrowed from branchPool so the per-descent ~1 KiB
 // BranchData allocation (formerly the #1 alloc source at ~24% of fold heap
 // pressure) becomes pool reuse. linkChild consumes the data and never retains
 // the pointer past return, so the deferred release is unconditional.
@@ -897,12 +939,13 @@ func sortOps(ops []op) {
 	})
 }
 
-// appendNibble returns a fresh prefix slice with nb appended.
+// appendNibble extends the fold-local path stack with nb. Fold and each
+// parallel root worker provide pathLen capacity, so the recursive descent
+// reuses one backing array. The fallback keeps direct internal callers safe.
+// branchStore methods must consume or copy prefixes synchronously; every
+// implementation in this package does so.
 func appendNibble(prefix []byte, nb uint8) []byte {
-	out := make([]byte, len(prefix)+1)
-	copy(out, prefix)
-	out[len(prefix)] = nb
-	return out
+	return append(prefix, nb)
 }
 
 // keyPath expands keccak256(lenPrefixed(key)) into pathLen nibbles, high nibble
@@ -911,8 +954,7 @@ func keyPath(key []byte) [pathLen]byte {
 	h := borrowKeccak()
 	defer returnKeccak(h)
 	writeLen8Prefixed(h, key)
-	var sum common.Hash
-	_, _ = h.Read(sum[:])
+	sum := readKeccakHash(h)
 	var out [pathLen]byte
 	for i := 0; i < common.HashLength; i++ {
 		out[2*i] = sum[i] >> 4
@@ -929,9 +971,7 @@ func leafValueHash(key, value []byte) common.Hash {
 	writeKeccakByte(h, 0x00)
 	writeLen8Prefixed(h, key)
 	writeLen8Prefixed(h, value)
-	var out common.Hash
-	_, _ = h.Read(out[:])
-	return out
+	return readKeccakHash(h)
 }
 
 // writeLen8Prefixed writes an 8-byte big-endian length followed by the bytes,

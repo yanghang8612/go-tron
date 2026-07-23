@@ -20,6 +20,17 @@ type Transaction struct {
 	hash     common.Hash
 	hashOnce sync.Once
 
+	// contractMessage memoizes Any.UnmarshalNew for the first (and, by TRON
+	// envelope rules, only) contract. Envelope validation, bandwidth charging,
+	// actuator validation/execution and energy settlement all inspect the same
+	// immutable transaction parameter. Keeping one decoded, read-only message
+	// avoids rebuilding the protobuf object at every stage. Callers must not
+	// mutate the returned message; actuators that modify their local contract
+	// representation must continue to decode or clone their own copy.
+	contractMessageOnce sync.Once
+	contractMessage     proto.Message
+	contractMessageErr  error
+
 	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
 	// the first recovery error) so the parallel pre-verification pass in
 	// InsertBlocks can warm it off the serial critical path. The result is a
@@ -63,6 +74,25 @@ func (tx *Transaction) Contract() *corepb.Transaction_Contract {
 		return nil
 	}
 	return tx.pb.RawData.Contract[0]
+}
+
+// DecodedContract returns the first contract parameter decoded as its concrete
+// protobuf message. The returned message is owned by tx and must be treated as
+// read-only. Both a successful result and an error are memoized.
+func (tx *Transaction) DecodedContract() (proto.Message, error) {
+	tx.contractMessageOnce.Do(func() {
+		contract := tx.Contract()
+		if contract == nil {
+			tx.contractMessageErr = errors.New("transaction has no contract")
+			return
+		}
+		if contract.Parameter == nil {
+			tx.contractMessageErr = errors.New("contract has no parameter")
+			return
+		}
+		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
+	})
+	return tx.contractMessage, tx.contractMessageErr
 }
 
 func (tx *Transaction) Timestamp() int64 {

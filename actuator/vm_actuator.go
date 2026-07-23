@@ -700,24 +700,30 @@ func generateContractAddress(tx *types.Transaction, owner common.Address) common
 }
 
 func (a *VMActuator) getCreateContract(ctx *Context) (*contractpb.CreateSmartContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
+	if ctx.Tx.Contract() == nil {
 		return nil, errors.New("no contract in transaction")
 	}
-	csc := &contractpb.CreateSmartContract{}
-	if err := contract.Parameter.UnmarshalTo(csc); err != nil {
+	msg, err := ctx.Tx.DecodedContract()
+	if err != nil {
+		return nil, errors.New("failed to unmarshal CreateSmartContract")
+	}
+	csc, ok := msg.(*contractpb.CreateSmartContract)
+	if !ok {
 		return nil, errors.New("failed to unmarshal CreateSmartContract")
 	}
 	return csc, nil
 }
 
 func (a *VMActuator) getTriggerContract(ctx *Context) (*contractpb.TriggerSmartContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
+	if ctx.Tx.Contract() == nil {
 		return nil, errors.New("no contract in transaction")
 	}
-	tsc := &contractpb.TriggerSmartContract{}
-	if err := contract.Parameter.UnmarshalTo(tsc); err != nil {
+	msg, err := ctx.Tx.DecodedContract()
+	if err != nil {
+		return nil, errors.New("failed to unmarshal TriggerSmartContract")
+	}
+	tsc, ok := msg.(*contractpb.TriggerSmartContract)
+	if !ok {
 		return nil, errors.New("failed to unmarshal TriggerSmartContract")
 	}
 	return tsc, nil

@@ -37,7 +37,7 @@ func (s *StateDB) JavaAccountStateRoot(parentRoot tcommon.Hash, mark int) (tcomm
 		switch change := entry.(type) {
 		case accountChange:
 			touched[change.address] = struct{}{}
-		case accountScalarChange:
+		case *accountScalarChange:
 			touched[change.address] = struct{}{}
 		}
 	}

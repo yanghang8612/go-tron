@@ -130,6 +130,27 @@ func TestOverlayHooksAndMetrics(t *testing.T) {
 	}
 }
 
+func TestOverlayOwnsMutationInputs(t *testing.T) {
+	owner := testAddress(0x26)
+	overlay := NewOverlay(nil)
+	key := []byte("key")
+	value := []byte("value")
+	if err := overlay.DomainPut(owner, kvdomains.ContractStorage, key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0] = 'x'
+	value[0] = 'x'
+
+	got, ok, err := overlay.GetLatest(owner, kvdomains.ContractStorage, []byte("key"))
+	if err != nil || !ok || string(got) != "value" {
+		t.Fatalf("owned mutation = %q ok=%v err=%v", got, ok, err)
+	}
+	mutations := overlay.Mutations()
+	if len(mutations) != 1 || string(mutations[0].Key) != "key" || string(mutations[0].Value) != "value" {
+		t.Fatalf("mutations = %+v", mutations)
+	}
+}
+
 func TestOverlayRejectsUnregisteredDomain(t *testing.T) {
 	owner := testAddress(0x25)
 	overlay := NewOverlay(nil)

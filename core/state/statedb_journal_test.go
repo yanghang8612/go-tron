@@ -303,7 +303,7 @@ func TestAccountScalarJournalNestedSnapshotRevert(t *testing.T) {
 	if got := len(sdb.journal.entries); got != 1 {
 		t.Fatalf("outer scalar journal entries = %d, want 1", got)
 	}
-	if _, ok := sdb.journal.entries[0].(accountScalarChange); !ok {
+	if _, ok := sdb.journal.entries[0].(*accountScalarChange); !ok {
 		t.Fatalf("outer journal type = %T, want accountScalarChange", sdb.journal.entries[0])
 	}
 
@@ -366,7 +366,7 @@ func TestAccountScalarJournalTransactionBoundaries(t *testing.T) {
 		t.Fatalf("journal entries across tx boundaries = %d, want 3", got)
 	}
 	for i, entry := range sdb.journal.entries {
-		if _, ok := entry.(accountScalarChange); !ok {
+		if _, ok := entry.(*accountScalarChange); !ok {
 			t.Fatalf("journal entry %d type = %T, want accountScalarChange", i, entry)
 		}
 	}

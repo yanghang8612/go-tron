@@ -20,15 +20,15 @@ func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
 }
 
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
-	// NoCopy avoids the per-Get defensive copy; DecodeBranchData consumes the
-	// bytes immediately and copies the leafKey field, so the aliased slice is
-	// not retained past this function.
+	// NoCopy avoids the per-Get defensive copy. The returned BranchData may
+	// borrow leaf-key slices from the owned/immutable encoded value; callers use
+	// it only within the synchronous fold or encode it before returning.
 	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
 	if err != nil || !ok {
 		return BranchData{}, ok, err
 	}
-	b, err := DecodeBranchData(encoded)
-	if err != nil {
+	var b BranchData
+	if err := decodeBranchDataIntoNoCopy(encoded, &b); err != nil {
 		return BranchData{}, false, err
 	}
 	return b, true, nil
@@ -36,13 +36,16 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 
 // GetBranchInto is GetBranch but writes into *dst instead of returning the
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
-// the ~1.5 KB struct off the heap; see branchPool in commitment_tree.go.
+// the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
 	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
 	if err != nil || !ok {
 		return ok, err
 	}
-	if err := DecodeBranchDataInto(encoded, dst); err != nil {
+	// The no-copy state reader returns either an owned Get result or an
+	// immutable overlay/cache value. Borrow its leaf-key slices for this fold
+	// descent; branch storage encodes/copies them synchronously before return.
+	if err := decodeBranchDataIntoNoCopy(encoded, dst); err != nil {
 		return false, err
 	}
 	return true, nil

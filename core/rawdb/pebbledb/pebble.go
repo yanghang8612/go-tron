@@ -489,6 +489,29 @@ func (d *Database) Get(key []byte) ([]byte, error) {
 	return ret, nil
 }
 
+// View invokes fn with the Pebble-owned value for key while its closer remains
+// open. fn must consume or copy value synchronously and must not retain or
+// mutate it. Blockbuffer uses this optional capability to copy a durable-base
+// miss directly into its immutable read cache instead of paying for the
+// intermediate defensive copy required by Get.
+func (d *Database) View(key []byte, fn func([]byte) error) (err error) {
+	d.quitLock.RLock()
+	defer d.quitLock.RUnlock()
+	if d.closed {
+		return pebble.ErrClosed
+	}
+	dat, closer, err := d.db.Get(key)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := closer.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return fn(dat)
+}
+
 // Put inserts the given value into the key-value store.
 func (d *Database) Put(key []byte, value []byte) error {
 	d.quitLock.RLock()

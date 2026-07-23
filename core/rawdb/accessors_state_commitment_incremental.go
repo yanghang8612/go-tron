@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"slices"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -28,8 +29,38 @@ func NewStateCommitmentDelete(key []byte) StateCommitmentUpdate {
 	}
 }
 
+// NewStateCommitmentPutOwned constructs an update without cloning its inputs.
+// The caller transfers exclusive ownership of key and value and must not mutate
+// them for the update's lifetime (including a deferred async fold). Hot
+// latest-domain paths use this only with freshly allocated physical keys and
+// encoded values.
+func NewStateCommitmentPutOwned(key, value []byte) StateCommitmentUpdate {
+	return StateCommitmentUpdate{Key: key, Value: value}
+}
+
+// NewStateCommitmentDeleteOwned is the delete counterpart of
+// NewStateCommitmentPutOwned.
+func NewStateCommitmentDeleteOwned(key []byte) StateCommitmentUpdate {
+	return StateCommitmentUpdate{Key: key, Delete: true}
+}
+
 func StateAccountLatestCommitmentKey(owner common.Address) []byte {
 	return stateAccountLatestKey(owner)
+}
+
+// StateAccountLatestCommitmentKeySize is the fixed encoded size of an
+// account-latest physical key. It lets commit paths reserve one contiguous
+// arena for all keys instead of allocating each key separately.
+func StateAccountLatestCommitmentKeySize() int {
+	return len(stateAccountLatestPrefix) + common.AccountIDLength
+}
+
+// AppendStateAccountLatestCommitmentKey appends an account-latest physical key
+// to dst. When dst has reserved capacity this performs no allocation.
+func AppendStateAccountLatestCommitmentKey(dst []byte, owner common.Address) []byte {
+	accountID := owner.AccountID()
+	dst = append(dst, stateAccountLatestPrefix...)
+	return append(dst, accountID[:]...)
 }
 
 func StateKVLatestCommitmentKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
@@ -73,16 +104,27 @@ func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value 
 // CoalesceStateCommitmentUpdates deduplicates updates per key (last-writer-wins)
 // and returns them sorted by key. Both callers
 // (DomainCommitmentState.latestUpdatesFromTouches and the unwind builder)
-// construct every element via NewStateCommitmentPut / NewStateCommitmentDelete,
-// which already allocate fresh, single-use copies of Key and Value that nothing
-// else aliases — so this re-uses the input element values directly rather than
-// re-cloning them. The downstream commitment fold (buildOps) makes its own copy
-// of every Key and only reads Value, so it never retains an alias to the input
-// bytes past its own copy. The returned slice may therefore share backing arrays
-// with the caller's input elements.
+// pass owned, immutable Key and Value buffers. This re-uses those buffers rather
+// than cloning them. The downstream commitment fold borrows both synchronously;
+// branch persistence encodes/copies every retained key before the fold returns.
+// The returned slice may therefore share backing arrays with the input.
 func CoalesceStateCommitmentUpdates(updates []StateCommitmentUpdate) []StateCommitmentUpdate {
 	if len(updates) == 0 {
 		return nil
+	}
+	// The production latest-touch collector already emits non-empty, unique
+	// keys in strict byte order. Preserve that slice directly: rebuilding a map
+	// here used to allocate one string per update plus map buckets and two result
+	// slices, only for buildOps to rediscover the same ordering one layer later.
+	strictlySorted := true
+	for i := range updates {
+		if len(updates[i].Key) == 0 || (i > 0 && bytes.Compare(updates[i-1].Key, updates[i].Key) >= 0) {
+			strictlySorted = false
+			break
+		}
+	}
+	if strictlySorted {
+		return updates
 	}
 	byKey := make(map[string]StateCommitmentUpdate, len(updates))
 	for _, update := range updates {

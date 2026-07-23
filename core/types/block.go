@@ -9,6 +9,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -241,4 +242,96 @@ func UnmarshalBlock(data []byte) (*Block, error) {
 		return nil, err
 	}
 	return NewBlockFromPB(pb), nil
+}
+
+// BlockHashFromRaw derives the canonical BlockID directly from bytes produced
+// by Block.Marshal. It scans past transaction fields without decoding them,
+// extracts BlockHeader.RawData, hashes those exact canonical protobuf bytes and
+// reads only the header's number varint for the BlockID prefix. Freezer uses
+// this after it has already loaded blockRaw, avoiding a second DB read and a
+// full transaction-tree unmarshal.
+func BlockHashFromRaw(data []byte) (common.Hash, error) {
+	header, ok, err := protobufBytesField(data, 2)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("block raw header: %w", err)
+	}
+	if !ok {
+		return common.Hash{}, errors.New("block raw header: missing block_header")
+	}
+	rawData, ok, err := protobufBytesField(header, 1)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("block raw header data: %w", err)
+	}
+	if !ok {
+		return common.Hash{}, errors.New("block raw header data: missing raw_data")
+	}
+	number, err := protobufInt64Field(rawData, 7)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("block raw number: %w", err)
+	}
+	hash := sha256.Sum256(rawData)
+	binary.BigEndian.PutUint64(hash[:8], uint64(number))
+	return hash, nil
+}
+
+// protobufBytesField returns the last occurrence of a bytes/message field.
+// Canonical Block.Marshal output contains one occurrence of both fields used
+// here; unrelated fields are skipped without allocating.
+func protobufBytesField(data []byte, field protowire.Number) ([]byte, bool, error) {
+	var out []byte
+	var found bool
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, false, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if number == field {
+			if wireType != protowire.BytesType {
+				return nil, false, fmt.Errorf("field %d has wire type %d, want bytes", field, wireType)
+			}
+			value, m := protowire.ConsumeBytes(data)
+			if m < 0 {
+				return nil, false, protowire.ParseError(m)
+			}
+			out, found = value, true
+			data = data[m:]
+			continue
+		}
+		m := protowire.ConsumeFieldValue(number, wireType, data)
+		if m < 0 {
+			return nil, false, protowire.ParseError(m)
+		}
+		data = data[m:]
+	}
+	return out, found, nil
+}
+
+func protobufInt64Field(data []byte, field protowire.Number) (int64, error) {
+	var out int64
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return 0, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if number == field {
+			if wireType != protowire.VarintType {
+				return 0, fmt.Errorf("field %d has wire type %d, want varint", field, wireType)
+			}
+			value, m := protowire.ConsumeVarint(data)
+			if m < 0 {
+				return 0, protowire.ParseError(m)
+			}
+			out = int64(value)
+			data = data[m:]
+			continue
+		}
+		m := protowire.ConsumeFieldValue(number, wireType, data)
+		if m < 0 {
+			return 0, protowire.ParseError(m)
+		}
+		data = data[m:]
+	}
+	return out, nil
 }

@@ -89,7 +89,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		dp = dynProps[0]
 	}
 
-	ownerBytes, isShielded, err := extractContractOwner(contract)
+	ownerBytes, isShielded, err := extractContractOwner(tx)
 	if err != nil {
 		return err
 	}
@@ -344,11 +344,12 @@ func validateTxCommon(tx *types.Transaction, headBlockTime int64, validateResult
 //   - owner: the address bytes (may be empty for fully shielded txs)
 //   - isShielded: true iff the contract type is ShieldedTransfer
 //   - err: malformed parameter or unmarshal failure
-func extractContractOwner(contract *corepb.Transaction_Contract) ([]byte, bool, error) {
-	if contract.Parameter == nil {
-		return nil, false, fmt.Errorf("contract has no parameter")
+func extractContractOwner(tx *types.Transaction) ([]byte, bool, error) {
+	contract := tx.Contract()
+	if contract == nil {
+		return nil, false, ErrNoContract
 	}
-	msg, err := contract.Parameter.UnmarshalNew()
+	msg, err := tx.DecodedContract()
 	if err != nil {
 		return nil, false, fmt.Errorf("unmarshal contract parameter: %w", err)
 	}

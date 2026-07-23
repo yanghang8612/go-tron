@@ -1,6 +1,8 @@
 package state
 
 import (
+	"sync"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -10,6 +12,11 @@ import (
 // journalChange represents a single undoable state change.
 type journalChange interface {
 	revert(stateObjects map[tcommon.Address]*stateObject, witnesses map[tcommon.Address]*types.Witness)
+}
+
+type recyclableJournalChange interface {
+	journalChange
+	release()
 }
 
 // accountChange records the previous account state for revert.
@@ -52,7 +59,22 @@ type accountScalarChange struct {
 	energyWindowOptimized      bool
 }
 
-func (e accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+var accountScalarChangePool = sync.Pool{
+	New: func() any { return new(accountScalarChange) },
+}
+
+func acquireAccountScalarChange() *accountScalarChange {
+	e := accountScalarChangePool.Get().(*accountScalarChange)
+	*e = accountScalarChange{}
+	return e
+}
+
+func (e *accountScalarChange) release() {
+	*e = accountScalarChange{}
+	accountScalarChangePool.Put(e)
+}
+
+func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj == nil || obj.account == nil {
 		return
@@ -309,7 +331,22 @@ func (j *journal) length() int {
 
 func (j *journal) revert(stateObjects map[tcommon.Address]*stateObject, witnesses map[tcommon.Address]*types.Witness, to int) {
 	for i := len(j.entries) - 1; i >= to; i-- {
-		j.entries[i].revert(stateObjects, witnesses)
+		entry := j.entries[i]
+		entry.revert(stateObjects, witnesses)
+		if recyclable, ok := entry.(recyclableJournalChange); ok {
+			recyclable.release()
+		}
+		j.entries[i] = nil
 	}
 	j.entries = j.entries[:to]
+}
+
+func (j *journal) reset() {
+	for i, entry := range j.entries {
+		if recyclable, ok := entry.(recyclableJournalChange); ok {
+			recyclable.release()
+		}
+		j.entries[i] = nil
+	}
+	j.entries = j.entries[:0]
 }

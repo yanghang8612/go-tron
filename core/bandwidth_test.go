@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -89,6 +90,53 @@ func TestTxBandwidthSize_SupportVMFormula(t *testing.T) {
 		t.Fatalf("clearRet did not neutralize populated ret: empty-ret=%d, populated-ret=%d",
 			withVM, withVMRet)
 	}
+}
+
+func TestTransactionSizeWithoutRetDoesNotMutate(t *testing.T) {
+	tx := makeTestTransferTx(1, 2, 100)
+	tx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	tx.Proto().Ret = []*corepb.Transaction_Result{
+		{Fee: 1, ContractRet: corepb.Transaction_Result_SUCCESS},
+		nil,
+		{Fee: 2, ContractRet: corepb.Transaction_Result_REVERT},
+	}
+
+	wantPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
+	wantPB.Ret = nil
+	want := proto.Size(wantPB)
+	if got := transactionSizeWithoutRet(tx); got != want {
+		t.Fatalf("size without ret: got %d, want %d", got, want)
+	}
+	if got := len(tx.Proto().Ret); got != 3 {
+		t.Fatalf("transaction ret mutated: got %d entries, want 3", got)
+	}
+}
+
+var transactionSizeSink int
+
+func BenchmarkTransactionSizeWithoutRet(b *testing.B) {
+	tx := makeTestTransferTx(1, 2, 100)
+	tx.Proto().RawData.Data = make([]byte, 512)
+	tx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	tx.Proto().Ret = []*corepb.Transaction_Result{
+		{Fee: 1, ContractRet: corepb.Transaction_Result_SUCCESS},
+		{Fee: 2, ContractRet: corepb.Transaction_Result_REVERT},
+	}
+
+	b.Run("deep-clone", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
+			stripped.Ret = nil
+			transactionSizeSink = proto.Size(stripped)
+		}
+	})
+	b.Run("field-size-subtraction", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			transactionSizeSink = transactionSizeWithoutRet(tx)
+		}
+	})
 }
 
 func TestConsumeBandwidth_ShieldedTransferSkipped(t *testing.T) {

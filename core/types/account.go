@@ -1,14 +1,22 @@
 package types
 
 import (
+	"sync/atomic"
+
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/runtime/protoiface"
 )
 
 type Account struct {
 	pb *corepb.Account
+	// marshalSizeHint is the previous deterministic encoding length. Account
+	// state changes frequently but its encoded size usually does not; using the
+	// last length lets Marshal call the generated append fast-path directly and
+	// skip protobuf's full Size pre-pass without repeated buffer growth.
+	marshalSizeHint atomic.Int64
 }
 
 func NewAccountFromPB(pb *corepb.Account) *Account {
@@ -39,7 +47,9 @@ func (a *Account) Copy() *Account {
 	if a == nil {
 		return nil
 	}
-	return NewAccountFromPB(proto.Clone(a.pb).(*corepb.Account))
+	copy := &Account{pb: proto.Clone(a.pb).(*corepb.Account)}
+	copy.marshalSizeHint.Store(a.marshalSizeHint.Load())
+	return copy
 }
 
 // AccountName accessors.
@@ -740,7 +750,28 @@ func (a *Account) ClearFrozenV2() {
 // unaffected: these bytes are never compared byte-for-byte across nodes, and
 // the consensus accountStateRoot uses its own map-free marshal path.
 func (a *Account) Marshal() ([]byte, error) {
-	return proto.MarshalOptions{Deterministic: true}.Marshal(a.pb)
+	message := a.pb.ProtoReflect()
+	methods := message.ProtoMethods()
+	if methods == nil || methods.Marshal == nil || methods.Flags&protoiface.SupportMarshalDeterministic == 0 {
+		return proto.MarshalOptions{Deterministic: true}.Marshal(a.pb)
+	}
+	hint := int(a.marshalSizeHint.Load())
+	if hint < 256 {
+		hint = 256
+	}
+	out, err := methods.Marshal(protoiface.MarshalInput{
+		Message: message,
+		Buf:     make([]byte, 0, hint),
+		Flags:   protoiface.MarshalDeterministic,
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.marshalSizeHint.Store(int64(len(out.Buf)))
+	if out.Buf == nil {
+		return []byte{}, nil
+	}
+	return out.Buf, nil
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {
@@ -748,5 +779,7 @@ func UnmarshalAccount(data []byte) (*Account, error) {
 	if err := proto.Unmarshal(data, pb); err != nil {
 		return nil, err
 	}
-	return NewAccountFromPB(pb), nil
+	account := &Account{pb: pb}
+	account.marshalSizeHint.Store(int64(len(data)))
+	return account, nil
 }

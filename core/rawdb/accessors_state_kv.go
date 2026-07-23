@@ -55,7 +55,7 @@ func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, ge
 }
 
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
-	raw, err := db.Get(stateKVLatestKey(owner, generation, domain, logicalKey))
+	raw, err := readStateNoCopyCached(db, stateKVLatestKey(owner, generation, domain, logicalKey))
 	if err != nil {
 		return nil, false, nil
 	}
@@ -185,7 +185,7 @@ func EncodeStateKVGenerationValue(generation uint64) []byte {
 }
 
 func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint64, bool, error) {
-	data, err := db.Get(stateKVGenerationKey(owner))
+	data, err := readStateNoCopyCached(db, stateKVGenerationKey(owner))
 	if err != nil {
 		return 0, false, nil
 	}

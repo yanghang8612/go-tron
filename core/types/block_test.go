@@ -1,12 +1,76 @@
 package types
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
+
+var benchmarkBlockHash common.Hash
+
+func blockHashRawTestBlock(txCount, dataSize int) *Block {
+	txs := make([]*corepb.Transaction, txCount)
+	for i := range txs {
+		txs[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				RefBlockBytes: []byte{byte(i >> 8), byte(i)},
+				Data:          bytes.Repeat([]byte{byte(i)}, dataSize),
+				Timestamp:     int64(i + 1),
+			},
+			Signature: [][]byte{bytes.Repeat([]byte{byte(i + 1)}, 65)},
+		}
+	}
+	raw := &corepb.BlockHeaderRaw{
+		Number:           12_345_678,
+		Timestamp:        1_700_000_000_000,
+		TxTrieRoot:       bytes.Repeat([]byte{0x11}, common.HashLength),
+		ParentHash:       bytes.Repeat([]byte{0x22}, common.HashLength),
+		WitnessAddress:   append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x33}, common.AccountIDLength)...),
+		Version:          34,
+		AccountStateRoot: bytes.Repeat([]byte{0x44}, common.HashLength),
+	}
+	rawUnknown := protowire.AppendTag(nil, 100, protowire.BytesType)
+	rawUnknown = protowire.AppendBytes(rawUnknown, []byte("raw-unknown"))
+	raw.ProtoReflect().SetUnknown(rawUnknown)
+	return NewBlockFromPB(&corepb.Block{
+		Transactions: txs,
+		BlockHeader: &corepb.BlockHeader{
+			RawData:          raw,
+			WitnessSignature: bytes.Repeat([]byte{0x55}, 65),
+		},
+	})
+}
+
+func BenchmarkBlockHashFromRaw(b *testing.B) {
+	block := blockHashRawTestBlock(200, 256)
+	data, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("full-unmarshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			decoded, err := UnmarshalBlock(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkBlockHash = decoded.Hash()
+		}
+	})
+	b.Run("raw-header-scan", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkBlockHash, err = BlockHashFromRaw(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 func TestNewBlock(t *testing.T) {
 	pb := &corepb.Block{
@@ -43,6 +107,42 @@ func TestBlockHash(t *testing.T) {
 	h2 := b.Hash()
 	if h != h2 {
 		t.Fatal("hash not deterministic")
+	}
+}
+
+func TestBlockHashFromRawMatchesBlockHash(t *testing.T) {
+	block := blockHashRawTestBlock(8, 64)
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := BlockHashFromRaw(data)
+	if err != nil {
+		t.Fatalf("BlockHashFromRaw: %v", err)
+	}
+	if want := block.Hash(); got != want {
+		t.Fatalf("raw block hash = %x, want %x", got, want)
+	}
+}
+
+func TestBlockHashFromRawRejectsMalformedOrMissingHeader(t *testing.T) {
+	wrongWire := protowire.AppendTag(nil, 2, protowire.VarintType)
+	wrongWire = protowire.AppendVarint(wrongWire, 1)
+	missingRaw, err := proto.Marshal(&corepb.Block{BlockHeader: &corepb.BlockHeader{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{
+		"empty":       nil,
+		"truncated":   {0x12, 0x80},
+		"wrong-wire":  wrongWire,
+		"missing-raw": missingRaw,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BlockHashFromRaw(data); err == nil {
+				t.Fatal("expected malformed/missing header error")
+			}
+		})
 	}
 }
 

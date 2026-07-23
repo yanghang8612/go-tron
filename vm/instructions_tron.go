@@ -138,7 +138,8 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, ErrEndowmentOutOfRange
 	}
 
-	inputData := mem.getCopy(int64(inOff), int64(inSz))
+	toPrecompile := getPrecompile(addr, in.tvm.cfg, in.tvm.GenesisHash) != nil
+	inputData := callFrameInput(in, mem, int64(inOff), int64(inSz), toPrecompile)
 	var ret []byte
 	var remaining uint64
 	if isTokenTransfer {
@@ -154,7 +155,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, err
 	}
 
-	in.writeCallReturn(mem, getPrecompile(addr, in.tvm.cfg, in.tvm.GenesisHash) != nil, err, retOff, retSz, ret)
+	in.writeCallReturn(mem, toPrecompile, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		in.returnData = nil
 	} else {
@@ -552,8 +553,8 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	voteOrder := make([]tcommon.Address, 0, n)
 	var totalVotes int64
 	for i := int64(0); i < n; i++ {
-		wBytes := mem.getCopy(wBase+32+i*32, 32)
-		aBytes := mem.getCopy(aBase+32+i*32, 32)
+		wBytes := mem.getPtr(wBase+32+i*32, 32)
+		aBytes := mem.getPtr(aBase+32+i*32, 32)
 
 		var witnessAddr tcommon.Address
 		if len(wBytes) == 32 {
@@ -754,7 +755,7 @@ func memoryArrayLengthSafe(mem *Memory, offset int64) int64 {
 	}
 	resizeMemory(mem, uint64(offset), 32) // java Memory.read()'s zero-extend side effect
 	var w uint256.Int
-	w.SetBytes(mem.getCopy(offset, 32))
+	w.SetBytes(mem.getPtr(offset, 32))
 	return int64(wordToIntValueSafe(&w))
 }
 

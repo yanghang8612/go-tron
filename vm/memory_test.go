@@ -57,3 +57,62 @@ func TestMemoryGetPtr(t *testing.T) {
 		t.Fatalf("getPtr mismatch: %x", ptr)
 	}
 }
+
+func TestCallFrameInputOwnership(t *testing.T) {
+	memory := newMemory()
+	memory.resize(32)
+	memory.store[4] = 0xaa
+
+	borrowed := callFrameInput(&Interpreter{}, memory, 4, 1, false)
+	memory.store[4] = 0xbb
+	if borrowed[0] != 0xbb {
+		t.Fatalf("ordinary frame input was copied: got %x", borrowed)
+	}
+
+	precompileInput := callFrameInput(&Interpreter{}, memory, 4, 1, true)
+	memory.store[4] = 0xcc
+	if precompileInput[0] != 0xbb {
+		t.Fatalf("precompile input aliases caller memory: got %x", precompileInput)
+	}
+
+	traced := callFrameInput(&Interpreter{tvmConfig: TVMConfig{Tracer: &recorderTracer{}}}, memory, 4, 1, false)
+	memory.store[4] = 0xdd
+	if traced[0] != 0xcc {
+		t.Fatalf("traced frame input aliases caller memory: got %x", traced)
+	}
+}
+
+var callFrameInputSink []byte
+
+func BenchmarkCallFrameInput(b *testing.B) {
+	memory := newMemory()
+	memory.resize(1024)
+	interpreter := new(Interpreter)
+
+	b.Run("borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024, false)
+		}
+	})
+	b.Run("retained", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024, true)
+		}
+	})
+}
+
+func BenchmarkMemoryIncrementalResize(b *testing.B) {
+	const words = 1024
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		memory := newMemory()
+		for word := 1; word <= words; word++ {
+			memory.resize(uint64(word * 32))
+		}
+		if memory.len() != words*32 {
+			b.Fatal(memory.len())
+		}
+	}
+}

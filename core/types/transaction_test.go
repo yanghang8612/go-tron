@@ -72,6 +72,124 @@ func TestTransactionContractType(t *testing.T) {
 	}
 }
 
+func TestTransactionDecodedContractMemoized(t *testing.T) {
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: []byte{0x41, 0x01},
+		ToAddress:    []byte{0x41, 0x02},
+		Amount:       100,
+	}
+	parameter, err := anypb.New(transfer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: parameter,
+		}},
+	}})
+
+	const readers = 32
+	results := make(chan proto.Message, readers)
+	errs := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			msg, err := tx.DecodedContract()
+			results <- msg
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("DecodedContract: %v", err)
+		}
+	}
+	var first proto.Message
+	for msg := range results {
+		if first == nil {
+			first = msg
+			continue
+		}
+		if msg != first {
+			t.Fatal("DecodedContract returned different message instances")
+		}
+	}
+	got, ok := first.(*contractpb.TransferContract)
+	if !ok {
+		t.Fatalf("decoded type = %T, want *TransferContract", first)
+	}
+	if !proto.Equal(got, transfer) {
+		t.Fatalf("decoded contract = %v, want %v", got, transfer)
+	}
+}
+
+func TestTransactionDecodedContractMemoizesError(t *testing.T) {
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type: corepb.Transaction_Contract_TransferContract,
+			Parameter: &anypb.Any{
+				TypeUrl: "type.googleapis.com/protocol.DoesNotExist",
+				Value:   []byte{1, 2, 3},
+			},
+		}},
+	}})
+
+	msg1, err1 := tx.DecodedContract()
+	msg2, err2 := tx.DecodedContract()
+	if err1 == nil || err2 == nil {
+		t.Fatalf("errors = (%v, %v), want both non-nil", err1, err2)
+	}
+	if msg1 != nil || msg2 != nil {
+		t.Fatalf("messages = (%T, %T), want nil", msg1, msg2)
+	}
+	if err1 != err2 {
+		t.Fatal("DecodedContract did not memoize the error instance")
+	}
+}
+
+var decodedContractBenchmarkSink proto.Message
+
+func BenchmarkTransactionDecodedContract(b *testing.B) {
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: make([]byte, common.AddressLength),
+		ToAddress:    make([]byte, common.AddressLength),
+		Amount:       1_000_000,
+	}
+	parameter, err := anypb.New(transfer)
+	if err != nil {
+		b.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: parameter,
+		}},
+	}})
+	if _, err := tx.DecodedContract(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("AnyUnmarshalNew", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decodedContractBenchmarkSink, _ = parameter.UnmarshalNew()
+		}
+	})
+	b.Run("Memoized", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decodedContractBenchmarkSink, _ = tx.DecodedContract()
+		}
+	})
+}
+
 // TestRecoverSigners_JavaSignatureV pins java-tron Rsv.fromSignature parity for
 // 65-byte signatures whose v byte is already 27/28. The fixture is Nile block
 // 3,595,432 tx 76d86fa20262de881670ff502e4164fb99f6b39f9652a00f0c173ab60aa2ae10;

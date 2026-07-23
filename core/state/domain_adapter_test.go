@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -10,6 +12,67 @@ import (
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+var benchmarkDomainCommitmentTouchCount int
+
+func BenchmarkDomainCommitmentRecordTouches(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment := NewDomainCommitmentState(&StateDB{})
+		for _, key := range keys {
+			commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+	}
+}
+
+func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
+	owner := testAddr(0x7e)
+	key := make([]byte, 32)
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	}
+}
+
+func TestDomainCommitmentTouchesPreserveRootedIdentityAndCallerKey(t *testing.T) {
+	commitment := NewDomainCommitmentState(&StateDB{})
+	owner := testAddr(0x7e)
+	alias := owner
+	alias[0] = 0xa0
+	key := []byte("slot/original")
+	original := append([]byte(nil), key...)
+
+	commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	key[0] = 'X'
+	commitment.recordKVLatestTouch(alias, 7, kvdomains.ContractStorage, original)
+	if len(commitment.touches) != 1 {
+		t.Fatalf("AccountID alias duplicated original touch: got %d touches", len(commitment.touches))
+	}
+	commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	if len(commitment.touches) != 2 {
+		t.Fatalf("caller key mutation changed retained touch: got %d touches, want 2 distinct keys", len(commitment.touches))
+	}
+
+	commitment.recordAccountLatestTouch(owner)
+	commitment.recordAccountLatestTouch(alias)
+	commitment.recordKVGenerationTouch(owner)
+	commitment.recordKVGenerationTouch(alias)
+	if len(commitment.touches) != 4 {
+		t.Fatalf("AccountID alias duplicated account/generation touches: got %d, want 4 total", len(commitment.touches))
+	}
+}
 
 func TestDomainStateAdaptsAccountKV(t *testing.T) {
 	sdb := newTestStateDB(t)
@@ -393,6 +456,11 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	}
 	if len(updates) != 5 {
 		t.Fatalf("typed latest-view updates = %+v, want account, generation, two prefix deletes, one put", updates)
+	}
+	for i := 1; i < len(updates); i++ {
+		if bytes.Compare(updates[i-1].Key, updates[i].Key) >= 0 {
+			t.Fatalf("touch-derived updates not strictly sorted at %d: %x >= %x", i, updates[i-1].Key, updates[i].Key)
+		}
 	}
 	byKey := stateCommitmentUpdatesByKey(updates)
 	assertCommitmentPut(t, byKey, rawdb.StateAccountLatestCommitmentKey(owner), []byte("account-v2"))

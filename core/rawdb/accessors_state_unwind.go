@@ -76,12 +76,12 @@ func CollectStateUnwind(db StateUnwindStore, fromBlock, toBlock uint64) ([]State
 			if err != nil {
 				return nil, err
 			}
-			updates = append(updates, NewStateCommitmentPut(key, val))
+			updates = append(updates, NewStateCommitmentPutOwned(key, val))
 		} else {
 			if err := deleteStateDomainLatestRow(db, c); err != nil {
 				return nil, err
 			}
-			updates = append(updates, NewStateCommitmentDelete(key))
+			updates = append(updates, NewStateCommitmentDeleteOwned(key))
 		}
 	}
 	return CoalesceStateCommitmentUpdates(updates), nil

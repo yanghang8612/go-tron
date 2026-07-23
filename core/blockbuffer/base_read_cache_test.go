@@ -7,7 +7,7 @@ import (
 
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
 	_, _, epoch := c.getWithEpoch(key)
-	c.setIfEpoch(key, value, epoch)
+	_, _ = c.setIfEpoch(key, value, epoch)
 }
 
 func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {

@@ -25,6 +25,33 @@ func BenchmarkNewInterpreter(b *testing.B) {
 	}
 }
 
+func BenchmarkInterpreterArithmetic(b *testing.B) {
+	evm := newTestEVM(b)
+	const rounds = 1000
+	code := make([]byte, 0, rounds*6+1)
+	for i := 0; i < rounds; i++ {
+		code = append(code,
+			byte(PUSH1), byte(i),
+			byte(PUSH1), byte(i>>8),
+			byte(ADD), byte(POP),
+		)
+	}
+	code = append(code, byte(STOP))
+	contract := NewContract(tcommon.Address{0x41, 1}, tcommon.Address{0x41, 2}, 0, 1_000_000_000)
+	contract.SetCode(contract.Address, code)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(rounds*4), "opcodes/run")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		contract.Energy = 1_000_000_000
+		contract.EnergyUsed = 0
+		if _, err := evm.interpreter.Run(contract); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestInterpretersShareImmutableJumpTable(t *testing.T) {
 	first := NewInterpreter(new(TVM), TVMConfig{})
 	second := NewInterpreter(new(TVM), TVMConfig{Constantinople: true, Istanbul: true})
@@ -42,11 +69,11 @@ func TestInterpretersShareImmutableJumpTable(t *testing.T) {
 	}
 }
 
-func newTestEVM(t *testing.T) *TVM {
+func newTestEVM(t testing.TB) *TVM {
 	return newTestEVMWithConfig(t, TVMConfig{})
 }
 
-func newTestEVMWithConfig(t *testing.T, cfg TVMConfig) *TVM {
+func newTestEVMWithConfig(t testing.TB, cfg TVMConfig) *TVM {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := state.NewDatabase(diskdb)
@@ -85,6 +112,63 @@ func TestInterpreterAddition(t *testing.T) {
 	}
 	if result[31] != 7 {
 		t.Fatalf("expected 7, got %d", result[31])
+	}
+}
+
+func TestInterpreterFramePoolsResetState(t *testing.T) {
+	evm := newTestEVM(t)
+	caller := tcommon.Address{0x41, 0x11}
+	address := tcommon.Address{0x41, 0x12}
+
+	// Dirty byte zero in a pooled frame's memory and leave a value on its
+	// operand stack. STOP intentionally consumes neither.
+	dirty := NewContract(caller, address, 0, 100_000)
+	dirty.SetCode(address, []byte{
+		byte(PUSH1), 0xaa,
+		byte(PUSH1), 0x00,
+		byte(MSTORE8),
+		byte(PUSH1), 0xbb,
+		byte(STOP),
+	})
+	if _, err := evm.interpreter.Run(dirty); err != nil {
+		t.Fatal(err)
+	}
+	freshStack := NewContract(caller, address, 0, 100_000)
+	freshStack.SetCode(address, []byte{byte(POP), byte(STOP)})
+	if _, err := evm.interpreter.Run(freshStack); err == nil {
+		t.Fatal("pooled stack retained an operand from the prior frame")
+	}
+
+	// A later frame must receive zero memory and an empty stack. MLOAD at zero
+	// would expose 0xaa if the memory pool failed to clear its retained bytes.
+	readFresh := NewContract(caller, address, 0, 100_000)
+	readFresh.SetCode(address, []byte{
+		byte(PUSH1), 0x00,
+		byte(MLOAD),
+		byte(PUSH1), 0x00,
+		byte(MSTORE),
+		byte(PUSH1), 0x20,
+		byte(PUSH1), 0x00,
+		byte(RETURN),
+	})
+	result, err := evm.interpreter.Run(readFresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(result, make([]byte, 32)) {
+		t.Fatalf("pooled memory leaked prior frame bytes: %x", result)
+	}
+
+	// Run stores PC on the Interpreter to avoid a per-frame escaping local, but
+	// nested callers still require their outer PC to be restored exactly.
+	evm.interpreter.pc = 77
+	empty := NewContract(caller, address, 0, 100_000)
+	empty.SetCode(address, []byte{byte(STOP)})
+	if _, err := evm.interpreter.Run(empty); err != nil {
+		t.Fatal(err)
+	}
+	if evm.interpreter.pc != 77 {
+		t.Fatalf("program counter after Run = %d, want parent 77", evm.interpreter.pc)
 	}
 }
 

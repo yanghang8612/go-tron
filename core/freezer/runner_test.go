@@ -1,6 +1,7 @@
 package freezer
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"testing"
@@ -73,9 +74,12 @@ func (f *fakeChain) ReadTransactionInfosRaw(n uint64) []byte {
 	return nil
 }
 
-func (f *fakeChain) ReadBlockHashByNumber(n uint64) tcommon.Hash {
+func (f *fakeChain) ReadBlockHash(n uint64, blockRaw []byte) tcommon.Hash {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !bytes.Equal(blockRaw, f.blockRaw[n]) {
+		return tcommon.Hash{}
+	}
 	return f.blockHashByNo[n]
 }
 

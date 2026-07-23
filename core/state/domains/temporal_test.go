@@ -4,11 +4,66 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type benchmarkDomainSink struct{}
+
+func (benchmarkDomainSink) DomainPut(common.Address, kvdomains.KVDomain, []byte, []byte) error {
+	return nil
+}
+func (benchmarkDomainSink) DomainDel(common.Address, kvdomains.KVDomain, []byte) error { return nil }
+func (benchmarkDomainSink) DomainDelPrefix(common.Address, kvdomains.KVDomain, []byte) error {
+	return nil
+}
+
+type benchmarkCommitmentRecorder struct{ count int }
+
+func (*benchmarkCommitmentRecorder) SeekCommitment(context.Context) (uint64, uint64, error) {
+	return 0, 0, nil
+}
+func (*benchmarkCommitmentRecorder) ComputeCommitment(context.Context, uint64, uint64) (common.Hash, error) {
+	return common.Hash{}, nil
+}
+func (r *benchmarkCommitmentRecorder) RecordCommitmentMutations(_ context.Context, mutations []Mutation) error {
+	r.count += len(mutations)
+	return nil
+}
+
+var sharedDomainMutationBenchmarkSink int
+
+func BenchmarkSharedDomainTxMutationBatch(b *testing.B) {
+	const mutationsPerBatch = 256
+	owner := testAddress(0x7a)
+	keys := make([][]byte, mutationsPerBatch)
+	values := make([][]byte, mutationsPerBatch)
+	for i := range mutationsPerBatch {
+		keys[i] = []byte(fmt.Sprintf("storage-slot-%03d", i))
+		values[i] = []byte(fmt.Sprintf("value-%03d-value-%03d", i, i))
+	}
+	recorder := new(benchmarkCommitmentRecorder)
+	tx := NewSharedDomainTx(SharedDomainTxConfig{
+		Writer:     benchmarkDomainSink{},
+		Commitment: recorder,
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for i := range mutationsPerBatch {
+			if err := tx.DomainPut(owner, kvdomains.ContractStorage, keys[i], values[i]); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := tx.Flush(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+	}
+	sharedDomainMutationBenchmarkSink = recorder.count
+}
 
 func TestSharedDomainTxStagesLatestAndFlushes(t *testing.T) {
 	owner := testAddress(0x41)

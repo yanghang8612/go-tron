@@ -8,11 +8,17 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 type countingKeyValueReader struct {
 	ethdb.KeyValueReader
-	gets int
+	gets  int
+	views int
+}
+
+type getOnlyReader struct {
+	ethdb.KeyValueReader
 }
 
 type blockingSnapshotReader struct {
@@ -36,9 +42,33 @@ func (r *blockingSnapshotReader) Get(key []byte) ([]byte, error) {
 	return value, err
 }
 
+func (r *blockingSnapshotReader) View(key []byte, fn func([]byte) error) error {
+	r.gets++
+	value, err := r.KeyValueReader.Get(key)
+	value = append([]byte(nil), value...)
+	r.once.Do(func() {
+		close(r.started)
+		<-r.release
+	})
+	if err != nil {
+		return err
+	}
+	return fn(value)
+}
+
 func (r *countingKeyValueReader) Get(key []byte) ([]byte, error) {
 	r.gets++
 	return r.KeyValueReader.Get(key)
+}
+
+func (r *countingKeyValueReader) View(key []byte, fn func([]byte) error) error {
+	r.gets++
+	r.views++
+	value, err := r.KeyValueReader.Get(key)
+	if err != nil {
+		return err
+	}
+	return fn(value)
 }
 
 // TestGetNoCopy_MatchesGet is the correctness gate for the commitment-fold
@@ -282,6 +312,9 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	if base.gets != 1 {
 		t.Fatalf("base gets after cache hit = %d, want 1", base.gets)
 	}
+	if base.views != 1 {
+		t.Fatalf("base callback views after cache fill = %d, want 1", base.views)
+	}
 
 	// An orphan overlay wins while present; discarding it reveals the still-valid
 	// durable cache entry without another base read.
@@ -343,6 +376,68 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	mustCached(resetNew)
 }
 
+func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x7a}
+	key := []byte("hot-slot")
+	oldValue := []byte("old")
+	newValue := []byte("new")
+	domain := kvdomains.ContractStorage
+	if err := rawdb.WriteStateKVLatest(disk, owner, 0, domain, key, oldValue); err != nil {
+		t.Fatal(err)
+	}
+	base := &countingKeyValueReader{KeyValueReader: disk}
+	b := New(base)
+	b.SetBaseReadCacheSize(1 << 20)
+
+	read := func(want []byte, wantExists bool) []byte {
+		t.Helper()
+		got, exists, err := rawdb.ReadStateKVLatest(b, owner, 0, domain, key)
+		if err != nil || exists != wantExists || !bytes.Equal(got, want) {
+			t.Fatalf("ReadStateKVLatest = (%q,%v,%v), want (%q,%v,nil)", got, exists, err, want, wantExists)
+		}
+		return got
+	}
+
+	first := read(oldValue, true)
+	first[0] = 'X'
+	read(oldValue, true)
+	if base.gets != 1 {
+		t.Fatalf("base gets after cached flat-latest read = %d, want 1", base.gets)
+	}
+	if base.views != 1 {
+		t.Fatalf("base callback views after flat-latest cache fill = %d, want 1", base.views)
+	}
+
+	b.BeginBlock(bufHash(1), 1)
+	if err := rawdb.WriteStateKVLatest(b, owner, 0, domain, key, newValue); err != nil {
+		t.Fatal(err)
+	}
+	read(newValue, true)
+	b.CommitBlock()
+	if err := b.FlushUpTo(1, disk); err != nil {
+		t.Fatal(err)
+	}
+	read(newValue, true)
+	if base.gets != 2 {
+		t.Fatalf("base gets after flat-latest flush invalidation = %d, want 2", base.gets)
+	}
+
+	b.BeginBlock(bufHash(2), 2)
+	if err := rawdb.DeleteStateKVLatest(b, owner, 0, domain, key); err != nil {
+		t.Fatal(err)
+	}
+	read(nil, false)
+	b.CommitBlock()
+	if err := b.FlushUpTo(2, disk); err != nil {
+		t.Fatal(err)
+	}
+	read(nil, false)
+	if base.gets != 3 {
+		t.Fatalf("base gets after flat-latest delete = %d, want 3", base.gets)
+	}
+}
+
 // TestBaseReadCache_RejectsLateFillAfterFlush exercises the narrow race where
 // a durable-base read captures the old value, then a flush invalidates that key
 // before the read returns. The old value may satisfy the already-started read,
@@ -401,4 +496,38 @@ func TestBaseReadCache_RejectsLateFillAfterFlush(t *testing.T) {
 	if base.gets != 2 {
 		t.Fatalf("new generation did not populate cache: gets=%d, want 2", base.gets)
 	}
+}
+
+func BenchmarkBaseReadCacheColdFill(b *testing.B) {
+	disk, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { disk.Close() })
+	key := []byte("cold-cache-fill")
+	value := bytes.Repeat([]byte{0xa5}, 4096)
+	if err := disk.Put(key, value); err != nil {
+		b.Fatal(err)
+	}
+
+	run := func(b *testing.B, base ethdb.KeyValueReader) {
+		buf := New(base)
+		buf.SetBaseReadCacheSize(1 << 20)
+		b.ReportAllocs()
+		b.SetBytes(int64(len(value)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			buf.baseReadCache.del(key)
+			got, err := buf.GetNoCopyCached(key)
+			if err != nil || len(got) != len(value) {
+				b.Fatalf("GetNoCopyCached = %d bytes, %v", len(got), err)
+			}
+		}
+	}
+	b.Run("copying-get", func(b *testing.B) {
+		run(b, getOnlyReader{KeyValueReader: disk})
+	})
+	b.Run("callback-view", func(b *testing.B) {
+		run(b, disk)
+	})
 }

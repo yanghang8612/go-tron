@@ -70,7 +70,7 @@ type bufferedBranchStore struct {
 	// counts. Overwriting removes it.)
 	//
 	// Map values are pooled pointers rather than BranchData values. BranchData is
-	// roughly 1.5 KiB; storing it inline makes every map bucket large and forces
+	// roughly 1 KiB; storing it inline makes every map bucket large and forces
 	// the runtime to copy those large values again while a growing map evacuates
 	// buckets. A pointer-sized map plus one pool-borrowed destination per distinct
 	// prefix keeps re-PUT overwrite semantics while reusing the large objects
@@ -262,7 +262,10 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		go func(nb uint8, sub *commitmentTrie, group []op) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			errs[nb] = sub.applyNibble(nil, 0, branch, nb, group)
+			// The worker owns its path backing array, so recursive appends can
+			// reuse all 64 nibble slots without aliasing sibling workers.
+			var path [pathLen]byte
+			errs[nb] = sub.applyNibble(path[:0], 0, branch, nb, group)
 		}(uint8(nb), sub, group)
 	}
 	wg.Wait()

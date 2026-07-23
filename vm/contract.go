@@ -1,6 +1,10 @@
 package vm
 
-import tcommon "github.com/tronprotocol/go-tron/common"
+import (
+	"sync"
+
+	tcommon "github.com/tronprotocol/go-tron/common"
+)
 
 // Contract represents a single call frame's execution context.
 type Contract struct {
@@ -23,6 +27,37 @@ type Contract struct {
 	Version    int32  // java-tron SmartContract.version for this code frame
 
 	jumpdests bitvec // valid JUMPDEST positions, 1 bit per code offset
+}
+
+// executionContractPool reuses the short-lived Contract object attached to
+// each VM call frame. Nested calls borrow distinct objects and return them as
+// their Go call frames unwind. Debug tracing deliberately bypasses this pool
+// because a third-party tracer may retain the live ScopeContext.Contract
+// pointer after CaptureState returns.
+var executionContractPool = sync.Pool{
+	New: func() any { return new(Contract) },
+}
+
+func acquireExecutionContract(caller, addr tcommon.Address, value int64, energy uint64) *Contract {
+	c := executionContractPool.Get().(*Contract)
+	*c = Contract{
+		Caller:  caller,
+		Address: addr,
+		Value:   value,
+		Energy:  energy,
+	}
+	return c
+}
+
+func releaseExecutionContract(c *Contract) {
+	if c == nil {
+		return
+	}
+	// Clear Code/Input/jumpdests before pooling so the process does not retain
+	// state bytecode, calldata or an uncached init-code analysis through an
+	// otherwise idle frame object.
+	*c = Contract{}
+	executionContractPool.Put(c)
 }
 
 // NewContract creates a new contract execution context.

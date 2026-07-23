@@ -6,7 +6,6 @@ import (
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"golang.org/x/crypto/sha3"
 )
 
 // --- Arithmetic ---
@@ -275,12 +274,10 @@ func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
-	data := memory.getCopy(int64(off), int64(sz))
-	h := sha3.NewLegacyKeccak256()
-	h.Write(data)
-	var hash tcommon.Hash
-	h.Sum(hash[:0])
-	size.SetBytes(hash.Bytes())
+	// SHA3 is read-only: hash the expanded memory directly instead of copying
+	// the whole range into a temporary allocation first.
+	hash := keccak256(memory.getPtr(int64(off), int64(sz)))
+	size.SetBytes(hash[:])
 	return nil, nil
 }
 

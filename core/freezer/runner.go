@@ -176,10 +176,9 @@ type ChainSource interface {
 	// the ancient table.
 	ReadTransactionInfosRaw(number uint64) []byte
 
-	// ReadBlockHashByNumber returns the canonical block hash for the
-	// given number. Used by the freezer to resolve the `bsr-<hash>`
-	// state-root key. Returns the zero hash when the block is unknown.
-	ReadBlockHashByNumber(number uint64) tcommon.Hash
+	// ReadBlockHash derives the canonical hash from blockRaw already returned by
+	// ReadBlockRaw. Reusing those bytes avoids a second KV read and full decode.
+	ReadBlockHash(number uint64, blockRaw []byte) tcommon.Hash
 
 	// ReadBlockStateRootRaw returns the raw state-root bytes under
 	// `bsr-<hash>`, or nil if absent. Pre-AccountStateRoot fork blocks
@@ -444,14 +443,15 @@ func (r *Runner) OnePass() (uint64, error) {
 			if err := op.AppendRaw(rawdbAncientTxInfos, n, r.chain.ReadTransactionInfosRaw(n)); err != nil {
 				return err
 			}
-			// State-root row is hash-keyed; resolve via the block proto.
+			// State-root row is hash-keyed; derive it from the block bytes already
+			// loaded above instead of reading and decoding the block a second time.
 			// Pre-AccountStateRoot fork blocks have no row, in which case
 			// ReadBlockStateRootRaw returns nil — append nil so the
 			// ancient table's per-num cardinality stays aligned with
 			// `bodies` / `tx_infos`. Empty entries decode back to the
 			// zero hash via the slice-2 read path, which matches the
 			// pre-freezer Pebble miss → zero-hash behavior.
-			hash := r.chain.ReadBlockHashByNumber(n)
+			hash := r.chain.ReadBlockHash(n, blockRaw)
 			stateRoot := r.chain.ReadBlockStateRootRaw(hash)
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err

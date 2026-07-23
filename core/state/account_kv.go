@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -47,9 +48,9 @@ type accountKVLatestBatch struct {
 	latestStore       accountKVPhysicalLatestStore
 	batch             ethdb.Batch
 	ops               int
-	pending           map[string]accountKVLatestPending
-	accountPending    map[string]accountLatestPending
-	generationPending map[string]kvGenerationPending
+	pending           map[accountKVLatestPendingMapKey]accountKVLatestPending
+	accountPending    map[tcommon.AccountID]accountLatestPending
+	generationPending map[tcommon.AccountID]kvGenerationPending
 	generation        func(tcommon.Address) (uint64, error)
 	changeSet         *domainChangeSetCapture
 	record            func(rawdb.StateCommitmentUpdate)
@@ -73,12 +74,8 @@ type accountKVLatestBatch struct {
 }
 
 type accountKVLatestPending struct {
-	owner      tcommon.Address
-	generation uint64
-	domain     kvdomains.KVDomain
-	key        []byte
-	value      []byte
-	deleted    bool
+	value   []byte
+	deleted bool
 	// number is the commit block that produced this entry, overwritten to the
 	// latest put's block on re-put of the same key (matching the map's
 	// overwrite-by-key semantics). Entries are pruned once a flush makes their
@@ -86,15 +83,25 @@ type accountKVLatestPending struct {
 	number uint64
 }
 
+// accountKVLatestPendingMapKey indexes the read-your-writes overlay by its
+// logical identity instead of serializing a full physical Pebble key for every
+// lookup. AccountID deliberately strips the network prefix, matching the
+// rooted-state key schema. logicalKey owns an immutable string copy on insert;
+// map lookups can convert a caller's transient []byte without allocating.
+type accountKVLatestPendingMapKey struct {
+	owner      tcommon.AccountID
+	generation uint64
+	domain     kvdomains.KVDomain
+	logicalKey string
+}
+
 type accountLatestPending struct {
-	owner   tcommon.Address
 	value   []byte
 	deleted bool
 	number  uint64
 }
 
 type kvGenerationPending struct {
-	owner      tcommon.Address
 	generation uint64
 	deleted    bool
 	number     uint64
@@ -252,7 +259,7 @@ func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, dom
 	}
 	w.rememberPut(owner, generation, domain, logicalKey, value)
 	if w.record != nil {
-		w.record(rawdb.NewStateCommitmentPut(
+		w.record(rawdb.NewStateCommitmentPutOwned(
 			rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey),
 			encodedValue,
 		))
@@ -269,7 +276,7 @@ func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, 
 	}
 	w.rememberDelete(owner, generation, domain, logicalKey)
 	if w.record != nil {
-		w.record(rawdb.NewStateCommitmentDelete(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
+		w.record(rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
 	}
 	return w.maybeFlush()
 }
@@ -391,7 +398,7 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.kvPendingDurable(e) {
+		if !w.deepAsync || w.kvPendingDurable(k, e) {
 			delete(w.pending, k)
 		}
 	}
@@ -399,7 +406,7 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.accountPendingDurable(e) {
+		if !w.deepAsync || w.accountPendingDurable(k, e) {
 			delete(w.accountPending, k)
 		}
 	}
@@ -407,7 +414,7 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.generationPendingDurable(e) {
+		if !w.deepAsync || w.generationPendingDurable(k, e) {
 			delete(w.generationPending, k)
 		}
 	}
@@ -422,11 +429,12 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 // breaking the commitBlock==op-layer assumption), latestStore still returns the
 // OLD value, so this keeps the entry — guarding the deep async-commit lost write.
 // On a read error it conservatively keeps the entry. Used only when deepAsync.
-func (w *accountKVLatestBatch) kvPendingDurable(e accountKVLatestPending) bool {
+func (w *accountKVLatestBatch) kvPendingDurable(key accountKVLatestPendingMapKey, e accountKVLatestPending) bool {
 	if w.latestStore == nil {
 		return true
 	}
-	val, exists, err := w.latestStore.ReadKVLatest(e.owner, e.generation, e.domain, e.key)
+	owner := key.owner.Address(tcommon.AddressPrefixMainnet)
+	val, exists, err := w.latestStore.ReadKVLatest(owner, key.generation, key.domain, []byte(key.logicalKey))
 	if err != nil {
 		return false
 	}
@@ -436,11 +444,11 @@ func (w *accountKVLatestBatch) kvPendingDurable(e accountKVLatestPending) bool {
 	return exists && bytes.Equal(val, e.value)
 }
 
-func (w *accountKVLatestBatch) accountPendingDurable(e accountLatestPending) bool {
+func (w *accountKVLatestBatch) accountPendingDurable(ownerID tcommon.AccountID, e accountLatestPending) bool {
 	if w.latestStore == nil {
 		return true
 	}
-	val, exists, err := w.latestStore.ReadAccountLatest(e.owner)
+	val, exists, err := w.latestStore.ReadAccountLatest(ownerID.Address(tcommon.AddressPrefixMainnet))
 	if err != nil {
 		return false
 	}
@@ -450,11 +458,11 @@ func (w *accountKVLatestBatch) accountPendingDurable(e accountLatestPending) boo
 	return exists && bytes.Equal(val, e.value)
 }
 
-func (w *accountKVLatestBatch) generationPendingDurable(e kvGenerationPending) bool {
+func (w *accountKVLatestBatch) generationPendingDurable(ownerID tcommon.AccountID, e kvGenerationPending) bool {
 	if w.latestStore == nil {
 		return true
 	}
-	gen, exists, err := w.latestStore.ReadKVGeneration(e.owner)
+	gen, exists, err := w.latestStore.ReadKVGeneration(ownerID.Address(tcommon.AddressPrefixMainnet))
 	if err != nil {
 		return false
 	}
@@ -495,6 +503,19 @@ func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value [
 	return w.maybeFlush()
 }
 
+// writeAccountLatestByKey accepts a physical latest key from the commit-wide
+// key arena. The backing writer owns/copies Put inputs before returning.
+func (w *accountKVLatestBatch) writeAccountLatestByKey(owner tcommon.Address, physicalKey, value []byte) error {
+	if w == nil || w.writer == nil {
+		return fmt.Errorf("account kv latest domain writer: nil writer")
+	}
+	if err := rawdb.WriteStateAccountLatestByKey(w.writer, physicalKey, value); err != nil {
+		return err
+	}
+	w.rememberAccountLatestPut(owner, value)
+	return w.maybeFlush()
+}
+
 func (w *accountKVLatestBatch) deleteAccountLatest(owner tcommon.Address) error {
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
@@ -506,9 +527,20 @@ func (w *accountKVLatestBatch) deleteAccountLatest(owner tcommon.Address) error 
 	return w.maybeFlush()
 }
 
+func (w *accountKVLatestBatch) deleteAccountLatestByKey(owner tcommon.Address, physicalKey []byte) error {
+	if w == nil || w.writer == nil {
+		return fmt.Errorf("account kv latest domain writer: nil writer")
+	}
+	if err := rawdb.DeleteStateAccountLatestByKey(w.writer, physicalKey); err != nil {
+		return err
+	}
+	w.rememberAccountLatestDelete(owner)
+	return w.maybeFlush()
+}
+
 func (w *accountKVLatestBatch) readAccountLatest(owner tcommon.Address) ([]byte, bool, error) {
 	if w != nil {
-		if pending, ok := w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))]; ok {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
 			if pending.deleted {
 				return nil, false, nil
 			}
@@ -545,7 +577,7 @@ func (w *accountKVLatestBatch) deleteKVGeneration(owner tcommon.Address) error {
 
 func (w *accountKVLatestBatch) readKVGeneration(owner tcommon.Address) (uint64, bool, error) {
 	if w != nil {
-		if pending, ok := w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))]; ok {
+		if pending, ok := w.generationPending[owner.AccountID()]; ok {
 			if pending.deleted {
 				return 0, false, nil
 			}
@@ -560,7 +592,7 @@ func (w *accountKVLatestBatch) readKVGeneration(owner tcommon.Address) (uint64, 
 
 func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	if w != nil {
-		if pending, ok := w.pending[string(accountKVLatestPendingKey(owner, generation, domain, logicalKey))]; ok {
+		if pending, ok := w.pending[accountKVLatestPendingKey(owner, generation, domain, logicalKey)]; ok {
 			if pending.deleted {
 				return nil, false, nil
 			}
@@ -596,11 +628,13 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 	}); err != nil {
 		return err
 	}
-	for _, pending := range w.pending {
-		if pending.owner != owner || pending.generation != generation || pending.domain != domain || !bytes.HasPrefix(pending.key, prefix) {
+	ownerID := owner.AccountID()
+	logicalPrefix := string(prefix)
+	for key, pending := range w.pending {
+		if key.owner != ownerID || key.generation != generation || key.domain != domain || !strings.HasPrefix(key.logicalKey, logicalPrefix) {
 			continue
 		}
-		mapKey := string(pending.key)
+		mapKey := key.logicalKey
 		if pending.deleted {
 			delete(entries, mapKey)
 			continue
@@ -629,15 +663,12 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 		return
 	}
 	if w.pending == nil {
-		w.pending = make(map[string]accountKVLatestPending)
+		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
-	w.pending[string(accountKVLatestPendingKey(owner, generation, domain, logicalKey))] = accountKVLatestPending{
-		owner:      owner,
-		generation: generation,
-		domain:     domain,
-		key:        append([]byte(nil), logicalKey...),
-		value:      append([]byte(nil), value...),
-		number:     w.commitBlock,
+	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
+	w.pending[mapKey] = accountKVLatestPending{
+		value:  append([]byte(nil), value...),
+		number: w.commitBlock,
 	}
 }
 
@@ -646,10 +677,9 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		return
 	}
 	if w.accountPending == nil {
-		w.accountPending = make(map[string]accountLatestPending)
+		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
-	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{
-		owner:  owner,
+	w.accountPending[owner.AccountID()] = accountLatestPending{
 		value:  append([]byte(nil), value...),
 		number: w.commitBlock,
 	}
@@ -660,9 +690,9 @@ func (w *accountKVLatestBatch) rememberAccountLatestDelete(owner tcommon.Address
 		return
 	}
 	if w.accountPending == nil {
-		w.accountPending = make(map[string]accountLatestPending)
+		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
-	w.accountPending[string(rawdb.StateAccountLatestCommitmentKey(owner))] = accountLatestPending{owner: owner, deleted: true, number: w.commitBlock}
+	w.accountPending[owner.AccountID()] = accountLatestPending{deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, generation uint64) {
@@ -670,9 +700,9 @@ func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, ge
 		return
 	}
 	if w.generationPending == nil {
-		w.generationPending = make(map[string]kvGenerationPending)
+		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{owner: owner, generation: generation, number: w.commitBlock}
+	w.generationPending[owner.AccountID()] = kvGenerationPending{generation: generation, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address) {
@@ -680,9 +710,9 @@ func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address)
 		return
 	}
 	if w.generationPending == nil {
-		w.generationPending = make(map[string]kvGenerationPending)
+		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
-	w.generationPending[string(rawdb.StateKVGenerationCommitmentKey(owner))] = kvGenerationPending{owner: owner, deleted: true, number: w.commitBlock}
+	w.generationPending[owner.AccountID()] = kvGenerationPending{deleted: true, number: w.commitBlock}
 }
 
 func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {
@@ -690,20 +720,22 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 		return
 	}
 	if w.pending == nil {
-		w.pending = make(map[string]accountKVLatestPending)
+		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
-	w.pending[string(accountKVLatestPendingKey(owner, generation, domain, logicalKey))] = accountKVLatestPending{
-		owner:      owner,
-		generation: generation,
-		domain:     domain,
-		key:        append([]byte(nil), logicalKey...),
-		deleted:    true,
-		number:     w.commitBlock,
+	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
+	w.pending[mapKey] = accountKVLatestPending{
+		deleted: true,
+		number:  w.commitBlock,
 	}
 }
 
-func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
-	return rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)
+func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
+	return accountKVLatestPendingMapKey{
+		owner:      owner.AccountID(),
+		generation: generation,
+		domain:     domain,
+		logicalKey: string(logicalKey),
+	}
 }
 
 // kvCompositeKey is the pre-hash logical key: domain (big-endian u16) || key.

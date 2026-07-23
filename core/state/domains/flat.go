@@ -96,7 +96,7 @@ func (s *FlatStore) DomainPut(owner common.Address, domain kvdomains.KVDomain, k
 		return err
 	}
 	return s.updateCommitment(db, []rawdb.StateCommitmentUpdate{
-		rawdb.NewStateCommitmentPut(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key), rawdb.EncodeStateKVLatestValue(value)),
+		rawdb.NewStateCommitmentPutOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key), rawdb.EncodeStateKVLatestValue(value)),
 	})
 }
 
@@ -112,7 +112,7 @@ func (s *FlatStore) DomainDel(owner common.Address, domain kvdomains.KVDomain, k
 		return err
 	}
 	return s.updateCommitment(db, []rawdb.StateCommitmentUpdate{
-		rawdb.NewStateCommitmentDelete(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key)),
+		rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key)),
 	})
 }
 
@@ -127,7 +127,7 @@ func (s *FlatStore) DomainDelPrefix(owner common.Address, domain kvdomains.KVDom
 	var updates []rawdb.StateCommitmentUpdate
 	if s.commitment {
 		if err := store.IterateLatest(owner, generation, domain, prefix, func(key, _ []byte) (bool, error) {
-			updates = append(updates, rawdb.NewStateCommitmentDelete(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key)))
+			updates = append(updates, rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, key)))
 			return true, nil
 		}); err != nil {
 			return err

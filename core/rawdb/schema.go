@@ -541,7 +541,15 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 }
 
 func stateKVLatestKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
-	return append(stateKVLatestDomainPrefix(owner, generation, domain), logicalKey...)
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2+len(logicalKey))
+	k = append(k, stateKVLatestPrefix...)
+	k = append(k, accountID[:]...)
+	var buf [10]byte
+	binary.BigEndian.PutUint64(buf[:8], generation)
+	binary.BigEndian.PutUint16(buf[8:], uint16(domain))
+	k = append(k, buf[:]...)
+	return append(k, logicalKey...)
 }
 
 func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
@@ -556,7 +564,15 @@ func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain k
 }
 
 func stateKVLatestLogicalPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) []byte {
-	return append(stateKVLatestDomainPrefix(owner, generation, domain), logicalPrefix...)
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2+len(logicalPrefix))
+	k = append(k, stateKVLatestPrefix...)
+	k = append(k, accountID[:]...)
+	var buf [10]byte
+	binary.BigEndian.PutUint64(buf[:8], generation)
+	binary.BigEndian.PutUint16(buf[8:], uint16(domain))
+	k = append(k, buf[:]...)
+	return append(k, logicalPrefix...)
 }
 
 func stateKVLatestOwnerPrefix(owner common.Address) []byte {

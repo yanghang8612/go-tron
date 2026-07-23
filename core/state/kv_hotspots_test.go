@@ -9,8 +9,14 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+func TestDefaultKVHotspotTrackerDisabled(t *testing.T) {
+	if DefaultKVHotspotTracker().Enabled() {
+		t.Fatal("process-wide hotspot tracker must be opt-in")
+	}
+}
+
 func TestKVHotspotTracker_RecordsAndSorts(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 
 	tr.Record(kvdomains.SystemDynamicProperty, []byte("hot-key"), false, 32)
 	tr.Record(kvdomains.SystemDynamicProperty, []byte("hot-key"), false, 32)
@@ -31,7 +37,7 @@ func TestKVHotspotTracker_RecordsAndSorts(t *testing.T) {
 }
 
 func TestKVHotspotTracker_DomainFilter(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	tr.Record(kvdomains.SystemDynamicProperty, []byte("a"), false, 1)
 	tr.Record(kvdomains.SystemReward, []byte("b"), false, 1)
 
@@ -42,7 +48,7 @@ func TestKVHotspotTracker_DomainFilter(t *testing.T) {
 }
 
 func TestKVHotspotTracker_DeleteCounts(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	tr.Record(kvdomains.SystemAsset, []byte("k"), false, 16)
 	tr.Record(kvdomains.SystemAsset, []byte("k"), true, 0)
 	tr.Record(kvdomains.SystemAsset, []byte("k"), true, 0)
@@ -57,7 +63,7 @@ func TestKVHotspotTracker_DeleteCounts(t *testing.T) {
 }
 
 func TestKVHotspotTracker_DisabledNoRecord(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	tr.SetEnabled(false)
 	tr.Record(kvdomains.SystemDynamicProperty, []byte("x"), false, 1)
 	if got := tr.Top(0, HotspotSortByActivity, ""); len(got) != 0 {
@@ -66,7 +72,7 @@ func TestKVHotspotTracker_DisabledNoRecord(t *testing.T) {
 }
 
 func TestKVHotspotTracker_Reset(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	tr.Record(kvdomains.SystemDynamicProperty, []byte("x"), false, 1)
 	tr.Reset()
 	if got := tr.Top(0, HotspotSortByActivity, ""); len(got) != 0 {
@@ -75,7 +81,7 @@ func TestKVHotspotTracker_Reset(t *testing.T) {
 }
 
 func TestKVHotspotTracker_EmptyKeyIgnored(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	tr.Record(kvdomains.SystemDynamicProperty, nil, false, 1)
 	tr.Record(kvdomains.SystemDynamicProperty, []byte{}, false, 1)
 	if got := tr.Top(0, HotspotSortByActivity, ""); len(got) != 0 {
@@ -84,7 +90,7 @@ func TestKVHotspotTracker_EmptyKeyIgnored(t *testing.T) {
 }
 
 func TestKVHotspotTracker_EvictsLowestActivity(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	// Force every key into the same shard so we hit the per-shard cap with
 	// a predictable insertion order. Use a fixed prefix the FNV-1a of which
 	// is stable, and append a sentinel byte that doesn't change the first 8
@@ -139,7 +145,7 @@ func TestKVHotspotTracker_EvictsLowestActivity(t *testing.T) {
 // the prior linear-scan implementation this test took ~30s for 1M inserts
 // after the shard filled; with sampled eviction it completes in milliseconds.
 func TestKVHotspotTracker_HighCardinalityEvictIsFast(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	// Force everything into one shard so we measure the shard-evict path.
 	prefix := []byte("samebkt0")
 	for i := 0; i < hotspotMaxKeysPerShard*4; i++ {
@@ -156,7 +162,7 @@ func TestKVHotspotTracker_HighCardinalityEvictIsFast(t *testing.T) {
 }
 
 func TestKVHotspotTracker_ConcurrentRecord(t *testing.T) {
-	tr := newKVHotspotTracker()
+	tr := newKVHotspotTracker(true)
 	var wg sync.WaitGroup
 	const writers = 8
 	const perWriter = 200
@@ -179,4 +185,24 @@ func TestKVHotspotTracker_ConcurrentRecord(t *testing.T) {
 	if want := uint64(writers * perWriter); total != want {
 		t.Fatalf("total puts = %d, want %d", total, want)
 	}
+}
+
+func BenchmarkKVHotspotTrackerRecord(b *testing.B) {
+	key := []byte("contract-storage-hot-key")
+	b.Run("Disabled", func(b *testing.B) {
+		tr := newKVHotspotTracker(false)
+		b.ReportAllocs()
+		for b.Loop() {
+			tr.Record(kvdomains.ContractStorage, key, false, 32)
+		}
+	})
+	b.Run("EnabledExistingKey", func(b *testing.B) {
+		tr := newKVHotspotTracker(true)
+		tr.Record(kvdomains.ContractStorage, key, false, 32)
+		b.ResetTimer()
+		b.ReportAllocs()
+		for b.Loop() {
+			tr.Record(kvdomains.ContractStorage, key, false, 32)
+		}
+	})
 }

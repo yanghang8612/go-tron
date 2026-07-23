@@ -167,7 +167,7 @@ var (
 	}
 	stateCommitmentCacheFlag = &cli.IntFlag{
 		Name:  "state.commitment.cache",
-		Usage: "Generation-safe commitment branch base-read cache size in MiB (0 disables)",
+		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
 		Value: 128,
 	}
 	configFileFlag = &cli.StringFlag{
@@ -448,7 +448,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
 	if commitmentCacheMiB > 0 {
-		log.Info("Commitment branch base-read cache enabled", "cacheMiB", commitmentCacheMiB)
+		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
 	} else {
 		log.Info("Commitment branch base-read cache disabled")
 	}

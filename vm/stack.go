@@ -1,12 +1,38 @@
 package vm
 
-import "github.com/holiman/uint256"
+import (
+	"sync"
+
+	"github.com/holiman/uint256"
+)
 
 const stackLimit = 1024
 
 // Stack is the TVM operand stack.
 type Stack struct {
 	data []uint256.Int
+}
+
+// executionStackPool reuses call-frame operand stacks. A contract call can
+// allocate several nested frames and every frame previously allocated both a
+// Stack and its initial 16-word backing slice. Stacks contain no pointers and
+// never exceed stackLimit, so retaining their high-water capacity is bounded.
+var executionStackPool = sync.Pool{
+	New: func() any { return newStack() },
+}
+
+func acquireExecutionStack() *Stack {
+	stack := executionStackPool.Get().(*Stack)
+	stack.data = stack.data[:0]
+	return stack
+}
+
+func releaseExecutionStack(stack *Stack) {
+	if stack == nil {
+		return
+	}
+	stack.data = stack.data[:0]
+	executionStackPool.Put(stack)
 }
 
 func newStack() *Stack {

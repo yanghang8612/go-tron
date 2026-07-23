@@ -119,8 +119,9 @@ func newLayer(hash common.Hash, number uint64) *layer {
 type Buffer struct {
 	base ethdb.KeyValueReader
 	// baseReadCache is populated only through GetNoCopyCached, the optional
-	// commitment-branch read path. Overlay layers always win; flush invalidates
-	// changed base keys and Discard clears the cache before reset/unwind.
+	// commitment/flat-latest read path. Overlay layers always win; flush
+	// invalidates changed base keys and Discard clears the cache before
+	// reset/unwind.
 	baseReadCache *baseReadCache
 	mu            sync.RWMutex
 	flushMu       sync.Mutex
@@ -150,6 +151,14 @@ type bufferBatch struct {
 	closed bool
 }
 
+// valueViewReader exposes a value only for the duration of fn. Pebble can use
+// this to keep its block handle open while the blockbuffer copies directly
+// into cache-owned immutable storage, avoiding Database.Get's intermediate
+// defensive copy. Implementations must invoke fn synchronously.
+type valueViewReader interface {
+	View(key []byte, fn func([]byte) error) error
+}
+
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
 	return &Buffer{base: base}
@@ -157,8 +166,8 @@ func New(base ethdb.KeyValueReader) *Buffer {
 
 // SetBaseReadCacheSize configures the bounded durable-base read cache used by
 // GetNoCopyCached. It must be called before the buffer begins concurrent use;
-// passing zero disables the cache. The cache is intentionally opt-in at the
-// blockbuffer layer because only commitment branch reads use the cached API.
+// passing zero disables the cache. Flat-latest and commitment-branch accessors
+// opt into this API because both consume or defensively copy returned bytes.
 func (b *Buffer) SetBaseReadCacheSize(sizeBytes int) {
 	if b == nil {
 		return
@@ -721,18 +730,18 @@ func (b *Buffer) Get(key []byte) ([]byte, error) {
 // GetNoCopy is Get without the defensive value copy: on a buffer hit it returns
 // the layer's internal value slice directly (aliasing buffer storage), saving
 // the per-Get allocation that dominates the commitment-fold read path. The
-// returned slice MUST be consumed (decoded, or copied) by the caller and MUST
-// NOT be mutated; it is only guaranteed stable until the same key is next
-// written. The commitment store satisfies this: DecodeBranchData copies every
-// field it retains and never holds the input past the decode. Reads that fall
-// through to the base reader use the base's own (copying) Get.
+// returned slice MUST NOT be mutated. Layer writes replace map values with new
+// backing slices, so a retained read remains stable even if the same key is
+// subsequently written. The commitment decoder uses that property to borrow
+// leaf-key fields for one synchronous fold. Reads that fall through to the
+// uncached base reader use the base's own (copying) Get.
 func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 	return b.getNoCopy(key, false)
 }
 
 // GetNoCopyCached is GetNoCopy plus a bounded cache for reads that fall all the
-// way through to the durable base. rawdb's commitment branch accessor detects
-// this optional method; ordinary buffer reads remain uncached.
+// way through to the durable base. rawdb's flat-latest and commitment-branch
+// accessors detect this optional method; ordinary buffer reads remain uncached.
 func (b *Buffer) GetNoCopyCached(key []byte) ([]byte, error) {
 	return b.getNoCopy(key, true)
 }
@@ -779,11 +788,35 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 			cacheEpoch = epoch
 		}
 	}
-	value, err := b.base.Get(key)
-	if err != nil || !cacheBase || cache == nil {
-		return value, err
+	if !cacheBase || cache == nil {
+		return b.base.Get(key)
 	}
-	return cache.setIfEpoch(key, value, cacheEpoch), nil
+	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
+}
+
+// readBaseIntoCache fills cache directly from a callback-style base reader
+// when available. If a concurrent flush invalidates the observed epoch, the
+// cache rejects the late fill; in that case we make one owned fallback copy
+// before View returns so no Pebble-backed slice escapes its valid lifetime.
+func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch uint64) ([]byte, error) {
+	if viewer, ok := base.(valueViewReader); ok {
+		var out []byte
+		err := viewer.View(key, func(value []byte) error {
+			if stored, ok := cache.setIfEpoch(key, value, epoch); ok {
+				out = stored
+			} else {
+				out = append([]byte(nil), value...)
+			}
+			return nil
+		})
+		return out, err
+	}
+	value, err := base.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	stored, _ := cache.setIfEpoch(key, value, epoch)
+	return stored, nil
 }
 
 // Has reports whether key exists, honoring tombstones. Safe to call
@@ -1015,73 +1048,49 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 	}
 
 	sizes := make([]layerBatchSize, len(layers))
-	maxEncodedSize := 0
-	queuedValueSize := 0
-	queuedEncodedSize := pebbleBatchHeaderSize
 	for i, l := range layers {
 		valueSize, encodedSize := layerWriteStats(l)
 		sizes[i] = layerBatchSize{value: valueSize, encoded: encodedSize}
-		if queuedValueSize > 0 && (queuedValueSize+valueSize > maxFlushBatchValueSize ||
-			queuedEncodedSize+encodedSize > maxFlushBatchEncodedSize) {
-			if queuedEncodedSize > maxEncodedSize {
-				maxEncodedSize = queuedEncodedSize
-			}
-			queuedValueSize = 0
-			queuedEncodedSize = pebbleBatchHeaderSize
-		}
-		queuedValueSize += valueSize
-		queuedEncodedSize += encodedSize
-		if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
-			if queuedEncodedSize > maxEncodedSize {
-				maxEncodedSize = queuedEncodedSize
-			}
-			queuedValueSize = 0
-			queuedEncodedSize = pebbleBatchHeaderSize
-		}
 	}
-	if queuedValueSize > 0 && queuedEncodedSize > maxEncodedSize {
-		maxEncodedSize = queuedEncodedSize
-	}
-	batch := batcher.NewBatchWithSize(maxEncodedSize)
-	defer closeBatch(batch)
 
 	flushed := 0
-	queuedLayers := 0
-	queuedEncodedSize = pebbleBatchHeaderSize
-	flushQueued := func() error {
-		if queuedLayers == 0 {
-			return nil
+	for start := 0; start < len(layers); {
+		end := start
+		queuedValueSize := 0
+		queuedEncodedSize := pebbleBatchHeaderSize
+		for end < len(layers) {
+			next := sizes[end]
+			if end > start && (queuedValueSize+next.value > maxFlushBatchValueSize ||
+				queuedEncodedSize+next.encoded > maxFlushBatchEncodedSize) {
+				break
+			}
+			queuedValueSize += next.value
+			queuedEncodedSize += next.encoded
+			end++
+			if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
+				break
+			}
+		}
+
+		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
+		// Reset. Reusing one large batch therefore made every group after the
+		// first grow geometrically from an empty buffer despite our exact size
+		// calculation. Allocate each bounded group at its exact encoded size so
+		// every batch performs one final allocation and no grow/copy cycle.
+		batch := batcher.NewBatchWithSize(queuedEncodedSize)
+		for i := start; i < end; i++ {
+			if err := writeLayer(layers[i], batch); err != nil {
+				closeBatch(batch)
+				return flushed, err
+			}
 		}
 		if err := batch.Write(); err != nil {
-			return err
-		}
-		flushed += queuedLayers
-		queuedLayers = 0
-		queuedEncodedSize = pebbleBatchHeaderSize
-		batch.Reset()
-		return nil
-	}
-
-	for i, l := range layers {
-		if queuedLayers > 0 && (batch.ValueSize()+sizes[i].value > maxFlushBatchValueSize ||
-			queuedEncodedSize+sizes[i].encoded > maxFlushBatchEncodedSize) {
-			if err := flushQueued(); err != nil {
-				return flushed, err
-			}
-		}
-		if err := writeLayer(l, batch); err != nil {
+			closeBatch(batch)
 			return flushed, err
 		}
-		queuedLayers++
-		queuedEncodedSize += sizes[i].encoded
-		if batch.ValueSize() >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
-			if err := flushQueued(); err != nil {
-				return flushed, err
-			}
-		}
-	}
-	if err := flushQueued(); err != nil {
-		return flushed, err
+		closeBatch(batch)
+		flushed += end - start
+		start = end
 	}
 	return flushed, nil
 }

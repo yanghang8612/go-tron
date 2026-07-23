@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,15 +36,33 @@ func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
 	if !supportVM {
 		return int64(tx.Size())
 	}
-	stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
-	stripped.Ret = nil
-	size := int64(proto.Size(stripped))
+	size := int64(transactionSizeWithoutRet(tx))
 	if tx.Proto().RawData != nil {
 		for _, c := range tx.Proto().RawData.Contract {
 			if c.Type != corepb.Transaction_Contract_ShieldedTransferContract {
 				size += maxResultSizeInTx
 			}
 		}
+	}
+	return size
+}
+
+// transactionSizeWithoutRet computes the serialized size used by java-tron's
+// bandwidth accounting without cloning the full transaction object graph.
+// Protobuf message fields are independently length-delimited, so subtracting
+// each field-5 Ret entry's encoded size from the complete transaction size is
+// exactly equivalent to clearing Ret and sizing again. Unknown fields and every
+// other transaction field remain included unchanged.
+func transactionSizeWithoutRet(tx *types.Transaction) int {
+	pb := tx.Proto()
+	if pb == nil {
+		return 0
+	}
+	size := tx.Size()
+	const retFieldNumber = protowire.Number(5)
+	for _, result := range pb.Ret {
+		resultSize := proto.Size(result)
+		size -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
 	}
 	return size
 }
@@ -172,10 +191,9 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 			// java subtracts signature payload reservations before applying
 			// max_create_account_tx_size: 65 bytes per ECDSA signature and the
 			// scheme-specific maximum embedded PQAuthSig wire size.
-			stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
-			stripped.Ret = nil
-			createSize := int64(proto.Size(stripped) - 65*len(stripped.GetSignature()))
-			for _, auth := range stripped.GetPqAuthSig() {
+			pb := tx.Proto()
+			createSize := int64(transactionSizeWithoutRet(tx) - 65*len(pb.GetSignature()))
+			for _, auth := range pb.GetPqAuthSig() {
 				wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())
 				if !ok {
 					return nil, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
@@ -259,7 +277,7 @@ func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bo
 	case corepb.Transaction_Contract_AccountCreateContract:
 		return true
 	case corepb.Transaction_Contract_TransferContract:
-		msg, err := contract.Parameter.UnmarshalNew()
+		msg, err := tx.DecodedContract()
 		if err != nil {
 			return false
 		}
@@ -268,7 +286,7 @@ func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bo
 			return !statedb.AccountExists(tcommon.BytesToAddress(g.GetToAddress()))
 		}
 	case corepb.Transaction_Contract_TransferAssetContract:
-		msg, err := contract.Parameter.UnmarshalNew()
+		msg, err := tx.DecodedContract()
 		if err != nil {
 			return false
 		}
@@ -285,9 +303,13 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	if contract == nil || contract.Parameter == nil {
 		return false, nil
 	}
-	c := &contractpb.TransferAssetContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
+	msg, err := tx.DecodedContract()
+	if err != nil {
 		return false, fmt.Errorf("failed to unmarshal TransferAssetContract: %w", err)
+	}
+	c, ok := msg.(*contractpb.TransferAssetContract)
+	if !ok {
+		return false, fmt.Errorf("failed to unmarshal TransferAssetContract: unexpected parameter type %T", msg)
 	}
 
 	asset, tokenID, err := resolveBandwidthAsset(statedb, dynProps, c.AssetName)
@@ -427,11 +449,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 
 // extractSender extracts the bandwidth payer from the first contract.
 func extractSender(tx *types.Transaction) tcommon.Address {
-	contract := tx.Contract()
-	if contract == nil {
-		return tcommon.Address{}
-	}
-	owner, _, err := extractContractOwner(contract)
+	owner, _, err := extractContractOwner(tx)
 	if err != nil {
 		return tcommon.Address{}
 	}

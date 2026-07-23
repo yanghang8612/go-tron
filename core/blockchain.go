@@ -515,10 +515,10 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 }
 
 // SetCommitmentBranchCacheSize configures the bounded durable-base cache used
-// only by commitment branch reads. It must be called before block insertion or
-// any other concurrent use of the chain; gtron wires it immediately after
-// construction. The cache lives below rewindable buffer layers, invalidates
-// flushed mutations, and is cleared by buffer reset/unwind.
+// by commitment branch and flat-latest reads. It must be called before block
+// insertion or any other concurrent use of the chain; gtron wires it
+// immediately after construction. The cache lives below rewindable buffer
+// layers, invalidates flushed mutations, and is cleared by buffer reset/unwind.
 func (bc *BlockChain) SetCommitmentBranchCacheSize(sizeBytes int) {
 	if bc == nil || bc.buffer == nil {
 		return
@@ -1491,38 +1491,10 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 }
 
 func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
-	batch := bc.db.NewBatch()
-
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
-	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
-		return fmt.Errorf("write block state root: %w", err)
-	}
-	if err := rawdb.WriteBlock(batch, block); err != nil {
-		return fmt.Errorf("write block: %w", err)
-	}
-	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
-		return fmt.Errorf("write tapos ref: %w", err)
-	}
-	for _, info := range txInfos {
-		if err := rawdb.WriteTransactionInfo(batch, info.Id, info); err != nil {
-			return fmt.Errorf("write tx info: %w", err)
-		}
-	}
-	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
-		return fmt.Errorf("write block tx infos: %w", err)
-	}
-	for _, tx := range block.Transactions() {
-		h := tx.Hash()
-		if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {
-			return fmt.Errorf("write tx index: %w", err)
-		}
-	}
-	if err := batch.Write(); err != nil {
-		return fmt.Errorf("write block metadata batch: %w", err)
-	}
-	return nil
+	return rawdb.WriteBlockMetadataBatch(bc.db, block, stateRoot, txInfos)
 }
 
 // flushBufferUpToSolidified drains every committed buffer layer whose block

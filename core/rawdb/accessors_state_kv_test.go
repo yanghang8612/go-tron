@@ -4,9 +4,20 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type cachedStateReadProbe struct {
+	ethdb.KeyValueReader
+	cachedReads int
+}
+
+func (p *cachedStateReadProbe) GetNoCopyCached(key []byte) ([]byte, error) {
+	p.cachedReads++
+	return p.KeyValueReader.Get(key)
+}
 
 func TestStateKVLatestReadWriteEmptyAndAccountID(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -81,6 +92,45 @@ func TestStateKVGenerationRoundTrip(t *testing.T) {
 	got, ok, err := ReadStateKVGeneration(db, owner)
 	if err != nil || !ok || got != 12 {
 		t.Fatalf("generation = %d ok=%v err=%v, want 12,true,nil", got, ok, err)
+	}
+}
+
+func TestFlatLatestReadsPreferCachedNoCopyReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	owner := stateKVTestAddress(0x41, 0x55)
+	if err := WriteStateAccountLatest(db, owner, []byte("account")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateKVGeneration(db, owner, 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateKVLatest(db, owner, 9, kvdomains.ContractStorage, []byte("slot"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	probe := &cachedStateReadProbe{KeyValueReader: db}
+
+	account, ok, err := ReadStateAccountLatest(probe, owner)
+	if err != nil || !ok || string(account) != "account" {
+		t.Fatalf("account latest = %q ok=%v err=%v", account, ok, err)
+	}
+	generation, ok, err := ReadStateKVGeneration(probe, owner)
+	if err != nil || !ok || generation != 9 {
+		t.Fatalf("generation = %d ok=%v err=%v", generation, ok, err)
+	}
+	value, ok, err := ReadStateKVLatest(probe, owner, 9, kvdomains.ContractStorage, []byte("slot"))
+	if err != nil || !ok || string(value) != "value" {
+		t.Fatalf("kv latest = %q ok=%v err=%v", value, ok, err)
+	}
+	if probe.cachedReads != 3 {
+		t.Fatalf("cached reads = %d, want 3", probe.cachedReads)
+	}
+
+	account[0] = 'X'
+	value[0] = 'X'
+	accountAgain, _, _ := ReadStateAccountLatest(probe, owner)
+	valueAgain, _, _ := ReadStateKVLatest(probe, owner, 9, kvdomains.ContractStorage, []byte("slot"))
+	if string(accountAgain) != "account" || string(valueAgain) != "value" {
+		t.Fatalf("cached no-copy backing storage was mutated: account=%q value=%q", accountAgain, valueAgain)
 	}
 }
 

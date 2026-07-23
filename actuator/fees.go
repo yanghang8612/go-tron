@@ -7,6 +7,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // burnFee subtracts fee from owner's balance. When AllowBlackholeOptimization
@@ -33,13 +34,17 @@ func burnFee(ctx *Context, owner common.Address, fee int64) error {
 // mirroring java-tron TransactionCapsule.getOwner. ShieldedTransferContract is a
 // special case (sender is transparent_from_address, not owner_address); all other
 // types expose GetOwnerAddress. Returns the zero address when there is no owner.
-func ownerOfContract(c *corepb.Transaction_Contract) common.Address {
+func ownerOfContract(c *corepb.Transaction_Contract, decoded proto.Message) common.Address {
 	if c == nil || c.Parameter == nil {
 		return common.Address{}
 	}
-	msg, err := c.Parameter.UnmarshalNew()
-	if err != nil {
-		return common.Address{}
+	msg := decoded
+	if msg == nil {
+		var err error
+		msg, err = c.Parameter.UnmarshalNew()
+		if err != nil {
+			return common.Address{}
+		}
 	}
 	// ShieldedTransferContract carries its sender in transparent_from_address, not
 	// owner_address. Mirror java-tron TransactionCapsule.getOwner: return the
@@ -78,7 +83,11 @@ func ConsumeMultiSignFee(ctx *Context) (int64, error) {
 	}
 	var charged int64
 	for _, c := range rawData.Contract {
-		owner := ownerOfContract(c)
+		var decoded proto.Message
+		if c == ctx.Tx.Contract() {
+			decoded, _ = ctx.Tx.DecodedContract()
+		}
+		owner := ownerOfContract(c, decoded)
 		if owner == (common.Address{}) {
 			continue
 		}
@@ -104,7 +113,11 @@ func ConsumeMemoFee(ctx *Context) (int64, error) {
 	}
 	var charged int64
 	for _, c := range rawData.Contract {
-		owner := ownerOfContract(c)
+		var decoded proto.Message
+		if c == ctx.Tx.Contract() {
+			decoded, _ = ctx.Tx.DecodedContract()
+		}
+		owner := ownerOfContract(c, decoded)
 		if owner == (common.Address{}) {
 			continue
 		}

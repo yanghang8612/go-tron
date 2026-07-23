@@ -55,6 +55,26 @@ func TestCommitmentHashFastPathsMatchReference(t *testing.T) {
 	if got := branch.nodeHash(); got != wantNode {
 		t.Fatalf("nodeHash = %x, want %x", got, wantNode)
 	}
+
+	// Exercise the maximum-size 529-byte node preimage as well as the sparse
+	// case above. Alternate child kinds; leaf keys are deliberately excluded
+	// from the node hash by the commitment format.
+	parts := make([][]byte, 1, 1+16*2)
+	parts[0] = []byte{0x01}
+	var full BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		childHash := common.Hash{nibble, nibble + 1, nibble + 2}
+		if nibble%2 == 0 {
+			full.SetHashChild(nibble, childHash)
+		} else {
+			full.SetLeafChild(nibble, []byte{0xff, nibble}, childHash)
+		}
+		parts = append(parts, []byte{nibble}, childHash[:])
+	}
+	wantFull := referenceLegacyKeccak(parts...)
+	if got := full.nodeHash(); got != wantFull {
+		t.Fatalf("full nodeHash = %x, want %x", got, wantFull)
+	}
 }
 
 func TestBranchDataRoundTrip(t *testing.T) {
@@ -74,6 +94,34 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 	if !b.Equal(got) {
 		t.Fatalf("decoded branch not Equal to original")
+	}
+}
+
+func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
+	var source BranchData
+	source.SetLeafChild(4, []byte("borrow-me"), common.Hash{0xaa})
+	encoded := source.Encode()
+
+	var copied, borrowed BranchData
+	if err := DecodeBranchDataInto(encoded, &copied); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeBranchDataIntoNoCopy(encoded, &borrowed); err != nil {
+		t.Fatal(err)
+	}
+	keyOffset := bytes.Index(encoded, []byte("borrow-me"))
+	if keyOffset < 0 {
+		t.Fatal("encoded leaf key not found")
+	}
+	encoded[keyOffset] = 'B'
+
+	copiedKey, _ := copied.leafChildAt(4)
+	if string(copiedKey) != "borrow-me" {
+		t.Fatalf("public decoder retained input: %q", copiedKey)
+	}
+	borrowedKey, _ := borrowed.leafChildAt(4)
+	if string(borrowedKey) != "Borrow-me" {
+		t.Fatalf("no-copy decoder did not alias input: %q", borrowedKey)
 	}
 }
 
@@ -120,9 +168,9 @@ func TestBranchDataDeterministicAndProperty(t *testing.T) {
 				continue
 			}
 			if c.kind == 0 {
-				ref2.SetHashChild(uint8(nibble), c.hashVal)
+				ref2.SetHashChild(uint8(nibble), c.valueHash)
 			} else {
-				ref2.SetLeafChild(uint8(nibble), c.leafKey, c.leafValHash)
+				ref2.SetLeafChild(uint8(nibble), c.leafKey, c.valueHash)
 			}
 		}
 		enc2 := ref2.Encode()

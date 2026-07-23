@@ -2,6 +2,7 @@ package domains
 
 import (
 	"encoding/binary"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -38,5 +39,16 @@ func DecodeLatestKey(key []byte) (common.AccountID, uint64, kvdomains.KVDomain, 
 }
 
 func logicalKey(owner common.Address, domain kvdomains.KVDomain, key []byte) string {
-	return string(EncodeLatestKey(owner, 0, domain, key))
+	// Build directly into the string's eventual backing buffer. The previous
+	// string(EncodeLatestKey(...)) allocated a []byte and then copied it into a
+	// second string allocation for every overlay/map lookup and write.
+	var b strings.Builder
+	b.Grow(LatestKeyHeaderLen + len(key))
+	ownerID := owner.AccountID()
+	_, _ = b.Write(ownerID[:])
+	var suffix [10]byte // zero generation64 || domain16
+	binary.BigEndian.PutUint16(suffix[8:], uint16(domain))
+	_, _ = b.Write(suffix[:])
+	_, _ = b.Write(key)
+	return b.String()
 }

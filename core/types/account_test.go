@@ -1,10 +1,15 @@
 package types
 
 import (
+	"bytes"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
 
 func makeTestAccount() *Account {
@@ -351,6 +356,89 @@ func TestAccountMarshalRoundTrip(t *testing.T) {
 	}
 	if a2.LatestWithdrawTime() != 600 {
 		t.Errorf("LatestWithdrawTime: want 600, got %d", a2.LatestWithdrawTime())
+	}
+}
+
+func TestAccountMarshalMatchesDeterministicProtoFastPath(t *testing.T) {
+	a := makeTestAccount()
+	pb := a.Proto()
+	pb.Balance = 123456
+	pb.Asset = map[string]int64{"legacy-z": 9, "legacy-a": 1}
+	pb.AssetV2 = map[string]int64{"1000002": 2, "1000001": 1}
+	pb.LatestAssetOperationTime = map[string]int64{"legacy-z": 90, "legacy-a": 10}
+	pb.LatestAssetOperationTimeV2 = map[string]int64{"1000002": 20, "1000001": 10}
+	pb.FreeAssetNetUsage = map[string]int64{"legacy-z": 900, "legacy-a": 100}
+	pb.FreeAssetNetUsageV2 = map[string]int64{"1000002": 200, "1000001": 100}
+	pb.AccountResource = &corepb.Account_AccountResource{EnergyUsage: 77}
+	pb.ActivePermission = []*corepb.Permission{{
+		Type:           corepb.Permission_Active,
+		Id:             2,
+		PermissionName: "active",
+		Threshold:      1,
+		Keys:           []*corepb.Key{{Address: pb.Address, Weight: 1}},
+	}}
+	unknown := protowire.AppendTag(nil, 100, protowire.VarintType)
+	unknown = protowire.AppendVarint(unknown, 7)
+	pb.ProtoReflect().SetUnknown(unknown)
+
+	assertExact := func(label string) {
+		t.Helper()
+		want, err := proto.MarshalOptions{Deterministic: true}.Marshal(pb)
+		if err != nil {
+			t.Fatalf("%s reference marshal: %v", label, err)
+		}
+		got, err := a.Marshal()
+		if err != nil {
+			t.Fatalf("%s fast marshal: %v", label, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s differs from deterministic protobuf\n got %x\nwant %x", label, got, want)
+		}
+	}
+
+	assertExact("initial")
+	pb.AssetV2["1000001"]++ // same encoded length
+	assertExact("same-size mutation")
+	pb.AssetV2["a-new-much-longer-token-key"] = 1 << 40 // force buffer growth
+	assertExact("larger mutation")
+	delete(pb.AssetV2, "1000002")
+	delete(pb.AssetV2, "a-new-much-longer-token-key")
+	assertExact("smaller mutation")
+}
+
+func TestAccountMarshalConcurrentReadOnly(t *testing.T) {
+	a := makeTestAccount()
+	a.Proto().AssetV2 = map[string]int64{"1000002": 2, "1000001": 1}
+	want, err := proto.MarshalOptions{Deterministic: true}.Marshal(a.Proto())
+	if err != nil {
+		t.Fatalf("reference marshal: %v", err)
+	}
+
+	const goroutines = 16
+	const iterations = 100
+	errCh := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				got, err := a.Marshal()
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if !bytes.Equal(got, want) {
+					errCh <- errors.New("concurrent marshal differs from deterministic protobuf")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
 	}
 }
 

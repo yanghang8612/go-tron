@@ -732,6 +732,33 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	}
 }
 
+func TestBuffer_FlushUpToCreatesSizedBatchPerOversizeLayer(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	value := bytes.Repeat([]byte{0x7a}, maxFlushBatchValueSize+1)
+	for i := 0; i < 3; i++ {
+		b.BeginBlock(bufHash(byte(i+1)), uint64(i+1))
+		if err := b.Put([]byte{'a' + byte(i)}, value); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(3, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.batches.Load(); got != 3 {
+		t.Fatalf("NewBatchWithSize calls = %d, want one exact-sized batch per oversized layer", got)
+	}
+	if got := dst.writes.Load(); got != 3 {
+		t.Fatalf("batch Write calls = %d, want 3", got)
+	}
+	wantHint := int64(pebbleBatchHeaderSize + 1 + uvarintSize(1) + 1 + uvarintSize(len(value)) + len(value))
+	if got := dst.sizeHint.Load(); got != wantHint {
+		t.Fatalf("last batch size hint = %d, want %d", got, wantHint)
+	}
+}
+
 // drainIterator walks a buffer iterator to completion and returns the
 // resulting (key, value) pairs as a slice of two-element string slices. The
 // helper exists because every iterator test wants the same compact view of

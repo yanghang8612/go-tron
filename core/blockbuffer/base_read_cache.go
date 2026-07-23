@@ -2,9 +2,9 @@ package blockbuffer
 
 import "sync"
 
-// baseReadCacheShardCount keeps cache lookup contention low when the commitment
-// fold fans out over the root's 16 first-nibble subtries. A power of two lets the
-// FNV hash select a shard with a mask.
+// baseReadCacheShardCount keeps cache lookup contention low when commitment
+// folds and flat-latest readers run concurrently. A power of two lets the FNV
+// hash select a shard with a mask.
 const baseReadCacheShardCount = 64
 
 // baseReadCacheEntryOverhead is a conservative charge for the map entry, queue
@@ -93,21 +93,23 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, uint64) {
 // setIfEpoch copies key/value into cache-owned immutable storage only if no
 // flush/reset invalidated the target shard since the caller's cache miss.
 // Returning the stored slice lets the caller decode it without a second lookup
-// or depending on the base reader's value lifetime.
-func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) []byte {
+// or depending on the base reader's value lifetime. The boolean reports
+// whether the returned slice is cache-owned; a callback-backed reader must copy
+// it before returning when false.
+func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, bool) {
 	if c == nil {
-		return value
+		return value, false
 	}
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	if charge > s.limit {
-		return value
+		return value, false
 	}
 
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
-		return value
+		return value, false
 	}
 	k := string(key)
 	v := append([]byte(nil), value...)
@@ -121,7 +123,7 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) []byte {
 	s.used += charge
 	s.evict()
 	s.mu.Unlock()
-	return v
+	return v, true
 }
 
 func (c *baseReadCache) del(key []byte) {

@@ -169,8 +169,8 @@ func (o *Overlay) DomainPut(owner common.Address, domain kvdomains.KVDomain, key
 		Kind:   MutationPut,
 		Owner:  owner,
 		Domain: domain,
-		Key:    append([]byte(nil), key...),
-		Value:  append([]byte(nil), value...),
+		Key:    key,
+		Value:  value,
 	})
 }
 
@@ -179,7 +179,7 @@ func (o *Overlay) DomainDel(owner common.Address, domain kvdomains.KVDomain, key
 		Kind:   MutationDel,
 		Owner:  owner,
 		Domain: domain,
-		Key:    append([]byte(nil), key...),
+		Key:    key,
 	})
 }
 
@@ -188,7 +188,7 @@ func (o *Overlay) DomainDelPrefix(owner common.Address, domain kvdomains.KVDomai
 		Kind:   MutationDelPrefix,
 		Owner:  owner,
 		Domain: domain,
-		Key:    append([]byte(nil), prefix...),
+		Key:    prefix,
 	})
 }
 
@@ -223,9 +223,14 @@ func (o *Overlay) Discard() {
 		return
 	}
 	o.nextSeq = 0
-	o.exact = make(map[string]Mutation)
-	o.prefixes = nil
-	o.ops = nil
+	clear(o.exact)
+	// Clear pointer-bearing fields before shortening the slices. The GC scans
+	// the entire backing array, including capacity beyond len; leaving old
+	// mutations there would retain keys/values from a large block indefinitely.
+	clear(o.prefixes)
+	clear(o.ops)
+	o.prefixes = o.prefixes[:0]
+	o.ops = o.ops[:0]
 }
 
 func (o *Overlay) Mutations() []Mutation {
@@ -237,6 +242,17 @@ func (o *Overlay) Mutations() []Mutation {
 		out[i] = cloneMutation(op)
 	}
 	return out
+}
+
+// mutationsView returns the overlay-owned operation slice for synchronous
+// internal consumers. Callers must neither mutate nor retain it past Flush or
+// Discard. Public callers use Mutations, which preserves the defensive-copy
+// contract.
+func (o *Overlay) mutationsView() []Mutation {
+	if o == nil {
+		return nil
+	}
+	return o.ops
 }
 
 func (o *Overlay) Metrics() Metrics {

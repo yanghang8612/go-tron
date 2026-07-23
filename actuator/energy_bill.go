@@ -245,12 +245,12 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 	if ctx.Tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
 		return common.Address{}, 0, totalEnergy
 	}
-	c := ctx.Tx.Contract()
-	if c == nil || c.Parameter == nil {
+	msg, err := ctx.Tx.DecodedContract()
+	if err != nil {
 		return common.Address{}, 0, totalEnergy
 	}
-	tsc := &contractpb.TriggerSmartContract{}
-	if err := c.Parameter.UnmarshalTo(tsc); err != nil {
+	tsc, ok := msg.(*contractpb.TriggerSmartContract)
+	if !ok {
 		return common.Address{}, 0, totalEnergy
 	}
 	contractAddr := common.BytesToAddress(tsc.ContractAddress)
@@ -343,11 +343,7 @@ func legacyVMReceiptEnergyLeftMode(ctx *Context) bool {
 // generic path (any contract with GetOwnerAddress) keeps the helper
 // usable for non-VM contract types if needed later.
 func extractOwnerAddress(ctx *Context) common.Address {
-	c := ctx.Tx.Contract()
-	if c == nil || c.Parameter == nil {
-		return common.Address{}
-	}
-	msg, err := c.Parameter.UnmarshalNew()
+	msg, err := ctx.Tx.DecodedContract()
 	if err != nil {
 		return common.Address{}
 	}

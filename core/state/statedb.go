@@ -2900,20 +2900,23 @@ func encodeAccountLatestObjectFromProto(obj *stateObject, accBytes []byte, flatR
 	return data, nil
 }
 
-func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
+func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey []byte) error {
 	if plan == nil || plan.obj == nil {
 		return nil
 	}
 	obj := plan.obj
 	addr := plan.addr
 	if plan.deleteAccount {
+		if len(physicalKey) == 0 {
+			physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
+		}
 		if err := s.writeAccountLatestChange(addr, false, nil); err != nil {
 			return err
 		}
 		if latestWriter == nil {
 			return fmt.Errorf("account latest writer unavailable")
 		}
-		if err := latestWriter.deleteAccountLatest(addr); err != nil {
+		if err := latestWriter.deleteAccountLatestByKey(addr, physicalKey); err != nil {
 			return err
 		}
 		commitment.recordAccountLatestTouch(addr)
@@ -2942,13 +2945,16 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRo
 	if !exists {
 		return nil
 	}
+	if len(physicalKey) == 0 {
+		physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
+	}
 	if err := s.writeAccountLatestChange(addr, exists, data); err != nil {
 		return err
 	}
 	if latestWriter == nil {
 		return fmt.Errorf("account latest writer unavailable")
 	}
-	if err := latestWriter.writeAccountLatest(addr, data); err != nil {
+	if err := latestWriter.writeAccountLatestByKey(addr, physicalKey, data); err != nil {
 		return err
 	}
 	commitment.recordAccountLatestTouch(addr)
@@ -2981,8 +2987,22 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 }
 
 func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
-	for _, plan := range accountCommitPlansByAddress(plans) {
-		if err := s.writeFlatAccountLatestWithPlan(plan, flatRoot, commitment, latestWriter); err != nil {
+	orderedPlans := accountCommitPlansByAddress(plans)
+	accountLatestWrites := 0
+	for _, plan := range orderedPlans {
+		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
+			accountLatestWrites++
+		}
+	}
+	keyArena := make([]byte, 0, accountLatestWrites*rawdb.StateAccountLatestCommitmentKeySize())
+	for _, plan := range orderedPlans {
+		var physicalKey []byte
+		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
+			start := len(keyArena)
+			keyArena = rawdb.AppendStateAccountLatestCommitmentKey(keyArena, plan.addr)
+			physicalKey = keyArena[start:len(keyArena):len(keyArena)]
+		}
+		if err := s.writeFlatAccountLatestWithPlan(plan, flatRoot, commitment, latestWriter, physicalKey); err != nil {
 			return err
 		}
 	}
@@ -3579,7 +3599,7 @@ func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) 
 					obj.invalidateAccountProto()
 					return
 				}
-			case accountScalarChange:
+			case *accountScalarChange:
 				if change.address == addr {
 					obj.invalidateAccountProto()
 					return
@@ -3588,21 +3608,20 @@ func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) 
 		}
 	}
 	pb := obj.account.Proto()
-	change := accountScalarChange{
-		address:                addr,
-		prevProto:              obj.accountProto,
-		balance:                pb.Balance,
-		allowance:              pb.Allowance,
-		latestWithdrawTime:     pb.LatestWithdrawTime,
-		netUsage:               pb.NetUsage,
-		latestOperationTime:    pb.LatestOprationTime,
-		latestConsumeTime:      pb.LatestConsumeTime,
-		freeNetUsage:           pb.FreeNetUsage,
-		latestConsumeFreeTime:  pb.LatestConsumeFreeTime,
-		netWindowSize:          pb.NetWindowSize,
-		netWindowOptimized:     pb.NetWindowOptimized,
-		accountResourcePresent: pb.AccountResource != nil,
-	}
+	change := acquireAccountScalarChange()
+	change.address = addr
+	change.prevProto = obj.accountProto
+	change.balance = pb.Balance
+	change.allowance = pb.Allowance
+	change.latestWithdrawTime = pb.LatestWithdrawTime
+	change.netUsage = pb.NetUsage
+	change.latestOperationTime = pb.LatestOprationTime
+	change.latestConsumeTime = pb.LatestConsumeTime
+	change.freeNetUsage = pb.FreeNetUsage
+	change.latestConsumeFreeTime = pb.LatestConsumeFreeTime
+	change.netWindowSize = pb.NetWindowSize
+	change.netWindowOptimized = pb.NetWindowOptimized
+	change.accountResourcePresent = pb.AccountResource != nil
 	if resource := pb.AccountResource; resource != nil {
 		change.energyUsage = resource.EnergyUsage
 		change.latestConsumeTimeForEnergy = resource.LatestConsumeTimeForEnergy
@@ -3637,7 +3656,7 @@ func (s *StateDB) accountJournalBoundary() (int, bool) {
 }
 
 func (s *StateDB) resetJournal() {
-	s.journal = newJournal()
+	s.journal.reset()
 	s.snapshots = s.snapshots[:0]
 	clear(s.accountJournalPos)
 }

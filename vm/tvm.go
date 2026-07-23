@@ -14,7 +14,6 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"golang.org/x/crypto/sha3"
 )
 
 // maxCallDepth mirrors java-tron Program.MAX_DEPTH = 64: the TVM caps the
@@ -93,6 +92,19 @@ func (tvm *TVM) runContract(contract *Contract) ([]byte, error) {
 	return ret, err
 }
 
+func (tvm *TVM) acquireCallFrame(caller, addr tcommon.Address, value int64, energy uint64) *Contract {
+	if tvm.cfg.Tracer != nil {
+		return NewContract(caller, addr, value, energy)
+	}
+	return acquireExecutionContract(caller, addr, value, energy)
+}
+
+func (tvm *TVM) releaseCallFrame(contract *Contract) {
+	if tvm.cfg.Tracer == nil {
+		releaseExecutionContract(contract)
+	}
+}
+
 func (tvm *TVM) contractVersion(addr tcommon.Address) int32 {
 	if meta := tvm.StateDB.GetContract(addr); meta != nil {
 		return meta.GetVersion()
@@ -136,6 +148,13 @@ func (tvm *TVM) currentInternalTxHash() tcommon.Hash {
 	return tvm.RootTxID
 }
 
+func (tvm *TVM) currentInternalTxHashBytes() []byte {
+	if n := len(tvm.internalTxHashStack); n > 0 {
+		return tvm.internalTxHashStack[n-1][:]
+	}
+	return tvm.RootTxID[:]
+}
+
 func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenID, tokenValue int64) *corepb.InternalTransaction {
 	var tokenInfo map[string]int64
 	if tokenID > 0 {
@@ -145,34 +164,42 @@ func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value
 }
 
 func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
-	parentHash := tvm.currentInternalTxHash()
-	receiveAddress := transferTo.Bytes()
-	if note == "create" {
-		receiveAddress = nil
-	}
+	// java-tron's identity is keccak(parent || receive || data || value ||
+	// nonce). Absorb the fields directly: the former concatenation allocated
+	// one data-sized buffer, then append(nonce) allocated and copied it again.
+	hash := internalTransactionHash(tvm.currentInternalTxHashBytes(), transferTo, note != "create", data, value, tvm.Nonce)
 
-	var valueBytes [8]byte
-	binary.BigEndian.PutUint64(valueBytes[:], uint64(value))
-	raw := make([]byte, 0, len(parentHash)+len(receiveAddress)+len(data)+len(valueBytes))
-	raw = append(raw, parentHash[:]...)
-	raw = append(raw, receiveAddress...)
-	raw = append(raw, data...)
-	raw = append(raw, valueBytes[:]...)
-
-	var nonceBytes [8]byte
-	binary.BigEndian.PutUint64(nonceBytes[:], tvm.Nonce)
-	hash := tcommon.Keccak256(append(raw, nonceBytes[:]...))
+	// The protobuf owns these bytes, but the four immutable fields can share a
+	// single backing allocation. Full-slice expressions cap each field at its
+	// own length so a future append cannot overwrite the adjacent field.
+	const addressBytes = tcommon.AddressLength
+	identityBytes := make([]byte, tcommon.HashLength+2*addressBytes+len(note))
+	off := 0
+	copy(identityBytes[off:], hash[:])
+	hashBytes := identityBytes[off : off+tcommon.HashLength : off+tcommon.HashLength]
+	off += tcommon.HashLength
+	copy(identityBytes[off:], caller[:])
+	callerBytes := identityBytes[off : off+addressBytes : off+addressBytes]
+	off += addressBytes
+	copy(identityBytes[off:], transferTo[:])
+	transferBytes := identityBytes[off : off+addressBytes : off+addressBytes]
+	off += addressBytes
+	copy(identityBytes[off:], note)
+	noteBytes := identityBytes[off : off+len(note) : off+len(note)]
 
 	it := &corepb.InternalTransaction{
-		Hash:              hash.Bytes(),
-		CallerAddress:     caller.Bytes(),
-		TransferToAddress: transferTo.Bytes(),
+		Hash:              hashBytes,
+		CallerAddress:     callerBytes,
+		TransferToAddress: transferBytes,
 		CallValueInfo: []*corepb.InternalTransaction_CallValueInfo{{
 			CallValue: value,
 		}},
-		Note: []byte(note),
+		Note: noteBytes,
 	}
 	if len(tokenInfo) > 0 {
+		callValues := make([]*corepb.InternalTransaction_CallValueInfo, 1, 1+len(tokenInfo))
+		callValues[0] = it.CallValueInfo[0]
+		it.CallValueInfo = callValues
 		tokenIDs := make([]string, 0, len(tokenInfo))
 		for tokenID := range tokenInfo {
 			tokenIDs = append(tokenIDs, tokenID)
@@ -184,6 +211,12 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 				CallValue: tokenInfo[tokenID],
 			})
 		}
+	}
+	if tvm.InternalTransactions == nil {
+		// Most calls emit only a handful of internal transactions. Lazy reserve
+		// avoids penalizing VM executions that emit none while removing the
+		// 1→2→4→8 pointer-slice growth sequence from executions that do.
+		tvm.InternalTransactions = make([]*corepb.InternalTransaction, 0, 8)
 	}
 	tvm.InternalTransactions = append(tvm.InternalTransactions, it)
 	return it
@@ -568,11 +601,7 @@ func (tvm *TVM) create2WithVersion(caller, addressSeed tcommon.Address, code []b
 
 func create2Address(seed tcommon.Address, code []byte, salt [32]byte) tcommon.Address {
 	codeHash := keccak256(code)
-	var buf []byte
-	buf = append(buf, seed[:]...)
-	buf = append(buf, salt[:]...)
-	buf = append(buf, codeHash[:]...)
-	hash := keccak256(buf)
+	hash := keccak256Parts(seed[:], salt[:], codeHash[:])
 
 	var contractAddr tcommon.Address
 	contractAddr[0] = 0x41
@@ -583,23 +612,12 @@ func create2Address(seed tcommon.Address, code []byte, salt [32]byte) tcommon.Ad
 func (tvm *TVM) createAddress(nonce uint64) tcommon.Address {
 	var nonceBytes [8]byte
 	binary.BigEndian.PutUint64(nonceBytes[:], nonce)
-	buf := make([]byte, 0, len(tvm.RootTxID)+len(nonceBytes))
-	buf = append(buf, tvm.RootTxID[:]...)
-	buf = append(buf, nonceBytes[:]...)
-	hash := tcommon.Keccak256(buf)
+	hash := keccak256Parts(tvm.RootTxID[:], nonceBytes[:])
 
 	var addr tcommon.Address
 	addr[0] = 0x41
 	copy(addr[1:], hash[12:])
 	return addr
-}
-
-func keccak256(data []byte) [32]byte {
-	h := sha3.NewLegacyKeccak256()
-	h.Write(data)
-	var out [32]byte
-	h.Sum(out[:0])
-	return out
 }
 
 func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract, contractVersion int32) (data []byte, newAddr tcommon.Address, leftover uint64, outErr error) {
@@ -670,7 +688,8 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		internalTx = tvm.addInternalTransaction(caller, contractAddr, value, code, "create", 0, 0)
 	}
 
-	contract := NewContract(caller, contractAddr, value, energy)
+	contract := tvm.acquireCallFrame(caller, contractAddr, value, energy)
+	defer tvm.releaseCallFrame(contract)
 	contract.Version = tvm.contractVersion(contractAddr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
@@ -850,7 +869,8 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		return nil, energy, nil
 	}
 
-	contract := NewContract(caller, addr, value, energy)
+	contract := tvm.acquireCallFrame(caller, addr, value, energy)
+	defer tvm.releaseCallFrame(contract)
 	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
@@ -1023,7 +1043,8 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		return nil, energy, nil
 	}
 
-	contract := NewContract(caller, addr, value, energy)
+	contract := tvm.acquireCallFrame(caller, addr, value, energy)
+	defer tvm.releaseCallFrame(contract)
 	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
@@ -1107,7 +1128,8 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 		return nil, energy, nil
 	}
 
-	contract := NewContract(caller, addr, 0, energy)
+	contract := tvm.acquireCallFrame(caller, addr, 0, energy)
+	defer tvm.releaseCallFrame(contract)
 	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
@@ -1183,7 +1205,8 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 		return nil, energy, nil
 	}
 
-	contract := NewContract(caller, context, value, energy)
+	contract := tvm.acquireCallFrame(caller, context, value, energy)
+	defer tvm.releaseCallFrame(contract)
 	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)

@@ -14,11 +14,21 @@ type StateAccountLatestRow struct {
 }
 
 func WriteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address, value []byte) error {
-	return db.Put(stateAccountLatestKey(owner), append([]byte(nil), value...))
+	// KeyValueWriter implementations own/copy Put inputs (Pebble batches,
+	// memorydb and blockbuffer all do). Avoid a redundant accessor-level value
+	// clone before the writer performs its required ownership copy.
+	return WriteStateAccountLatestByKey(db, stateAccountLatestKey(owner), value)
+}
+
+// WriteStateAccountLatestByKey writes an account-latest row using a physical
+// key already constructed by StateAccountLatestCommitmentKey or its append
+// variant. Commit paths use it to build all write keys in one arena.
+func WriteStateAccountLatestByKey(db ethdb.KeyValueWriter, physicalKey, value []byte) error {
+	return db.Put(physicalKey, value)
 }
 
 func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
-	value, err := db.Get(stateAccountLatestKey(owner))
+	value, err := readStateNoCopyCached(db, stateAccountLatestKey(owner))
 	if err != nil {
 		return nil, false, nil
 	}
@@ -26,7 +36,13 @@ func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]by
 }
 
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {
-	return db.Delete(stateAccountLatestKey(owner))
+	return DeleteStateAccountLatestByKey(db, stateAccountLatestKey(owner))
+}
+
+// DeleteStateAccountLatestByKey is the delete counterpart of
+// WriteStateAccountLatestByKey.
+func DeleteStateAccountLatestByKey(db ethdb.KeyValueWriter, physicalKey []byte) error {
+	return db.Delete(physicalKey)
 }
 
 func IterateStateAccountLatest(db ethdb.Iteratee, ownerPrefix []byte, fn func(StateAccountLatestRow) (bool, error)) error {

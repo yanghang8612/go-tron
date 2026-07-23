@@ -33,6 +33,26 @@ func newSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{subs: make(map[string]*wsSub)}
 }
 
+// eventDemand reports the event classes currently consumed by WebSocket
+// subscriptions. It deliberately does not expose the subscription map to the
+// FilterManager; notify takes its own later snapshot for delivery.
+func (sm *SubscriptionManager) eventDemand() (block, logs bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	for _, sub := range sm.subs {
+		switch sub.kind {
+		case "newHeads":
+			block = true
+		case "logs":
+			logs = true
+		}
+		if block && logs {
+			break
+		}
+	}
+	return block, logs
+}
+
 // notify is called by FilterManager.fanOut (after releasing fm.mu) for each new block.
 // It copies the relevant sub set under sm.mu, then sends to per-connection channels
 // without holding any lock.

@@ -24,11 +24,11 @@ import (
 // (linear scan over the shard) — the cap is small and the eviction path only
 // fires when capacity is full.
 //
-// Overhead: established negligible in the existing analysis (≤5k writes/s on
-// Nile sync × ~100 ns per shard.Lock+map op = 0.05% of one core). The atomic
-// `enabled` flag lets an operator disable the tracker at runtime via the
-// /debug/state-hotspots?enabled=false handler if a future workload changes
-// that.
+// The tracker is disabled by default because production profiling showed its
+// high-cardinality string keys retaining 25–35 MB after a forced GC during
+// mainnet sync. Operators can enable it temporarily through
+// /debug/state-hotspots?enabled=true, collect a sample, then disable/reset it.
+// The disabled commit-path cost is one atomic load and branch per mutation.
 type KVHotspotTracker struct {
 	enabled atomic.Bool
 	shards  [hotspotShardCount]hotspotShard
@@ -65,12 +65,12 @@ type KVHotspotEntry struct {
 // Activity returns the total mutation count (puts + deletes).
 func (e KVHotspotEntry) Activity() uint64 { return e.Puts + e.Deletes }
 
-func newKVHotspotTracker() *KVHotspotTracker {
+func newKVHotspotTracker(enabled bool) *KVHotspotTracker {
 	t := &KVHotspotTracker{}
 	for i := range t.shards {
 		t.shards[i].entries = make(map[string]*KVHotspotEntry)
 	}
-	t.enabled.Store(true)
+	t.enabled.Store(enabled)
 	return t
 }
 
@@ -247,7 +247,7 @@ func evictLowestActivity(m map[string]*KVHotspotEntry) {
 // diagnostic-only and never participates in consensus, so a singleton
 // avoids threading another dependency through state.StateDB / BlockChain /
 // debugapi.NewServer.
-var defaultKVHotspotTracker = newKVHotspotTracker()
+var defaultKVHotspotTracker = newKVHotspotTracker(false)
 
 // DefaultKVHotspotTracker returns the process singleton.
 func DefaultKVHotspotTracker() *KVHotspotTracker { return defaultKVHotspotTracker }

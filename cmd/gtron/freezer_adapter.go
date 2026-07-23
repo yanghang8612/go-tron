@@ -39,8 +39,8 @@ func (a *freezerChainSource) ReadTransactionInfosRaw(number uint64) []byte {
 	return rawdb.ReadTransactionInfosRaw(a.chain.DB(), number)
 }
 
-func (a *freezerChainSource) ReadBlockHashByNumber(number uint64) tcommon.Hash {
-	return rawdb.ReadBlockHashByNumber(a.chain.DB(), number)
+func (a *freezerChainSource) ReadBlockHash(_ uint64, blockRaw []byte) tcommon.Hash {
+	return rawdb.ReadBlockHashRaw(blockRaw)
 }
 
 func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) []byte {
