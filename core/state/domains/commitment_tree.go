@@ -231,27 +231,23 @@ func (b *BranchData) Encode() []byte {
 // uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
 // per-PutBranch allocations observed on Nile sync.
 func (b *BranchData) EncodeTo(dst []byte) []byte {
-	// Compute childMask.
+	// Compute the mask and exact wire length together. Leaf key lengths are
+	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
+	// each one over-allocates the immutable encoding retained by blockbuffer.
 	var mask uint16
-	for i := uint8(0); i < 16; i++ {
-		if b.children[i].present {
-			mask |= 1 << i
-		}
-	}
-
-	// Pre-compute required capacity for a single grow.
 	size := 2 // childMask
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
 		if !c.present {
 			continue
 		}
+		mask |= 1 << i
 		size++ // kind byte
 		if c.kind == kindHash {
 			size += common.HashLength
 		} else {
 			// Uvarint for keyLen + key bytes + valHash
-			size += binary.MaxVarintLen64 + len(c.leafKey) + common.HashLength
+			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey) + common.HashLength
 		}
 	}
 	if cap(dst)-len(dst) < size {
@@ -281,6 +277,15 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 		}
 	}
 	return dst
+}
+
+func uvarintEncodedLen(v uint64) int {
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
 }
 
 // Equal reports whether b and other represent the same branch node.

@@ -97,6 +97,22 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBranchDataEncodeAllocatesExactCapacity(t *testing.T) {
+	var b BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		keyLen := 1 << (nibble % 9)
+		b.SetLeafChild(nibble, bytes.Repeat([]byte{nibble}, keyLen), common.Hash{nibble})
+	}
+
+	encoded := b.Encode()
+	if cap(encoded) != len(encoded) {
+		t.Fatalf("encoded capacity = %d, want exact length %d", cap(encoded), len(encoded))
+	}
+	if _, err := DecodeBranchData(encoded); err != nil {
+		t.Fatalf("DecodeBranchData: %v", err)
+	}
+}
+
 func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	var source BranchData
 	source.SetLeafChild(4, []byte("borrow-me"), common.Hash{0xaa})
