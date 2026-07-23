@@ -2,7 +2,9 @@ package state
 
 import (
 	"bytes"
+	"fmt"
 	"math"
+	"reflect"
 	"testing"
 
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -11,6 +13,19 @@ import (
 )
 
 type stateAccountV2Reference StateAccountV2
+
+var stateAccountV2DecodeSink *StateAccountV2
+
+func decodeStateAccountV2Reference(data []byte) (*StateAccountV2, error) {
+	v := new(stateAccountV2Reference)
+	if err := rlp.DecodeBytes(data, v); err != nil {
+		return nil, err
+	}
+	if v.Version != StateAccountVersion {
+		return nil, fmt.Errorf("unsupported version")
+	}
+	return (*StateAccountV2)(v), nil
+}
 
 func TestStateAccountV2EncodeMatchesGenericRLP(t *testing.T) {
 	var nilValue *StateAccountV2
@@ -92,6 +107,105 @@ func TestStateAccountV2RoundTrip(t *testing.T) {
 		out.CodeHash != in.CodeHash {
 		t.Fatalf("round-trip mismatch:\n in=%+v\nout=%+v", in, out)
 	}
+}
+
+func TestStateAccountV2DirectDecodeMatchesGenericRLP(t *testing.T) {
+	var accountRoot, codeHash tcommon.Hash
+	for i := range accountRoot {
+		accountRoot[i] = byte(i)
+		codeHash[i] = byte(0xff - i)
+	}
+	protos := [][]byte{
+		nil,
+		{},
+		{0x00},
+		{0x7f},
+		{0x80},
+		bytes.Repeat([]byte{0x11}, 55),
+		bytes.Repeat([]byte{0x22}, 56),
+		bytes.Repeat([]byte{0x33}, 256),
+		bytes.Repeat([]byte{0x44}, 4096),
+	}
+	integers := []uint64{0, 1, 0x7f, 0x80, 0xff, 0x100, math.MaxUint64}
+	var validEncodings [][]byte
+	for i, accountProto := range protos {
+		value := &StateAccountV2{
+			Version:             StateAccountVersion,
+			AccountProto:        accountProto,
+			AccountKVRoot:       accountRoot,
+			AccountKVGeneration: integers[i%len(integers)],
+			CodeHash:            codeHash,
+		}
+		encoded, err := value.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		validEncodings = append(validEncodings, encoded)
+		got, gotErr := DecodeStateAccountV2(encoded)
+		want, wantErr := decodeStateAccountV2Reference(encoded)
+		if gotErr != nil || wantErr != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("valid case %d mismatch: got=(%+v,%v) want=(%+v,%v)", i, got, gotErr, want, wantErr)
+		}
+	}
+
+	// Compare acceptance and decoded values against the former generic decoder
+	// for truncations, trailing data, and byte-level corruptions. Some mutations
+	// remain valid RLP; those must decode to exactly the same fields.
+	malformed := [][]byte{nil, {}, {0xc0}, {0x80}}
+	for _, encoded := range validEncodings {
+		for end := 0; end < len(encoded); end++ {
+			malformed = append(malformed, append([]byte(nil), encoded[:end]...))
+		}
+		withTrailing := append(append([]byte(nil), encoded...), 0x00)
+		malformed = append(malformed, withTrailing)
+		for i := range encoded {
+			mutated := append([]byte(nil), encoded...)
+			mutated[i] ^= 0x80
+			malformed = append(malformed, mutated)
+		}
+	}
+	for i, encoded := range malformed {
+		got, gotErr := DecodeStateAccountV2(encoded)
+		want, wantErr := decodeStateAccountV2Reference(encoded)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("corpus case %d acceptance mismatch for %x: got=%v want=%v", i, encoded, gotErr, wantErr)
+		}
+		if gotErr == nil && !reflect.DeepEqual(got, want) {
+			t.Fatalf("corpus case %d value mismatch for %x: got=%+v want=%+v", i, encoded, got, want)
+		}
+	}
+}
+
+func BenchmarkStateAccountV2Decode(b *testing.B) {
+	value := &StateAccountV2{
+		Version:             StateAccountVersion,
+		AccountProto:        bytes.Repeat([]byte{0x5a}, 512),
+		AccountKVRoot:       tcommon.Hash{0x11, 0x22},
+		AccountKVGeneration: 7,
+		CodeHash:            tcommon.Hash{0x33, 0x44},
+	}
+	encoded, err := value.Encode()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			stateAccountV2DecodeSink, err = DecodeStateAccountV2(encoded)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("generic-reference", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			stateAccountV2DecodeSink, err = decodeStateAccountV2Reference(encoded)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestStateAccountV2Deterministic(t *testing.T) {

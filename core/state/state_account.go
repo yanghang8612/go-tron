@@ -102,12 +102,52 @@ func encodedSizeLen(size int) int {
 
 // DecodeStateAccountV2 parses a flat account-latest envelope and enforces the version.
 func DecodeStateAccountV2(data []byte) (*StateAccountV2, error) {
-	v := new(StateAccountV2)
-	if err := rlp.DecodeBytes(data, v); err != nil {
+	content, trailing, err := rlp.SplitList(data)
+	if err != nil {
 		return nil, fmt.Errorf("decode StateAccountV2: %w", err)
 	}
-	if v.Version != StateAccountVersion {
-		return nil, fmt.Errorf("unsupported StateAccountV2 version %d (want %d)", v.Version, StateAccountVersion)
+	if len(trailing) != 0 {
+		return nil, fmt.Errorf("decode StateAccountV2: trailing bytes")
 	}
+	version, content, err := rlp.SplitUint64(content)
+	if err != nil {
+		return nil, fmt.Errorf("decode StateAccountV2 version: %w", err)
+	}
+	accountProto, content, err := rlp.SplitString(content)
+	if err != nil {
+		return nil, fmt.Errorf("decode StateAccountV2 account: %w", err)
+	}
+	accountKVRoot, content, err := rlp.SplitString(content)
+	if err != nil {
+		return nil, fmt.Errorf("decode StateAccountV2 account root: %w", err)
+	}
+	if len(accountKVRoot) != tcommon.HashLength {
+		return nil, fmt.Errorf("decode StateAccountV2 account root: got %d bytes, want %d", len(accountKVRoot), tcommon.HashLength)
+	}
+	accountKVGeneration, content, err := rlp.SplitUint64(content)
+	if err != nil {
+		return nil, fmt.Errorf("decode StateAccountV2 generation: %w", err)
+	}
+	codeHash, content, err := rlp.SplitString(content)
+	if err != nil {
+		return nil, fmt.Errorf("decode StateAccountV2 code hash: %w", err)
+	}
+	if len(codeHash) != tcommon.HashLength {
+		return nil, fmt.Errorf("decode StateAccountV2 code hash: got %d bytes, want %d", len(codeHash), tcommon.HashLength)
+	}
+	if len(content) != 0 {
+		return nil, fmt.Errorf("decode StateAccountV2: too many list elements")
+	}
+	if version != StateAccountVersion {
+		return nil, fmt.Errorf("unsupported StateAccountV2 version %d (want %d)", version, StateAccountVersion)
+	}
+	v := &StateAccountV2{
+		Version:             version,
+		AccountProto:        make([]byte, len(accountProto)),
+		AccountKVGeneration: accountKVGeneration,
+	}
+	copy(v.AccountProto, accountProto)
+	copy(v.AccountKVRoot[:], accountKVRoot)
+	copy(v.CodeHash[:], codeHash)
 	return v, nil
 }
