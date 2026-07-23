@@ -106,6 +106,18 @@ func (e transferValidationError) Is(target error) bool {
 	return target == ErrTransferFailed
 }
 
+type tokenTransferValidationError struct {
+	reason string
+}
+
+func (e tokenTransferValidationError) Error() string {
+	return "transfer trc10 failed: " + e.reason
+}
+
+func (e tokenTransferValidationError) Is(target error) bool {
+	return target == ErrTokenTransferFailed
+}
+
 // selfDestructTransferValidationError mirrors java-tron's TransferException
 // after ALLOW_TVM_CONSTANTINOPLE. Unlike the legacy bytecode exception, this
 // classifies as TRANSFER_FAILED and preserves the remaining transaction energy.

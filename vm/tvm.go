@@ -344,6 +344,12 @@ func (tvm *TVM) validateAndPrepareTRXEndowment(caller, addr tcommon.Address, val
 			reason: "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract.",
 		}
 	}
+	if tvm.StateDB.GetBalance(addr) > math.MaxInt64-value {
+		if !tvm.cfg.Constantinople {
+			return ErrValidateForSmartContract
+		}
+		return transferValidationError{reason: "long overflow"}
+	}
 	return nil
 }
 
@@ -1019,6 +1025,14 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			}
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
+		}
+		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil && tvm.StateDB.GetTRC10Balance(addr, tokenID) > math.MaxInt64-tokenValue {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			if !tvm.cfg.Constantinople {
+				return nil, 0, ErrValidateForSmartContract
+			}
+			return nil, energy, tokenTransferValidationError{reason: "long overflow"}
 		}
 		if err := tvm.StateDB.SubTRC10Balance(caller, tokenID, tokenValue); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
