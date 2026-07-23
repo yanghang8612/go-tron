@@ -10,6 +10,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+var benchmarkTransferContract *contractpb.TransferContract
+
 func makeTransferTx(from, to byte, amount int64) *types.Transaction {
 	fromAddr := makeTestAddr(from)
 	toAddr := makeTestAddr(to)
@@ -46,6 +48,65 @@ func TestTransferValidate_Success(t *testing.T) {
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate should pass: %v", err)
 	}
+}
+
+func TestTransferActuatorContractCacheTracksTransaction(t *testing.T) {
+	act := &TransferActuator{}
+	firstCtx := &Context{Tx: makeTransferTx(1, 2, 11)}
+	first, err := act.getContract(firstCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := act.getContract(firstCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first {
+		t.Fatal("same transaction was decoded twice")
+	}
+
+	secondCtx := &Context{Tx: makeTransferTx(1, 2, 22)}
+	second, err := act.getContract(secondCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first || second.Amount != 22 {
+		t.Fatalf("cache did not follow replacement transaction: same=%v amount=%d", second == first, second.Amount)
+	}
+}
+
+func BenchmarkTransferActuatorContractDecode(b *testing.B) {
+	ctx := &Context{Tx: makeTransferTx(1, 2, 11)}
+	decode := func() *contractpb.TransferContract {
+		contract := ctx.Tx.Contract()
+		decoded := new(contractpb.TransferContract)
+		if err := contract.Parameter.UnmarshalTo(decoded); err != nil {
+			b.Fatal(err)
+		}
+		return decoded
+	}
+	b.Run("decode-twice", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkTransferContract = decode()
+			benchmarkTransferContract = decode()
+		}
+	})
+	b.Run("validate-execute-cache", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			act := new(TransferActuator)
+			var err error
+			benchmarkTransferContract, err = act.getContract(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkTransferContract, err = act.getContract(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestTransferValidate_InsufficientBalance(t *testing.T) {
