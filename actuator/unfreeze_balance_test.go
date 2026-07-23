@@ -285,3 +285,77 @@ func TestUnfreezeBalanceExecute_Delegated(t *testing.T) {
 		t.Fatalf("acquired delegated frozen bandwidth: want 0, got %d", got)
 	}
 }
+
+// TestUnfreezeBalanceValidate_DelegatedEnergyExpiryGatedByMultiSign locks in
+// java-tron's historical DelegatedResourceCapsule behavior: before the
+// ALLOW_MULTI_SIGN proposal, delegated ENERGY unfreeze validation reads the
+// BANDWIDTH expiry; after activation it reads the ENERGY expiry.
+func TestUnfreezeBalanceValidate_DelegatedEnergyExpiryGatedByMultiSign(t *testing.T) {
+	tests := []struct {
+		name            string
+		allowMultiSign  bool
+		bandwidthExpiry int64
+		energyExpiry    int64
+		wantErr         bool
+	}{
+		{
+			name:            "before proposal uses expired bandwidth timestamp",
+			bandwidthExpiry: 500_000,
+			energyExpiry:    2_000_000,
+		},
+		{
+			name:            "before proposal rejects future bandwidth timestamp",
+			bandwidthExpiry: 2_000_000,
+			energyExpiry:    500_000,
+			wantErr:         true,
+		},
+		{
+			name:            "after proposal rejects future energy timestamp",
+			allowMultiSign:  true,
+			bandwidthExpiry: 500_000,
+			energyExpiry:    2_000_000,
+			wantErr:         true,
+		},
+		{
+			name:            "after proposal uses expired energy timestamp",
+			allowMultiSign:  true,
+			bandwidthExpiry: 2_000_000,
+			energyExpiry:    500_000,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ownerByte := byte(40 + i*2)
+			receiverByte := ownerByte + 1
+			owner := makeTestAddr(ownerByte)
+			receiver := makeTestAddr(receiverByte)
+			statedb := setupStateDB(t)
+			seedAccount(statedb, owner, 10_000_000)
+			seedAccount(statedb, receiver, 0)
+
+			tx := makeUnfreezeBalanceTx(ownerByte, corepb.ResourceCode_ENERGY, &receiverByte)
+			ctx := setupContext(t, statedb, tx)
+			ctx.DynProps.SetAllowDelegateResource(true)
+			ctx.DynProps.SetAllowMultiSign(tt.allowMultiSign)
+			if err := statedb.WriteDelegatedResourceLegacy(owner, receiver, &rawdb.DelegatedResource{
+				From:                   owner,
+				To:                     receiver,
+				FrozenBalanceForEnergy: 1_000_000,
+				ExpireTimeForBandwidth: tt.bandwidthExpiry,
+				ExpireTimeForEnergy:    tt.energyExpiry,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			err := (&UnfreezeBalanceActuator{}).Validate(ctx)
+			if tt.wantErr {
+				if err == nil || err.Error() != "It's not time to unfreeze." {
+					t.Fatalf("Validate error = %v, want expiry error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+		})
+	}
+}

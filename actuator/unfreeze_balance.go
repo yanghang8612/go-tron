@@ -100,7 +100,14 @@ func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {
 			if dr.FrozenBalanceForEnergy <= 0 {
 				return errors.New("no delegated frozen energy")
 			}
-			if dr.ExpireTimeForEnergy > ctx.PrevBlockTime {
+			// java-tron's DelegatedResourceCapsule historically returned the
+			// bandwidth expiry for delegated energy until ALLOW_MULTI_SIGN was
+			// enabled. Preserve that proposal-gated consensus behavior.
+			expireTime := dr.ExpireTimeForEnergy
+			if !ctx.DynProps.AllowMultiSign() {
+				expireTime = dr.ExpireTimeForBandwidth
+			}
+			if expireTime > ctx.PrevBlockTime {
 				return errors.New("It's not time to unfreeze.")
 			}
 		default:
