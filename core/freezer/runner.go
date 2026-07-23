@@ -187,6 +187,38 @@ type ChainSource interface {
 	ReadBlockStateRootRaw(hash tcommon.Hash) []byte
 }
 
+// RawViewSource is the optional zero-intermediate-copy extension implemented
+// by production's Pebble-backed chain adapter. Each callback runs
+// synchronously while the underlying value handle is valid; callers must not
+// retain or mutate raw after it returns. ChainSource's slice-returning methods
+// remain the compatibility fallback for tests and alternate stores.
+type RawViewSource interface {
+	ViewBlockRaw(number uint64, fn func(raw []byte) error) (found bool, err error)
+	ViewTransactionInfosRaw(number uint64, fn func(raw []byte) error) (found bool, err error)
+}
+
+func viewBlockRaw(chain ChainSource, number uint64, fn func([]byte) error) (bool, error) {
+	if viewer, ok := chain.(RawViewSource); ok {
+		return viewer.ViewBlockRaw(number, fn)
+	}
+	raw := chain.ReadBlockRaw(number)
+	if raw == nil {
+		return false, nil
+	}
+	return true, fn(raw)
+}
+
+func viewTransactionInfosRaw(chain ChainSource, number uint64, fn func([]byte) error) (bool, error) {
+	if viewer, ok := chain.(RawViewSource); ok {
+		return viewer.ViewTransactionInfosRaw(number, fn)
+	}
+	raw := chain.ReadTransactionInfosRaw(number)
+	if raw == nil {
+		return false, nil
+	}
+	return true, fn(raw)
+}
+
 // FreezerStore is the writer surface the runner needs from the freezer.
 // Implemented by *freezer.Freezer (via rawdb.AncientWriter) — abstracted
 // for the same testability reason as ChainSource: unit tests substitute
@@ -399,7 +431,15 @@ func (r *Runner) OnePass() (uint64, error) {
 	// expensive DeleteRange+Compact only runs when a crash actually left
 	// rows behind; the clean-restart path pays a single Get.
 	if freezeFromN > 0 && !r.reconciled.Swap(true) {
-		if len(r.chain.ReadBlockRaw(freezeFromN-1)) > 0 {
+		var leftover bool
+		_, viewErr := viewBlockRaw(r.chain, freezeFromN-1, func(raw []byte) error {
+			leftover = len(raw) > 0
+			return nil
+		})
+		if viewErr != nil {
+			return 0, viewErr
+		}
+		if leftover {
 			leftoverHi := freezeFromN - 1
 			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
 				return 0, err
@@ -433,15 +473,34 @@ func (r *Runner) OnePass() (uint64, error) {
 	// rows in one table.
 	if _, err := r.freezer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		for n := freezeFromN; n < capExclusive; n++ {
-			blockRaw := r.chain.ReadBlockRaw(n)
-			if len(blockRaw) == 0 {
+			var hash tcommon.Hash
+			found, err := viewBlockRaw(r.chain, n, func(blockRaw []byte) error {
+				if len(blockRaw) == 0 {
+					return errMissingBlock(n)
+				}
+				if err := op.AppendRaw(rawdbAncientBlocks, n, blockRaw); err != nil {
+					return err
+				}
+				hash = r.chain.ReadBlockHash(n, blockRaw)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if !found {
 				return errMissingBlock(n)
 			}
-			if err := op.AppendRaw(rawdbAncientBlocks, n, blockRaw); err != nil {
+
+			found, err = viewTransactionInfosRaw(r.chain, n, func(txInfosRaw []byte) error {
+				return op.AppendRaw(rawdbAncientTxInfos, n, txInfosRaw)
+			})
+			if err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdbAncientTxInfos, n, r.chain.ReadTransactionInfosRaw(n)); err != nil {
-				return err
+			if !found {
+				if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
+					return err
+				}
 			}
 			// State-root row is hash-keyed; derive it from the block bytes already
 			// loaded above instead of reading and decoding the block a second time.
@@ -451,7 +510,6 @@ func (r *Runner) OnePass() (uint64, error) {
 			// `bodies` / `tx_infos`. Empty entries decode back to the
 			// zero hash via the slice-2 read path, which matches the
 			// pre-freezer Pebble miss → zero-hash behavior.
-			hash := r.chain.ReadBlockHash(n, blockRaw)
 			stateRoot := r.chain.ReadBlockStateRootRaw(hash)
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
