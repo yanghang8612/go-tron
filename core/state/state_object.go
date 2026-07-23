@@ -40,7 +40,13 @@ type stateObject struct {
 	// previous transaction's post-image as its pre-image without sorting all
 	// protobuf map fields again.
 	accountProto []byte
-	dirty        bool
+	// accountProtoLoaded marks bytes borrowed from the flat account envelope at
+	// first load. They are useful as a same-block journal pre-image, but an
+	// untouched read-only account must not retain a second full representation
+	// for the rest of a long range import. StateDB clears still-marked entries at
+	// the successful commit boundary; any mutation invalidates the marker.
+	accountProtoLoaded bool
+	dirty              bool
 	// accountDirty tracks protobuf-account envelope changes separately from
 	// rooted KV/storage/code changes so net-zero KV overlays can skip account
 	// trie updates at commit.
@@ -87,12 +93,14 @@ func (s *stateObject) deterministicAccountProto() ([]byte, error) {
 		return nil, err
 	}
 	s.accountProto = data
+	s.accountProtoLoaded = false
 	return data, nil
 }
 
 func (s *stateObject) invalidateAccountProto() {
 	if s != nil {
 		s.accountProto = nil
+		s.accountProtoLoaded = false
 	}
 }
 

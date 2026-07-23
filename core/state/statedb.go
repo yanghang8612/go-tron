@@ -33,6 +33,13 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// loadedAccountProtoObjects tracks objects whose original flat-envelope
+	// AccountProto is retained for a possible same-block journal pre-image.
+	// Successful commit releases bytes that were never consumed by a mutation,
+	// keeping this optimization bounded to one block without scanning the whole
+	// range-accumulated stateObjects map.
+	loadedAccountProtoObjects []*stateObject
+
 	// dirtyWitnesses tracks addresses whose VoteCount or URL changed in
 	// the current block. FlushWitnesses iterates this set instead of the
 	// full witnesses map so no-op blocks (the common case — no VoteWitness
@@ -3218,6 +3225,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.capturedFold = &CapturedCommit{updates: touchUpdates, repair: s.commitmentRepair()}
 		s.deferFold = false
 		s.resetJournal()
+		s.releaseUnusedLoadedAccountProtos()
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -3230,6 +3238,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	}
 	s.originRoot = ethcommon.Hash(root)
 	s.resetJournal()
+	s.releaseUnusedLoadedAccountProtos()
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil
@@ -3537,13 +3546,34 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 		return nil
 	}
 	obj := newStateObject(addr, acc)
+	// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
+	// a potential journal pre-image instead of immediately re-marshaling the
+	// account on its first mutation. A successful block commit releases this
+	// copy if the account stayed read-only.
+	obj.accountProto = envelope.AccountProto
+	obj.accountProtoLoaded = true
 	obj.accountKVRoot = envelope.AccountKVRoot
 	obj.accountKVGeneration = envelope.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
 	obj.codeHash = envelope.CodeHash
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
+	s.loadedAccountProtoObjects = append(s.loadedAccountProtoObjects, obj)
 	return obj
+}
+
+// releaseUnusedLoadedAccountProtos drops envelope bytes retained only to avoid
+// a same-block pre-image marshal. Mutated accounts clear accountProtoLoaded as
+// they journal/invalidate and retain their newly encoded post-image normally.
+func (s *StateDB) releaseUnusedLoadedAccountProtos() {
+	for _, obj := range s.loadedAccountProtoObjects {
+		if obj != nil && obj.accountProtoLoaded {
+			obj.accountProto = nil
+			obj.accountProtoLoaded = false
+		}
+	}
+	clear(s.loadedAccountProtoObjects)
+	s.loadedAccountProtoObjects = s.loadedAccountProtoObjects[:0]
 }
 
 // journalAccount records the current state of an account for revert.
@@ -3561,7 +3591,9 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	}
 	var prev []byte
 	var prevLatest []byte
+	var prevProtoLoaded bool
 	if obj != nil && obj.account != nil {
+		prevProtoLoaded = obj.accountProtoLoaded
 		var err error
 		prev, err = obj.deterministicAccountProto()
 		if err == nil && !obj.deleted && !obj.selfDestructed {
@@ -3577,6 +3609,7 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 		address:          addr,
 		prev:             prev,
 		prevLatest:       prevLatest,
+		prevProtoLoaded:  prevProtoLoaded,
 		prevDeleted:      obj != nil && obj.deleted,
 		prevCreated:      obj != nil && obj.created,
 		prevSelfDestruct: obj != nil && obj.selfDestructed,
@@ -3622,6 +3655,7 @@ func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) 
 	change := acquireAccountScalarChange()
 	change.address = addr
 	change.prevProto = obj.accountProto
+	change.prevProtoLoaded = obj.accountProtoLoaded
 	change.balance = pb.Balance
 	change.allowance = pb.Allowance
 	change.latestWithdrawTime = pb.LatestWithdrawTime

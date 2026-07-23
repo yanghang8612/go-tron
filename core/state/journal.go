@@ -24,6 +24,7 @@ type accountChange struct {
 	address          tcommon.Address
 	prev             []byte // serialized Account protobuf before mutation, nil if account didn't exist
 	prevLatest       []byte // encoded flat account-latest envelope before mutation
+	prevProtoLoaded  bool   // prev came directly from this block's durable envelope load
 	prevDeleted      bool
 	prevCreated      bool
 	prevSelfDestruct bool
@@ -39,6 +40,9 @@ type accountChange struct {
 type accountScalarChange struct {
 	address   tcommon.Address
 	prevProto []byte
+	// prevProtoLoaded restores the one-block retention marker when a mutation
+	// reverts back to the original durable envelope bytes.
+	prevProtoLoaded bool
 
 	balance            int64
 	allowance          int64
@@ -102,6 +106,7 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 		pb.AccountResource = nil
 	}
 	obj.accountProto = e.prevProto
+	obj.accountProtoLoaded = e.prevProtoLoaded
 	obj.dirty = true
 	obj.accountDirty = true
 }
@@ -126,6 +131,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// mutation. The journal owns the backing slice for as long as the object
 		// can reference it, including after the entry is removed on revert.
 		obj.accountProto = e.prev
+		obj.accountProtoLoaded = e.prevProtoLoaded
 		obj.dirty = true
 		obj.accountDirty = true
 		obj.deleted = e.prevDeleted
