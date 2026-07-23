@@ -223,7 +223,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	// released at function exit after the flush.
 	var counts [maxFoldNibbles]int
 	for i := range ops {
-		counts[ops[i].path[0]]++
+		counts[pathNibble(ops[i].path, 0)]++
 	}
 	var starts [maxFoldNibbles]int
 	for i := 1; i < maxFoldNibbles; i++ {
@@ -234,7 +234,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	grouped := *groupedP
 	heads := starts
 	for i := range ops {
-		nb := ops[i].path[0]
+		nb := pathNibble(ops[i].path, 0)
 		grouped[heads[nb]] = ops[i]
 		heads[nb]++
 	}

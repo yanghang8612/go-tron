@@ -397,15 +397,15 @@ func TestCommitmentTrie_ExtensionLikeChain(t *testing.T) {
 // least minShared leading nibbles.
 func findSharedPrefixPair(t *testing.T, minShared int) (ka, kb []byte, shared int) {
 	t.Helper()
-	seen := make(map[[6]byte][]byte) // first 6 nibbles → key, for a quick bucket
+	seen := make(map[[3]byte][]byte) // first 6 nibbles → key, for a quick bucket
 	for i := 0; i < 1<<24; i++ {
 		k := []byte{byte(i), byte(i >> 8), byte(i >> 16)}
 		p := keyPath(k)
-		var bucket [6]byte
-		copy(bucket[:], p[:6])
+		var bucket [3]byte
+		copy(bucket[:], p[:3])
 		if prev, ok := seen[bucket]; ok {
 			pp := keyPath(prev)
-			s := commonNibbles(pp[:], p[:])
+			s := commonNibbles(pp, p)
 			if s >= minShared {
 				return append([]byte(nil), prev...), k, s
 			}
@@ -416,9 +416,9 @@ func findSharedPrefixPair(t *testing.T, minShared int) (ka, kb []byte, shared in
 	return nil, nil, 0
 }
 
-func commonNibbles(a, b []byte) int {
+func commonNibbles(a, b common.Hash) int {
 	n := 0
-	for n < len(a) && n < len(b) && a[n] == b[n] {
+	for n < pathLen && pathNibble(a, n) == pathNibble(b, n) {
 		n++
 	}
 	return n

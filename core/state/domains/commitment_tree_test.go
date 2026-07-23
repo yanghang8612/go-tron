@@ -28,13 +28,17 @@ func TestCommitmentHashFastPathsMatchReference(t *testing.T) {
 	binary.BigEndian.PutUint64(valueLen[:], uint64(len(value)))
 
 	pathDigest := referenceLegacyKeccak(keyLen[:], key)
-	var wantPath [pathLen]byte
-	for i, b := range pathDigest {
-		wantPath[2*i] = b >> 4
-		wantPath[2*i+1] = b & 0x0f
+	if got := keyPath(key); got != pathDigest {
+		t.Fatalf("keyPath = %x, want %x", got, pathDigest)
 	}
-	if got := keyPath(key); got != wantPath {
-		t.Fatalf("keyPath = %x, want %x", got, wantPath)
+	for depth := 0; depth < pathLen; depth++ {
+		want := pathDigest[depth>>1] >> 4
+		if depth&1 != 0 {
+			want = pathDigest[depth>>1] & 0x0f
+		}
+		if got := pathNibble(pathDigest, depth); got != want {
+			t.Fatalf("pathNibble(%d) = %x, want %x", depth, got, want)
+		}
 	}
 
 	wantLeaf := referenceLegacyKeccak([]byte{0x00}, keyLen[:], key, valueLen[:], value)

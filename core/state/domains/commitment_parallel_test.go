@@ -86,8 +86,7 @@ func siblingFlushOps(nibbles ...uint8) []op {
 				key:     []byte{0xff, nb, child},
 				valHash: common.Hash{nb + 1, child + 1},
 			}
-			o.path[0] = nb
-			o.path[1] = child
+			o.path[0] = nb<<4 | child
 			ops = append(ops, o)
 		}
 	}
@@ -451,7 +450,7 @@ func TestParallelFoldMatchesSequential_EdgeCases(t *testing.T) {
 		for len(batch) < 200 {
 			k := make([]byte, 32)
 			_, _ = rng.Read(k)
-			if keyPath(k)[0] == 0x0a { // confine to nibble 0xa
+			if pathNibble(keyPath(k), 0) == 0x0a { // confine to nibble 0xa
 				v := make([]byte, 8)
 				binary.BigEndian.PutUint64(v, rng.Uint64())
 				batch = append(batch, put(k, v))
