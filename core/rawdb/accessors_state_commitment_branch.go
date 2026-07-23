@@ -25,6 +25,10 @@ type keyPartsOwnedValueWriter interface {
 	PutKeyPartsOwnedValue(first, second, value []byte) error
 }
 
+type keyPartsStringOwnedValueWriter interface {
+	PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error
+}
+
 // SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
 // encoded branch value directly. Callers use this to choose between allocating
 // the final immutable encoding and reusing a scratch buffer for copying stores.
@@ -57,6 +61,17 @@ func WriteCommitmentBranchOwned(db ethdb.KeyValueWriter, prefix []byte, encoded 
 		return writer.PutKeyPartsOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
 	}
 	return WriteCommitmentBranch(db, prefix, encoded)
+}
+
+// WriteCommitmentBranchOwnedString is the batch-flush form of
+// WriteCommitmentBranchOwned. Layered writers can join the already-immutable
+// string prefix directly into their map key; generic writers retain the normal
+// []byte API and copy semantics through the fallback.
+func WriteCommitmentBranchOwnedString(db ethdb.KeyValueWriter, prefix string, encoded []byte) error {
+	if writer, ok := db.(keyPartsStringOwnedValueWriter); ok {
+		return writer.PutKeyPartsStringOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+	}
+	return WriteCommitmentBranchOwned(db, []byte(prefix), encoded)
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.

@@ -1172,6 +1172,21 @@ func (b *Buffer) PutKeyPartsOwnedValue(first, second, value []byte) error {
 	return nil
 }
 
+// PutKeyPartsStringOwnedValue is PutKeyPartsOwnedValue with an immutable string
+// suffix. Commitment sibling batches already index final branches by string;
+// accepting it directly avoids allocating []byte only to copy it into the
+// layer's physical string key.
+func (b *Buffer) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsStringOwnedValue called with no active layer")
+	}
+	b.putIntoKeyPartsStringOwnedValue(active, first, second, value)
+	return nil
+}
+
 // PutStateKVLatest implements rawdb's structured flat-latest writer path for
 // the synchronous pipeline.
 func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {

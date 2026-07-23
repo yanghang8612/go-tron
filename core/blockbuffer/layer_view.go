@@ -69,6 +69,14 @@ func joinKeyParts(first, second []byte) string {
 	return key.String()
 }
 
+func joinKeyPartsString(first []byte, second string) string {
+	var key strings.Builder
+	key.Grow(len(first) + len(second))
+	_, _ = key.Write(first)
+	_, _ = key.WriteString(second)
+	return key.String()
+}
+
 // appendStateKVLatestKey assembles rawdb's flat-latest physical key into dst.
 // The schema prefix is passed by rawdb through a structural interface so this
 // package does not depend on rawdb (and therefore does not create a cycle).
@@ -103,6 +111,10 @@ func (b *Buffer) putIntoKeyParts(l *layer, first, second, value []byte) {
 
 func (b *Buffer) putIntoKeyPartsOwnedValue(l *layer, first, second, value []byte) {
 	b.putIntoStringOwnedValue(l, joinKeyParts(first, second), value)
+}
+
+func (b *Buffer) putIntoKeyPartsStringOwnedValue(l *layer, first []byte, second string, value []byte) {
+	b.putIntoStringOwnedValue(l, joinKeyPartsString(first, second), value)
 }
 
 func (b *Buffer) putIntoStateKVLatest(l *layer, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) {
@@ -181,6 +193,14 @@ func (v *LayerView) PutKeyParts(first, second, value []byte) error {
 // immutable value. The caller transfers value ownership to the layer.
 func (v *LayerView) PutKeyPartsOwnedValue(first, second, value []byte) error {
 	v.b.putIntoKeyPartsOwnedValue(v.l, first, second, value)
+	return nil
+}
+
+// PutKeyPartsStringOwnedValue is the branch-batch counterpart of
+// PutKeyPartsOwnedValue. The caller already owns the logical suffix as an
+// immutable map string, so joining it directly avoids a temporary []byte.
+func (v *LayerView) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
+	v.b.putIntoKeyPartsStringOwnedValue(v.l, first, second, value)
 	return nil
 }
 

@@ -96,6 +96,13 @@ type concurrentSiblingFlushStore interface {
 	concurrentSiblingFlushSafe() bool
 }
 
+// branchBatchStore accepts the sorted final writes from one sibling fold. The
+// rawdb adapter uses this seam to arena-pack immutable encodings; generic test
+// stores keep the ordinary one-PutBranch-at-a-time path.
+type branchBatchStore interface {
+	putBranchesSorted(keys []string, branches map[string]*BranchData) error
+}
+
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
 	return &bufferedBranchStore{base: base}
 }
@@ -185,6 +192,9 @@ func (s *bufferedBranchStore) flush(base branchStore) error {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		if batch, ok := base.(branchBatchStore); ok {
+			return batch.putBranchesSorted(keys, s.puts)
+		}
 		for _, k := range keys {
 			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
 				return err

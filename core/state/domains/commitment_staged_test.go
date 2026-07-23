@@ -4,9 +4,42 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+func TestRawdbBranchStoreBatchRoundTrip(t *testing.T) {
+	buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+	buffer.BeginBlock(common.Hash{1}, 1)
+	handle, ok := buffer.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	store := newRawdbBranchStore(buffer.ViewLayer(handle))
+
+	var first, second BranchData
+	first.SetHashChild(1, common.Hash{0x11})
+	second.SetLeafChild(2, []byte("stable-leaf"), common.Hash{0x22})
+	branches := map[string]*BranchData{
+		string([]byte{0x01}):       &first,
+		string([]byte{0x02, 0x03}): &second,
+	}
+	keys := []string{string([]byte{0x01}), string([]byte{0x02, 0x03})}
+	if err := store.putBranchesSorted(keys, branches); err != nil {
+		t.Fatalf("put branch batch: %v", err)
+	}
+
+	for _, key := range keys {
+		got, found, err := store.GetBranch([]byte(key))
+		if err != nil || !found {
+			t.Fatalf("GetBranch(%x) = found %v err %v", key, found, err)
+		}
+		if !got.Equal(*branches[key]) {
+			t.Fatalf("GetBranch(%x) differs from input", key)
+		}
+	}
+}
 
 // TestRawdbBranchStoreRoundTrip pins the rawdb-backed branchStore adapter:
 // PutBranch persists an encoded BranchData row, GetBranch decodes it back, and

@@ -22,11 +22,19 @@ type keyPartsProbeWriter struct {
 
 type ownedKeyPartsProbeWriter struct {
 	keyPartsProbeWriter
-	ownedCalls int
+	ownedCalls       int
+	stringOwnedCalls int
 }
 
 func (w *ownedKeyPartsProbeWriter) PutKeyPartsOwnedValue(first, second, value []byte) error {
 	w.ownedCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	w.value = value
+	return nil
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
+	w.stringOwnedCalls++
 	w.key = append(append(w.key[:0], first...), second...)
 	w.value = value
 	return nil
@@ -88,6 +96,22 @@ func TestCommitmentBranchOwnedValueUsesTransferWriter(t *testing.T) {
 	}
 	if &w.value[0] != &value[0] {
 		t.Fatal("owned commitment writer copied the transferred value")
+	}
+}
+
+func TestCommitmentBranchOwnedStringUsesTransferWriter(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	prefix := string([]byte{1, 2, 3, 4})
+	value := []byte{5, 6, 7}
+	wantKey := commitmentBranchKey([]byte(prefix))
+	if err := WriteCommitmentBranchOwnedString(w, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	if w.stringOwnedCalls != 1 || w.ownedCalls != 0 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
+		t.Fatalf("string-owned Put = string %d owned %d regular %d key %x value %x, want 1/0/0/%x/%x", w.stringOwnedCalls, w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
+	}
+	if &w.value[0] != &value[0] {
+		t.Fatal("string-owned commitment writer copied the transferred value")
 	}
 }
 

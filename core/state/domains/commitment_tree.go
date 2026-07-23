@@ -226,14 +226,12 @@ func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
-// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
-// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
-// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
-// per-PutBranch allocations observed on Nile sync.
-func (b *BranchData) EncodeTo(dst []byte) []byte {
-	// Compute the mask and exact wire length together. Leaf key lengths are
-	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
-	// each one over-allocates the immutable encoding retained by blockbuffer.
+func (b *BranchData) encodedSize() int {
+	_, size := b.encodingLayout()
+	return size
+}
+
+func (b *BranchData) encodingLayout() (uint16, int) {
 	var mask uint16
 	size := 2 // childMask
 	for i := uint8(0); i < 16; i++ {
@@ -246,10 +244,22 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 		if c.kind == kindHash {
 			size += common.HashLength
 		} else {
-			// Uvarint for keyLen + key bytes + valHash
+			// Uvarint for keyLen + key bytes + valHash.
 			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey) + common.HashLength
 		}
 	}
+	return mask, size
+}
+
+// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
+// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
+// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
+// per-PutBranch allocations observed on Nile sync.
+func (b *BranchData) EncodeTo(dst []byte) []byte {
+	// Compute the mask and exact wire length together. Leaf key lengths are
+	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
+	// each one over-allocates the immutable encoding retained by blockbuffer.
+	mask, size := b.encodingLayout()
 	if cap(dst)-len(dst) < size {
 		grown := make([]byte, len(dst), len(dst)+size)
 		copy(grown, dst)
