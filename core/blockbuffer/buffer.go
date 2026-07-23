@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -364,6 +365,24 @@ func (b *bufferBatch) PutOwnedValue(key, value []byte) error {
 	return nil
 }
 
+// PutOwnedKeyValue retains a freshly constructed immutable key and value.
+// The account-latest commit path builds all physical keys in one exact-size
+// arena and transfers that arena to the batch, so converting the slices to
+// strings without copying avoids one allocation per updated account. The
+// string keeps the arena alive for as long as an operation or layer needs it.
+func (b *bufferBatch) PutOwnedKeyValue(key, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	var k string
+	if len(key) != 0 {
+		k = unsafe.String(unsafe.SliceData(key), len(key))
+	}
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
+	return nil
+}
+
 func (b *bufferBatch) Delete(key []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
@@ -531,6 +550,9 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 }
 
 func (b *bufferBatch) Reset() {
+	// Operations may retain caller-transferred key arenas and values. Clear the
+	// reusable backing slice so Reset releases them immediately.
+	clear(b.ops)
 	b.ops = b.ops[:0]
 	b.size = 0
 }

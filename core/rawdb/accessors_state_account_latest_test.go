@@ -14,6 +14,18 @@ type accountLatestOwnedValueProbe struct {
 	value      []byte
 }
 
+type accountLatestOwnedKeyValueProbe struct {
+	accountLatestOwnedValueProbe
+	ownedKeyValueCalls int
+}
+
+func (p *accountLatestOwnedKeyValueProbe) PutOwnedKeyValue(key, value []byte) error {
+	p.ownedKeyValueCalls++
+	p.key = key
+	p.value = value
+	return nil
+}
+
 func (p *accountLatestOwnedValueProbe) Put(key, value []byte) error {
 	p.putCalls++
 	p.key = append(p.key[:0], key...)
@@ -42,6 +54,21 @@ func TestWriteStateAccountLatestOwnedByKeyPrefersOwnedWriter(t *testing.T) {
 	}
 	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
 		t.Fatal("owned writer did not receive the original key/value slices")
+	}
+}
+
+func TestWriteStateAccountLatestOwnedByKeyPrefersOwnedKeyValueWriter(t *testing.T) {
+	probe := new(accountLatestOwnedKeyValueProbe)
+	key := []byte("owned-physical-account-key")
+	value := []byte("owned-account-envelope")
+	if err := WriteStateAccountLatestOwnedByKey(probe, key, value); err != nil {
+		t.Fatal(err)
+	}
+	if probe.ownedKeyValueCalls != 1 || probe.ownedCalls != 0 || probe.putCalls != 0 {
+		t.Fatalf("writer calls key-value/value/Put = %d/%d/%d, want 1/0/0", probe.ownedKeyValueCalls, probe.ownedCalls, probe.putCalls)
+	}
+	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
+		t.Fatal("owned key/value writer did not receive the original slices")
 	}
 }
 

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -230,6 +232,52 @@ func TestBufferBatchPutOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
 		t.Fatal("PutOwnedValue copied the transferred value")
 	}
 	mustNotFound(t, b, []byte("Xwned-value-key"))
+}
+
+func TestBufferBatchPutOwnedKeyValueRetainsBothInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	keyArena := []byte("prefix-owned-key-suffix")
+	key := keyArena[len("prefix-"):len("prefix-owned-key"):len("prefix-owned-key")]
+	value := []byte("owned-value")
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if unsafe.StringData(batch.ops[0].key) != unsafe.SliceData(key) {
+		t.Fatal("PutOwnedKeyValue copied the transferred key")
+	}
+	// The string alias, rather than a live caller slice, must keep the arena
+	// reachable until the batch publishes the operation.
+	keyArena = nil
+	key = nil
+	runtime.GC()
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned key/value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedKeyValue copied the transferred value")
+	}
+}
+
+func TestBufferBatchResetReleasesOwnedInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue([]byte("owned-key"), []byte("owned-value")); err != nil {
+		t.Fatal(err)
+	}
+	batch.Reset()
+	if len(batch.ops) != 0 || batch.size != 0 {
+		t.Fatalf("Reset left len/size = %d/%d", len(batch.ops), batch.size)
+	}
+	if retained := batch.ops[:cap(batch.ops)][0]; retained.key != "" || retained.value != nil || retained.target != nil {
+		t.Fatalf("Reset retained operation references: %+v", retained)
+	}
 }
 
 func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {

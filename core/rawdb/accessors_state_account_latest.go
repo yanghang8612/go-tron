@@ -31,11 +31,21 @@ type ownedValueWriter interface {
 	PutOwnedValue(key, value []byte) error
 }
 
+// ownedKeyValueWriter is a narrowly scoped extension for commit writers that
+// can retain both inputs directly. Callers transfer ownership of both byte
+// ranges and must keep their contents immutable after the call.
+type ownedKeyValueWriter interface {
+	PutOwnedKeyValue(key, value []byte) error
+}
+
 // WriteStateAccountLatestOwnedByKey is the ownership-taking counterpart of
 // WriteStateAccountLatestByKey. Commit planning calls it only with a freshly
 // encoded account envelope that will never be mutated again. Writers that do
 // not advertise the optional extension retain the normal copying Put fallback.
 func WriteStateAccountLatestOwnedByKey(db ethdb.KeyValueWriter, physicalKey, value []byte) error {
+	if writer, ok := db.(ownedKeyValueWriter); ok {
+		return writer.PutOwnedKeyValue(physicalKey, value)
+	}
 	if writer, ok := db.(ownedValueWriter); ok {
 		return writer.PutOwnedValue(physicalKey, value)
 	}
