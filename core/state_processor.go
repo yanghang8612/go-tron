@@ -507,6 +507,15 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+	// Fork stats and prevBlockTime are immutable throughout this block. Share
+	// permanently-passed versions with the chain cache, but keep pending/false
+	// results in a disposable block view so per-tx gates read each version only
+	// once without delaying a quorum transition at the next block boundary.
+	if forkPassCache == nil {
+		forkPassCache = forks.NewVersionPassCache()
+	}
+	forkPassCache = forkPassCache.BlockScope()
+
 	blockSnap := statedb.Snapshot()
 	dpSnap := dynProps.Snapshot()
 	defer func() {

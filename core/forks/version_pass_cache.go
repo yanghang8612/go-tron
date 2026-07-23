@@ -24,12 +24,13 @@ import "sync"
 // every later block — EXCEPT across a reorg that rewinds below V's activation
 // block, which is exactly why switchFork (and a failed apply) call Reset.
 //
-// Only the TRUE result is memoized: a still-pending version's bitmap is still
-// accumulating votes, so it is re-read live on every call and its answer can
-// still flip to true the moment quorum is reached. The cache therefore never
-// changes an answer — it only elides redundant reads — and is safe to leave
-// nil (every method is nil-receiver safe), which the single-block producer
-// path does (one block has nothing to amortize).
+// Passed TRUE results are memoized across blocks. A block-scoped view created
+// by BlockScope additionally memoizes FALSE results for that one block: fork
+// votes and the previous-head timestamp are immutable while processBlock runs,
+// so every transaction in the block must receive the same answer. The next
+// block gets a fresh view and therefore re-reads pending versions, allowing a
+// quorum transition to become visible at the exact same boundary as the
+// uncached implementation.
 //
 // All access happens on the serial block-execution thread (processBlock via
 // the actuator Context, switchFork, the applyBlockWithPlan error path); the
@@ -38,6 +39,12 @@ import "sync"
 type VersionPassCache struct {
 	mu     sync.Mutex
 	passed map[int32]struct{}
+
+	// parent is non-nil only for a block-scoped view. Cross-block TRUE results
+	// live in the root cache; pending contains FALSE results observed by this
+	// block only and is discarded with the view after processBlock returns.
+	parent  *VersionPassCache
+	pending map[int32]struct{}
 }
 
 // NewVersionPassCache returns an empty cache ready for the block-execution path.
@@ -45,28 +52,57 @@ func NewVersionPassCache() *VersionPassCache {
 	return &VersionPassCache{passed: make(map[int32]struct{})}
 }
 
+// BlockScope returns an isolated per-block view of c. The view shares c's
+// monotonic passed-version set but owns a fresh pending-version set, allowing
+// repeated FALSE gates within one block to avoid the rooted fork-stats read.
+// Callers must not reuse the returned view for another block. Nil is preserved
+// so optional-cache call sites retain their existing behaviour.
+func (c *VersionPassCache) BlockScope() *VersionPassCache {
+	if c == nil {
+		return nil
+	}
+	return &VersionPassCache{
+		parent:  c.root(),
+		pending: make(map[int32]struct{}),
+	}
+}
+
 // Pass is PassVersionFromStore(store, version, latestBlockTime,
-// maintenanceIntervalMs) with a monotonic once-true short-circuit: a version
-// previously observed to pass returns true without re-reading the store. A nil
-// cache degrades to the plain uncached call. Only true is memoized — a pending
-// version is always re-read live.
+// maintenanceIntervalMs) with two short-circuits: a version observed to pass
+// returns true across all later blocks, while a pending version observed by a
+// BlockScope returns false for the rest of that block. A nil cache degrades to
+// the plain uncached call. Calling Pass on the root cache preserves the legacy
+// true-only behaviour.
 func (c *VersionPassCache) Pass(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
 	if c == nil {
 		return PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs)
 	}
-	c.mu.Lock()
-	_, ok := c.passed[version]
-	c.mu.Unlock()
+	root := c.root()
+	root.mu.Lock()
+	_, ok := root.passed[version]
+	root.mu.Unlock()
 	if ok {
 		return true
 	}
+	if c != root {
+		c.mu.Lock()
+		_, ok = c.pending[version]
+		c.mu.Unlock()
+		if ok {
+			return false
+		}
+	}
 	passed := PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs)
 	if passed {
-		c.mu.Lock()
-		if c.passed == nil {
-			c.passed = make(map[int32]struct{})
+		root.mu.Lock()
+		if root.passed == nil {
+			root.passed = make(map[int32]struct{})
 		}
-		c.passed[version] = struct{}{}
+		root.passed[version] = struct{}{}
+		root.mu.Unlock()
+	} else if c != root {
+		c.mu.Lock()
+		c.pending[version] = struct{}{}
 		c.mu.Unlock()
 	}
 	return passed
@@ -78,9 +114,10 @@ func (c *VersionPassCache) IsPassed(version int32) bool {
 	if c == nil {
 		return false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.passed[version]
+	root := c.root()
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	_, ok := root.passed[version]
 	return ok
 }
 
@@ -91,7 +128,20 @@ func (c *VersionPassCache) Reset() {
 	if c == nil {
 		return
 	}
-	c.mu.Lock()
-	c.passed = nil
-	c.mu.Unlock()
+	root := c.root()
+	root.mu.Lock()
+	root.passed = nil
+	root.mu.Unlock()
+	if c != root {
+		c.mu.Lock()
+		clear(c.pending)
+		c.mu.Unlock()
+	}
+}
+
+func (c *VersionPassCache) root() *VersionPassCache {
+	if c.parent != nil {
+		return c.parent
+	}
+	return c
 }

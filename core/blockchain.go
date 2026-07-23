@@ -156,9 +156,10 @@ type BlockChain struct {
 	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
 	// failed apply. See proposalScanCache.
 	proposalCache *proposalScanCache
-	// versionPassCache skips the per-tx fork-stats read + vote tally for an SR
-	// fork version that has already activated. Node-local; reset on reorg /
-	// failed apply (same discipline as proposalCache). See forks.VersionPassCache.
+	// versionPassCache skips the per-tx fork-stats read + vote tally for SR fork
+	// versions: passed results persist across blocks, while processBlock derives
+	// a disposable scope for pending results. Node-local; reset on reorg / failed
+	// apply (same discipline as proposalCache). See forks.VersionPassCache.
 	versionPassCache *forks.VersionPassCache
 	fc               *forks.ForkController
 
