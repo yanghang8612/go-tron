@@ -82,6 +82,13 @@ type Context struct {
 	// Node-local and reset on reorg; nil contexts fall through to the uncached
 	// store tally.
 	ForkPassCache *forks.VersionPassCache
+	// ResultSink is an optional block-local scratch result. The canonical block
+	// replay path consumes an actuator result completely before executing the
+	// next transaction, so simple actuators can fill this object instead of
+	// allocating one result per transaction. Callers that return Result to
+	// their own caller leave this nil and retain the existing ownership model.
+	// Execute implementations must never retain the sink after returning.
+	ResultSink *Result
 	// Tracer, when non-nil, is installed into the TVM config for this tx so the
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.
@@ -231,6 +238,18 @@ type Result struct {
 	InternalTransactions          []*corepb.InternalTransaction
 	ContractRet                   int32
 	ResMessage                    []byte
+}
+
+// newResult returns the caller-provided block-local result after clearing all
+// scalar and reference fields. The nil-sink path preserves the public
+// Execute/ApplyTransaction contract: the returned result is independently
+// owned and remains valid after the next transaction executes.
+func (ctx *Context) newResult() *Result {
+	if ctx != nil && ctx.ResultSink != nil {
+		*ctx.ResultSink = Result{}
+		return ctx.ResultSink
+	}
+	return new(Result)
 }
 
 type Actuator interface {

@@ -1,12 +1,14 @@
 package actuator
 
 import (
+	"reflect"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -172,6 +174,50 @@ func TestTransferExecute_Success(t *testing.T) {
 	}
 	if statedb.GetBalance(to) != 8_000_000 {
 		t.Fatalf("to balance: expected 8000000, got %d", statedb.GetBalance(to))
+	}
+}
+
+func TestTransferExecute_ReusesAndClearsResultSink(t *testing.T) {
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
+	seedAccount(statedb, makeTestAddr(2), 5_000_000)
+
+	sink := &Result{
+		Fee:                         99,
+		EnergyUsageTotal:            88,
+		CancelUnfreezeV2Amount:      map[string]int64{"BANDWIDTH": 77},
+		ContractResult:              []byte{1, 2, 3},
+		Logs:                        []vm.Log{{}},
+		InternalTransactions:        []*corepb.InternalTransaction{{}},
+		ContractResultPresent:       true,
+		NetFeeForBandwidth:          true,
+		HasCallerEnergyLeft:         true,
+		HasOriginEnergyLeft:         true,
+		ExchangeReceivedAmount:      66,
+		CallerEnergyLastConsumeTime: 55,
+	}
+	ctx := setupContext(t, statedb, makeTransferTx(1, 2, 3_000_000))
+	ctx.ResultSink = sink
+
+	result, err := (&TransferActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result != sink {
+		t.Fatal("transfer did not return the block-local result sink")
+	}
+	want := Result{ContractRet: 1}
+	if !reflect.DeepEqual(*result, want) {
+		t.Fatalf("result sink retained fields from prior transaction:\n got: %#v\nwant: %#v", *result, want)
+	}
+}
+
+func TestContextNewResultWithoutSinkReturnsIndependentResults(t *testing.T) {
+	ctx := new(Context)
+	first := ctx.newResult()
+	second := ctx.newResult()
+	if first == second {
+		t.Fatal("nil-sink results unexpectedly alias")
 	}
 }
 

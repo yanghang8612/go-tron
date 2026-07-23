@@ -113,5 +113,8 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ctx.State.AddBalance(toAddr, tc.Amount)
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	result := ctx.newResult()
+	result.Fee = fee
+	result.ContractRet = 1
+	return result, nil
 }
