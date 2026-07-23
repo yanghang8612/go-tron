@@ -34,12 +34,16 @@ const (
 	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
 	peerJoinAttemptInterval   = 2 * time.Second
 
-	// Retain a small near-tip subset of the blocks already decoded by the peer
-	// receive path so the drain does not immediately protobuf-decode them again.
-	// Both caps are global to the SyncService and include the active drain batch;
-	// all remaining buffered blocks stay raw-only to keep the GC mark set small.
-	maxRetainedDecodedBlocks = 32
-	maxRetainedDecodedBytes  = 8 << 20
+	// Retain up to one complete near-tip fetch batch already decoded by the peer
+	// receive path so the drain does not immediately protobuf-decode it again.
+	// Both caps are global to the SyncService and include the active drain batch.
+	// The 64 MiB raw-byte charge bounds the corresponding pointer-rich protobuf
+	// graph to a few hundred MiB even at the ~5x expansion observed in production;
+	// all farther runahead remains raw-only, avoiding the former unbounded 12 GiB
+	// / 161 M-object GC spiral while using the memory now available to remove the
+	// second decode from the contiguous execution path.
+	maxRetainedDecodedBlocks = maxFetchBatch
+	maxRetainedDecodedBytes  = 64 << 20
 )
 
 type syncDiagnostics struct {

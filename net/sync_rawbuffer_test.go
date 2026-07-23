@@ -180,18 +180,33 @@ func TestDecodedFastPathIsBoundedReusedAndReleased(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.syncedTipNum = 1
-	batch := ss.popBufferedSyncBatchLocked(time.Now())
+	ss.mu.Unlock()
+	var (
+		batches []bufferedSyncBatch
+		decoded []*types.Block
+	)
+	for len(decoded) < count {
+		ss.mu.Lock()
+		batch := ss.popBufferedSyncBatchLocked(time.Now())
+		ss.mu.Unlock()
+		if len(batch.buffered) == 0 {
+			t.Fatalf("buffer drained after %d/%d blocks", len(decoded), count)
+		}
+		ss.decodeBatchBlocks(&batch)
+		decoded = append(decoded, batch.blocks...)
+		batches = append(batches, batch)
+	}
+	ss.mu.Lock()
 	chargedWhileActive := ss.retainedDecodedBlocks
 	ss.mu.Unlock()
 	if chargedWhileActive != maxRetainedDecodedBlocks {
 		t.Fatalf("active batch lost decoded charge: got=%d want=%d",
 			chargedWhileActive, maxRetainedDecodedBlocks)
 	}
-	ss.decodeBatchBlocks(&batch)
-	if len(batch.blocks) != count {
-		t.Fatalf("decoded batch length=%d, want=%d", len(batch.blocks), count)
+	if len(decoded) != count {
+		t.Fatalf("decoded blocks=%d, want=%d", len(decoded), count)
 	}
-	for i, block := range batch.blocks {
+	for i, block := range decoded {
 		num := uint64(i + 2)
 		if i < maxRetainedDecodedBlocks && block != originals[num] {
 			t.Fatalf("block #%d did not reuse retained receive object", num)
@@ -201,7 +216,9 @@ func TestDecodedFastPathIsBoundedReusedAndReleased(t *testing.T) {
 		}
 	}
 
-	ss.releaseDecodedBatch(&batch)
+	for i := range batches {
+		ss.releaseDecodedBatch(&batches[i])
+	}
 	ss.mu.Lock()
 	remainingBlocks := ss.retainedDecodedBlocks
 	remainingBytes := ss.retainedDecodedBytes
@@ -224,7 +241,7 @@ func TestDecodedFastPathIsBoundedReusedAndReleased(t *testing.T) {
 }
 
 func BenchmarkDecodeBatchBlocks(b *testing.B) {
-	const batchSize = maxRetainedDecodedBlocks
+	const batchSize = maxFetchBatch
 	blk := blockWithTxs(1, tcommon.Hash{0xab}, 200)
 	raw, err := proto.Marshal(blk.Proto())
 	if err != nil {
@@ -233,17 +250,18 @@ func BenchmarkDecodeBatchBlocks(b *testing.B) {
 	ss := &SyncService{}
 
 	for _, tc := range []struct {
-		name     string
-		retained bool
+		name       string
+		retainMode int
 	}{
 		{name: "raw"},
-		{name: "retained", retained: true},
+		{name: "bounded", retainMode: 1},
+		{name: "all-retained", retainMode: 2},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			buffered := make([]bufferedSyncBlock, batchSize)
 			for i := range buffered {
 				buffered[i].raw = raw
-				if tc.retained {
+				if tc.retainMode == 2 || (tc.retainMode == 1 && i < maxRetainedDecodedBlocks) {
 					buffered[i].decoded = blk
 				}
 			}
