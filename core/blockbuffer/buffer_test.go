@@ -188,7 +188,59 @@ func TestBufferBatchOwnsValuesAfterWrite(t *testing.T) {
 	mustGet(t, b, []byte("key"), []byte("original"))
 }
 
+func TestBufferBatchOwnsKeysBeforeWrite(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+
+	key := []byte("original-key")
+	batch := b.NewBatch()
+	if err := batch.Put(key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	copy(key, "mutated-key!")
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("original-key"), []byte("value"))
+	mustNotFound(t, b, []byte("mutated-key!"))
+}
+
+func TestBufferBatchPutOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	key := []byte("owned-value-key")
+	value := []byte("owned-value")
+	batch := b.NewBatch()
+	owned := batch.(interface {
+		PutOwnedValue(key, value []byte) error
+	})
+	if err := owned.PutOwnedValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0] = 'X'
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-value-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedValue copied the transferred value")
+	}
+	mustNotFound(t, b, []byte("Xwned-value-key"))
+}
+
 func BenchmarkBufferBatchWrite(b *testing.B) {
+	benchmarkBufferBatchWrite(b, false)
+}
+
+func BenchmarkBufferBatchWriteOwnedValues(b *testing.B) {
+	benchmarkBufferBatchWrite(b, true)
+}
+
+func benchmarkBufferBatchWrite(b *testing.B, ownedValues bool) {
 	buffer := New(rawdb.NewMemoryDatabase())
 	buffer.BeginBlock(bufHash(1), 1)
 	keys := make([][]byte, 128)
@@ -201,8 +253,17 @@ func BenchmarkBufferBatchWrite(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		batch := buffer.NewBatchWithSize(len(keys) * (len(value) + 16))
+		owned, _ := batch.(interface {
+			PutOwnedValue(key, value []byte) error
+		})
 		for _, key := range keys {
-			if err := batch.Put(key, value); err != nil {
+			var err error
+			if ownedValues {
+				err = owned.PutOwnedValue(key, value)
+			} else {
+				err = batch.Put(key, value)
+			}
+			if err != nil {
 				b.Fatal(err)
 			}
 		}

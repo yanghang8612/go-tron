@@ -27,6 +27,21 @@ func WriteStateAccountLatestByKey(db ethdb.KeyValueWriter, physicalKey, value []
 	return db.Put(physicalKey, value)
 }
 
+type ownedValueWriter interface {
+	PutOwnedValue(key, value []byte) error
+}
+
+// WriteStateAccountLatestOwnedByKey is the ownership-taking counterpart of
+// WriteStateAccountLatestByKey. Commit planning calls it only with a freshly
+// encoded account envelope that will never be mutated again. Writers that do
+// not advertise the optional extension retain the normal copying Put fallback.
+func WriteStateAccountLatestOwnedByKey(db ethdb.KeyValueWriter, physicalKey, value []byte) error {
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(physicalKey, value)
+	}
+	return db.Put(physicalKey, value)
+}
+
 func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
 	value, err := readStateNoCopyCached(db, stateAccountLatestKey(owner))
 	if err != nil {

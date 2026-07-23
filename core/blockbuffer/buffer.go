@@ -218,7 +218,7 @@ type Buffer struct {
 
 type bufferBatchOp struct {
 	delete bool
-	key    []byte
+	key    string
 	value  []byte
 	target *layer
 }
@@ -326,10 +326,27 @@ func (b *bufferBatch) Put(key, value []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
-	k := append([]byte(nil), key...)
+	// The layer ultimately indexes by string. Own that immutable string now so
+	// Write can publish it directly instead of first copying []byte here and
+	// then allocating the same key again during []byte→string conversion.
+	k := string(key)
 	v := append([]byte(nil), value...)
 	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
 	b.size += len(k) + len(v)
+	return nil
+}
+
+// PutOwnedValue is an optional hot-path extension for freshly encoded values.
+// It still owns the key via an immutable string copy, but retains value
+// directly. The caller transfers ownership and must never mutate value after
+// this call. Ordinary ethdb.Batch.Put keeps its defensive-copy semantics.
+func (b *bufferBatch) PutOwnedValue(key, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := string(key)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
 	return nil
 }
 
@@ -337,7 +354,7 @@ func (b *bufferBatch) Delete(key []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
-	k := append([]byte(nil), key...)
+	k := string(key)
 	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
 	b.size += len(k)
 	return nil
@@ -379,7 +396,7 @@ func (b *bufferBatch) Write() error {
 }
 
 func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
-	k := string(op.key)
+	k := op.key
 	s := target.shardForString(k)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -495,13 +512,17 @@ func (b *bufferBatch) Reset() {
 
 func (b *bufferBatch) Replay(w ethdb.KeyValueWriter) error {
 	for _, op := range b.ops {
+		// Replay targets an arbitrary ethdb writer whose ownership contract may
+		// retain the key. Give it an owned []byte; the normal blockbuffer Write /
+		// WriteUpTo paths publish the batch-owned string without this conversion.
+		key := []byte(op.key)
 		if op.delete {
-			if err := w.Delete(op.key); err != nil {
+			if err := w.Delete(key); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := w.Put(op.key, op.value); err != nil {
+		if err := w.Put(key, op.value); err != nil {
 			return err
 		}
 	}

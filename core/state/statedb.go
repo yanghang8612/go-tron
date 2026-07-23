@@ -2968,7 +2968,7 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRo
 	if latestWriter == nil {
 		return fmt.Errorf("account latest writer unavailable")
 	}
-	if err := latestWriter.writeAccountLatestByKey(addr, physicalKey, data); err != nil {
+	if err := latestWriter.writeAccountLatestOwnedByKey(addr, physicalKey, data); err != nil {
 		return err
 	}
 	commitment.recordAccountLatestTouch(addr)

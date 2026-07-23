@@ -503,16 +503,17 @@ func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value [
 	return w.maybeFlush()
 }
 
-// writeAccountLatestByKey accepts a physical latest key from the commit-wide
-// key arena. The backing writer owns/copies Put inputs before returning.
-func (w *accountKVLatestBatch) writeAccountLatestByKey(owner tcommon.Address, physicalKey, value []byte) error {
+// writeAccountLatestOwnedByKey accepts a physical latest key from the
+// commit-wide key arena and takes ownership of the freshly encoded value.
+// Both the layer batch and pending read overlay retain it as immutable data.
+func (w *accountKVLatestBatch) writeAccountLatestOwnedByKey(owner tcommon.Address, physicalKey, value []byte) error {
 	if w == nil || w.writer == nil {
 		return fmt.Errorf("account kv latest domain writer: nil writer")
 	}
-	if err := rawdb.WriteStateAccountLatestByKey(w.writer, physicalKey, value); err != nil {
+	if err := rawdb.WriteStateAccountLatestOwnedByKey(w.writer, physicalKey, value); err != nil {
 		return err
 	}
-	w.rememberAccountLatestPut(owner, value)
+	w.rememberAccountLatestPutOwned(owner, value)
 	return w.maybeFlush()
 }
 
@@ -673,6 +674,10 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 }
 
 func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, value []byte) {
+	w.rememberAccountLatestPutOwned(owner, append([]byte(nil), value...))
+}
+
+func (w *accountKVLatestBatch) rememberAccountLatestPutOwned(owner tcommon.Address, value []byte) {
 	if w == nil {
 		return
 	}
@@ -680,7 +685,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
 	w.accountPending[owner.AccountID()] = accountLatestPending{
-		value:  append([]byte(nil), value...),
+		value:  value,
 		number: w.commitBlock,
 	}
 }

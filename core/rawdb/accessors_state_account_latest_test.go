@@ -7,6 +7,44 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+type accountLatestOwnedValueProbe struct {
+	ownedCalls int
+	putCalls   int
+	key        []byte
+	value      []byte
+}
+
+func (p *accountLatestOwnedValueProbe) Put(key, value []byte) error {
+	p.putCalls++
+	p.key = append(p.key[:0], key...)
+	p.value = append(p.value[:0], value...)
+	return nil
+}
+
+func (*accountLatestOwnedValueProbe) Delete([]byte) error { return nil }
+
+func (p *accountLatestOwnedValueProbe) PutOwnedValue(key, value []byte) error {
+	p.ownedCalls++
+	p.key = key
+	p.value = value
+	return nil
+}
+
+func TestWriteStateAccountLatestOwnedByKeyPrefersOwnedWriter(t *testing.T) {
+	probe := new(accountLatestOwnedValueProbe)
+	key := []byte("physical-account-key")
+	value := []byte("fresh-account-envelope")
+	if err := WriteStateAccountLatestOwnedByKey(probe, key, value); err != nil {
+		t.Fatal(err)
+	}
+	if probe.ownedCalls != 1 || probe.putCalls != 0 {
+		t.Fatalf("writer calls owned/Put = %d/%d, want 1/0", probe.ownedCalls, probe.putCalls)
+	}
+	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
+		t.Fatal("owned writer did not receive the original key/value slices")
+	}
+}
+
 func TestStateAccountLatestReadWriteDelete(t *testing.T) {
 	db := NewMemoryDatabase()
 	owner := stateKVTestAddress(0x41, 0x55)
