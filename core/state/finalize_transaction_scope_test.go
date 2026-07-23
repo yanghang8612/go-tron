@@ -125,9 +125,9 @@ func TestFinalizeTransactionScopedSelfDestructStillDeletes(t *testing.T) {
 
 // A row written to zero and committed must stay non-existent in a LATER block
 // that only touches a different slot of the same contract. This pins the
-// cross-commit persistence the inner-loop scoping relies on: storageExists is
-// not reset at commit, so a later FinalizeTransaction need not re-scan the
-// already-marked zero row — it must already read as absent.
+// cross-commit persistence the inner-loop scoping relies on: the cached
+// row-existence bit is not reset at commit, so a later FinalizeTransaction need
+// not re-scan the already-marked zero row — it must already read as absent.
 func TestFinalizeTransactionZeroRowStaysNonExistentAcrossCommit(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(5)

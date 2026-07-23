@@ -1537,13 +1537,14 @@ func (s *StateDB) FinalizeTransaction() {
 		// Scope to slots written this block (dirtyStorage), not the whole cached
 		// storage map. A zero-valued cached slot can only come from SetState
 		// (reads never cache a zero row), which adds it to dirtyStorage, and
-		// storageExists is NOT reset at commit — so a zero row from an earlier
-		// block already reads as absent and need not be re-marked. This is the
-		// same authoritative write set the commit path uses, and keeps the scan
+		// the cached row-existence bit is NOT reset at commit — so a zero row from
+		// an earlier block already reads as absent and need not be re-marked. This
+		// is the same authoritative write set the commit path uses and keeps the scan
 		// O(writes-this-block) instead of O(accumulated storage cache).
 		for k := range obj.dirtyStorage {
-			if obj.storage[k] == (tcommon.Hash{}) {
-				obj.storageExists[k] = false
+			if slot := obj.storage[k]; slot.value == (tcommon.Hash{}) {
+				slot.exists = false
+				obj.storage[k] = slot
 			}
 		}
 		if obj.selfDestructed && !obj.deleted {
@@ -2354,8 +2355,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if obj == nil {
 		return tcommon.Hash{}, false
 	}
-	if v, ok := obj.storage[key]; ok {
-		return v, obj.storageExists[key]
+	if slot, ok := obj.storage[key]; ok {
+		return slot.value, slot.exists
 	}
 	if obj.created {
 		return tcommon.Hash{}, false
@@ -2370,8 +2371,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if h == (tcommon.Hash{}) {
 		return tcommon.Hash{}, false
 	}
-	obj.storage[key] = h
-	obj.storageExists[key] = true
+	obj.storage[key] = storageSlot{value: h, exists: true}
 	return h, true
 }
 
@@ -2672,8 +2672,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			codeDirty:                obj.codeDirty,
 			contractMeta:             metaCopy,
 			contractMetaDirty:        obj.contractMetaDirty,
-			storage:                  make(map[tcommon.Hash]tcommon.Hash),
-			storageExists:            make(map[tcommon.Hash]bool),
+			storage:                  make(map[tcommon.Hash]storageSlot),
 			dirtyStorage:             make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage)),
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
@@ -2689,7 +2688,6 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		}
 		for k, v := range obj.storage {
 			newObj.storage[k] = v
-			newObj.storageExists[k] = obj.storageExists[k]
 		}
 		for k, origin := range obj.dirtyStorage {
 			newObj.dirtyStorage[k] = origin
@@ -2791,7 +2789,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 		})
 		plan.storageOps = make([]storageCommitOp, 0, len(storageKeys))
 		for _, key := range storageKeys {
-			value := obj.storage[key]
+			value := obj.storage[key].value
 			origin := obj.dirtyStorage[key]
 			var prevValue []byte
 			if origin.loaded && origin.exists {
@@ -3034,8 +3032,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.accountDirty = false
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
-		obj.storage = make(map[tcommon.Hash]tcommon.Hash)
-		obj.storageExists = make(map[tcommon.Hash]bool)
+		obj.storage = make(map[tcommon.Hash]storageSlot)
 		obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 		obj.dirty = false
 		return

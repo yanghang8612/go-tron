@@ -167,10 +167,8 @@ func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// Only a clean absent pre-image can safely be uncached.
 		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
-			delete(obj.storageExists, e.key)
 		} else {
-			obj.storage[e.key] = e.prev
-			obj.storageExists[e.key] = e.prevExists
+			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
 		}
 		if obj.dirtyStorage == nil {
 			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)

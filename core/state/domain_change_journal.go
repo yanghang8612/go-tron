@@ -308,7 +308,7 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 	if obj == nil || obj.deleted || obj.selfDestructed {
 		return nil, nil
 	}
-	value := obj.storage[touch.slot]
+	value := obj.storage[touch.slot].value
 	nextExist := value != (tcommon.Hash{})
 	var next []byte
 	if nextExist {
