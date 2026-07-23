@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"strings"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -104,7 +105,8 @@ type DomainCommitmentState struct {
 	state        *StateDB
 	generation   statedomains.GenerationResolver
 	latestReader domainCommitmentLatestReader
-	touches      map[domainCommitmentTouch]struct{}
+	touches      map[domainCommitmentTouch]int
+	touchValues  []domainCommitmentCapturedValue
 }
 
 type domainCommitmentTouch struct {
@@ -113,6 +115,17 @@ type domainCommitmentTouch struct {
 	generation uint64
 	domain     kvdomains.KVDomain
 	key        string
+}
+
+// domainCommitmentCapturedValue is the final value carried by a KV-latest
+// mutation. The temporal overlay already owns this value before it is flushed,
+// so retaining one immutable copy avoids reading the just-written row back from
+// the latest store when commitment updates are assembled. Account-latest and
+// generation touches still use the reader and leave loaded false.
+type domainCommitmentCapturedValue struct {
+	value  []byte
+	exists bool
+	loaded bool
 }
 
 type domainCommitmentLatestReader interface {
@@ -165,7 +178,7 @@ func NewDomainCommitmentStateWithGenerationResolver(s *StateDB, generation state
 	return &DomainCommitmentState{
 		state:      s,
 		generation: generation,
-		touches:    make(map[domainCommitmentTouch]struct{}),
+		touches:    make(map[domainCommitmentTouch]int),
 	}
 }
 
@@ -185,14 +198,26 @@ func (d *DomainCommitmentState) RecordCommitmentMutations(ctx context.Context, m
 			return err
 		}
 		switch mutation.Kind {
-		case statedomains.MutationPut, statedomains.MutationDel:
-			d.recordKVLatestTouch(mutation.Owner, generation, mutation.Domain, mutation.Key)
+		case statedomains.MutationPut:
+			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, true)
+		case statedomains.MutationDel:
+			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, nil, false)
 		case statedomains.MutationDelPrefix:
 			if err := d.iterateKVLatestPrefix(mutation.Owner, generation, mutation.Domain, mutation.Key, func(key, _ []byte) (bool, error) {
-				d.recordKVLatestTouch(mutation.Owner, generation, mutation.Domain, key)
+				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, key, nil, false)
 				return true, nil
 			}); err != nil {
 				return err
+			}
+			// The latest reader does not include mutations still in this temporal
+			// overlay. Apply the prefix tombstone to earlier captured puts too;
+			// later mutations in the loop can overwrite it normally.
+			ownerID := mutation.Owner.AccountID()
+			prefix := string(mutation.Key)
+			for touch, index := range d.touches {
+				if touch.flatDomain == rawdb.StateFlatDomainKVLatest && touch.owner == ownerID && touch.generation == generation && touch.domain == mutation.Domain && strings.HasPrefix(touch.key, prefix) {
+					d.touchValues[index] = domainCommitmentCapturedValue{loaded: true}
+				}
 			}
 		}
 	}
@@ -247,7 +272,7 @@ func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitm
 		}
 	}
 	accountKeyArena := make([]byte, 0, accountTouchCount*rawdb.StateAccountLatestCommitmentKeySize())
-	for touch := range d.touches {
+	for touch, index := range d.touches {
 		var accountCommitmentKey []byte
 		if touch.flatDomain == rawdb.StateFlatDomainAccountLatest {
 			start := len(accountKeyArena)
@@ -255,7 +280,7 @@ func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitm
 			accountKeyArena = rawdb.AppendStateAccountLatestCommitmentKey(accountKeyArena, owner)
 			accountCommitmentKey = accountKeyArena[start:len(accountKeyArena):len(accountKeyArena)]
 		}
-		update, err := d.latestUpdateFromTouch(reader, touch, accountCommitmentKey)
+		update, err := d.latestUpdateFromTouch(reader, touch, d.touchValues[index], accountCommitmentKey)
 		if err != nil {
 			return nil, err
 		}
@@ -267,7 +292,7 @@ func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitm
 	return updates, nil
 }
 
-func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLatestReader, touch domainCommitmentTouch, accountCommitmentKey []byte) (rawdb.StateCommitmentUpdate, error) {
+func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLatestReader, touch domainCommitmentTouch, captured domainCommitmentCapturedValue, accountCommitmentKey []byte) (rawdb.StateCommitmentUpdate, error) {
 	owner := touch.owner.Address(tcommon.AddressPrefixMainnet)
 	switch touch.flatDomain {
 	case rawdb.StateFlatDomainAccountLatest:
@@ -296,6 +321,12 @@ func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLat
 	case rawdb.StateFlatDomainKVLatest:
 		logicalKey := []byte(touch.key)
 		commitmentKey := rawdb.StateKVLatestCommitmentKey(owner, touch.generation, touch.domain, logicalKey)
+		if captured.loaded {
+			if captured.exists {
+				return rawdb.NewStateCommitmentPutOwned(commitmentKey, rawdb.EncodeStateKVLatestValue(captured.value)), nil
+			}
+			return rawdb.NewStateCommitmentDeleteOwned(commitmentKey), nil
+		}
 		value, ok, err := reader.KVLatest(owner, touch.generation, touch.domain, logicalKey)
 		if err != nil {
 			return rawdb.StateCommitmentUpdate{}, err
@@ -326,21 +357,59 @@ func (d *DomainCommitmentState) recordKVLatestTouch(owner tcommon.Address, gener
 	})
 }
 
-func (d *DomainCommitmentState) hasKVLatestTouch(owner tcommon.AccountID, generation uint64, domain kvdomains.KVDomain, key []byte) bool {
+func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key, value []byte, exists bool) {
 	if d == nil {
-		return false
+		return
 	}
-	_, ok := d.touches[domainCommitmentTouch{
+	ownerID := owner.AccountID()
+	if index, ok := d.kvLatestTouchIndex(ownerID, generation, domain, key); ok {
+		captured := &d.touchValues[index]
+		captured.exists = exists
+		captured.loaded = true
+		if exists {
+			captured.value = append(captured.value[:0], value...)
+		} else {
+			captured.value = nil
+		}
+		return
+	}
+	captured := domainCommitmentCapturedValue{exists: exists, loaded: true}
+	if exists {
+		captured.value = append([]byte(nil), value...)
+	}
+	d.recordTouchWithValue(domainCommitmentTouch{
+		flatDomain: rawdb.StateFlatDomainKVLatest,
+		owner:      ownerID,
+		generation: generation,
+		domain:     domain,
+		key:        string(key),
+	}, captured)
+}
+
+func (d *DomainCommitmentState) hasKVLatestTouch(owner tcommon.AccountID, generation uint64, domain kvdomains.KVDomain, key []byte) bool {
+	_, ok := d.kvLatestTouchIndex(owner, generation, domain, key)
+	return ok
+}
+
+func (d *DomainCommitmentState) kvLatestTouchIndex(owner tcommon.AccountID, generation uint64, domain kvdomains.KVDomain, key []byte) (int, bool) {
+	if d == nil {
+		return 0, false
+	}
+	index, ok := d.touches[domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainKVLatest,
 		owner:      owner,
 		generation: generation,
 		domain:     domain,
 		key:        string(key),
 	}]
-	return ok
+	return index, ok
 }
 
 func (d *DomainCommitmentState) recordTouch(touch domainCommitmentTouch) {
+	d.recordTouchWithValue(touch, domainCommitmentCapturedValue{})
+}
+
+func (d *DomainCommitmentState) recordTouchWithValue(touch domainCommitmentTouch, captured domainCommitmentCapturedValue) {
 	if d == nil {
 		return
 	}
@@ -350,9 +419,13 @@ func (d *DomainCommitmentState) recordTouch(touch domainCommitmentTouch) {
 		return
 	}
 	if d.touches == nil {
-		d.touches = make(map[domainCommitmentTouch]struct{})
+		d.touches = make(map[domainCommitmentTouch]int)
 	}
-	d.touches[touch] = struct{}{}
+	if _, exists := d.touches[touch]; exists {
+		return
+	}
+	d.touches[touch] = len(d.touchValues)
+	d.touchValues = append(d.touchValues, captured)
 }
 
 func (d *DomainCommitmentState) resolveGeneration(owner tcommon.Address) (uint64, error) {

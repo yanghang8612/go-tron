@@ -1150,6 +1150,14 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 }
 
 func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool) (bool, error) {
+	return s.stageAccountKVCommitWithPrev(obj, domain, key, value, deleted, nil, false, false)
+}
+
+// stageAccountKVCommitWithPrev stages a commit-generated account-KV mutation.
+// Callers that already loaded the durable pre-image can pass it here to avoid a
+// duplicate flat-latest lookup. prevLoaded=true with prevExists=false denotes a
+// known absent row.
+func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool, prevValue []byte, prevExists, prevLoaded bool) (bool, error) {
 	if !kvdomains.IsRegistered(domain) {
 		return false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
@@ -1162,6 +1170,11 @@ func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDoma
 	entry := newKVEntry(comp, value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
+	} else if prevLoaded {
+		entry.setPrev(prevValue, prevExists)
+		if noop, known := entry.latestNoop(); known && noop {
+			return false, nil
+		}
 	} else {
 		current, exists, err := s.readAccountKVLatest(obj.address, obj.accountKVGeneration, domain, key)
 		if err != nil {

@@ -8,6 +8,17 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+// storageOrigin is the durable value observed before a slot's first write in
+// the current commit interval. SetState already has to load that value for
+// SSTORE semantics, so retaining it lets commit planning avoid reading the
+// same flat-latest row again. loaded distinguishes a known absent row from the
+// fallback entries produced by direct stateObject tests/helpers.
+type storageOrigin struct {
+	value  tcommon.Hash
+	exists bool
+	loaded bool
+}
+
 // stateObject represents an in-memory account with dirty tracking.
 type stateObject struct {
 	address tcommon.Address
@@ -28,14 +39,14 @@ type stateObject struct {
 	created      bool
 
 	// Contract fields
-	code              []byte                        // contract bytecode
-	codeHash          tcommon.Hash                  // Keccak-256 hash of the code
-	codeDirty         bool                          // true if code was modified
-	contractMeta      *contractpb.SmartContract     // contract metadata
-	contractMetaDirty bool                          // true if contractMeta was modified
-	storage           map[tcommon.Hash]tcommon.Hash // cached current contract storage
-	storageExists     map[tcommon.Hash]bool         // java-tron StorageRow existence for cached slots
-	dirtyStorage      map[tcommon.Hash]struct{}     // storage slots actually written this block
+	code              []byte                         // contract bytecode
+	codeHash          tcommon.Hash                   // Keccak-256 hash of the code
+	codeDirty         bool                           // true if code was modified
+	contractMeta      *contractpb.SmartContract      // contract metadata
+	contractMetaDirty bool                           // true if contractMeta was modified
+	storage           map[tcommon.Hash]tcommon.Hash  // cached current contract storage
+	storageExists     map[tcommon.Hash]bool          // java-tron StorageRow existence for cached slots
+	dirtyStorage      map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
 	selfDestructed    bool
 
 	// Generic-KV generation is the Erigon-style incarnation number. AccountKVRoot
@@ -82,7 +93,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 		account:       acc,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
-		dirtyStorage:  make(map[tcommon.Hash]struct{}),
+		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
@@ -97,7 +108,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		created:       true,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
-		dirtyStorage:  make(map[tcommon.Hash]struct{}),
+		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
@@ -143,11 +154,16 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 	if s.dirtyStorage == nil {
-		s.dirtyStorage = make(map[tcommon.Hash]struct{})
+		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+	}
+	if _, dirty := s.dirtyStorage[key]; !dirty {
+		// Production writes install a loaded origin in SetState before calling
+		// here. Keep direct helper calls correct by leaving an explicit fallback
+		// entry that makes commit planning use the durable reader.
+		s.dirtyStorage[key] = storageOrigin{}
 	}
 	s.storage[key] = value
 	s.storageExists[key] = exists
-	s.dirtyStorage[key] = struct{}{}
 	s.markDirty()
 }
 

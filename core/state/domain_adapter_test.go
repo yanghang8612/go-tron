@@ -445,7 +445,7 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	commitment.recordKVGenerationTouch(owner)
 	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
 		{Kind: statedomains.MutationDelPrefix, Owner: owner, Domain: domain, Key: []byte("prefix/")},
-		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/3")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/3"), Value: []byte("three")},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +478,53 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	}
 }
 
+func TestDomainCommitmentStateUsesCapturedFinalKVMutations(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(disk)
+	sdb, err := New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testAddr(0x7e)
+	domain := kvdomains.ContractStorage
+	view := &commitmentLatestView{
+		t:            t,
+		owner:        owner,
+		domain:       domain,
+		generation:   9,
+		failKVLatest: true,
+	}
+	sdb.flatLatestReader = view
+	sdb.setAccountKVLatestView(view, view)
+
+	finalValue := []byte("final")
+	commitment := NewDomainCommitmentState(sdb)
+	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/final"), Value: []byte("first")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/gone"), Value: []byte("gone")},
+		{Kind: statedomains.MutationDelPrefix, Owner: owner, Domain: domain, Key: []byte("prefix/")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/final"), Value: finalValue},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("empty"), Value: nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The recorder must own retained bytes because the temporal overlay releases
+	// its mutation storage immediately after Flush.
+	finalValue[0] = 'X'
+
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatalf("commitment updates from captured mutations: %v", err)
+	}
+	if len(updates) != 3 {
+		t.Fatalf("captured updates = %+v, want final put, prefix delete, and empty put", updates)
+	}
+	byKey := stateCommitmentUpdatesByKey(updates)
+	assertCommitmentPut(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("prefix/final")), rawdb.EncodeStateKVLatestValue([]byte("final")))
+	assertCommitmentDelete(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("prefix/gone")))
+	assertCommitmentPut(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("empty")), rawdb.EncodeStateKVLatestValue(nil))
+}
+
 type commitmentLatestView struct {
 	t                 *testing.T
 	owner             tcommon.Address
@@ -488,6 +535,7 @@ type commitmentLatestView struct {
 	prefixKeys        []string
 	kvGenerations     []uint64
 	prefixGenerations []uint64
+	failKVLatest      bool
 }
 
 func (v *commitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
@@ -503,6 +551,9 @@ func (v *commitmentLatestView) KVGeneration(owner tcommon.Address) (uint64, bool
 func (v *commitmentLatestView) KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	v.checkOwner(owner)
 	v.checkDomain(domain)
+	if v.failKVLatest {
+		v.t.Fatalf("unexpected KVLatest read for captured mutation %q", key)
+	}
 	v.kvGenerations = append(v.kvGenerations, generation)
 	value, ok := v.kv[string(key)]
 	if !ok {

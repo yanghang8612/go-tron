@@ -2386,6 +2386,15 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		return
 	}
 	_, prevDirty := obj.dirtyStorage[key]
+	if !prevDirty {
+		if obj.dirtyStorage == nil {
+			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+		}
+		// SetState has already paid for the durable read needed by SSTORE. Keep
+		// that pre-image with the dirty slot so commit planning does not issue the
+		// same account-KV/Pebble lookup a second time.
+		obj.dirtyStorage[key] = storageOrigin{value: prev, exists: prevExists, loaded: true}
+	}
 	s.journal.append(storageChange{
 		address:    addr,
 		key:        key,
@@ -2665,7 +2674,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			contractMetaDirty:        obj.contractMetaDirty,
 			storage:                  make(map[tcommon.Hash]tcommon.Hash),
 			storageExists:            make(map[tcommon.Hash]bool),
-			dirtyStorage:             make(map[tcommon.Hash]struct{}, len(obj.dirtyStorage)),
+			dirtyStorage:             make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage)),
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
@@ -2682,8 +2691,8 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			newObj.storage[k] = v
 			newObj.storageExists[k] = obj.storageExists[k]
 		}
-		for k := range obj.dirtyStorage {
-			newObj.dirtyStorage[k] = struct{}{}
+		for k, origin := range obj.dirtyStorage {
+			newObj.dirtyStorage[k] = origin
 		}
 		newObj.dirtySet = cp.dirtyObjects
 		if newObj.dirty {
@@ -2783,9 +2792,14 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 		plan.storageOps = make([]storageCommitOp, 0, len(storageKeys))
 		for _, key := range storageKeys {
 			value := obj.storage[key]
+			origin := obj.dirtyStorage[key]
+			var prevValue []byte
+			if origin.loaded && origin.exists {
+				prevValue = origin.value.Bytes()
+			}
 			rowKey := s.storageRowKey(addr, key)
 			if value == (tcommon.Hash{}) {
-				staged, err := s.stageAccountKVCommit(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true)
+				staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true, prevValue, origin.exists, origin.loaded)
 				if err != nil {
 					return nil, err
 				}
@@ -2796,7 +2810,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 				})
 				continue
 			}
-			staged, err := s.stageAccountKVCommit(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false)
+			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, prevValue, origin.exists, origin.loaded)
 			if err != nil {
 				return nil, err
 			}
@@ -3022,7 +3036,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMetaDirty = false
 		obj.storage = make(map[tcommon.Hash]tcommon.Hash)
 		obj.storageExists = make(map[tcommon.Hash]bool)
-		obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+		obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 		obj.dirty = false
 		return
 	}
@@ -3036,7 +3050,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMetaDirty = false
 	}
 	obj.accountDirty = false
-	obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+	obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 	obj.created = false
 	obj.dirty = false
 }
