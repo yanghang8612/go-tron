@@ -554,6 +554,27 @@ func (w *accountKVLatestBatch) readAccountLatest(owner tcommon.Address) ([]byte,
 	return w.latestStore.ReadAccountLatest(owner)
 }
 
+// readAccountLatestForCommitment is the synchronous commitment-fold variant
+// of readAccountLatest. Pending account values are freshly encoded immutable
+// buffers whose ownership was transferred to this batch. The fold only hashes
+// them before returning, so borrowing the pending slice avoids a defensive copy
+// per touched account without weakening readAccountLatest's public ownership
+// contract. The durable-store fallback already returns an owned value.
+func (w *accountKVLatestBatch) readAccountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
 func (w *accountKVLatestBatch) writeKVGeneration(owner tcommon.Address, generation uint64) error {
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")

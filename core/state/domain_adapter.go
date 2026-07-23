@@ -134,6 +134,13 @@ type domainCommitmentLatestReader interface {
 	KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error)
 }
 
+// domainCommitmentAccountBorrower is deliberately package-private: only the
+// synchronous commit-scope reader can lend its immutable pending account value.
+// General latest readers retain AccountLatest's defensive-copy contract.
+type domainCommitmentAccountBorrower interface {
+	accountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error)
+}
+
 type domainCommitmentLatestPrefixIterator interface {
 	KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
 }
@@ -326,7 +333,14 @@ func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLat
 		if len(commitmentKey) == 0 {
 			commitmentKey = rawdb.StateAccountLatestCommitmentKey(owner)
 		}
-		value, ok, err := reader.AccountLatest(owner)
+		var value []byte
+		var ok bool
+		var err error
+		if borrower, canBorrow := reader.(domainCommitmentAccountBorrower); canBorrow {
+			value, ok, err = borrower.accountLatestForCommitment(owner)
+		} else {
+			value, ok, err = reader.AccountLatest(owner)
+		}
 		if err != nil {
 			return rawdb.StateCommitmentUpdate{}, err
 		}

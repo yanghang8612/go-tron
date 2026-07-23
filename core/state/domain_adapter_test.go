@@ -591,6 +591,48 @@ type commitmentLatestView struct {
 	failKVLatest      bool
 }
 
+type borrowingCommitmentLatestView struct {
+	*commitmentLatestView
+	borrowed      []byte
+	ordinaryReads int
+	borrowedReads int
+}
+
+func (v *borrowingCommitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
+	v.checkOwner(owner)
+	v.ordinaryReads++
+	return append([]byte(nil), v.account...), true, nil
+}
+
+func (v *borrowingCommitmentLatestView) accountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	v.checkOwner(owner)
+	v.borrowedReads++
+	return v.borrowed, true, nil
+}
+
+func TestDomainCommitmentPrefersImmutableAccountBorrow(t *testing.T) {
+	owner := testAddr(0x7e)
+	borrowed := []byte("borrowed-account-envelope")
+	reader := &borrowingCommitmentLatestView{
+		commitmentLatestView: &commitmentLatestView{t: t, owner: owner, account: []byte("ordinary-copy")},
+		borrowed:             borrowed,
+	}
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.latestReader = reader
+	commitment.recordAccountLatestTouch(owner)
+
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatalf("latestUpdatesFromTouches: %v", err)
+	}
+	if reader.borrowedReads != 1 || reader.ordinaryReads != 0 {
+		t.Fatalf("account reads: borrowed=%d ordinary=%d, want 1/0", reader.borrowedReads, reader.ordinaryReads)
+	}
+	if len(updates) != 1 || len(updates[0].Value) == 0 || &updates[0].Value[0] != &borrowed[0] {
+		t.Fatal("commitment update did not retain the borrowed immutable account value")
+	}
+}
+
 func (v *commitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
 	v.checkOwner(owner)
 	return append([]byte(nil), v.account...), true, nil

@@ -424,6 +424,13 @@ func (r *commitScopeLatestReader) AccountLatest(owner tcommon.Address) ([]byte, 
 	return r.writer.readAccountLatest(owner)
 }
 
+func (r *commitScopeLatestReader) accountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readAccountLatestForCommitment(owner)
+}
+
 func (r *commitScopeLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
 	if r == nil || r.writer == nil {
 		return 0, false, nil
