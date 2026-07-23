@@ -58,11 +58,18 @@ func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynPr
 	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
 }
 
-func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
-	return applyTransactionWithResultSink(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil)
+// applyTransactionScratch owns the per-block actuator objects whose contents
+// are consumed synchronously before processBlock advances to the next tx.
+type applyTransactionScratch struct {
+	context actuator.Context
+	result  actuator.Result
 }
 
-func applyTransactionWithResultSink(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, resultSink *actuator.Result) (result *actuator.Result, err error) {
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
+	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil)
+}
+
+func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch) (result *actuator.Result, err error) {
 	var revertOnOverflow func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -154,7 +161,15 @@ func applyTransactionWithResultSink(statedb *state.StateDB, dynProps *state.Dyna
 		return nil, fmt.Errorf("create actuator: %w", err)
 	}
 
-	ctx := &actuator.Context{
+	var ctx *actuator.Context
+	var resultSink *actuator.Result
+	if scratch == nil {
+		ctx = new(actuator.Context)
+	} else {
+		ctx = &scratch.context
+		resultSink = &scratch.result
+	}
+	*ctx = actuator.Context{
 		State:                      statedb,
 		DynProps:                   dynProps,
 		Tx:                         tx,
@@ -547,7 +562,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
-	var resultScratch actuator.Result
+	var txScratch applyTransactionScratch
 
 	for i, tx := range block.Transactions() {
 		domainChangeMark := statedb.DomainChangeJournalMark()
@@ -573,7 +588,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if traceTxIndex >= 0 && i == traceTxIndex {
 			txTracer = traceTracer
 		}
-		result, err := applyTransactionWithResultSink(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &resultScratch)
+		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
