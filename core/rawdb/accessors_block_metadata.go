@@ -54,15 +54,38 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	txs := block.Transactions()
 	var numberValue [8]byte
 	binary.BigEndian.PutUint64(numberValue[:], blockNum)
+	var ringSlot [8]byte
+	binary.BigEndian.PutUint64(ringSlot[:], blockNum%blockNumberHashSlots)
 	ref := taposRefBytes(blockNum)
+
+	keyBytes := len(blockStateRootPrefix) + len(blockHash) +
+		len(blockPrefix) + len(numberValue) +
+		len(blockHashPrefix) + len(blockHash) +
+		len(blockNumberHashPrefix) + len(ringSlot) +
+		len(taposPrefix) + len(ref) +
+		len(txInfoBlockPrefix) + len(numberValue) +
+		len(txs)*(len(txPrefix)+common.HashLength)
+	for _, info := range infos {
+		keyBytes += len(txInfoPrefix) + len(info.Id)
+	}
+	keyArena := make([]byte, keyBytes)
+	keyOffset := 0
+	metadataKey := func(prefix, suffix []byte) []byte {
+		start := keyOffset
+		keyOffset += len(prefix) + len(suffix)
+		key := keyArena[start:keyOffset:keyOffset]
+		n := copy(key, prefix)
+		copy(key[n:], suffix)
+		return key
+	}
 
 	rows := make([]blockMetadataRow, 0, 6+len(infos)+len(txs))
 	rows = append(rows,
-		blockMetadataRow{key: blockStateRootKey(blockHash[:]), value: stateRoot[:]},
-		blockMetadataRow{key: blockKey(blockNum), value: blockData},
-		blockMetadataRow{key: blockHashKey(blockHash[:]), value: numberValue[:]},
-		blockMetadataRow{key: blockNumberHashKey(blockNum), value: blockHash[:]},
-		blockMetadataRow{key: taposKey(ref[:]), value: blockHash[8:16]},
+		blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]},
+		blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData},
+		blockMetadataRow{key: metadataKey(blockHashPrefix, blockHash[:]), value: numberValue[:]},
+		blockMetadataRow{key: metadataKey(blockNumberHashPrefix, ringSlot[:]), value: blockHash[:]},
+		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},
 	)
 	infoRowStart := len(rows)
 	for _, info := range infos {
@@ -70,17 +93,17 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		if err != nil {
 			return fmt.Errorf("marshal tx info: %w", err)
 		}
-		rows = append(rows, blockMetadataRow{key: txInfoKey(info.Id), value: data})
+		rows = append(rows, blockMetadataRow{key: metadataKey(txInfoPrefix, info.Id), value: data})
 	}
 	var blockTimestamp int64
 	if len(infos) > 0 {
 		blockTimestamp = infos[0].BlockTimeStamp
 	}
 	retData := marshalTransactionRetRows(int64(blockNum), blockTimestamp, rows[infoRowStart:])
-	rows = append(rows, blockMetadataRow{key: txInfoBlockKey(blockNum), value: retData})
+	rows = append(rows, blockMetadataRow{key: metadataKey(txInfoBlockPrefix, numberValue[:]), value: retData})
 	for _, tx := range txs {
 		hash := tx.Hash()
-		rows = append(rows, blockMetadataRow{key: txKey(hash[:]), value: numberValue[:]})
+		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: numberValue[:]})
 	}
 
 	encodedSize := metadataBatchHeaderSize
