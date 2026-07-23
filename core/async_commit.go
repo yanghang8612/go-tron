@@ -66,6 +66,8 @@ type commitJob struct {
 	dynProps          *state.DynamicProperties
 	cycleRewards      cycleRewardAccumulatorSnapshot
 	txInfos           []*corepb.TransactionInfo
+	txInfoBatch       *transactionInfoBatch
+	txInfoBatchPool   *transactionInfoBatchPool
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
 	checkpoint        bool
@@ -205,6 +207,8 @@ func (bc *BlockChain) commitAsync(
 		dynProps:          dynProps.Copy(),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
+		txInfoBatch:       plan.txInfoBatch,
+		txInfoBatchPool:   plan.txInfoBatchPool,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
@@ -213,6 +217,7 @@ func (bc *BlockChain) commitAsync(
 	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
 	//    bounds the pipeline to depth 2). After this returns the foreground may
 	//    begin the next block's layer.
+	plan.txInfoBatchHandedOff = true
 	bc.enqueueCommit(job)
 
 	// 6. Flush the scope's latest-domain rows + drop solidified buffer layers,
@@ -288,6 +293,7 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 // KEEP IN SYNC with applyBlockWithPlan's synchronous commit tail.
 func (bc *BlockChain) runCommitJob(job *commitJob) {
 	defer bc.commitPending.done()
+	defer job.txInfoBatchPool.release(job.txInfoBatch)
 	if errPtr := bc.commitErr.Load(); errPtr != nil {
 		// A prior commit already failed; do not apply further state. Drop the
 		// layer so it is not left dangling.

@@ -296,6 +296,73 @@ type transactionInfoSlot struct {
 	contractResult [1][]byte
 }
 
+// transactionInfoBatch owns the contiguous receipt storage for one block.
+// Canonical range execution may recycle a batch after the metadata writer has
+// consumed every TransactionInfo; public ProcessBlock callers keep the
+// allocation-per-call ownership contract by passing no batch.
+type transactionInfoBatch struct {
+	slots []transactionInfoSlot
+	infos []*corepb.TransactionInfo
+}
+
+func (b *transactionInfoBatch) prepare(n int) ([]transactionInfoSlot, []*corepb.TransactionInfo) {
+	if n == 0 {
+		b.slots = b.slots[:0]
+		b.infos = b.infos[:0]
+		return b.slots, b.infos
+	}
+	if cap(b.slots) < n {
+		newCap := n
+		if grown := cap(b.slots) + cap(b.slots)/2; grown > newCap {
+			newCap = grown
+		}
+		if newCap < 16 {
+			newCap = 16
+		}
+		b.slots = make([]transactionInfoSlot, n, newCap)
+		b.infos = make([]*corepb.TransactionInfo, n, newCap)
+	} else {
+		b.slots = b.slots[:n]
+		b.infos = b.infos[:n]
+	}
+	return b.slots, b.infos
+}
+
+// transactionInfoBatchPool is bounded by the commit pipeline depth. A batch
+// handed to async commit is returned only after the worker has serialized its
+// infos, so foreground execution can never overwrite worker-owned protobufs.
+type transactionInfoBatchPool struct {
+	free chan *transactionInfoBatch
+}
+
+func newTransactionInfoBatchPool(depth int) *transactionInfoBatchPool {
+	if depth < 1 {
+		depth = 1
+	}
+	return &transactionInfoBatchPool{free: make(chan *transactionInfoBatch, depth)}
+}
+
+func (p *transactionInfoBatchPool) acquire() *transactionInfoBatch {
+	select {
+	case batch := <-p.free:
+		return batch
+	default:
+		return new(transactionInfoBatch)
+	}
+}
+
+func (p *transactionInfoBatchPool) release(batch *transactionInfoBatch) {
+	if p == nil || batch == nil {
+		return
+	}
+	select {
+	case p.free <- batch:
+	default:
+		// The pool is only a reuse hint. Dropping an unexpected surplus keeps
+		// retention bounded without adding synchronization to block execution.
+	}
+}
+
 // buildTransactionInfo constructs an independently owned TransactionInfo.
 // processBlock uses transactionInfoSlot.build with a block-sized slot array;
 // standalone callers retain the same ownership through one dedicated slot.
@@ -304,6 +371,10 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 }
 
 func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
+	// Break a prior occupant's result reference even when the new transaction
+	// does not publish ContractResult. The full info assignment below clears all
+	// other pointer-bearing protobuf fields before they are rebuilt.
+	slot.contractResult[0] = nil
 	slot.id = tx.Hash()
 	isVMContract := isVMContractType(tx.ContractType())
 
@@ -512,21 +583,21 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, -1, nil)
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, -1, nil)
 }
 
 // ProcessBlockTraced re-executes block against the supplied (copied) PARENT
@@ -535,7 +606,7 @@ func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, d
 // tracer captures just the target tx's opcode/call stream (every other tx runs
 // with a nil tracer at zero overhead). genesisHash is optional.
 func ProcessBlockTraced(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, forkPassCache *forks.VersionPassCache, traceTxIndex int, tracer vm.Tracer, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, forkPassCache, traceTxIndex, tracer)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, forkPassCache, nil, traceTxIndex, tracer)
 	return txInfos, err
 }
 
@@ -546,7 +617,7 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	// Fork stats and prevBlockTime are immutable throughout this block. Share
 	// permanently-passed versions with the chain cache, but keep pending/false
 	// results in a disposable block view so per-tx gates read each version only
@@ -584,8 +655,13 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
-	txInfoSlots := make([]transactionInfoSlot, len(transactions))
-	txInfos = make([]*corepb.TransactionInfo, len(transactions))
+	var txInfoSlots []transactionInfoSlot
+	if txInfoBatch != nil {
+		txInfoSlots, txInfos = txInfoBatch.prepare(len(transactions))
+	} else {
+		txInfoSlots = make([]transactionInfoSlot, len(transactions))
+		txInfos = make([]*corepb.TransactionInfo, len(transactions))
+	}
 
 	for i, tx := range transactions {
 		domainChangeMark := statedb.DomainChangeJournalMark()

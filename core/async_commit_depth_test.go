@@ -10,7 +10,9 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // TestResolveCommitPipelineDepth pins the env parsing + clamp for the ops-only
@@ -119,6 +121,70 @@ func TestAsyncCommit_Depth4_MatchesSync(t *testing.T) {
 	}
 	if got := bc.CurrentBlock().Hash(); got != blocks[N-1].Hash() {
 		t.Fatalf("async head = %x, want %x", got, blocks[N-1].Hash())
+	}
+}
+
+// TestAsyncCommit_Depth4_TransactionInfoBatchOwnership keeps the commit worker
+// deliberately behind foreground execution while every block produces
+// transaction receipts. A recycled transactionInfoBatch must remain owned by
+// its job until metadata serialization completes; returning it at enqueue time
+// would overwrite IDs/block numbers and this test would observe cross-block
+// receipt corruption.
+func TestAsyncCommit_Depth4_TransactionInfoBatchOwnership(t *testing.T) {
+	const numBlocks, txPerBlock = 12, 4
+	genesis, makeBlocks := buildTransferChain(64, numBlocks, txPerBlock)
+
+	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	diskdb := ethrawdb.NewMemoryDatabase()
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatalf("setup genesis: %v", err)
+	}
+	blocks := makeBlocks(genesisHash)
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("new blockchain: %v", err)
+	}
+	bc.SetAsyncCommit(true)
+	defer bc.Close()
+
+	SetCommitFoldHookForTest(func(uint64) error {
+		time.Sleep(2 * time.Millisecond)
+		return nil
+	})
+	defer SetCommitFoldHookForTest(nil)
+
+	if err := bc.InsertBlocks(blocks); err != nil {
+		t.Fatalf("async InsertBlocks: %v", err)
+	}
+	bc.WaitForCommitSettled()
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		t.Fatalf("async commit recorded error: %v", *errPtr)
+	}
+
+	for _, block := range blocks {
+		txs := block.Transactions()
+		infos := rawdb.ReadTransactionInfosByBlock(bc.chaindb, block.Number())
+		if len(infos) != len(txs) {
+			t.Fatalf("block %d infos = %d, want %d", block.Number(), len(infos), len(txs))
+		}
+		for i, tx := range txs {
+			wantID := tx.Hash()
+			info := infos[i]
+			if info == nil {
+				t.Fatalf("block %d tx %d: nil info", block.Number(), i)
+			}
+			if got := tcommon.BytesToHash(info.Id); got != wantID {
+				t.Fatalf("block %d tx %d id = %x, want %x", block.Number(), i, got, wantID)
+			}
+			if info.BlockNumber != int64(block.Number()) {
+				t.Fatalf("block %d tx %d info block = %d", block.Number(), i, info.BlockNumber)
+			}
+			indexed := rawdb.ReadTransactionInfo(bc.chaindb, wantID[:])
+			if indexed == nil || indexed.BlockNumber != int64(block.Number()) {
+				t.Fatalf("block %d tx %d per-tx index mismatch: %+v", block.Number(), i, indexed)
+			}
+		}
 	}
 }
 
