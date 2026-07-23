@@ -322,6 +322,12 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 // snapshot and is reverted by the caller on a later error.
 func (tvm *TVM) validateAndPrepareTRXEndowment(caller, addr tcommon.Address, value int64) error {
 	if caller == addr {
+		// Program.callToAddress catches the self-transfer validation failure as
+		// a BytecodeExecutionException before ALLOW_TVM_CONSTANTINOPLE. Only
+		// after that proposal does java-tron promote it to TransferException.
+		if !tvm.cfg.Constantinople {
+			return ErrValidateForSmartContract
+		}
 		return ErrTransferFailed
 	}
 
@@ -985,6 +991,11 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		if caller == addr {
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
+			// The TRC10 validation catch is governed by the same
+			// ALLOW_TVM_CONSTANTINOPLE branch as the TRX path in java-tron.
+			if !tvm.cfg.Constantinople {
+				return nil, 0, ErrValidateForSmartContract
+			}
 			return nil, energy, ErrTokenTransferFailed
 		}
 		if !tvm.StateDB.AccountExists(addr) {

@@ -250,6 +250,53 @@ func TestMainnet3422904AccountlessCALLReplay(t *testing.T) {
 	}
 }
 
+// TestMainnet4997510PreConstantinopleSelfCALLReplay pins mainnet block
+// 4,997,510, tx d52b35bb078dfd695623ffbcb50259b051a25e2396ac8bf357dc6f1e061bdff2.
+// Before ALLOW_MULTI_SIGN, ADDRESS retained TRON's 0x41 prefix while Solidity
+// address values were masked to 20 bytes. PotPotato therefore failed to
+// recognize its own address and attempted a value-bearing CALL to itself.
+// Program.callToAddress's validation failed; before ALLOW_TVM_CONSTANTINOPLE
+// java wrapped that failure as BytecodeExecutionException, yielding UNKNOWN
+// and consuming all transaction energy rather than TRANSFER_FAILED.
+func TestMainnet4997510PreConstantinopleSelfCALLReplay(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+
+	owner := tcommon.BytesToAddress(tcommon.FromHex("41647b94acbf6b93eff1eeff2d19abd4ad39642c7d"))
+	contractAddr := tcommon.BytesToAddress(tcommon.FromHex("41853936257e9697e2312daff9c36ee8c74983d99e"))
+	sdb.CreateAccount(owner, corepb.AccountType_Normal)
+	sdb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	sdb.AddBalance(owner, 100_000_000)
+
+	// The historical contract reached this CALL after its prefixed ADDRESS
+	// comparison missed. Reproduce the resulting self-transfer directly.
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH20),
+	}
+	code = append(code, contractAddr[1:]...)
+	code = append(code, byte(PUSH2), 0x08, 0xfc, byte(CALL), byte(STOP))
+	sdb.SetCode(contractAddr, code)
+
+	const energyLimit = uint64(100_000_000)
+	_, left, err := tvm.Call(owner, contractAddr, nil, energyLimit, 3_000_000)
+	if !errors.Is(err, ErrValidateForSmartContract) {
+		t.Fatalf("Call error: got %v, want validateForSmartContract failure", err)
+	}
+	if left != 0 {
+		t.Fatalf("remaining energy: got %d, want 0", left)
+	}
+	if got := sdb.GetBalance(owner); got != 100_000_000 {
+		t.Fatalf("owner balance after reverted trigger: got %d, want 100000000", got)
+	}
+	if got := sdb.GetBalance(contractAddr); got != 0 {
+		t.Fatalf("contract balance after reverted trigger: got %d, want 0", got)
+	}
+}
+
 func TestCALLWithValue_ConstantinopleBeforeSolidity059ReturnsTransferFailed(t *testing.T) {
 	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
 	caller := tcommon.Address{0x41, 0x01}
@@ -569,48 +616,80 @@ func TestCallTokenToExistingCodeInsufficientBalanceSkipsJavaSurcharge(t *testing
 	}
 }
 
-func TestCallTokenToSelfReturnsTransferFailed(t *testing.T) {
+func TestCallTokenToSelfGatedByConstantinople(t *testing.T) {
 	const tokenID = int64(1_000_002)
 
-	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
-	caller := tcommon.Address{0x41, 0x11}
-	sdb.GetOrCreateAccount(caller)
-	sdb.AddTRC10Balance(caller, tokenID, 10)
-
-	code := []byte{
-		byte(PUSH1), 0x00, // retSize
-		byte(PUSH1), 0x00, // retOffset
-		byte(PUSH1), 0x00, // inSize
-		byte(PUSH1), 0x00, // inOffset
-		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
-		byte(PUSH1), 0x01, // tokenValue
-		byte(PUSH20),
+	tests := []struct {
+		name           string
+		constantinople bool
+		want           error
+	}{
+		{name: "before-constantinople", want: ErrValidateForSmartContract},
+		{name: "after-constantinople", constantinople: true, want: ErrTokenTransferFailed},
 	}
-	code = append(code, caller[1:]...)
-	code = append(code,
-		byte(PUSH2), 0x27, 0x10, // gas
-		byte(CALLTOKEN),
-		byte(STOP),
-	)
-	contract := NewContract(caller, caller, 0, 100_000)
-	contract.SetCode(caller, code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{
+				TransferTrc10:  true,
+				Constantinople: tt.constantinople,
+			}, nil)
+			caller := tcommon.Address{0x41, 0x11}
+			sdb.GetOrCreateAccount(caller)
+			sdb.AddTRC10Balance(caller, tokenID, 10)
 
-	if _, err := tvm.interpreter.Run(contract); err != ErrTokenTransferFailed {
-		t.Fatalf("Run error: got %v, want %v", err, ErrTokenTransferFailed)
-	}
-	if got := sdb.GetTRC10Balance(caller, tokenID); got != 10 {
-		t.Fatalf("caller token balance changed: got %d", got)
+			code := []byte{
+				byte(PUSH1), 0x00, // retSize
+				byte(PUSH1), 0x00, // retOffset
+				byte(PUSH1), 0x00, // inSize
+				byte(PUSH1), 0x00, // inOffset
+				byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+				byte(PUSH1), 0x01, // tokenValue
+				byte(PUSH20),
+			}
+			code = append(code, caller[1:]...)
+			code = append(code,
+				byte(PUSH2), 0x27, 0x10, // gas
+				byte(CALLTOKEN),
+				byte(STOP),
+			)
+			contract := NewContract(caller, caller, 0, 100_000)
+			contract.SetCode(caller, code)
+
+			if _, err := tvm.interpreter.Run(contract); !errors.Is(err, tt.want) {
+				t.Fatalf("Run error: got %v, want %v", err, tt.want)
+			}
+			if got := sdb.GetTRC10Balance(caller, tokenID); got != 10 {
+				t.Fatalf("caller token balance changed: got %d", got)
+			}
+		})
 	}
 }
 
-func TestCallValueToSelfReturnsTransferFailed(t *testing.T) {
-	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
-	caller := tcommon.Address{0x41, 0x11}
-	sdb.GetOrCreateAccount(caller)
-	sdb.AddBalance(caller, 10)
+func TestCallValueToSelfGatedByConstantinople(t *testing.T) {
+	tests := []struct {
+		name           string
+		constantinople bool
+		want           error
+		wantLeft       uint64
+	}{
+		{name: "before-constantinople", want: ErrValidateForSmartContract},
+		{name: "after-constantinople", constantinople: true, want: ErrTransferFailed, wantLeft: 100_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: tt.constantinople}, nil)
+			caller := tcommon.Address{0x41, 0x11}
+			sdb.GetOrCreateAccount(caller)
+			sdb.AddBalance(caller, 10)
 
-	if _, _, err := tvm.Call(caller, caller, nil, 100_000, 1); err != ErrTransferFailed {
-		t.Fatalf("Call error: got %v, want %v", err, ErrTransferFailed)
+			_, left, err := tvm.Call(caller, caller, nil, 100_000, 1)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Call error: got %v, want %v", err, tt.want)
+			}
+			if left != tt.wantLeft {
+				t.Fatalf("remaining energy: got %d, want %d", left, tt.wantLeft)
+			}
+		})
 	}
 }
 

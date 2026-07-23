@@ -103,7 +103,11 @@ accountless recipient, which must spend all energy and record UNKNOWN rather
 than implicitly create the recipient (mainnet 3,422,904); and the
 pre-ALLOW_MULTI_SIGN empty-runtime-code cache NPE after an internal CREATE
 (typically a constructor SELFDESTRUCT), which must spend all energy and record
-UNKNOWN (mainnet 4,904,919, with repeats at 4,905,126 and 4,905,131).
+UNKNOWN (mainnet 4,904,919, with repeats at 4,905,126 and 4,905,131); and
+pre-ALLOW_TVM_CONSTANTINOPLE internal self-transfer validation, which is a
+BytecodeExecutionException (UNKNOWN + spend-all) rather than the later
+TransferException (TRANSFER_FAILED + refund), exposed by the prefixed ADDRESS
+semantics at mainnet 4,997,510.
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline
