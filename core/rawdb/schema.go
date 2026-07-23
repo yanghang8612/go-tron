@@ -31,8 +31,9 @@ var (
 	// blockNumberHashPrefix is a bounded recent BlockID ring. Each key selects
 	// one of blockNumberHashSlots slots. A TRON BlockID embeds its number in the
 	// first 8 bytes, so readers can reject overwritten slots without storing
-	// separate metadata. Two complete TVM BLOCKHASH windows remain hot without
-	// an ever-growing number→hash index.
+	// separate metadata. The ring covers a complete 2000-block sync inventory
+	// as well as the TVM's 256-block BLOCKHASH window without an ever-growing
+	// number→hash index.
 	blockNumberHashPrefix    = []byte("bnh-")
 	txPrefix                 = []byte("tx-")
 	txInfoPrefix             = []byte("ti-")
@@ -405,7 +406,7 @@ func blockHashKey(hash []byte) []byte {
 	return append(append([]byte{}, blockHashPrefix...), hash...)
 }
 
-const blockNumberHashSlots = uint64(512)
+const blockNumberHashSlots = uint64(4096)
 
 func blockNumberHashKey(number uint64) []byte {
 	k := make([]byte, len(blockNumberHashPrefix)+8)

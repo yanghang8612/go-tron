@@ -487,6 +487,27 @@ func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 	return rawdb.ReadBlock(bc.chaindb, number)
 }
 
+// BlockIDByNumber retrieves only the canonical BlockID at number. Sync
+// summaries and inventory checks use this instead of deserializing the complete
+// block (including every transaction) merely to compare its hash. The head is
+// already resident; older blocks use rawdb's recent-hash ring or allocation-
+// light raw-header scan with ancient fallback.
+func (bc *BlockChain) BlockIDByNumber(number uint64) (types.BlockID, bool) {
+	if current := bc.CurrentBlock(); current != nil {
+		if number > current.Number() {
+			return types.BlockID{}, false
+		}
+		if number == current.Number() {
+			return current.ID(), true
+		}
+	}
+	hash, ok := rawdb.ReadBlockHash(bc.chaindb, number)
+	if !ok {
+		return types.BlockID{}, false
+	}
+	return types.BlockID{Hash: hash, Num: number}, true
+}
+
 // GetBlockByHash retrieves a block by its hash.
 func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	num := rawdb.ReadBlockNumber(bc.chaindb, hash)

@@ -831,7 +831,7 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	}
 
 	// Convert to BlockIDs
-	var peerSummary []types.BlockID
+	peerSummary := make([]types.BlockID, 0, len(inv.Ids))
 	for _, bid := range inv.Ids {
 		peerSummary = append(peerSummary, types.BlockID{
 			Hash: tcommon.BytesToHash(bid.Hash),
@@ -844,14 +844,17 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	headNum := ss.chain.CurrentBlock().Number()
 
 	// Build chain inventory: sequential blocks after common
-	var responseIDs []*corepb.ChainInventory_BlockId
+	responseCap := headNum - commonNum
+	if responseCap > maxChainInventorySize {
+		responseCap = maxChainInventorySize
+	}
+	responseIDs := make([]*corepb.ChainInventory_BlockId, 0, int(responseCap))
 	count := 0
 	for num := commonNum + 1; num <= headNum && count < maxChainInventorySize; num++ {
-		block := ss.chain.GetBlockByNumber(num)
-		if block == nil {
+		bid, ok := ss.chain.BlockIDByNumber(num)
+		if !ok {
 			break
 		}
-		bid := block.ID()
 		responseIDs = append(responseIDs, &corepb.ChainInventory_BlockId{
 			Hash:   bid.Hash[:],
 			Number: int64(bid.Num),
@@ -926,7 +929,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			continue
 		}
 		if num <= committedHeadNum {
-			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
+			if existing, ok := ss.chain.BlockIDByNumber(num); ok && existing.Hash == hash {
 				continue
 			}
 		}
@@ -1213,7 +1216,7 @@ func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
 		return true
 	}
 	if bid.Num <= committedHeadNum {
-		if existing := ss.chain.GetBlockByNumber(bid.Num); existing != nil && existing.Hash() == bid.Hash {
+		if existing, ok := ss.chain.BlockIDByNumber(bid.Num); ok && existing.Hash == bid.Hash {
 			ss.releaseBlockPathLocked(bid)
 			return true
 		}
