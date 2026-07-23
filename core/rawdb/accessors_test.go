@@ -1,12 +1,36 @@
 package rawdb
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+type ownedBlockWriterProbe struct {
+	ownedKey   []byte
+	ownedValue []byte
+	puts       map[string][]byte
+}
+
+func (p *ownedBlockWriterProbe) Put(key, value []byte) error {
+	if p.puts == nil {
+		p.puts = make(map[string][]byte)
+	}
+	p.puts[string(key)] = append([]byte(nil), value...)
+	return nil
+}
+
+func (*ownedBlockWriterProbe) Delete([]byte) error { return nil }
+
+func (p *ownedBlockWriterProbe) PutOwnedValue(key, value []byte) error {
+	p.ownedKey = append([]byte(nil), key...)
+	p.ownedValue = value
+	return nil
+}
 
 func TestWriteReadBlock(t *testing.T) {
 	chaindb := NewMemoryChainDB()
@@ -28,6 +52,95 @@ func TestWriteReadBlock(t *testing.T) {
 	if got.Number() != 42 {
 		t.Fatalf("expected 42, got %d", got.Number())
 	}
+	gotHash, ok := ReadBlockHash(chaindb, block.Number())
+	if !ok || gotHash != block.Hash() {
+		t.Fatalf("number->hash = %x,%v want %x,true", gotHash, ok, block.Hash())
+	}
+}
+
+func TestWriteBlockEncodedTransfersPayloadToOwnedWriter(t *testing.T) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126_000}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{0xab}, 512)}}},
+	})
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := new(ownedBlockWriterProbe)
+	if err := WriteBlockEncoded(probe, block, data); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(probe.ownedKey, blockKey(block.Number())) {
+		t.Fatalf("owned key = %x, want %x", probe.ownedKey, blockKey(block.Number()))
+	}
+	if !bytes.Equal(probe.ownedValue, data) || &probe.ownedValue[0] != &data[0] {
+		t.Fatal("encoded block payload was copied instead of transferred")
+	}
+	hash := block.Hash()
+	if got := probe.puts[string(blockHashKey(hash[:]))]; !bytes.Equal(got, encodeBlockNumber(block.Number())) {
+		t.Fatalf("hash index = %x, want block number %d", got, block.Number())
+	}
+	wantRingKey := blockNumberHashKey(block.Number())
+	if got := probe.puts[string(wantRingKey)]; !bytes.Equal(got, hash[:]) {
+		t.Fatalf("number index = %x, want hash %x", got, hash)
+	}
+}
+
+func encodeBlockNumber(number uint64) []byte {
+	var out [8]byte
+	binary.BigEndian.PutUint64(out[:], number)
+	return out[:]
+}
+
+func TestReadBlockHashKVCompactIndexWithoutBody(t *testing.T) {
+	db := NewMemoryDatabase()
+	var want common.Hash
+	binary.BigEndian.PutUint64(want[:8], 42)
+	copy(want[8:], []byte("compact-index"))
+	if err := db.Put(blockNumberHashKey(42), want[:]); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := ReadBlockHashKV(db, 42)
+	if !ok || got != want {
+		t.Fatalf("ReadBlockHashKV = %x,%v want %x,true", got, ok, want)
+	}
+}
+
+func TestReadBlockHashKVRejectsOverwrittenRingSlot(t *testing.T) {
+	db := NewMemoryDatabase()
+	newer := uint64(42) + blockNumberHashSlots
+	var want common.Hash
+	binary.BigEndian.PutUint64(want[:8], newer)
+	copy(want[8:], []byte("newer-ring-value"))
+	if err := db.Put(blockNumberHashKey(newer), want[:]); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := ReadBlockHashKV(db, 42); ok || got != (common.Hash{}) {
+		t.Fatalf("overwritten slot answered old number: %x,%v", got, ok)
+	}
+	if got, ok := ReadBlockHashKV(db, newer); !ok || got != want {
+		t.Fatalf("new slot value = %x,%v want %x,true", got, ok, want)
+	}
+}
+
+func TestReadBlockHashKVLegacyBodyFallback(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126000}},
+	})
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a database created before the compact number→hash index.
+	if err := db.Put(blockKey(block.Number()), data); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := ReadBlockHashKV(db, block.Number())
+	if !ok || got != block.Hash() {
+		t.Fatalf("legacy ReadBlockHashKV = %x,%v want %x,true", got, ok, block.Hash())
+	}
 }
 
 func TestWriteReadBlockByHash(t *testing.T) {
@@ -46,6 +159,29 @@ func TestWriteReadBlockByHash(t *testing.T) {
 	}
 	if *num != 10 {
 		t.Fatalf("expected 10, got %d", *num)
+	}
+}
+
+func TestWriteBlockOverwritesRecentHashForCanonicalNumber(t *testing.T) {
+	db := NewMemoryChainDB()
+	first := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 10, Timestamp: 30_000}},
+	})
+	second := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 10, Timestamp: 30_001}},
+	})
+	if first.Hash() == second.Hash() {
+		t.Fatal("test blocks unexpectedly have the same hash")
+	}
+	if err := WriteBlock(db, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBlock(db, second); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := ReadBlockHashKV(db, 10)
+	if !ok || got != second.Hash() {
+		t.Fatalf("canonical replacement hash = %x,%v want %x,true", got, ok, second.Hash())
 	}
 }
 

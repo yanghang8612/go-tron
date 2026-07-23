@@ -161,6 +161,31 @@ func TestBlockChainGetBlockByNumber(t *testing.T) {
 	}
 }
 
+func TestBlockChainBlockIDByNumber(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 1000},
+		},
+	}
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	want := bc.CurrentBlock().ID()
+	got, ok := bc.BlockIDByNumber(0)
+	if !ok || got != want {
+		t.Fatalf("BlockIDByNumber(0) = %+v,%v want %+v,true", got, ok, want)
+	}
+	if got, ok := bc.BlockIDByNumber(1); ok || got != (types.BlockID{}) {
+		t.Fatalf("future BlockIDByNumber = %+v,%v want zero,false", got, ok)
+	}
+}
+
 func TestBlockChainGetBlockByHash(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)

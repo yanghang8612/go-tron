@@ -20,6 +20,26 @@ type keyPartsProbeWriter struct {
 	value       []byte
 }
 
+type ownedKeyPartsProbeWriter struct {
+	keyPartsProbeWriter
+	ownedCalls       int
+	stringOwnedCalls int
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	w.ownedCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	w.value = value
+	return nil
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
+	w.stringOwnedCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	w.value = value
+	return nil
+}
+
 func (w *keyPartsProbeWriter) Put(_, _ []byte) error {
 	return fmt.Errorf("unexpected fallback Put")
 }
@@ -60,6 +80,41 @@ func TestCommitmentBranchUsesSplitKeyWriter(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchOwnedValueUsesTransferWriter(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	prefix := []byte{1, 2, 3, 4}
+	value := []byte{5, 6, 7}
+	wantKey := commitmentBranchKey(prefix)
+	if !SupportsCommitmentBranchOwnedValue(w) {
+		t.Fatal("owned split-key writer capability was not detected")
+	}
+	if err := WriteCommitmentBranchOwned(w, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	if w.ownedCalls != 1 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
+		t.Fatalf("owned Put = owned %d regular %d key %x value %x, want 1/0/%x/%x", w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
+	}
+	if &w.value[0] != &value[0] {
+		t.Fatal("owned commitment writer copied the transferred value")
+	}
+}
+
+func TestCommitmentBranchOwnedStringUsesTransferWriter(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	prefix := string([]byte{1, 2, 3, 4})
+	value := []byte{5, 6, 7}
+	wantKey := commitmentBranchKey([]byte(prefix))
+	if err := WriteCommitmentBranchOwnedString(w, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	if w.stringOwnedCalls != 1 || w.ownedCalls != 0 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
+		t.Fatalf("string-owned Put = string %d owned %d regular %d key %x value %x, want 1/0/0/%x/%x", w.stringOwnedCalls, w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
+	}
+	if &w.value[0] != &value[0] {
+		t.Fatal("string-owned commitment writer copied the transferred value")
+	}
+}
+
 func BenchmarkCommitmentBranchKeyAllocation(b *testing.B) {
 	w := discardCommitmentWriter{}
 	value := bytes.Repeat([]byte{0xcd}, 256)
@@ -81,6 +136,21 @@ type cachedNoCopyProbe struct {
 	getCalls    int
 	noCopyCalls int
 	cachedCalls int
+}
+
+type splitCachedNoCopyProbe struct {
+	*cachedNoCopyProbe
+	splitCalls int
+	first      []byte
+	second     []byte
+}
+
+func (p *splitCachedNoCopyProbe) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	p.splitCalls++
+	p.first = append(p.first[:0], first...)
+	p.second = append(p.second[:0], second...)
+	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
+	return p.KeyValueReader.Get(key)
 }
 
 func (p *cachedNoCopyProbe) Get(key []byte) ([]byte, error) {
@@ -217,5 +287,28 @@ func TestReadCommitmentBranchNoCopy_PrefersCachedReader(t *testing.T) {
 	if probe.cachedCalls != 1 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
 		t.Fatalf("reader calls cached/noCopy/Get = %d/%d/%d, want 1/0/0",
 			probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	}
+}
+
+func TestReadCommitmentBranchNoCopy_PrefersSplitCachedReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x04, 0x05, 0x06}
+	want := []byte{0xdd, 0xee, 0xff}
+	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
+		t.Fatal(err)
+	}
+	probe := &splitCachedNoCopyProbe{
+		cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db},
+	}
+	got, ok, err := ReadCommitmentBranchNoCopy(probe, prefix)
+	if err != nil || !ok || !bytes.Equal(got, want) {
+		t.Fatalf("ReadCommitmentBranchNoCopy = (%x,%v,%v)", got, ok, err)
+	}
+	if probe.splitCalls != 1 || probe.cachedCalls != 0 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
+		t.Fatalf("reader calls split/cached/noCopy/Get = %d/%d/%d/%d, want 1/0/0/0",
+			probe.splitCalls, probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	}
+	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
+		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
 	}
 }

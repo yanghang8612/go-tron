@@ -293,6 +293,15 @@ func TestBlock_TransactionsAreStable(t *testing.T) {
 		if a[i] != b[i] {
 			t.Fatalf("Transactions()[%d] not stable: %p vs %p", i, a[i], b[i])
 		}
+		if a[i].Proto() != block.Proto().Transactions[i] {
+			t.Fatalf("Transactions()[%d] wraps the wrong protobuf", i)
+		}
+	}
+	if a[0] == a[1] {
+		t.Fatal("distinct protobuf transactions share one wrapper")
+	}
+	if a[0].Hash() == a[1].Hash() {
+		t.Fatal("distinct transaction wrappers share a hash cache")
 	}
 }
 

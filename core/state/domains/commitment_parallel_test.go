@@ -5,7 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
@@ -19,6 +22,158 @@ func newParallelTrie(store branchStore) *commitmentTrie {
 	t := newCommitmentTrie(store)
 	t.parallelMinOps = 1
 	return t
+}
+
+type concurrentFlushProbe struct {
+	mu      sync.Mutex
+	base    *mapBranchStore
+	entered chan struct{}
+	release chan struct{}
+	active  atomic.Int32
+	max     atomic.Int32
+	failOn  int
+}
+
+func newConcurrentFlushProbe() *concurrentFlushProbe {
+	return &concurrentFlushProbe{
+		base:    newMapBranchStore(),
+		entered: make(chan struct{}, maxFoldNibbles),
+		release: make(chan struct{}),
+		failOn:  -1,
+	}
+}
+
+func (*concurrentFlushProbe) concurrentSiblingFlushSafe() bool { return true }
+
+func (s *concurrentFlushProbe) GetBranch(prefix []byte) (BranchData, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.base.GetBranch(prefix)
+}
+
+func (s *concurrentFlushProbe) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.base.GetBranchInto(prefix, dst)
+}
+
+func (s *concurrentFlushProbe) PutBranch(prefix []byte, branch BranchData) error {
+	active := s.active.Add(1)
+	for max := s.max.Load(); active > max && !s.max.CompareAndSwap(max, active); max = s.max.Load() {
+	}
+	defer s.active.Add(-1)
+	s.entered <- struct{}{}
+	<-s.release
+	if len(prefix) > 0 && int(prefix[0]) == s.failOn {
+		return fmt.Errorf("flush probe failure at prefix %x", prefix)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.base.PutBranch(prefix, branch)
+}
+
+func (s *concurrentFlushProbe) DelBranch(prefix []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.base.DelBranch(prefix)
+}
+
+func siblingFlushOps(nibbles ...uint8) []op {
+	ops := make([]op, 0, len(nibbles)*2)
+	for _, nb := range nibbles {
+		for child := uint8(0); child < 2; child++ {
+			o := op{
+				key:     []byte{0xff, nb, child},
+				valHash: common.Hash{nb + 1, child + 1},
+			}
+			o.path[0] = nb<<4 | child
+			ops = append(ops, o)
+		}
+	}
+	return ops
+}
+
+func TestApplyRootParallelFlushesOptedInStoreConcurrently(t *testing.T) {
+	probe := newConcurrentFlushProbe()
+	trie := newCommitmentTrie(probe)
+	trie.parallelLimit = 2
+
+	type result struct {
+		root *BranchData
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		root, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1))
+		done <- result{root: root, err: err}
+	}()
+	timer := time.NewTimer(2 * time.Second)
+	concurrent := true
+	for i := 0; i < 2; i++ {
+		select {
+		case <-probe.entered:
+		case <-timer.C:
+			concurrent = false
+			i = 2
+		}
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	close(probe.release)
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.root == nil || got.root.childCount() != 2 {
+		t.Fatalf("parallel root = %#v, want two children", got.root)
+	}
+	if !concurrent || probe.max.Load() < 2 {
+		t.Fatalf("flush max concurrency = %d, want at least 2", probe.max.Load())
+	}
+	if rows := probe.base.rowSet(); len(rows) != 2 {
+		t.Fatalf("parallel flush wrote %d rows, want 2", len(rows))
+	}
+}
+
+func TestRawdbBranchStoreConcurrentFlushRequiresMarkedDB(t *testing.T) {
+	direct := newRawdbBranchStore(rawdb.NewMemoryDatabase())
+	if direct.concurrentSiblingFlushSafe() {
+		t.Fatal("unmarked memory database unexpectedly opted into concurrent flush")
+	}
+	buffered := newRawdbBranchStore(blockbuffer.New(rawdb.NewMemoryDatabase()))
+	if !buffered.concurrentSiblingFlushSafe() {
+		t.Fatal("blockbuffer database did not opt into concurrent flush")
+	}
+	buf := blockbuffer.New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(common.Hash{1}, 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight blockbuffer layer")
+	}
+	layer := newRawdbBranchStore(buf.ViewLayer(h))
+	if !layer.concurrentSiblingFlushSafe() {
+		t.Fatal("blockbuffer layer view did not opt into concurrent flush")
+	}
+}
+
+func TestApplyRootParallelJoinsSiblingFlushesAfterError(t *testing.T) {
+	probe := newConcurrentFlushProbe()
+	probe.failOn = 1
+	close(probe.release)
+	trie := newCommitmentTrie(probe)
+	trie.parallelLimit = 3
+	if _, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1, 2)); err == nil {
+		t.Fatal("parallel flush unexpectedly succeeded")
+	}
+	// Siblings are joined rather than abandoned on the first error, so the two
+	// non-failing disjoint writes both complete.
+	if rows := probe.base.rowSet(); len(rows) != 2 {
+		t.Fatalf("parallel error path completed %d sibling rows, want 2", len(rows))
+	}
 }
 
 func cloneUpdates(in []Update) []Update {
@@ -156,6 +311,30 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 	}
 }
 
+func TestBufferedBranchStorePoolResetsState(t *testing.T) {
+	firstBase := newMapBranchStore()
+	buf := borrowBufferedBranchStore(firstBase)
+	var branch BranchData
+	branch.SetHashChild(1, common.Hash{0xaa})
+	if err := buf.PutBranch([]byte{0x01}, branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.DelBranch([]byte{0x02}); err != nil {
+		t.Fatal(err)
+	}
+	returnBufferedBranchStore(buf)
+
+	secondBase := newMapBranchStore()
+	reused := borrowBufferedBranchStore(secondBase)
+	defer returnBufferedBranchStore(reused)
+	if reused.base != secondBase || len(reused.puts) != 0 || len(reused.dels) != 0 {
+		t.Fatalf("reused buffer retained state: base=%T puts=%d dels=%d", reused.base, len(reused.puts), len(reused.dels))
+	}
+	if _, ok, err := reused.GetBranch([]byte{0x01}); err != nil || ok {
+		t.Fatalf("reused buffer exposed prior put: ok=%v err=%v", ok, err)
+	}
+}
+
 // TestParallelFoldMatchesSequential_Incremental drives many rounds of mixed
 // inserts/overwrites/deletes through a sequential trie and a forced-parallel
 // trie, asserting byte-identical root and branch keyspace after every round.
@@ -179,15 +358,13 @@ func TestParallelFoldMatchesSequential_Incremental(t *testing.T) {
 }
 
 // TestParallelFoldMatchesSequential_RawdbStore drives the same incremental mix
-// through the PRODUCTION branch store (rawdbBranchStore over an in-memory KV),
-// so it exercises the real read path and, critically, the parallel flush's
-// putBranchEncoded fast path — proving the raw-bytes write is byte-identical to
-// the sequential Decode→Encode store path, both in root and in persisted rows.
+// through rawdbBranchStore over an in-memory KV, proving the production encoding
+// remains byte-identical across sequential and parallel subtree computation.
 func TestParallelFoldMatchesSequential_RawdbStore(t *testing.T) {
 	seqDB, parDB := rawdb.NewMemoryDatabase(), rawdb.NewMemoryDatabase()
 	seqTrie := newCommitmentTrie(newRawdbBranchStore(seqDB))
 	parTrie := newCommitmentTrie(newRawdbBranchStore(parDB))
-	parTrie.parallelMinOps = 1 // force the parallel + fast-path flush
+	parTrie.parallelMinOps = 1 // force parallel subtree computation
 
 	u := &keyUniverse{rng: rand.New(rand.NewSource(2024))}
 	for round := 0; round < 30; round++ {
@@ -211,32 +388,52 @@ func TestParallelFoldMatchesSequential_RawdbStore(t *testing.T) {
 // TestParallelFoldOverBlockbuffer_RaceAndRootMatch folds over the REAL production
 // base store — a blockbuffer.Buffer, whose GetNoCopy is the exact concurrent read
 // path the production commitment fold uses. Run under -race, it proves the
-// parallel fold's 16 concurrent subtries safely read the live blockbuffer (its
-// GetNoCopy takes RLock and is documented safe with concurrent readers), and the
-// resulting root matches a sequential fold over the same data.
+// parallel fold's 16 concurrent subtries safely read the live blockbuffer via
+// immutable topology views and sharded maps. It also exercises the opted-in
+// concurrent sibling flush and verifies the resulting root matches sequential.
 func TestParallelFoldOverBlockbuffer_RaceAndRootMatch(t *testing.T) {
-	foldOverBuffer := func(parallel bool) common.Hash {
+	foldOverBuffer := func(parallel, layerView bool) common.Hash {
 		buf := blockbuffer.New(rawdb.NewMemoryDatabase())
 		buf.BeginBlock(common.Hash{0x01}, 1)
-		trie := newCommitmentTrie(newRawdbBranchStore(buf))
+		var db CommitmentDB = buf
+		if layerView {
+			h, ok := buf.NewestInflight()
+			if !ok {
+				t.Fatal("missing in-flight blockbuffer layer")
+			}
+			db = buf.ViewLayer(h)
+		}
+		trie := newCommitmentTrie(newRawdbBranchStore(db))
 		if parallel {
 			trie.parallelMinOps = 1
 		}
+		universe := &keyUniverse{rng: rand.New(rand.NewSource(5))}
 		// Base trie the parallel subtries will read concurrently via GetNoCopy.
-		if _, err := trie.Fold(buildRandomPuts(rand.New(rand.NewSource(5)), 2000)); err != nil {
+		if _, err := trie.Fold(universe.batch(2000, 0, 0)); err != nil {
 			t.Fatal(err)
 		}
-		// A 500-key incremental batch (>= threshold) forces the parallel path.
-		root, err := trie.Fold(buildRandomPuts(rand.New(rand.NewSource(6)), 500))
+		// A 500-key mix of inserts, overwrites, and deletes forces concurrent
+		// PutBranch and DelBranch publication while sibling workers still read.
+		root, err := trie.Fold(universe.batch(500, 0.25, 0.40))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return root
 	}
-	seqRoot := foldOverBuffer(false)
-	parRoot := foldOverBuffer(true)
-	if seqRoot != parRoot {
-		t.Fatalf("blockbuffer parallel fold root mismatch\n  seq=%x\n  par=%x", seqRoot, parRoot)
+	for _, tc := range []struct {
+		name      string
+		layerView bool
+	}{
+		{name: "buffer"},
+		{name: "layer_view", layerView: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seqRoot := foldOverBuffer(false, tc.layerView)
+			parRoot := foldOverBuffer(true, tc.layerView)
+			if seqRoot != parRoot {
+				t.Fatalf("blockbuffer parallel fold root mismatch\n  seq=%x\n  par=%x", seqRoot, parRoot)
+			}
+		})
 	}
 }
 
@@ -277,7 +474,7 @@ func TestParallelFoldMatchesSequential_EdgeCases(t *testing.T) {
 		for len(batch) < 200 {
 			k := make([]byte, 32)
 			_, _ = rng.Read(k)
-			if keyPath(k)[0] == 0x0a { // confine to nibble 0xa
+			if pathNibble(keyPath(k), 0) == 0x0a { // confine to nibble 0xa
 				v := make([]byte, 8)
 				binary.BigEndian.PutUint64(v, rng.Uint64())
 				batch = append(batch, put(k, v))

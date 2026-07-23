@@ -11,15 +11,7 @@ import (
 type UnfreezeBalanceActuator struct{}
 
 func (a *UnfreezeBalanceActuator) getContract(ctx *Context) (*contractpb.UnfreezeBalanceContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	uc := &contractpb.UnfreezeBalanceContract{}
-	if err := contract.Parameter.UnmarshalTo(uc); err != nil {
-		return nil, errors.New("failed to unmarshal UnfreezeBalanceContract")
-	}
-	return uc, nil
+	return decodedContract[*contractpb.UnfreezeBalanceContract](ctx, "UnfreezeBalanceContract")
 }
 
 func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {

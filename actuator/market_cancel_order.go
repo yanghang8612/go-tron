@@ -16,15 +16,7 @@ import (
 type MarketCancelOrderActuator struct{}
 
 func (a *MarketCancelOrderActuator) getContract(ctx *Context) (*contractpb.MarketCancelOrderContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.MarketCancelOrderContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal MarketCancelOrderContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.MarketCancelOrderContract](ctx, "MarketCancelOrderContract")
 }
 
 // Validate checks all preconditions for a MarketCancelOrder transaction.

@@ -12,6 +12,35 @@ import (
 type NodeInfo struct {
 	Version      string `json:"version"`
 	CurrentBlock uint64 `json:"currentBlock"`
+	// LastInsertTime is the Unix-millisecond timestamp of the last block that
+	// successfully reached the canonical chain. It distinguishes a genuinely
+	// idle node from an API response that merely happens to repeat a height.
+	LastInsertTime int64     `json:"lastInsertTime"`
+	Sync           *SyncInfo `json:"syncInfo,omitempty"`
+}
+
+// SyncInfo is the HTTP diagnostic view of the downloader. It intentionally
+// lives outside the java-tron protobuf NodeInfo message: adding JSON fields is
+// backward compatible for wallet clients, while changing the imported proto
+// would break wire compatibility.
+type SyncInfo struct {
+	Active                bool   `json:"active"`
+	Paused                bool   `json:"paused"`
+	PeerCount             int    `json:"peerCount"`
+	SyncPeerCount         int    `json:"syncPeerCount"`
+	TargetHead            uint64 `json:"targetHead"`
+	AppliedTip            uint64 `json:"appliedTip"`
+	Remaining             int64  `json:"remaining"`
+	Inflight              int    `json:"inflight"`
+	BufferedBlocks        int    `json:"bufferedBlocks"`
+	BufferedBytes         int64  `json:"bufferedBytes"`
+	RequestedBlocks       int    `json:"requestedBlocks"`
+	RetryBlocks           int    `json:"retryBlocks"`
+	RetainedDecodedBlocks int    `json:"retainedDecodedBlocks"`
+	RetainedDecodedBytes  int64  `json:"retainedDecodedBytes"`
+	PauseBlock            uint64 `json:"pauseBlock,omitempty"`
+	PauseTime             string `json:"pauseTime,omitempty"`
+	PauseError            string `json:"pauseError,omitempty"`
 }
 
 type TriggerResult struct {

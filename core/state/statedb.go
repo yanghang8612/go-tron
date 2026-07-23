@@ -33,6 +33,13 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// loadedAccountProtoObjects tracks objects whose original flat-envelope
+	// AccountProto is retained for a possible same-block journal pre-image.
+	// Successful commit releases bytes that were never consumed by a mutation,
+	// keeping this optimization bounded to one block without scanning the whole
+	// range-accumulated stateObjects map.
+	loadedAccountProtoObjects []*stateObject
+
 	// dirtyWitnesses tracks addresses whose VoteCount or URL changed in
 	// the current block. FlushWitnesses iterates this set instead of the
 	// full witnesses map so no-op blocks (the common case — no VoteWitness
@@ -415,6 +422,20 @@ func (r *commitScopeLatestReader) AccountLatest(owner tcommon.Address) ([]byte, 
 		return nil, false, nil
 	}
 	return r.writer.readAccountLatest(owner)
+}
+
+func (r *commitScopeLatestReader) accountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readAccountLatestForCommitment(owner)
+}
+
+func (r *commitScopeLatestReader) accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readAccountLatestForHydration(owner)
 }
 
 func (r *commitScopeLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
@@ -1537,13 +1558,15 @@ func (s *StateDB) FinalizeTransaction() {
 		// Scope to slots written this block (dirtyStorage), not the whole cached
 		// storage map. A zero-valued cached slot can only come from SetState
 		// (reads never cache a zero row), which adds it to dirtyStorage, and
-		// storageExists is NOT reset at commit — so a zero row from an earlier
-		// block already reads as absent and need not be re-marked. This is the
-		// same authoritative write set the commit path uses, and keeps the scan
+		// the cached row-existence bit is NOT reset at commit — so a zero row from
+		// an earlier block already reads as absent and need not be re-marked. This
+		// is the same authoritative write set the commit path uses and keeps the scan
 		// O(writes-this-block) instead of O(accumulated storage cache).
 		for k := range obj.dirtyStorage {
-			if obj.storage[k] == (tcommon.Hash{}) {
-				obj.storageExists[k] = false
+			if slot := obj.storage[k]; slot.value == (tcommon.Hash{}) {
+				slot.exists = false
+				obj.ensureStorage()
+				obj.storage[k] = slot
 			}
 		}
 		if obj.selfDestructed && !obj.deleted {
@@ -2354,8 +2377,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if obj == nil {
 		return tcommon.Hash{}, false
 	}
-	if v, ok := obj.storage[key]; ok {
-		return v, obj.storageExists[key]
+	if slot, ok := obj.storage[key]; ok {
+		return slot.value, slot.exists
 	}
 	if obj.created {
 		return tcommon.Hash{}, false
@@ -2370,8 +2393,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if h == (tcommon.Hash{}) {
 		return tcommon.Hash{}, false
 	}
-	obj.storage[key] = h
-	obj.storageExists[key] = true
+	obj.ensureStorage()
+	obj.storage[key] = storageSlot{value: h, exists: true}
 	return h, true
 }
 
@@ -2646,7 +2669,10 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		if obj.contractMeta != nil {
 			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
 		}
-		kvDirtyCopy := make(map[string]kvEntry, len(obj.kvDirty))
+		var kvDirtyCopy map[string]kvEntry
+		if len(obj.kvDirty) != 0 {
+			kvDirtyCopy = make(map[string]kvEntry, len(obj.kvDirty))
+		}
 		for k, v := range obj.kvDirty {
 			ec := kvEntry{
 				deleted:    v.deleted,
@@ -2661,6 +2687,14 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			}
 			kvDirtyCopy[k] = ec
 		}
+		var storageCopy map[tcommon.Hash]storageSlot
+		if len(obj.storage) != 0 {
+			storageCopy = make(map[tcommon.Hash]storageSlot, len(obj.storage))
+		}
+		var dirtyStorageCopy map[tcommon.Hash]storageOrigin
+		if len(obj.dirtyStorage) != 0 {
+			dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
+		}
 		newObj := &stateObject{
 			address:                  addr,
 			dirty:                    obj.dirty,
@@ -2672,9 +2706,8 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			codeDirty:                obj.codeDirty,
 			contractMeta:             metaCopy,
 			contractMetaDirty:        obj.contractMetaDirty,
-			storage:                  make(map[tcommon.Hash]tcommon.Hash),
-			storageExists:            make(map[tcommon.Hash]bool),
-			dirtyStorage:             make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage)),
+			storage:                  storageCopy,
+			dirtyStorage:             dirtyStorageCopy,
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
@@ -2689,7 +2722,6 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		}
 		for k, v := range obj.storage {
 			newObj.storage[k] = v
-			newObj.storageExists[k] = obj.storageExists[k]
 		}
 		for k, origin := range obj.dirtyStorage {
 			newObj.dirtyStorage[k] = origin
@@ -2741,42 +2773,46 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
 
-	plans := make([]*accountCommitPlan, 0, len(addrs))
-	for _, addr := range addrs {
-		plan, err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr])
-		if err != nil {
+	// Downstream phases keep pointer-based plans, but every plan lives only for
+	// this commit. Allocate their stable addresses from one commit-sized arena
+	// instead of creating one heap object per dirty account.
+	planStorage := make([]accountCommitPlan, len(addrs))
+	plans := make([]*accountCommitPlan, len(addrs))
+	for i, addr := range addrs {
+		plan := &planStorage[i]
+		if err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr], plan); err != nil {
 			return nil, err
 		}
-		plans = append(plans, plan)
+		plans[i] = plan
 	}
 	return plans, nil
 }
 
-func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject) (*accountCommitPlan, error) {
-	plan := &accountCommitPlan{
+func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject, plan *accountCommitPlan) error {
+	*plan = accountCommitPlan{
 		addr:               addr,
 		obj:                obj,
 		deleteAccount:      obj.deleted || obj.selfDestructed,
 		accountLatestDirty: obj.accountDirty || obj.created || obj.codeDirty || obj.accountKVGenerationDirty,
 	}
 	if plan.deleteAccount {
-		return plan, nil
+		return nil
 	}
 	if obj.contractMetaDirty {
 		if obj.contractMeta == nil {
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, nil, true); err != nil {
-				return nil, err
+				return err
 			}
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractABI, contractABIKVKey, nil, true); err != nil {
-				return nil, err
+				return err
 			}
 		} else {
 			metaBytes, err := proto.Marshal(obj.contractMeta)
 			if err != nil {
-				return nil, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+				return fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
 			}
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes, false); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
@@ -2791,7 +2827,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 		})
 		plan.storageOps = make([]storageCommitOp, 0, len(storageKeys))
 		for _, key := range storageKeys {
-			value := obj.storage[key]
+			value := obj.storage[key].value
 			origin := obj.dirtyStorage[key]
 			var prevValue []byte
 			if origin.loaded && origin.exists {
@@ -2801,7 +2837,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			if value == (tcommon.Hash{}) {
 				staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true, prevValue, origin.exists, origin.loaded)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				plan.storageOps = append(plan.storageOps, storageCommitOp{
 					rowKey: rowKey,
@@ -2812,7 +2848,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			}
 			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, prevValue, origin.exists, origin.loaded)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			plan.storageOps = append(plan.storageOps, storageCommitOp{
 				rowKey: rowKey,
@@ -2826,11 +2862,11 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 	if plan.hadKVDirty {
 		kvPlan, err := s.prepareAccountKVCommitPlan(obj)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		plan.kvPlan = kvPlan
 	}
-	return plan, nil
+	return nil
 }
 
 func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex accountKVIndexStore, accountKVLatestWriter statedomains.Writer) error {
@@ -2880,15 +2916,29 @@ func accountCommitPlanGenerationResolver(plans []*accountCommitPlan) statedomain
 }
 
 func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, error) {
+	return appendAccountLatestObject(nil, obj, flatRoot)
+}
+
+func accountLatestObjectEncodedSize(obj *stateObject) (int, bool, error) {
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
-		return nil, false, nil
+		return 0, false, nil
 	}
 	accBytes, err := obj.deterministicAccountProto()
 	if err != nil {
-		return nil, false, err
+		return 0, false, err
 	}
-	data, err := encodeAccountLatestObjectFromProto(obj, accBytes, flatRoot)
-	return data, true, err
+	return stateAccountV2EncodedSize(StateAccountVersion, accBytes, obj.accountKVGeneration), true, nil
+}
+
+func appendAccountLatestObject(dst []byte, obj *stateObject, flatRoot bool) ([]byte, bool, error) {
+	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
+		return dst, false, nil
+	}
+	accBytes, err := obj.deterministicAccountProto()
+	if err != nil {
+		return dst, false, err
+	}
+	return appendAccountLatestObjectFromProto(dst, obj, accBytes, flatRoot), true, nil
 }
 
 // encodeAccountLatestObjectFromProto wraps an already-serialized account in its
@@ -2896,25 +2946,18 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 // reuse the same deterministic protobuf encoding instead of marshaling maps a
 // second time.
 func encodeAccountLatestObjectFromProto(obj *stateObject, accBytes []byte, flatRoot bool) ([]byte, error) {
+	return appendAccountLatestObjectFromProto(nil, obj, accBytes, flatRoot), nil
+}
+
+func appendAccountLatestObjectFromProto(dst []byte, obj *stateObject, accBytes []byte, flatRoot bool) []byte {
 	accountKVRoot := obj.accountKVRoot
 	if flatRoot {
 		accountKVRoot = EmptyKVRoot
 	}
-	envelope := &StateAccountV2{
-		Version:             StateAccountVersion,
-		AccountProto:        accBytes,
-		AccountKVRoot:       accountKVRoot,
-		AccountKVGeneration: obj.accountKVGeneration,
-		CodeHash:            obj.codeHash,
-	}
-	data, err := envelope.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return appendStateAccountV2Fields(dst, StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
 }
 
-func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey []byte) error {
+func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey, accountLatestData []byte, accountLatestExists bool) error {
 	if plan == nil || plan.obj == nil {
 		return nil
 	}
@@ -2952,23 +2995,19 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRo
 	if !needsAccountLatestUpdate {
 		return nil
 	}
-	data, exists, err := encodeAccountLatestObject(obj, flatRoot)
-	if err != nil {
-		return err
-	}
-	if !exists {
+	if !accountLatestExists {
 		return nil
 	}
 	if len(physicalKey) == 0 {
 		physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
 	}
-	if err := s.writeAccountLatestChange(addr, exists, data); err != nil {
+	if err := s.writeAccountLatestChange(addr, true, accountLatestData); err != nil {
 		return err
 	}
 	if latestWriter == nil {
 		return fmt.Errorf("account latest writer unavailable")
 	}
-	if err := latestWriter.writeAccountLatestByKey(addr, physicalKey, data); err != nil {
+	if err := latestWriter.writeAccountLatestOwnedByKey(addr, physicalKey, accountLatestData); err != nil {
 		return err
 	}
 	commitment.recordAccountLatestTouch(addr)
@@ -3003,20 +3042,47 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
 	orderedPlans := accountCommitPlansByAddress(plans)
 	accountLatestWrites := 0
+	accountLatestValueBytes := 0
 	for _, plan := range orderedPlans {
 		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
 			accountLatestWrites++
 		}
+		if plan == nil || plan.deleteAccount || !plan.accountLatestDirty {
+			continue
+		}
+		size, exists, err := accountLatestObjectEncodedSize(plan.obj)
+		if err != nil {
+			return err
+		}
+		if exists {
+			accountLatestValueBytes += size
+		}
 	}
 	keyArena := make([]byte, 0, accountLatestWrites*rawdb.StateAccountLatestCommitmentKeySize())
+	// deterministicAccountProto caches the first pass's protobuf bytes on each
+	// object, so the append pass only frames those bytes into one owned arena.
+	valueArena := make([]byte, 0, accountLatestValueBytes)
 	for _, plan := range orderedPlans {
 		var physicalKey []byte
+		var accountLatestData []byte
+		var accountLatestExists bool
 		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
 			start := len(keyArena)
 			keyArena = rawdb.AppendStateAccountLatestCommitmentKey(keyArena, plan.addr)
 			physicalKey = keyArena[start:len(keyArena):len(keyArena)]
 		}
-		if err := s.writeFlatAccountLatestWithPlan(plan, flatRoot, commitment, latestWriter, physicalKey); err != nil {
+		if plan != nil && !plan.deleteAccount && plan.accountLatestDirty {
+			start := len(valueArena)
+			var err error
+			valueArena, accountLatestExists, err = appendAccountLatestObject(valueArena, plan.obj, flatRoot)
+			if err != nil {
+				return err
+			}
+			if accountLatestExists {
+				accountLatestData = valueArena[start:len(valueArena):len(valueArena)]
+			}
+		}
+		if err := s.writeFlatAccountLatestWithPlan(plan, commitment, latestWriter, physicalKey, accountLatestData, accountLatestExists); err != nil {
 			return err
 		}
 	}
@@ -3034,14 +3100,13 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.accountDirty = false
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
-		obj.storage = make(map[tcommon.Hash]tcommon.Hash)
-		obj.storageExists = make(map[tcommon.Hash]bool)
-		obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+		obj.storage = nil
+		obj.dirtyStorage = nil
 		obj.dirty = false
 		return
 	}
 	if plan.hadKVDirty {
-		obj.kvDirty = make(map[string]kvEntry)
+		obj.kvDirty = nil
 	}
 	if obj.codeDirty {
 		obj.codeDirty = false
@@ -3050,7 +3115,10 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMetaDirty = false
 	}
 	obj.accountDirty = false
-	obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+	// Origins are only needed between the first SSTORE and this commit. Leave
+	// the map nil afterward; every storage write/revert path already creates it
+	// lazily, avoiding an empty map allocation for non-contract accounts.
+	obj.dirtyStorage = nil
 	obj.created = false
 	obj.dirty = false
 }
@@ -3100,18 +3168,38 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	}
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
+	commitmentTouchCapacity := 0
 	for _, plan := range plans {
-		if plan.kvPlan == nil || len(plan.kvPlan.items) == 0 {
+		if plan == nil || plan.obj == nil {
 			continue
 		}
-		stats.KVAccounts++
-		stats.KVItems += len(plan.kvPlan.items)
+		if plan.deleteAccount {
+			// Account deletion writes both the account-latest tombstone and
+			// its generation row.
+			commitmentTouchCapacity += 2
+		} else {
+			if plan.accountLatestDirty {
+				commitmentTouchCapacity++
+			}
+			if plan.obj.accountKVGenerationDirty {
+				commitmentTouchCapacity++
+			}
+		}
+		if plan.kvPlan != nil && len(plan.kvPlan.items) > 0 {
+			stats.KVAccounts++
+			stats.KVItems += len(plan.kvPlan.items)
+			commitmentTouchCapacity += len(plan.kvPlan.items)
+		}
 	}
 	mark(&stats.Prepare)
 
 	accountKVIndex := s.accountKVIndex()
 	generationResolver := accountCommitPlanGenerationResolver(plans)
 	commitmentState := NewDomainCommitmentStateWithGenerationResolver(s, generationResolver)
+	// The commit plans expose the exact maximum number of distinct commitment
+	// touches before any writes begin. Reserve it once instead of growing the
+	// per-block mutation map and captured-value slice through multiple sizes.
+	commitmentState.reserveTouches(commitmentTouchCapacity)
 	var accountKVLatestWriter *accountKVLatestBatch
 	var accountKVTemporalTx statedomains.TemporalTx
 	if scope != nil {
@@ -3221,6 +3309,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.capturedFold = &CapturedCommit{updates: touchUpdates, repair: s.commitmentRepair()}
 		s.deferFold = false
 		s.resetJournal()
+		s.releaseUnusedLoadedAccountProtos()
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -3233,6 +3322,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	}
 	s.originRoot = ethcommon.Hash(root)
 	s.resetJournal()
+	s.releaseUnusedLoadedAccountProtos()
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil
@@ -3527,7 +3617,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 		}
 		return obj
 	}
-	data, ok, err := s.readStateAccountLatest(addr)
+	data, ok, err := s.readStateAccountLatestForHydration(addr)
 	if err != nil || !ok {
 		return nil
 	}
@@ -3540,13 +3630,34 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 		return nil
 	}
 	obj := newStateObject(addr, acc)
+	// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
+	// a potential journal pre-image instead of immediately re-marshaling the
+	// account on its first mutation. A successful block commit releases this
+	// copy if the account stayed read-only.
+	obj.accountProto = envelope.AccountProto
+	obj.accountProtoLoaded = true
 	obj.accountKVRoot = envelope.AccountKVRoot
 	obj.accountKVGeneration = envelope.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
 	obj.codeHash = envelope.CodeHash
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
+	s.loadedAccountProtoObjects = append(s.loadedAccountProtoObjects, obj)
 	return obj
+}
+
+// releaseUnusedLoadedAccountProtos drops envelope bytes retained only to avoid
+// a same-block pre-image marshal. Mutated accounts clear accountProtoLoaded as
+// they journal/invalidate and retain their newly encoded post-image normally.
+func (s *StateDB) releaseUnusedLoadedAccountProtos() {
+	for _, obj := range s.loadedAccountProtoObjects {
+		if obj != nil && obj.accountProtoLoaded {
+			obj.accountProto = nil
+			obj.accountProtoLoaded = false
+		}
+	}
+	clear(s.loadedAccountProtoObjects)
+	s.loadedAccountProtoObjects = s.loadedAccountProtoObjects[:0]
 }
 
 // journalAccount records the current state of an account for revert.
@@ -3564,7 +3675,9 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	}
 	var prev []byte
 	var prevLatest []byte
+	var prevProtoLoaded bool
 	if obj != nil && obj.account != nil {
+		prevProtoLoaded = obj.accountProtoLoaded
 		var err error
 		prev, err = obj.deterministicAccountProto()
 		if err == nil && !obj.deleted && !obj.selfDestructed {
@@ -3580,6 +3693,7 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 		address:          addr,
 		prev:             prev,
 		prevLatest:       prevLatest,
+		prevProtoLoaded:  prevProtoLoaded,
 		prevDeleted:      obj != nil && obj.deleted,
 		prevCreated:      obj != nil && obj.created,
 		prevSelfDestruct: obj != nil && obj.selfDestructed,
@@ -3625,6 +3739,7 @@ func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) 
 	change := acquireAccountScalarChange()
 	change.address = addr
 	change.prevProto = obj.accountProto
+	change.prevProtoLoaded = obj.accountProtoLoaded
 	change.balance = pb.Balance
 	change.allowance = pb.Allowance
 	change.latestWithdrawTime = pb.LatestWithdrawTime

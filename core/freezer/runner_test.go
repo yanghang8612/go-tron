@@ -32,6 +32,48 @@ type fakeChain struct {
 	blockHashByNo map[uint64]tcommon.Hash
 }
 
+// viewingFakeChain advertises RawViewSource and counts whether Runner used the
+// callback path or fell back to the allocating slice-returning accessors.
+type viewingFakeChain struct {
+	*fakeChain
+	blockViews int
+	txViews    int
+	blockReads int
+	txReads    int
+}
+
+func (f *viewingFakeChain) ReadBlockRaw(n uint64) []byte {
+	f.blockReads++
+	return f.fakeChain.ReadBlockRaw(n)
+}
+
+func (f *viewingFakeChain) ReadTransactionInfosRaw(n uint64) []byte {
+	f.txReads++
+	return f.fakeChain.ReadTransactionInfosRaw(n)
+}
+
+func (f *viewingFakeChain) ViewBlockRaw(n uint64, fn func([]byte) error) (bool, error) {
+	f.blockViews++
+	f.mu.Lock()
+	raw, ok := f.blockRaw[n]
+	f.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	return true, fn(raw)
+}
+
+func (f *viewingFakeChain) ViewTransactionInfosRaw(n uint64, fn func([]byte) error) (bool, error) {
+	f.txViews++
+	f.mu.Lock()
+	raw, ok := f.txInfosRaw[n]
+	f.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	return true, fn(raw)
+}
+
 func newFakeChain() *fakeChain {
 	return &fakeChain{
 		db:            memorydb.New(),
@@ -290,6 +332,33 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 		if v, err := fc.db.Get(blockKVKey(n)); err != nil || len(v) == 0 {
 			t.Fatalf("Pebble lost b-%d (should still be hot)", n)
 		}
+	}
+}
+
+func TestOnePass_UsesRawViewSourceWithoutFallbackCopies(t *testing.T) {
+	base := newFakeChain()
+	for n := uint64(0); n < 10; n++ {
+		base.plantBlock(t, n)
+	}
+	base.setSolidified(8)
+	chain := &viewingFakeChain{fakeChain: base}
+	r := New(chain, wrapFreezer(newFreezer(t)), Config{
+		Enabled:      true,
+		MarginBlocks: 1,
+		BatchBlocks:  100,
+	})
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen != 8 {
+		t.Fatalf("frozen = %d, want 8", frozen)
+	}
+	if chain.blockViews != 8 || chain.txViews != 8 {
+		t.Fatalf("view calls = blocks:%d txInfos:%d, want 8/8", chain.blockViews, chain.txViews)
+	}
+	if chain.blockReads != 0 || chain.txReads != 0 {
+		t.Fatalf("fallback reads = blocks:%d txInfos:%d, want 0/0", chain.blockReads, chain.txReads)
 	}
 }
 

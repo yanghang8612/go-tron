@@ -32,6 +32,12 @@ type canonicalBlockExecution struct {
 	// as the next block's parentDynProps.
 	parentDynProps *state.DynamicProperties
 	finalDynProps  *state.DynamicProperties
+	// txInfoBatch is range-owned receipt storage. The synchronous path returns
+	// it after applyBlockWithPlan; async commit marks handedOff and returns it
+	// from the worker only after metadata serialization.
+	txInfoBatch          *transactionInfoBatch
+	txInfoBatchPool      *transactionInfoBatchPool
+	txInfoBatchHandedOff bool
 }
 
 type canonicalCommitResult struct {
@@ -188,11 +194,20 @@ type canonicalRangeExecutor struct {
 	// the next block threads them directly under async commit (decision-b),
 	// rather than reading the lazily-published dynPropsCache. Only populated when
 	// bc.asyncCommit; nil for the synchronous path (which reads the head cache).
-	lastDynProps *state.DynamicProperties
+	lastDynProps  *state.DynamicProperties
+	txInfoBatches *transactionInfoBatchPool
 }
 
 func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonicalRangeExecutor {
-	return &canonicalRangeExecutor{bc: bc, allowSharedCommit: allowSharedCommit}
+	depth := 1
+	if bc != nil && bc.asyncCommit {
+		depth = bc.commitDepth
+	}
+	return &canonicalRangeExecutor{
+		bc:                bc,
+		allowSharedCommit: allowSharedCommit,
+		txInfoBatches:     newTransactionInfoBatchPool(depth),
+	}
 }
 
 // tip returns the range-local tip — the block subsequent applies build on.
@@ -240,12 +255,19 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		e.commit = e.state.NewCommitScope()
 	}
 	plan := &canonicalBlockExecution{
-		state:    e.state,
-		commit:   e.commit,
-		txRange:  plannedTxRange,
-		pipeline: newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
-		parent:   current,
+		state:           e.state,
+		commit:          e.commit,
+		txRange:         plannedTxRange,
+		pipeline:        newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
+		parent:          current,
+		txInfoBatch:     e.txInfoBatches.acquire(),
+		txInfoBatchPool: e.txInfoBatches,
 	}
+	defer func() {
+		if !plan.txInfoBatchHandedOff {
+			plan.txInfoBatchPool.release(plan.txInfoBatch)
+		}
+	}()
 	// Under async commit, thread the previous block's finalized dynamic
 	// properties into this block (decision-b). Left nil for the synchronous
 	// path so applyBlockWithPlan reads the head cache exactly as before.

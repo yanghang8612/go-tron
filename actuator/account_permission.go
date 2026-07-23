@@ -16,15 +16,7 @@ import (
 type AccountPermissionUpdateActuator struct{}
 
 func (a *AccountPermissionUpdateActuator) getContract(ctx *Context) (*contractpb.AccountPermissionUpdateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.AccountPermissionUpdateContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal AccountPermissionUpdateContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.AccountPermissionUpdateContract](ctx, "AccountPermissionUpdateContract")
 }
 
 func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {

@@ -27,12 +27,50 @@ func WriteStateAccountLatestByKey(db ethdb.KeyValueWriter, physicalKey, value []
 	return db.Put(physicalKey, value)
 }
 
+type ownedValueWriter interface {
+	PutOwnedValue(key, value []byte) error
+}
+
+// ownedKeyValueWriter is a narrowly scoped extension for commit writers that
+// can retain both inputs directly. Callers transfer ownership of both byte
+// ranges and must keep their contents immutable after the call.
+type ownedKeyValueWriter interface {
+	PutOwnedKeyValue(key, value []byte) error
+}
+
+// WriteStateAccountLatestOwnedByKey is the ownership-taking counterpart of
+// WriteStateAccountLatestByKey. Commit planning calls it only with a freshly
+// encoded account envelope that will never be mutated again. Writers that do
+// not advertise the optional extension retain the normal copying Put fallback.
+func WriteStateAccountLatestOwnedByKey(db ethdb.KeyValueWriter, physicalKey, value []byte) error {
+	if writer, ok := db.(ownedKeyValueWriter); ok {
+		return writer.PutOwnedKeyValue(physicalKey, value)
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(physicalKey, value)
+	}
+	return db.Put(physicalKey, value)
+}
+
 func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
+	value, ok, err := ReadStateAccountLatestNoCopy(db, owner)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return append([]byte(nil), value...), true, nil
+}
+
+// ReadStateAccountLatestNoCopy returns the encoded account envelope without a
+// trailing defensive copy. The returned bytes may alias the reader's cache or
+// overlay and must be consumed before the next database operation. StateDB's
+// hydration path decodes the RLP envelope immediately and retains only the
+// decoder-owned fields.
+func ReadStateAccountLatestNoCopy(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
 	value, err := readStateNoCopyCached(db, stateAccountLatestKey(owner))
 	if err != nil {
 		return nil, false, nil
 	}
-	return append([]byte(nil), value...), true, nil
+	return value, true, nil
 }
 
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {

@@ -15,15 +15,7 @@ import (
 type ExchangeTransactionActuator struct{}
 
 func (a *ExchangeTransactionActuator) getContract(ctx *Context) (*contractpb.ExchangeTransactionContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ExchangeTransactionContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ExchangeTransactionContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ExchangeTransactionContract](ctx, "ExchangeTransactionContract")
 }
 
 // Validate checks all preconditions for an ExchangeTransaction swap.

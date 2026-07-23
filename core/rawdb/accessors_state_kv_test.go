@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -11,12 +12,22 @@ import (
 
 type cachedStateReadProbe struct {
 	ethdb.KeyValueReader
-	cachedReads int
+	cachedReads     int
+	structuredReads int
 }
 
 func (p *cachedStateReadProbe) GetNoCopyCached(key []byte) ([]byte, error) {
 	p.cachedReads++
 	return p.KeyValueReader.Get(key)
+}
+
+func (p *cachedStateReadProbe) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
+	p.structuredReads++
+	if !bytes.Equal(prefix, stateKVLatestPrefix) {
+		return nil, errors.New("unexpected state latest prefix")
+	}
+	owner := accountID.Address(common.AddressPrefixMainnet)
+	return p.KeyValueReader.Get(stateKVLatestKey(owner, generation, kvdomains.KVDomain(domain), logicalKey))
 }
 
 func TestStateKVLatestReadWriteEmptyAndAccountID(t *testing.T) {
@@ -121,8 +132,8 @@ func TestFlatLatestReadsPreferCachedNoCopyReader(t *testing.T) {
 	if err != nil || !ok || string(value) != "value" {
 		t.Fatalf("kv latest = %q ok=%v err=%v", value, ok, err)
 	}
-	if probe.cachedReads != 3 {
-		t.Fatalf("cached reads = %d, want 3", probe.cachedReads)
+	if probe.cachedReads != 2 || probe.structuredReads != 1 {
+		t.Fatalf("cached reads = %d structured = %d, want 2/1", probe.cachedReads, probe.structuredReads)
 	}
 
 	account[0] = 'X'
@@ -131,6 +142,9 @@ func TestFlatLatestReadsPreferCachedNoCopyReader(t *testing.T) {
 	valueAgain, _, _ := ReadStateKVLatest(probe, owner, 9, kvdomains.ContractStorage, []byte("slot"))
 	if string(accountAgain) != "account" || string(valueAgain) != "value" {
 		t.Fatalf("cached no-copy backing storage was mutated: account=%q value=%q", accountAgain, valueAgain)
+	}
+	if probe.cachedReads != 3 || probe.structuredReads != 2 {
+		t.Fatalf("cached reads after replay = %d structured = %d, want 3/2", probe.cachedReads, probe.structuredReads)
 	}
 }
 

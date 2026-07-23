@@ -126,9 +126,9 @@ func TestVersionPassCache_ResetRevertsToLiveRead(t *testing.T) {
 	}
 }
 
-// TestVersionPassCache_PendingResultNotCached proves only TRUE is memoized: a
-// still-pending bitmap is re-read every call, so the gate opens the moment
-// quorum is reached.
+// TestVersionPassCache_PendingResultNotCached proves the root cache retains its
+// legacy true-only semantics. BlockScope is the only object allowed to retain
+// false, preventing accidental cross-block latching at non-block call sites.
 func TestVersionPassCache_PendingResultNotCached(t *testing.T) {
 	c := NewVersionPassCache()
 	store := newCountingForkStore()
@@ -147,6 +147,68 @@ func TestVersionPassCache_PendingResultNotCached(t *testing.T) {
 	store.data[35] = statsWithUpvotes(27, 19)
 	if !c.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
 		t.Fatal("once quorum is reached Pass must return true (a pending false is never cached)")
+	}
+}
+
+// TestVersionPassCache_BlockScopeCachesPendingResult gives the live-sync
+// optimization teeth. Fork votes cannot change while one block's transaction
+// loop is running, so a pending result is read once and reused for every later
+// gate in that block. A new block scope must re-read it and observe quorum.
+func TestVersionPassCache_BlockScopeCachesPendingResult(t *testing.T) {
+	root := NewVersionPassCache()
+	store := newCountingForkStore()
+	store.data[35] = statsWithUpvotes(27, 3)
+
+	block := root.BlockScope()
+	if block.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("below quorum must be pending/false")
+	}
+	readsAfterFirst := store.reads
+	for range 100 {
+		if block.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+			t.Fatal("same-block pending result changed")
+		}
+	}
+	if store.reads != readsAfterFirst {
+		t.Fatalf("same block re-read pending version: reads %d -> %d", readsAfterFirst, store.reads)
+	}
+
+	// This mutation models the fork-controller update between blocks. The old
+	// scope intentionally remains immutable; the next scope sees the update.
+	store.data[35] = statsWithUpvotes(27, 19)
+	if block.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("an existing block scope must retain its pending answer")
+	}
+	nextBlock := root.BlockScope()
+	if !nextBlock.Pass(store, 35, blockTimeAfterFork(35)+1, maintenanceInterval) {
+		t.Fatal("fresh block scope must observe newly reached quorum")
+	}
+	if store.reads != readsAfterFirst+1 {
+		t.Fatalf("fresh block scope reads = %d, want %d", store.reads, readsAfterFirst+1)
+	}
+	if !root.IsPassed(35) {
+		t.Fatal("newly passed version must be promoted to the cross-block cache")
+	}
+}
+
+// TestVersionPassCache_BlockScopesSharePassedResults proves the per-block view
+// does not weaken the original monotonic-TRUE optimization: once any scope sees
+// quorum, all future scopes return true without touching the store.
+func TestVersionPassCache_BlockScopesSharePassedResults(t *testing.T) {
+	root := NewVersionPassCache()
+	store := newCountingForkStore()
+	store.data[35] = statsWithUpvotes(27, 19)
+
+	if !root.BlockScope().Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("v35 at quorum should pass")
+	}
+	readsAfterPass := store.reads
+	store.data[35] = statsWithUpvotes(27, 0)
+	if !root.BlockScope().Pass(store, 35, blockTimeAfterFork(35)+1, maintenanceInterval) {
+		t.Fatal("later scope must use monotonic passed result")
+	}
+	if store.reads != readsAfterPass {
+		t.Fatalf("passed version re-read across scopes: reads %d -> %d", readsAfterPass, store.reads)
 	}
 }
 
@@ -170,4 +232,32 @@ func TestVersionPassCache_PerVersionIndependent(t *testing.T) {
 	if c.IsPassed(35) {
 		t.Fatal("IsPassed(35) must be false for a pending version")
 	}
+}
+
+func BenchmarkVersionPassCachePending(b *testing.B) {
+	b.Run("root_true_only", func(b *testing.B) {
+		cache := NewVersionPassCache()
+		store := newCountingForkStore()
+		store.data[35] = statsWithUpvotes(27, 3)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if cache.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+				b.Fatal("pending version passed")
+			}
+		}
+	})
+
+	b.Run("block_scope", func(b *testing.B) {
+		cache := NewVersionPassCache().BlockScope()
+		store := newCountingForkStore()
+		store.data[35] = statsWithUpvotes(27, 3)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if cache.Pass(store, 35, blockTimeAfterFork(35), maintenanceInterval) {
+				b.Fatal("pending version passed")
+			}
+		}
+	})
 }

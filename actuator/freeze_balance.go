@@ -16,15 +16,7 @@ const trxPrecisionActuator = 1_000_000
 type FreezeBalanceActuator struct{}
 
 func (a *FreezeBalanceActuator) getContract(ctx *Context) (*contractpb.FreezeBalanceContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	fc := &contractpb.FreezeBalanceContract{}
-	if err := contract.Parameter.UnmarshalTo(fc); err != nil {
-		return nil, errors.New("failed to unmarshal FreezeBalanceContract")
-	}
-	return fc, nil
+	return decodedContract[*contractpb.FreezeBalanceContract](ctx, "FreezeBalanceContract")
 }
 
 func (a *FreezeBalanceActuator) Validate(ctx *Context) error {

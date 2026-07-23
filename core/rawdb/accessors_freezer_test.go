@@ -3,12 +3,18 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
+)
+
+var (
+	benchmarkFreezerRawBytes []byte
+	benchmarkFreezerRawLen   int
 )
 
 // fakeAncient is a deterministic, in-memory AncientReader that lets the
@@ -125,6 +131,95 @@ func TestReadBlockHashRawMatchesCanonicalBlockHash(t *testing.T) {
 	}
 }
 
+func TestViewFreezerRawUsesCallbackAndPropagatesErrors(t *testing.T) {
+	db, err := NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	blockRaw := bytes.Repeat([]byte{0xab}, 4096)
+	if err := db.Put(blockKey(77), blockRaw); err != nil {
+		t.Fatal(err)
+	}
+	found, err := ViewBlockRaw(db, 77, func(raw []byte) error {
+		if !bytes.Equal(raw, blockRaw) {
+			t.Fatalf("viewed block = %x, want %x", raw[:16], blockRaw[:16])
+		}
+		return nil
+	})
+	if err != nil || !found {
+		t.Fatalf("ViewBlockRaw = (found=%v, err=%v), want true/nil", found, err)
+	}
+
+	wantErr := errors.New("stop callback")
+	found, err = ViewBlockRaw(db, 77, func([]byte) error { return wantErr })
+	if !found || !errors.Is(err, wantErr) {
+		t.Fatalf("callback error = (found=%v, err=%v), want true/%v", found, err, wantErr)
+	}
+	called := false
+	found, err = ViewBlockRaw(db, 78, func([]byte) error {
+		called = true
+		return nil
+	})
+	if found || err != nil || called {
+		t.Fatalf("missing view = (found=%v, err=%v, called=%v), want false/nil/false", found, err, called)
+	}
+}
+
+func TestViewFreezerRawFallsBackToGet(t *testing.T) {
+	db := NewMemoryDatabase()
+	want := []byte("encoded-transaction-ret")
+	if err := db.Put(txInfoBlockKey(9), want); err != nil {
+		t.Fatal(err)
+	}
+	found, err := ViewTransactionInfosRaw(db, 9, func(raw []byte) error {
+		if !bytes.Equal(raw, want) {
+			t.Fatalf("viewed tx infos = %q, want %q", raw, want)
+		}
+		return nil
+	})
+	if err != nil || !found {
+		t.Fatalf("fallback view = (found=%v, err=%v), want true/nil", found, err)
+	}
+}
+
+func BenchmarkFreezerRawRead(b *testing.B) {
+	db, err := NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	payload := bytes.Repeat([]byte{0xcd}, 256*1024)
+	if err := db.Put(blockKey(77), payload); err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("copying-get", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		for b.Loop() {
+			benchmarkFreezerRawBytes = ReadBlockRaw(db, 77)
+			if len(benchmarkFreezerRawBytes) != len(payload) {
+				b.Fatal("short read")
+			}
+		}
+	})
+	b.Run("callback-view", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		for b.Loop() {
+			found, err := ViewBlockRaw(db, 77, func(raw []byte) error {
+				benchmarkFreezerRawLen = len(raw)
+				return nil
+			})
+			if err != nil || !found || benchmarkFreezerRawLen != len(payload) {
+				b.Fatalf("view = (%v,%v,%d)", found, err, benchmarkFreezerRawLen)
+			}
+		}
+	})
+}
+
 // TestReadBlock_AncientFallthrough verifies that ReadBlock prefers the
 // freezer when an entry exists at the requested number, even when the
 // KV side is empty.
@@ -151,6 +246,24 @@ func TestReadBlock_AncientFallthrough(t *testing.T) {
 	}
 	if got.Hash() != block.Hash() {
 		t.Fatalf("hash: got %x, want %x", got.Hash(), block.Hash())
+	}
+}
+
+func TestReadBlockHash_AncientLegacyFallthrough(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(7, 12345))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 7, data)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	got, ok := ReadBlockHash(cdb, 7)
+	if !ok || got != block.Hash() {
+		t.Fatalf("ReadBlockHash ancient = %x,%v want %x,true", got, ok, block.Hash())
 	}
 }
 

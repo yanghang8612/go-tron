@@ -2,10 +2,10 @@ package blockbuffer
 
 import "sync"
 
-// baseReadCacheShardCount keeps cache lookup contention low when commitment
-// folds and flat-latest readers run concurrently. A power of two lets the FNV
-// hash select a shard with a mask.
-const baseReadCacheShardCount = 64
+// baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
+// the same physical state keys, so they share the tested O(1) shard selector
+// rather than hashing every key twice (once here and once again in the Go map).
+const baseReadCacheShardCount = layerShardCount
 
 // baseReadCacheEntryOverhead is a conservative charge for the map entry, queue
 // token, slice/string headers, and allocator bookkeeping. The byte budget is an
@@ -19,10 +19,13 @@ const baseReadCacheEntryOverhead = 64
 // committed writes/tombstones are always resolved first, so a fork discard only
 // removes overlays and never needs to roll this cache back.
 //
-// Flush invalidates every key written to the durable base before dropping its
-// layer. Discard clears the whole cache before callers perform an out-of-band
-// reset/unwind. Those two lifecycle hooks make cached values generation-safe
-// without tagging every lookup with the current head hash.
+// A successful flush refreshes already-cached keys from immutable layer values
+// before dropping the layer and invalidates every tombstone. Writes that were
+// never read through this cache are not admitted, preventing unrelated block
+// metadata from evicting commitment/latest-state rows. Discard clears the whole
+// cache before callers perform an out-of-band reset/unwind. Those lifecycle
+// hooks make cached values generation-safe without tagging every lookup with
+// the current head hash.
 type baseReadCache struct {
 	shards [baseReadCacheShardCount]baseReadCacheShard
 }
@@ -111,31 +114,83 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 		s.mu.Unlock()
 		return value, false
 	}
+	// Another reader may have observed the same miss/epoch and completed its
+	// durable read while this caller was in Pebble. Reuse that immutable value
+	// instead of copying the same key/value again, appending a stale FIFO token,
+	// and replacing an entry from the identical durable generation.
+	if current, ok := s.entries[string(key)]; ok {
+		s.mu.Unlock()
+		return current.value, true
+	}
 	k := string(key)
 	v := append([]byte(nil), value...)
-	if old, ok := s.entries[k]; ok {
-		s.used -= old.charge
-	}
 	s.nextGen++
 	gen := s.nextGen
 	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen}
 	s.queue = append(s.queue, baseReadCacheToken{key: k, gen: gen})
 	s.used += charge
 	s.evict()
+	s.compactIfSparse()
 	s.mu.Unlock()
 	return v, true
+}
+
+// setFlushed refreshes an already-cached key from a successfully flushed
+// committed layer. Committed layer values are immutable and owned by the
+// Buffer, so the cache can retain value directly instead of allocating the copy
+// setIfEpoch needs for a Pebble-borrowed read result. A key absent from the
+// cache is invalidated but not admitted; otherwise unrelated buffered metadata
+// would churn through the cache on every canonical flush.
+//
+// Advancing the shard epoch before replacement rejects any late cache fill
+// that started against the pre-flush durable generation. If the value is too
+// large for its shard, the old entry is still invalidated and no replacement
+// is retained.
+func (c *baseReadCache) setFlushed(key string, value []byte) {
+	if c == nil {
+		return
+	}
+	charge := len(key) + len(value) + baseReadCacheEntryOverhead
+	s := &c.shards[baseReadCacheShardIndexString(key)]
+	s.mu.Lock()
+	s.epoch++
+	old, cached := s.entries[key]
+	if cached {
+		delete(s.entries, key)
+		s.used -= old.charge
+	}
+	if cached && charge <= s.limit {
+		// Preserve the existing generation and its FIFO token. This is a value
+		// refresh, not a new admission; appending one token per block would grow
+		// stale queue metadata for the lifetime of a hot commitment branch.
+		s.entries[key] = baseReadCacheEntry{value: value, charge: charge, gen: old.gen}
+		s.used += charge
+		s.evict()
+	}
+	s.compactIfSparse()
+	s.mu.Unlock()
 }
 
 func (c *baseReadCache) del(key []byte) {
 	if c == nil {
 		return
 	}
-	s := &c.shards[baseReadCacheShardIndex(key)]
+	c.delStringAt(string(key), baseReadCacheShardIndex(key))
+}
+
+func (c *baseReadCache) delString(key string) {
+	if c == nil {
+		return
+	}
+	c.delStringAt(key, baseReadCacheShardIndexString(key))
+}
+
+func (c *baseReadCache) delStringAt(key string, shard uint32) {
+	s := &c.shards[shard]
 	s.mu.Lock()
 	s.epoch++
-	k := string(key)
-	if old, ok := s.entries[k]; ok {
-		delete(s.entries, k)
+	if old, ok := s.entries[key]; ok {
+		delete(s.entries, key)
 		s.used -= old.charge
 	}
 	s.compactIfSparse()
@@ -198,36 +253,36 @@ func (s *baseReadCacheShard) compactIfSparse() {
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {
-	const (
-		offset32 = uint32(2166136261)
-		prime32  = uint32(16777619)
-	)
-	h := offset32
-	for _, b := range key {
-		h ^= uint32(b)
-		h *= prime32
-	}
-	return h & (baseReadCacheShardCount - 1)
+	return layerShardIndexBytes(key)
 }
 
-func (b *Buffer) invalidateBaseReadCacheLayer(l *layer) {
+func baseReadCacheShardIndexString(key string) uint32 {
+	return layerShardIndexString(key)
+}
+
+func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	if b == nil || b.baseReadCache == nil || l == nil {
 		return
 	}
-	for k := range l.writes {
-		b.baseReadCache.del([]byte(k))
-	}
-	for k := range l.deletes {
-		b.baseReadCache.del([]byte(k))
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			b.baseReadCache.setFlushed(k, v)
+		}
+		for k := range s.deletes {
+			b.baseReadCache.delString(k)
+		}
+		s.mu.RUnlock()
 	}
 }
 
-func (b *Buffer) invalidateBaseReadCacheLayers(layers []*layer) {
+func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
 	if b == nil || b.baseReadCache == nil {
 		return
 	}
 	for _, l := range layers {
-		b.invalidateBaseReadCacheLayer(l)
+		b.promoteBaseReadCacheLayer(l)
 	}
 }
 

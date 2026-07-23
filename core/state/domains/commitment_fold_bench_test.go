@@ -8,6 +8,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -31,6 +33,28 @@ func buildRandomPuts(rng *rand.Rand, n int) []Update {
 // faithful number (decode-on-read, encode-on-write, no read round-trip).
 func mapBase() branchStore   { return newMapBranchStore() }
 func rawdbBase() branchStore { return newRawdbBranchStore(rawdb.NewMemoryDatabase()) }
+
+// serialFlushBranchStore deliberately hides concurrentSiblingFlushStore while
+// preserving the same reads/writes. It gives the blockbuffer benchmark an
+// apples-to-apples serial-flush baseline without disabling parallel subtree
+// computation.
+type serialFlushBranchStore struct{ branchStore }
+
+func rawdbBlockbufferBase(parallelFlush bool) branchStore {
+	buf := blockbuffer.New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(common.Hash{1}, 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		panic("missing benchmark blockbuffer layer")
+	}
+	// Async mainnet commitment folds use the layer-bound view, not Buffer's
+	// newest-inflight convenience writer. Keep the benchmark on that exact path.
+	store := branchStore(newRawdbBranchStore(buf.ViewLayer(h)))
+	if !parallelFlush {
+		store = &serialFlushBranchStore{branchStore: store}
+	}
+	return store
+}
 
 // benchFoldIncremental measures folding a batch of N updates onto a pre-populated
 // base trie, approximating a per-block commit on a large existing state. With
@@ -85,6 +109,14 @@ func BenchmarkFoldParRawdb(b *testing.B) { benchFoldIncremental(b, true, rawdbBa
 // last-writer-wins has already run and the raw keys are strictly sorted.
 func BenchmarkFoldParRawdbCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, rawdbBase)
+}
+
+func BenchmarkFoldParBlockbufferSerialFlushCoalesced(b *testing.B) {
+	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(false) })
+}
+
+func BenchmarkFoldParBlockbufferParallelFlushCoalesced(b *testing.B) {
+	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(true) })
 }
 
 // BenchmarkBuildOps isolates the production coalesced+raw-key-sorted fast path

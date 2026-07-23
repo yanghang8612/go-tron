@@ -226,34 +226,40 @@ func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
-// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
-// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
-// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
-// per-PutBranch allocations observed on Nile sync.
-func (b *BranchData) EncodeTo(dst []byte) []byte {
-	// Compute childMask.
-	var mask uint16
-	for i := uint8(0); i < 16; i++ {
-		if b.children[i].present {
-			mask |= 1 << i
-		}
-	}
+func (b *BranchData) encodedSize() int {
+	_, size := b.encodingLayout()
+	return size
+}
 
-	// Pre-compute required capacity for a single grow.
+func (b *BranchData) encodingLayout() (uint16, int) {
+	var mask uint16
 	size := 2 // childMask
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
 		if !c.present {
 			continue
 		}
+		mask |= 1 << i
 		size++ // kind byte
 		if c.kind == kindHash {
 			size += common.HashLength
 		} else {
-			// Uvarint for keyLen + key bytes + valHash
-			size += binary.MaxVarintLen64 + len(c.leafKey) + common.HashLength
+			// Uvarint for keyLen + key bytes + valHash.
+			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey) + common.HashLength
 		}
 	}
+	return mask, size
+}
+
+// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
+// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
+// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
+// per-PutBranch allocations observed on Nile sync.
+func (b *BranchData) EncodeTo(dst []byte) []byte {
+	// Compute the mask and exact wire length together. Leaf key lengths are
+	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
+	// each one over-allocates the immutable encoding retained by blockbuffer.
+	mask, size := b.encodingLayout()
 	if cap(dst)-len(dst) < size {
 		grown := make([]byte, len(dst), len(dst)+size)
 		copy(grown, dst)
@@ -281,6 +287,15 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 		}
 	}
 	return dst
+}
+
+func uvarintEncodedLen(v uint64) int {
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
 }
 
 // Equal reports whether b and other represent the same branch node.
@@ -525,9 +540,12 @@ func newCommitmentTrie(store branchStore) *commitmentTrie {
 // pathLen is the number of nibbles in a hashed key path (keccak256 → 32 bytes).
 const pathLen = common.HashLength * 2
 
-// op is a resolved update: its full 64-nibble path plus the leaf value hash.
+// op is a resolved update: its 32-byte path digest plus the leaf value hash.
+// Trie traversal extracts high/low nibbles on demand. Keeping the compact
+// digest avoids expanding and clearing another 32 bytes in every top-level and
+// recursive scratch op while preserving the identical 64-nibble path.
 type op struct {
-	path    [pathLen]byte
+	path    common.Hash
 	key     []byte
 	valHash common.Hash
 	delete  bool
@@ -675,7 +693,7 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 	// (recursive depth up to 64 → high churn on dense fold passes).
 	var counts [16]int
 	for _, o := range ops {
-		counts[o.path[depth]]++
+		counts[pathNibble(o.path, depth)]++
 	}
 	var starts [16]int
 	for i := 1; i < 16; i++ {
@@ -685,7 +703,7 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 	defer returnOpsBuf(scratch)
 	heads := starts
 	for _, o := range ops {
-		nb := o.path[depth]
+		nb := pathNibble(o.path, depth)
 		(*scratch)[heads[nb]] = o
 		heads[nb]++
 	}
@@ -930,13 +948,19 @@ func livePutsInPlace(group []op) []op {
 
 func sortOps(ops []op) {
 	sort.Slice(ops, func(i, j int) bool {
-		for n := 0; n < pathLen; n++ {
-			if ops[i].path[n] != ops[j].path[n] {
-				return ops[i].path[n] < ops[j].path[n]
-			}
+		if cmp := bytes.Compare(ops[i].path[:], ops[j].path[:]); cmp != 0 {
+			return cmp < 0
 		}
 		return string(ops[i].key) < string(ops[j].key)
 	})
+}
+
+func pathNibble(path common.Hash, depth int) uint8 {
+	b := path[depth>>1]
+	if depth&1 == 0 {
+		return b >> 4
+	}
+	return b & 0x0f
 }
 
 // appendNibble extends the fold-local path stack with nb. Fold and each
@@ -948,19 +972,13 @@ func appendNibble(prefix []byte, nb uint8) []byte {
 	return append(prefix, nb)
 }
 
-// keyPath expands keccak256(lenPrefixed(key)) into pathLen nibbles, high nibble
-// first.
-func keyPath(key []byte) [pathLen]byte {
+// keyPath hashes lenPrefixed(key). pathNibble exposes its pathLen high-first
+// nibbles without materializing a second expanded array.
+func keyPath(key []byte) common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
 	writeLen8Prefixed(h, key)
-	sum := readKeccakHash(h)
-	var out [pathLen]byte
-	for i := 0; i < common.HashLength; i++ {
-		out[2*i] = sum[i] >> 4
-		out[2*i+1] = sum[i] & 0x0f
-	}
-	return out
+	return readKeccakHash(h)
 }
 
 // leafValueHash is the value hash of a key: keccak256(0x00 || lenPrefixed(key) ||

@@ -28,13 +28,17 @@ func TestCommitmentHashFastPathsMatchReference(t *testing.T) {
 	binary.BigEndian.PutUint64(valueLen[:], uint64(len(value)))
 
 	pathDigest := referenceLegacyKeccak(keyLen[:], key)
-	var wantPath [pathLen]byte
-	for i, b := range pathDigest {
-		wantPath[2*i] = b >> 4
-		wantPath[2*i+1] = b & 0x0f
+	if got := keyPath(key); got != pathDigest {
+		t.Fatalf("keyPath = %x, want %x", got, pathDigest)
 	}
-	if got := keyPath(key); got != wantPath {
-		t.Fatalf("keyPath = %x, want %x", got, wantPath)
+	for depth := 0; depth < pathLen; depth++ {
+		want := pathDigest[depth>>1] >> 4
+		if depth&1 != 0 {
+			want = pathDigest[depth>>1] & 0x0f
+		}
+		if got := pathNibble(pathDigest, depth); got != want {
+			t.Fatalf("pathNibble(%d) = %x, want %x", depth, got, want)
+		}
 	}
 
 	wantLeaf := referenceLegacyKeccak([]byte{0x00}, keyLen[:], key, valueLen[:], value)
@@ -94,6 +98,22 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 	if !b.Equal(got) {
 		t.Fatalf("decoded branch not Equal to original")
+	}
+}
+
+func TestBranchDataEncodeAllocatesExactCapacity(t *testing.T) {
+	var b BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		keyLen := 1 << (nibble % 9)
+		b.SetLeafChild(nibble, bytes.Repeat([]byte{nibble}, keyLen), common.Hash{nibble})
+	}
+
+	encoded := b.Encode()
+	if cap(encoded) != len(encoded) {
+		t.Fatalf("encoded capacity = %d, want exact length %d", cap(encoded), len(encoded))
+	}
+	if _, err := DecodeBranchData(encoded); err != nil {
+		t.Fatalf("DecodeBranchData: %v", err)
 	}
 }
 

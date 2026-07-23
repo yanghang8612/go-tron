@@ -61,15 +61,7 @@ func resolveAsset(ctx *Context, assetName []byte) (*resolvedAsset, error) {
 }
 
 func (a *TransferAssetActuator) getContract(ctx *Context) (*contractpb.TransferAssetContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.TransferAssetContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal TransferAssetContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.TransferAssetContract](ctx, "TransferAssetContract")
 }
 
 func (a *TransferAssetActuator) Validate(ctx *Context) error {

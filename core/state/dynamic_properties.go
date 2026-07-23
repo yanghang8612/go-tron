@@ -264,6 +264,26 @@ type dynamicPropertyChange struct {
 	dirty       bool
 }
 
+func sameDynamicProperty(a, b dynamicPropertyChange) bool {
+	if a.kind != b.kind {
+		return false
+	}
+	if a.kind == dynamicHashChange {
+		return true
+	}
+	return a.key == b.key
+}
+
+func (dp *DynamicProperties) journaledSince(boundary int, kind dynamicPropertyChangeKind, key string) bool {
+	for i := len(dp.journal) - 1; i >= boundary; i-- {
+		change := dp.journal[i]
+		if change.kind == kind && (kind == dynamicHashChange || change.key == key) {
+			return true
+		}
+	}
+	return false
+}
+
 // NewDynamicProperties creates a DynamicProperties with default values.
 func NewDynamicProperties() *DynamicProperties {
 	dp := &DynamicProperties{
@@ -509,15 +529,18 @@ func (dp *DynamicProperties) Set(key string, value int64) {
 		return
 	}
 	if len(dp.snapshots) > 0 {
-		previous, existed := dp.props[key]
-		_, dirty := dp.dirty[key]
-		dp.journal = append(dp.journal, dynamicPropertyChange{
-			kind:     dynamicIntChange,
-			key:      key,
-			intValue: previous,
-			existed:  existed,
-			dirty:    dirty,
-		})
+		boundary := dp.snapshots[len(dp.snapshots)-1]
+		if !dp.journaledSince(boundary, dynamicIntChange, key) {
+			previous, existed := dp.props[key]
+			_, dirty := dp.dirty[key]
+			dp.journal = append(dp.journal, dynamicPropertyChange{
+				kind:     dynamicIntChange,
+				key:      key,
+				intValue: previous,
+				existed:  existed,
+				dirty:    dirty,
+			})
+		}
 	}
 	dp.props[key] = value
 	dp.dirty[key] = struct{}{}
@@ -988,11 +1011,14 @@ func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 		return
 	}
 	if len(dp.snapshots) > 0 {
-		dp.journal = append(dp.journal, dynamicPropertyChange{
-			kind:      dynamicHashChange,
-			hashValue: dp.latestBlockHeaderHash,
-			dirty:     dp.hashDirty,
-		})
+		boundary := dp.snapshots[len(dp.snapshots)-1]
+		if !dp.journaledSince(boundary, dynamicHashChange, "") {
+			dp.journal = append(dp.journal, dynamicPropertyChange{
+				kind:      dynamicHashChange,
+				hashValue: dp.latestBlockHeaderHash,
+				dirty:     dp.hashDirty,
+			})
+		}
 	}
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
@@ -1161,8 +1187,9 @@ func (dp *DynamicProperties) RevertToSnapshot(id int) {
 
 // CommitSnapshot accepts the changes made since id. When id is the outermost
 // snapshot the undo log is no longer reachable and is cleared. Committing a
-// nested transaction snapshot keeps its entries so an enclosing block
-// snapshot can still roll back the whole block.
+// nested transaction snapshot merges its first-touch pre-images into the
+// parent, so the enclosing block can still roll back without retaining one
+// copy of the same property pre-image per successful transaction.
 func (dp *DynamicProperties) CommitSnapshot(id int) {
 	if id < 0 || id >= len(dp.snapshots) {
 		return
@@ -1178,6 +1205,31 @@ func (dp *DynamicProperties) CommitSnapshot(id int) {
 		dp.snapshots = dp.snapshots[:0]
 		return
 	}
+	// Once the child commits, only the parent's earliest pre-image for each
+	// property is needed to roll back the enclosing snapshot. Compact the child
+	// segment in place: retain properties first touched by the child, discard
+	// later pre-images for properties the parent already journals. The DP key
+	// set is small, so the bounded linear scan avoids allocating a map on every
+	// transaction commit.
+	parentBoundary := dp.snapshots[id-1]
+	childBoundary := dp.snapshots[id]
+	write := childBoundary
+	for i := childBoundary; i < len(dp.journal); i++ {
+		change := dp.journal[i]
+		redundant := false
+		for j := parentBoundary; j < write; j++ {
+			if sameDynamicProperty(dp.journal[j], change) {
+				redundant = true
+				break
+			}
+		}
+		if !redundant {
+			dp.journal[write] = change
+			write++
+		}
+	}
+	clear(dp.journal[write:])
+	dp.journal = dp.journal[:write]
 	dp.snapshots = dp.snapshots[:id]
 }
 
@@ -1878,15 +1930,18 @@ func (dp *DynamicProperties) SetString(key string, value string) {
 		return
 	}
 	if len(dp.snapshots) > 0 {
-		previous, existed := dp.stringProps[key]
-		_, dirty := dp.stringDirty[key]
-		dp.journal = append(dp.journal, dynamicPropertyChange{
-			kind:        dynamicStringChange,
-			key:         key,
-			stringValue: previous,
-			existed:     existed,
-			dirty:       dirty,
-		})
+		boundary := dp.snapshots[len(dp.snapshots)-1]
+		if !dp.journaledSince(boundary, dynamicStringChange, key) {
+			previous, existed := dp.stringProps[key]
+			_, dirty := dp.stringDirty[key]
+			dp.journal = append(dp.journal, dynamicPropertyChange{
+				kind:        dynamicStringChange,
+				key:         key,
+				stringValue: previous,
+				existed:     existed,
+				dirty:       dirty,
+			})
+		}
 	}
 	dp.stringProps[key] = value
 	dp.stringDirty[key] = struct{}{}

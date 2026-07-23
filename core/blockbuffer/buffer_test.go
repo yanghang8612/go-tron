@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -188,7 +190,139 @@ func TestBufferBatchOwnsValuesAfterWrite(t *testing.T) {
 	mustGet(t, b, []byte("key"), []byte("original"))
 }
 
+func TestBufferBatchOwnsKeysBeforeWrite(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+
+	key := []byte("original-key")
+	batch := b.NewBatch()
+	if err := batch.Put(key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	copy(key, "mutated-key!")
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("original-key"), []byte("value"))
+	mustNotFound(t, b, []byte("mutated-key!"))
+}
+
+func TestBufferBatchPutOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	key := []byte("owned-value-key")
+	value := []byte("owned-value")
+	batch := b.NewBatch()
+	owned := batch.(interface {
+		PutOwnedValue(key, value []byte) error
+	})
+	if err := owned.PutOwnedValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0] = 'X'
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-value-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedValue copied the transferred value")
+	}
+	mustNotFound(t, b, []byte("Xwned-value-key"))
+}
+
+func TestBufferBatchPutOwnedKeyValueRetainsBothInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	keyArena := []byte("prefix-owned-key-suffix")
+	key := keyArena[len("prefix-"):len("prefix-owned-key"):len("prefix-owned-key")]
+	value := []byte("owned-value")
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if unsafe.StringData(batch.ops[0].key) != unsafe.SliceData(key) {
+		t.Fatal("PutOwnedKeyValue copied the transferred key")
+	}
+	// The string alias, rather than a live caller slice, must keep the arena
+	// reachable until the batch publishes the operation.
+	keyArena = nil
+	key = nil
+	runtime.GC()
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned key/value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedKeyValue copied the transferred value")
+	}
+}
+
+func TestBufferBatchResetReleasesOwnedInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue([]byte("owned-key"), []byte("owned-value")); err != nil {
+		t.Fatal(err)
+	}
+	batch.Reset()
+	if len(batch.ops) != 0 || batch.size != 0 {
+		t.Fatalf("Reset left len/size = %d/%d", len(batch.ops), batch.size)
+	}
+	if retained := batch.ops[:cap(batch.ops)][0]; retained.key != "" || retained.value != nil || retained.target != nil {
+		t.Fatalf("Reset retained operation references: %+v", retained)
+	}
+}
+
+func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	writers := map[string]interface {
+		PutOwnedValue(key, value []byte) error
+	}{
+		"buffer":     b,
+		"layer-view": b.ViewLayer(h),
+	}
+	for name, writer := range writers {
+		t.Run(name, func(t *testing.T) {
+			key := []byte(name + "-owned-key")
+			wantKey := append([]byte(nil), key...)
+			value := []byte(name + "-owned-value")
+			if err := writer.PutOwnedValue(key, value); err != nil {
+				t.Fatal(err)
+			}
+			key[0] = 'X'
+			got, err := b.GetNoCopy(wantKey)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("owned value read = (%q,%v), want %q", got, err, value)
+			}
+			if &got[0] != &value[0] {
+				t.Fatal("PutOwnedValue copied the transferred value")
+			}
+			mustNotFound(t, b, key)
+		})
+	}
+}
+
 func BenchmarkBufferBatchWrite(b *testing.B) {
+	benchmarkBufferBatchWrite(b, false)
+}
+
+func BenchmarkBufferBatchWriteOwnedValues(b *testing.B) {
+	benchmarkBufferBatchWrite(b, true)
+}
+
+func benchmarkBufferBatchWrite(b *testing.B, ownedValues bool) {
 	buffer := New(rawdb.NewMemoryDatabase())
 	buffer.BeginBlock(bufHash(1), 1)
 	keys := make([][]byte, 128)
@@ -201,8 +335,17 @@ func BenchmarkBufferBatchWrite(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		batch := buffer.NewBatchWithSize(len(keys) * (len(value) + 16))
+		owned, _ := batch.(interface {
+			PutOwnedValue(key, value []byte) error
+		})
 		for _, key := range keys {
-			if err := batch.Put(key, value); err != nil {
+			var err error
+			if ownedValues {
+				err = owned.PutOwnedValue(key, value)
+			} else {
+				err = batch.Put(key, value)
+			}
+			if err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -222,12 +365,13 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 
 	puts := newLayer(bufHash(1), 1)
 	value := bytes.Repeat([]byte{0xcd}, 1024)
+	setup := &Buffer{}
 	for i := 0; i < 2048; i++ {
-		puts.writes[fmt.Sprintf("flush-key-%04d", i)] = value
+		setup.putIntoString(puts, fmt.Sprintf("flush-key-%04d", i), value)
 	}
 	deletes := newLayer(bufHash(2), 2)
 	for i := 0; i < 32768; i++ {
-		deletes.deletes[fmt.Sprintf("deleted-state-key-%08d", i)] = struct{}{}
+		setup.deleteIntoString(deletes, fmt.Sprintf("deleted-state-key-%08d", i))
 	}
 
 	for _, workload := range []struct {

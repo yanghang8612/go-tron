@@ -11,15 +11,7 @@ import (
 type TransferActuator struct{}
 
 func (a *TransferActuator) getContract(ctx *Context) (*contractpb.TransferContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	tc := &contractpb.TransferContract{}
-	if err := contract.Parameter.UnmarshalTo(tc); err != nil {
-		return nil, errors.New("failed to unmarshal TransferContract")
-	}
-	return tc, nil
+	return decodedContract[*contractpb.TransferContract](ctx, "TransferContract")
 }
 
 func (a *TransferActuator) Validate(ctx *Context) error {
@@ -121,5 +113,8 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ctx.State.AddBalance(toAddr, tc.Amount)
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	result := ctx.newResult()
+	result.Fee = fee
+	result.ContractRet = 1
+	return result, nil
 }

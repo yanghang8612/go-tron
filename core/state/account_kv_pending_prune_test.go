@@ -98,6 +98,33 @@ func TestAccountKVLatestPendingStructuredKeysPreserveIdentity(t *testing.T) {
 	}
 }
 
+func TestAccountKVLatestCommitmentReadBorrowsImmutablePendingValue(t *testing.T) {
+	writer := &accountKVLatestBatch{}
+	owner := pruneTestOwner(1)
+	value := []byte("immutable-account-envelope")
+	writer.rememberAccountLatestPutOwned(owner, value)
+
+	ordinary, ok, err := writer.readAccountLatest(owner)
+	if err != nil || !ok {
+		t.Fatalf("readAccountLatest = (%q,%v,%v)", ordinary, ok, err)
+	}
+	if &ordinary[0] == &value[0] {
+		t.Fatal("ordinary account read exposed the pending value backing array")
+	}
+	ordinary[0] ^= 0xff
+	if !bytes.Equal(writer.accountPending[owner.AccountID()].value, value) {
+		t.Fatal("mutating ordinary account read changed the pending value")
+	}
+
+	borrowed, ok, err := writer.readAccountLatestForCommitment(owner)
+	if err != nil || !ok {
+		t.Fatalf("readAccountLatestForCommitment = (%q,%v,%v)", borrowed, ok, err)
+	}
+	if &borrowed[0] != &value[0] {
+		t.Fatal("commitment account read copied its immutable pending value")
+	}
+}
+
 // newPruneTestWriter builds a latest-domain writer backed by a real block buffer
 // so flushUpTo/flushCommitted exercise the genuine WriteUpTo/WriteCommitted/
 // NewestCommittedNumber layer-batch path.

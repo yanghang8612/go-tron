@@ -24,6 +24,7 @@ type accountChange struct {
 	address          tcommon.Address
 	prev             []byte // serialized Account protobuf before mutation, nil if account didn't exist
 	prevLatest       []byte // encoded flat account-latest envelope before mutation
+	prevProtoLoaded  bool   // prev came directly from this block's durable envelope load
 	prevDeleted      bool
 	prevCreated      bool
 	prevSelfDestruct bool
@@ -39,6 +40,9 @@ type accountChange struct {
 type accountScalarChange struct {
 	address   tcommon.Address
 	prevProto []byte
+	// prevProtoLoaded restores the one-block retention marker when a mutation
+	// reverts back to the original durable envelope bytes.
+	prevProtoLoaded bool
 
 	balance            int64
 	allowance          int64
@@ -102,6 +106,7 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 		pb.AccountResource = nil
 	}
 	obj.accountProto = e.prevProto
+	obj.accountProtoLoaded = e.prevProtoLoaded
 	obj.dirty = true
 	obj.accountDirty = true
 }
@@ -126,6 +131,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// mutation. The journal owns the backing slice for as long as the object
 		// can reference it, including after the entry is removed on revert.
 		obj.accountProto = e.prev
+		obj.accountProtoLoaded = e.prevProtoLoaded
 		obj.dirty = true
 		obj.accountDirty = true
 		obj.deleted = e.prevDeleted
@@ -167,10 +173,9 @@ func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// Only a clean absent pre-image can safely be uncached.
 		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
-			delete(obj.storageExists, e.key)
 		} else {
-			obj.storage[e.key] = e.prev
-			obj.storageExists[e.key] = e.prevExists
+			obj.ensureStorage()
+			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
 		}
 		if obj.dirtyStorage == nil {
 			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
@@ -256,6 +261,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 		return
 	}
 	if e.hadEntry {
+		obj.ensureKVDirty()
 		obj.kvDirty[e.mapKey] = e.prevEntry
 	} else {
 		delete(obj.kvDirty, e.mapKey)

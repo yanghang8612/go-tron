@@ -21,6 +21,36 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+// rawValueViewReader exposes a KV value only while fn is running. Pebble uses
+// this shape to keep its value closer open, letting synchronous consumers copy
+// or compress directly from table-cache storage without Database.Get's
+// intermediate defensive allocation.
+type rawValueViewReader interface {
+	View(key []byte, fn func([]byte) error) error
+}
+
+func viewRawValue(db ethdb.KeyValueReader, key []byte, fn func([]byte) error) (bool, error) {
+	if viewer, ok := db.(rawValueViewReader); ok {
+		called := false
+		err := viewer.View(key, func(value []byte) error {
+			called = true
+			return fn(value)
+		})
+		// The existing Read*Raw accessors collapse a Get failure into a nil
+		// result. Preserve that contract for misses/read failures while still
+		// propagating callback and closer errors after a value was found.
+		if !called {
+			return false, nil
+		}
+		return true, err
+	}
+	value, err := db.Get(key)
+	if err != nil {
+		return false, nil
+	}
+	return true, fn(value)
+}
+
 // ReadBlockRaw returns the marshalled `corepb.Block` bytes stored under
 // `b-<num>` in Pebble, or nil if no row exists. The freezer pass calls
 // this on every block in the freeze range and forwards the bytes to
@@ -40,6 +70,14 @@ func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
+// ViewBlockRaw invokes fn synchronously with the marshalled block row while a
+// capable store's value handle remains open. found is false on a missing/read-
+// failed row, matching ReadBlockRaw's nil contract. fn must not retain or
+// mutate value after returning.
+func ViewBlockRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error) (found bool, err error) {
+	return viewRawValue(db, blockKey(number), fn)
+}
+
 // ReadTransactionInfosRaw returns the marshalled `corepb.TransactionRet`
 // bytes stored under `tib-<num>` in Pebble, or nil if the row is absent.
 // Same fast-path rationale as ReadBlockRaw: avoid round-tripping the proto
@@ -57,6 +95,13 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
+// ViewTransactionInfosRaw is the callback form of ReadTransactionInfosRaw.
+// It avoids a full TransactionRet-sized intermediate copy when the consumer
+// synchronously compresses/appends the row (the freezer hot path).
+func ViewTransactionInfosRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error) (found bool, err error) {
+	return viewRawValue(db, txInfoBlockKey(number), fn)
+}
+
 // ReadBlockHashRaw returns the canonical block hash from bytes previously
 // loaded by ReadBlockRaw. It scans only BlockHeader.RawData and skips all
 // transaction messages without decoding them.
@@ -68,14 +113,13 @@ func ReadBlockHashRaw(data []byte) common.Hash {
 	return hash
 }
 
-// ReadBlockHashByNumber remains for rare callers that do not already hold the
-// block bytes. The freezer runner uses ReadBlockHashRaw on its existing read.
+// ReadBlockHashByNumber remains for rare KV-only callers that do not already
+// hold the block bytes. It prefers the bounded recent BlockID ring and retains a
+// raw-body fallback for databases created before that index existed. The
+// freezer runner uses ReadBlockHashRaw on its existing read.
 func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
-	data, err := db.Get(blockKey(number))
-	if err != nil {
-		return common.Hash{}
-	}
-	return ReadBlockHashRaw(data)
+	hash, _ := ReadBlockHashKV(db, number)
+	return hash
 }
 
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under
@@ -95,9 +139,10 @@ func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 //
 // Per the slice-1 freezer design, `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
 // and `ti-<txid>` are intentionally left in Pebble — they are small,
-// hash-keyed wallet-hot rows that the freezer does not own. A future
-// slice may relocate them; until then this helper is deliberately
-// narrow.
+// hash-keyed wallet-hot rows that the freezer does not own. The bounded
+// `bnh-<slot>` recent-hash ring also stays hot so the full 256-block TVM
+// BLOCKHASH window remains body-free after freezing. A future slice may
+// relocate the unbounded hash-keyed rows; until then this helper is narrow.
 //
 // Implementation: two DeleteRange calls — one per prefix — wrapping the
 // half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into

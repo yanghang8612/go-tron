@@ -12,15 +12,7 @@ import (
 type FreezeBalanceV2Actuator struct{}
 
 func (a *FreezeBalanceV2Actuator) getContract(ctx *Context) (*contractpb.FreezeBalanceV2Contract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	fc := &contractpb.FreezeBalanceV2Contract{}
-	if err := contract.Parameter.UnmarshalTo(fc); err != nil {
-		return nil, errors.New("failed to unmarshal FreezeBalanceV2Contract")
-	}
-	return fc, nil
+	return decodedContract[*contractpb.FreezeBalanceV2Contract](ctx, "FreezeBalanceV2Contract")
 }
 
 func (a *FreezeBalanceV2Actuator) Validate(ctx *Context) error {

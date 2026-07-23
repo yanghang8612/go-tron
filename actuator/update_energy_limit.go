@@ -12,15 +12,7 @@ const blockNumForEnergyLimit int64 = 4_727_890
 type UpdateEnergyLimitActuator struct{}
 
 func (a *UpdateEnergyLimitActuator) getContract(ctx *Context) (*contractpb.UpdateEnergyLimitContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.UpdateEnergyLimitContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal UpdateEnergyLimitContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.UpdateEnergyLimitContract](ctx, "UpdateEnergyLimitContract")
 }
 
 func (a *UpdateEnergyLimitActuator) Validate(ctx *Context) error {

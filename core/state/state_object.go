@@ -19,6 +19,16 @@ type storageOrigin struct {
 	loaded bool
 }
 
+// storageSlot keeps the cached StorageRow value and java-tron row-existence
+// bit under one hash-table entry. Keeping these in separate maps duplicated
+// every 32-byte storage key and paid two map lookups on each hit/write. Storage
+// is the largest live StateDB heap consumer during range sync, so the combined
+// entry materially shrinks both the retained working set and GC scan surface.
+type storageSlot struct {
+	value  tcommon.Hash
+	exists bool
+}
+
 // stateObject represents an in-memory account with dirty tracking.
 type stateObject struct {
 	address tcommon.Address
@@ -30,7 +40,13 @@ type stateObject struct {
 	// previous transaction's post-image as its pre-image without sorting all
 	// protobuf map fields again.
 	accountProto []byte
-	dirty        bool
+	// accountProtoLoaded marks bytes borrowed from the flat account envelope at
+	// first load. They are useful as a same-block journal pre-image, but an
+	// untouched read-only account must not retain a second full representation
+	// for the rest of a long range import. StateDB clears still-marked entries at
+	// the successful commit boundary; any mutation invalidates the marker.
+	accountProtoLoaded bool
+	dirty              bool
 	// accountDirty tracks protobuf-account envelope changes separately from
 	// rooted KV/storage/code changes so net-zero KV overlays can skip account
 	// trie updates at commit.
@@ -44,8 +60,7 @@ type stateObject struct {
 	codeDirty         bool                           // true if code was modified
 	contractMeta      *contractpb.SmartContract      // contract metadata
 	contractMetaDirty bool                           // true if contractMeta was modified
-	storage           map[tcommon.Hash]tcommon.Hash  // cached current contract storage
-	storageExists     map[tcommon.Hash]bool          // java-tron StorageRow existence for cached slots
+	storage           map[tcommon.Hash]storageSlot   // cached current contract storage and StorageRow existence
 	dirtyStorage      map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
 	selfDestructed    bool
 
@@ -78,12 +93,14 @@ func (s *stateObject) deterministicAccountProto() ([]byte, error) {
 		return nil, err
 	}
 	s.accountProto = data
+	s.accountProtoLoaded = false
 	return data, nil
 }
 
 func (s *stateObject) invalidateAccountProto() {
 	if s != nil {
 		s.accountProto = nil
+		s.accountProtoLoaded = false
 	}
 }
 
@@ -91,11 +108,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 	return &stateObject{
 		address:       addr,
 		account:       acc,
-		storage:       make(map[tcommon.Hash]tcommon.Hash),
-		storageExists: make(map[tcommon.Hash]bool),
-		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
-		kvDirty:       make(map[string]kvEntry),
 	}
 }
 
@@ -106,11 +119,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		dirty:         true,
 		accountDirty:  true,
 		created:       true,
-		storage:       make(map[tcommon.Hash]tcommon.Hash),
-		storageExists: make(map[tcommon.Hash]bool),
-		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
-		kvDirty:       make(map[string]kvEntry),
 	}
 }
 
@@ -118,6 +127,18 @@ func (s *stateObject) markDirty() {
 	s.dirty = true
 	if s.dirtySet != nil {
 		s.dirtySet[s.address] = struct{}{}
+	}
+}
+
+func (s *stateObject) ensureStorage() {
+	if s.storage == nil {
+		s.storage = make(map[tcommon.Hash]storageSlot)
+	}
+}
+
+func (s *stateObject) ensureKVDirty() {
+	if s.kvDirty == nil {
+		s.kvDirty = make(map[string]kvEntry)
 	}
 }
 
@@ -141,18 +162,19 @@ func (s *stateObject) setCode(code []byte) {
 }
 
 func (s *stateObject) getStorage(key tcommon.Hash) tcommon.Hash {
-	return s.storage[key]
+	return s.storage[key].value
 }
 
 func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool, bool) {
-	value, cached := s.storage[key]
+	slot, cached := s.storage[key]
 	if !cached {
 		return tcommon.Hash{}, false, false
 	}
-	return value, s.storageExists[key], true
+	return slot.value, slot.exists, true
 }
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
+	s.ensureStorage()
 	if s.dirtyStorage == nil {
 		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 	}
@@ -162,18 +184,19 @@ func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 		// entry that makes commit planning use the durable reader.
 		s.dirtyStorage[key] = storageOrigin{}
 	}
-	s.storage[key] = value
-	s.storageExists[key] = exists
+	s.storage[key] = storageSlot{value: value, exists: exists}
 	s.markDirty()
 }
 
 func (s *stateObject) stageKV(domain kvdomains.KVDomain, key, value []byte) {
+	s.ensureKVDirty()
 	comp := kvCompositeKey(domain, key)
 	s.kvDirty[string(comp)] = newKVEntry(comp, value, false)
 	s.markDirty()
 }
 
 func (s *stateObject) stageDeleteKV(domain kvdomains.KVDomain, key []byte) {
+	s.ensureKVDirty()
 	comp := kvCompositeKey(domain, key)
 	s.kvDirty[string(comp)] = newKVEntry(comp, nil, true)
 	s.markDirty()

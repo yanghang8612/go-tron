@@ -36,15 +36,7 @@ func getLockPeriod(supportMax bool, contractLockPeriod int64) int64 {
 }
 
 func (a *DelegateResourceActuator) getContract(ctx *Context) (*contractpb.DelegateResourceContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.DelegateResourceContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal DelegateResourceContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.DelegateResourceContract](ctx, "DelegateResourceContract")
 }
 
 func (a *DelegateResourceActuator) Validate(ctx *Context) error {

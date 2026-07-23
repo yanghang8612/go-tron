@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,42 +38,72 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 	if err != nil {
 		return fmt.Errorf("marshal block: %w", err)
 	}
+	return WriteBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos)
+}
+
+// WriteBlockMetadataBatchEncoded is WriteBlockMetadataBatch with an immutable
+// block protobuf payload already produced for the rewindable staged block row.
+// Reusing it avoids marshaling the same block again in the durable publish
+// tail. block remains the source of metadata indexes and must match blockData.
+func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
+	if db == nil || block == nil {
+		return fmt.Errorf("write block metadata: nil database or block")
+	}
 	blockHash := block.Hash()
 	blockNum := block.Number()
 	txs := block.Transactions()
 	var numberValue [8]byte
 	binary.BigEndian.PutUint64(numberValue[:], blockNum)
+	var ringSlot [8]byte
+	binary.BigEndian.PutUint64(ringSlot[:], blockNum%blockNumberHashSlots)
 	ref := taposRefBytes(blockNum)
 
-	rows := make([]blockMetadataRow, 0, 5+len(infos)+len(txs))
+	keyBytes := len(blockStateRootPrefix) + len(blockHash) +
+		len(blockPrefix) + len(numberValue) +
+		len(blockHashPrefix) + len(blockHash) +
+		len(blockNumberHashPrefix) + len(ringSlot) +
+		len(taposPrefix) + len(ref) +
+		len(txInfoBlockPrefix) + len(numberValue) +
+		len(txs)*(len(txPrefix)+common.HashLength)
+	for _, info := range infos {
+		keyBytes += len(txInfoPrefix) + len(info.Id)
+	}
+	keyArena := make([]byte, keyBytes)
+	keyOffset := 0
+	metadataKey := func(prefix, suffix []byte) []byte {
+		start := keyOffset
+		keyOffset += len(prefix) + len(suffix)
+		key := keyArena[start:keyOffset:keyOffset]
+		n := copy(key, prefix)
+		copy(key[n:], suffix)
+		return key
+	}
+
+	rows := make([]blockMetadataRow, 0, 6+len(infos)+len(txs))
 	rows = append(rows,
-		blockMetadataRow{key: blockStateRootKey(blockHash[:]), value: stateRoot[:]},
-		blockMetadataRow{key: blockKey(blockNum), value: blockData},
-		blockMetadataRow{key: blockHashKey(blockHash[:]), value: numberValue[:]},
-		blockMetadataRow{key: taposKey(ref[:]), value: blockHash[8:16]},
+		blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]},
+		blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData},
+		blockMetadataRow{key: metadataKey(blockHashPrefix, blockHash[:]), value: numberValue[:]},
+		blockMetadataRow{key: metadataKey(blockNumberHashPrefix, ringSlot[:]), value: blockHash[:]},
+		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},
 	)
+	infoRowStart := len(rows)
 	for _, info := range infos {
 		data, err := proto.Marshal(info)
 		if err != nil {
 			return fmt.Errorf("marshal tx info: %w", err)
 		}
-		rows = append(rows, blockMetadataRow{key: txInfoKey(info.Id), value: data})
+		rows = append(rows, blockMetadataRow{key: metadataKey(txInfoPrefix, info.Id), value: data})
 	}
-	ret := &corepb.TransactionRet{
-		BlockNumber:     int64(blockNum),
-		Transactioninfo: infos,
-	}
+	var blockTimestamp int64
 	if len(infos) > 0 {
-		ret.BlockTimeStamp = infos[0].BlockTimeStamp
+		blockTimestamp = infos[0].BlockTimeStamp
 	}
-	retData, err := proto.Marshal(ret)
-	if err != nil {
-		return fmt.Errorf("marshal block tx infos: %w", err)
-	}
-	rows = append(rows, blockMetadataRow{key: txInfoBlockKey(blockNum), value: retData})
+	retData := marshalTransactionRetRows(int64(blockNum), blockTimestamp, rows[infoRowStart:])
+	rows = append(rows, blockMetadataRow{key: metadataKey(txInfoBlockPrefix, numberValue[:]), value: retData})
 	for _, tx := range txs {
 		hash := tx.Hash()
-		rows = append(rows, blockMetadataRow{key: txKey(hash[:]), value: numberValue[:]})
+		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: numberValue[:]})
 	}
 
 	encodedSize := metadataBatchHeaderSize
@@ -90,6 +121,48 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 		return fmt.Errorf("write block metadata batch: %w", err)
 	}
 	return nil
+}
+
+// marshalTransactionRetRows builds the TransactionRet wire payload around
+// TransactionInfo messages that WriteBlockMetadataBatch has already marshaled
+// for the per-transaction index. Calling proto.Marshal on TransactionRet would
+// traverse and marshal every nested info a second time.
+//
+// TransactionRet's schema is three ascending fields:
+//
+//	1: int64 blockNumber
+//	2: int64 blockTimeStamp
+//	3: repeated TransactionInfo transactioninfo
+//
+// Mirroring proto3's zero-value omission and generated field order produces
+// the same wire bytes when given the same nested info payloads, while retaining
+// unknown fields and map ordering exactly as encoded in each info row.
+func marshalTransactionRetRows(blockNumber, blockTimestamp int64, infoRows []blockMetadataRow) []byte {
+	size := 0
+	if blockNumber != 0 {
+		size += protowire.SizeTag(1) + protowire.SizeVarint(uint64(blockNumber))
+	}
+	if blockTimestamp != 0 {
+		size += protowire.SizeTag(2) + protowire.SizeVarint(uint64(blockTimestamp))
+	}
+	for _, row := range infoRows {
+		size += protowire.SizeTag(3) + protowire.SizeBytes(len(row.value))
+	}
+
+	data := make([]byte, 0, size)
+	if blockNumber != 0 {
+		data = protowire.AppendTag(data, 1, protowire.VarintType)
+		data = protowire.AppendVarint(data, uint64(blockNumber))
+	}
+	if blockTimestamp != 0 {
+		data = protowire.AppendTag(data, 2, protowire.VarintType)
+		data = protowire.AppendVarint(data, uint64(blockTimestamp))
+	}
+	for _, row := range infoRows {
+		data = protowire.AppendTag(data, 3, protowire.BytesType)
+		data = protowire.AppendBytes(data, row.value)
+	}
+	return data
 }
 
 func metadataBatchSetRecordSize(key, value []byte) int {

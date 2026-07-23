@@ -9,15 +9,7 @@ import (
 type SetAccountIdActuator struct{}
 
 func (a *SetAccountIdActuator) getContract(ctx *Context) (*contractpb.SetAccountIdContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.SetAccountIdContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal SetAccountIdContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.SetAccountIdContract](ctx, "SetAccountIdContract")
 }
 
 func (a *SetAccountIdActuator) Validate(ctx *Context) error {

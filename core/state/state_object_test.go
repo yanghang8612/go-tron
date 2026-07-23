@@ -43,9 +43,15 @@ func TestStateObjectContractStorage(t *testing.T) {
 	}
 
 	obj.setStorage(key, val, true)
-	got = obj.getStorage(key)
-	if got != val {
-		t.Fatalf("storage mismatch: got %x, want %x", got, val)
+	got, exists, cached := obj.getStorageWithExist(key)
+	if got != val || !exists || !cached {
+		t.Fatalf("storage mismatch: got (%x,%v,%v), want (%x,true,true)", got, exists, cached, val)
+	}
+
+	obj.setStorage(key, tcommon.Hash{}, false)
+	got, exists, cached = obj.getStorageWithExist(key)
+	if got != (tcommon.Hash{}) || exists || !cached {
+		t.Fatalf("cached absent storage mismatch: got (%x,%v,%v), want (zero,false,true)", got, exists, cached)
 	}
 }
 

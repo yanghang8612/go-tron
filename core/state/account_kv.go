@@ -144,6 +144,17 @@ type accountKVPhysicalLatestStore interface {
 	IterateKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
 }
 
+type accountLatestNoCopyPhysicalStore interface {
+	ReadAccountLatestNoCopy(owner tcommon.Address) ([]byte, bool, error)
+}
+
+// accountLatestHydrationBorrower is package-private because its result is only
+// valid for immediate RLP decoding. General AccountLatest callers keep their
+// defensive-copy contract.
+type accountLatestHydrationBorrower interface {
+	accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error)
+}
+
 func newAccountKVLatestBatch(index accountKVIndexStore, record func(rawdb.StateCommitmentUpdate)) *accountKVLatestBatch {
 	w := &accountKVLatestBatch{index: index, writer: index, record: record}
 	if batcher, ok := index.(ethdb.Batcher); ok {
@@ -503,16 +514,17 @@ func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value [
 	return w.maybeFlush()
 }
 
-// writeAccountLatestByKey accepts a physical latest key from the commit-wide
-// key arena. The backing writer owns/copies Put inputs before returning.
-func (w *accountKVLatestBatch) writeAccountLatestByKey(owner tcommon.Address, physicalKey, value []byte) error {
+// writeAccountLatestOwnedByKey accepts a physical latest key from the
+// commit-wide key arena and takes ownership of the freshly encoded value.
+// Both the layer batch and pending read overlay retain it as immutable data.
+func (w *accountKVLatestBatch) writeAccountLatestOwnedByKey(owner tcommon.Address, physicalKey, value []byte) error {
 	if w == nil || w.writer == nil {
 		return fmt.Errorf("account kv latest domain writer: nil writer")
 	}
-	if err := rawdb.WriteStateAccountLatestByKey(w.writer, physicalKey, value); err != nil {
+	if err := rawdb.WriteStateAccountLatestOwnedByKey(w.writer, physicalKey, value); err != nil {
 		return err
 	}
-	w.rememberAccountLatestPut(owner, value)
+	w.rememberAccountLatestPutOwned(owner, value)
 	return w.maybeFlush()
 }
 
@@ -549,6 +561,48 @@ func (w *accountKVLatestBatch) readAccountLatest(owner tcommon.Address) ([]byte,
 	}
 	if w == nil || w.latestStore == nil {
 		return nil, false, nil
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
+// readAccountLatestForCommitment is the synchronous commitment-fold variant
+// of readAccountLatest. Pending account values are freshly encoded immutable
+// buffers whose ownership was transferred to this batch. The fold only hashes
+// them before returning, so borrowing the pending slice avoids a defensive copy
+// per touched account without weakening readAccountLatest's public ownership
+// contract. The durable-store fallback already returns an owned value.
+func (w *accountKVLatestBatch) readAccountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
+// readAccountLatestForHydration lends immutable bytes only until the caller's
+// immediate decode completes. Pending values and blockbuffer cache values are
+// already immutable; generic stores fall back to their ordinary owned read.
+func (w *accountKVLatestBatch) readAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	if reader, ok := w.latestStore.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
 	}
 	return w.latestStore.ReadAccountLatest(owner)
 }
@@ -673,6 +727,10 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 }
 
 func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, value []byte) {
+	w.rememberAccountLatestPutOwned(owner, append([]byte(nil), value...))
+}
+
+func (w *accountKVLatestBatch) rememberAccountLatestPutOwned(owner tcommon.Address, value []byte) {
 	if w == nil {
 		return
 	}
@@ -680,7 +738,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
 	w.accountPending[owner.AccountID()] = accountLatestPending{
-		value:  append([]byte(nil), value...),
+		value:  value,
 		number: w.commitBlock,
 	}
 }
@@ -866,6 +924,20 @@ func (s *StateDB) readStateAccountLatest(owner tcommon.Address) ([]byte, bool, e
 		return s.flatLatestReader.AccountLatest(owner)
 	}
 	return s.accountKVPhysicalLatestStore().ReadAccountLatest(owner)
+}
+
+func (s *StateDB) readStateAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if s != nil && s.flatLatestReader != nil {
+		if reader, ok := s.flatLatestReader.(accountLatestHydrationBorrower); ok {
+			return reader.accountLatestForHydration(owner)
+		}
+		return s.flatLatestReader.AccountLatest(owner)
+	}
+	store := s.accountKVPhysicalLatestStore()
+	if reader, ok := store.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
+	}
+	return store.ReadAccountLatest(owner)
 }
 
 func (s *StateDB) readStateKVGeneration(owner tcommon.Address) (uint64, bool, error) {
@@ -1144,6 +1216,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
+	obj.ensureKVDirty()
 	obj.kvDirty[mk] = entry
 	obj.markDirty()
 	return nil
@@ -1185,6 +1258,7 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 			return false, nil
 		}
 	}
+	obj.ensureKVDirty()
 	obj.kvDirty[mk] = entry
 	return true, nil
 }
@@ -1225,6 +1299,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
+	obj.ensureKVDirty()
 	obj.kvDirty[mk] = entry
 	obj.markDirty()
 	return nil
@@ -1274,7 +1349,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 		prevGenerationDirty:  obj.accountKVGenerationDirty,
 		prevDirty:            prevDirty,
 	})
-	obj.kvDirty = make(map[string]kvEntry)
+	obj.kvDirty = nil
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.accountKVGenerationDirty = true

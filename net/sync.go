@@ -34,12 +34,16 @@ const (
 	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
 	peerJoinAttemptInterval   = 2 * time.Second
 
-	// Retain a small near-tip subset of the blocks already decoded by the peer
-	// receive path so the drain does not immediately protobuf-decode them again.
-	// Both caps are global to the SyncService and include the active drain batch;
-	// all remaining buffered blocks stay raw-only to keep the GC mark set small.
-	maxRetainedDecodedBlocks = 32
-	maxRetainedDecodedBytes  = 8 << 20
+	// Retain up to one complete near-tip fetch batch already decoded by the peer
+	// receive path so the drain does not immediately protobuf-decode it again.
+	// Both caps are global to the SyncService and include the active drain batch.
+	// The 64 MiB raw-byte charge bounds the corresponding pointer-rich protobuf
+	// graph to a few hundred MiB even at the ~5x expansion observed in production;
+	// all farther runahead remains raw-only, avoiding the former unbounded 12 GiB
+	// / 161 M-object GC spiral while using the memory now available to remove the
+	// second decode from the contiguous execution path.
+	maxRetainedDecodedBlocks = maxFetchBatch
+	maxRetainedDecodedBytes  = 64 << 20
 )
 
 type syncDiagnostics struct {
@@ -373,6 +377,54 @@ func (ss *SyncService) IsPaused() bool {
 // error captured when the pause was triggered. Intended for status reporting.
 func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, err error) {
 	return ss.pause.Status()
+}
+
+// SyncStatus is a point-in-time downloader snapshot for operational APIs. It
+// exposes counts rather than internal maps/slices so callers cannot mutate the
+// sync state and collecting it remains bounded regardless of backlog size.
+type SyncStatus struct {
+	Active                bool
+	Paused                bool
+	SyncPeerCount         int
+	TargetHead            uint64
+	AppliedTip            uint64
+	Remaining             int64
+	Inflight              int
+	BufferedBlocks        int
+	BufferedBytes         int64
+	RequestedBlocks       int
+	RetryBlocks           int
+	RetainedDecodedBlocks int
+	RetainedDecodedBytes  int64
+	PauseBlock            uint64
+	PauseTime             time.Time
+	PauseError            error
+}
+
+// Status returns one lock-consistent downloader snapshot. The lock order is
+// the established ss.mu → pause.mu order used by the sync state machine.
+func (ss *SyncService) Status() SyncStatus {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	paused, pauseBlock, pauseTime, pauseErr := ss.pause.Status()
+	return SyncStatus{
+		Active:                ss.syncing,
+		Paused:                paused,
+		SyncPeerCount:         len(ss.peers),
+		TargetHead:            ss.targetHeadNum,
+		AppliedTip:            ss.syncedTipNum,
+		Remaining:             ss.estimatedRemainLocked(),
+		Inflight:              ss.inflight,
+		BufferedBlocks:        len(ss.blockBuffer),
+		BufferedBytes:         ss.bufferedBytes,
+		RequestedBlocks:       len(ss.requested),
+		RetryBlocks:           len(ss.retryList),
+		RetainedDecodedBlocks: ss.retainedDecodedBlocks,
+		RetainedDecodedBytes:  ss.retainedDecodedBytes,
+		PauseBlock:            pauseBlock,
+		PauseTime:             pauseTime,
+		PauseError:            pauseErr,
+	}
 }
 
 // ErrSyncStopHeightReached is recorded in PausedStatus when an operator
@@ -779,7 +831,7 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	}
 
 	// Convert to BlockIDs
-	var peerSummary []types.BlockID
+	peerSummary := make([]types.BlockID, 0, len(inv.Ids))
 	for _, bid := range inv.Ids {
 		peerSummary = append(peerSummary, types.BlockID{
 			Hash: tcommon.BytesToHash(bid.Hash),
@@ -792,14 +844,17 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	headNum := ss.chain.CurrentBlock().Number()
 
 	// Build chain inventory: sequential blocks after common
-	var responseIDs []*corepb.ChainInventory_BlockId
+	responseCap := headNum - commonNum
+	if responseCap > maxChainInventorySize {
+		responseCap = maxChainInventorySize
+	}
+	responseIDs := make([]*corepb.ChainInventory_BlockId, 0, int(responseCap))
 	count := 0
 	for num := commonNum + 1; num <= headNum && count < maxChainInventorySize; num++ {
-		block := ss.chain.GetBlockByNumber(num)
-		if block == nil {
+		bid, ok := ss.chain.BlockIDByNumber(num)
+		if !ok {
 			break
 		}
-		bid := block.ID()
 		responseIDs = append(responseIDs, &corepb.ChainInventory_BlockId{
 			Hash:   bid.Hash[:],
 			Number: int64(bid.Num),
@@ -874,7 +929,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			continue
 		}
 		if num <= committedHeadNum {
-			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
+			if existing, ok := ss.chain.BlockIDByNumber(num); ok && existing.Hash == hash {
 				continue
 			}
 		}
@@ -1161,7 +1216,7 @@ func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
 		return true
 	}
 	if bid.Num <= committedHeadNum {
-		if existing := ss.chain.GetBlockByNumber(bid.Num); existing != nil && existing.Hash() == bid.Hash {
+		if existing, ok := ss.chain.BlockIDByNumber(bid.Num); ok && existing.Hash == bid.Hash {
 			ss.releaseBlockPathLocked(bid)
 			return true
 		}

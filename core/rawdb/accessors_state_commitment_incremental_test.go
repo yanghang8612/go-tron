@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 var benchmarkStateCommitmentUpdates []StateCommitmentUpdate
@@ -34,6 +35,44 @@ func TestAppendStateAccountLatestCommitmentKeyArena(t *testing.T) {
 	}
 }
 
+func TestAppendMixedStateCommitmentKeyArena(t *testing.T) {
+	owner := common.Address{0x41, 0x01}
+	logicalKey := []byte("storage-slot")
+	total := StateAccountLatestCommitmentKeySize() +
+		StateKVGenerationCommitmentKeySize() +
+		StateKVLatestCommitmentKeySize(len(logicalKey))
+	arena := make([]byte, 0, total)
+	keys := make([][]byte, 0, 3)
+	appendKey := func(fn func([]byte) []byte) {
+		t.Helper()
+		start := len(arena)
+		arena = fn(arena)
+		keys = append(keys, arena[start:len(arena):len(arena)])
+	}
+	appendKey(func(dst []byte) []byte { return AppendStateAccountLatestCommitmentKey(dst, owner) })
+	appendKey(func(dst []byte) []byte { return AppendStateKVGenerationCommitmentKey(dst, owner) })
+	appendKey(func(dst []byte) []byte {
+		return AppendStateKVLatestCommitmentKeyString(dst, owner, 7, kvdomains.ContractStorage, string(logicalKey))
+	})
+
+	if len(arena) != total || cap(arena) != total {
+		t.Fatalf("arena len/cap = %d/%d, want %d/%d", len(arena), cap(arena), total, total)
+	}
+	want := [][]byte{
+		StateAccountLatestCommitmentKey(owner),
+		StateKVGenerationCommitmentKey(owner),
+		StateKVLatestCommitmentKey(owner, 7, kvdomains.ContractStorage, logicalKey),
+	}
+	for i := range keys {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("key %d = %x, want %x", i, keys[i], want[i])
+		}
+		if cap(keys[i]) != len(keys[i]) {
+			t.Fatalf("key %d len/cap = %d/%d, want capped segment", i, len(keys[i]), cap(keys[i]))
+		}
+	}
+}
+
 func BenchmarkStateAccountLatestCommitmentKeys(b *testing.B) {
 	const count = 1024
 	owners := make([]common.Address, count)
@@ -58,6 +97,42 @@ func BenchmarkStateAccountLatestCommitmentKeys(b *testing.B) {
 			for i, owner := range owners {
 				start := len(arena)
 				arena = AppendStateAccountLatestCommitmentKey(arena, owner)
+				updates[i].Key = arena[start:len(arena):len(arena)]
+			}
+			benchmarkStateCommitmentUpdates = updates
+		}
+	})
+}
+
+func BenchmarkStateKVLatestCommitmentKeys(b *testing.B) {
+	const count = 1024
+	owners := make([]common.Address, count)
+	logicalKeys := make([][]byte, count)
+	total := 0
+	for i := range owners {
+		binary.BigEndian.PutUint64(owners[i][common.AddressLength-8:], uint64(i))
+		logicalKeys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(logicalKeys[i][24:], uint64(i))
+		total += StateKVLatestCommitmentKeySize(len(logicalKeys[i]))
+	}
+	b.Run("individual", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			updates := make([]StateCommitmentUpdate, count)
+			for i, owner := range owners {
+				updates[i].Key = StateKVLatestCommitmentKey(owner, 7, kvdomains.ContractStorage, logicalKeys[i])
+			}
+			benchmarkStateCommitmentUpdates = updates
+		}
+	})
+	b.Run("arena", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			updates := make([]StateCommitmentUpdate, count)
+			arena := make([]byte, 0, total)
+			for i, owner := range owners {
+				start := len(arena)
+				arena = AppendStateKVLatestCommitmentKey(arena, owner, 7, kvdomains.ContractStorage, logicalKeys[i])
 				updates[i].Key = arena[start:len(arena):len(arena)]
 			}
 			benchmarkStateCommitmentUpdates = updates

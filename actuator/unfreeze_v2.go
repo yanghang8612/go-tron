@@ -15,15 +15,7 @@ const maxUnfreezeCount = 32
 type UnfreezeBalanceV2Actuator struct{}
 
 func (a *UnfreezeBalanceV2Actuator) getContract(ctx *Context) (*contractpb.UnfreezeBalanceV2Contract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	uc := &contractpb.UnfreezeBalanceV2Contract{}
-	if err := contract.Parameter.UnmarshalTo(uc); err != nil {
-		return nil, errors.New("failed to unmarshal UnfreezeBalanceV2Contract")
-	}
-	return uc, nil
+	return decodedContract[*contractpb.UnfreezeBalanceV2Contract](ctx, "UnfreezeBalanceV2Contract")
 }
 
 func (a *UnfreezeBalanceV2Actuator) Validate(ctx *Context) error {

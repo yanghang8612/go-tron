@@ -11,15 +11,7 @@ import (
 type ProposalApproveActuator struct{}
 
 func (a *ProposalApproveActuator) getContract(ctx *Context) (*contractpb.ProposalApproveContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ProposalApproveContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ProposalApproveContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ProposalApproveContract](ctx, "ProposalApproveContract")
 }
 
 func (a *ProposalApproveActuator) Validate(ctx *Context) error {

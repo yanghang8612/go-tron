@@ -12,11 +12,21 @@ import (
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
-	db CommitmentDB
+	db         CommitmentDB
+	ownedValue bool
 }
 
 func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
-	return &rawdbBranchStore{db: db}
+	return &rawdbBranchStore{db: db, ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db)}
+}
+
+// concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
+// explicitly advertises concurrent reads and writes. The steady-state sync path
+// uses blockbuffer.Buffer/LayerView, which provide the marker; direct Pebble,
+// memorydb, and custom stores keep serial flushes unless separately audited.
+func (s *rawdbBranchStore) concurrentSiblingFlushSafe() bool {
+	_, ok := s.db.(interface{ ConcurrentReadWriteSafe() })
+	return ok
 }
 
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -52,6 +62,12 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
+	// A blockbuffer layer can retain a freshly allocated encoding directly.
+	// Encode into that final immutable slice and transfer it, avoiding the
+	// scratch-to-layer copy on every branch flushed by the commitment fold.
+	if s.ownedValue {
+		return rawdb.WriteCommitmentBranchOwned(s.db, prefix, b.Encode())
+	}
 	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
 	// copies the value into its own arena during the call, so the buffer is
 	// safe to return as soon as WriteCommitmentBranch returns.
@@ -59,6 +75,36 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	defer returnEncodeBuf(bp)
 	*bp = b.EncodeTo((*bp)[:0])
 	return rawdb.WriteCommitmentBranch(s.db, prefix, *bp)
+}
+
+// putBranchesSorted encodes one sibling fold's final branches into a single
+// immutable arena before transferring its disjoint slices to blockbuffer. The
+// layer retains those slices until commit/drop, so a scratch buffer cannot be
+// reused; sharing one exact-sized arena removes the per-branch heap object while
+// preserving the owned-value lifetime. keys must be sorted by the caller.
+func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]*BranchData) error {
+	if !s.ownedValue {
+		for _, key := range keys {
+			if err := s.PutBranch([]byte(key), *branches[key]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	totalSize := 0
+	for _, key := range keys {
+		totalSize += branches[key].encodedSize()
+	}
+	arena := make([]byte, 0, totalSize)
+	for _, key := range keys {
+		start := len(arena)
+		arena = branches[key].EncodeTo(arena)
+		encoded := arena[start:len(arena):len(arena)]
+		if err := rawdb.WriteCommitmentBranchOwnedString(s.db, key, encoded); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {

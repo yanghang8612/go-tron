@@ -21,14 +21,13 @@ func BuildChainSummary(chain *core.BlockChain) []types.BlockID {
 	head := chain.CurrentBlock()
 	headNum := head.Number()
 
-	var summary []types.BlockID
+	summary := make([]types.BlockID, 0, 32)
 	step := uint64(1)
 	num := headNum
 
 	for {
-		block := chain.GetBlockByNumber(num)
-		if block != nil {
-			summary = append(summary, block.ID())
+		if bid, ok := chain.BlockIDByNumber(num); ok {
+			summary = append(summary, bid)
 		}
 		if num == 0 {
 			break
@@ -50,17 +49,21 @@ func BuildChainSummary(chain *core.BlockChain) []types.BlockID {
 }
 
 // FindCommonBlock finds the highest block in peerSummary that exists in
-// `chain`. Returns 0 (genesis) when no entry matches.
+// `chain`. It is order-independent: java-tron summaries are oldest-first, but
+// older tests and defensive callers may supply newest-first. Returns 0
+// (genesis) when no positive-height entry matches.
 func FindCommonBlock(chain *core.BlockChain, peerSummary []types.BlockID) uint64 {
 	headNum := chain.CurrentBlock().Number()
+	best := uint64(0)
 	for _, bid := range peerSummary {
-		if bid.Number() > headNum {
+		number := bid.Number()
+		if number <= best || number > headNum {
 			continue
 		}
-		block := chain.GetBlockByNumber(bid.Number())
-		if block != nil && block.ID().Hash == bid.Hash {
-			return bid.Number()
+		local, ok := chain.BlockIDByNumber(number)
+		if ok && local.Hash == bid.Hash {
+			best = number
 		}
 	}
-	return 0 // fallback to genesis
+	return best
 }
