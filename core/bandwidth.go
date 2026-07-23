@@ -170,18 +170,18 @@ func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, 
 // only staked bandwidth is consulted. On insufficient stake the path falls
 // back to the `create_account_fee` (default 100_000 SUN), bypassing the
 // free-bandwidth daily quota entirely.
-func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64) (*BandwidthResult, error) {
+func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64) (BandwidthResult, error) {
 	return consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, HeadSlot(prevBlockTime, 0))
 }
 
-func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64) (*BandwidthResult, error) {
+func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64) (BandwidthResult, error) {
 	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
-		return &BandwidthResult{}, nil
+		return BandwidthResult{}, nil
 	}
 
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
-		return nil, fmt.Errorf("cannot determine sender")
+		return BandwidthResult{}, fmt.Errorf("cannot determine sender")
 	}
 
 	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
@@ -196,12 +196,12 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 			for _, auth := range pb.GetPqAuthSig() {
 				wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())
 				if !ok {
-					return nil, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
+					return BandwidthResult{}, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
 				}
 				createSize -= int64(wireSize)
 			}
 			if createSize > dynProps.MaxCreateAccountTxSize() {
-				return nil, fmt.Errorf("create account transaction size %d exceeds maximum %d", createSize, dynProps.MaxCreateAccountTxSize())
+				return BandwidthResult{}, fmt.Errorf("create account transaction size %d exceeds maximum %d", createSize, dynProps.MaxCreateAccountTxSize())
 			}
 		}
 		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, prevBlockTime, resourceTime)
@@ -210,17 +210,17 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 	if tx.ContractType() == corepb.Transaction_Contract_TransferAssetContract {
 		ok, err := useAssetAccountNet(statedb, dynProps, tx, sender, txSize, prevBlockTime, resourceTime)
 		if err != nil {
-			return nil, err
+			return BandwidthResult{}, err
 		}
 		if ok {
-			return &BandwidthResult{NetUsage: txSize}, nil
+			return BandwidthResult{NetUsage: txSize}, nil
 		}
 	}
 
 	acct := statedb.GetAccount(sender)
 	if chargeStakedNet(statedb, dynProps, sender, acct, txSize, resourceTime) {
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
-		return &BandwidthResult{NetUsage: txSize}, nil
+		return BandwidthResult{NetUsage: txSize}, nil
 	}
 
 	// Try free bandwidth
@@ -234,18 +234,18 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
 		dynProps.SetPublicNetUsage(recoveredPublicUsage + txSize)
 		dynProps.SetPublicNetTime(resourceTime)
-		return &BandwidthResult{NetUsage: txSize}, nil
+		return BandwidthResult{NetUsage: txSize}, nil
 	}
 
 	// Burn TRX
 	cost := txSize * dynProps.TransactionFee()
 	if err := statedb.SubBalance(sender, cost); err != nil {
-		return nil, fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
+		return BandwidthResult{}, fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
 	}
 	statedb.SetLatestOperationTime(sender, prevBlockTime)
 	routeBandwidthFee(statedb, dynProps, cost)
 	dynProps.AddTotalTransactionCost(cost)
-	return &BandwidthResult{NetFee: cost, NetFeeForBandwidth: true}, nil
+	return BandwidthResult{NetFee: cost, NetFeeForBandwidth: true}, nil
 }
 
 func routeBandwidthFee(statedb *state.StateDB, dynProps *state.DynamicProperties, fee int64) {
@@ -423,19 +423,19 @@ func resolveBandwidthAsset(statedb *state.StateDB, dynProps *state.DynamicProper
 // applied per byte); on shortage the `create_account_fee` is taken from the
 // owner balance and either burned or sent to the blackhole — and
 // `total_create_account_cost` is incremented.
-func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (*BandwidthResult, error) {
+func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (BandwidthResult, error) {
 	ratio := dynProps.CreateNewAccountBandwidthRate()
 	netCost := txSize * ratio
 
 	acct := statedb.GetAccount(sender)
 	if chargeStakedNet(statedb, dynProps, sender, acct, netCost, resourceTime) {
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
-		return &BandwidthResult{NetUsage: netCost}, nil
+		return BandwidthResult{NetUsage: netCost}, nil
 	}
 
 	fee := dynProps.CreateAccountFee()
 	if err := statedb.SubBalance(sender, fee); err != nil {
-		return nil, fmt.Errorf("insufficient balance for create_account_fee: need %d sun", fee)
+		return BandwidthResult{}, fmt.Errorf("insufficient balance for create_account_fee: need %d sun", fee)
 	}
 	statedb.SetLatestOperationTime(sender, prevBlockTime)
 	if dynProps.AllowBlackHoleOptimization() {
@@ -444,7 +444,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 		statedb.AddBalance(statedb.BlackholeAddress(), fee)
 	}
 	dynProps.AddTotalCreateAccountCost(fee)
-	return &BandwidthResult{NetFee: fee}, nil
+	return BandwidthResult{NetFee: fee}, nil
 }
 
 // extractSender extracts the bandwidth payer from the first contract.
