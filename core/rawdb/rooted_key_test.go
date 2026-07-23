@@ -98,6 +98,7 @@ func TestLookupRootedStateKeyRuntimeDerivedAndHistoryStayFlat(t *testing.T) {
 		{name: "previous shuffled witnesses", key: previousShuffledWitnessesKey},
 		{name: "tapos recent block", key: taposKey([]byte{0x00, 0x01})},
 		{name: "total transaction count", key: totalTransactionCountKey},
+		{name: "block number hash index", key: blockNumberHashKey(12)},
 		{name: "derived latest block number", key: dynPropKey("latest_block_header_number")},
 		{name: "derived latest block timestamp", key: dynPropKey("latest_block_header_timestamp")},
 		{name: "derived latest block hash", key: dynPropKey("latest_block_header_hash")},

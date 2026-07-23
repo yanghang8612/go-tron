@@ -154,6 +154,24 @@ func TestReadBlock_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadBlockHash_AncientLegacyFallthrough(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(7, 12345))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 7, data)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	got, ok := ReadBlockHash(cdb, 7)
+	if !ok || got != block.Hash() {
+		t.Fatalf("ReadBlockHash ancient = %x,%v want %x,true", got, ok, block.Hash())
+	}
+}
+
 // TestReadBlock_KVPath verifies that ReadBlock reads from the hot KV
 // store when no ancient entry exists (the slice-2 default with
 // NoopAncient).

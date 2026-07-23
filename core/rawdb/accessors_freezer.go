@@ -68,14 +68,13 @@ func ReadBlockHashRaw(data []byte) common.Hash {
 	return hash
 }
 
-// ReadBlockHashByNumber remains for rare callers that do not already hold the
-// block bytes. The freezer runner uses ReadBlockHashRaw on its existing read.
+// ReadBlockHashByNumber remains for rare KV-only callers that do not already
+// hold the block bytes. It prefers the bounded recent BlockID ring and retains a
+// raw-body fallback for databases created before that index existed. The
+// freezer runner uses ReadBlockHashRaw on its existing read.
 func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
-	data, err := db.Get(blockKey(number))
-	if err != nil {
-		return common.Hash{}
-	}
-	return ReadBlockHashRaw(data)
+	hash, _ := ReadBlockHashKV(db, number)
+	return hash
 }
 
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under
@@ -95,9 +94,10 @@ func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 //
 // Per the slice-1 freezer design, `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
 // and `ti-<txid>` are intentionally left in Pebble — they are small,
-// hash-keyed wallet-hot rows that the freezer does not own. A future
-// slice may relocate them; until then this helper is deliberately
-// narrow.
+// hash-keyed wallet-hot rows that the freezer does not own. The bounded
+// `bnh-<slot>` recent-hash ring also stays hot so the full 256-block TVM
+// BLOCKHASH window remains body-free after freezing. A future slice may
+// relocate the unbounded hash-keyed rows; until then this helper is narrow.
 //
 // Implementation: two DeleteRange calls — one per prefix — wrapping the
 // half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into

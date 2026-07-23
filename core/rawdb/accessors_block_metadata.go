@@ -44,11 +44,12 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 	binary.BigEndian.PutUint64(numberValue[:], blockNum)
 	ref := taposRefBytes(blockNum)
 
-	rows := make([]blockMetadataRow, 0, 5+len(infos)+len(txs))
+	rows := make([]blockMetadataRow, 0, 6+len(infos)+len(txs))
 	rows = append(rows,
 		blockMetadataRow{key: blockStateRootKey(blockHash[:]), value: stateRoot[:]},
 		blockMetadataRow{key: blockKey(blockNum), value: blockData},
 		blockMetadataRow{key: blockHashKey(blockHash[:]), value: numberValue[:]},
+		blockMetadataRow{key: blockNumberHashKey(blockNum), value: blockHash[:]},
 		blockMetadataRow{key: taposKey(ref[:]), value: blockHash[8:16]},
 	)
 	for _, info := range infos {

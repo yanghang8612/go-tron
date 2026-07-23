@@ -86,6 +86,9 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 	if gotBlock == nil || gotBlock.Hash() != block.Hash() {
 		t.Fatalf("block metadata round trip failed: got %v", gotBlock)
 	}
+	if gotHash, ok := ReadBlockHash(chainDB, block.Number()); !ok || gotHash != block.Hash() {
+		t.Fatalf("block hash index = %x,%v want %x,true", gotHash, ok, block.Hash())
+	}
 	if got := ReadBlockStateRoot(chainDB, block.Hash()); got != root {
 		t.Fatalf("state root = %x, want %x", got, root)
 	}

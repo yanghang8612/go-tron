@@ -2474,14 +2474,11 @@ func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	// Hot path: the wrapped view (buffer layers fall through to Pebble),
 	// covering everything the freezer has not pruned, including blocks of
 	// an in-flight insert batch that only exist in the buffer.
-	if blk := rawdb.ReadBlockKV(s.BufferedKVStore, number); blk != nil {
-		return blk.Hash(), true
+	if hash, ok := rawdb.ReadBlockHashKV(s.BufferedKVStore, number); ok {
+		return hash, true
 	}
-	// Frozen path: ancient-first ReadBlock (the hot row is already gone).
-	if blk := rawdb.ReadBlock(s.chaindb, number); blk != nil {
-		return blk.Hash(), true
-	}
-	return tcommon.Hash{}, false
+	// Frozen / legacy path: recent BlockID ring first, then raw ancient body.
+	return rawdb.ReadBlockHash(s.chaindb, number)
 }
 
 // vmKV wraps a processing view for handoff to the actuator/VM layer.

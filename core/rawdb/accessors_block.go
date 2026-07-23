@@ -20,12 +20,22 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	if err != nil {
 		return err
 	}
-	if err := db.Put(blockKey(block.Number()), data); err != nil {
+	number := block.Number()
+	hash := block.Hash()
+	if err := db.Put(blockKey(number), data); err != nil {
 		return err
 	}
-	num := make([]byte, 8)
-	binary.BigEndian.PutUint64(num, block.Number())
-	return db.Put(blockHashKey(block.Hash().Bytes()), num)
+	var num [8]byte
+	binary.BigEndian.PutUint64(num[:], number)
+	if err := db.Put(blockHashKey(hash[:]), num[:]); err != nil {
+		return err
+	}
+	var slot [8]byte
+	binary.BigEndian.PutUint64(slot[:], number%blockNumberHashSlots)
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.PutKeyParts(blockNumberHashPrefix, slot[:], hash[:])
+	}
+	return db.Put(blockNumberHashKey(number), hash[:])
 }
 
 // ReadBlock returns the block at the given number, consulting the freezer
@@ -67,6 +77,71 @@ func ReadBlockNumber(db *ChainDB, hash common.Hash) *uint64 {
 	}
 	num := binary.BigEndian.Uint64(data)
 	return &num
+}
+
+// ReadBlockHash returns the canonical BlockID hash at number without decoding
+// the block. New databases answer from the bounded recent BlockID ring. For
+// databases created before that index existed, the fallback scans the raw hot
+// or ancient block protobuf and extracts only BlockHeader.RawData.
+func ReadBlockHash(db *ChainDB, number uint64) (common.Hash, bool) {
+	if hash, ok := readBlockHashIndex(db, number); ok {
+		return hash, true
+	}
+	if data, ok := readAncient(db, ancientBlocks, number); ok {
+		hash, err := types.BlockHashFromRaw(data)
+		if err == nil {
+			return hash, true
+		}
+	}
+	return readBlockHashRawKV(db, number)
+}
+
+// ReadBlockHashKV is the hot-store variant of ReadBlockHash. The raw-body
+// fallback keeps pre-index databases compatible and uses immutable no-copy
+// overlay values when the reader advertises that optional capability.
+func ReadBlockHashKV(db ethdb.KeyValueReader, number uint64) (common.Hash, bool) {
+	if hash, ok := readBlockHashIndex(db, number); ok {
+		return hash, true
+	}
+	return readBlockHashRawKV(db, number)
+}
+
+func readBlockHashIndex(db ethdb.KeyValueReader, number uint64) (common.Hash, bool) {
+	var suffix [8]byte
+	binary.BigEndian.PutUint64(suffix[:], number%blockNumberHashSlots)
+	var (
+		data []byte
+		err  error
+	)
+	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
+		data, err = reader.GetNoCopyCachedKeyParts(blockNumberHashPrefix, suffix[:])
+	} else {
+		data, err = readStateNoCopyCached(db, blockNumberHashKey(number))
+	}
+	if err != nil || len(data) != common.HashLength || binary.BigEndian.Uint64(data[:8]) != number {
+		return common.Hash{}, false
+	}
+	return common.BytesToHash(data), true
+}
+
+func readBlockHashRawKV(db ethdb.KeyValueReader, number uint64) (common.Hash, bool) {
+	data, err := readBlockRawNoCopy(db, number)
+	if err != nil {
+		return common.Hash{}, false
+	}
+	hash, err := types.BlockHashFromRaw(data)
+	if err != nil {
+		return common.Hash{}, false
+	}
+	return hash, true
+}
+
+func readBlockRawNoCopy(db ethdb.KeyValueReader, number uint64) ([]byte, error) {
+	key := blockKey(number)
+	if reader, ok := db.(noCopyKeyValueReader); ok {
+		return reader.GetNoCopy(key)
+	}
+	return db.Get(key)
 }
 
 // readAncient is the per-accessor freezer probe. Returns (data, true) when

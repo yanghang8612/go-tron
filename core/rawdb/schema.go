@@ -26,8 +26,14 @@ var (
 	// empty.
 	blockStateRootPrefix = []byte("bsr-")
 
-	blockPrefix              = []byte("b-")
-	blockHashPrefix          = []byte("bh-")
+	blockPrefix     = []byte("b-")
+	blockHashPrefix = []byte("bh-")
+	// blockNumberHashPrefix is a bounded recent BlockID ring. Each key selects
+	// one of blockNumberHashSlots slots. A TRON BlockID embeds its number in the
+	// first 8 bytes, so readers can reject overwritten slots without storing
+	// separate metadata. Two complete TVM BLOCKHASH windows remain hot without
+	// an ever-growing number→hash index.
+	blockNumberHashPrefix    = []byte("bnh-")
 	txPrefix                 = []byte("tx-")
 	txInfoPrefix             = []byte("ti-")
 	txInfoBlockPrefix        = []byte("tib-")
@@ -397,6 +403,15 @@ func blockKey(number uint64) []byte {
 
 func blockHashKey(hash []byte) []byte {
 	return append(append([]byte{}, blockHashPrefix...), hash...)
+}
+
+const blockNumberHashSlots = uint64(512)
+
+func blockNumberHashKey(number uint64) []byte {
+	k := make([]byte, len(blockNumberHashPrefix)+8)
+	copy(k, blockNumberHashPrefix)
+	binary.BigEndian.PutUint64(k[len(blockNumberHashPrefix):], number%blockNumberHashSlots)
+	return k
 }
 
 func blockStateRootKey(hash []byte) []byte {
