@@ -3104,18 +3104,38 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	}
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
+	commitmentTouchCapacity := 0
 	for _, plan := range plans {
-		if plan.kvPlan == nil || len(plan.kvPlan.items) == 0 {
+		if plan == nil || plan.obj == nil {
 			continue
 		}
-		stats.KVAccounts++
-		stats.KVItems += len(plan.kvPlan.items)
+		if plan.deleteAccount {
+			// Account deletion writes both the account-latest tombstone and
+			// its generation row.
+			commitmentTouchCapacity += 2
+		} else {
+			if plan.accountLatestDirty {
+				commitmentTouchCapacity++
+			}
+			if plan.obj.accountKVGenerationDirty {
+				commitmentTouchCapacity++
+			}
+		}
+		if plan.kvPlan != nil && len(plan.kvPlan.items) > 0 {
+			stats.KVAccounts++
+			stats.KVItems += len(plan.kvPlan.items)
+			commitmentTouchCapacity += len(plan.kvPlan.items)
+		}
 	}
 	mark(&stats.Prepare)
 
 	accountKVIndex := s.accountKVIndex()
 	generationResolver := accountCommitPlanGenerationResolver(plans)
 	commitmentState := NewDomainCommitmentStateWithGenerationResolver(s, generationResolver)
+	// The commit plans expose the exact maximum number of distinct commitment
+	// touches before any writes begin. Reserve it once instead of growing the
+	// per-block mutation map and captured-value slice through multiple sizes.
+	commitmentState.reserveTouches(commitmentTouchCapacity)
 	var accountKVLatestWriter *accountKVLatestBatch
 	var accountKVTemporalTx statedomains.TemporalTx
 	if scope != nil {

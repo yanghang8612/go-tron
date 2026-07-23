@@ -37,6 +37,26 @@ func BenchmarkDomainCommitmentRecordTouches(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainCommitmentRecordTouchesReserved(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment := NewDomainCommitmentState(&StateDB{})
+		commitment.reserveTouches(count)
+		for _, key := range keys {
+			commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+	}
+}
+
 func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
 	owner := testAddr(0x7e)
 	key := make([]byte, 32)

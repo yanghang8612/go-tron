@@ -178,7 +178,25 @@ func NewDomainCommitmentStateWithGenerationResolver(s *StateDB, generation state
 	return &DomainCommitmentState{
 		state:      s,
 		generation: generation,
-		touches:    make(map[domainCommitmentTouch]int),
+	}
+}
+
+// reserveTouches sizes the per-commit mutation index and its parallel captured-
+// value slice from the commit plan's already-known upper bound. A fresh
+// DomainCommitmentState is created for every block; letting both containers grow
+// from zero repeatedly otherwise allocates and rehashes the same sequence of map
+// buckets throughout a long sync range.
+func (d *DomainCommitmentState) reserveTouches(capacity int) {
+	if d == nil || capacity <= len(d.touches) {
+		return
+	}
+	if len(d.touches) == 0 {
+		d.touches = make(map[domainCommitmentTouch]int, capacity)
+	}
+	if cap(d.touchValues) < capacity {
+		values := make([]domainCommitmentCapturedValue, len(d.touchValues), capacity)
+		copy(values, d.touchValues)
+		d.touchValues = values
 	}
 }
 
