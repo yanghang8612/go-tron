@@ -2929,18 +2929,7 @@ func encodeAccountLatestObjectFromProto(obj *stateObject, accBytes []byte, flatR
 	if flatRoot {
 		accountKVRoot = EmptyKVRoot
 	}
-	envelope := &StateAccountV2{
-		Version:             StateAccountVersion,
-		AccountProto:        accBytes,
-		AccountKVRoot:       accountKVRoot,
-		AccountKVGeneration: obj.accountKVGeneration,
-		CodeHash:            obj.codeHash,
-	}
-	data, err := envelope.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return encodeStateAccountV2Fields(StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash), nil
 }
 
 func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey []byte) error {

@@ -2,11 +2,72 @@ package state
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
+
+type stateAccountV2Reference StateAccountV2
+
+func TestStateAccountV2EncodeMatchesGenericRLP(t *testing.T) {
+	var nilValue *StateAccountV2
+	gotNil, err := nilValue.Encode()
+	if err != nil {
+		t.Fatalf("nil direct encode: %v", err)
+	}
+	wantNil, err := rlp.EncodeToBytes((*stateAccountV2Reference)(nil))
+	if err != nil {
+		t.Fatalf("nil reference encode: %v", err)
+	}
+	if !bytes.Equal(gotNil, wantNil) {
+		t.Fatalf("nil encoding mismatch: got %x want %x", gotNil, wantNil)
+	}
+
+	protos := [][]byte{
+		nil,
+		{0x00},
+		{0x7f},
+		{0x80},
+		bytes.Repeat([]byte{0x11}, 55),
+		bytes.Repeat([]byte{0x22}, 56),
+		bytes.Repeat([]byte{0x33}, 255),
+		bytes.Repeat([]byte{0x44}, 256),
+		bytes.Repeat([]byte{0x55}, 4096),
+		bytes.Repeat([]byte{0x66}, 65536),
+	}
+	integers := []uint64{0, 1, 0x7f, 0x80, 0xff, 0x100, math.MaxUint64}
+	for i, accountProto := range protos {
+		var accountRoot, codeHash tcommon.Hash
+		for j := range accountRoot {
+			accountRoot[j] = byte(i + j)
+			codeHash[j] = byte(0xff - i - j)
+		}
+		value := &StateAccountV2{
+			Version:             integers[i%len(integers)],
+			AccountProto:        accountProto,
+			AccountKVRoot:       accountRoot,
+			AccountKVGeneration: integers[(i+3)%len(integers)],
+			CodeHash:            codeHash,
+		}
+		got, err := value.Encode()
+		if err != nil {
+			t.Fatalf("case %d direct encode: %v", i, err)
+		}
+		want, err := rlp.EncodeToBytes((*stateAccountV2Reference)(value))
+		if err != nil {
+			t.Fatalf("case %d reference encode: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("case %d encoding mismatch:\n got  %x\n want %x", i, got, want)
+		}
+		if len(got) != cap(got) {
+			t.Fatalf("case %d output len/cap = %d/%d, want exact allocation", i, len(got), cap(got))
+		}
+	}
+}
 
 func TestStateAccountV2RoundTrip(t *testing.T) {
 	in := &StateAccountV2{
