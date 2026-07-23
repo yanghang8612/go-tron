@@ -28,6 +28,25 @@ type keyValueWriterOnly struct {
 	ethdb.KeyValueWriter
 }
 
+// cachedLayerReaderOnly preserves rawdb's generic cached no-copy extension but
+// intentionally hides the structured state-latest extension. Benchmarks use it
+// to isolate only the physical-key construction change.
+type cachedLayerReaderOnly struct {
+	view *LayerView
+}
+
+func (r cachedLayerReaderOnly) Get(key []byte) ([]byte, error) {
+	return r.view.Get(key)
+}
+
+func (r cachedLayerReaderOnly) Has(key []byte) (bool, error) {
+	return r.view.Has(key)
+}
+
+func (r cachedLayerReaderOnly) GetNoCopyCached(key []byte) ([]byte, error) {
+	return r.view.GetNoCopyCached(key)
+}
+
 type blockingSnapshotReader struct {
 	ethdb.KeyValueReader
 	started chan struct{}
@@ -144,6 +163,100 @@ func TestCommitmentSplitReadOversizedKey(t *testing.T) {
 			got, found, err := rawdb.ReadCommitmentBranchNoCopy(reader, prefix)
 			if err != nil || !found || !bytes.Equal(got, want) {
 				t.Fatalf("oversized split read = (%q,%v,%v)", got, found, err)
+			}
+		})
+	}
+}
+
+func TestStateKVLatestStructuredLifecycle(t *testing.T) {
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x42}, common.AddressLength))
+	generation := uint64(17)
+	domain := kvdomains.ContractStorage
+	oversizedKey := bytes.Repeat([]byte{0x7b}, splitReadKeyStackSize)
+
+	for _, tc := range []struct {
+		name string
+		mode string
+	}{
+		{name: "buffer", mode: "buffer"},
+		{name: "layer-view", mode: "layer-view"},
+		{name: "buffer-batch", mode: "buffer-batch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicalKey := bytes.Repeat([]byte{0x31}, 32)
+			disk := rawdb.NewMemoryDatabase()
+			if err := rawdb.WriteStateKVLatest(disk, owner, generation, domain, logicalKey, []byte("durable")); err != nil {
+				t.Fatal(err)
+			}
+			if err := rawdb.WriteStateKVLatest(disk, owner, generation, domain, oversizedKey, []byte("oversized")); err != nil {
+				t.Fatal(err)
+			}
+			base := &countingKeyValueReader{KeyValueReader: disk}
+			buf := New(base)
+			buf.SetBaseReadCacheSize(1 << 20)
+			buf.BeginBlock(bufHash(1), 1)
+			h, _ := buf.NewestInflight()
+
+			var reader ethdb.KeyValueReader = buf
+			var writer ethdb.KeyValueWriter = buf
+			publish := func() {}
+			switch tc.mode {
+			case "layer-view":
+				view := buf.ViewLayer(h)
+				reader, writer = view, view
+			case "buffer-batch":
+				batch := buf.NewBatch()
+				defer batch.Close()
+				writer = batch
+				publish = func() {
+					t.Helper()
+					if err := batch.Write(); err != nil {
+						t.Fatal(err)
+					}
+					batch.Reset()
+				}
+			}
+
+			read := func(key []byte, want string, wantFound bool) {
+				t.Helper()
+				got, found, err := rawdb.ReadStateKVLatest(reader, owner, generation, domain, key)
+				if err != nil || found != wantFound || string(got) != want {
+					t.Fatalf("ReadStateKVLatest = (%q,%v,%v), want (%q,%v,nil)", got, found, err, want, wantFound)
+				}
+			}
+
+			// The first durable read fills the cache; the second structured read
+			// must reconstruct the identical physical key and hit it.
+			read(logicalKey, "durable", true)
+			read(logicalKey, "durable", true)
+			if base.gets != 1 {
+				t.Fatalf("base reads after structured cache hit = %d, want 1", base.gets)
+			}
+
+			originalKey := append([]byte(nil), logicalKey...)
+			wrapped := rawdb.EncodeStateKVLatestValue([]byte("overlay"))
+			if err := rawdb.WriteStateKVLatestEncoded(writer, owner, generation, domain, logicalKey, wrapped); err != nil {
+				t.Fatal(err)
+			}
+			logicalKey[0] ^= 0xff
+			clear(wrapped)
+			publish()
+			read(originalKey, "overlay", true)
+			read(logicalKey, "", false)
+			if base.gets != 2 { // mutated key is a genuine one-time base miss
+				t.Fatalf("base reads after overlay/mutated-key reads = %d, want 2", base.gets)
+			}
+
+			if err := rawdb.DeleteStateKVLatest(writer, owner, generation, domain, originalKey); err != nil {
+				t.Fatal(err)
+			}
+			publish()
+			read(originalKey, "", false)
+
+			// Long logical keys use the owned fallback and must remain byte-exact.
+			read(oversizedKey, "oversized", true)
+			if base.gets != 3 {
+				t.Fatalf("base reads after oversized key = %d, want 3", base.gets)
 			}
 		})
 	}
@@ -754,4 +867,97 @@ func BenchmarkCommitmentBranchLayerRead(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkStateKVLatestLayerRead(b *testing.B) {
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x41}, common.AddressLength))
+	logicalKey := bytes.Repeat([]byte{0x5a}, 32)
+	value := bytes.Repeat([]byte{0xcd}, 32)
+	const generation = uint64(23)
+	domain := kvdomains.ContractStorage
+
+	for _, location := range []string{"overlay-hit", "base-cache-hit"} {
+		for _, structured := range []bool{false, true} {
+			name := location + "/generic-key"
+			if structured {
+				name = location + "/structured-key"
+			}
+			b.Run(name, func(b *testing.B) {
+				disk := rawdb.NewMemoryDatabase()
+				buf := New(disk)
+				buf.SetBaseReadCacheSize(1 << 20)
+				buf.BeginBlock(bufHash(1), 1)
+				h, _ := buf.NewestInflight()
+				view := buf.ViewLayer(h)
+
+				if location == "overlay-hit" {
+					if err := rawdb.WriteStateKVLatest(view, owner, generation, domain, logicalKey, value); err != nil {
+						b.Fatal(err)
+					}
+				} else if err := rawdb.WriteStateKVLatest(disk, owner, generation, domain, logicalKey, value); err != nil {
+					b.Fatal(err)
+				}
+
+				var reader ethdb.KeyValueReader = view
+				if !structured {
+					reader = cachedLayerReaderOnly{view: view}
+				}
+				if _, ok, err := rawdb.ReadStateKVLatest(reader, owner, generation, domain, logicalKey); err != nil || !ok {
+					b.Fatalf("warm latest read = ok:%v err:%v", ok, err)
+				}
+
+				b.ReportAllocs()
+				b.SetBytes(int64(len(value)))
+				b.ResetTimer()
+				for range b.N {
+					if _, ok, err := rawdb.ReadStateKVLatest(reader, owner, generation, domain, logicalKey); err != nil || !ok {
+						b.Fatalf("latest read = ok:%v err:%v", ok, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkStateKVLatestLayerWrite(b *testing.B) {
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x41}, common.AddressLength))
+	logicalKey := bytes.Repeat([]byte{0x5a}, 32)
+	wrapped := rawdb.EncodeStateKVLatestValue(bytes.Repeat([]byte{0xcd}, 32))
+	const generation = uint64(23)
+	domain := kvdomains.ContractStorage
+
+	for _, destination := range []string{"layer", "batch"} {
+		for _, structured := range []bool{false, true} {
+			name := destination + "/generic-key"
+			if structured {
+				name = destination + "/structured-key"
+			}
+			b.Run(name, func(b *testing.B) {
+				buf := New(rawdb.NewMemoryDatabase())
+				buf.BeginBlock(bufHash(1), 1)
+				h, _ := buf.NewestInflight()
+				var concrete ethdb.KeyValueWriter = buf.ViewLayer(h)
+				reset := func() {}
+				if destination == "batch" {
+					batch := buf.NewBatch()
+					defer batch.Close()
+					concrete = batch
+					reset = batch.Reset
+				}
+				var writer ethdb.KeyValueWriter = keyValueWriterOnly{KeyValueWriter: concrete}
+				if structured {
+					writer = concrete
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(len(wrapped)))
+				b.ResetTimer()
+				for range b.N {
+					if err := rawdb.WriteStateKVLatestEncoded(writer, owner, generation, domain, logicalKey, wrapped); err != nil {
+						b.Fatal(err)
+					}
+					reset()
+				}
+			})
+		}
+	}
 }

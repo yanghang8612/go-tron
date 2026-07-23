@@ -336,6 +336,20 @@ func (b *bufferBatch) Put(key, value []byte) error {
 	return nil
 }
 
+// PutStateKVLatest implements rawdb's structured flat-latest writer path for
+// buffered batches. The final immutable string is owned here, while value is
+// defensively copied exactly like ordinary Batch.Put.
+func (b *bufferBatch) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
+	v := append([]byte(nil), value...)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
+	b.size += len(k) + len(v)
+	return nil
+}
+
 // PutOwnedValue is an optional hot-path extension for freshly encoded values.
 // It still owns the key via an immutable string copy, but retains value
 // directly. The caller transfers ownership and must never mutate value after
@@ -355,6 +369,17 @@ func (b *bufferBatch) Delete(key []byte) error {
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := string(key)
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
+	b.size += len(k)
+	return nil
+}
+
+// DeleteStateKVLatest is the structured flat-latest batch delete counterpart.
+func (b *bufferBatch) DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
 	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
 	b.size += len(k)
 	return nil
@@ -955,6 +980,29 @@ func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
 	key := stack[:total]
 	n := copy(key, first)
 	copy(key[n:], second)
+	return b.getNoCopyCachedStackKey(key)
+}
+
+// GetNoCopyCachedStateKVLatest implements rawdb's structured flat-latest read
+// path for the synchronous pipeline. Typical storage keys are assembled in
+// stack storage and never materialised on overlay/base-cache hits.
+func (b *Buffer) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
+	total := len(prefix) + common.AccountIDLength + 10 + len(logicalKey)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = appendStateKVLatestKey(key, prefix, accountID, generation, domain, logicalKey)
+		return b.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := appendStateKVLatestKey(stack[:0], prefix, accountID, generation, domain, logicalKey)
+	return b.getNoCopyCachedStackKey(key)
+}
+
+// getNoCopyCachedStackKey resolves a key backed by caller stack storage. A
+// durable miss takes an exact-sized owned copy before the interface call/cache
+// fill, avoiding escape of the entire fixed scratch array.
+func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	view := b.loadReadView()
 	for i := len(view.inflight) - 1; i >= 0; i-- {
 		value, found, tomb := view.inflight[i].lookup(key)
@@ -1087,6 +1135,19 @@ func (b *Buffer) PutKeyPartsOwnedValue(first, second, value []byte) error {
 	return nil
 }
 
+// PutStateKVLatest implements rawdb's structured flat-latest writer path for
+// the synchronous pipeline.
+func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutStateKVLatest called with no active layer")
+	}
+	b.putIntoStateKVLatest(active, prefix, accountID, generation, domain, logicalKey, value)
+	return nil
+}
+
 // Delete tombstones a key in the active layer.
 // Panics if no layer is active.
 func (b *Buffer) Delete(key []byte) error {
@@ -1109,6 +1170,18 @@ func (b *Buffer) DeleteKeyParts(first, second []byte) error {
 		panic("blockbuffer: DeleteKeyParts called with no active layer")
 	}
 	b.deleteIntoKeyParts(active, first, second)
+	return nil
+}
+
+// DeleteStateKVLatest is the structured flat-latest delete counterpart.
+func (b *Buffer) DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: DeleteStateKVLatest called with no active layer")
+	}
+	b.deleteIntoStateKVLatest(active, prefix, accountID, generation, domain, logicalKey)
 	return nil
 }
 

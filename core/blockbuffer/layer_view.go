@@ -1,9 +1,11 @@
 package blockbuffer
 
 import (
+	"encoding/binary"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 )
 
 const splitReadKeyStackSize = 128
@@ -67,12 +69,44 @@ func joinKeyParts(first, second []byte) string {
 	return key.String()
 }
 
+// appendStateKVLatestKey assembles rawdb's flat-latest physical key into dst.
+// The schema prefix is passed by rawdb through a structural interface so this
+// package does not depend on rawdb (and therefore does not create a cycle).
+func appendStateKVLatestKey(dst, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) []byte {
+	dst = append(dst, prefix...)
+	dst = append(dst, accountID[:]...)
+	var numeric [10]byte
+	binary.BigEndian.PutUint64(numeric[:8], generation)
+	binary.BigEndian.PutUint16(numeric[8:], domain)
+	dst = append(dst, numeric[:]...)
+	return append(dst, logicalKey...)
+}
+
+// joinStateKVLatestKey constructs the immutable layer-map key in one
+// allocation, avoiding rawdb's temporary physical []byte allocation.
+func joinStateKVLatestKey(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) string {
+	var key strings.Builder
+	key.Grow(len(prefix) + common.AccountIDLength + 10 + len(logicalKey))
+	_, _ = key.Write(prefix)
+	_, _ = key.Write(accountID[:])
+	var numeric [10]byte
+	binary.BigEndian.PutUint64(numeric[:8], generation)
+	binary.BigEndian.PutUint16(numeric[8:], domain)
+	_, _ = key.Write(numeric[:])
+	_, _ = key.Write(logicalKey)
+	return key.String()
+}
+
 func (b *Buffer) putIntoKeyParts(l *layer, first, second, value []byte) {
 	b.putIntoString(l, joinKeyParts(first, second), value)
 }
 
 func (b *Buffer) putIntoKeyPartsOwnedValue(l *layer, first, second, value []byte) {
 	b.putIntoStringOwnedValue(l, joinKeyParts(first, second), value)
+}
+
+func (b *Buffer) putIntoStateKVLatest(l *layer, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) {
+	b.putIntoString(l, joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey), value)
 }
 
 func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
@@ -101,6 +135,10 @@ func (b *Buffer) deleteInto(l *layer, key []byte) {
 
 func (b *Buffer) deleteIntoKeyParts(l *layer, first, second []byte) {
 	b.deleteIntoString(l, joinKeyParts(first, second))
+}
+
+func (b *Buffer) deleteIntoStateKVLatest(l *layer, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) {
+	b.deleteIntoString(l, joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey))
 }
 
 func (b *Buffer) deleteIntoString(l *layer, key string) {
@@ -142,6 +180,19 @@ func (v *LayerView) PutKeyPartsOwnedValue(first, second, value []byte) error {
 // DeleteKeyParts is the delete counterpart of PutKeyParts.
 func (v *LayerView) DeleteKeyParts(first, second []byte) error {
 	v.b.deleteIntoKeyParts(v.l, first, second)
+	return nil
+}
+
+// PutStateKVLatest implements rawdb's structured flat-latest writer path.
+// The value keeps ordinary Put's defensive-copy ownership contract.
+func (v *LayerView) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	v.b.putIntoStateKVLatest(v.l, prefix, accountID, generation, domain, logicalKey, value)
+	return nil
+}
+
+// DeleteStateKVLatest is the structured flat-latest delete counterpart.
+func (v *LayerView) DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error {
+	v.b.deleteIntoStateKVLatest(v.l, prefix, accountID, generation, domain, logicalKey)
 	return nil
 }
 
@@ -251,6 +302,29 @@ func (v *LayerView) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error
 	key := stack[:total]
 	n := copy(key, first)
 	copy(key[n:], second)
+	return v.getNoCopyCachedStackKey(key)
+}
+
+// GetNoCopyCachedStateKVLatest implements rawdb's structured flat-latest read
+// path. Normal storage keys fit in the fixed stack buffer; only genuinely long
+// logical keys allocate, preserving the generic reader's behaviour.
+func (v *LayerView) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
+	total := len(prefix) + common.AccountIDLength + 10 + len(logicalKey)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = appendStateKVLatestKey(key, prefix, accountID, generation, domain, logicalKey)
+		return v.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := appendStateKVLatestKey(stack[:0], prefix, accountID, generation, domain, logicalKey)
+	return v.getNoCopyCachedStackKey(key)
+}
+
+// getNoCopyCachedStackKey resolves a key backed by caller stack storage. A
+// durable miss takes an exact-sized owned copy before the interface call/cache
+// fill, avoiding escape of the entire fixed scratch array.
+func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	b := v.b
 	view := b.loadReadView()
 	value, found, tomb := v.l.lookup(key)
