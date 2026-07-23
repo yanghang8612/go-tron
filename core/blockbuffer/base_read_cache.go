@@ -19,10 +19,13 @@ const baseReadCacheEntryOverhead = 64
 // committed writes/tombstones are always resolved first, so a fork discard only
 // removes overlays and never needs to roll this cache back.
 //
-// Flush invalidates every key written to the durable base before dropping its
-// layer. Discard clears the whole cache before callers perform an out-of-band
-// reset/unwind. Those two lifecycle hooks make cached values generation-safe
-// without tagging every lookup with the current head hash.
+// A successful flush refreshes already-cached keys from immutable layer values
+// before dropping the layer and invalidates every tombstone. Writes that were
+// never read through this cache are not admitted, preventing unrelated block
+// metadata from evicting commitment/latest-state rows. Discard clears the whole
+// cache before callers perform an out-of-band reset/unwind. Those lifecycle
+// hooks make cached values generation-safe without tagging every lookup with
+// the current head hash.
 type baseReadCache struct {
 	shards [baseReadCacheShardCount]baseReadCacheShard
 }
@@ -122,20 +125,67 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 	s.queue = append(s.queue, baseReadCacheToken{key: k, gen: gen})
 	s.used += charge
 	s.evict()
+	s.compactIfSparse()
 	s.mu.Unlock()
 	return v, true
+}
+
+// setFlushed refreshes an already-cached key from a successfully flushed
+// committed layer. Committed layer values are immutable and owned by the
+// Buffer, so the cache can retain value directly instead of allocating the copy
+// setIfEpoch needs for a Pebble-borrowed read result. A key absent from the
+// cache is invalidated but not admitted; otherwise unrelated buffered metadata
+// would churn through the cache on every canonical flush.
+//
+// Advancing the shard epoch before replacement rejects any late cache fill
+// that started against the pre-flush durable generation. If the value is too
+// large for its shard, the old entry is still invalidated and no replacement
+// is retained.
+func (c *baseReadCache) setFlushed(key string, value []byte) {
+	if c == nil {
+		return
+	}
+	charge := len(key) + len(value) + baseReadCacheEntryOverhead
+	s := &c.shards[baseReadCacheShardIndexString(key)]
+	s.mu.Lock()
+	s.epoch++
+	old, cached := s.entries[key]
+	if cached {
+		delete(s.entries, key)
+		s.used -= old.charge
+	}
+	if cached && charge <= s.limit {
+		// Preserve the existing generation and its FIFO token. This is a value
+		// refresh, not a new admission; appending one token per block would grow
+		// stale queue metadata for the lifetime of a hot commitment branch.
+		s.entries[key] = baseReadCacheEntry{value: value, charge: charge, gen: old.gen}
+		s.used += charge
+		s.evict()
+	}
+	s.compactIfSparse()
+	s.mu.Unlock()
 }
 
 func (c *baseReadCache) del(key []byte) {
 	if c == nil {
 		return
 	}
-	s := &c.shards[baseReadCacheShardIndex(key)]
+	c.delStringAt(string(key), baseReadCacheShardIndex(key))
+}
+
+func (c *baseReadCache) delString(key string) {
+	if c == nil {
+		return
+	}
+	c.delStringAt(key, baseReadCacheShardIndexString(key))
+}
+
+func (c *baseReadCache) delStringAt(key string, shard uint32) {
+	s := &c.shards[shard]
 	s.mu.Lock()
 	s.epoch++
-	k := string(key)
-	if old, ok := s.entries[k]; ok {
-		delete(s.entries, k)
+	if old, ok := s.entries[key]; ok {
+		delete(s.entries, key)
 		s.used -= old.charge
 	}
 	s.compactIfSparse()
@@ -210,24 +260,37 @@ func baseReadCacheShardIndex(key []byte) uint32 {
 	return h & (baseReadCacheShardCount - 1)
 }
 
-func (b *Buffer) invalidateBaseReadCacheLayer(l *layer) {
+func baseReadCacheShardIndexString(key string) uint32 {
+	const (
+		offset32 = uint32(2166136261)
+		prime32  = uint32(16777619)
+	)
+	h := offset32
+	for i := range len(key) {
+		h ^= uint32(key[i])
+		h *= prime32
+	}
+	return h & (baseReadCacheShardCount - 1)
+}
+
+func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	if b == nil || b.baseReadCache == nil || l == nil {
 		return
 	}
-	for k := range l.writes {
-		b.baseReadCache.del([]byte(k))
+	for k, v := range l.writes {
+		b.baseReadCache.setFlushed(k, v)
 	}
 	for k := range l.deletes {
-		b.baseReadCache.del([]byte(k))
+		b.baseReadCache.delString(k)
 	}
 }
 
-func (b *Buffer) invalidateBaseReadCacheLayers(layers []*layer) {
+func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
 	if b == nil || b.baseReadCache == nil {
 		return
 	}
 	for _, l := range layers {
-		b.invalidateBaseReadCacheLayer(l)
+		b.promoteBaseReadCacheLayer(l)
 	}
 }
 

@@ -367,8 +367,9 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 		t.Fatalf("fork discard invalidated unchanged base: gets=%d, want 1", base.gets)
 	}
 
-	// A flushed canonical write changes the durable generation. Flush invalidates
-	// the old cache entry, so the next read re-loads the new value from base.
+	// A flushed canonical write changes the durable generation. Because the key
+	// was already cached, Flush refreshes it directly from the immutable layer
+	// value and the next read does not round-trip through the durable base.
 	b.BeginBlock(bufHash(2), 2)
 	newValue := bytes.Repeat([]byte{0x33}, 1500)
 	if err := b.Put(key, newValue); err != nil {
@@ -379,8 +380,8 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCached(newValue)
-	if base.gets != 2 {
-		t.Fatalf("base gets after flushed overwrite = %d, want 2", base.gets)
+	if base.gets != 1 {
+		t.Fatalf("base gets after flushed overwrite = %d, want 1", base.gets)
 	}
 
 	// A flushed tombstone also invalidates. Missing values are deliberately not
@@ -455,8 +456,8 @@ func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(newValue, true)
-	if base.gets != 2 {
-		t.Fatalf("base gets after flat-latest flush invalidation = %d, want 2", base.gets)
+	if base.gets != 1 {
+		t.Fatalf("base gets after flat-latest flush refresh = %d, want 1", base.gets)
 	}
 
 	b.BeginBlock(bufHash(2), 2)
@@ -469,8 +470,8 @@ func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(nil, false)
-	if base.gets != 3 {
-		t.Fatalf("base gets after flat-latest delete = %d, want 3", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("base gets after flat-latest delete = %d, want 2", base.gets)
 	}
 }
 

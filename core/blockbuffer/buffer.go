@@ -119,10 +119,10 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
 	base ethdb.KeyValueReader
-	// baseReadCache is populated only through GetNoCopyCached, the optional
-	// commitment/flat-latest read path. Overlay layers always win; flush
-	// invalidates changed base keys and Discard clears the cache before
-	// reset/unwind.
+	// baseReadCache is populated through GetNoCopyCached. Overlay layers always
+	// win; a successful canonical flush refreshes already-cached keys directly
+	// from immutable layer values and invalidates tombstones, while Discard clears
+	// the cache before reset/unwind.
 	baseReadCache *baseReadCache
 	mu            sync.RWMutex
 	flushMu       sync.Mutex
@@ -925,7 +925,7 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 			}
 			return err
 		}
-		b.invalidateBaseReadCacheLayer(l)
+		b.promoteBaseReadCacheLayer(l)
 	}
 	for i := range b.layers {
 		b.layers[i] = nil
@@ -1009,7 +1009,7 @@ func (b *Buffer) FlushUpTo(
 	if flushed == 0 {
 		return nil
 	}
-	b.invalidateBaseReadCacheLayers(snapshot[:flushed])
+	b.promoteBaseReadCacheLayers(snapshot[:flushed])
 
 	// Step 3: drop the flushed prefix under the write lock.
 	b.dropFlushedPrefix(flushed)
