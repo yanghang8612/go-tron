@@ -73,7 +73,9 @@ func TestEnvironmentAddressOpcodesKeepTronPrefixBeforeMultiSign(t *testing.T) {
 }
 
 func TestCreateReturnsFullTronAddressWord(t *testing.T) {
-	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	// Empty runtime code is accepted only after ALLOW_MULTI_SIGN; this test is
+	// about the returned address word, not the legacy empty-code NPE.
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{MultiSign: true}, nil)
 	caller := tcommon.Address{0x41, 0x01}
 	parent := tcommon.Address{0x41, 0x02}
 
@@ -97,7 +99,9 @@ func TestCreateReturnsFullTronAddressWord(t *testing.T) {
 }
 
 func TestCreate2ReturnsFullTronAddressWord(t *testing.T) {
-	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	// Mainnet cannot have CREATE2 active before ALLOW_MULTI_SIGN. Keep the
+	// configuration historically reachable while testing the address word.
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, MultiSign: true}, nil)
 	caller := tcommon.Address{0x41, 0x01}
 	parent := tcommon.Address{0x41, 0x02}
 
@@ -127,7 +131,7 @@ func TestCreate2ReturnsFullTronAddressWord(t *testing.T) {
 // decoder to reject the non-zero high bits and REVERT. Dropping 0x41 made gtron
 // incorrectly decode the address and report SUCCESS.
 func TestNile59652963Create3ProxyReturnsPrefixedCreateWord(t *testing.T) {
-	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, MultiSign: true}, nil)
 	tvm.SetRootTransactionID(tcommon.HexToHash("fb246091644e7d1473033985ed58da3cbf60021bbfbd70e4277760b32bac9154"))
 	// The preceding CREATE2 and CALL have advanced java's transaction-global
 	// nonce to 2 before the proxy executes CREATE.
@@ -152,7 +156,7 @@ func TestNile59652963Create3ProxyReturnsPrefixedCreateWord(t *testing.T) {
 }
 
 func TestCreateAddressMatchesJavaRootTransactionNonce(t *testing.T) {
-	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{MultiSign: true}, nil)
 	tvm.SetRootTransactionID(tcommon.HexToHash("07b254b84ec06839e28295f1679f1e22bd96d82ae83e2e5df6df6c69c859f2da"))
 	caller := tcommon.Address{0x41, 0x02}
 	code := []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}
@@ -171,7 +175,7 @@ func TestCreateAddressMatchesJavaRootTransactionNonce(t *testing.T) {
 }
 
 func TestCreate2AddressMatchesJavaFormula(t *testing.T) {
-	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, MultiSign: true}, nil)
 	caller := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
 	code := []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}
 	var salt [32]byte
@@ -217,10 +221,10 @@ func TestCreate2OpcodeUsesCallerBeforeIstanbulAndContextAfter(t *testing.T) {
 	}
 
 	t.Run("pre-istanbul", func(t *testing.T) {
-		run(t, TVMConfig{Constantinople: true}, caller)
+		run(t, TVMConfig{Constantinople: true, MultiSign: true}, caller)
 	})
 	t.Run("istanbul", func(t *testing.T) {
-		run(t, TVMConfig{Constantinople: true, Istanbul: true}, context)
+		run(t, TVMConfig{Constantinople: true, Istanbul: true, MultiSign: true}, context)
 	})
 }
 
@@ -231,25 +235,25 @@ func TestCreate2DepthCheckRequiresCompatibleEVMOrOsaka(t *testing.T) {
 	// tvm.Depth is 1-based during frame execution; java refuses when
 	// getCallDeep() == MAX_DEPTH, i.e. inside the frame at Depth
 	// maxCallDepth+1.
-	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, MultiSign: true}, nil)
 	tvm.Depth = maxCallDepth + 1
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != nil {
 		t.Fatalf("legacy CREATE2 depth check: got %v, want nil", err)
 	}
 
-	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
+	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true, MultiSign: true}, nil)
 	tvm.Depth = maxCallDepth + 1
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != ErrDepthExceeded {
 		t.Fatalf("compatible CREATE2 depth check: got %v want %v", err, ErrDepthExceeded)
 	}
 
-	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Osaka: true}, nil)
+	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Osaka: true, MultiSign: true}, nil)
 	tvm.Depth = maxCallDepth + 1
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != ErrDepthExceeded {
 		t.Fatalf("Osaka CREATE2 depth check: got %v want %v", err, ErrDepthExceeded)
 	}
 
-	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
+	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true, MultiSign: true}, nil)
 	tvm.Depth = maxCallDepth // deepest allowed frame may still spawn
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != nil {
 		t.Fatalf("compatible CREATE2 at deepest allowed frame: got %v, want nil", err)
@@ -400,7 +404,7 @@ func TestCreate2CollisionConsumesChildEnergyAndReturnsZero(t *testing.T) {
 }
 
 func TestCreate2CanRecreateSelfDestructedContractAfterTransactionBoundary(t *testing.T) {
-	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, MultiSign: true}, nil)
 	caller := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
 	code := []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}
 	var salt [32]byte

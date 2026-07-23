@@ -614,6 +614,9 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	if got := contractRetFromError(vm.ErrValidateForSmartContract); got != int32(corepb.Transaction_Result_UNKNOWN) {
 		t.Fatalf("legacy smart-contract transfer validation ret: got %d, want UNKNOWN(13)", got)
 	}
+	if got := contractRetFromError(vm.ErrLegacyCreateEmptyCode); got != int32(corepb.Transaction_Result_UNKNOWN) {
+		t.Fatalf("legacy empty-code CREATE ret: got %d, want UNKNOWN(13)", got)
+	}
 	if got := contractRetFromError(vm.ErrTransferFailed); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
 		t.Fatalf("TRX transfer failed ret: got %d", got)
 	}
@@ -643,6 +646,9 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	}
 	if got := string(runtimeMessageFromError(vm.ErrValidateForSmartContract)); got != "validateForSmartContract failure" {
 		t.Fatalf("legacy smart-contract transfer validation message: got %q", got)
+	}
+	if got := string(runtimeMessageFromError(vm.ErrLegacyCreateEmptyCode)); got != "Unknown Exception" {
+		t.Fatalf("legacy empty-code CREATE message: got %q", got)
 	}
 }
 

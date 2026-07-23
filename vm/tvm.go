@@ -701,6 +701,16 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	contract.SetCode(contractAddr, code)
 
 	ret, err := tvm.runContract(contract)
+	// java-tron before ALLOW_MULTI_SIGN stored even an empty constructor return
+	// through DepositImpl.saveCode. Value(byte[], type) left Value.type nil for
+	// empty input, and the subsequent commitCodeCache dereference raised a
+	// message-less NullPointerException. VM.play normalized that to
+	// "Unknown Exception". ALLOW_MULTI_SIGN initialized the empty Value's type
+	// and removed the crash. Reproduce the legacy wrapper failure here; this is
+	// an internal CREATE/CREATE2 quirk, not a top-level contract-deploy rule.
+	if err == nil && internal && len(ret) == 0 && !tvm.cfg.MultiSign {
+		err = ErrLegacyCreateEmptyCode
+	}
 
 	if err != nil {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)

@@ -105,7 +105,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	// the CALL family's shouldPropagateCallError gate. Non-fatal create failures
 	// (revert, OOE, bytecode/transfer exceptions) still push 0 like java's
 	// stackPushZero.
-	if isFatalVMError(err) {
+	if shouldPropagateCreateError(err) {
 		return nil, err
 	}
 
@@ -217,7 +217,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	// of swallowing it — see opCreate. The depth self-guard above only catches a
 	// timeout raised BEFORE entering the constructor; one raised INSIDE it (e.g. a
 	// precompile CPU-time abort) surfaces here as err.
-	if isFatalVMError(err) {
+	if shouldPropagateCreateError(err) {
 		return nil, err
 	}
 

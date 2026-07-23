@@ -6,24 +6,30 @@ import (
 )
 
 var (
-	ErrOutOfEnergy            = errors.New("out of energy")
-	ErrStackOverflow          = errors.New("stack overflow")
-	ErrStackUnderflow         = errors.New("stack underflow")
-	ErrInvalidJump            = errors.New("invalid jump destination")
-	ErrWriteProtection        = errors.New("Attempt to call a state modifying opcode inside STATICCALL")
-	ErrReturnDataOutOfBounds  = errors.New("return data out of bounds")
-	ErrDepthExceeded          = errors.New("max call depth exceeded")
-	ErrInsufficientBalance    = errors.New("insufficient balance for transfer")
-	ErrContractAlreadyExists  = errors.New("contract already exists")
-	ErrContractCodeTooLarge   = errors.New("max code size exceeded")
-	ErrInvalidCode            = errors.New("invalid code: must not begin with 0xef")
-	ErrInvalidOpCode          = errors.New("opcode not available in current fork")
-	ErrExecutionReverted      = errors.New("execution reverted")
-	ErrAlreadyTimeOut         = errors.New("Already Time Out")
-	ErrOutOfMemory            = errors.New("out of memory")
-	ErrJVMStackOverflow       = errors.New("StackOverflowError:  exceed default JVM stack size!")
-	ErrPrecompiledContract    = errors.New("precompiled contract error")
-	ErrEndowmentOutOfRange    = errors.New("endowment out of long range")
+	ErrOutOfEnergy           = errors.New("out of energy")
+	ErrStackOverflow         = errors.New("stack overflow")
+	ErrStackUnderflow        = errors.New("stack underflow")
+	ErrInvalidJump           = errors.New("invalid jump destination")
+	ErrWriteProtection       = errors.New("Attempt to call a state modifying opcode inside STATICCALL")
+	ErrReturnDataOutOfBounds = errors.New("return data out of bounds")
+	ErrDepthExceeded         = errors.New("max call depth exceeded")
+	ErrInsufficientBalance   = errors.New("insufficient balance for transfer")
+	ErrContractAlreadyExists = errors.New("contract already exists")
+	ErrContractCodeTooLarge  = errors.New("max code size exceeded")
+	ErrInvalidCode           = errors.New("invalid code: must not begin with 0xef")
+	ErrInvalidOpCode         = errors.New("opcode not available in current fork")
+	ErrExecutionReverted     = errors.New("execution reverted")
+	ErrAlreadyTimeOut        = errors.New("Already Time Out")
+	ErrOutOfMemory           = errors.New("out of memory")
+	ErrJVMStackOverflow      = errors.New("StackOverflowError:  exceed default JVM stack size!")
+	ErrPrecompiledContract   = errors.New("precompiled contract error")
+	ErrEndowmentOutOfRange   = errors.New("endowment out of long range")
+	// ErrLegacyCreateEmptyCode mirrors java-tron's pre-ALLOW_MULTI_SIGN
+	// internal-CREATE bug. A constructor that returned empty runtime code was
+	// stored in DepositImpl as a Value whose type remained nil; commitCodeCache
+	// then raised a message-less NullPointerException, which VM.play converted
+	// to "Unknown Exception" and which consumed the whole transaction energy.
+	ErrLegacyCreateEmptyCode  = errors.New("Unknown Exception")
 	ErrTransferFailed         = errors.New("transfer trx failed: Cannot transfer TRX to yourself.")
 	ErrTokenTransferFailed    = errors.New("transfer trc10 failed: Cannot transfer asset to yourself.")
 	ErrInvalidTokenID         = errors.New("invalid token id")
@@ -176,6 +182,14 @@ func newStackOverflowError() error {
 
 func isFatalVMError(err error) bool {
 	return errors.Is(err, ErrAlreadyTimeOut) || errors.Is(err, ErrJVMStackOverflow)
+}
+
+// shouldPropagateCreateError identifies exceptions raised by java's CREATE
+// wrapper itself rather than by the constructor frame. The wrapper exception
+// aborts the currently executing Program; ordinary constructor failures are
+// still represented by CREATE pushing zero.
+func shouldPropagateCreateError(err error) bool {
+	return isFatalVMError(err) || errors.Is(err, ErrLegacyCreateEmptyCode)
 }
 
 func isTransferFailure(err error) bool {
