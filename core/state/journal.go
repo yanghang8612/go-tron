@@ -160,7 +160,12 @@ type storageChange struct {
 func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj != nil {
-		if e.prev == (tcommon.Hash{}) && !e.prevExists {
+		// A zero/non-existent value from an earlier successful transaction in
+		// the same block is a pending delete that must continue to shadow the
+		// durable pre-block row. Dropping it from the cache here would make the
+		// next SLOAD fall through to disk and resurrect the old non-zero value.
+		// Only a clean absent pre-image can safely be uncached.
+		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
 			delete(obj.storageExists, e.key)
 		} else {
