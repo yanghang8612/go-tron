@@ -140,9 +140,14 @@ func (b *Block) Version() int32 {
 
 func (b *Block) Transactions() []*Transaction {
 	b.txsOnce.Do(func() {
+		// The pointers stored in txs keep storage's backing allocation alive.
+		// Each element therefore owns independent sync.Once-backed caches while
+		// all wrappers require only one block-sized heap object.
+		storage := make([]Transaction, len(b.pb.Transactions))
 		txs := make([]*Transaction, len(b.pb.Transactions))
 		for i, pb := range b.pb.Transactions {
-			txs[i] = NewTransactionFromPB(pb)
+			storage[i].pb = pb
+			txs[i] = &storage[i]
 		}
 		b.txs = txs
 	})
