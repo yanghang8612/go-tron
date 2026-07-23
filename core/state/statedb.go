@@ -2746,42 +2746,46 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
 
-	plans := make([]*accountCommitPlan, 0, len(addrs))
-	for _, addr := range addrs {
-		plan, err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr])
-		if err != nil {
+	// Downstream phases keep pointer-based plans, but every plan lives only for
+	// this commit. Allocate their stable addresses from one commit-sized arena
+	// instead of creating one heap object per dirty account.
+	planStorage := make([]accountCommitPlan, len(addrs))
+	plans := make([]*accountCommitPlan, len(addrs))
+	for i, addr := range addrs {
+		plan := &planStorage[i]
+		if err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr], plan); err != nil {
 			return nil, err
 		}
-		plans = append(plans, plan)
+		plans[i] = plan
 	}
 	return plans, nil
 }
 
-func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject) (*accountCommitPlan, error) {
-	plan := &accountCommitPlan{
+func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject, plan *accountCommitPlan) error {
+	*plan = accountCommitPlan{
 		addr:               addr,
 		obj:                obj,
 		deleteAccount:      obj.deleted || obj.selfDestructed,
 		accountLatestDirty: obj.accountDirty || obj.created || obj.codeDirty || obj.accountKVGenerationDirty,
 	}
 	if plan.deleteAccount {
-		return plan, nil
+		return nil
 	}
 	if obj.contractMetaDirty {
 		if obj.contractMeta == nil {
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, nil, true); err != nil {
-				return nil, err
+				return err
 			}
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractABI, contractABIKVKey, nil, true); err != nil {
-				return nil, err
+				return err
 			}
 		} else {
 			metaBytes, err := proto.Marshal(obj.contractMeta)
 			if err != nil {
-				return nil, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+				return fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
 			}
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes, false); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
@@ -2806,7 +2810,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			if value == (tcommon.Hash{}) {
 				staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true, prevValue, origin.exists, origin.loaded)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				plan.storageOps = append(plan.storageOps, storageCommitOp{
 					rowKey: rowKey,
@@ -2817,7 +2821,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			}
 			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, prevValue, origin.exists, origin.loaded)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			plan.storageOps = append(plan.storageOps, storageCommitOp{
 				rowKey: rowKey,
@@ -2831,11 +2835,11 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 	if plan.hadKVDirty {
 		kvPlan, err := s.prepareAccountKVCommitPlan(obj)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		plan.kvPlan = kvPlan
 	}
-	return plan, nil
+	return nil
 }
 
 func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex accountKVIndexStore, accountKVLatestWriter statedomains.Writer) error {
