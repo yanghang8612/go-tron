@@ -87,6 +87,10 @@ type bufferedBranchStore struct {
 	dels map[string]struct{} // prefix -> tombstone
 }
 
+var bufferedBranchStorePool = sync.Pool{
+	New: func() any { return new(bufferedBranchStore) },
+}
+
 // concurrentSiblingFlushStore is an opt-in marker for a branchStore whose
 // PutBranch/DelBranch methods may safely execute concurrently with each other
 // and with reads of disjoint keys. The parallel root fold never reads or writes
@@ -105,6 +109,28 @@ type branchBatchStore interface {
 
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
 	return &bufferedBranchStore{base: base}
+}
+
+func borrowBufferedBranchStore(base branchStore) *bufferedBranchStore {
+	s := bufferedBranchStorePool.Get().(*bufferedBranchStore)
+	s.base = base
+	return s
+}
+
+func returnBufferedBranchStore(s *bufferedBranchStore) {
+	if s == nil {
+		return
+	}
+	s.releasePuts()
+	clear(s.dels)
+	s.base = nil
+	bufferedBranchStorePool.Put(s)
+}
+
+func returnSiblingBuffers(buffers [maxFoldNibbles]*bufferedBranchStore) {
+	for _, buf := range buffers {
+		returnBufferedBranchStore(buf)
+	}
 }
 
 func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -276,18 +302,17 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 			continue
 		}
 		group := grouped[starts[nb] : starts[nb]+n]
-		buf := newBufferedBranchStore(t.store)
-		// flush releases successful buffers itself; this fallback also releases
-		// every sibling buffer if any parallel fold or an earlier flush fails.
-		defer buf.releasePuts()
+		buf := borrowBufferedBranchStore(t.store)
 		buffers[nb] = buf
-		// Each subtrie folds sequentially against its private buffer.
-		sub := &commitmentTrie{store: buf}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(nb uint8, sub *commitmentTrie, buf *bufferedBranchStore, group []op) {
+		go func(nb uint8, buf *bufferedBranchStore, group []op) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Each subtrie folds sequentially against its private buffer. Keep
+			// this tiny owner on the goroutine stack instead of allocating one
+			// beside every spawned worker.
+			sub := commitmentTrie{store: buf}
 			// The worker owns its path backing array, so recursive appends can
 			// reuse all 64 nibble slots without aliasing sibling workers.
 			var path [pathLen]byte
@@ -299,20 +324,23 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 				err = buf.flush(t.store)
 			}
 			errs[nb] = err
-		}(uint8(nb), sub, buf, group)
+		}(uint8(nb), buf, group)
 	}
 	wg.Wait()
 
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if errs[nb] != nil {
+			returnSiblingBuffers(buffers)
 			return nil, errs[nb]
 		}
 	}
 	if !concurrentFlush {
 		if err := flushSiblingBuffersSerial(t.store, buffers); err != nil {
+			returnSiblingBuffers(buffers)
 			return nil, err
 		}
 	}
+	returnSiblingBuffers(buffers)
 
 	if branch.childCount() == 0 {
 		return nil, nil

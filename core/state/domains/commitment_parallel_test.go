@@ -311,6 +311,30 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 	}
 }
 
+func TestBufferedBranchStorePoolResetsState(t *testing.T) {
+	firstBase := newMapBranchStore()
+	buf := borrowBufferedBranchStore(firstBase)
+	var branch BranchData
+	branch.SetHashChild(1, common.Hash{0xaa})
+	if err := buf.PutBranch([]byte{0x01}, branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.DelBranch([]byte{0x02}); err != nil {
+		t.Fatal(err)
+	}
+	returnBufferedBranchStore(buf)
+
+	secondBase := newMapBranchStore()
+	reused := borrowBufferedBranchStore(secondBase)
+	defer returnBufferedBranchStore(reused)
+	if reused.base != secondBase || len(reused.puts) != 0 || len(reused.dels) != 0 {
+		t.Fatalf("reused buffer retained state: base=%T puts=%d dels=%d", reused.base, len(reused.puts), len(reused.dels))
+	}
+	if _, ok, err := reused.GetBranch([]byte{0x01}); err != nil || ok {
+		t.Fatalf("reused buffer exposed prior put: ok=%v err=%v", ok, err)
+	}
+}
+
 // TestParallelFoldMatchesSequential_Incremental drives many rounds of mixed
 // inserts/overwrites/deletes through a sequential trie and a forced-parallel
 // trie, asserting byte-identical root and branch keyspace after every round.
