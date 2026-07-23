@@ -557,20 +557,13 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 }
 
 func stateKVLatestKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
-	accountID := owner.AccountID()
 	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2+len(logicalKey))
-	k = append(k, stateKVLatestPrefix...)
-	k = append(k, accountID[:]...)
-	var buf [10]byte
-	binary.BigEndian.PutUint64(buf[:8], generation)
-	binary.BigEndian.PutUint16(buf[8:], uint16(domain))
-	k = append(k, buf[:]...)
+	k = appendStateKVLatestKeyHeader(k, owner, generation, domain)
 	return append(k, logicalKey...)
 }
 
-func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
+func appendStateKVLatestKeyHeader(k []byte, owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
 	accountID := owner.AccountID()
-	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2)
 	k = append(k, stateKVLatestPrefix...)
 	k = append(k, accountID[:]...)
 	var buf [10]byte
@@ -579,15 +572,14 @@ func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain k
 	return append(k, buf[:]...)
 }
 
+func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
+	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2)
+	return appendStateKVLatestKeyHeader(k, owner, generation, domain)
+}
+
 func stateKVLatestLogicalPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) []byte {
-	accountID := owner.AccountID()
 	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2+len(logicalPrefix))
-	k = append(k, stateKVLatestPrefix...)
-	k = append(k, accountID[:]...)
-	var buf [10]byte
-	binary.BigEndian.PutUint64(buf[:8], generation)
-	binary.BigEndian.PutUint16(buf[8:], uint16(domain))
-	k = append(k, buf[:]...)
+	k = appendStateKVLatestKeyHeader(k, owner, generation, domain)
 	return append(k, logicalPrefix...)
 }
 
@@ -599,8 +591,12 @@ func stateKVLatestOwnerPrefix(owner common.Address) []byte {
 }
 
 func stateKVGenerationKey(owner common.Address) []byte {
-	accountID := owner.AccountID()
 	k := make([]byte, 0, len(stateKVGenerationPrefix)+common.AccountIDLength)
+	return appendStateKVGenerationKey(k, owner)
+}
+
+func appendStateKVGenerationKey(k []byte, owner common.Address) []byte {
+	accountID := owner.AccountID()
 	k = append(k, stateKVGenerationPrefix...)
 	return append(k, accountID[:]...)
 }

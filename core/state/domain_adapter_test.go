@@ -13,7 +13,10 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-var benchmarkDomainCommitmentTouchCount int
+var (
+	benchmarkDomainCommitmentTouchCount int
+	benchmarkDomainCommitmentUpdates    []rawdb.StateCommitmentUpdate
+)
 
 func BenchmarkDomainCommitmentRecordTouches(b *testing.B) {
 	const count = 1024
@@ -43,6 +46,36 @@ func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	}
+}
+
+func BenchmarkDomainCommitmentLatestUpdatesFromCapturedTouches(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	commitment := NewDomainCommitmentState(&StateDB{})
+	for i := range count {
+		key := make([]byte, 32)
+		binary.BigEndian.PutUint64(key[24:], uint64(i))
+		commitment.recordTouchWithValue(domainCommitmentTouch{
+			flatDomain: rawdb.StateFlatDomainKVLatest,
+			owner:      owner.AccountID(),
+			generation: 7,
+			domain:     kvdomains.ContractStorage,
+			key:        string(key),
+		}, domainCommitmentCapturedValue{
+			loaded: true,
+			exists: true,
+			value:  []byte{byte(i)},
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		updates, err := commitment.latestUpdatesFromTouches()
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDomainCommitmentUpdates = updates
 	}
 }
 
