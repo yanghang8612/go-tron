@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -52,6 +53,7 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 		blockMetadataRow{key: blockNumberHashKey(blockNum), value: blockHash[:]},
 		blockMetadataRow{key: taposKey(ref[:]), value: blockHash[8:16]},
 	)
+	infoRowStart := len(rows)
 	for _, info := range infos {
 		data, err := proto.Marshal(info)
 		if err != nil {
@@ -59,17 +61,11 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 		}
 		rows = append(rows, blockMetadataRow{key: txInfoKey(info.Id), value: data})
 	}
-	ret := &corepb.TransactionRet{
-		BlockNumber:     int64(blockNum),
-		Transactioninfo: infos,
-	}
+	var blockTimestamp int64
 	if len(infos) > 0 {
-		ret.BlockTimeStamp = infos[0].BlockTimeStamp
+		blockTimestamp = infos[0].BlockTimeStamp
 	}
-	retData, err := proto.Marshal(ret)
-	if err != nil {
-		return fmt.Errorf("marshal block tx infos: %w", err)
-	}
+	retData := marshalTransactionRetRows(int64(blockNum), blockTimestamp, rows[infoRowStart:])
 	rows = append(rows, blockMetadataRow{key: txInfoBlockKey(blockNum), value: retData})
 	for _, tx := range txs {
 		hash := tx.Hash()
@@ -91,6 +87,48 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 		return fmt.Errorf("write block metadata batch: %w", err)
 	}
 	return nil
+}
+
+// marshalTransactionRetRows builds the TransactionRet wire payload around
+// TransactionInfo messages that WriteBlockMetadataBatch has already marshaled
+// for the per-transaction index. Calling proto.Marshal on TransactionRet would
+// traverse and marshal every nested info a second time.
+//
+// TransactionRet's schema is three ascending fields:
+//
+//	1: int64 blockNumber
+//	2: int64 blockTimeStamp
+//	3: repeated TransactionInfo transactioninfo
+//
+// Mirroring proto3's zero-value omission and generated field order produces
+// the same wire bytes when given the same nested info payloads, while retaining
+// unknown fields and map ordering exactly as encoded in each info row.
+func marshalTransactionRetRows(blockNumber, blockTimestamp int64, infoRows []blockMetadataRow) []byte {
+	size := 0
+	if blockNumber != 0 {
+		size += protowire.SizeTag(1) + protowire.SizeVarint(uint64(blockNumber))
+	}
+	if blockTimestamp != 0 {
+		size += protowire.SizeTag(2) + protowire.SizeVarint(uint64(blockTimestamp))
+	}
+	for _, row := range infoRows {
+		size += protowire.SizeTag(3) + protowire.SizeBytes(len(row.value))
+	}
+
+	data := make([]byte, 0, size)
+	if blockNumber != 0 {
+		data = protowire.AppendTag(data, 1, protowire.VarintType)
+		data = protowire.AppendVarint(data, uint64(blockNumber))
+	}
+	if blockTimestamp != 0 {
+		data = protowire.AppendTag(data, 2, protowire.VarintType)
+		data = protowire.AppendVarint(data, uint64(blockTimestamp))
+	}
+	for _, row := range infoRows {
+		data = protowire.AppendTag(data, 3, protowire.BytesType)
+		data = protowire.AppendBytes(data, row.value)
+	}
+	return data
 }
 
 func metadataBatchSetRecordSize(key, value []byte) int {

@@ -8,7 +8,11 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
+
+var metadataRetBenchmarkSink []byte
 
 type metadataBatchProbe struct {
 	ethdb.KeyValueStore
@@ -110,6 +114,149 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 			t.Fatalf("tx index %d = %v, want %d", i, got, block.Number())
 		}
 	}
+	wantRet, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber:     int64(block.Number()),
+		BlockTimeStamp:  infos[0].BlockTimeStamp,
+		Transactioninfo: infos,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRet, err := disk.Get(txInfoBlockKey(block.Number()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotRet, wantRet) {
+		t.Fatalf("transaction ret wire mismatch:\n got %x\nwant %x", gotRet, wantRet)
+	}
+}
+
+func TestMarshalTransactionRetRowsMatchesProto(t *testing.T) {
+	unknown := protowire.AppendTag(nil, 100, protowire.BytesType)
+	unknown = protowire.AppendString(unknown, "unknown-info-field")
+	infoWithUnknown := &corepb.TransactionInfo{}
+	known, err := proto.Marshal(&corepb.TransactionInfo{
+		Id:                     []byte{0xaa, 0xbb},
+		Fee:                    17,
+		BlockNumber:            21,
+		BlockTimeStamp:         63_000,
+		ContractResult:         [][]byte{{1, 2, 3}},
+		CancelUnfreezeV2Amount: map[string]int64{"z": 9, "a": 1},
+		WithdrawExpireAmount:   5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proto.Unmarshal(append(known, unknown...), infoWithUnknown); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		number    int64
+		timestamp int64
+		infos     []*corepb.TransactionInfo
+	}{
+		{name: "all-zero"},
+		{
+			name:      "ordinary",
+			number:    21,
+			timestamp: 63_000,
+			infos: []*corepb.TransactionInfo{
+				{Id: []byte{1}, Fee: 100, BlockNumber: 21, BlockTimeStamp: 63_000},
+				{Id: []byte{2}, Result: corepb.TransactionInfo_FAILED, ResMessage: []byte("revert")},
+			},
+		},
+		{name: "empty-info-message", number: 1, infos: []*corepb.TransactionInfo{{}}},
+		{name: "negative-int64-wire-values", number: -1, timestamp: -2},
+		{name: "nested-map-and-unknown-fields", number: 21, timestamp: 63_000, infos: []*corepb.TransactionInfo{infoWithUnknown}},
+	}
+	marshal := proto.MarshalOptions{Deterministic: true}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := make([]blockMetadataRow, 0, len(test.infos))
+			for _, info := range test.infos {
+				data, err := marshal.Marshal(info)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows = append(rows, blockMetadataRow{value: data})
+			}
+			got := marshalTransactionRetRows(test.number, test.timestamp, rows)
+			want, err := marshal.Marshal(&corepb.TransactionRet{
+				BlockNumber:     test.number,
+				BlockTimeStamp:  test.timestamp,
+				Transactioninfo: test.infos,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("wire mismatch:\n got %x\nwant %x", got, want)
+			}
+			if len(got) != cap(got) {
+				t.Fatalf("result len/cap = %d/%d, want exact allocation", len(got), cap(got))
+			}
+			decoded := &corepb.TransactionRet{}
+			if err := proto.Unmarshal(got, decoded); err != nil {
+				t.Fatal(err)
+			}
+			wantMessage := &corepb.TransactionRet{
+				BlockNumber:     test.number,
+				BlockTimeStamp:  test.timestamp,
+				Transactioninfo: test.infos,
+			}
+			if !proto.Equal(decoded, wantMessage) {
+				t.Fatalf("decoded = %v, want %v", decoded, wantMessage)
+			}
+		})
+	}
+}
+
+func BenchmarkMarshalTransactionRetRows(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xab}, 512)
+	infos := make([]*corepb.TransactionInfo, 100)
+	rows := make([]blockMetadataRow, len(infos))
+	for i := range infos {
+		infos[i] = &corepb.TransactionInfo{
+			Id:                   bytes.Repeat([]byte{byte(i)}, 32),
+			Fee:                  int64(100 + i),
+			BlockNumber:          21,
+			BlockTimeStamp:       63_000,
+			ContractResult:       [][]byte{payload},
+			WithdrawExpireAmount: int64(i),
+		}
+		data, err := proto.Marshal(infos[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		rows[i].value = data
+	}
+	ret := &corepb.TransactionRet{
+		BlockNumber:     21,
+		BlockTimeStamp:  63_000,
+		Transactioninfo: infos,
+	}
+	wireSize := len(marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, rows))
+
+	b.Run("proto-remarshal", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(wireSize))
+		for i := 0; i < b.N; i++ {
+			data, err := proto.Marshal(ret)
+			if err != nil {
+				b.Fatal(err)
+			}
+			metadataRetBenchmarkSink = data
+		}
+	})
+	b.Run("reuse-info-payloads", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(wireSize))
+		for i := 0; i < b.N; i++ {
+			metadataRetBenchmarkSink = marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, rows)
+		}
+	})
 }
 
 func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
