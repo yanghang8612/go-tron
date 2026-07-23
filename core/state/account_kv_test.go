@@ -842,6 +842,52 @@ func TestStorageCommitReusesSetStatePreimage(t *testing.T) {
 	}
 }
 
+func TestStorageCommitLazilyRecreatesDirtyOrigins(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x1b)
+	var slot, original, next tcommon.Hash
+	slot[31] = 0x06
+	original[31] = 0x51
+	next[31] = 0x52
+
+	sdb.SetState(addr, slot, original)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatalf("commit original storage: %v", err)
+	}
+	obj := sdb.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing after first commit")
+	}
+	if obj.dirtyStorage != nil {
+		t.Fatalf("dirty origins retained after commit: %d", len(obj.dirtyStorage))
+	}
+
+	// A second write on the same cached state object must lazily recreate the
+	// origin map and preserve the committed value as its pre-image.
+	sdb.SetState(addr, slot, next)
+	origin, ok := obj.dirtyStorage[slot]
+	if !ok || !origin.loaded || !origin.exists || origin.value != original {
+		t.Fatalf("second-write origin = %+v, want loaded existing %x", origin, original)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit updated storage: %v", err)
+	}
+	if obj.dirtyStorage != nil {
+		t.Fatalf("dirty origins retained after second commit: %d", len(obj.dirtyStorage))
+	}
+
+	check, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen updated root: %v", err)
+	}
+	check.SetAccountKVIndexStore(check.db.DiskDB())
+	check.SetAccountKVIndexReads(true)
+	if got := check.GetState(addr, slot); got != next {
+		t.Fatalf("updated storage = %x, want %x", got, next)
+	}
+}
+
 func TestStoragePreimageSurvivesSnapshotAndStateCopy(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x1a)

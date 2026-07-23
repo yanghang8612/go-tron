@@ -3044,7 +3044,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
 		obj.storage = make(map[tcommon.Hash]storageSlot)
-		obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+		obj.dirtyStorage = nil
 		obj.dirty = false
 		return
 	}
@@ -3058,7 +3058,10 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMetaDirty = false
 	}
 	obj.accountDirty = false
-	obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+	// Origins are only needed between the first SSTORE and this commit. Leave
+	// the map nil afterward; every storage write/revert path already creates it
+	// lazily, avoiding an empty map allocation for non-contract accounts.
+	obj.dirtyStorage = nil
 	obj.created = false
 	obj.dirty = false
 }
