@@ -48,21 +48,42 @@ type headerSignaturePrewarmer interface {
 // warmed on the happy path / not touched when the kill switch is off.
 var sigPrewarmJobHook func()
 
-// prewarmBlockSignatures concurrently warms the ECDSA-recovery memos for a
+// signaturePrewarmRun owns the worker lifetime of one batch. Callers may execute
+// blocks while it runs, but must Wait before releasing the batch. RecoverSigners'
+// sync.Once and the header memo safely turn an early serial read into a wait for
+// that one in-flight recovery; workers otherwise stay ahead on later blocks.
+type signaturePrewarmRun struct {
+	wg sync.WaitGroup
+}
+
+func (r *signaturePrewarmRun) Wait() {
+	if r != nil {
+		r.wg.Wait()
+	}
+}
+
+// prewarmBlockSignatures is the synchronous wrapper retained for focused callers
+// and benchmarks. The block insertion paths use startBlockSignaturePrewarm
+// directly so signature recovery for later blocks overlaps current-block state
+// execution, then join the returned run before the batch is released.
+func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarmer) {
+	startBlockSignaturePrewarm(blocks, engine).Wait()
+}
+
+// startBlockSignaturePrewarm starts warming the ECDSA-recovery memos for a
 // contiguous batch of blocks: each transaction's recovered signers and (when the
-// engine supports it) each block's recovered witness. It is a pure cache-warming
-// step — it returns nothing and never aborts on a bad signature; a recovery error
-// is captured in the memo and surfaced, identically, by the serial verification /
-// envelope-validation path when it reaches that block/tx in order.
+// engine supports it) each block's recovered witness. It is pure cache warming
+// and never aborts on a bad signature; a recovery error is captured in the memo
+// and surfaced, identically, by the ordered verification/envelope path.
 //
 // Concurrency safety: the per-tx signers memo (sync.Once) and the per-block
 // witness memo (mutex-guarded) are each populated at most once and are pure
 // functions of immutable proto fields, so warming them from many goroutines races
 // with nothing and yields the same value the serial path would compute. Blocks the
 // pre-pass never sees (e.g. fork-replay) just miss the cache and recover inline.
-func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarmer) {
+func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePrewarmer) *signaturePrewarmRun {
 	if ParallelSigVerifyMinTxs <= 0 || len(blocks) == 0 {
-		return
+		return nil
 	}
 
 	// Flatten the batch into independent recovery jobs so work is balanced
@@ -94,7 +115,7 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 	// Gate on transaction volume: a near-empty batch is cheaper to recover
 	// inline than to fan out. Header-only jobs don't count toward the gate.
 	if totalTx < ParallelSigVerifyMinTxs || len(jobs) == 0 {
-		return
+		return nil
 	}
 
 	workers := runtime.GOMAXPROCS(0)
@@ -110,18 +131,16 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 		for i := range jobs {
 			runSigJob(jobs[i].block, jobs[i].txs, jobs[i].txIndex, engine)
 		}
-		return
+		return nil
 	}
 
-	var (
-		wg   sync.WaitGroup
-		next atomic.Int64
-	)
+	run := new(signaturePrewarmRun)
+	var next atomic.Int64
 	n := int64(len(jobs))
 	for w := 0; w < workers; w++ {
-		wg.Add(1)
+		run.wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer run.wg.Done()
 			for {
 				idx := next.Add(1) - 1
 				if idx >= n {
@@ -132,7 +151,7 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 			}
 		}()
 	}
-	wg.Wait()
+	return run
 }
 
 // runSigJob executes one recovery job. txIndex < 0 means warm the block's header

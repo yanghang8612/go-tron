@@ -635,12 +635,13 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
-	// Parallel signature pre-verification: warm every tx's sender recovery and
-	// every block's witness-signature recovery ahead of serial execution, off
-	// the critical path. Pure cache-warming — the serial path (envelope
+	// Parallel signature pre-verification: start every tx's sender recovery and
+	// every block's witness-signature recovery, then overlap later-block jobs with
+	// ordered state execution. Pure cache warming — the serial path (envelope
 	// validation, header verification) still owns every accept/reject decision
-	// and reads an identical recovered value, computing inline on any miss.
-	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
+	// and reads an identical memoized value, waiting/computing inline on a miss.
+	sigPrewarm := startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+	defer sigPrewarm.Wait()
 
 	executor := newCanonicalRangeExecutor(bc, true)
 	if bc.asyncCommit {
