@@ -71,15 +71,26 @@ func (b *Buffer) putIntoKeyParts(l *layer, first, second, value []byte) {
 	b.putIntoString(l, joinKeyParts(first, second), value)
 }
 
+func (b *Buffer) putIntoKeyPartsOwnedValue(l *layer, first, second, value []byte) {
+	b.putIntoStringOwnedValue(l, joinKeyParts(first, second), value)
+}
+
 func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
 	v := append([]byte(nil), value...)
+	b.putIntoStringOwnedValue(l, key, v)
+}
+
+// putIntoStringOwnedValue publishes a caller-transferred immutable value
+// without copying it. Keep this separate from putIntoString so ordinary
+// ethdb.Put semantics remain defensive even if the caller mutates its slice.
+func (b *Buffer) putIntoStringOwnedValue(l *layer, key string, value []byte) {
 	s := l.shardForString(key)
 	s.mu.Lock()
 	delete(s.deletes, key)
 	if s.writes == nil {
 		s.writes = make(map[string][]byte)
 	}
-	s.writes[key] = v
+	s.writes[key] = value
 	s.mu.Unlock()
 }
 
@@ -118,6 +129,13 @@ func (v *LayerView) Delete(key []byte) error {
 // a package dependency; callers should otherwise use Put.
 func (v *LayerView) PutKeyParts(first, second, value []byte) error {
 	v.b.putIntoKeyParts(v.l, first, second, value)
+	return nil
+}
+
+// PutKeyPartsOwnedValue is the split-key write path for a freshly encoded
+// immutable value. The caller transfers value ownership to the layer.
+func (v *LayerView) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	v.b.putIntoKeyPartsOwnedValue(v.l, first, second, value)
 	return nil
 }
 

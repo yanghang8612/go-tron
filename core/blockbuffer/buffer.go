@@ -1073,6 +1073,20 @@ func (b *Buffer) PutKeyParts(first, second, value []byte) error {
 	return nil
 }
 
+// PutKeyPartsOwnedValue is PutKeyParts for a freshly encoded immutable value.
+// The caller transfers value ownership to the active layer; ordinary Put and
+// PutKeyParts continue to copy caller-owned slices defensively.
+func (b *Buffer) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsOwnedValue called with no active layer")
+	}
+	b.putIntoKeyPartsOwnedValue(active, first, second, value)
+	return nil
+}
+
 // Delete tombstones a key in the active layer.
 // Panics if no layer is active.
 func (b *Buffer) Delete(key []byte) error {

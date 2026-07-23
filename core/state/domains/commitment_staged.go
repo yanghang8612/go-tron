@@ -12,11 +12,12 @@ import (
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
-	db CommitmentDB
+	db         CommitmentDB
+	ownedValue bool
 }
 
 func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
-	return &rawdbBranchStore{db: db}
+	return &rawdbBranchStore{db: db, ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db)}
 }
 
 // concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
@@ -61,6 +62,12 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
+	// A blockbuffer layer can retain a freshly allocated encoding directly.
+	// Encode into that final immutable slice and transfer it, avoiding the
+	// scratch-to-layer copy on every branch flushed by the commitment fold.
+	if s.ownedValue {
+		return rawdb.WriteCommitmentBranchOwned(s.db, prefix, b.Encode())
+	}
 	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
 	// copies the value into its own arena during the call, so the buffer is
 	// safe to return as soon as WriteCommitmentBranch returns.

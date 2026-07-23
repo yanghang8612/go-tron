@@ -20,6 +20,18 @@ type keyPartsProbeWriter struct {
 	value       []byte
 }
 
+type ownedKeyPartsProbeWriter struct {
+	keyPartsProbeWriter
+	ownedCalls int
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	w.ownedCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	w.value = value
+	return nil
+}
+
 func (w *keyPartsProbeWriter) Put(_, _ []byte) error {
 	return fmt.Errorf("unexpected fallback Put")
 }
@@ -57,6 +69,25 @@ func TestCommitmentBranchUsesSplitKeyWriter(t *testing.T) {
 	}
 	if w.deleteCalls != 1 || !bytes.Equal(w.key, wantKey) {
 		t.Fatalf("split Delete = calls %d key %x, want 1/%x", w.deleteCalls, w.key, wantKey)
+	}
+}
+
+func TestCommitmentBranchOwnedValueUsesTransferWriter(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	prefix := []byte{1, 2, 3, 4}
+	value := []byte{5, 6, 7}
+	wantKey := commitmentBranchKey(prefix)
+	if !SupportsCommitmentBranchOwnedValue(w) {
+		t.Fatal("owned split-key writer capability was not detected")
+	}
+	if err := WriteCommitmentBranchOwned(w, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	if w.ownedCalls != 1 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
+		t.Fatalf("owned Put = owned %d regular %d key %x value %x, want 1/0/%x/%x", w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
+	}
+	if &w.value[0] != &value[0] {
+		t.Fatal("owned commitment writer copied the transferred value")
 	}
 }
 

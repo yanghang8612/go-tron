@@ -17,6 +17,22 @@ type keyPartsWriter interface {
 	DeleteKeyParts(first, second []byte) error
 }
 
+// keyPartsOwnedValueWriter is the narrow layered-store extension used when a
+// caller has just encoded a value and can transfer its backing bytes. Ordinary
+// Put/PutKeyParts retain their defensive-copy contract; this method may retain
+// value directly, and the caller must not mutate it after the call.
+type keyPartsOwnedValueWriter interface {
+	PutKeyPartsOwnedValue(first, second, value []byte) error
+}
+
+// SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
+// encoded branch value directly. Callers use this to choose between allocating
+// the final immutable encoding and reusing a scratch buffer for copying stores.
+func SupportsCommitmentBranchOwnedValue(db ethdb.KeyValueWriter) bool {
+	_, ok := db.(keyPartsOwnedValueWriter)
+	return ok
+}
+
 // WriteCommitmentBranch persists an encoded BranchData row for the given
 // hex-trie prefix.  The encoded bytes are opaque at the rawdb layer.
 //
@@ -30,6 +46,17 @@ func WriteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte, encoded []byt
 		return writer.PutKeyParts(stateCommitmentBranchPrefix, prefix, encoded)
 	}
 	return db.Put(commitmentBranchKey(prefix), encoded)
+}
+
+// WriteCommitmentBranchOwned is WriteCommitmentBranch for a freshly allocated
+// immutable encoding whose ownership the caller transfers to db. A capable
+// layered writer retains encoded directly; all other writers fall back to the
+// normal copying path. The caller must not mutate encoded after this call.
+func WriteCommitmentBranchOwned(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
+	if writer, ok := db.(keyPartsOwnedValueWriter); ok {
+		return writer.PutKeyPartsOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+	}
+	return WriteCommitmentBranch(db, prefix, encoded)
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.

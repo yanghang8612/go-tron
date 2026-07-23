@@ -685,6 +685,33 @@ func BenchmarkCommitmentBranchLayerWrite(b *testing.B) {
 	}
 }
 
+func TestCommitmentBranchLayerOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	prefix := []byte{0x0a, 0x0b, 0x0c}
+	wantPrefix := append([]byte(nil), prefix...)
+	value := []byte("fresh-branch-encoding")
+	if err := rawdb.WriteCommitmentBranchOwned(view, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	prefix[0] = 0xff
+	got, found, err := rawdb.ReadCommitmentBranchNoCopy(view, wantPrefix)
+	if err != nil || !found || !bytes.Equal(got, value) {
+		t.Fatalf("owned branch read = (%q,%v,%v), want (%q,true,nil)", got, found, err, value)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("blockbuffer copied the transferred branch value")
+	}
+	if _, found, err := rawdb.ReadCommitmentBranchNoCopy(view, prefix); err != nil || found {
+		t.Fatalf("mutated caller prefix unexpectedly addressed branch: found=%v err=%v", found, err)
+	}
+}
+
 func BenchmarkCommitmentBranchLayerRead(b *testing.B) {
 	prefix := bytes.Repeat([]byte{0x0a}, 48)
 	value := bytes.Repeat([]byte{0xcd}, 512)
