@@ -74,7 +74,11 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 	root := common.Hash{0xaa, 0xbb}
 	disk := NewMemoryDatabase()
 	probe := &metadataBatchProbe{KeyValueStore: disk}
-	if err := WriteBlockMetadataBatch(probe, block, root, infos); err != nil {
+	blockData, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBlockMetadataBatchEncoded(probe, block, blockData, root, infos); err != nil {
 		t.Fatal(err)
 	}
 	if probe.newCalls != 0 || probe.sizedCalls != 1 {
@@ -262,8 +266,13 @@ func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
 	pb := newBlockProto(21, 63_000)
 	pb.Transactions = make([]*corepb.Transaction, 100)
+	blockPayload := bytes.Repeat([]byte{0xcd}, 512)
+	signature := bytes.Repeat([]byte{0xee}, 65)
 	for i := range pb.Transactions {
-		pb.Transactions[i] = &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: int64(i + 1)}}
+		pb.Transactions[i] = &corepb.Transaction{
+			RawData:   &corepb.TransactionRaw{Timestamp: int64(i + 1), Data: blockPayload},
+			Signature: [][]byte{signature},
+		}
 	}
 	block := types.NewBlockFromPB(pb)
 	txs := block.Transactions()
@@ -280,6 +289,10 @@ func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
 		}
 	}
 	root := common.Hash{0xaa, 0xbb}
+	blockData, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.Run("legacy-unsized", func(b *testing.B) {
 		db, err := NewPebbleDB(b.TempDir(), 16, 16)
@@ -306,6 +319,42 @@ func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			if err := WriteBlockMetadataBatch(db, block, root, infos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("encoded-exact-sized", func(b *testing.B) {
+		db, err := NewPebbleDB(b.TempDir(), 16, 16)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { db.Close() })
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := WriteBlockMetadataBatchEncoded(db, block, blockData, root, infos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("memory-remarshal", func(b *testing.B) {
+		db := NewMemoryDatabase()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := WriteBlockMetadataBatch(db, block, root, infos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("memory-encoded", func(b *testing.B) {
+		db := NewMemoryDatabase()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := WriteBlockMetadataBatchEncoded(db, block, blockData, root, infos); err != nil {
 				b.Fatal(err)
 			}
 		}

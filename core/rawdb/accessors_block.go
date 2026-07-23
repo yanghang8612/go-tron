@@ -20,9 +20,25 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	if err != nil {
 		return err
 	}
+	return WriteBlockEncoded(db, block, data)
+}
+
+// WriteBlockEncoded writes a block using an already-marshaled protobuf
+// payload. The caller must keep data immutable after this call: layered stores
+// may retain its backing bytes directly, allowing the later durable metadata
+// batch to reuse the same payload without another full-block marshal or copy.
+// block remains the source of the number/hash indexes, so data must encode that
+// same block.
+func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte) error {
 	number := block.Number()
 	hash := block.Hash()
-	if err := db.Put(blockKey(number), data); err != nil {
+	var err error
+	if writer, ok := db.(ownedValueWriter); ok {
+		err = writer.PutOwnedValue(blockKey(number), data)
+	} else {
+		err = db.Put(blockKey(number), data)
+	}
+	if err != nil {
 		return err
 	}
 	var num [8]byte

@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -8,6 +9,28 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+type ownedBlockWriterProbe struct {
+	ownedKey   []byte
+	ownedValue []byte
+	puts       map[string][]byte
+}
+
+func (p *ownedBlockWriterProbe) Put(key, value []byte) error {
+	if p.puts == nil {
+		p.puts = make(map[string][]byte)
+	}
+	p.puts[string(key)] = append([]byte(nil), value...)
+	return nil
+}
+
+func (*ownedBlockWriterProbe) Delete([]byte) error { return nil }
+
+func (p *ownedBlockWriterProbe) PutOwnedValue(key, value []byte) error {
+	p.ownedKey = append([]byte(nil), key...)
+	p.ownedValue = value
+	return nil
+}
 
 func TestWriteReadBlock(t *testing.T) {
 	chaindb := NewMemoryChainDB()
@@ -33,6 +56,41 @@ func TestWriteReadBlock(t *testing.T) {
 	if !ok || gotHash != block.Hash() {
 		t.Fatalf("number->hash = %x,%v want %x,true", gotHash, ok, block.Hash())
 	}
+}
+
+func TestWriteBlockEncodedTransfersPayloadToOwnedWriter(t *testing.T) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126_000}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{0xab}, 512)}}},
+	})
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := new(ownedBlockWriterProbe)
+	if err := WriteBlockEncoded(probe, block, data); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(probe.ownedKey, blockKey(block.Number())) {
+		t.Fatalf("owned key = %x, want %x", probe.ownedKey, blockKey(block.Number()))
+	}
+	if !bytes.Equal(probe.ownedValue, data) || &probe.ownedValue[0] != &data[0] {
+		t.Fatal("encoded block payload was copied instead of transferred")
+	}
+	hash := block.Hash()
+	if got := probe.puts[string(blockHashKey(hash[:]))]; !bytes.Equal(got, encodeBlockNumber(block.Number())) {
+		t.Fatalf("hash index = %x, want block number %d", got, block.Number())
+	}
+	wantRingKey := blockNumberHashKey(block.Number())
+	if got := probe.puts[string(wantRingKey)]; !bytes.Equal(got, hash[:]) {
+		t.Fatalf("number index = %x, want hash %x", got, hash)
+	}
+}
+
+func encodeBlockNumber(number uint64) []byte {
+	var out [8]byte
+	binary.BigEndian.PutUint64(out[:], number)
+	return out[:]
 }
 
 func TestReadBlockHashKVCompactIndexWithoutBody(t *testing.T) {

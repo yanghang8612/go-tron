@@ -38,6 +38,17 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 	if err != nil {
 		return fmt.Errorf("marshal block: %w", err)
 	}
+	return WriteBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos)
+}
+
+// WriteBlockMetadataBatchEncoded is WriteBlockMetadataBatch with an immutable
+// block protobuf payload already produced for the rewindable staged block row.
+// Reusing it avoids marshaling the same block again in the durable publish
+// tail. block remains the source of metadata indexes and must match blockData.
+func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
+	if db == nil || block == nil {
+		return fmt.Errorf("write block metadata: nil database or block")
+	}
 	blockHash := block.Hash()
 	blockNum := block.Number()
 	txs := block.Transactions()

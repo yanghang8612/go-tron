@@ -1320,8 +1320,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// serves the parent hash — Nile 10,552,292 stalled exactly here (OneSwap
 	// derives limit-order ids from blockhash(block.number-1) ^ tx.origin, so
 	// the zero hash silently diverged the order book at placement). Layered
-	// staging keeps the row fork-rewindable, like the TAPOS ref above.
-	if err := rawdb.WriteBlock(bc.buffer, block); err != nil {
+	// staging keeps the row fork-rewindable, like the TAPOS ref above. Keep this
+	// one immutable encoding for the durable metadata tail as well: the buffer
+	// takes a read-only alias instead of copying it, and neither side mutates it.
+	blockData, err := block.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal staged block body: %w", err)
+	}
+	if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
 		return fmt.Errorf("stage block body: %w", err)
 	}
 	if n := len(block.Transactions()); n > 0 {
@@ -1364,7 +1370,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// is skipped entirely and the synchronous commit runs unchanged —
 	// byte-identical.
 	if bc.asyncCommit && plan.commit != nil {
-		return bc.commitAsync(block, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
+		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
 	}
 
 	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
@@ -1402,7 +1408,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos); err != nil {
 		return err
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
@@ -1513,11 +1519,11 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
-	return rawdb.WriteBlockMetadataBatch(bc.db, block, stateRoot, txInfos)
+	return rawdb.WriteBlockMetadataBatchEncoded(bc.db, block, blockData, stateRoot, txInfos)
 }
 
 // flushBufferUpToSolidified drains every committed buffer layer whose block

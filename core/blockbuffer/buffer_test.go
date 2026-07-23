@@ -232,6 +232,40 @@ func TestBufferBatchPutOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
 	mustNotFound(t, b, []byte("Xwned-value-key"))
 }
 
+func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	writers := map[string]interface {
+		PutOwnedValue(key, value []byte) error
+	}{
+		"buffer":     b,
+		"layer-view": b.ViewLayer(h),
+	}
+	for name, writer := range writers {
+		t.Run(name, func(t *testing.T) {
+			key := []byte(name + "-owned-key")
+			wantKey := append([]byte(nil), key...)
+			value := []byte(name + "-owned-value")
+			if err := writer.PutOwnedValue(key, value); err != nil {
+				t.Fatal(err)
+			}
+			key[0] = 'X'
+			got, err := b.GetNoCopy(wantKey)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("owned value read = (%q,%v), want %q", got, err, value)
+			}
+			if &got[0] != &value[0] {
+				t.Fatal("PutOwnedValue copied the transferred value")
+			}
+			mustNotFound(t, b, key)
+		})
+	}
+}
+
 func BenchmarkBufferBatchWrite(b *testing.B) {
 	benchmarkBufferBatchWrite(b, false)
 }

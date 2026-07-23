@@ -1107,6 +1107,21 @@ func (b *Buffer) Put(key, value []byte) error {
 	return nil
 }
 
+// PutOwnedValue is Put for a freshly encoded immutable value. The caller keeps
+// the value immutable after this call; Buffer may retain its backing bytes
+// directly. This is used for large staged block payloads and encoded account
+// rows that are also consumed read-only by a later publish step.
+func (b *Buffer) PutOwnedValue(key, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutOwnedValue called with no active layer")
+	}
+	b.putIntoStringOwnedValue(active, string(key), value)
+	return nil
+}
+
 // PutKeyParts implements the optional rawdb split-key writer path for the
 // synchronous commitment pipeline. It joins both key fragments directly into
 // the layer's immutable string key, avoiding an intermediate []byte allocation.

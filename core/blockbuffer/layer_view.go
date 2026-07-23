@@ -157,6 +157,13 @@ func (v *LayerView) Put(key, value []byte) error {
 	return nil
 }
 
+// PutOwnedValue is the layer-bound ownership-taking write path. The caller
+// keeps value immutable; the layer may retain its backing bytes directly.
+func (v *LayerView) PutOwnedValue(key, value []byte) error {
+	v.b.putIntoStringOwnedValue(v.l, string(key), value)
+	return nil
+}
+
 func (v *LayerView) Delete(key []byte) error {
 	v.b.deleteInto(v.l, key)
 	return nil
