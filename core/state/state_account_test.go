@@ -84,6 +84,46 @@ func TestStateAccountV2EncodeMatchesGenericRLP(t *testing.T) {
 	}
 }
 
+func TestAppendStateAccountV2FieldsUsesCallerArena(t *testing.T) {
+	rootA := tcommon.Hash{0x11, 0x22}
+	codeA := tcommon.Hash{0x33, 0x44}
+	rootB := tcommon.Hash{0x55, 0x66}
+	codeB := tcommon.Hash{0x77, 0x88}
+	protoA := bytes.Repeat([]byte{0x91}, 73)
+	protoB := bytes.Repeat([]byte{0xa2}, 257)
+	wantA := encodeStateAccountV2Fields(StateAccountVersion, protoA, rootA, 7, codeA)
+	wantB := encodeStateAccountV2Fields(StateAccountVersion, protoB, rootB, math.MaxUint64, codeB)
+	prefix := []byte{0xde, 0xad, 0xbe, 0xef}
+	arena := make([]byte, len(prefix), len(prefix)+len(wantA)+len(wantB))
+	copy(arena, prefix)
+
+	startA := len(arena)
+	arena = appendStateAccountV2Fields(arena, StateAccountVersion, protoA, rootA, 7, codeA)
+	gotA := arena[startA:len(arena):len(arena)]
+	startB := len(arena)
+	arena = appendStateAccountV2Fields(arena, StateAccountVersion, protoB, rootB, math.MaxUint64, codeB)
+	gotB := arena[startB:len(arena):len(arena)]
+
+	if !bytes.Equal(arena[:len(prefix)], prefix) {
+		t.Fatalf("prefix changed: got %x want %x", arena[:len(prefix)], prefix)
+	}
+	if !bytes.Equal(gotA, wantA) {
+		t.Fatalf("first arena encoding mismatch:\n got  %x\n want %x", gotA, wantA)
+	}
+	if !bytes.Equal(gotB, wantB) {
+		t.Fatalf("second arena encoding mismatch:\n got  %x\n want %x", gotB, wantB)
+	}
+	if len(arena) != cap(arena) {
+		t.Fatalf("arena len/cap = %d/%d, want exact sizing", len(arena), cap(arena))
+	}
+	if _, err := DecodeStateAccountV2(gotA); err != nil {
+		t.Fatalf("decode first arena value: %v", err)
+	}
+	if _, err := DecodeStateAccountV2(gotB); err != nil {
+		t.Fatalf("decode second arena value: %v", err)
+	}
+}
+
 func TestStateAccountV2RoundTrip(t *testing.T) {
 	in := &StateAccountV2{
 		Version:             StateAccountVersion,

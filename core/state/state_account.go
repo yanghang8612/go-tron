@@ -44,21 +44,37 @@ func (v *StateAccountV2) Encode() ([]byte, error) {
 }
 
 func encodeStateAccountV2Fields(version uint64, accountProto []byte, accountKVRoot tcommon.Hash, accountKVGeneration uint64, codeHash tcommon.Hash) []byte {
-	contentSize := rlp.IntSize(version) +
+	return appendStateAccountV2Fields(nil, version, accountProto, accountKVRoot, accountKVGeneration, codeHash)
+}
+
+func stateAccountV2ContentSize(version uint64, accountProto []byte, accountKVGeneration uint64) int {
+	return rlp.IntSize(version) +
 		rlpBytesSize(accountProto) +
 		1 + tcommon.HashLength +
 		rlp.IntSize(accountKVGeneration) +
 		1 + tcommon.HashLength
-	out := make([]byte, 0, int(rlp.ListSize(uint64(contentSize))))
-	out = appendRLPSize(out, 0xc0, 0xf7, contentSize)
-	out = rlp.AppendUint64(out, version)
-	out = appendRLPBytes(out, accountProto)
-	out = append(out, 0x80+tcommon.HashLength)
-	out = append(out, accountKVRoot[:]...)
-	out = rlp.AppendUint64(out, accountKVGeneration)
-	out = append(out, 0x80+tcommon.HashLength)
-	out = append(out, codeHash[:]...)
-	return out
+}
+
+func stateAccountV2EncodedSize(version uint64, accountProto []byte, accountKVGeneration uint64) int {
+	return int(rlp.ListSize(uint64(stateAccountV2ContentSize(version, accountProto, accountKVGeneration))))
+}
+
+func appendStateAccountV2Fields(dst []byte, version uint64, accountProto []byte, accountKVRoot tcommon.Hash, accountKVGeneration uint64, codeHash tcommon.Hash) []byte {
+	contentSize := stateAccountV2ContentSize(version, accountProto, accountKVGeneration)
+	encodedSize := int(rlp.ListSize(uint64(contentSize)))
+	if cap(dst)-len(dst) < encodedSize {
+		grown := make([]byte, len(dst), len(dst)+encodedSize)
+		copy(grown, dst)
+		dst = grown
+	}
+	dst = appendRLPSize(dst, 0xc0, 0xf7, contentSize)
+	dst = rlp.AppendUint64(dst, version)
+	dst = appendRLPBytes(dst, accountProto)
+	dst = append(dst, 0x80+tcommon.HashLength)
+	dst = append(dst, accountKVRoot[:]...)
+	dst = rlp.AppendUint64(dst, accountKVGeneration)
+	dst = append(dst, 0x80+tcommon.HashLength)
+	return append(dst, codeHash[:]...)
 }
 
 func rlpBytesSize(value []byte) int {

@@ -2916,15 +2916,29 @@ func accountCommitPlanGenerationResolver(plans []*accountCommitPlan) statedomain
 }
 
 func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, error) {
+	return appendAccountLatestObject(nil, obj, flatRoot)
+}
+
+func accountLatestObjectEncodedSize(obj *stateObject) (int, bool, error) {
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
-		return nil, false, nil
+		return 0, false, nil
 	}
 	accBytes, err := obj.deterministicAccountProto()
 	if err != nil {
-		return nil, false, err
+		return 0, false, err
 	}
-	data, err := encodeAccountLatestObjectFromProto(obj, accBytes, flatRoot)
-	return data, true, err
+	return stateAccountV2EncodedSize(StateAccountVersion, accBytes, obj.accountKVGeneration), true, nil
+}
+
+func appendAccountLatestObject(dst []byte, obj *stateObject, flatRoot bool) ([]byte, bool, error) {
+	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
+		return dst, false, nil
+	}
+	accBytes, err := obj.deterministicAccountProto()
+	if err != nil {
+		return dst, false, err
+	}
+	return appendAccountLatestObjectFromProto(dst, obj, accBytes, flatRoot), true, nil
 }
 
 // encodeAccountLatestObjectFromProto wraps an already-serialized account in its
@@ -2932,14 +2946,18 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 // reuse the same deterministic protobuf encoding instead of marshaling maps a
 // second time.
 func encodeAccountLatestObjectFromProto(obj *stateObject, accBytes []byte, flatRoot bool) ([]byte, error) {
+	return appendAccountLatestObjectFromProto(nil, obj, accBytes, flatRoot), nil
+}
+
+func appendAccountLatestObjectFromProto(dst []byte, obj *stateObject, accBytes []byte, flatRoot bool) []byte {
 	accountKVRoot := obj.accountKVRoot
 	if flatRoot {
 		accountKVRoot = EmptyKVRoot
 	}
-	return encodeStateAccountV2Fields(StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash), nil
+	return appendStateAccountV2Fields(dst, StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
 }
 
-func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey []byte) error {
+func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey, accountLatestData []byte, accountLatestExists bool) error {
 	if plan == nil || plan.obj == nil {
 		return nil
 	}
@@ -2977,23 +2995,19 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRo
 	if !needsAccountLatestUpdate {
 		return nil
 	}
-	data, exists, err := encodeAccountLatestObject(obj, flatRoot)
-	if err != nil {
-		return err
-	}
-	if !exists {
+	if !accountLatestExists {
 		return nil
 	}
 	if len(physicalKey) == 0 {
 		physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
 	}
-	if err := s.writeAccountLatestChange(addr, exists, data); err != nil {
+	if err := s.writeAccountLatestChange(addr, true, accountLatestData); err != nil {
 		return err
 	}
 	if latestWriter == nil {
 		return fmt.Errorf("account latest writer unavailable")
 	}
-	if err := latestWriter.writeAccountLatestOwnedByKey(addr, physicalKey, data); err != nil {
+	if err := latestWriter.writeAccountLatestOwnedByKey(addr, physicalKey, accountLatestData); err != nil {
 		return err
 	}
 	commitment.recordAccountLatestTouch(addr)
@@ -3028,20 +3042,47 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
 	orderedPlans := accountCommitPlansByAddress(plans)
 	accountLatestWrites := 0
+	accountLatestValueBytes := 0
 	for _, plan := range orderedPlans {
 		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
 			accountLatestWrites++
 		}
+		if plan == nil || plan.deleteAccount || !plan.accountLatestDirty {
+			continue
+		}
+		size, exists, err := accountLatestObjectEncodedSize(plan.obj)
+		if err != nil {
+			return err
+		}
+		if exists {
+			accountLatestValueBytes += size
+		}
 	}
 	keyArena := make([]byte, 0, accountLatestWrites*rawdb.StateAccountLatestCommitmentKeySize())
+	// deterministicAccountProto caches the first pass's protobuf bytes on each
+	// object, so the append pass only frames those bytes into one owned arena.
+	valueArena := make([]byte, 0, accountLatestValueBytes)
 	for _, plan := range orderedPlans {
 		var physicalKey []byte
+		var accountLatestData []byte
+		var accountLatestExists bool
 		if plan != nil && (plan.deleteAccount || plan.accountLatestDirty) {
 			start := len(keyArena)
 			keyArena = rawdb.AppendStateAccountLatestCommitmentKey(keyArena, plan.addr)
 			physicalKey = keyArena[start:len(keyArena):len(keyArena)]
 		}
-		if err := s.writeFlatAccountLatestWithPlan(plan, flatRoot, commitment, latestWriter, physicalKey); err != nil {
+		if plan != nil && !plan.deleteAccount && plan.accountLatestDirty {
+			start := len(valueArena)
+			var err error
+			valueArena, accountLatestExists, err = appendAccountLatestObject(valueArena, plan.obj, flatRoot)
+			if err != nil {
+				return err
+			}
+			if accountLatestExists {
+				accountLatestData = valueArena[start:len(valueArena):len(valueArena)]
+			}
+		}
+		if err := s.writeFlatAccountLatestWithPlan(plan, commitment, latestWriter, physicalKey, accountLatestData, accountLatestExists); err != nil {
 			return err
 		}
 	}
