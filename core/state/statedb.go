@@ -1551,6 +1551,7 @@ func (s *StateDB) FinalizeTransaction() {
 		for k := range obj.dirtyStorage {
 			if slot := obj.storage[k]; slot.value == (tcommon.Hash{}) {
 				slot.exists = false
+				obj.ensureStorage()
 				obj.storage[k] = slot
 			}
 		}
@@ -2378,6 +2379,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	if h == (tcommon.Hash{}) {
 		return tcommon.Hash{}, false
 	}
+	obj.ensureStorage()
 	obj.storage[key] = storageSlot{value: h, exists: true}
 	return h, true
 }
@@ -2653,7 +2655,10 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		if obj.contractMeta != nil {
 			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
 		}
-		kvDirtyCopy := make(map[string]kvEntry, len(obj.kvDirty))
+		var kvDirtyCopy map[string]kvEntry
+		if len(obj.kvDirty) != 0 {
+			kvDirtyCopy = make(map[string]kvEntry, len(obj.kvDirty))
+		}
 		for k, v := range obj.kvDirty {
 			ec := kvEntry{
 				deleted:    v.deleted,
@@ -2668,6 +2673,14 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			}
 			kvDirtyCopy[k] = ec
 		}
+		var storageCopy map[tcommon.Hash]storageSlot
+		if len(obj.storage) != 0 {
+			storageCopy = make(map[tcommon.Hash]storageSlot, len(obj.storage))
+		}
+		var dirtyStorageCopy map[tcommon.Hash]storageOrigin
+		if len(obj.dirtyStorage) != 0 {
+			dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
+		}
 		newObj := &stateObject{
 			address:                  addr,
 			dirty:                    obj.dirty,
@@ -2679,8 +2692,8 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			codeDirty:                obj.codeDirty,
 			contractMeta:             metaCopy,
 			contractMetaDirty:        obj.contractMetaDirty,
-			storage:                  make(map[tcommon.Hash]storageSlot),
-			dirtyStorage:             make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage)),
+			storage:                  storageCopy,
+			dirtyStorage:             dirtyStorageCopy,
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
@@ -3043,13 +3056,13 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.accountDirty = false
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
-		obj.storage = make(map[tcommon.Hash]storageSlot)
+		obj.storage = nil
 		obj.dirtyStorage = nil
 		obj.dirty = false
 		return
 	}
 	if plan.hadKVDirty {
-		obj.kvDirty = make(map[string]kvEntry)
+		obj.kvDirty = nil
 	}
 	if obj.codeDirty {
 		obj.codeDirty = false

@@ -174,6 +174,7 @@ func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
 		} else {
+			obj.ensureStorage()
 			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
 		}
 		if obj.dirtyStorage == nil {
@@ -260,6 +261,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 		return
 	}
 	if e.hadEntry {
+		obj.ensureKVDirty()
 		obj.kvDirty[e.mapKey] = e.prevEntry
 	} else {
 		delete(obj.kvDirty, e.mapKey)

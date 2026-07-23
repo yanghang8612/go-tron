@@ -108,9 +108,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 	return &stateObject{
 		address:       addr,
 		account:       acc,
-		storage:       make(map[tcommon.Hash]storageSlot),
 		accountKVRoot: EmptyKVRoot,
-		kvDirty:       make(map[string]kvEntry),
 	}
 }
 
@@ -121,9 +119,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		dirty:         true,
 		accountDirty:  true,
 		created:       true,
-		storage:       make(map[tcommon.Hash]storageSlot),
 		accountKVRoot: EmptyKVRoot,
-		kvDirty:       make(map[string]kvEntry),
 	}
 }
 
@@ -131,6 +127,18 @@ func (s *stateObject) markDirty() {
 	s.dirty = true
 	if s.dirtySet != nil {
 		s.dirtySet[s.address] = struct{}{}
+	}
+}
+
+func (s *stateObject) ensureStorage() {
+	if s.storage == nil {
+		s.storage = make(map[tcommon.Hash]storageSlot)
+	}
+}
+
+func (s *stateObject) ensureKVDirty() {
+	if s.kvDirty == nil {
+		s.kvDirty = make(map[string]kvEntry)
 	}
 }
 
@@ -166,6 +174,7 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 }
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
+	s.ensureStorage()
 	if s.dirtyStorage == nil {
 		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 	}
@@ -180,12 +189,14 @@ func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 }
 
 func (s *stateObject) stageKV(domain kvdomains.KVDomain, key, value []byte) {
+	s.ensureKVDirty()
 	comp := kvCompositeKey(domain, key)
 	s.kvDirty[string(comp)] = newKVEntry(comp, value, false)
 	s.markDirty()
 }
 
 func (s *stateObject) stageDeleteKV(domain kvdomains.KVDomain, key []byte) {
+	s.ensureKVDirty()
 	comp := kvCompositeKey(domain, key)
 	s.kvDirty[string(comp)] = newKVEntry(comp, nil, true)
 	s.markDirty()
