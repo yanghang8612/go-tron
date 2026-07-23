@@ -56,6 +56,16 @@ type signaturePrewarmRun struct {
 	wg sync.WaitGroup
 }
 
+// signaturePrewarmJob is deliberately pointer-only. The former job shape kept
+// a full transaction slice plus an index (40 bytes on 64-bit systems) for every
+// transaction in a sync batch. A direct transaction pointer carries the same
+// immutable work item in 16 bytes and avoids repeatedly retaining the parent
+// slice header in the flattened queue.
+type signaturePrewarmJob struct {
+	block *types.Block
+	tx    *types.Transaction
+}
+
 func (r *signaturePrewarmRun) Wait() {
 	if r != nil {
 		r.wg.Wait()
@@ -86,36 +96,40 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 		return nil
 	}
 
+	// Count directly from the immutable protobuf first. Besides giving the
+	// flattened queue an exact capacity, this lets sub-threshold batches return
+	// without constructing Transaction wrappers that the serial path may never
+	// need (for example, after a header rejection).
+	totalTx := 0
+	headerJobs := 0
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		totalTx += len(block.Proto().GetTransactions())
+		if engine != nil {
+			headerJobs++
+		}
+	}
+	// Gate on transaction volume: a near-empty batch is cheaper to recover
+	// inline than to fan out. Header-only jobs don't count toward the gate.
+	if totalTx < ParallelSigVerifyMinTxs || totalTx+headerJobs == 0 {
+		return nil
+	}
+
 	// Flatten the batch into independent recovery jobs so work is balanced
 	// across goroutines regardless of how txs are distributed between blocks.
-	// A block job (negative txIndex sentinel) warms the header signature; a tx
-	// job warms one transaction's signers.
-	type job struct {
-		block   *types.Block
-		txs     []*types.Transaction
-		txIndex int // -1 → header-signature job; >=0 → index into txs
-	}
-	var (
-		jobs    []job
-		totalTx int
-	)
+	jobs := make([]signaturePrewarmJob, 0, totalTx+headerJobs)
 	for _, block := range blocks {
 		if block == nil {
 			continue
 		}
 		if engine != nil {
-			jobs = append(jobs, job{block: block, txIndex: -1})
+			jobs = append(jobs, signaturePrewarmJob{block: block})
 		}
-		txs := block.Transactions()
-		totalTx += len(txs)
-		for i := range txs {
-			jobs = append(jobs, job{txs: txs, txIndex: i})
+		for _, tx := range block.Transactions() {
+			jobs = append(jobs, signaturePrewarmJob{tx: tx})
 		}
-	}
-	// Gate on transaction volume: a near-empty batch is cheaper to recover
-	// inline than to fan out. Header-only jobs don't count toward the gate.
-	if totalTx < ParallelSigVerifyMinTxs || len(jobs) == 0 {
-		return nil
 	}
 
 	workers := runtime.GOMAXPROCS(0)
@@ -129,7 +143,7 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 	// path's later read, but no goroutine churn.
 	if workers == 1 {
 		for i := range jobs {
-			runSigJob(jobs[i].block, jobs[i].txs, jobs[i].txIndex, engine)
+			runSigJob(jobs[i], engine)
 		}
 		return nil
 	}
@@ -146,26 +160,26 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 				if idx >= n {
 					return
 				}
-				j := &jobs[idx]
-				runSigJob(j.block, j.txs, j.txIndex, engine)
+				runSigJob(jobs[idx], engine)
 			}
 		}()
 	}
 	return run
 }
 
-// runSigJob executes one recovery job. txIndex < 0 means warm the block's header
-// signature; otherwise warm txs[txIndex]'s signers. Errors are intentionally
-// discarded here — they are memoized and resurfaced by the serial path.
-func runSigJob(block *types.Block, txs []*types.Transaction, txIndex int, engine headerSignaturePrewarmer) {
+// runSigJob executes one recovery job. A non-nil block warms the header
+// signature; otherwise tx identifies the transaction signer memo to warm.
+// Errors are intentionally discarded here — they are memoized and resurfaced
+// by the serial path.
+func runSigJob(job signaturePrewarmJob, engine headerSignaturePrewarmer) {
 	if sigPrewarmJobHook != nil {
 		sigPrewarmJobHook()
 	}
-	if txIndex < 0 {
-		if engine != nil && block != nil {
-			engine.PrewarmHeaderSignature(block)
+	if job.block != nil {
+		if engine != nil {
+			engine.PrewarmHeaderSignature(job.block)
 		}
 		return
 	}
-	_, _ = txs[txIndex].RecoverSigners()
+	_, _ = job.tx.RecoverSigners()
 }
