@@ -49,7 +49,7 @@ func (b *metadataProbeBatch) Write() error {
 	return b.Batch.Write()
 }
 
-func TestWriteBlockMetadataBatchUsesExactSizeAndPreservesRows(t *testing.T) {
+func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing.T) {
 	pb := newBlockProto(21, 63_000)
 	pb.Transactions = []*corepb.Transaction{
 		{RawData: &corepb.TransactionRaw{Timestamp: 1}},
@@ -76,8 +76,9 @@ func TestWriteBlockMetadataBatchUsesExactSizeAndPreservesRows(t *testing.T) {
 	if probe.newCalls != 0 || probe.sizedCalls != 1 {
 		t.Fatalf("batch constructors: NewBatch=%d NewBatchWithSize=%d, want 0/1", probe.newCalls, probe.sizedCalls)
 	}
-	if probe.hint != probe.actual {
-		t.Fatalf("batch size hint = %d, actual encoded bytes = %d", probe.hint, probe.actual)
+	if probe.hint != probe.actual+metadataBatchRecordSlack {
+		t.Fatalf("batch size hint = %d, want encoded %d + scratch %d",
+			probe.hint, probe.actual, metadataBatchRecordSlack)
 	}
 
 	chainDB := NewChainDB(disk, NoopAncient{})

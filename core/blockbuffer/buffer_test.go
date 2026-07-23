@@ -220,33 +220,52 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 	}
 	b.Cleanup(func() { db.Close() })
 
-	l := newLayer(bufHash(1), 1)
+	puts := newLayer(bufHash(1), 1)
 	value := bytes.Repeat([]byte{0xcd}, 1024)
 	for i := 0; i < 2048; i++ {
-		l.writes[fmt.Sprintf("flush-key-%04d", i)] = value
+		puts.writes[fmt.Sprintf("flush-key-%04d", i)] = value
 	}
-	_, encodedSize := layerWriteStats(l)
+	deletes := newLayer(bufHash(2), 2)
+	for i := 0; i < 32768; i++ {
+		deletes.deletes[fmt.Sprintf("deleted-state-key-%08d", i)] = struct{}{}
+	}
 
-	b.Run("unsized", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			batch := db.NewBatch()
-			if err := writeLayer(l, batch); err != nil {
-				b.Fatal(err)
+	for _, workload := range []struct {
+		name  string
+		layer *layer
+	}{
+		{name: "puts", layer: puts},
+		{name: "deletes", layer: deletes},
+	} {
+		b.Run(workload.name, func(b *testing.B) {
+			_, encodedSize := layerWriteStats(workload.layer)
+			exactSize := pebbleBatchHeaderSize + encodedSize
+			for _, sizing := range []struct {
+				name string
+				size int
+			}{
+				{name: "unsized"},
+				{name: "exact-final-size", size: exactSize},
+				{name: "with-record-slack", size: exactSize + pebbleBatchRecordSlack},
+			} {
+				b.Run(sizing.name, func(b *testing.B) {
+					b.ReportAllocs()
+					for i := 0; i < b.N; i++ {
+						var batch ethdb.Batch
+						if sizing.size == 0 {
+							batch = db.NewBatch()
+						} else {
+							batch = db.NewBatchWithSize(sizing.size)
+						}
+						if err := writeLayer(workload.layer, batch); err != nil {
+							b.Fatal(err)
+						}
+						closeBatch(batch)
+					}
+				})
 			}
-			closeBatch(batch)
-		}
-	})
-	b.Run("sized", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			batch := db.NewBatchWithSize(encodedSize)
-			if err := writeLayer(l, batch); err != nil {
-				b.Fatal(err)
-			}
-			closeBatch(batch)
-		}
-	})
+		})
+	}
 }
 
 func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
@@ -719,9 +738,9 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 		t.Fatalf("batch Write calls = %d, want 1", got)
 	}
 	// Each Set record is kind(1), key length(1), key(1), value length(1),
-	// value(1), plus the one 12-byte Pebble batch header.
-	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+3*5); got != want {
-		t.Fatalf("batch size hint = %d, want exact encoded size %d", got, want)
+	// value(1), plus the Pebble header and one-record temporary varint slack.
+	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+3*5+pebbleBatchRecordSlack); got != want {
+		t.Fatalf("batch size hint = %d, want encoded size plus scratch %d", got, want)
 	}
 	got, err := dst.Get([]byte("k"))
 	if err != nil {
@@ -753,7 +772,7 @@ func TestBuffer_FlushUpToCreatesSizedBatchPerOversizeLayer(t *testing.T) {
 	if got := dst.writes.Load(); got != 3 {
 		t.Fatalf("batch Write calls = %d, want 3", got)
 	}
-	wantHint := int64(pebbleBatchHeaderSize + 1 + uvarintSize(1) + 1 + uvarintSize(len(value)) + len(value))
+	wantHint := int64(pebbleBatchHeaderSize + 1 + uvarintSize(1) + 1 + uvarintSize(len(value)) + len(value) + pebbleBatchRecordSlack)
 	if got := dst.sizeHint.Load(); got != wantHint {
 		t.Fatalf("last batch size hint = %d, want %d", got, wantHint)
 	}

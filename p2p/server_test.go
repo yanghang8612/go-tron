@@ -54,6 +54,34 @@ func TestServerStartStop(t *testing.T) {
 	srv.Stop()
 }
 
+func TestNewServerDialTimeoutDefaultsAndPreservesOverride(t *testing.T) {
+	defaulted := NewServer(ServerConfig{}, &testHandler{})
+	if got := defaulted.config.DialTimeout; got != defaultDialTimeout {
+		t.Fatalf("default DialTimeout=%s, want %s", got, defaultDialTimeout)
+	}
+
+	override := 250 * time.Millisecond
+	configured := NewServer(ServerConfig{DialTimeout: override}, &testHandler{})
+	if got := configured.config.DialTimeout; got != override {
+		t.Fatalf("configured DialTimeout=%s, want %s", got, override)
+	}
+}
+
+func TestServerAddPeerSkipsDialForConnectedOrFullPeerSet(t *testing.T) {
+	connectedAddr := "127.0.0.1:18888"
+	connected := NewServer(ServerConfig{MaxPeers: 2}, &testHandler{})
+	connected.peers[connectedAddr] = &Peer{}
+	if err := connected.AddPeer(connectedAddr); !errors.Is(err, errAlreadyConnected) {
+		t.Fatalf("connected endpoint AddPeer error=%v, want %v", err, errAlreadyConnected)
+	}
+
+	full := NewServer(ServerConfig{MaxPeers: 1}, &testHandler{})
+	full.peers[connectedAddr] = &Peer{}
+	if err := full.AddPeer("192.0.2.1:18888"); !errors.Is(err, errPeerCapacity) {
+		t.Fatalf("full peer set AddPeer error=%v, want %v", err, errPeerCapacity)
+	}
+}
+
 func TestServerAcceptsPeer(t *testing.T) {
 	h1 := &testHandler{}
 	h2 := &testHandler{}

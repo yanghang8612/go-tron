@@ -33,13 +33,22 @@ const (
 	maxBufferedRunaheadBytes  = tsync.MaxBufferedRunaheadBytes
 	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
 	peerJoinAttemptInterval   = 2 * time.Second
+
+	// Retain a small near-tip subset of the blocks already decoded by the peer
+	// receive path so the drain does not immediately protobuf-decode them again.
+	// Both caps are global to the SyncService and include the active drain batch;
+	// all remaining buffered blocks stay raw-only to keep the GC mark set small.
+	maxRetainedDecodedBlocks = 32
+	maxRetainedDecodedBytes  = 8 << 20
 )
 
 type syncDiagnostics struct {
-	blockBufferLen int
-	requestedLen   int
-	retryListLen   int
-	peerState      string
+	blockBufferLen       int
+	requestedLen         int
+	retryListLen         int
+	retainedDecoded      int
+	retainedDecodedBytes int64
+	peerState            string
 }
 
 type syncPeerState struct {
@@ -75,31 +84,30 @@ type syncPeerState struct {
 }
 
 // bufferedSyncBlock holds an out-of-order sync block awaiting contiguous
-// drain. It stores the raw wire bytes (one []byte, no inner pointers) plus
-// light metadata rather than the decoded *types.Block: a decoded block pins its
-// whole proto tree (~80k pointer-rich objects), so on a busy chain the buffered
-// backlog balloons the GC mark set (≈12 GB / 161 M live objects observed on
-// the Nile node, ~70% CPU in GC). The full block is decoded lazily at drain.
+// drain. Raw wire bytes remain the authoritative, compact representation. A
+// strictly bounded near-tip subset may also retain the block already decoded
+// by the peer receive path, avoiding an immediate second protobuf decode. The
+// bounds are essential: retaining every decoded block once ballooned the GC
+// mark set to ≈12 GB / 161 M live objects on Nile (~70% CPU in GC).
 type bufferedSyncBlock struct {
-	raw  []byte
-	hash tcommon.Hash
-	num  uint64
-	peer *p2p.Peer
+	raw     []byte
+	decoded *types.Block
+	hash    tcommon.Hash
+	num     uint64
+	peer    *p2p.Peer
 }
 
-// bufferRawBlockBytes returns a self-owned copy of the block's wire bytes for
-// the sync buffer. `raw` is the exact payload received off the wire; we copy it
-// so the buffer never aliases a frame the p2p codec may later reuse. Callers
-// without the original bytes (tests, or any non-wire path) pass nil and we
-// re-marshal from the decoded block.
+// bufferRawBlockBytes takes ownership of the block's wire bytes for the sync
+// buffer. The p2p codec allocates a fresh frame/unwrap payload per message and
+// invokes the handler synchronously, so a consumed sync block can transfer that
+// slice without another full-block copy. Callers must not mutate raw after
+// HandleBlock consumes it. Tests/non-wire paths may pass nil to marshal a copy.
 func bufferRawBlockBytes(block *types.Block, raw []byte) []byte {
 	if len(raw) == 0 {
 		b, _ := block.Marshal()
 		return b
 	}
-	out := make([]byte, len(raw))
-	copy(out, raw)
-	return out
+	return raw
 }
 
 type bufferedSyncBatch struct {
@@ -160,7 +168,13 @@ type SyncService struct {
 	// It gates far-ahead fetching against MaxBufferedRunaheadBytes so the
 	// buffer's heap footprint stays bounded at full-block eras.
 	bufferedBytes int64
-	targetHeadNum uint64
+	// retainedDecoded* accounts for decoded block pointers in blockBuffer plus
+	// the single active drain batch. It is intentionally not reset blindly when
+	// a sync session ends: an import already running off-lock may outlive reset,
+	// and its pointers remain charged until releaseDecodedBatch runs.
+	retainedDecodedBlocks int
+	retainedDecodedBytes  int64
+	targetHeadNum         uint64
 	// syncedTipNum is the drain cursor: the highest block this session has
 	// popped for import. Under async-commit depth>2 the committed CurrentBlock
 	// lags the applied tip by up to the pipeline depth, so popping from
@@ -462,6 +476,7 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 }
 
 func (ss *SyncService) initSessionLocked(now time.Time) {
+	ss.releaseBufferedDecodedLocked()
 	ss.syncing = true
 	ss.syncPeer = nil
 	ss.fetchList = nil
@@ -518,10 +533,11 @@ func (ss *SyncService) effectiveSyncTipLocked() uint64 {
 	return tip
 }
 
-// removeBufferedBlockLocked removes one raw entry and all of its accounting.
-// Keeping deletion in one helper prevents defensive stale cleanup and normal
-// contiguous drain from drifting on bufferedBytes/bufferedHash/blockPath.
-func (ss *SyncService) removeBufferedBlockLocked(num uint64) (bufferedSyncBlock, bool) {
+// detachBufferedBlockLocked removes one raw entry and its indexes. When the
+// block moves into the active drain batch, keepDecoded remains true so its
+// decoded pointer stays charged against the global retention caps until the
+// insert finishes. Stale/discard paths pass false and release it immediately.
+func (ss *SyncService) detachBufferedBlockLocked(num uint64, keepDecoded bool) (bufferedSyncBlock, bool) {
 	buffered, ok := ss.blockBuffer[num]
 	if !ok {
 		return bufferedSyncBlock{}, false
@@ -534,7 +550,55 @@ func (ss *SyncService) removeBufferedBlockLocked(num uint64) (bufferedSyncBlock,
 	} else {
 		ss.bufferedBytes -= n
 	}
+	if !keepDecoded {
+		ss.releaseRetainedDecodedLocked(&buffered)
+	}
 	return buffered, true
+}
+
+func (ss *SyncService) removeBufferedBlockLocked(num uint64) (bufferedSyncBlock, bool) {
+	return ss.detachBufferedBlockLocked(num, false)
+}
+
+func (ss *SyncService) popBufferedBlockLocked(num uint64) (bufferedSyncBlock, bool) {
+	return ss.detachBufferedBlockLocked(num, true)
+}
+
+func (ss *SyncService) retainDecodedBlockLocked(block *types.Block, blockNum, effectiveTip uint64, rawBytes int) bool {
+	if block == nil || blockNum > effectiveTip+alwaysFetchRunaheadBlocks {
+		return false
+	}
+	n := int64(rawBytes)
+	if ss.retainedDecodedBlocks >= maxRetainedDecodedBlocks ||
+		n > maxRetainedDecodedBytes-ss.retainedDecodedBytes {
+		return false
+	}
+	ss.retainedDecodedBlocks++
+	ss.retainedDecodedBytes += n
+	return true
+}
+
+func (ss *SyncService) releaseRetainedDecodedLocked(buffered *bufferedSyncBlock) {
+	if buffered == nil || buffered.decoded == nil {
+		return
+	}
+	buffered.decoded = nil
+	if ss.retainedDecodedBlocks > 0 {
+		ss.retainedDecodedBlocks--
+	}
+	n := int64(len(buffered.raw))
+	if n >= ss.retainedDecodedBytes {
+		ss.retainedDecodedBytes = 0
+	} else {
+		ss.retainedDecodedBytes -= n
+	}
+}
+
+func (ss *SyncService) releaseBufferedDecodedLocked() {
+	for num, buffered := range ss.blockBuffer {
+		ss.releaseRetainedDecodedLocked(&buffered)
+		ss.blockBuffer[num] = buffered
+	}
 }
 
 // pruneStaleSyncStateLocked drops buffer entries and path reservations at or
@@ -1194,7 +1258,9 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 // Returns true if the block was consumed by sync, false if it should be handled
 // as a broadcast. `raw` is the block's exact wire bytes (the decode source);
 // the buffer stores those rather than the decoded block. Callers without the
-// original bytes may pass nil — they are re-marshaled from `block`.
+// original bytes may pass nil — they are re-marshaled from `block`. When this
+// method consumes a block, ownership of non-empty raw transfers to the sync
+// buffer and the caller must not mutate it afterward.
 func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byte) bool {
 	if ss.stopping.Load() {
 		return true
@@ -1260,6 +1326,9 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 				num:  blockNum,
 				peer: peer,
 			}
+			if ss.retainDecodedBlockLocked(block, blockNum, effectiveTipNum, len(entry.raw)) {
+				entry.decoded = block
+			}
 			ss.blockBuffer[blockNum] = entry
 			ss.bufferedHash[blockHash] = struct{}{}
 			ss.bufferedBytes += int64(len(entry.raw))
@@ -1270,21 +1339,24 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		// the now-stale path without disturbing a different fork reservation.
 		ss.releaseBlockPathLocked(types.BlockID{Hash: blockHash, Num: blockNum})
 	}
-	var out []outboundSyncRequest
-	if batchDone {
-		out = ss.fillFetchSlotsLocked(time.Now())
-	}
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
 
-	ss.drainBufferedBlocks()
-	if len(out) > 0 && ss.IsSyncing() && !ss.IsPaused() {
-		ss.sendOutboundRequests(out)
-	}
+	// Keep the peer read loop free to receive the rest of the requested range.
+	// Importing a block can take tens of milliseconds; doing it inline here
+	// prevents a lone peer from filling blockBuffer while the current block is
+	// executing, which in turn forces every deep InsertSession to finish as soon
+	// as the buffer runs dry. A single scheduled drain worker preserves ordered
+	// insertion while allowing receive and execution to overlap.
+	ss.scheduleDrainBufferedBlocks()
 	return true
 }
 
-func (ss *SyncService) drainBufferedBlocks() {
+// scheduleDrainBufferedBlocks starts one asynchronous drain worker, or asks the
+// active worker to take another pass. The drainMu handoff closes both lost-wake
+// windows: an arrival before the worker's final check sets drainAgain, while an
+// arrival after it clears draining starts a new worker.
+func (ss *SyncService) scheduleDrainBufferedBlocks() {
 	ss.drainMu.Lock()
 	if ss.draining {
 		ss.drainAgain = true
@@ -1294,6 +1366,24 @@ func (ss *SyncService) drainBufferedBlocks() {
 	ss.draining = true
 	ss.drainMu.Unlock()
 
+	go ss.runDrainBufferedBlocks()
+}
+
+// drainBufferedBlocks runs a drain synchronously for lifecycle callers such as
+// the watchdog. Peer receive paths use scheduleDrainBufferedBlocks instead.
+func (ss *SyncService) drainBufferedBlocks() {
+	ss.drainMu.Lock()
+	if ss.draining {
+		ss.drainAgain = true
+		ss.drainMu.Unlock()
+		return
+	}
+	ss.draining = true
+	ss.drainMu.Unlock()
+	ss.runDrainBufferedBlocks()
+}
+
+func (ss *SyncService) runDrainBufferedBlocks() {
 	for {
 		ss.drainBufferedBlocksOnce()
 		ss.drainMu.Lock()
@@ -1368,6 +1458,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			// Every popped block failed to decode (can't happen for validated
 			// wire bytes). The entries were already removed at pop, so loop to
 			// re-pop the next run or hit the gap.
+			ss.releaseDecodedBatch(&batch)
 			continue
 		}
 		for _, wait := range batch.bufferWaits {
@@ -1394,6 +1485,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			}
 			applied = failed
 			ss.recordImportedBatch(batch, applied, insertElapsed)
+			ss.releaseDecodedBatch(&batch)
 			failedNum := batch.buffered[failed].num
 			if failedNum == 0 && rangeErr != nil {
 				failedNum = rangeErr.BlockNumber
@@ -1403,6 +1495,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.recordImportedBatch(batch, applied, insertElapsed)
+		ss.releaseDecodedBatch(&batch)
 		if stopHeight, configured := ss.configuredStopHeight(); configured && batch.buffered[applied-1].num >= stopHeight {
 			// A deep InsertSession publishes CurrentBlock only when Finish drains
 			// its commit worker. Settle it before latching the audit pause so the
@@ -1420,6 +1513,20 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			paused = true
 			break
 		}
+		// Refill a peer only after at least one contiguous batch has applied
+		// successfully. This lets receive run ahead of execution across fetch
+		// batches without sending more requests after a bad block. In the common
+		// single-peer case, the read loop fills blockBuffer while this worker is
+		// inserting; once the previous request completes, this check immediately
+		// starts the next request instead of waiting for the buffer to empty.
+		ss.mu.Lock()
+		var batchOut []outboundSyncRequest
+		if ss.syncing && !ss.pause.Paused() {
+			batchOut = ss.fillFetchSlotsLocked(time.Now())
+			ss.mirrorLegacyLocked()
+		}
+		ss.mu.Unlock()
+		ss.sendOutboundRequests(batchOut)
 	}
 	// Settle the session on any loop-exit path (not-syncing / paused / error
 	// break). The empty-batch path already finished it above (sess == nil there).
@@ -1456,7 +1563,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		if stopHeight, configured := ss.configuredStopHeight(); configured && next > stopHeight {
 			break
 		}
-		buffered, ok := ss.removeBufferedBlockLocked(next)
+		buffered, ok := ss.popBufferedBlockLocked(next)
 		if !ok {
 			break
 		}
@@ -1475,16 +1582,18 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 	return batch
 }
 
-// decodeBatchBlocks decodes the popped raw blocks into batch.blocks. It runs
-// OFF ss.mu — a full proto decode per block (up to maxFetchBatch, and largest
-// in exactly the full-block era this raw buffer targets) is far too heavy to
-// hold the sync lock across, and InsertBlocks already runs off-lock. A decode
-// error (can't happen for bytes that already decoded at receive) truncates the
-// batch; the dropped suffix was removed from the buffer at pop, so it is simply
-// re-fetched.
+// decodeBatchBlocks materializes the popped blocks. A bounded near-tip subset
+// reuses the object already decoded by the peer receive path; raw-only entries
+// are protobuf-decoded here. It runs OFF ss.mu because a full decode per block
+// is far too heavy for the central sync lock. A decode error (can't happen for
+// bytes that already decoded at receive) truncates the batch.
 func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
 	for i := range batch.buffered {
+		if batch.buffered[i].decoded != nil {
+			batch.blocks = append(batch.blocks, batch.buffered[i].decoded)
+			continue
+		}
 		blk, err := types.UnmarshalBlock(batch.buffered[i].raw)
 		if err != nil {
 			syncLog.Error("Dropping undecodable buffered sync block",
@@ -1492,6 +1601,21 @@ func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 			return
 		}
 		batch.blocks = append(batch.blocks, blk)
+	}
+}
+
+// releaseDecodedBatch drops retained receive-path objects after their insert
+// attempt and returns their charge to the global cap. Newly decoded raw-only
+// blocks are also cleared so the next receive/refill pass cannot overlap their
+// object graph unnecessarily.
+func (ss *SyncService) releaseDecodedBatch(batch *bufferedSyncBatch) {
+	ss.mu.Lock()
+	for i := range batch.buffered {
+		ss.releaseRetainedDecodedLocked(&batch.buffered[i])
+	}
+	ss.mu.Unlock()
+	for i := range batch.blocks {
+		batch.blocks[i] = nil
 	}
 }
 
@@ -1648,9 +1772,11 @@ func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
 
 func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
 	diag := syncDiagnostics{
-		blockBufferLen: len(ss.blockBuffer),
-		requestedLen:   len(ss.requested),
-		retryListLen:   len(ss.retryList),
+		blockBufferLen:       len(ss.blockBuffer),
+		requestedLen:         len(ss.requested),
+		retryListLen:         len(ss.retryList),
+		retainedDecoded:      ss.retainedDecodedBlocks,
+		retainedDecodedBytes: ss.retainedDecodedBytes,
 	}
 	if len(ss.peers) == 0 {
 		return diag
@@ -1773,6 +1899,8 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
 		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
 		"blockBuffer", diag.blockBufferLen,
+		"retainedDecoded", diag.retainedDecoded,
+		"retainedDecodedBytes", diag.retainedDecodedBytes,
 		"requested", diag.requestedLen,
 		"retryList", diag.retryListLen,
 	}
@@ -1851,6 +1979,7 @@ func slowestStateCommitPhase(s core.ApplyStats) (string, time.Duration) {
 
 // doReset clears all sync state. Must be called with ss.mu held.
 func (ss *SyncService) doReset() {
+	ss.releaseBufferedDecodedLocked()
 	for _, ps := range ss.peers {
 		if ps.fetchTimer != nil {
 			ps.fetchTimer.Stop()

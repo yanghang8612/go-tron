@@ -7,7 +7,6 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/runtime/protoiface"
 )
 
 type Account struct {
@@ -740,38 +739,25 @@ func (a *Account) ClearFrozenV2() {
 	a.pb.FrozenV2 = nil
 }
 
-// Marshal serializes the account proto deterministically. The Deterministic
-// option only fixes the ordering of protobuf map fields (Asset, AssetV2,
-// FreeAssetNetUsage*, LatestAssetOperationTime*); without it Go map iteration
-// order leaks into the bytes, which makes the internal account-trie leaf — and
-// thus the internal full-state root — non-reproducible. The guarantee is stable
-// within a binary build (not canonical across protobuf-go versions), which is
-// exactly the scope the internal root needs. java-tron wire compatibility is
-// unaffected: these bytes are never compared byte-for-byte across nodes, and
-// the consensus accountStateRoot uses its own map-free marshal path.
+// Marshal serializes the complete Account protobuf deterministically. The six
+// string→int64 maps use a direct sorted encoder to avoid protobuf reflection;
+// all other fields retain generated-protobuf encoding. The returned bytes stay
+// byte-compatible with protobuf's deterministic representation.
 func (a *Account) Marshal() ([]byte, error) {
-	message := a.pb.ProtoReflect()
-	methods := message.ProtoMethods()
-	if methods == nil || methods.Marshal == nil || methods.Flags&protoiface.SupportMarshalDeterministic == 0 {
-		return proto.MarshalOptions{Deterministic: true}.Marshal(a.pb)
-	}
 	hint := int(a.marshalSizeHint.Load())
-	if hint < 256 {
-		hint = 256
+	if data, err, handled := marshalAccountDirectMaps(a.pb, hint); handled {
+		if err != nil {
+			return nil, err
+		}
+		a.marshalSizeHint.Store(int64(len(data)))
+		return data, nil
 	}
-	out, err := methods.Marshal(protoiface.MarshalInput{
-		Message: message,
-		Buf:     make([]byte, 0, hint),
-		Flags:   protoiface.MarshalDeterministic,
-	})
+	data, err := marshalMessageDeterministic(a.pb.ProtoReflect(), hint)
 	if err != nil {
 		return nil, err
 	}
-	a.marshalSizeHint.Store(int64(len(out.Buf)))
-	if out.Buf == nil {
-		return []byte{}, nil
-	}
-	return out.Buf, nil
+	a.marshalSizeHint.Store(int64(len(data)))
+	return data, nil
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {

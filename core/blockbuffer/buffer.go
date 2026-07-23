@@ -24,6 +24,7 @@ package blockbuffer
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"sort"
 	"strings"
@@ -861,12 +862,21 @@ func (b *Buffer) Put(key, value []byte) error {
 	if active == nil {
 		panic("blockbuffer: Put called with no active layer")
 	}
-	k := string(key)
-	v := append([]byte(nil), value...)
-	active.mu.Lock()
-	delete(active.deletes, k)
-	active.writes[k] = v
-	active.mu.Unlock()
+	b.putInto(active, key, value)
+	return nil
+}
+
+// PutKeyParts implements the optional rawdb split-key writer path for the
+// synchronous commitment pipeline. It joins both key fragments directly into
+// the layer's immutable string key, avoiding an intermediate []byte allocation.
+func (b *Buffer) PutKeyParts(first, second, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyParts called with no active layer")
+	}
+	b.putIntoKeyParts(active, first, second, value)
 	return nil
 }
 
@@ -879,11 +889,19 @@ func (b *Buffer) Delete(key []byte) error {
 	if active == nil {
 		panic("blockbuffer: Delete called with no active layer")
 	}
-	k := string(key)
-	active.mu.Lock()
-	delete(active.writes, k)
-	active.deletes[k] = struct{}{}
-	active.mu.Unlock()
+	b.deleteInto(active, key)
+	return nil
+}
+
+// DeleteKeyParts is the delete counterpart of PutKeyParts.
+func (b *Buffer) DeleteKeyParts(first, second []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: DeleteKeyParts called with no active layer")
+	}
+	b.deleteIntoKeyParts(active, first, second)
 	return nil
 }
 
@@ -1021,7 +1039,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
 		_, encodedSize := layerWriteStats(l)
-		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize)
+		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize + pebbleBatchRecordSlack)
 		defer closeBatch(batch)
 		if err := writeLayer(l, batch); err != nil {
 			return err
@@ -1074,10 +1092,11 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 
 		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
 		// Reset. Reusing one large batch therefore made every group after the
-		// first grow geometrically from an empty buffer despite our exact size
-		// calculation. Allocate each bounded group at its exact encoded size so
-		// every batch performs one final allocation and no grow/copy cycle.
-		batch := batcher.NewBatchWithSize(queuedEncodedSize)
+		// first grow geometrically from an empty buffer despite our size
+		// calculation. Allocate each bounded group at its encoded size plus the
+		// one-record scratch allowance so every batch performs one final
+		// allocation and no grow/copy cycle.
+		batch := batcher.NewBatchWithSize(queuedEncodedSize + pebbleBatchRecordSlack)
 		for i := start; i < end; i++ {
 			if err := writeLayer(layers[i], batch); err != nil {
 				closeBatch(batch)
@@ -1114,7 +1133,16 @@ func layerWriteSize(l *layer) int {
 	return size
 }
 
-const pebbleBatchHeaderSize = 12
+const (
+	pebbleBatchHeaderSize = 12
+	// Pebble v1.1.x's deferred Set/Delete builders temporarily reserve the
+	// maximum varint width before shrinking each record to its actual encoding.
+	// The first record's init path uses binary.MaxVarintLen64 for both key/value
+	// lengths, so an exact final encoded-size hint can still grow on the last
+	// record and copy the entire batch. This small one-record scratch allowance
+	// prevents that geometric grow without materially overallocating the batch.
+	pebbleBatchRecordSlack = 2 * binary.MaxVarintLen64
+)
 
 type layerBatchSize struct {
 	value   int
@@ -1124,8 +1152,9 @@ type layerBatchSize struct {
 // layerWriteStats returns both ethdb's logical ValueSize and the encoded
 // Pebble batch record size. Pebble records use one kind byte followed by
 // uvarint-framed keys and values; deletes omit the value. Supplying this exact
-// encoded size up front avoids Batch.grow repeatedly copying a megabyte-scale
-// flush batch. The 12-byte batch header is added once by the caller.
+// encoded size plus Pebble's one-record temporary varint slack up front avoids
+// Batch.grow copying a megabyte-scale flush batch. The 12-byte batch header and
+// scratch slack are added once by the caller.
 func layerWriteStats(l *layer) (valueSize, encodedSize int) {
 	if l == nil {
 		return 0, 0

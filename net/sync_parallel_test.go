@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -87,6 +88,7 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	if !ss.HandleBlock(peerA, block1, nil) {
 		t.Fatal("block 1 should be consumed by sync")
 	}
+	ss.waitForDrain()
 	if got := bc.CurrentBlock().Number(); got != 2 {
 		t.Fatalf("buffered chain did not drain in order, head=%d", got)
 	}
@@ -98,6 +100,152 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	ss.mu.Unlock()
 	if buffered != 0 {
 		t.Fatalf("buffered range not fully drained: %d blocks remain", buffered)
+	}
+}
+
+// TestHandleBlockReceivesWhileDrainIsBlocked pins the receive/import split.
+// The apply hook deliberately stalls block #1 insertion; the same peer must
+// still deliver block #2, and the drain must import it after the stall clears.
+func TestHandleBlockReceivesWhileDrainIsBlocked(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	peer, closePeer := testPeer(t, "async-drain")
+	defer closePeer()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		ss.waitForDrain()
+	}()
+	bc.AddApplyStatsHook(func(block *types.Block, _ core.ApplyStats) {
+		if block.Number() != 1 {
+			return
+		}
+		close(started)
+		<-release
+	})
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ps.inflight = 2
+	ps.pending = make(map[tcommon.Hash]uint64, 2)
+	ps.pendingIDs = make(map[tcommon.Hash]types.BlockID, 2)
+	for _, block := range []*types.Block{block1, block2} {
+		bid := block.ID()
+		ss.reserveBlockPathLocked(bid)
+		ps.pending[bid.Hash] = bid.Num
+		ps.pendingIDs[bid.Hash] = bid
+		ps.requestedHashes[bid.Hash] = bid.Num
+		ss.requested[bid.Hash] = peer.ID()
+	}
+	ss.mu.Unlock()
+
+	returned := make(chan bool, 1)
+	go func() { returned <- ss.HandleBlock(peer, block1, nil) }()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled drain did not start insertion")
+	}
+	select {
+	case consumed := <-returned:
+		if !consumed {
+			t.Fatal("block should be consumed by sync")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("HandleBlock remained blocked on insertion")
+	}
+	if !ss.HandleBlock(peer, block2, nil) {
+		t.Fatal("same peer could not deliver block #2 while block #1 was inserting")
+	}
+	ss.mu.Lock()
+	_, block2Buffered := ss.blockBuffer[2]
+	ss.mu.Unlock()
+	if !block2Buffered {
+		t.Fatal("block #2 was not buffered while block #1 insertion was stalled")
+	}
+
+	close(release)
+	released = true
+	ss.waitForDrain()
+	if got := bc.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("scheduled drain did not import both blocks: head=%d", got)
+	}
+}
+
+func TestStopWaitsForScheduledDrainAndKeepsSyncStateReset(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	peer, closePeer := testPeer(t, "stop-during-drain")
+	defer closePeer()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		ss.waitForDrain()
+	}()
+	bc.AddApplyStatsHook(func(block *types.Block, _ core.ApplyStats) {
+		if block.Number() == 1 {
+			close(started)
+			<-release
+		}
+	})
+
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	markPendingLocked(ss, ps, block.ID())
+	ss.mu.Unlock()
+	if !ss.HandleBlock(peer, block, nil) {
+		t.Fatal("block should be consumed by sync")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled drain did not start insertion")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		ss.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while scheduled insertion was still active")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after scheduled insertion completed")
+	}
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.syncing || ss.peers != nil || ss.requested != nil || ss.blockBuffer != nil || ss.blockPath != nil ||
+		ss.retainedDecodedBlocks != 0 || ss.retainedDecodedBytes != 0 {
+		t.Fatalf("sync state was recreated after Stop: syncing=%v peers=%v requested=%v buffer=%v path=%v decoded=%d decodedBytes=%d",
+			ss.syncing, ss.peers, ss.requested, ss.blockBuffer, ss.blockPath,
+			ss.retainedDecodedBlocks, ss.retainedDecodedBytes)
 	}
 }
 

@@ -11,7 +11,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const metadataBatchHeaderSize = 12
+const (
+	metadataBatchHeaderSize = 12
+	// Pebble's deferred Set builder temporarily reserves maximum-width key and
+	// value varints before shrinking the record. Exact final encoded size alone
+	// therefore grows/copies the whole batch on its last row.
+	metadataBatchRecordSlack = 2 * binary.MaxVarintLen64
+)
 
 type blockMetadataRow struct {
 	key   []byte
@@ -19,9 +25,10 @@ type blockMetadataRow struct {
 }
 
 // WriteBlockMetadataBatch atomically persists the hot block metadata rows with
-// an exact encoded-size batch hint. Preparing the already-required protobuf
-// payloads before constructing the batch avoids Pebble's geometric grow/copy
-// cycle without an extra proto.Size traversal or a second marshal.
+// an encoded-size batch hint plus Pebble's one-record scratch allowance.
+// Preparing the already-required protobuf payloads before constructing the
+// batch avoids Pebble's geometric grow/copy cycle without an extra proto.Size
+// traversal or a second marshal.
 func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
 	if db == nil || block == nil {
 		return fmt.Errorf("write block metadata: nil database or block")
@@ -72,7 +79,7 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 	for _, row := range rows {
 		encodedSize += metadataBatchSetRecordSize(row.key, row.value)
 	}
-	batch := db.NewBatchWithSize(encodedSize)
+	batch := db.NewBatchWithSize(encodedSize + metadataBatchRecordSlack)
 	defer closeMetadataBatch(batch)
 	for _, row := range rows {
 		if err := batch.Put(row.key, row.value); err != nil {

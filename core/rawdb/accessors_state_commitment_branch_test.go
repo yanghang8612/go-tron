@@ -2,10 +2,79 @@ package rawdb
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+type discardCommitmentWriter struct{}
+
+func (discardCommitmentWriter) Put(_, _ []byte) error { return nil }
+func (discardCommitmentWriter) Delete(_ []byte) error { return nil }
+
+type keyPartsProbeWriter struct {
+	putCalls    int
+	deleteCalls int
+	key         []byte
+	value       []byte
+}
+
+func (w *keyPartsProbeWriter) Put(_, _ []byte) error {
+	return fmt.Errorf("unexpected fallback Put")
+}
+
+func (w *keyPartsProbeWriter) Delete(_ []byte) error {
+	return fmt.Errorf("unexpected fallback Delete")
+}
+
+func (w *keyPartsProbeWriter) PutKeyParts(first, second, value []byte) error {
+	w.putCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	w.value = append(w.value[:0], value...)
+	return nil
+}
+
+func (w *keyPartsProbeWriter) DeleteKeyParts(first, second []byte) error {
+	w.deleteCalls++
+	w.key = append(append(w.key[:0], first...), second...)
+	return nil
+}
+
+func TestCommitmentBranchUsesSplitKeyWriter(t *testing.T) {
+	w := new(keyPartsProbeWriter)
+	prefix := []byte{1, 2, 3, 4}
+	value := []byte{5, 6, 7}
+	wantKey := commitmentBranchKey(prefix)
+	if err := WriteCommitmentBranch(w, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	if w.putCalls != 1 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
+		t.Fatalf("split Put = calls %d key %x value %x, want 1/%x/%x", w.putCalls, w.key, w.value, wantKey, value)
+	}
+	if err := DeleteCommitmentBranch(w, prefix); err != nil {
+		t.Fatal(err)
+	}
+	if w.deleteCalls != 1 || !bytes.Equal(w.key, wantKey) {
+		t.Fatalf("split Delete = calls %d key %x, want 1/%x", w.deleteCalls, w.key, wantKey)
+	}
+}
+
+func BenchmarkCommitmentBranchKeyAllocation(b *testing.B) {
+	w := discardCommitmentWriter{}
+	value := bytes.Repeat([]byte{0xcd}, 256)
+	for _, prefixLen := range []int{0, 8, 32, 64} {
+		b.Run(fmt.Sprintf("prefix-%d", prefixLen), func(b *testing.B) {
+			prefix := bytes.Repeat([]byte{0x0a}, prefixLen)
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := WriteCommitmentBranch(w, prefix, value); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 type cachedNoCopyProbe struct {
 	ethdb.KeyValueReader

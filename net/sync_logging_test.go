@@ -73,6 +73,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		}
 		parent = blk.Hash()
 	}
+	ss.waitForDrain()
 
 	out := buf.String()
 	if !strings.Contains(out, "Imported chain segment") {
@@ -142,6 +143,8 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"persist=",
 		"hooks=",
 		"blockBuffer=",
+		"retainedDecoded=",
+		"retainedDecodedBytes=",
 		"requested=",
 		"retryList=",
 		"peerState=",

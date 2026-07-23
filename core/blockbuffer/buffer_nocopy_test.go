@@ -21,12 +21,48 @@ type getOnlyReader struct {
 	ethdb.KeyValueReader
 }
 
+// keyValueWriterOnly intentionally hides optional writer extensions so
+// benchmarks can compare rawdb's generic Put fallback with LayerView's
+// split-key fast path.
+type keyValueWriterOnly struct {
+	ethdb.KeyValueWriter
+}
+
 type blockingSnapshotReader struct {
 	ethdb.KeyValueReader
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
 	gets    int
+}
+
+func TestLayerViewCommitmentSplitKeyOwnsInputs(t *testing.T) {
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	prefix := []byte{1, 2, 3, 4}
+	wantPrefix := append([]byte(nil), prefix...)
+	value := []byte{5, 6, 7, 8}
+	wantValue := append([]byte(nil), value...)
+	if err := rawdb.WriteCommitmentBranch(view, prefix, value); err != nil {
+		t.Fatal(err)
+	}
+	clear(prefix)
+	clear(value)
+	got, found, err := rawdb.ReadCommitmentBranch(view, wantPrefix)
+	if err != nil || !found || !bytes.Equal(got, wantValue) {
+		t.Fatalf("split-key read = (%x,%v,%v), want (%x,true,nil)", got, found, err, wantValue)
+	}
+	if err := rawdb.DeleteCommitmentBranch(view, wantPrefix); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := rawdb.ReadCommitmentBranch(view, wantPrefix); err != nil || found {
+		t.Fatalf("split-key read after delete = (found=%v, err=%v), want false/nil", found, err)
+	}
 }
 
 func (r *blockingSnapshotReader) Get(key []byte) ([]byte, error) {
@@ -530,4 +566,36 @@ func BenchmarkBaseReadCacheColdFill(b *testing.B) {
 	b.Run("callback-view", func(b *testing.B) {
 		run(b, disk)
 	})
+}
+
+func BenchmarkCommitmentBranchLayerWrite(b *testing.B) {
+	prefix := bytes.Repeat([]byte{0x0a}, 32)
+	value := bytes.Repeat([]byte{0xcd}, 256)
+	for _, variant := range []struct {
+		name     string
+		fallback bool
+	}{
+		{name: "joined-key-fallback", fallback: true},
+		{name: "split-key-fast-path"},
+	} {
+		b.Run(variant.name, func(b *testing.B) {
+			buf := New(rawdb.NewMemoryDatabase())
+			buf.BeginBlock(bufHash(1), 1)
+			h, ok := buf.NewestInflight()
+			if !ok {
+				b.Fatal("missing in-flight layer")
+			}
+			var writer ethdb.KeyValueWriter = buf.ViewLayer(h)
+			if variant.fallback {
+				writer = keyValueWriterOnly{KeyValueWriter: writer}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := rawdb.WriteCommitmentBranch(writer, prefix, value); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

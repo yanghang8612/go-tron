@@ -4,20 +4,28 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-// branchKeyStackBufLen sizes the stack array used by commitmentBranchKeyInto.
-// Wall-format: stateCommitmentBranchPrefix (27 bytes) + a hex-trie prefix up to
-// pathLen=64 nibbles. 128 covers every real key with headroom; oversize prefixes
-// fall back to heap.
-const branchKeyStackBufLen = 128
+// keyPartsWriter is an optional writer fast path for layered stores whose
+// native key is a string. It lets them join the fixed schema prefix and trie
+// path directly into their owned key instead of allocating an intermediate
+// []byte that is immediately copied again by Put.
+type keyPartsWriter interface {
+	PutKeyParts(first, second, value []byte) error
+	DeleteKeyParts(first, second []byte) error
+}
 
 // WriteCommitmentBranch persists an encoded BranchData row for the given
 // hex-trie prefix.  The encoded bytes are opaque at the rawdb layer.
 //
-// pebble batches and direct Put both copy the key bytes into their internal
-// buffer during the call, so passing a stack-backed key slice is safe.
+// Generic writers receive a key allocated at its exact encoded length. A
+// fixed-size local array looks cheaper here, but passing its slice through
+// ethdb.KeyValueWriter makes the whole array escape; commitment keys are
+// usually much shorter than the previous 128-byte scratch object. Layered
+// writers can implement keyPartsWriter and avoid that intermediate key.
 func WriteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
-	var buf [branchKeyStackBufLen]byte
-	return db.Put(commitmentBranchKeyInto(buf[:0], prefix), encoded)
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.PutKeyParts(stateCommitmentBranchPrefix, prefix, encoded)
+	}
+	return db.Put(commitmentBranchKey(prefix), encoded)
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.
@@ -41,8 +49,7 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
-	var buf [branchKeyStackBufLen]byte
-	key := commitmentBranchKeyInto(buf[:0], prefix)
+	key := commitmentBranchKey(prefix)
 	raw, err := readStateNoCopyCached(db, key)
 	if err != nil {
 		// go-ethereum memorydb / pebble both return an error on missing keys.
@@ -53,8 +60,10 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 
 // DeleteCommitmentBranch removes the branch row for prefix.
 func DeleteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte) error {
-	var buf [branchKeyStackBufLen]byte
-	return db.Delete(commitmentBranchKeyInto(buf[:0], prefix))
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.DeleteKeyParts(stateCommitmentBranchPrefix, prefix)
+	}
+	return db.Delete(commitmentBranchKey(prefix))
 }
 
 // IterateCommitmentBranches iterates every branch row in the commitment
@@ -100,9 +109,10 @@ func ReadCommitmentEngineState(db ethdb.KeyValueReader) ([]byte, bool, error) {
 	return append([]byte(nil), raw...), true, nil
 }
 
-// commitmentBranchKey builds the physical DB key for a branch row. The result
-// always escapes to the heap; the Write/Read/Delete accessors above bypass it
-// in favour of commitmentBranchKeyInto with a stack buffer.
+// commitmentBranchKey builds the physical DB key for a branch row with an
+// exact capacity. The result necessarily escapes through the ethdb interface,
+// so minimizing the allocation is more effective than using an oversized
+// local array that the compiler also moves to the heap.
 func commitmentBranchKey(prefix []byte) []byte {
 	return commitmentBranchKeyInto(make([]byte, 0, len(stateCommitmentBranchPrefix)+len(prefix)), prefix)
 }

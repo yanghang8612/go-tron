@@ -1,6 +1,8 @@
 package blockbuffer
 
 import (
+	"strings"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
@@ -45,19 +47,44 @@ func (b *Buffer) LayerWriter(h InflightHandle) ethdb.KeyValueWriter {
 // disjoint locks).
 func (b *Buffer) putInto(l *layer, key, value []byte) {
 	k := string(key)
+	b.putIntoString(l, k, value)
+}
+
+// joinKeyParts constructs the immutable map key in one allocation. Building an
+// intermediate []byte and then converting it to string would allocate twice.
+func joinKeyParts(first, second []byte) string {
+	var key strings.Builder
+	key.Grow(len(first) + len(second))
+	_, _ = key.Write(first)
+	_, _ = key.Write(second)
+	return key.String()
+}
+
+func (b *Buffer) putIntoKeyParts(l *layer, first, second, value []byte) {
+	b.putIntoString(l, joinKeyParts(first, second), value)
+}
+
+func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
 	v := append([]byte(nil), value...)
 	l.mu.Lock()
-	delete(l.deletes, k)
-	l.writes[k] = v
+	delete(l.deletes, key)
+	l.writes[key] = v
 	l.mu.Unlock()
 }
 
 // deleteInto tombstones key in a specific layer under that layer's lock.
 func (b *Buffer) deleteInto(l *layer, key []byte) {
-	k := string(key)
+	b.deleteIntoString(l, string(key))
+}
+
+func (b *Buffer) deleteIntoKeyParts(l *layer, first, second []byte) {
+	b.deleteIntoString(l, joinKeyParts(first, second))
+}
+
+func (b *Buffer) deleteIntoString(l *layer, key string) {
 	l.mu.Lock()
-	delete(l.writes, k)
-	l.deletes[k] = struct{}{}
+	delete(l.writes, key)
+	l.deletes[key] = struct{}{}
 	l.mu.Unlock()
 }
 
@@ -68,6 +95,20 @@ func (v *LayerView) Put(key, value []byte) error {
 
 func (v *LayerView) Delete(key []byte) error {
 	v.b.deleteInto(v.l, key)
+	return nil
+}
+
+// PutKeyParts implements rawdb's optional split-key writer path. It is public
+// only so a structural interface in rawdb can discover it without introducing
+// a package dependency; callers should otherwise use Put.
+func (v *LayerView) PutKeyParts(first, second, value []byte) error {
+	v.b.putIntoKeyParts(v.l, first, second, value)
+	return nil
+}
+
+// DeleteKeyParts is the delete counterpart of PutKeyParts.
+func (v *LayerView) DeleteKeyParts(first, second []byte) error {
+	v.b.deleteIntoKeyParts(v.l, first, second)
 	return nil
 }
 

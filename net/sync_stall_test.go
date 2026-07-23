@@ -338,6 +338,7 @@ func TestInsertFailurePausesSync(t *testing.T) {
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}
+	ss.waitForDrain()
 
 	// Sync must be paused, not syncing, and not have sent any outbound
 	// frame (no SYNC_BLOCK_CHAIN retry, no FETCH_INV_DATA).

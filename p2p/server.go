@@ -19,14 +19,27 @@ const (
 	defaultMaxConnectionsWithSameIP = 2
 	// maintainInterval is how often we check whether seed nodes need reconnection.
 	maintainInterval = 10 * time.Second
+	// defaultDialTimeout bounds the TCP-connect half of an outbound attempt.
+	// The libp2p handshake has its own 10-second deadline after connect.
+	defaultDialTimeout = 10 * time.Second
 )
 
 // errDuplicatePeer is returned by addPeerConn when the peer ID is already
 // connected. Callers must close the connection.
 var errDuplicatePeer = errors.New("duplicate peer")
 
+// errAlreadyConnected is the cheap pre-dial result for an endpoint already in
+// the peer map. Unlike errDuplicatePeer, it does not indicate that a remote
+// node ID collided during handshake and is therefore routine discovery noise.
+var errAlreadyConnected = errors.New("peer endpoint already connected")
+
 // errTooManyFromSameIP is returned when an inbound peer exceeds the per-IP cap.
 var errTooManyFromSameIP = errors.New("too many connections from same IP")
+
+// errPeerCapacity is returned when MaxPeers is already occupied. It is kept
+// distinct from net.ErrClosed so callers can treat normal discovery saturation
+// as a non-error without hiding actual socket closure failures.
+var errPeerCapacity = errors.New("peer capacity reached")
 
 // errDialThrottled is returned by AddPeer when the per-address dial throttle
 // is still in cooldown. Callers (maintainPeers, discovery's onNewPeer
@@ -69,6 +82,10 @@ type ServerConfig struct {
 	// DialThrottleInterval is the minimum gap between outbound dial attempts
 	// to the same address. Zero ⇒ default (30s); negative ⇒ disabled.
 	DialThrottleInterval time.Duration
+
+	// DialTimeout bounds outbound TCP connection establishment. Zero or a
+	// negative value uses the 10-second default.
+	DialTimeout time.Duration
 }
 
 // Server manages TCP connections to peers.
@@ -103,6 +120,9 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 	}
 	if config.MaxConnectionsWithSameIP <= 0 {
 		config.MaxConnectionsWithSameIP = defaultMaxConnectionsWithSameIP
+	}
+	if config.DialTimeout <= 0 {
+		config.DialTimeout = defaultDialTimeout
 	}
 	throttle := config.DialThrottleInterval
 	if throttle == 0 {
@@ -247,10 +267,24 @@ func (s *Server) Peers() []*Peer {
 // dial throttle: returns errDialThrottled (a sentinel callers may swallow) if
 // a dial to addr was started in the past DialThrottleInterval.
 func (s *Server) AddPeer(addr string) error {
+	// Discovery reports the same reachable nodes repeatedly. Avoid a TCP dial
+	// and libp2p handshake when the exact endpoint is already connected or the
+	// peer set is full; addPeerConn repeats both checks to close the race with a
+	// concurrent inbound/outbound handshake.
+	s.mu.RLock()
+	full := len(s.peers) >= s.config.MaxPeers
+	_, connected := s.peers[addr]
+	s.mu.RUnlock()
+	if full {
+		return errPeerCapacity
+	}
+	if connected {
+		return errAlreadyConnected
+	}
 	if s.dialLimiter != nil && !s.dialLimiter.Allow(addr) {
 		return errDialThrottled
 	}
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, s.config.DialTimeout)
 	if err != nil {
 		return err
 	}
@@ -259,6 +293,19 @@ func (s *Server) AddPeer(addr string) error {
 		return err
 	}
 	return nil
+}
+
+// AddDiscoveredPeer dials a candidate reported by UDP discovery. Repeated
+// pongs commonly rediscover an address inside the dial cooldown, so throttle
+// errors stay silent; other failures remain visible at debug level for peer
+// population diagnostics.
+func (s *Server) AddDiscoveredPeer(addr string) {
+	if err := s.AddPeer(addr); err != nil &&
+		!errors.Is(err, errDialThrottled) &&
+		!errors.Is(err, errAlreadyConnected) &&
+		!errors.Is(err, errPeerCapacity) {
+		log.Debug("Discovery peer dial failed", "addr", addr, "err", err)
+	}
 }
 
 // performLibp2pHandshake runs the libp2p HANDSHAKE_HELLO exchange on a raw
@@ -342,7 +389,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	s.mu.Lock()
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
-		return net.ErrClosed
+		return errPeerCapacity
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
@@ -373,7 +420,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
 		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_TOO_MANY_PEERS)
-		return net.ErrClosed
+		return errPeerCapacity
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()

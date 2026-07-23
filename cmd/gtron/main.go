@@ -548,12 +548,14 @@ func gtron(ctx *cli.Context) error {
 	externalIP := cfg.ExternalIP
 	if externalIP == "" {
 		externalIP = "127.0.0.1"
+		log.Warn("P2P external IP not configured; advertising loopback",
+			"advertised", externalIP,
+			"hint", "set --external.ip to a publicly reachable address for inbound peers")
 	}
 
 	// Construct Kademlia discovery service. The UDP port mirrors the TCP P2P
 	// port unless --discover.port was set explicitly. SetOnNewPeer is patched
-	// in below once p2pServer exists; AddPeer is the only callback the server
-	// surface exposes for new candidates.
+	// in below once p2pServer exists.
 	discoverPort := cfg.DiscoverPort
 	if discoverPort == 0 {
 		discoverPort = cfg.P2PPort
@@ -594,11 +596,10 @@ func gtron(ctx *cli.Context) error {
 		ExternalIP:     externalIP,
 		Port:           int32(cfg.P2PPort),
 	}, handler)
-	// onNewPeer fires on every pong, including from already-connected peers;
-	// swallow the resulting duplicate/per-IP-cap errors instead of logging.
-	discSvc.SetOnNewPeer(func(addr string) {
-		_ = p2pServer.AddPeer(addr)
-	})
+	// onNewPeer fires on every pong, including from already-connected peers.
+	// The server suppresses dial-throttle noise while retaining real failures
+	// at debug level so low-peer incidents are diagnosable.
+	discSvc.SetOnNewPeer(p2pServer.AddDiscoveredPeer)
 	handler.SetServer(p2pServer)
 	handler.StartKeepAlive()
 	syncService.Start()
