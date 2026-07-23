@@ -109,7 +109,6 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 		address:       addr,
 		account:       acc,
 		storage:       make(map[tcommon.Hash]storageSlot),
-		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
@@ -123,7 +122,6 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		accountDirty:  true,
 		created:       true,
 		storage:       make(map[tcommon.Hash]storageSlot),
-		dirtyStorage:  make(map[tcommon.Hash]storageOrigin),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
