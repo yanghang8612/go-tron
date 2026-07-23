@@ -72,6 +72,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	retSizeWord := stack.pop()
 
 	addr := uint256ToAddress(&addrWord)
+	toPrecompile := getPrecompile(addr, in.tvm.cfg, in.tvm.GenesisHash) != nil
 	tokenValueNonZero := !tokenValueWord.IsZero()
 	tokenValue, tokenValueOK := uint256ToInt64Exact(&tokenValueWord)
 	tokenID := int64(tokenIdWord.Uint64())
@@ -134,11 +135,13 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, ErrInvalidTokenID
 	}
 	if !tokenValueOK {
-		contract.Energy += callEnergy
-		return nil, ErrEndowmentOutOfRange
+		rangeErr := callEndowmentOutOfRangeError(in.tvm.cfg.Constantinople, toPrecompile)
+		if rangeErr == ErrEndowmentOutOfRange {
+			contract.Energy += callEnergy
+		}
+		return nil, rangeErr
 	}
 
-	toPrecompile := getPrecompile(addr, in.tvm.cfg, in.tvm.GenesisHash) != nil
 	inputData := callFrameInput(in, mem, int64(inOff), int64(inSz), toPrecompile)
 	var ret []byte
 	var remaining uint64

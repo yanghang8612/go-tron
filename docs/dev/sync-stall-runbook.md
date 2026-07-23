@@ -111,7 +111,12 @@ semantics at mainnet 4,997,510; and pre-ALLOW_TVM_SOLIDITY_059 SELFDESTRUCT
 to an accountless beneficiary, whose MUtil.transfer validation must produce
 "transfer failure" / UNKNOWN and spend all energy before Constantinople
 (mainnet 5,196,383), rather than letting StateDB.AddBalance implicitly create
-the beneficiary.
+the beneficiary; and pre-ALLOW_TVM_CONSTANTINOPLE CALL/CALLCODE/CALLTOKEN
+endowments outside Java long range, where BigInteger.longValueExact must remain
+a raw ArithmeticException (UNKNOWN / "BigInteger out of long range" / spend
+all) instead of the later TransferException (mainnet 5,780,856). CREATE,
+CREATE2, and precompile calls retain the raw ArithmeticException in every era
+because their java paths do not contain the Constantinople catch.
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline

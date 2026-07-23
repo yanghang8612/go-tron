@@ -24,6 +24,11 @@ var (
 	ErrJVMStackOverflow      = errors.New("StackOverflowError:  exceed default JVM stack size!")
 	ErrPrecompiledContract   = errors.New("precompiled contract error")
 	ErrEndowmentOutOfRange   = errors.New("endowment out of long range")
+	// ErrLegacyEndowmentOutOfRange mirrors BigInteger.longValueExact before
+	// Program.callToAddress began converting the ArithmeticException into a
+	// TransferException under ALLOW_TVM_CONSTANTINOPLE. It also applies to
+	// CREATE/CREATE2 and precompile calls, whose java paths never catch it.
+	ErrLegacyEndowmentOutOfRange = errors.New("BigInteger out of long range")
 	// ErrLegacyCreateEmptyCode mirrors java-tron's pre-ALLOW_MULTI_SIGN
 	// internal-CREATE bug. A constructor that returned empty runtime code was
 	// stored in DepositImpl as a Value whose type remained nil; commitCodeCache
@@ -121,6 +126,16 @@ func newSelfDestructTransferError(constantinople bool, reason string) error {
 		return selfDestructTransferValidationError{reason: reason}
 	}
 	return ErrSelfDestructTransferFailure
+}
+
+// callEndowmentOutOfRangeError selects the java exception class for CALL-like
+// opcodes. Ordinary callToAddress converts the ArithmeticException only after
+// ALLOW_TVM_CONSTANTINOPLE; callToPrecompiledAddress has no such catch.
+func callEndowmentOutOfRangeError(constantinople, precompile bool) error {
+	if constantinople && !precompile {
+		return ErrEndowmentOutOfRange
+	}
+	return ErrLegacyEndowmentOutOfRange
 }
 
 type outOfEnergyError struct {
