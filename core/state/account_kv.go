@@ -144,6 +144,17 @@ type accountKVPhysicalLatestStore interface {
 	IterateKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
 }
 
+type accountLatestNoCopyPhysicalStore interface {
+	ReadAccountLatestNoCopy(owner tcommon.Address) ([]byte, bool, error)
+}
+
+// accountLatestHydrationBorrower is package-private because its result is only
+// valid for immediate RLP decoding. General AccountLatest callers keep their
+// defensive-copy contract.
+type accountLatestHydrationBorrower interface {
+	accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error)
+}
+
 func newAccountKVLatestBatch(index accountKVIndexStore, record func(rawdb.StateCommitmentUpdate)) *accountKVLatestBatch {
 	w := &accountKVLatestBatch{index: index, writer: index, record: record}
 	if batcher, ok := index.(ethdb.Batcher); ok {
@@ -575,6 +586,27 @@ func (w *accountKVLatestBatch) readAccountLatestForCommitment(owner tcommon.Addr
 	return w.latestStore.ReadAccountLatest(owner)
 }
 
+// readAccountLatestForHydration lends immutable bytes only until the caller's
+// immediate decode completes. Pending values and blockbuffer cache values are
+// already immutable; generic stores fall back to their ordinary owned read.
+func (w *accountKVLatestBatch) readAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	if reader, ok := w.latestStore.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
 func (w *accountKVLatestBatch) writeKVGeneration(owner tcommon.Address, generation uint64) error {
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
@@ -892,6 +924,20 @@ func (s *StateDB) readStateAccountLatest(owner tcommon.Address) ([]byte, bool, e
 		return s.flatLatestReader.AccountLatest(owner)
 	}
 	return s.accountKVPhysicalLatestStore().ReadAccountLatest(owner)
+}
+
+func (s *StateDB) readStateAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if s != nil && s.flatLatestReader != nil {
+		if reader, ok := s.flatLatestReader.(accountLatestHydrationBorrower); ok {
+			return reader.accountLatestForHydration(owner)
+		}
+		return s.flatLatestReader.AccountLatest(owner)
+	}
+	store := s.accountKVPhysicalLatestStore()
+	if reader, ok := store.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
+	}
+	return store.ReadAccountLatest(owner)
 }
 
 func (s *StateDB) readStateKVGeneration(owner tcommon.Address) (uint64, bool, error) {

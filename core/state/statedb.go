@@ -431,6 +431,13 @@ func (r *commitScopeLatestReader) accountLatestForCommitment(owner tcommon.Addre
 	return r.writer.readAccountLatestForCommitment(owner)
 }
 
+func (r *commitScopeLatestReader) accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readAccountLatestForHydration(owner)
+}
+
 func (r *commitScopeLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
 	if r == nil || r.writer == nil {
 		return 0, false, nil
@@ -3569,7 +3576,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 		}
 		return obj
 	}
-	data, ok, err := s.readStateAccountLatest(addr)
+	data, ok, err := s.readStateAccountLatestForHydration(addr)
 	if err != nil || !ok {
 		return nil
 	}

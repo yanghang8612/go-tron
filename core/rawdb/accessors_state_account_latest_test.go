@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
 
@@ -99,6 +100,35 @@ func TestStateAccountLatestReadWriteDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadStateAccountLatest(db, owner); err != nil || ok {
 		t.Fatalf("read after delete = ok:%v err:%v", ok, err)
+	}
+}
+
+type accountLatestAliasingReadProbe struct {
+	ethdb.KeyValueReader
+	value []byte
+}
+
+func (p *accountLatestAliasingReadProbe) GetNoCopyCached([]byte) ([]byte, error) {
+	return p.value, nil
+}
+
+func TestReadStateAccountLatestNoCopyAliasesReaderValue(t *testing.T) {
+	owner := stateKVTestAddress(0x41, 0x56)
+	backing := []byte("account-envelope")
+	probe := &accountLatestAliasingReadProbe{value: backing}
+	borrowed, ok, err := ReadStateAccountLatestNoCopy(probe, owner)
+	if err != nil || !ok || !bytes.Equal(borrowed, backing) {
+		t.Fatalf("borrowed read = (%q,%v,%v)", borrowed, ok, err)
+	}
+	if &borrowed[0] != &backing[0] {
+		t.Fatal("no-copy account read copied the reader value")
+	}
+	owned, ok, err := ReadStateAccountLatest(probe, owner)
+	if err != nil || !ok || !bytes.Equal(owned, backing) {
+		t.Fatalf("owned read = (%q,%v,%v)", owned, ok, err)
+	}
+	if &owned[0] == &backing[0] {
+		t.Fatal("ordinary account read exposed the reader value")
 	}
 }
 

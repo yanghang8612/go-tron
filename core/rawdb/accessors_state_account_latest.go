@@ -53,11 +53,24 @@ func WriteStateAccountLatestOwnedByKey(db ethdb.KeyValueWriter, physicalKey, val
 }
 
 func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
+	value, ok, err := ReadStateAccountLatestNoCopy(db, owner)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return append([]byte(nil), value...), true, nil
+}
+
+// ReadStateAccountLatestNoCopy returns the encoded account envelope without a
+// trailing defensive copy. The returned bytes may alias the reader's cache or
+// overlay and must be consumed before the next database operation. StateDB's
+// hydration path decodes the RLP envelope immediately and retains only the
+// decoder-owned fields.
+func ReadStateAccountLatestNoCopy(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
 	value, err := readStateNoCopyCached(db, stateAccountLatestKey(owner))
 	if err != nil {
 		return nil, false, nil
 	}
-	return append([]byte(nil), value...), true, nil
+	return value, true, nil
 }
 
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {

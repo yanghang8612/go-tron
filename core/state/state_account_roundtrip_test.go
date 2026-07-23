@@ -12,6 +12,23 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+type accountHydrationBorrowProbe struct {
+	domainCommitmentLatestReader
+	value         []byte
+	borrowedCalls int
+	ordinaryCalls int
+}
+
+func (p *accountHydrationBorrowProbe) AccountLatest(tcommon.Address) ([]byte, bool, error) {
+	p.ordinaryCalls++
+	return append([]byte(nil), p.value...), true, nil
+}
+
+func (p *accountHydrationBorrowProbe) accountLatestForHydration(tcommon.Address) ([]byte, bool, error) {
+	p.borrowedCalls++
+	return p.value, true, nil
+}
+
 func TestAccountSurvivesCommitReopen(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x22)
@@ -38,6 +55,35 @@ func TestAccountSurvivesCommitReopen(t *testing.T) {
 	}
 	if obj.accountKVGeneration != 0 {
 		t.Fatalf("accountKVGeneration = %d, want 0", obj.accountKVGeneration)
+	}
+}
+
+func TestGetStateObjectBorrowsEnvelopeOnlyForImmediateHydration(t *testing.T) {
+	source := newTestStateDB(t)
+	addr := testAddr(0x25)
+	source.CreateAccount(addr, corepb.AccountType_Normal)
+	source.AddBalance(addr, 4321)
+	if _, err := source.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, ok, err := source.readStateAccountLatest(addr)
+	if err != nil || !ok {
+		t.Fatalf("read encoded account: ok=%v err=%v", ok, err)
+	}
+
+	target := newTestStateDB(t)
+	probe := &accountHydrationBorrowProbe{value: encoded}
+	target.flatLatestReader = probe
+	obj := target.getStateObject(addr)
+	if obj == nil || obj.account.Balance() != 4321 {
+		t.Fatalf("hydrated account = %#v", obj)
+	}
+	if probe.borrowedCalls != 1 || probe.ordinaryCalls != 0 {
+		t.Fatalf("hydration reads borrowed/ordinary = %d/%d, want 1/0", probe.borrowedCalls, probe.ordinaryCalls)
+	}
+	clear(encoded)
+	if obj.account.Balance() != 4321 {
+		t.Fatal("hydrated account retained the borrowed envelope")
 	}
 }
 
