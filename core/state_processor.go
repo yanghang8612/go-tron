@@ -286,9 +286,25 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	return result, nil
 }
 
-// buildTransactionInfo constructs a TransactionInfo proto from the execution result.
+// transactionInfoSlot keeps the fixed-size pieces of one transaction receipt
+// in one allocation. Each slot owns its ID and repeated-contract-result cell,
+// preserving per-TransactionInfo mutation isolation.
+type transactionInfoSlot struct {
+	info           corepb.TransactionInfo
+	receipt        corepb.ResourceReceipt
+	id             tcommon.Hash
+	contractResult [1][]byte
+}
+
+// buildTransactionInfo constructs an independently owned TransactionInfo.
+// processBlock uses transactionInfoSlot.build with a block-sized slot array;
+// standalone callers retain the same ownership through one dedicated slot.
 func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
-	txID := tx.Hash()
+	return new(transactionInfoSlot).build(tx, result, blockNum, blockTime, supportTransactionFeePool)
+}
+
+func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
+	slot.id = tx.Hash()
 	isVMContract := isVMContractType(tx.ContractType())
 
 	// Receipt fields mirror java-tron `Protocol.ResourceReceipt`: EnergyUsage
@@ -296,50 +312,52 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 	// the full VM energy spent (proto field 4) and EnergyFee is the
 	// balance-paid bill in SUN (proto field 2). The split between
 	// EnergyUsed/EnergyFee is set by actuator.PayEnergyBill.
-	info := &corepb.TransactionInfo{
-		Id:             txID[:],
+	slot.receipt = corepb.ResourceReceipt{
+		EnergyUsage:       result.EnergyUsed,
+		EnergyFee:         result.EnergyFee,
+		OriginEnergyUsage: result.OriginEnergyUsage,
+		EnergyUsageTotal:  result.EnergyUsageTotal,
+		NetUsage:          result.NetUsage,
+		NetFee:            result.NetFee,
+		// Diagnostic (cross-impl parity): available energy of origin/caller
+		// at contract execution start; set unconditionally in vm_actuator.
+		OriginEnergyLeft: result.OriginEnergyLeft,
+		CallerEnergyLeft: result.CallerEnergyLeft,
+		// Diagnostic (cross-impl parity), non-consensus. Owner* are the
+		// fee-payer's balance/bandwidth state at exec start (set for every
+		// tx type in applyTransaction); *EnergyWindow are the origin/caller
+		// energy recovery windows (set for VM txs in vm_actuator).
+		OwnerBalance:                result.OwnerBalance,
+		OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
+		OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
+		OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
+		OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
+		OwnerFrozenForNet:           result.OwnerFrozenForNet,
+		OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
+		OriginEnergyWindow:          result.OriginEnergyWindow,
+		CallerEnergyWindow:          result.CallerEnergyWindow,
+		// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
+		// Decompose the energy bill: recovered = *_energy_limit -
+		// *_energy_left, limit = floor(frozen_for_energy/TRX *
+		// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
+		// vm_actuator at execution start.
+		CallerEnergyLimit:           result.CallerEnergyLimit,
+		OriginEnergyLimit:           result.OriginEnergyLimit,
+		OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
+		CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
+		OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
+		CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
+		OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
+		TotalEnergyWeight:           result.TotalEnergyWeight,
+		TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
+	}
+	info := &slot.info
+	*info = corepb.TransactionInfo{
+		Id:             slot.id[:],
 		Fee:            result.Fee + result.NetFee,
 		BlockNumber:    int64(blockNum),
 		BlockTimeStamp: blockTime,
-		Receipt: &corepb.ResourceReceipt{
-			EnergyUsage:       result.EnergyUsed,
-			EnergyFee:         result.EnergyFee,
-			OriginEnergyUsage: result.OriginEnergyUsage,
-			EnergyUsageTotal:  result.EnergyUsageTotal,
-			NetUsage:          result.NetUsage,
-			NetFee:            result.NetFee,
-			// Diagnostic (cross-impl parity): available energy of origin/caller
-			// at contract execution start; set unconditionally in vm_actuator.
-			OriginEnergyLeft: result.OriginEnergyLeft,
-			CallerEnergyLeft: result.CallerEnergyLeft,
-			// Diagnostic (cross-impl parity), non-consensus. Owner* are the
-			// fee-payer's balance/bandwidth state at exec start (set for every
-			// tx type in applyTransaction); *EnergyWindow are the origin/caller
-			// energy recovery windows (set for VM txs in vm_actuator).
-			OwnerBalance:                result.OwnerBalance,
-			OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
-			OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
-			OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
-			OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
-			OwnerFrozenForNet:           result.OwnerFrozenForNet,
-			OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
-			OriginEnergyWindow:          result.OriginEnergyWindow,
-			CallerEnergyWindow:          result.CallerEnergyWindow,
-			// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
-			// Decompose the energy bill: recovered = *_energy_limit -
-			// *_energy_left, limit = floor(frozen_for_energy/TRX *
-			// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
-			// vm_actuator at execution start.
-			CallerEnergyLimit:           result.CallerEnergyLimit,
-			OriginEnergyLimit:           result.OriginEnergyLimit,
-			OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
-			CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
-			OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
-			CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
-			OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
-			TotalEnergyWeight:           result.TotalEnergyWeight,
-			TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
-		},
+		Receipt:        &slot.receipt,
 	}
 	if isVMContract {
 		info.Receipt.Result = corepb.Transaction_ResultContractResult(result.ContractRet)
@@ -354,9 +372,11 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 	}
 
 	if result.ContractResultPresent || len(result.ContractResult) > 0 {
-		info.ContractResult = [][]byte{result.ContractResult}
+		slot.contractResult[0] = result.ContractResult
+		info.ContractResult = slot.contractResult[:]
 	} else if !isVMContract && result.ContractRet == int32(corepb.Transaction_Result_SUCCESS) {
-		info.ContractResult = [][]byte{{}}
+		slot.contractResult[0] = []byte{}
+		info.ContractResult = slot.contractResult[:]
 	}
 
 	if len(result.ContractAddress) > 0 {
@@ -563,8 +583,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
+	transactions := block.Transactions()
+	txInfoSlots := make([]transactionInfoSlot, len(transactions))
+	txInfos = make([]*corepb.TransactionInfo, len(transactions))
 
-	for i, tx := range block.Transactions() {
+	for i, tx := range transactions {
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()
@@ -595,8 +618,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
-		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
-		txInfos = append(txInfos, info)
+		txInfos[i] = txInfoSlots[i].build(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		statedb.FinalizeTransaction()
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {

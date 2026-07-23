@@ -638,6 +638,22 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 			t.Fatalf("txInfo[%d] has empty ID", i)
 		}
 	}
+	if txInfos[0] == txInfos[1] || txInfos[0].Receipt == txInfos[1].Receipt {
+		t.Fatal("transaction info slots alias each other's fixed-size messages")
+	}
+	secondIDFirstByte := txInfos[1].Id[0]
+	txInfos[0].Id[0] ^= 0xff
+	if txInfos[1].Id[0] != secondIDFirstByte {
+		t.Fatal("transaction IDs share mutable backing storage")
+	}
+	txInfos[0].ContractResult[0] = []byte{1}
+	if len(txInfos[1].ContractResult[0]) != 0 {
+		t.Fatal("contract-result cells share mutable backing storage")
+	}
+	txInfos[0].Receipt.EnergyFee = 99
+	if txInfos[1].Receipt.EnergyFee == 99 {
+		t.Fatal("resource receipts share mutable backing storage")
+	}
 }
 
 func TestBuildTransactionInfo_PackingFee(t *testing.T) {
