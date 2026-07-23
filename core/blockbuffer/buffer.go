@@ -918,6 +918,60 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
 }
 
+// GetNoCopyCachedKeyParts is the split-key counterpart of GetNoCopyCached. It
+// avoids materialising the physical key on overlay/cache hits; uncommon keys
+// above splitReadKeyStackSize and genuine durable misses use an owned key.
+func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return b.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		value, found, tomb := view.inflight[i].lookup(key)
+		if tomb {
+			return nil, ErrNotFound
+		}
+		if found {
+			return value, nil
+		}
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb := view.layers[i].lookup(key)
+		if tomb {
+			return nil, ErrNotFound
+		}
+		if found {
+			return value, nil
+		}
+	}
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	cache := view.baseReadCache
+	var cacheEpoch uint64
+	if cache != nil {
+		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			return value, nil
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	owned := append([]byte(nil), key...)
+	if cache == nil {
+		return b.base.Get(owned)
+	}
+	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
+}
+
 // readBaseIntoCache fills cache directly from a callback-style base reader
 // when available. If a concurrent flush invalidates the observed epoch, the
 // cache rejects the late fill; in that case we make one owned fallback copy

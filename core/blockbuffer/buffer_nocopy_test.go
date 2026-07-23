@@ -65,6 +65,90 @@ func TestLayerViewCommitmentSplitKeyOwnsInputs(t *testing.T) {
 	}
 }
 
+func TestCommitmentSplitReadLifecycle(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	prefix := bytes.Repeat([]byte{0x0a}, 48)
+	oldValue := []byte("old-branch")
+	newValue := []byte("new-branch")
+	if err := rawdb.WriteCommitmentBranch(disk, prefix, oldValue); err != nil {
+		t.Fatal(err)
+	}
+	base := &countingKeyValueReader{KeyValueReader: disk}
+	buf := New(base)
+	buf.SetBaseReadCacheSize(1 << 20)
+
+	read := func(reader ethdb.KeyValueReader, want []byte, wantFound bool) {
+		t.Helper()
+		got, found, err := rawdb.ReadCommitmentBranchNoCopy(reader, prefix)
+		if err != nil || found != wantFound || !bytes.Equal(got, want) {
+			t.Fatalf("ReadCommitmentBranchNoCopy = (%q,%v,%v), want (%q,%v,nil)", got, found, err, want, wantFound)
+		}
+	}
+
+	// A durable miss populates the cache and the next split-key read hits it.
+	read(buf, oldValue, true)
+	read(buf, oldValue, true)
+	if base.gets != 1 {
+		t.Fatalf("base reads after split cache hit = %d, want 1", base.gets)
+	}
+
+	// A bound LayerView must prefer its own overlay and tombstone over both the
+	// committed topology and the already-populated durable cache.
+	buf.BeginBlock(bufHash(1), 1)
+	h, _ := buf.NewestInflight()
+	view := buf.ViewLayer(h)
+	if err := rawdb.WriteCommitmentBranch(view, prefix, newValue); err != nil {
+		t.Fatal(err)
+	}
+	read(view, newValue, true)
+	if err := rawdb.DeleteCommitmentBranch(view, prefix); err != nil {
+		t.Fatal(err)
+	}
+	read(view, nil, false)
+	if base.gets != 1 {
+		t.Fatalf("overlay split reads reached base: %d reads, want 1", base.gets)
+	}
+
+	// Replacing the tombstone and flushing refreshes the cached durable value.
+	if err := rawdb.WriteCommitmentBranch(view, prefix, newValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.CommitInflight(h); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.FlushUpTo(1, disk); err != nil {
+		t.Fatal(err)
+	}
+	read(buf, newValue, true)
+	if base.gets != 1 {
+		t.Fatalf("flushed split read did not use refreshed cache: %d reads, want 1", base.gets)
+	}
+}
+
+func TestCommitmentSplitReadOversizedKey(t *testing.T) {
+	prefix := bytes.Repeat([]byte{0x7b}, splitReadKeyStackSize)
+	want := []byte("oversized-branch")
+	disk := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteCommitmentBranch(disk, prefix, want); err != nil {
+		t.Fatal(err)
+	}
+	buf := New(disk)
+	buf.SetBaseReadCacheSize(1 << 20)
+	buf.BeginBlock(bufHash(1), 1)
+	h, _ := buf.NewestInflight()
+	for name, reader := range map[string]ethdb.KeyValueReader{
+		"buffer": buf,
+		"view":   buf.ViewLayer(h),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, found, err := rawdb.ReadCommitmentBranchNoCopy(reader, prefix)
+			if err != nil || !found || !bytes.Equal(got, want) {
+				t.Fatalf("oversized split read = (%q,%v,%v)", got, found, err)
+			}
+		})
+	}
+}
+
 func (r *blockingSnapshotReader) Get(key []byte) ([]byte, error) {
 	r.gets++
 	value, err := r.KeyValueReader.Get(key)
@@ -599,4 +683,48 @@ func BenchmarkCommitmentBranchLayerWrite(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkCommitmentBranchLayerRead(b *testing.B) {
+	prefix := bytes.Repeat([]byte{0x0a}, 48)
+	value := bytes.Repeat([]byte{0xcd}, 512)
+
+	b.Run("overlay-hit", func(b *testing.B) {
+		buf := New(rawdb.NewMemoryDatabase())
+		buf.BeginBlock(bufHash(1), 1)
+		h, _ := buf.NewestInflight()
+		view := buf.ViewLayer(h)
+		if err := rawdb.WriteCommitmentBranch(view, prefix, value); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if _, ok, err := rawdb.ReadCommitmentBranchNoCopy(view, prefix); err != nil || !ok {
+				b.Fatalf("branch read = ok:%v err:%v", ok, err)
+			}
+		}
+	})
+
+	b.Run("base-cache-hit", func(b *testing.B) {
+		disk := rawdb.NewMemoryDatabase()
+		if err := rawdb.WriteCommitmentBranch(disk, prefix, value); err != nil {
+			b.Fatal(err)
+		}
+		buf := New(disk)
+		buf.SetBaseReadCacheSize(1 << 20)
+		buf.BeginBlock(bufHash(1), 1)
+		h, _ := buf.NewestInflight()
+		view := buf.ViewLayer(h)
+		if _, ok, err := rawdb.ReadCommitmentBranchNoCopy(view, prefix); err != nil || !ok {
+			b.Fatalf("warm branch read = ok:%v err:%v", ok, err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if _, ok, err := rawdb.ReadCommitmentBranchNoCopy(view, prefix); err != nil || !ok {
+				b.Fatalf("branch read = ok:%v err:%v", ok, err)
+			}
+		}
+	})
 }

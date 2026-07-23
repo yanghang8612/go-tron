@@ -6,6 +6,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
+const splitReadKeyStackSize = 128
+
 // LayerView is a read/write view bound to ONE in-flight layer. Reads resolve
 // that layer's own writes/tombstones first, then the committed stack
 // (newest-first), then the base reader — it deliberately IGNORES every other
@@ -214,6 +216,58 @@ func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 		return b.base.Get(key)
 	}
 	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
+}
+
+// GetNoCopyCachedKeyParts is the split-key counterpart of GetNoCopyCached for
+// the async commit worker's layer-bound view.
+func (v *LayerView) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return v.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	b := v.b
+	view := b.loadReadView()
+	value, found, tomb := v.l.lookup(key)
+	if tomb {
+		return nil, ErrNotFound
+	}
+	if found {
+		return value, nil
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb = view.layers[i].lookup(key)
+		if tomb {
+			return nil, ErrNotFound
+		}
+		if found {
+			return value, nil
+		}
+	}
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	cache := view.baseReadCache
+	var cacheEpoch uint64
+	if cache != nil {
+		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			return cached, nil
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	owned := append([]byte(nil), key...)
+	if cache == nil {
+		return b.base.Get(owned)
+	}
+	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
 }
 
 // Has reports existence over [bound layer, committed stack, base].

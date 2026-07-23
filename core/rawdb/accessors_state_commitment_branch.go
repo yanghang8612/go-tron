@@ -4,6 +4,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
+type cachedNoCopyKeyPartsReader interface {
+	GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error)
+}
+
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
 // path directly into their owned key instead of allocating an intermediate
@@ -49,8 +53,15 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
-	key := commitmentBranchKey(prefix)
-	raw, err := readStateNoCopyCached(db, key)
+	var (
+		raw []byte
+		err error
+	)
+	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
+		raw, err = reader.GetNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix)
+	} else {
+		raw, err = readStateNoCopyCached(db, commitmentBranchKey(prefix))
+	}
 	if err != nil {
 		// go-ethereum memorydb / pebble both return an error on missing keys.
 		return nil, false, nil

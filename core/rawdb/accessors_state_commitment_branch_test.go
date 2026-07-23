@@ -83,6 +83,21 @@ type cachedNoCopyProbe struct {
 	cachedCalls int
 }
 
+type splitCachedNoCopyProbe struct {
+	*cachedNoCopyProbe
+	splitCalls int
+	first      []byte
+	second     []byte
+}
+
+func (p *splitCachedNoCopyProbe) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	p.splitCalls++
+	p.first = append(p.first[:0], first...)
+	p.second = append(p.second[:0], second...)
+	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
+	return p.KeyValueReader.Get(key)
+}
+
 func (p *cachedNoCopyProbe) Get(key []byte) ([]byte, error) {
 	p.getCalls++
 	return p.KeyValueReader.Get(key)
@@ -217,5 +232,28 @@ func TestReadCommitmentBranchNoCopy_PrefersCachedReader(t *testing.T) {
 	if probe.cachedCalls != 1 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
 		t.Fatalf("reader calls cached/noCopy/Get = %d/%d/%d, want 1/0/0",
 			probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	}
+}
+
+func TestReadCommitmentBranchNoCopy_PrefersSplitCachedReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x04, 0x05, 0x06}
+	want := []byte{0xdd, 0xee, 0xff}
+	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
+		t.Fatal(err)
+	}
+	probe := &splitCachedNoCopyProbe{
+		cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db},
+	}
+	got, ok, err := ReadCommitmentBranchNoCopy(probe, prefix)
+	if err != nil || !ok || !bytes.Equal(got, want) {
+		t.Fatalf("ReadCommitmentBranchNoCopy = (%x,%v,%v)", got, ok, err)
+	}
+	if probe.splitCalls != 1 || probe.cachedCalls != 0 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
+		t.Fatalf("reader calls split/cached/noCopy/Get = %d/%d/%d/%d, want 1/0/0/0",
+			probe.splitCalls, probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	}
+	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
+		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
 	}
 }
