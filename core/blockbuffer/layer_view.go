@@ -121,35 +121,30 @@ func (v *LayerView) DeleteKeyParts(first, second []byte) error {
 }
 
 // Get resolves key over [bound layer, committed stack newest-first, base].
-// b.mu.RLock keeps the committed slice stable; each layer's matching map shard
-// (including the bound in-flight layer, which the worker writes via putInto) is
-// read under its own shard lock via lookup.
+// One immutable read view keeps the committed slice stable; each layer's
+// matching map shard (including the bound in-flight layer, which the worker
+// writes via putInto) is read under its own shard lock via lookup.
 func (v *LayerView) Get(key []byte) ([]byte, error) {
 	b := v.b
-	b.mu.RLock()
+	view := b.loadReadView()
 	val, found, tomb := v.l.lookup(key)
 	if tomb {
-		b.mu.RUnlock()
 		return nil, ErrNotFound
 	}
 	if found {
 		out := append([]byte(nil), val...)
-		b.mu.RUnlock()
 		return out, nil
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		val, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		val, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
 			out := append([]byte(nil), val...)
-			b.mu.RUnlock()
 			return out, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
@@ -181,29 +176,24 @@ func (v *LayerView) GetNoCopyCached(key []byte) ([]byte, error) {
 
 func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	b := v.b
-	b.mu.RLock()
+	view := b.loadReadView()
 	val, found, tomb := v.l.lookup(key)
 	if tomb {
-		b.mu.RUnlock()
 		return nil, ErrNotFound
 	}
 	if found {
-		b.mu.RUnlock()
 		return val, nil
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		val, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		val, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
-			b.mu.RUnlock()
 			return val, nil
 		}
 	}
-	cache := b.baseReadCache
-	b.mu.RUnlock()
+	cache := view.baseReadCache
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
@@ -224,26 +214,21 @@ func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 // Has reports existence over [bound layer, committed stack, base].
 func (v *LayerView) Has(key []byte) (bool, error) {
 	b := v.b
-	b.mu.RLock()
+	view := b.loadReadView()
 	if _, found, tomb := v.l.lookup(key); tomb {
-		b.mu.RUnlock()
 		return false, nil
 	} else if found {
-		b.mu.RUnlock()
 		return true, nil
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		_, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		_, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return false, nil
 		}
 		if found {
-			b.mu.RUnlock()
 			return true, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return false, nil
 	}
@@ -254,12 +239,11 @@ func (v *LayerView) Has(key []byte) (bool, error) {
 // skipping all other in-flight layers. Reuses the Buffer's overlay+base merge.
 func (v *LayerView) NewIterator(prefix, start []byte) ethdb.Iterator {
 	b := v.b
-	b.mu.RLock()
+	view := b.loadReadView()
 	overlay := newOverlayState()
 	overlay.walk(v.l, prefix, start)
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		overlay.walk(b.layers[i], prefix, start)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walk(view.layers[i], prefix, start)
 	}
-	b.mu.RUnlock()
 	return b.finishIterator(overlay, prefix, start)
 }

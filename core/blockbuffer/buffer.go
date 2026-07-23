@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -51,9 +52,10 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 //
 // Shard locks are INDEPENDENT of b.mu (which guards the inflight/layers slices).
 // Lock ordering is always b.mu → shard.mu, never the reverse: map writers capture
-// the target under a brief b.mu.RLock, release it, then take one shard lock;
-// readers hold b.mu.RLock for the layer walk and take one shard RLock at a time.
-// No path holds a shard lock while acquiring b.mu, so the two never deadlock.
+// the target under a brief b.mu.RLock, release it, then take one shard lock. Hot
+// readers load an immutable topology view atomically and take only one shard
+// RLock at a time. No path holds a shard lock while acquiring b.mu, so the two
+// never deadlock.
 type layer struct {
 	blockHash common.Hash
 	number    uint64
@@ -72,6 +74,17 @@ type layerShard struct {
 	writes  map[string][]byte
 	deletes map[string]struct{}
 	_       [24]byte
+}
+
+// bufferReadView is an immutable snapshot of the layer topology used by the
+// read hot path. Structural writers build a fresh slice copy under Buffer.mu
+// and publish it atomically; readers can then walk stable layer references
+// without contending on the global RWMutex. Individual layer contents remain
+// protected by their shard locks.
+type bufferReadView struct {
+	inflight      []*layer
+	layers        []*layer
+	baseReadCache *baseReadCache
 }
 
 const (
@@ -188,6 +201,7 @@ type Buffer struct {
 	// from immutable layer values and invalidates tombstones, while Discard clears
 	// the cache before reset/unwind.
 	baseReadCache *baseReadCache
+	readView      atomic.Pointer[bufferReadView]
 	mu            sync.RWMutex
 	flushMu       sync.Mutex
 	layers        []*layer
@@ -226,7 +240,41 @@ type valueViewReader interface {
 
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
-	return &Buffer{base: base}
+	b := &Buffer{base: base}
+	b.publishReadViewLocked()
+	return b
+}
+
+// publishReadViewLocked publishes copies of the topology slices. The layer
+// pointers themselves are stable: dropping a layer only removes the owning
+// slice reference, while a reader that already loaded an older view keeps the
+// layer alive until that read completes. Caller holds b.mu for every mutation
+// after construction (construction itself is single-threaded).
+func (b *Buffer) publishReadViewLocked() {
+	view := &bufferReadView{baseReadCache: b.baseReadCache}
+	if len(b.inflight) > 0 {
+		view.inflight = append([]*layer(nil), b.inflight...)
+	}
+	if len(b.layers) > 0 {
+		view.layers = append([]*layer(nil), b.layers...)
+	}
+	b.readView.Store(view)
+}
+
+// loadReadView supports Buffer's zero value for tests and lightweight wrappers:
+// New and every structural mutator publish a view, but a never-mutated literal
+// may not have one yet. The fallback takes the old read lock once and returns a
+// private immutable copy without publishing under a read lock.
+func (b *Buffer) loadReadView() *bufferReadView {
+	if view := b.readView.Load(); view != nil {
+		return view
+	}
+	b.mu.RLock()
+	view := &bufferReadView{baseReadCache: b.baseReadCache}
+	view.inflight = append(view.inflight, b.inflight...)
+	view.layers = append(view.layers, b.layers...)
+	b.mu.RUnlock()
+	return view
 }
 
 // SetBaseReadCacheSize configures the bounded durable-base read cache used by
@@ -240,6 +288,7 @@ func (b *Buffer) SetBaseReadCacheSize(sizeBytes int) {
 	b.mu.Lock()
 	old := b.baseReadCache
 	b.baseReadCache = newBaseReadCache(sizeBytes)
+	b.publishReadViewLocked()
 	b.mu.Unlock()
 	if old != nil {
 		old.clear()
@@ -580,6 +629,7 @@ func (b *Buffer) BeginBlock(hash common.Hash, number uint64) {
 		panic("blockbuffer: BeginBlock would exceed maxInflight in-flight layers")
 	}
 	b.inflight = append(b.inflight, newLayer(hash, number))
+	b.publishReadViewLocked()
 }
 
 // CommitBlock promotes the OLDEST in-flight layer onto the committed stack
@@ -605,6 +655,7 @@ func (b *Buffer) promoteOldestInflightLocked() {
 	b.inflight[len(b.inflight)-1] = nil
 	b.inflight = b.inflight[:len(b.inflight)-1]
 	b.layers = append(b.layers, l)
+	b.publishReadViewLocked()
 }
 
 // DiscardActive drops the NEWEST in-flight layer without promoting it (the
@@ -616,6 +667,7 @@ func (b *Buffer) DiscardActive() {
 	if n := len(b.inflight); n > 0 {
 		b.inflight[n-1] = nil
 		b.inflight = b.inflight[:n-1]
+		b.publishReadViewLocked()
 	}
 }
 
@@ -682,6 +734,7 @@ func (b *Buffer) DiscardInflight(h InflightHandle) {
 			copy(b.inflight[i:], b.inflight[i+1:])
 			b.inflight[len(b.inflight)-1] = nil
 			b.inflight = b.inflight[:len(b.inflight)-1]
+			b.publishReadViewLocked()
 			return
 		}
 	}
@@ -705,6 +758,7 @@ func (b *Buffer) DiscardBlock(hash common.Hash) {
 		b.layers[i] = nil
 	}
 	b.layers = out
+	b.publishReadViewLocked()
 }
 
 // Discard drops every layer (active and committed). Used as a
@@ -723,6 +777,7 @@ func (b *Buffer) Discard() {
 	if b.baseReadCache != nil {
 		b.baseReadCache.clear()
 	}
+	b.publishReadViewLocked()
 }
 
 // PendingBlocks returns the block hashes for currently-pending committed
@@ -761,39 +816,33 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 // layered stack newest-first, then the base reader. Tombstones short-
 // circuit and return ErrNotFound. Safe to call concurrently with mutators.
 //
-// b.mu.RLock is held only for the in-memory layer walk (keeping the
-// inflight/layers slices stable); each layer's matching map shard is read under
-// its shard lock via lookup. The (potentially slow) base read runs after b.mu is
-// released, exactly as before.
+// The layer topology comes from an atomically published immutable view; each
+// layer's matching map shard is read under its shard lock via lookup. The
+// (potentially slow) base read therefore runs without holding Buffer.mu.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
-	b.mu.RLock()
+	view := b.loadReadView()
 	// In-flight layers first, newest-first (the foreground's active layer wins
 	// over an older worker-owned layer), then committed layers newest-first.
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := b.inflight[i].lookup(key)
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		v, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
 			out := append([]byte(nil), v...)
-			b.mu.RUnlock()
 			return out, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		v, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		v, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
 			out := append([]byte(nil), v...)
-			b.mu.RUnlock()
 			return out, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
@@ -822,34 +871,29 @@ func (b *Buffer) GetNoCopyCached(key []byte) ([]byte, error) {
 func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	// lookup keeps the map index allocation-free (string(key) in the index
 	// expression is elided by the compiler), so this read stays alloc-free on a
-	// buffer hit — it returns the layer's internal slice directly. b.mu.RLock
-	// keeps the slices stable for the walk; each layer's matching map shard is
-	// read under its own lock inside lookup.
-	b.mu.RLock()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := b.inflight[i].lookup(key)
+	// buffer hit — it returns the layer's internal slice directly. The immutable
+	// read view keeps topology stable for the walk; lookup locks only the key's
+	// matching map shard.
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		v, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
-			b.mu.RUnlock()
 			return v, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		v, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		v, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
-			b.mu.RUnlock()
 			return v, nil
 		}
 	}
-	cache := b.baseReadCache
-	b.mu.RUnlock()
+	cache := view.baseReadCache
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
@@ -895,30 +939,25 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // Has reports whether key exists, honoring tombstones. Safe to call
 // concurrently with mutators.
 func (b *Buffer) Has(key []byte) (bool, error) {
-	b.mu.RLock()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		_, found, tomb := b.inflight[i].lookup(key)
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		_, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return false, nil
 		}
 		if found {
-			b.mu.RUnlock()
 			return true, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		_, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		_, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return false, nil
 		}
 		if found {
-			b.mu.RUnlock()
 			return true, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return false, nil
 	}
@@ -1003,6 +1042,7 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:0]
+	b.publishReadViewLocked()
 	return nil
 }
 
@@ -1107,6 +1147,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:len(b.layers)-n]
+	b.publishReadViewLocked()
 }
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
@@ -1285,17 +1326,16 @@ func closeBatch(batch ethdb.Batch) {
 // recognize it and replace its 133 point Gets per applyBlock with one scan.
 func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	// Step 1: collect the overlay newest-first (in-flight newest→oldest, then
-	// committed newest→oldest) under a brief read lock. Step 2-4 (base merge +
-	// sort) are shared with LayerView via finishIterator.
-	b.mu.RLock()
+	// committed newest→oldest) from one immutable topology view. Step 2-4 (base
+	// merge + sort) are shared with LayerView via finishIterator.
+	view := b.loadReadView()
 	overlay := newOverlayState()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		overlay.walk(b.inflight[i], prefix, start)
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		overlay.walk(view.inflight[i], prefix, start)
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		overlay.walk(b.layers[i], prefix, start)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walk(view.layers[i], prefix, start)
 	}
-	b.mu.RUnlock()
 	return b.finishIterator(overlay, prefix, start)
 }
 
@@ -1315,9 +1355,9 @@ type overlayState struct {
 func newOverlayState() *overlayState { return &overlayState{m: make(map[string]overlayOp)} }
 
 // walk folds layer l into the overlay, keeping only keys in [prefix+start, …)
-// that have the given prefix. Caller holds the buffer read lock (for slice
-// stability); this takes each layer shard's lock for its map iteration so it is
-// race-free against a concurrent foreground/worker write to l.
+// that have the given prefix. The caller's immutable read view keeps the layer
+// alive; this takes each layer shard's lock for map iteration so it is race-free
+// against a concurrent foreground/worker write to l.
 func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if l == nil {
 		return
