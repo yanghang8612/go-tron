@@ -42,22 +42,36 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 
 // layer is a single applyBlock's worth of buffered mutations.
 //
-// mu guards this layer's writes/deletes maps. It is INDEPENDENT of the buffer's
-// b.mu (which guards the inflight/layers slices): a writer mutating one layer's
-// maps (foreground on the newest in-flight layer, the commit worker on an older
-// one, writeFiltered/flush on committed ones) takes only that layer's mu, so
-// writers targeting DISJOINT layers run concurrently instead of serializing on
-// b.mu. Lock ordering is always b.mu → layer.mu, never the reverse: map writers
-// capture the target under a brief b.mu.RLock, release it, then take layer.mu;
-// readers hold b.mu.RLock for the (in-memory, fast) layer walk and take each
-// layer's mu.RLock as they touch it. No path holds a layer.mu while acquiring
-// b.mu, so the two never deadlock.
+// A layer shards its writes/deletes maps by key. This is important for the
+// commitment fold: its 16 root workers concurrently walk the same few buffered
+// layers, and a single layer-wide RWMutex turns every read-lock operation into
+// contention on one cache line. Independent shards preserve the exact same
+// per-key last-write/tombstone semantics while letting unrelated branch keys be
+// read concurrently.
+//
+// Shard locks are INDEPENDENT of b.mu (which guards the inflight/layers slices).
+// Lock ordering is always b.mu → shard.mu, never the reverse: map writers capture
+// the target under a brief b.mu.RLock, release it, then take one shard lock;
+// readers hold b.mu.RLock for the layer walk and take one shard RLock at a time.
+// No path holds a shard lock while acquiring b.mu, so the two never deadlock.
 type layer struct {
 	blockHash common.Hash
 	number    uint64
-	mu        sync.RWMutex
-	writes    map[string][]byte
-	deletes   map[string]struct{}
+	shards    [layerShardCount]layerShard
+}
+
+const layerShardCount = 64
+
+// layerShard is padded to one 64-byte cache line on the deployment target
+// (amd64). Without the padding, adjacent shard RWMutex counters can still
+// false-share under the 16-way commitment fold even though their maps differ.
+// The fixed ~4 KiB per live layer is small relative to the layer values and the
+// configured 24 GiB Pebble cache, and maps remain lazily allocated.
+type layerShard struct {
+	mu      sync.RWMutex
+	writes  map[string][]byte
+	deletes map[string]struct{}
+	_       [24]byte
 }
 
 const (
@@ -69,9 +83,59 @@ func newLayer(hash common.Hash, number uint64) *layer {
 	return &layer{
 		blockHash: hash,
 		number:    number,
-		writes:    make(map[string][]byte),
-		deletes:   make(map[string]struct{}),
 	}
+}
+
+func (l *layer) shardForBytes(key []byte) *layerShard {
+	return &l.shards[layerShardIndexBytes(key)]
+}
+
+func (l *layer) shardForString(key string) *layerShard {
+	return &l.shards[layerShardIndexString(key)]
+}
+
+// The middle and tail of hot state keys carry their highest-entropy bytes: a
+// commitment path nibble, account/address byte, contract-storage slot, or key
+// suffix. Sampling three tail bytes plus one middle byte avoids hashing the full
+// 30-100 byte physical key a second time (the Go map will hash it once already),
+// while two independently distributed commitment nibbles provide all 64 shard
+// combinations. Include length so short prefixes that share a suffix do not
+// systematically collide. The byte/string forms must remain identical for
+// write/read routing.
+func layerShardIndexBytes(key []byte) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) ^ uint32(key[n-1])
+	if n > 1 {
+		h ^= uint32(key[n-2]) << 2
+	}
+	if n > 3 {
+		h ^= uint32(key[n-4]) << 4
+	}
+	if n > 8 {
+		h ^= uint32(key[n/2]) << 1
+	}
+	return h & (layerShardCount - 1)
+}
+
+func layerShardIndexString(key string) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) ^ uint32(key[n-1])
+	if n > 1 {
+		h ^= uint32(key[n-2]) << 2
+	}
+	if n > 3 {
+		h ^= uint32(key[n-4]) << 4
+	}
+	if n > 8 {
+		h ^= uint32(key[n/2]) << 1
+	}
+	return h & (layerShardCount - 1)
 }
 
 // Buffer is a layered in-memory write-set over a base reader.
@@ -86,8 +150,8 @@ func newLayer(hash common.Hash, number uint64) *layer {
 //
 // Foreground mutators (Begin/CommitBlock/DiscardActive/Put/Delete) assume the
 // caller serializes them — typically via core.BlockChain's chainmu. The
-// internal mu guards the inflight/layers slices and per-layer maps so that
-// uncoordinated readers (RPC handlers, metrics, txpool) can call
+// internal mu guards the inflight/layers slices and per-shard locks guard layer
+// maps, so uncoordinated readers (RPC handlers, metrics, txpool) can call
 // Get/Has/PendingBlocks concurrently with a writer holding chainmu without
 // triggering a Go race detector report.
 //
@@ -99,10 +163,10 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // holds a handle to an OLDER in-flight layer (block N) and writes it via
 // ViewLayer/LayerWriter while the foreground writes the newer layer (N+1); the
 // worker promotes its layer with CommitInflight or drops it with DiscardInflight.
-// The two threads target DISJOINT layers and every method takes mu, so the
-// per-layer maps and the slices stay race-free. With maxInflight==1 (the
-// default) only one layer is ever in flight, so this degenerates to the
-// single-active model and is byte-identical to it.
+// The two threads target DISJOINT layers and every method takes the applicable
+// locks, so the sharded layer maps and slices stay race-free. With
+// maxInflight==1 (the default), only one layer is ever in flight; this then
+// degenerates to the single-active model and is byte-identical to it.
 //
 // flushMu serializes FlushUpTo/Flush calls against each other so the
 // snapshot→disk-I/O→drop phases of two concurrent flushers can't
@@ -113,8 +177,8 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // inline fallback, and Close; only one runs the body at a time.
 //
 // FlushUpTo/Flush/DiscardBlock operate on COMMITTED layers only and never
-// touch in-flight layers, so the lock-free immutable-committed-layer read in
-// FlushUpTo is unaffected by the multi-active-layer change: a layer becomes
+// touch in-flight layers, so the b.mu-free committed-layer read in FlushUpTo is
+// unaffected by the multi-active-layer change: a layer becomes
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
@@ -260,18 +324,25 @@ func (b *bufferBatch) Write() error {
 
 func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
 	k := string(op.key)
-	target.mu.Lock()
-	defer target.mu.Unlock()
+	s := target.shardForString(k)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if op.delete {
-		delete(target.writes, k)
-		target.deletes[k] = struct{}{}
+		delete(s.writes, k)
+		if s.deletes == nil {
+			s.deletes = make(map[string]struct{})
+		}
+		s.deletes[k] = struct{}{}
 		return
 	}
-	delete(target.deletes, k)
+	delete(s.deletes, k)
 	// Put already copied the caller's value into storage owned by the batch.
 	// Batches never mutate those bytes, so the layer can retain that owned
 	// slice directly instead of allocating and copying it a second time.
-	target.writes[k] = op.value
+	if s.writes == nil {
+		s.writes = make(map[string][]byte)
+	}
+	s.writes[k] = op.value
 }
 
 func bufferBatchOpSize(op bufferBatchOp) int {
@@ -666,20 +737,21 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 	return out
 }
 
-// lookup checks one layer for key under that layer's read lock. The returned
-// value ALIASES the layer's storage (no copy); it stays valid even after a
+// lookup checks one layer for key under the matching shard's read lock. The
+// returned value ALIASES the layer's storage (no copy); it stays valid even after a
 // concurrent write because writes replace the map entry with a fresh slice and
 // never mutate the backing array in place. found and tomb are mutually
 // exclusive. Taking key as []byte keeps the `m[string(key)]` map index
 // allocation-free (the compiler elides the conversion), so GetNoCopy stays
 // alloc-free on a buffer hit.
 func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if _, t := l.deletes[string(key)]; t {
+	s := l.shardForBytes(key)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, t := s.deletes[string(key)]; t {
 		return nil, false, true
 	}
-	if val, ok := l.writes[string(key)]; ok {
+	if val, ok := s.writes[string(key)]; ok {
 		return val, true, false
 	}
 	return nil, false, false
@@ -690,8 +762,8 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 // circuit and return ErrNotFound. Safe to call concurrently with mutators.
 //
 // b.mu.RLock is held only for the in-memory layer walk (keeping the
-// inflight/layers slices stable); each layer's own map is read under its
-// layer.mu via lookup. The (potentially slow) base read runs after b.mu is
+// inflight/layers slices stable); each layer's matching map shard is read under
+// its shard lock via lookup. The (potentially slow) base read runs after b.mu is
 // released, exactly as before.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
 	b.mu.RLock()
@@ -751,8 +823,8 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	// lookup keeps the map index allocation-free (string(key) in the index
 	// expression is elided by the compiler), so this read stays alloc-free on a
 	// buffer hit — it returns the layer's internal slice directly. b.mu.RLock
-	// keeps the slices stable for the walk; each layer's map is read under its
-	// own lock inside lookup.
+	// keeps the slices stable for the walk; each layer's matching map shard is
+	// read under its own lock inside lookup.
 	b.mu.RLock()
 	for i := len(b.inflight) - 1; i >= 0; i-- {
 		v, found, tomb := b.inflight[i].lookup(key)
@@ -957,12 +1029,13 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 // holding b.mu, so concurrent readers — most importantly the
 // LoadDynamicProperties(buffer) scan that every applyBlock runs in its
 // prologue — are not blocked by an in-flight flush. This is safe because
-// committed layers are immutable once CommitBlock promotes them: their
-// write/delete maps are never mutated again, only the slice that holds them
-// is. We therefore:
+// FlushUpTo holds flushMu, which excludes writeFiltered (the only path that can
+// finish range-owned batch writes into a committed layer); ordinary
+// foreground/worker writes target in-flight layers only. Per-shard read locks
+// additionally make every map traversal race-free. We therefore:
 //
 //  1. briefly RLock to snapshot the layer pointers,
-//  2. run numberOf + flushLayer lock-free on that snapshot,
+//  2. run numberOf + flushLayer without b.mu on that snapshot,
 //  3. briefly Lock to drop the flushed prefix.
 //
 // flushMu serializes flushers against each other; DiscardBlock (the only
@@ -986,9 +1059,9 @@ func (b *Buffer) FlushUpTo(
 		return nil
 	}
 
-	// Step 2: lock-free disk I/O. Layers are immutable post-commit, so
-	// reading blockHash + number + write/delete maps without b.mu is race-free,
-	// and readers can RLock concurrently.
+	// Step 2: disk I/O without b.mu. flushMu excludes committed-layer batch
+	// mutations, and writeLayer's shard RLocks protect each map traversal, so
+	// readers can continue resolving unrelated shards concurrently.
 	eligible := 0
 	for _, l := range snapshot {
 		if l.number > cutoff {
@@ -1115,15 +1188,22 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 }
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
-	for k, v := range l.writes {
-		if err := w.Put([]byte(k), v); err != nil {
-			return err
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			if err := w.Put([]byte(k), v); err != nil {
+				s.mu.RUnlock()
+				return err
+			}
 		}
-	}
-	for k := range l.deletes {
-		if err := w.Delete([]byte(k)); err != nil {
-			return err
+		for k := range s.deletes {
+			if err := w.Delete([]byte(k)); err != nil {
+				s.mu.RUnlock()
+				return err
+			}
 		}
+		s.mu.RUnlock()
 	}
 	return nil
 }
@@ -1159,13 +1239,18 @@ func layerWriteStats(l *layer) (valueSize, encodedSize int) {
 	if l == nil {
 		return 0, 0
 	}
-	for k, v := range l.writes {
-		valueSize += len(k) + len(v)
-		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
-	}
-	for k := range l.deletes {
-		valueSize += len(k)
-		encodedSize += 1 + uvarintSize(len(k)) + len(k)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			valueSize += len(k) + len(v)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
+		}
+		for k := range s.deletes {
+			valueSize += len(k)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k)
+		}
+		s.mu.RUnlock()
 	}
 	return valueSize, encodedSize
 }
@@ -1231,8 +1316,8 @@ func newOverlayState() *overlayState { return &overlayState{m: make(map[string]o
 
 // walk folds layer l into the overlay, keeping only keys in [prefix+start, …)
 // that have the given prefix. Caller holds the buffer read lock (for slice
-// stability); this takes l's own lock for the map iteration so it is race-free
-// against a concurrent foreground/worker write to l.
+// stability); this takes each layer shard's lock for its map iteration so it is
+// race-free against a concurrent foreground/worker write to l.
 func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if l == nil {
 		return
@@ -1245,25 +1330,28 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 		}
 		return k >= lo
 	}
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	for k, v := range l.writes {
-		if !matches(k) {
-			continue
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := o.m[k]; set {
+				continue
+			}
+			o.m[k] = overlayOp{value: append([]byte(nil), v...)}
 		}
-		if _, set := o.m[k]; set {
-			continue
+		for k := range s.deletes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := o.m[k]; set {
+				continue
+			}
+			o.m[k] = overlayOp{deleted: true}
 		}
-		o.m[k] = overlayOp{value: append([]byte(nil), v...)}
-	}
-	for k := range l.deletes {
-		if !matches(k) {
-			continue
-		}
-		if _, set := o.m[k]; set {
-			continue
-		}
-		o.m[k] = overlayOp{deleted: true}
+		s.mu.RUnlock()
 	}
 }
 

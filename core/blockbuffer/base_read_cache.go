@@ -277,11 +277,16 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	if b == nil || b.baseReadCache == nil || l == nil {
 		return
 	}
-	for k, v := range l.writes {
-		b.baseReadCache.setFlushed(k, v)
-	}
-	for k := range l.deletes {
-		b.baseReadCache.delString(k)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			b.baseReadCache.setFlushed(k, v)
+		}
+		for k := range s.deletes {
+			b.baseReadCache.delString(k)
+		}
+		s.mu.RUnlock()
 	}
 }
 

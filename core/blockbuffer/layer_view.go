@@ -15,8 +15,8 @@ import (
 // The async commit worker uses a LayerView (obtained via Buffer.ViewLayer) as
 // the commitment store / account-KV index for block N's fold + publish tail,
 // while the foreground writes the newer layer N+1 through the Buffer directly.
-// Because both go through Buffer.mu and target disjoint layers, the per-layer
-// maps stay race-free.
+// Because both go through Buffer.mu and target disjoint layers, the sharded
+// layer maps stay race-free.
 //
 // A LayerView satisfies ethdb.KeyValueReader + ethdb.KeyValueWriter +
 // ethdb.Iteratee, so it drops in anywhere those interfaces (CommitmentDB,
@@ -41,8 +41,8 @@ func (b *Buffer) LayerWriter(h InflightHandle) ethdb.KeyValueWriter {
 	return &LayerView{b: b, l: h.l}
 }
 
-// putInto writes (k,v) into a specific layer under that layer's lock. Used by
-// the layer-bound writer so the worker can target an older in-flight layer
+// putInto writes (k,v) into a specific layer under the key's shard lock. Used
+// by the layer-bound writer so the worker can target an older in-flight layer
 // (concurrently with the foreground writing the newest one — disjoint layers,
 // disjoint locks).
 func (b *Buffer) putInto(l *layer, key, value []byte) {
@@ -66,13 +66,17 @@ func (b *Buffer) putIntoKeyParts(l *layer, first, second, value []byte) {
 
 func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
 	v := append([]byte(nil), value...)
-	l.mu.Lock()
-	delete(l.deletes, key)
-	l.writes[key] = v
-	l.mu.Unlock()
+	s := l.shardForString(key)
+	s.mu.Lock()
+	delete(s.deletes, key)
+	if s.writes == nil {
+		s.writes = make(map[string][]byte)
+	}
+	s.writes[key] = v
+	s.mu.Unlock()
 }
 
-// deleteInto tombstones key in a specific layer under that layer's lock.
+// deleteInto tombstones key in a specific layer under the key's shard lock.
 func (b *Buffer) deleteInto(l *layer, key []byte) {
 	b.deleteIntoString(l, string(key))
 }
@@ -82,10 +86,14 @@ func (b *Buffer) deleteIntoKeyParts(l *layer, first, second []byte) {
 }
 
 func (b *Buffer) deleteIntoString(l *layer, key string) {
-	l.mu.Lock()
-	delete(l.writes, key)
-	l.deletes[key] = struct{}{}
-	l.mu.Unlock()
+	s := l.shardForString(key)
+	s.mu.Lock()
+	delete(s.writes, key)
+	if s.deletes == nil {
+		s.deletes = make(map[string]struct{})
+	}
+	s.deletes[key] = struct{}{}
+	s.mu.Unlock()
 }
 
 func (v *LayerView) Put(key, value []byte) error {
@@ -113,9 +121,9 @@ func (v *LayerView) DeleteKeyParts(first, second []byte) error {
 }
 
 // Get resolves key over [bound layer, committed stack newest-first, base].
-// b.mu.RLock keeps the committed slice stable; each layer's map (including the
-// bound in-flight layer, which the worker writes via putInto) is read under its
-// own lock via lookup.
+// b.mu.RLock keeps the committed slice stable; each layer's matching map shard
+// (including the bound in-flight layer, which the worker writes via putInto) is
+// read under its own shard lock via lookup.
 func (v *LayerView) Get(key []byte) ([]byte, error) {
 	b := v.b
 	b.mu.RLock()

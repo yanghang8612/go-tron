@@ -222,12 +222,13 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 
 	puts := newLayer(bufHash(1), 1)
 	value := bytes.Repeat([]byte{0xcd}, 1024)
+	setup := &Buffer{}
 	for i := 0; i < 2048; i++ {
-		puts.writes[fmt.Sprintf("flush-key-%04d", i)] = value
+		setup.putIntoString(puts, fmt.Sprintf("flush-key-%04d", i), value)
 	}
 	deletes := newLayer(bufHash(2), 2)
 	for i := 0; i < 32768; i++ {
-		deletes.deletes[fmt.Sprintf("deleted-state-key-%08d", i)] = struct{}{}
+		setup.deleteIntoString(deletes, fmt.Sprintf("deleted-state-key-%08d", i))
 	}
 
 	for _, workload := range []struct {
