@@ -44,6 +44,7 @@ type TronBackend struct {
 	pool             *txpool.TxPool
 	txBroadcast      TxBroadcaster              // nil until wired from main
 	peersFunc        func() []*tronapi.PeerInfo // nil until wired from main
+	syncInfoFunc     func() tronapi.SyncInfo    // nil until wired from main
 	stateColdHistory state.StateDomainChangeColdHistory
 
 	subsMu    sync.Mutex
@@ -94,6 +95,13 @@ func (b *TronBackend) SetTxBroadcaster(bc TxBroadcaster) {
 // Called from main.go to avoid a core→net import cycle.
 func (b *TronBackend) SetPeerLister(fn func() []*tronapi.PeerInfo) {
 	b.peersFunc = fn
+}
+
+// SetSyncInfoProvider wires downloader diagnostics without introducing a
+// core→net import cycle. The provider is read only by the low-rate NodeInfo
+// endpoint and must return a self-contained snapshot.
+func (b *TronBackend) SetSyncInfoProvider(fn func() tronapi.SyncInfo) {
+	b.syncInfoFunc = fn
 }
 
 // SetStateColdHistory wires snapshot-backed flat history into archive reads.
@@ -189,10 +197,16 @@ func (b *TronBackend) BroadcastTransaction(tx *types.Transaction) error {
 
 func (b *TronBackend) GetNodeInfo() *tronapi.NodeInfo {
 	current := b.chain.CurrentBlock()
-	return &tronapi.NodeInfo{
-		Version:      "0.2.0-dev",
-		CurrentBlock: current.Number(),
+	info := &tronapi.NodeInfo{
+		Version:        "0.2.0-dev",
+		CurrentBlock:   current.Number(),
+		LastInsertTime: b.chain.LastInsertTime().UnixMilli(),
 	}
+	if b.syncInfoFunc != nil {
+		syncInfo := b.syncInfoFunc()
+		info.Sync = &syncInfo
+	}
+	return info
 }
 
 func (b *TronBackend) PendingTransactionCount() int {

@@ -375,6 +375,54 @@ func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, 
 	return ss.pause.Status()
 }
 
+// SyncStatus is a point-in-time downloader snapshot for operational APIs. It
+// exposes counts rather than internal maps/slices so callers cannot mutate the
+// sync state and collecting it remains bounded regardless of backlog size.
+type SyncStatus struct {
+	Active                bool
+	Paused                bool
+	SyncPeerCount         int
+	TargetHead            uint64
+	AppliedTip            uint64
+	Remaining             int64
+	Inflight              int
+	BufferedBlocks        int
+	BufferedBytes         int64
+	RequestedBlocks       int
+	RetryBlocks           int
+	RetainedDecodedBlocks int
+	RetainedDecodedBytes  int64
+	PauseBlock            uint64
+	PauseTime             time.Time
+	PauseError            error
+}
+
+// Status returns one lock-consistent downloader snapshot. The lock order is
+// the established ss.mu → pause.mu order used by the sync state machine.
+func (ss *SyncService) Status() SyncStatus {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	paused, pauseBlock, pauseTime, pauseErr := ss.pause.Status()
+	return SyncStatus{
+		Active:                ss.syncing,
+		Paused:                paused,
+		SyncPeerCount:         len(ss.peers),
+		TargetHead:            ss.targetHeadNum,
+		AppliedTip:            ss.syncedTipNum,
+		Remaining:             ss.estimatedRemainLocked(),
+		Inflight:              ss.inflight,
+		BufferedBlocks:        len(ss.blockBuffer),
+		BufferedBytes:         ss.bufferedBytes,
+		RequestedBlocks:       len(ss.requested),
+		RetryBlocks:           len(ss.retryList),
+		RetainedDecodedBlocks: ss.retainedDecodedBlocks,
+		RetainedDecodedBytes:  ss.retainedDecodedBytes,
+		PauseBlock:            pauseBlock,
+		PauseTime:             pauseTime,
+		PauseError:            pauseErr,
+	}
+}
+
 // ErrSyncStopHeightReached is recorded in PausedStatus when an operator
 // configured audit boundary has been reached. It is intentionally distinct
 // from an InsertBlock error so status consumers can tell a planned pause from
