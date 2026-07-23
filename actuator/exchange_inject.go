@@ -15,15 +15,7 @@ import (
 type ExchangeInjectActuator struct{}
 
 func (a *ExchangeInjectActuator) getContract(ctx *Context) (*contractpb.ExchangeInjectContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ExchangeInjectContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ExchangeInjectContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ExchangeInjectContract](ctx, "ExchangeInjectContract")
 }
 
 // Validate checks all preconditions for an ExchangeInject transaction.

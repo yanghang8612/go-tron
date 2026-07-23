@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm"
+	"google.golang.org/protobuf/proto"
 )
 
 // BufferedKVStore is the read+write capability that actuators need from
@@ -235,6 +236,27 @@ type Result struct {
 type Actuator interface {
 	Validate(ctx *Context) error
 	Execute(ctx *Context) (*Result, error)
+}
+
+// decodedContract returns the transaction-owned, read-only contract message.
+// Validation, bandwidth charging, actuator execution and energy settlement can
+// all inspect the first contract, so reusing one message avoids unmarshalling
+// the same Any again in both Validate and Execute. Actuators that mutate their
+// input must keep a private decode or clone instead.
+func decodedContract[T proto.Message](ctx *Context, typeName string) (T, error) {
+	var zero T
+	if ctx.Tx.Contract() == nil {
+		return zero, errors.New("no contract in transaction")
+	}
+	msg, err := ctx.Tx.DecodedContract()
+	if err != nil {
+		return zero, errors.New("failed to unmarshal " + typeName)
+	}
+	contract, ok := msg.(T)
+	if !ok {
+		return zero, errors.New("failed to unmarshal " + typeName)
+	}
+	return contract, nil
 }
 
 func CreateActuator(tx *types.Transaction) (Actuator, error) {

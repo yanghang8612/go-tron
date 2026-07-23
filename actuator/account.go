@@ -9,15 +9,7 @@ import (
 type CreateAccountActuator struct{}
 
 func (a *CreateAccountActuator) getContract(ctx *Context) (*contractpb.AccountCreateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	ac := &contractpb.AccountCreateContract{}
-	if err := contract.Parameter.UnmarshalTo(ac); err != nil {
-		return nil, errors.New("failed to unmarshal AccountCreateContract")
-	}
-	return ac, nil
+	return decodedContract[*contractpb.AccountCreateContract](ctx, "AccountCreateContract")
 }
 
 func (a *CreateAccountActuator) Validate(ctx *Context) error {

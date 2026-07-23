@@ -10,15 +10,7 @@ import (
 type UpdateSettingActuator struct{}
 
 func (a *UpdateSettingActuator) getContract(ctx *Context) (*contractpb.UpdateSettingContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.UpdateSettingContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal UpdateSettingContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.UpdateSettingContract](ctx, "UpdateSettingContract")
 }
 
 func (a *UpdateSettingActuator) Validate(ctx *Context) error {

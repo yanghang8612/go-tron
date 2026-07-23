@@ -50,7 +50,7 @@ func TestTransferValidate_Success(t *testing.T) {
 	}
 }
 
-func TestTransferActuatorContractCacheTracksTransaction(t *testing.T) {
+func TestTransferActuatorUsesTransactionContractCache(t *testing.T) {
 	act := &TransferActuator{}
 	firstCtx := &Context{Tx: makeTransferTx(1, 2, 11)}
 	first, err := act.getContract(firstCtx)
@@ -71,7 +71,7 @@ func TestTransferActuatorContractCacheTracksTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if second == first || second.Amount != 22 {
-		t.Fatalf("cache did not follow replacement transaction: same=%v amount=%d", second == first, second.Amount)
+		t.Fatalf("decoded contract did not follow replacement transaction: same=%v amount=%d", second == first, second.Amount)
 	}
 }
 
@@ -92,16 +92,15 @@ func BenchmarkTransferActuatorContractDecode(b *testing.B) {
 			benchmarkTransferContract = decode()
 		}
 	})
-	b.Run("validate-execute-cache", func(b *testing.B) {
+	b.Run("transaction-cache", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			act := new(TransferActuator)
 			var err error
-			benchmarkTransferContract, err = act.getContract(ctx)
+			benchmarkTransferContract, err = (&TransferActuator{}).getContract(ctx)
 			if err != nil {
 				b.Fatal(err)
 			}
-			benchmarkTransferContract, err = act.getContract(ctx)
+			benchmarkTransferContract, err = (&TransferActuator{}).getContract(ctx)
 			if err != nil {
 				b.Fatal(err)
 			}

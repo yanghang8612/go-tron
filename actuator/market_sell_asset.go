@@ -25,15 +25,7 @@ const (
 )
 
 func (a *MarketSellAssetActuator) getContract(ctx *Context) (*contractpb.MarketSellAssetContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.MarketSellAssetContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal MarketSellAssetContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.MarketSellAssetContract](ctx, "MarketSellAssetContract")
 }
 
 // Validate checks all preconditions for a MarketSellAsset transaction.

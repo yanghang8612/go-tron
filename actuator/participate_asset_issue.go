@@ -12,15 +12,7 @@ import (
 type ParticipateAssetIssueActuator struct{}
 
 func (a *ParticipateAssetIssueActuator) getContract(ctx *Context) (*contractpb.ParticipateAssetIssueContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ParticipateAssetIssueContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ParticipateAssetIssueContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ParticipateAssetIssueContract](ctx, "ParticipateAssetIssueContract")
 }
 
 func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {

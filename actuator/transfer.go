@@ -4,36 +4,14 @@ import (
 	"errors"
 	"math"
 
-	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-type TransferActuator struct {
-	// Validate and Execute run consecutively on one actuator and one immutable
-	// transaction in the block processor. Cache the successful protobuf decode
-	// so Execute does not unmarshal the same TransferContract a second time.
-	// Tracking the transaction pointer keeps direct tests that reuse an actuator
-	// with a different Context correct.
-	tx       *types.Transaction
-	contract *contractpb.TransferContract
-}
+type TransferActuator struct{}
 
 func (a *TransferActuator) getContract(ctx *Context) (*contractpb.TransferContract, error) {
-	if a.tx == ctx.Tx && a.contract != nil {
-		return a.contract, nil
-	}
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	tc := &contractpb.TransferContract{}
-	if err := contract.Parameter.UnmarshalTo(tc); err != nil {
-		return nil, errors.New("failed to unmarshal TransferContract")
-	}
-	a.tx = ctx.Tx
-	a.contract = tc
-	return tc, nil
+	return decodedContract[*contractpb.TransferContract](ctx, "TransferContract")
 }
 
 func (a *TransferActuator) Validate(ctx *Context) error {

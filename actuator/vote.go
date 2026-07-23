@@ -12,15 +12,7 @@ import (
 type VoteWitnessActuator struct{}
 
 func (a *VoteWitnessActuator) getContract(ctx *Context) (*contractpb.VoteWitnessContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	vc := &contractpb.VoteWitnessContract{}
-	if err := contract.Parameter.UnmarshalTo(vc); err != nil {
-		return nil, errors.New("failed to unmarshal VoteWitnessContract")
-	}
-	return vc, nil
+	return decodedContract[*contractpb.VoteWitnessContract](ctx, "VoteWitnessContract")
 }
 
 func (a *VoteWitnessActuator) Validate(ctx *Context) error {

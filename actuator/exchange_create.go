@@ -14,15 +14,7 @@ import (
 type ExchangeCreateActuator struct{}
 
 func (a *ExchangeCreateActuator) getContract(ctx *Context) (*contractpb.ExchangeCreateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ExchangeCreateContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ExchangeCreateContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ExchangeCreateContract](ctx, "ExchangeCreateContract")
 }
 
 // Validate checks all preconditions for an ExchangeCreate transaction.

@@ -10,15 +10,7 @@ import (
 type CancelAllUnfreezeV2Actuator struct{}
 
 func (a *CancelAllUnfreezeV2Actuator) getContract(ctx *Context) (*contractpb.CancelAllUnfreezeV2Contract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.CancelAllUnfreezeV2Contract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal CancelAllUnfreezeV2Contract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.CancelAllUnfreezeV2Contract](ctx, "CancelAllUnfreezeV2Contract")
 }
 
 func (a *CancelAllUnfreezeV2Actuator) Validate(ctx *Context) error {
