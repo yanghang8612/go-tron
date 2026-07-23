@@ -43,6 +43,11 @@ var (
 	// gtron mirrors that by surfacing this sentinel, which contractRetFromError
 	// maps to its default UNKNOWN(13) and which propagates from sub-calls.
 	ErrPrecompileUnknown = errors.New("precompiled contract: uncaught exception")
+	// ErrSelfDestructTransferFailure mirrors java-tron's pre-Constantinople
+	// Program.suicide BytecodeExecutionException when the beneficiary transfer
+	// fails validation. VM.play spends all remaining energy and records UNKNOWN
+	// with the byte-exact message "transfer failure".
+	ErrSelfDestructTransferFailure = errors.New("transfer failure")
 	// ErrPrecompileTransferFailure mirrors java-tron
 	// Program.callToPrecompiledAddress's BytecodeExecutionException("transfer
 	// failure"): a TRX endowment on a precompile-targeted CALL whose
@@ -94,6 +99,28 @@ func (e transferValidationError) Error() string {
 
 func (e transferValidationError) Is(target error) bool {
 	return target == ErrTransferFailed
+}
+
+// selfDestructTransferValidationError mirrors java-tron's TransferException
+// after ALLOW_TVM_CONSTANTINOPLE. Unlike the legacy bytecode exception, this
+// classifies as TRANSFER_FAILED and preserves the remaining transaction energy.
+type selfDestructTransferValidationError struct {
+	reason string
+}
+
+func (e selfDestructTransferValidationError) Error() string {
+	return "transfer all token or transfer all trx failed in suicide: " + e.reason
+}
+
+func (e selfDestructTransferValidationError) Is(target error) bool {
+	return target == ErrTransferFailed
+}
+
+func newSelfDestructTransferError(constantinople bool, reason string) error {
+	if constantinople {
+		return selfDestructTransferValidationError{reason: reason}
+	}
+	return ErrSelfDestructTransferFailure
 }
 
 type outOfEnergyError struct {

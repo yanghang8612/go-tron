@@ -107,7 +107,11 @@ UNKNOWN (mainnet 4,904,919, with repeats at 4,905,126 and 4,905,131); and
 pre-ALLOW_TVM_CONSTANTINOPLE internal self-transfer validation, which is a
 BytecodeExecutionException (UNKNOWN + spend-all) rather than the later
 TransferException (TRANSFER_FAILED + refund), exposed by the prefixed ADDRESS
-semantics at mainnet 4,997,510.
+semantics at mainnet 4,997,510; and pre-ALLOW_TVM_SOLIDITY_059 SELFDESTRUCT
+to an accountless beneficiary, whose MUtil.transfer validation must produce
+"transfer failure" / UNKNOWN and spend all energy before Constantinople
+(mainnet 5,196,383), rather than letting StateDB.AddBalance implicitly create
+the beneficiary.
 
 **Async-commit reader checklist.** Everything block N writes that block
 N+1's *execution* reads must be visible through the buffer pipeline

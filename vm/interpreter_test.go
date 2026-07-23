@@ -881,6 +881,7 @@ func TestSelfDestructRestrictionKeepsExistingContract(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x44}
 	beneficiary := tcommon.Address{0x41, 0x55}
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 	evm.StateDB.AddBalance(contractAddr, 123)
 
 	contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergySelfDestruct+EnergyCallNewAcct)
@@ -905,6 +906,7 @@ func TestSelfDestructRestrictionDeletesNewContract(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x66}
 	beneficiary := tcommon.Address{0x41, 0x77}
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 	evm.StateDB.AddBalance(contractAddr, 123)
 	evm.newContracts[contractAddr] = true
 
@@ -990,6 +992,7 @@ func TestSelfDestructAddressComparisonFollowsEnergyAdjustment(t *testing.T) {
 		t.Helper()
 		evm := newTestEVMWithConfig(t, cfg)
 		evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+		evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 		evm.StateDB.AddBalance(contractAddr, 100)
 
 		contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergyCallNewAcct)

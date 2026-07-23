@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/holiman/uint256"
@@ -970,6 +971,20 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			// stamps create_time and (when AllowMultiSign is on) default
 			// permissions, matching RepositoryImpl.createNormalAccount.
 			interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
+			// MUtil.transfer validates the beneficiary even though StateDB's
+			// AddBalance would implicitly create it. Before Solidity059 a missing
+			// beneficiary therefore fails SELFDESTRUCT. Constantinople changed
+			// only the exception class/energy treatment, not the validation rule.
+			var transferFailure string
+			switch {
+			case !interpreter.tvm.StateDB.AccountExists(address):
+				transferFailure = "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract."
+			case interpreter.tvm.StateDB.GetBalance(address) > math.MaxInt64-balance:
+				transferFailure = "long overflow"
+			}
+			if transferFailure != "" {
+				return nil, newSelfDestructTransferError(interpreter.tvmConfig.Constantinople, transferFailure)
+			}
 			interpreter.tvm.StateDB.AddBalance(address, balance)
 			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
 				return nil, err
