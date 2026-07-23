@@ -19,6 +19,15 @@ func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
 	return &rawdbBranchStore{db: db}
 }
 
+// concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
+// explicitly advertises concurrent reads and writes. The steady-state sync path
+// uses blockbuffer.Buffer/LayerView, which provide the marker; direct Pebble,
+// memorydb, and custom stores keep serial flushes unless separately audited.
+func (s *rawdbBranchStore) concurrentSiblingFlushSafe() bool {
+	_, ok := s.db.(interface{ ConcurrentReadWriteSafe() })
+	return ok
+}
+
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	// NoCopy avoids the per-Get defensive copy. The returned BranchData may
 	// borrow leaf-key slices from the owned/immutable encoded value; callers use

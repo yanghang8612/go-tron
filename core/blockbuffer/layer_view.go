@@ -26,6 +26,11 @@ type LayerView struct {
 	l *layer
 }
 
+// ConcurrentReadWriteSafe is the LayerView counterpart of Buffer's structural
+// marker. Every write targets this fixed layer, while reads resolve the fixed
+// layer and committed topology; both paths take the selected key shard's lock.
+func (*LayerView) ConcurrentReadWriteSafe() {}
+
 // ViewLayer returns a read/write view bound to the in-flight layer referenced
 // by h. The handle must still be in flight; a view over a no-longer-in-flight
 // layer reads/writes a detached layer (its writes never reach the committed

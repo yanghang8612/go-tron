@@ -245,6 +245,13 @@ func New(base ethdb.KeyValueReader) *Buffer {
 	return b
 }
 
+// ConcurrentReadWriteSafe is a structural marker for higher-level stores that
+// may publish disjoint keys while other workers are still reading. Buffer
+// Put/Delete resolve the target under b.mu and protect the actual map mutation
+// with the key's shard lock; readers use immutable topology views and the same
+// shard locks.
+func (*Buffer) ConcurrentReadWriteSafe() {}
+
 // publishReadViewLocked publishes copies of the topology slices. The layer
 // pointers themselves are stable: dropping a layer only removes the owning
 // slice reference, while a reader that already loaded an older view keeps the
