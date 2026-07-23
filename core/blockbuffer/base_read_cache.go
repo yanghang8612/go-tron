@@ -2,10 +2,10 @@ package blockbuffer
 
 import "sync"
 
-// baseReadCacheShardCount keeps cache lookup contention low when commitment
-// folds and flat-latest readers run concurrently. A power of two lets the FNV
-// hash select a shard with a mask.
-const baseReadCacheShardCount = 64
+// baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
+// the same physical state keys, so they share the tested O(1) shard selector
+// rather than hashing every key twice (once here and once again in the Go map).
+const baseReadCacheShardCount = layerShardCount
 
 // baseReadCacheEntryOverhead is a conservative charge for the map entry, queue
 // token, slice/string headers, and allocator bookkeeping. The byte budget is an
@@ -114,11 +114,16 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 		s.mu.Unlock()
 		return value, false
 	}
+	// Another reader may have observed the same miss/epoch and completed its
+	// durable read while this caller was in Pebble. Reuse that immutable value
+	// instead of copying the same key/value again, appending a stale FIFO token,
+	// and replacing an entry from the identical durable generation.
+	if current, ok := s.entries[string(key)]; ok {
+		s.mu.Unlock()
+		return current.value, true
+	}
 	k := string(key)
 	v := append([]byte(nil), value...)
-	if old, ok := s.entries[k]; ok {
-		s.used -= old.charge
-	}
 	s.nextGen++
 	gen := s.nextGen
 	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen}
@@ -248,29 +253,11 @@ func (s *baseReadCacheShard) compactIfSparse() {
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {
-	const (
-		offset32 = uint32(2166136261)
-		prime32  = uint32(16777619)
-	)
-	h := offset32
-	for _, b := range key {
-		h ^= uint32(b)
-		h *= prime32
-	}
-	return h & (baseReadCacheShardCount - 1)
+	return layerShardIndexBytes(key)
 }
 
 func baseReadCacheShardIndexString(key string) uint32 {
-	const (
-		offset32 = uint32(2166136261)
-		prime32  = uint32(16777619)
-	)
-	h := offset32
-	for i := range len(key) {
-		h ^= uint32(key[i])
-		h *= prime32
-	}
-	return h & (baseReadCacheShardCount - 1)
+	return layerShardIndexString(key)
 }
 
 func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {

@@ -1,6 +1,7 @@
 package blockbuffer
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 )
@@ -107,6 +108,27 @@ func TestBaseReadCache_SetFlushedDropsOversizedReplacement(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_RacingSameEpochFillsPublishOnce(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("same-generation-branch")
+	_, _, epoch := c.getWithEpoch(key)
+	first, stored := c.setIfEpoch(key, []byte("durable-value"), epoch)
+	if !stored {
+		t.Fatal("first fill was rejected")
+	}
+	second, stored := c.setIfEpoch(key, []byte("duplicate-read"), epoch)
+	if !stored || string(second) != "durable-value" {
+		t.Fatalf("racing fill = (%q,%v), want first immutable value", second, stored)
+	}
+	if &first[0] != &second[0] {
+		t.Fatal("racing fill copied/replaced the existing immutable value")
+	}
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	if len(s.entries) != 1 || len(s.queue)-s.head != 1 || s.nextGen != 1 {
+		t.Fatalf("racing fills published entries=%d tokens=%d generation=%d, want 1/1/1", len(s.entries), len(s.queue)-s.head, s.nextGen)
+	}
+}
+
 func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 	key := []byte("state-commitment-branch-v1-hot-prefix")
 	keyString := string(key)
@@ -135,4 +157,26 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 			c.setFlushed(keyString, value)
 		}
 	})
+}
+
+func BenchmarkBaseReadCacheHit(b *testing.B) {
+	for _, keyLen := range []int{32, 64, 96, 128} {
+		b.Run(fmt.Sprintf("key=%d", keyLen), func(b *testing.B) {
+			c := newBaseReadCache(1 << 20)
+			key := bytes.Repeat([]byte{0xa5}, keyLen)
+			// Give the tail/middle bytes representative entropy rather than
+			// benchmarking a degenerate repeated-byte key.
+			for i := range key {
+				key[i] ^= byte(i * 37)
+			}
+			testBaseReadCacheSet(c, key, []byte("value"))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, ok, _ := c.getWithEpoch(key); !ok {
+					b.Fatal("cache hit missed")
+				}
+			}
+		})
+	}
 }
