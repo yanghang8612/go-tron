@@ -14,6 +14,12 @@ const baseReadCacheShardCount = layerShardCount
 // more memory than configured.
 const baseReadCacheEntryOverhead = 64
 
+// baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
+// history per shard. The history stores fingerprints only (no key/value
+// objects), so a 128 MiB or larger cache spends at most 1 MiB across all 64
+// shards to keep one-hit historical-sync scans out of the resident cache.
+const baseReadCacheMaxAdmissionSlots = 2048
+
 // baseReadCache is a bounded, sharded FIFO cache for values read from Buffer's
 // durable base. It is intentionally below the overlay layers: in-flight and
 // committed writes/tombstones are always resolved first, so a fork discard only
@@ -34,9 +40,15 @@ type baseReadCacheShard struct {
 	mu      sync.RWMutex
 	entries map[string]baseReadCacheEntry
 	queue   []baseReadCacheToken
-	head    int
-	used    int
-	limit   int
+	// admission is a direct-mapped fingerprint table. A durable miss is
+	// admitted only when the same fingerprint is observed twice without being
+	// displaced. Commitment sync walks a large number of cold branches once,
+	// while upper trie branches and flat-latest rows are revisited quickly; this
+	// tiny probation stage preserves the latter without retaining the former.
+	admission []uint64
+	head      int
+	used      int
+	limit     int
 	// epoch advances before this shard is invalidated or cleared. A base read
 	// captures it on cache miss; if a flush advances it before that read returns,
 	// setIfEpoch rejects the now-stale late fill.
@@ -68,6 +80,7 @@ func newBaseReadCache(sizeBytes int) *baseReadCache {
 			c.shards[i].limit++
 		}
 		c.shards[i].entries = make(map[string]baseReadCacheEntry)
+		c.shards[i].admission = make([]uint64, baseReadCacheAdmissionSlots(c.shards[i].limit))
 	}
 	return c
 }
@@ -122,6 +135,10 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 		s.mu.Unlock()
 		return current.value, true
 	}
+	if !s.admit(key) {
+		s.mu.Unlock()
+		return value, false
+	}
 	k := string(key)
 	v := append([]byte(nil), value...)
 	s.nextGen++
@@ -166,6 +183,8 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 		s.entries[key] = baseReadCacheEntry{value: value, charge: charge, gen: old.gen}
 		s.used += charge
 		s.evict()
+	} else {
+		s.forgetAdmissionString(key)
 	}
 	s.compactIfSparse()
 	s.mu.Unlock()
@@ -193,6 +212,7 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 		delete(s.entries, key)
 		s.used -= old.charge
 	}
+	s.forgetAdmissionString(key)
 	s.compactIfSparse()
 	s.mu.Unlock()
 }
@@ -208,10 +228,85 @@ func (c *baseReadCache) clear() {
 		clear(s.entries)
 		clear(s.queue)
 		s.queue = s.queue[:0]
+		clear(s.admission)
 		s.head = 0
 		s.used = 0
 		s.mu.Unlock()
 	}
+}
+
+func baseReadCacheAdmissionSlots(limit int) int {
+	// Keep probation metadata small relative to the configured payload budget:
+	// one 8-byte slot per 256 bytes, rounded down to a power of two for direct
+	// indexing. Real deployments hit the cap; tiny unit-test caches do not
+	// silently allocate a deployment-sized table.
+	target := limit / 256
+	if target < 8 {
+		target = 8
+	}
+	if target > baseReadCacheMaxAdmissionSlots {
+		target = baseReadCacheMaxAdmissionSlots
+	}
+	slots := 1
+	for slots<<1 <= target {
+		slots <<= 1
+	}
+	return slots
+}
+
+// admit reports whether key has completed its probationary first sighting.
+// Fingerprint collisions can only cause a cold row to be admitted early; they
+// cannot return an incorrect value because resident entries still compare the
+// complete key. Clearing the slot on admission means a later eviction requires
+// fresh evidence before the row can pollute the cache again.
+func (s *baseReadCacheShard) admit(key []byte) bool {
+	fingerprint := baseReadCacheAdmissionFingerprint(key)
+	index := fingerprint & uint64(len(s.admission)-1)
+	if s.admission[index] == fingerprint {
+		s.admission[index] = 0
+		return true
+	}
+	s.admission[index] = fingerprint
+	return false
+}
+
+func (s *baseReadCacheShard) forgetAdmissionString(key string) {
+	fingerprint := baseReadCacheAdmissionFingerprintString(key)
+	index := fingerprint & uint64(len(s.admission)-1)
+	if s.admission[index] == fingerprint {
+		s.admission[index] = 0
+	}
+}
+
+func baseReadCacheAdmissionFingerprint(key []byte) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for _, b := range key {
+		hash = (hash ^ uint64(b)) * prime
+	}
+	// Zero denotes an empty direct-mapped slot.
+	if hash == 0 {
+		return 1
+	}
+	return hash
+}
+
+func baseReadCacheAdmissionFingerprintString(key string) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for i := 0; i < len(key); i++ {
+		hash = (hash ^ uint64(key[i])) * prime
+	}
+	if hash == 0 {
+		return 1
+	}
+	return hash
 }
 
 func (s *baseReadCacheShard) evict() {

@@ -7,8 +7,45 @@ import (
 )
 
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
-	_, _, epoch := c.getWithEpoch(key)
-	_, _ = c.setIfEpoch(key, value, epoch)
+	for attempt := 0; attempt < 2; attempt++ {
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, value, epoch); stored {
+			return
+		}
+	}
+	panic("base-read cache test fill did not complete admission")
+}
+
+func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	value := []byte("durable-value")
+	for i := 0; i < 10_000; i++ {
+		key := []byte(fmt.Sprintf("cold-branch-%08d", i))
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, value, epoch); stored {
+			t.Fatalf("one-hit key %q was admitted", key)
+		}
+	}
+	resident := 0
+	for i := range c.shards {
+		resident += len(c.shards[i].entries)
+	}
+	if resident != 0 {
+		t.Fatalf("one-hit scan retained %d resident entries, want 0", resident)
+	}
+
+	hotKey := []byte("repeated-hot-branch")
+	_, _, epoch := c.getWithEpoch(hotKey)
+	if _, stored := c.setIfEpoch(hotKey, value, epoch); stored {
+		t.Fatal("first hot-key sighting bypassed probation")
+	}
+	_, _, epoch = c.getWithEpoch(hotKey)
+	if _, stored := c.setIfEpoch(hotKey, value, epoch); !stored {
+		t.Fatal("second hot-key sighting was not admitted")
+	}
+	if got, ok, _ := c.getWithEpoch(hotKey); !ok || !bytes.Equal(got, value) {
+		t.Fatalf("admitted hot key = (%q,%v), want (%q,true)", got, ok, value)
+	}
 }
 
 func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {
@@ -113,16 +150,18 @@ func TestBaseReadCache_RacingSameEpochFillsPublishOnce(t *testing.T) {
 	key := []byte("same-generation-branch")
 	_, _, epoch := c.getWithEpoch(key)
 	first, stored := c.setIfEpoch(key, []byte("durable-value"), epoch)
-	if !stored {
-		t.Fatal("first fill was rejected")
+	if stored {
+		t.Fatal("first fill bypassed probation")
 	}
 	second, stored := c.setIfEpoch(key, []byte("duplicate-read"), epoch)
-	if !stored || string(second) != "durable-value" {
-		t.Fatalf("racing fill = (%q,%v), want first immutable value", second, stored)
+	if !stored || string(second) != "duplicate-read" {
+		t.Fatalf("second racing fill = (%q,%v), want admitted duplicate-read", second, stored)
 	}
-	if &first[0] != &second[0] {
-		t.Fatal("racing fill copied/replaced the existing immutable value")
+	third, stored := c.setIfEpoch(key, []byte("late-read"), epoch)
+	if !stored || string(third) != "duplicate-read" {
+		t.Fatalf("late racing fill = (%q,%v), want existing duplicate-read", third, stored)
 	}
+	_ = first
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	if len(s.entries) != 1 || len(s.queue)-s.head != 1 || s.nextGen != 1 {
 		t.Fatalf("racing fills published entries=%d tokens=%d generation=%d, want 1/1/1", len(s.entries), len(s.queue)-s.head, s.nextGen)
@@ -142,8 +181,11 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 		for range b.N {
 			c.del(key)
 			_, _, epoch := c.getWithEpoch(key)
+			if _, stored := c.setIfEpoch(key, value, epoch); stored {
+				b.Fatal("first refill bypassed probation")
+			}
 			if _, stored := c.setIfEpoch(key, value, epoch); !stored {
-				b.Fatal("refill rejected")
+				b.Fatal("second refill rejected")
 			}
 		}
 	})

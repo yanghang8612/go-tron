@@ -104,11 +104,12 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 		}
 	}
 
-	// A durable miss populates the cache and the next split-key read hits it.
+	// Two durable reads complete admission and the next split-key read hits it.
 	read(buf, oldValue, true)
 	read(buf, oldValue, true)
-	if base.gets != 1 {
-		t.Fatalf("base reads after split cache hit = %d, want 1", base.gets)
+	read(buf, oldValue, true)
+	if base.gets != 2 {
+		t.Fatalf("base reads after split cache hit = %d, want 2", base.gets)
 	}
 
 	// A bound LayerView must prefer its own overlay and tombstone over both the
@@ -124,8 +125,8 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(view, nil, false)
-	if base.gets != 1 {
-		t.Fatalf("overlay split reads reached base: %d reads, want 1", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("overlay split reads reached base: %d reads, want 2", base.gets)
 	}
 
 	// Replacing the tombstone and flushing refreshes the cached durable value.
@@ -139,8 +140,8 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(buf, newValue, true)
-	if base.gets != 1 {
-		t.Fatalf("flushed split read did not use refreshed cache: %d reads, want 1", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("flushed split read did not use refreshed cache: %d reads, want 2", base.gets)
 	}
 }
 
@@ -225,12 +226,13 @@ func TestStateKVLatestStructuredLifecycle(t *testing.T) {
 				}
 			}
 
-			// The first durable read fills the cache; the second structured read
-			// must reconstruct the identical physical key and hit it.
+			// Two durable reads complete admission; the third structured read must
+			// reconstruct the identical physical key and hit it.
 			read(logicalKey, "durable", true)
 			read(logicalKey, "durable", true)
-			if base.gets != 1 {
-				t.Fatalf("base reads after structured cache hit = %d, want 1", base.gets)
+			read(logicalKey, "durable", true)
+			if base.gets != 2 {
+				t.Fatalf("base reads after structured cache hit = %d, want 2", base.gets)
 			}
 
 			originalKey := append([]byte(nil), logicalKey...)
@@ -243,8 +245,8 @@ func TestStateKVLatestStructuredLifecycle(t *testing.T) {
 			publish()
 			read(originalKey, "overlay", true)
 			read(logicalKey, "", false)
-			if base.gets != 2 { // mutated key is a genuine one-time base miss
-				t.Fatalf("base reads after overlay/mutated-key reads = %d, want 2", base.gets)
+			if base.gets != 3 { // mutated key is a genuine one-time base miss
+				t.Fatalf("base reads after overlay/mutated-key reads = %d, want 3", base.gets)
 			}
 
 			if err := rawdb.DeleteStateKVLatest(writer, owner, generation, domain, originalKey); err != nil {
@@ -255,8 +257,8 @@ func TestStateKVLatestStructuredLifecycle(t *testing.T) {
 
 			// Long logical keys use the owned fallback and must remain byte-exact.
 			read(oversizedKey, "oversized", true)
-			if base.gets != 3 {
-				t.Fatalf("base reads after oversized key = %d, want 3", base.gets)
+			if base.gets != 4 {
+				t.Fatalf("base reads after oversized key = %d, want 4", base.gets)
 			}
 		})
 	}
@@ -532,7 +534,8 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	b := New(base)
 	b.SetBaseReadCacheSize(1 << 20)
 
-	// First durable read populates; second read is served without touching base.
+	// The first durable read records probation, the second admits the key, and
+	// the third is served without touching base.
 	mustCached := func(want []byte) {
 		t.Helper()
 		got, err := b.GetNoCopyCached(key)
@@ -542,11 +545,12 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	}
 	mustCached(oldValue)
 	mustCached(oldValue)
-	if base.gets != 1 {
-		t.Fatalf("base gets after cache hit = %d, want 1", base.gets)
+	mustCached(oldValue)
+	if base.gets != 2 {
+		t.Fatalf("base gets after cache hit = %d, want 2", base.gets)
 	}
-	if base.views != 1 {
-		t.Fatalf("base callback views after cache fill = %d, want 1", base.views)
+	if base.views != 2 {
+		t.Fatalf("base callback views after cache fill = %d, want 2", base.views)
 	}
 
 	// An orphan overlay wins while present; discarding it reveals the still-valid
@@ -560,8 +564,8 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	mustCached(orphanValue)
 	b.DiscardBlock(bufHash(1))
 	mustCached(oldValue)
-	if base.gets != 1 {
-		t.Fatalf("fork discard invalidated unchanged base: gets=%d, want 1", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("fork discard invalidated unchanged base: gets=%d, want 2", base.gets)
 	}
 
 	// A flushed canonical write changes the durable generation. Because the key
@@ -577,8 +581,8 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCached(newValue)
-	if base.gets != 1 {
-		t.Fatalf("base gets after flushed overwrite = %d, want 1", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("base gets after flushed overwrite = %d, want 2", base.gets)
 	}
 
 	// A flushed tombstone also invalidates. Missing values are deliberately not
@@ -636,11 +640,12 @@ func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 	first := read(oldValue, true)
 	first[0] = 'X'
 	read(oldValue, true)
-	if base.gets != 1 {
-		t.Fatalf("base gets after cached flat-latest read = %d, want 1", base.gets)
+	read(oldValue, true)
+	if base.gets != 2 {
+		t.Fatalf("base gets after cached flat-latest read = %d, want 2", base.gets)
 	}
-	if base.views != 1 {
-		t.Fatalf("base callback views after flat-latest cache fill = %d, want 1", base.views)
+	if base.views != 2 {
+		t.Fatalf("base callback views after flat-latest cache fill = %d, want 2", base.views)
 	}
 
 	b.BeginBlock(bufHash(1), 1)
@@ -653,8 +658,8 @@ func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(newValue, true)
-	if base.gets != 1 {
-		t.Fatalf("base gets after flat-latest flush refresh = %d, want 1", base.gets)
+	if base.gets != 2 {
+		t.Fatalf("base gets after flat-latest flush refresh = %d, want 2", base.gets)
 	}
 
 	b.BeginBlock(bufHash(2), 2)
@@ -667,8 +672,8 @@ func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(nil, false)
-	if base.gets != 2 {
-		t.Fatalf("base gets after flat-latest delete = %d, want 2", base.gets)
+	if base.gets != 3 {
+		t.Fatalf("base gets after flat-latest delete = %d, want 3", base.gets)
 	}
 }
 
@@ -727,8 +732,14 @@ func TestBaseReadCache_RejectsLateFillAfterFlush(t *testing.T) {
 	if _, err := b.GetNoCopyCached(key); err != nil {
 		t.Fatal(err)
 	}
-	if base.gets != 2 {
-		t.Fatalf("new generation did not populate cache: gets=%d, want 2", base.gets)
+	if base.gets != 3 {
+		t.Fatalf("new generation did not complete admission: gets=%d, want 3", base.gets)
+	}
+	if _, err := b.GetNoCopyCached(key); err != nil {
+		t.Fatal(err)
+	}
+	if base.gets != 3 {
+		t.Fatalf("new generation was not cached after admission: gets=%d, want 3", base.gets)
 	}
 }
 
