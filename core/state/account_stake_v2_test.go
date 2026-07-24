@@ -123,6 +123,59 @@ func TestAccountFrozenV2PointReadCacheAndSnapshotInvalidation(t *testing.T) {
 	}
 }
 
+func TestTronPowerReadsOnlyRelevantFrozenRows(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xac)
+	receiver := testAddr(0xad)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.CreateAccount(receiver, corepb.AccountType_Normal)
+	sdb.FreezeV1Bandwidth(addr, 10, 1)
+	sdb.FreezeV1Energy(addr, 20, 1)
+	sdb.FreezeV1TronPower(addr, 60, 1)
+	sdb.FreezeV1DelegatedBandwidth(addr, receiver, 5)
+	sdb.FreezeV1DelegatedEnergy(addr, receiver, 6)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 30)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, 40)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_TRON_POWER, 50)
+	sdb.AddDelegatedFrozenV2(addr, corepb.ResourceCode_BANDWIDTH, 7)
+	sdb.AddDelegatedFrozenV2(addr, corepb.ResourceCode_ENERGY, 8)
+	// The unfreeze queue is intentionally non-empty: voting-power reads must not
+	// scan or materialize it.
+	sdb.AddUnfreezeV2(addr, corepb.ResourceCode_ENERGY, 70, 100)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	if got := reopened.GetLegacyTronPower(addr); got != 126 {
+		t.Fatalf("legacy tron power = %d, want 126", got)
+	}
+	if got := reopened.GetAllTronPower(addr); got != 236 {
+		t.Fatalf("all tron power = %d, want 236", got)
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("tron-power point reads opened %d iterators", store.iteratorCalls)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj.accountMapsLoaded || obj.accountPermissionsLoaded || obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded || obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
+		t.Fatalf("tron-power reads materialized unrelated split domains: %+v", obj)
+	}
+
+	reopened.InitializeOldTronPowerIfNeeded(addr)
+	if got := reopened.AccountReference(addr).OldTronPower(); got != 126 {
+		t.Fatalf("initialized old tron power = %d, want 126", got)
+	}
+	if store.iteratorCalls != 0 || obj.accountStakeV2Loaded {
+		t.Fatalf("old-power initialization scanned StakeV2: iterators=%d loaded=%v", store.iteratorCalls, obj.accountStakeV2Loaded)
+	}
+}
+
 func TestAccountStakeV2PersistsOutsideAccountEnvelope(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x99)

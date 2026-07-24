@@ -1939,16 +1939,41 @@ func (s *StateDB) GetLegacyTronPower(addr tcommon.Address) int64 {
 	if obj == nil {
 		return 0
 	}
+	power, err := s.legacyTronPower(obj)
+	if err != nil {
+		return 0
+	}
+	return power
+}
+
+// legacyTronPower computes java-tron's getTronPower from the exact resource
+// rows it uses. In particular it does not scan the unrelated V2 unfreeze queue
+// or materialize the whole StakeV2 account domain.
+func (s *StateDB) legacyTronPower(obj *stateObject) (int64, error) {
+	bandwidth, err := s.accountFrozenBandwidthTotal(obj)
+	if err != nil {
+		return 0, err
+	}
 	if err := s.materializeAccountResource(obj); err != nil {
-		return 0
+		return 0, err
 	}
-	if err := s.materializeAccountStakeV1(obj); err != nil {
-		return 0
+	frozenV2Bandwidth, _, err := s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.materializeAccountStakeV2(obj); err != nil {
-		return 0
+	frozenV2Energy, _, err := s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
+	if err != nil {
+		return 0, err
 	}
-	return obj.account.LegacyTronPower()
+	acct := obj.account
+	return bandwidth +
+		acct.FrozenEnergyAmount() +
+		acct.DelegatedFrozenBandwidth() +
+		acct.DelegatedFrozenEnergy() +
+		frozenV2Bandwidth +
+		frozenV2Energy +
+		acct.DelegatedFrozenV2BalanceForBandwidth() +
+		acct.DelegatedFrozenV2BalanceForEnergy(), nil
 }
 
 // GetAllTronPower returns the AllowNewResourceModel voting power in drops.
@@ -1957,16 +1982,30 @@ func (s *StateDB) GetAllTronPower(addr tcommon.Address) int64 {
 	if obj == nil {
 		return 0
 	}
-	if err := s.materializeAccountResource(obj); err != nil {
+	v1TronPower, _, err := s.accountTronPower(obj)
+	if err != nil {
 		return 0
 	}
-	if err := s.materializeAccountStakeV1(obj); err != nil {
+	var v1Amount int64
+	if v1TronPower != nil {
+		v1Amount = v1TronPower.FrozenBalance
+	}
+	v2Amount, _, err := s.accountFrozenV2Amount(obj, corepb.ResourceCode_TRON_POWER)
+	if err != nil {
 		return 0
 	}
-	if err := s.materializeAccountStakeV2(obj); err != nil {
-		return 0
+	switch oldPower := obj.account.OldTronPower(); {
+	case oldPower == -1:
+		return v1Amount + v2Amount
+	case oldPower == 0:
+		legacy, err := s.legacyTronPower(obj)
+		if err != nil {
+			return 0
+		}
+		return legacy + v1Amount + v2Amount
+	default:
+		return oldPower + v1Amount + v2Amount
 	}
-	return obj.account.AllTronPower()
 }
 
 // InitializeOldTronPowerIfNeeded snapshots LegacyTronPower into old_tron_power
@@ -1976,17 +2015,15 @@ func (s *StateDB) InitializeOldTronPowerIfNeeded(addr tcommon.Address) {
 	if obj == nil || !obj.account.OldTronPowerIsNotInitialized() {
 		return
 	}
-	if err := s.materializeAccountResource(obj); err != nil {
+	value, err := s.legacyTronPower(obj)
+	if err != nil {
 		return
 	}
-	if err := s.materializeAccountStakeV1(obj); err != nil {
-		return
-	}
-	if err := s.materializeAccountStakeV2(obj); err != nil {
-		return
+	if value == 0 {
+		value = -1
 	}
 	s.journalAccount(addr, obj)
-	obj.account.InitializeOldTronPower()
+	obj.account.SetOldTronPower(value)
 	obj.markDirty()
 }
 
