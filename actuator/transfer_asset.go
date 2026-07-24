@@ -10,11 +10,44 @@ import (
 )
 
 // TransferAssetActuator handles TRC10 token transfers (contract type 2).
-type TransferAssetActuator struct{}
+type TransferAssetActuator struct {
+	assetCache assetResolverCache
+}
 
 type resolvedAsset struct {
 	TokenID int64
 	Asset   *contractpb.AssetIssueContract
+}
+
+// assetResolverCache carries the immutable asset metadata resolved during
+// Validate into Execute. Core creates one actuator per transaction, and no
+// TRC10 metadata mutation occurs between those two calls. Matching the wire
+// name and fork mode keeps direct/reused test calls safe as well.
+type assetResolverCache struct {
+	assetName          string
+	allowSameTokenName bool
+	resolved           *resolvedAsset
+}
+
+func (c *assetResolverCache) reset() {
+	c.assetName = ""
+	c.allowSameTokenName = false
+	c.resolved = nil
+}
+
+func (c *assetResolverCache) resolve(ctx *Context, assetName []byte) (*resolvedAsset, error) {
+	allowSameTokenName := ctx.DynProps.AllowSameTokenName()
+	if c.resolved != nil && c.assetName == string(assetName) && c.allowSameTokenName == allowSameTokenName {
+		return c.resolved, nil
+	}
+	resolved, err := resolveAsset(ctx, assetName)
+	if err != nil {
+		return nil, err
+	}
+	c.assetName = string(assetName)
+	c.allowSameTokenName = allowSameTokenName
+	c.resolved = resolved
+	return resolved, nil
 }
 
 // resolveAssetNameOrID accepts the wire-format asset_name field. Before
@@ -43,17 +76,32 @@ func resolveAssetNameOrID(ctx *Context, assetName []byte) (int64, error) {
 }
 
 func resolveAsset(ctx *Context, assetName []byte) (*resolvedAsset, error) {
+	// Before AllowSameTokenName the legacy metadata row already contains the
+	// numeric ID. Return that same decoded message instead of resolving the ID
+	// in one read and loading the identical name row again in a second read.
+	if !ctx.DynProps.AllowSameTokenName() {
+		if asset := ctx.State.ReadAssetIssueByName(assetName); asset != nil {
+			tokenID, err := strconv.ParseInt(asset.Id, 10, 64)
+			if err != nil {
+				return nil, errors.New("invalid legacy asset ID")
+			}
+			return &resolvedAsset{TokenID: tokenID, Asset: asset}, nil
+		}
+		tokenID, ok := ctx.State.ReadAssetNameIndex(assetName)
+		if !ok {
+			return nil, errors.New("invalid asset_name: no name index hit")
+		}
+		asset := ctx.State.ReadAssetIssue(tokenID)
+		if asset == nil {
+			return nil, errors.New("token not found")
+		}
+		return &resolvedAsset{TokenID: tokenID, Asset: asset}, nil
+	}
 	tokenID, err := resolveAssetNameOrID(ctx, assetName)
 	if err != nil {
 		return nil, err
 	}
-	var asset *contractpb.AssetIssueContract
-	if !ctx.DynProps.AllowSameTokenName() {
-		asset = ctx.State.ReadAssetIssueByName(assetName)
-	}
-	if asset == nil {
-		asset = ctx.State.ReadAssetIssue(tokenID)
-	}
+	asset := ctx.State.ReadAssetIssue(tokenID)
 	if asset == nil {
 		return nil, errors.New("token not found")
 	}
@@ -72,7 +120,8 @@ func (a *TransferAssetActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	asset, err := resolveAsset(ctx, c.AssetName)
+	a.assetCache.reset()
+	asset, err := a.assetCache.resolve(ctx, c.AssetName)
 	if err != nil {
 		return err
 	}
@@ -121,7 +170,7 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	asset, err := resolveAsset(ctx, c.AssetName)
+	asset, err := a.assetCache.resolve(ctx, c.AssetName)
 	if err != nil {
 		return nil, err
 	}

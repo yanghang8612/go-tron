@@ -80,8 +80,15 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate must accept literal name: %v", err)
 	}
+	validatedAsset := act.assetCache.resolved
+	if validatedAsset == nil || validatedAsset.Asset == nil {
+		t.Fatal("validate did not retain resolved asset metadata")
+	}
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute must succeed with literal name: %v", err)
+	}
+	if act.assetCache.resolved != validatedAsset {
+		t.Fatal("execute decoded asset metadata again instead of reusing validate result")
 	}
 	if got := statedb.GetTRC10Balance(owner, tokenID); got != 21_000_000-100 {
 		t.Errorf("owner balance after transfer: got %d want %d", got, 21_000_000-100)

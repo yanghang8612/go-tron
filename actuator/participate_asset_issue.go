@@ -9,7 +9,9 @@ import (
 
 // ParticipateAssetIssueActuator handles TRC10 ICO participation (contract type 9).
 // Buyers send TRX to the issuer in exchange for tokens at the asset's exchange rate.
-type ParticipateAssetIssueActuator struct{}
+type ParticipateAssetIssueActuator struct {
+	assetCache assetResolverCache
+}
 
 func (a *ParticipateAssetIssueActuator) getContract(ctx *Context) (*contractpb.ParticipateAssetIssueContract, error) {
 	return decodedContract[*contractpb.ParticipateAssetIssueContract](ctx, "ParticipateAssetIssueContract")
@@ -23,7 +25,8 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	resolved, err := resolveAsset(ctx, c.AssetName)
+	a.assetCache.reset()
+	resolved, err := a.assetCache.resolve(ctx, c.AssetName)
 	if err != nil {
 		return err
 	}
@@ -93,7 +96,7 @@ func (a *ParticipateAssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := resolveAsset(ctx, c.AssetName)
+	resolved, err := a.assetCache.resolve(ctx, c.AssetName)
 	if err != nil {
 		return nil, err
 	}
