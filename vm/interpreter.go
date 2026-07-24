@@ -295,9 +295,7 @@ func makePush(size int) executionFunc {
 			endMin = uint64(len(contract.Code))
 		}
 
-		var v uint256.Int
-		v.SetBytes(contract.Code[startMin:endMin])
-		stack.push(&v)
+		stack.pushBytes(contract.Code[startMin:endMin])
 		*pc += uint64(size)
 		return nil, nil
 	}

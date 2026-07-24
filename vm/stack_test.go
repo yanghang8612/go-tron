@@ -24,6 +24,22 @@ func TestStackPushPop(t *testing.T) {
 	}
 }
 
+func TestStackPushBytesMatchesUint256(t *testing.T) {
+	s := newStack()
+	for size := 0; size <= 32; size++ {
+		input := make([]byte, size)
+		for i := range input {
+			input[i] = byte(size + i + 1)
+		}
+		var want uint256.Int
+		want.SetBytes(input)
+		s.pushBytes(input)
+		if got := s.pop(); !got.Eq(&want) {
+			t.Fatalf("pushBytes size %d = %s, want %s", size, got.String(), want.String())
+		}
+	}
+}
+
 func TestStackPeek(t *testing.T) {
 	s := newStack()
 	s.push(uint256.NewInt(10))
