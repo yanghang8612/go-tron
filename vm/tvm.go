@@ -163,6 +163,16 @@ func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value
 	return tvm.addInternalTransactionWithTokenInfo(caller, transferTo, value, data, note, tokenInfo)
 }
 
+// internalTransactionRecord keeps the protobuf message, its mandatory value,
+// and the one-element pointer backing array in one allocation. A pointer to tx
+// is an interior pointer into the record, so retaining the returned protobuf
+// keeps the complete record alive.
+type internalTransactionRecord struct {
+	tx         corepb.InternalTransaction
+	baseValue  corepb.InternalTransaction_CallValueInfo
+	callValues [1]*corepb.InternalTransaction_CallValueInfo
+}
+
 func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
 	// java-tron's identity is keccak(parent || receive || data || value ||
 	// nonce). Absorb the fields directly: the former concatenation allocated
@@ -187,15 +197,15 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	copy(identityBytes[off:], note)
 	noteBytes := identityBytes[off : off+len(note) : off+len(note)]
 
-	it := &corepb.InternalTransaction{
-		Hash:              hashBytes,
-		CallerAddress:     callerBytes,
-		TransferToAddress: transferBytes,
-		CallValueInfo: []*corepb.InternalTransaction_CallValueInfo{{
-			CallValue: value,
-		}},
-		Note: noteBytes,
-	}
+	record := new(internalTransactionRecord)
+	record.baseValue.CallValue = value
+	record.callValues[0] = &record.baseValue
+	it := &record.tx
+	it.Hash = hashBytes
+	it.CallerAddress = callerBytes
+	it.TransferToAddress = transferBytes
+	it.CallValueInfo = record.callValues[:]
+	it.Note = noteBytes
 	if len(tokenInfo) > 0 {
 		callValues := make([]*corepb.InternalTransaction_CallValueInfo, 1, 1+len(tokenInfo))
 		callValues[0] = it.CallValueInfo[0]
