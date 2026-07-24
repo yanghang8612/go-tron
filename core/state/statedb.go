@@ -33,6 +33,14 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// lastStateObject is a single-entry lookup cache for the account map. TVM
+	// execution commonly performs long runs of SLOAD/SSTORE and account queries
+	// against the current contract, all of which otherwise hash the same address
+	// in stateObjects. StateDB is execution-goroutine confined, so no locking is
+	// needed. RevertToSnapshot clears the cache because journal replay may delete
+	// or replace the mapped object.
+	lastStateObject *stateObject
+
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.
 	// Successful commit releases bytes that were never consumed by a mutation,
@@ -728,7 +736,10 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 		obj.account = acc.Copy()
 		return
 	}
-	s.stateObjects[addr] = newStateObject(addr, acc.Copy())
+	obj := newStateObject(addr, acc.Copy())
+	obj.dirtySet = s.dirtyObjects
+	s.stateObjects[addr] = obj
+	s.lastStateObject = obj
 }
 
 // LoadAccountReference hydrates an account into the in-memory object cache
@@ -746,7 +757,10 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 		obj.account = acc
 		return
 	}
-	s.stateObjects[addr] = newStateObject(addr, acc)
+	obj := newStateObject(addr, acc)
+	obj.dirtySet = s.dirtyObjects
+	s.stateObjects[addr] = obj
+	s.lastStateObject = obj
 }
 
 // LoadAccountSnapshotReference hydrates an account envelope into the in-memory
@@ -766,7 +780,9 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 	obj.accountKVGeneration = snapshot.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
 	obj.codeHash = snapshot.CodeHash
+	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
+	s.lastStateObject = obj
 }
 
 // CopyAccount returns a detached copy of the cached/live account.
@@ -861,6 +877,7 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	obj.dirtySet = s.dirtyObjects
 	s.dirtyObjects[addr] = struct{}{}
 	s.stateObjects[addr] = obj
+	s.lastStateObject = obj
 	return obj
 }
 
@@ -1539,6 +1556,9 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	}
 	journalLen := s.snapshots[id]
 	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
+	// accountChange/codeChange/contractMetaChange may delete or replace an
+	// object in stateObjects. Never retain a pointer across journal replay.
+	s.lastStateObject = nil
 	s.snapshots = s.snapshots[:id]
 }
 
@@ -3627,12 +3647,19 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 // getStateObject returns the state object for addr, loading from the flat
 // account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
+	// Address byte 20 is uniformly distributed for normal TRON addresses. Check
+	// it before the full 21-byte equality so alternating-account workloads pay
+	// one byte comparison rather than comparing the common 0x41 prefix first.
+	if obj := s.lastStateObject; obj != nil && obj.address[20] == addr[20] && obj.address == addr {
+		return obj
+	}
 	if obj, ok := s.stateObjects[addr]; ok {
 		// Heal objects that entered the cache without a back-pointer (Load*
 		// hydration, journal-revert re-creation) so their next markDirty records.
 		if obj.dirtySet == nil {
 			obj.dirtySet = s.dirtyObjects
 		}
+		s.lastStateObject = obj
 		return obj
 	}
 	data, ok, err := s.readStateAccountLatestForHydration(addr)
@@ -3660,6 +3687,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	obj.codeHash = envelope.CodeHash
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
+	s.lastStateObject = obj
 	s.loadedAccountProtoObjects = append(s.loadedAccountProtoObjects, obj)
 	return obj
 }

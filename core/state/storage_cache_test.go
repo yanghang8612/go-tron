@@ -177,6 +177,26 @@ func BenchmarkGetStateUniqueMissingStorageRows(b *testing.B) {
 	}
 }
 
+func BenchmarkGetStateAlternatingCachedAccounts(b *testing.B) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	addrs := [2]tcommon.Address{testAddr(0xa5), testAddr(0xa6)}
+	slot := tcommon.Hash{0x01}
+	for i, addr := range addrs {
+		sdb.CreateAccount(addr, corepb.AccountType_Contract)
+		obj := sdb.getStateObject(addr)
+		obj.ensureStorage()
+		obj.storage[slot] = storageSlot{value: tcommon.Hash{byte(i + 1)}, exists: true}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sdb.GetStateWithExist(addrs[i&1], slot)
+	}
+}
+
 func BenchmarkSetStateCachedDirtySlot(b *testing.B) {
 	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
 	if err != nil {
