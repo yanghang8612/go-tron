@@ -300,6 +300,38 @@ func TestRecoverSigners_TolerateTrailingBytes(t *testing.T) {
 	}
 }
 
+func TestSignatureForRecoveryBorrowsCanonicalInput(t *testing.T) {
+	canonical := make([]byte, 66)
+	canonical[64] = 1
+	canonical[65] = 0x7f
+	got, err := signatureForRecovery(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 65 || got[64] != 1 {
+		t.Fatalf("canonical recovery signature = %x", got)
+	}
+	if &got[0] != &canonical[0] {
+		t.Fatal("canonical v=0/1 signature should borrow immutable protobuf bytes")
+	}
+
+	javaStyle := append([]byte(nil), canonical...)
+	javaStyle[64] = 28
+	normalized, err := signatureForRecovery(javaStyle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized[64] != 1 {
+		t.Fatalf("normalized recovery id = %d, want 1", normalized[64])
+	}
+	if &normalized[0] == &javaStyle[0] {
+		t.Fatal("Java-style v=27/28 signature must use a normalized copy")
+	}
+	if javaStyle[64] != 28 {
+		t.Fatal("normalization mutated protobuf signature")
+	}
+}
+
 // TestRecoverSigners_RejectsShortSignature pins the lower bound: java's
 // checkWeight throws SignatureFormatException on sig.size() < 65, and so
 // must we.
