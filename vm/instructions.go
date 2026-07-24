@@ -354,8 +354,7 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Input, javaCopySourceOffset(&dataOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, contract.Input, javaCopySourceOffset(&dataOffset))
 	return nil, nil
 }
 
@@ -379,8 +378,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Code, javaCopySourceOffset(&codeOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, contract.Code, javaCopySourceOffset(&codeOffset))
 	return nil, nil
 }
 
@@ -406,8 +404,7 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	}
 	resizeMemory(memory, off, size)
 	code := interpreter.tvm.StateDB.GetCode(address)
-	data := getDataSlice(code, javaCopySourceOffset(&codeOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, code, javaCopySourceOffset(&codeOffset))
 	return nil, nil
 }
 
@@ -1115,17 +1112,6 @@ func addressToUint256WithMode(addr tcommon.Address, multiSign bool) uint256.Int 
 		return addressToUint256(addr)
 	}
 	return addressToUint256WithPrefix(addr)
-}
-
-func getDataSlice(data []byte, offset, size uint64) []byte {
-	if size == 0 {
-		return nil
-	}
-	result := make([]byte, size)
-	if offset < uint64(len(data)) {
-		copy(result, data[offset:])
-	}
-	return result
 }
 
 // javaCopySourceOffset mirrors how java decodes the SOURCE offset of the

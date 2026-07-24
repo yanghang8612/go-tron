@@ -54,6 +54,25 @@ func (m *Memory) set(offset, size uint64, value []byte) {
 	copy(m.store[offset:offset+size], value)
 }
 
+// setPadded copies source[sourceOffset:] into [offset, offset+size), truncating
+// to size and zero-filling every byte not covered by the source. The COPY
+// opcodes consume the result immediately, so writing into final VM memory
+// avoids allocating a same-sized zero-padded temporary slice.
+func (m *Memory) setPadded(offset, size uint64, source []byte, sourceOffset uint64) {
+	if size == 0 {
+		return
+	}
+	if offset+size > uint64(len(m.store)) {
+		m.resize(offset + size)
+	}
+	dst := m.store[offset : offset+size]
+	copied := 0
+	if sourceOffset < uint64(len(source)) {
+		copied = copy(dst, source[sourceOffset:])
+	}
+	clear(dst[copied:])
+}
+
 // set32 writes a 32-byte big-endian uint256 at offset.
 func (m *Memory) set32(offset uint64, val *uint256.Int) {
 	if offset+32 > uint64(len(m.store)) {
