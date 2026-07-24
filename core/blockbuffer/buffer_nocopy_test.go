@@ -916,7 +916,7 @@ func BenchmarkCommitmentBranchLayerOwnedBatches(b *testing.B) {
 				for b.Loop() {
 					l := newLayer(common.Hash{}, 1)
 					for batch := 0; batch < batchCount; batch++ {
-						buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch])
+						buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch], batchCount)
 					}
 					benchmarkCommitmentLayerSink = l
 				}
@@ -931,13 +931,35 @@ func BenchmarkCommitmentBranchLayerOwnedBatches(b *testing.B) {
 					for batch := 0; batch < batchCount; batch++ {
 						go func(batch int) {
 							defer wg.Done()
-							buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch])
+							buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch], batchCount)
 						}(batch)
 					}
 					wg.Wait()
 					benchmarkCommitmentLayerSink = l
 				}
 			})
+		})
+	}
+}
+
+func BenchmarkCommitmentBranchLayerSparseReservation(b *testing.B) {
+	const batchSize = 64
+	prefix := []byte("state-commitment-branch-v1-")
+	seconds := make([]string, batchSize)
+	values := make([][]byte, batchSize)
+	for i := range seconds {
+		seconds[i] = string([]byte{byte(i >> 8), byte(i)})
+		values[i] = bytes.Repeat([]byte{byte(i + 1)}, 256)
+	}
+	buf := new(Buffer)
+	for _, hint := range []int{1, 16} {
+		b.Run("hint-"+strconv.Itoa(hint), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				l := newLayer(common.Hash{}, 1)
+				buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds, values, hint)
+				benchmarkCommitmentLayerSink = l
+			}
 		})
 	}
 }

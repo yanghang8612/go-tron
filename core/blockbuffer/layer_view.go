@@ -25,11 +25,6 @@ func returnSplitReadKey(key *[splitReadKeyStackSize]byte) {
 	splitReadKeyPool.Put(key)
 }
 
-// A parallel commitment root fold publishes at most one batch from each of
-// its 16 first-nibble siblings. The first sibling reaching a layer shard uses
-// this fan-out to reserve the map once for the batches likely to follow.
-const commitmentSiblingBatchCount = 16
-
 type ownedValueBatchLink struct {
 	end  int
 	next int // next entry index + 1; zero terminates the shard chain
@@ -171,7 +166,10 @@ func (b *Buffer) putIntoKeyPartsStringOwnedValue(l *layer, first []byte, second 
 // while packing all immutable physical map keys into one exact-size arena.
 // Each unsafe string keeps that shared arena alive until its layer is dropped;
 // the arena is never mutated after publication.
-func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, seconds []string, values [][]byte) {
+func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, seconds []string, values [][]byte, reserveBatches int) {
+	if reserveBatches < 1 {
+		reserveBatches = 1
+	}
 	totalSize := len(first) * len(seconds)
 	for _, second := range seconds {
 		totalSize += len(second)
@@ -204,7 +202,12 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 		s := &l.shards[shard]
 		s.mu.Lock()
 		if !s.commitmentReserved {
-			capacity := len(s.writes) + counts[shard]*commitmentSiblingBatchCount
+			// Reserve for the number of root-sibling batches the commitment fold
+			// actually started. Historical mainnet blocks commonly touch only one
+			// or two siblings; assuming the maximum fan-out of 16 made every sparse
+			// block allocate a mostly empty map. A dense fold still supplies 16 and
+			// preserves the single-allocation behaviour of the original fast path.
+			capacity := len(s.writes) + counts[shard]*reserveBatches
 			reserved := make(map[string][]byte, capacity)
 			for key, value := range s.writes {
 				reserved[key] = value
@@ -325,10 +328,17 @@ func (v *LayerView) PutKeyPartsStringOwnedValue(first []byte, second string, val
 // PutKeyPartsStringOwnedValue. The caller transfers immutable values; this
 // layer owns one shared arena containing every joined physical key.
 func (v *LayerView) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	return v.PutKeyPartsStringsOwnedValuesWithBatchCount(first, seconds, values, 1)
+}
+
+// PutKeyPartsStringsOwnedValuesWithBatchCount additionally supplies the
+// number of sibling batches expected to publish into this layer. It lets the
+// first batch reserve accurately for sparse and dense commitment folds alike.
+func (v *LayerView) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error {
 	if len(seconds) != len(values) {
 		return errors.New("blockbuffer: key/value batch length mismatch")
 	}
-	v.b.putIntoKeyPartsStringsOwnedValues(v.l, first, seconds, values)
+	v.b.putIntoKeyPartsStringsOwnedValues(v.l, first, seconds, values, batchCount)
 	return nil
 }
 

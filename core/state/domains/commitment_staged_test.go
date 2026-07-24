@@ -41,7 +41,7 @@ func TestRawdbBranchStoreBatchRoundTrip(t *testing.T) {
 		string([]byte{0x02, 0x03}): &second,
 	}
 	keys := []string{string([]byte{0x01}), string([]byte{0x02, 0x03})}
-	if err := store.putBranchesSorted(keys, branches); err != nil {
+	if err := store.putBranchesSorted(keys, branches, 1); err != nil {
 		t.Fatalf("put branch batch: %v", err)
 	}
 

@@ -26,6 +26,7 @@ type ownedKeyPartsProbeWriter struct {
 	ownedCalls       int
 	stringOwnedCalls int
 	batchOwnedCalls  int
+	batchCount       int
 	batchKeys        [][]byte
 	batchValues      [][]byte
 }
@@ -52,6 +53,11 @@ func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringsOwnedValues(first []byte, s
 	}
 	w.batchValues = values
 	return nil
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error {
+	w.batchCount = batchCount
+	return w.PutKeyPartsStringsOwnedValues(first, seconds, values)
 }
 
 func (w *keyPartsProbeWriter) Put(_, _ []byte) error {
@@ -140,6 +146,9 @@ func TestCommitmentBranchesOwnedStringsUsesBatchTransferWriter(t *testing.T) {
 		t.Fatalf("batch owned calls = batch %d string %d owned %d regular %d, want 1/0/0/0",
 			w.batchOwnedCalls, w.stringOwnedCalls, w.ownedCalls, w.putCalls)
 	}
+	if w.batchCount != 1 {
+		t.Fatalf("default batch count = %d, want 1", w.batchCount)
+	}
 	for i, prefix := range prefixes {
 		wantKey := commitmentBranchKey([]byte(prefix))
 		if !bytes.Equal(w.batchKeys[i], wantKey) || !bytes.Equal(w.batchValues[i], values[i]) {
@@ -151,6 +160,12 @@ func TestCommitmentBranchesOwnedStringsUsesBatchTransferWriter(t *testing.T) {
 	}
 	if err := WriteCommitmentBranchesOwnedStrings(w, prefixes, values[:1]); err == nil {
 		t.Fatal("mismatched batch lengths were accepted")
+	}
+	if err := WriteCommitmentBranchesOwnedStringsWithBatchCount(w, prefixes, values, 7); err != nil {
+		t.Fatal(err)
+	}
+	if w.batchCount != 7 {
+		t.Fatalf("explicit batch count = %d, want 7", w.batchCount)
 	}
 }
 

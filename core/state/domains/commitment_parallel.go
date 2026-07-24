@@ -104,7 +104,7 @@ type concurrentSiblingFlushStore interface {
 // rawdb adapter uses this seam to arena-pack immutable encodings; generic test
 // stores keep the ordinary one-PutBranch-at-a-time path.
 type branchBatchStore interface {
-	putBranchesSorted(keys []string, branches map[string]*BranchData) error
+	putBranchesSorted(keys []string, branches map[string]*BranchData, batchCount int) error
 }
 
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
@@ -194,7 +194,7 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 // iteration only makes the emitted write stream deterministic. Each surviving
 // branch is encoded here exactly once (inside base.PutBranch). Sorting stabilizes
 // each sibling's stream; opted-in concurrent siblings may interleave freely.
-func (s *bufferedBranchStore) flush(base branchStore) error {
+func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
 	// A buffered store is single-use: after applyRootParallel flushes it, no
 	// caller reads it again. Return every large BranchData destination even when
 	// the base write fails so the next fold can reuse the storage.
@@ -219,7 +219,7 @@ func (s *bufferedBranchStore) flush(base branchStore) error {
 		}
 		sort.Strings(keys)
 		if batch, ok := base.(branchBatchStore); ok {
-			return batch.putBranchesSorted(keys, s.puts)
+			return batch.putBranchesSorted(keys, s.puts, batchCount)
 		}
 		for _, k := range keys {
 			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
@@ -289,6 +289,12 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	if store, ok := t.store.(concurrentSiblingFlushStore); ok && limit > 1 {
 		concurrentFlush = store.concurrentSiblingFlushSafe()
 	}
+	activeBatches := 0
+	for _, count := range counts {
+		if count > 0 {
+			activeBatches++
+		}
+	}
 
 	var (
 		buffers [maxFoldNibbles]*bufferedBranchStore
@@ -321,7 +327,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 				// This worker only reads/writes prefixes beginning with nb. Publishing
 				// its finished buffer cannot affect any still-running sibling, so overlap
 				// encoding/writes with their computation and avoid a second goroutine wave.
-				err = buf.flush(t.store)
+				err = buf.flush(t.store, activeBatches)
 			}
 			errs[nb] = err
 		}(uint8(nb), buf, group)
@@ -335,7 +341,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		}
 	}
 	if !concurrentFlush {
-		if err := flushSiblingBuffersSerial(t.store, buffers); err != nil {
+		if err := flushSiblingBuffersSerial(t.store, buffers, activeBatches); err != nil {
 			returnSiblingBuffers(buffers)
 			return nil, err
 		}
@@ -350,12 +356,12 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 
 // flushSiblingBuffersSerial publishes first-nibble buffers in deterministic
 // order for stores that do not opt into concurrent read/write access.
-func flushSiblingBuffersSerial(base branchStore, buffers [maxFoldNibbles]*bufferedBranchStore) error {
+func flushSiblingBuffersSerial(base branchStore, buffers [maxFoldNibbles]*bufferedBranchStore, batchCount int) error {
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if buffers[nb] == nil {
 			continue
 		}
-		if err := buffers[nb].flush(base); err != nil {
+		if err := buffers[nb].flush(base, batchCount); err != nil {
 			return err
 		}
 	}

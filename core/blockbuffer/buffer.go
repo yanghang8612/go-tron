@@ -1316,6 +1316,12 @@ func (b *Buffer) PutKeyPartsStringOwnedValue(first []byte, second string, value 
 // PutKeyPartsStringOwnedValue. It joins all physical keys into one immutable
 // arena and retains each caller-owned value directly.
 func (b *Buffer) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	return b.PutKeyPartsStringsOwnedValuesWithBatchCount(first, seconds, values, 1)
+}
+
+// PutKeyPartsStringsOwnedValuesWithBatchCount is the reservation-aware form
+// used by commitment sibling folds. See LayerView's equivalent method.
+func (b *Buffer) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error {
 	if len(seconds) != len(values) {
 		return errors.New("blockbuffer: key/value batch length mismatch")
 	}
@@ -1325,7 +1331,7 @@ func (b *Buffer) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, v
 	if active == nil {
 		panic("blockbuffer: PutKeyPartsStringsOwnedValues called with no active layer")
 	}
-	b.putIntoKeyPartsStringsOwnedValues(active, first, seconds, values)
+	b.putIntoKeyPartsStringsOwnedValues(active, first, seconds, values, batchCount)
 	return nil
 }
 

@@ -141,7 +141,7 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 // layer retains those slices until commit/drop, so a scratch buffer cannot be
 // reused; sharing one exact-sized arena removes the per-branch heap object while
 // preserving the owned-value lifetime. keys must be sorted by the caller.
-func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]*BranchData) error {
+func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]*BranchData, batchCount int) error {
 	if !s.ownedValue {
 		for _, key := range keys {
 			if err := s.PutBranch([]byte(key), *branches[key]); err != nil {
@@ -169,7 +169,7 @@ func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]
 		arena = plan.branch.encodeToLayout(arena, plan.mask, plan.size)
 		values[i] = arena[start:len(arena):len(arena)]
 	}
-	return rawdb.WriteCommitmentBranchesOwnedStrings(s.db, keys, values)
+	return rawdb.WriteCommitmentBranchesOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {

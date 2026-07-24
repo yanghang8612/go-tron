@@ -39,6 +39,10 @@ type keyPartsStringsOwnedValuesWriter interface {
 	PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error
 }
 
+type keyPartsStringsOwnedValuesBatchWriter interface {
+	PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error
+}
+
 // SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
 // encoded branch value directly. Callers use this to choose between allocating
 // the final immutable encoding and reusing a scratch buffer for copying stores.
@@ -90,8 +94,18 @@ func WriteCommitmentBranchOwnedString(db ethdb.KeyValueWriter, prefix string, en
 // branch. Values are already disjoint slices of the fold's immutable encoding
 // arena and may be retained directly.
 func WriteCommitmentBranchesOwnedStrings(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte) error {
+	return WriteCommitmentBranchesOwnedStringsWithBatchCount(db, prefixes, encoded, 1)
+}
+
+// WriteCommitmentBranchesOwnedStringsWithBatchCount carries the number of
+// active root-sibling batches to layered writers so their first map allocation
+// can reserve for the real fold fan-out rather than the maximum of 16.
+func WriteCommitmentBranchesOwnedStringsWithBatchCount(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte, batchCount int) error {
 	if len(prefixes) != len(encoded) {
 		return errors.New("rawdb: commitment branch batch length mismatch")
+	}
+	if writer, ok := db.(keyPartsStringsOwnedValuesBatchWriter); ok {
+		return writer.PutKeyPartsStringsOwnedValuesWithBatchCount(stateCommitmentBranchPrefix, prefixes, encoded, batchCount)
 	}
 	if writer, ok := db.(keyPartsStringsOwnedValuesWriter); ok {
 		return writer.PutKeyPartsStringsOwnedValues(stateCommitmentBranchPrefix, prefixes, encoded)

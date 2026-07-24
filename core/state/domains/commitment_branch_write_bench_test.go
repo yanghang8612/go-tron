@@ -80,7 +80,7 @@ func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				if err := store.putBranchesSorted(keys, branches); err != nil {
+				if err := store.putBranchesSorted(keys, branches, 1); err != nil {
 					b.Fatal(err)
 				}
 			}
