@@ -30,8 +30,10 @@ import (
 	"runtime"
 	runtimepprof "runtime/pprof"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -103,6 +105,18 @@ func NewServer(addr string) *Server {
 	// puts, deletes, putBytes } ] }
 	mux.HandleFunc("/debug/state-hotspots", stateHotspotsHandler)
 
+	// /debug/metrics exposes snapshots of the process metrics registry. Pebble
+	// already updates cache/filter/compaction gauges every three seconds; making
+	// them reachable here lets live sync sampling distinguish block-cache misses,
+	// table-cache misses, Bloom-filter effectiveness, and compaction debt without
+	// enabling any additional hot-path instrumentation. Use ?prefix=cache/ (or
+	// another metric-name prefix) to keep the response focused.
+	mux.HandleFunc("/debug/metrics", metricsHandler)
+	// The deployment gateway already proxies /debug/pprof/ as one protected
+	// diagnostic prefix. Keep an alias below it so operators can use metrics
+	// immediately without adding another externally reachable Nginx location.
+	mux.HandleFunc("/debug/pprof/metrics", metricsHandler)
+
 	return &Server{
 		httpServer: &http.Server{
 			Addr:    addr,
@@ -110,6 +124,30 @@ func NewServer(addr string) *Server {
 		},
 		addr: addr,
 	}
+}
+
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	all := metrics.DefaultRegistry.GetAll()
+	selected := make(map[string]map[string]interface{}, len(all))
+	for name, values := range all {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			selected[name] = values
+		}
+	}
+	out := struct {
+		Prefix  string                            `json:"prefix,omitempty"`
+		Count   int                               `json:"count"`
+		Metrics map[string]map[string]interface{} `json:"metrics"`
+	}{
+		Prefix:  prefix,
+		Count:   len(selected),
+		Metrics: selected,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
 }
 
 // Start begins listening. Implements node.Lifecycle.
