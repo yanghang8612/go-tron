@@ -60,7 +60,12 @@ func invalidateAccountSplitMaterialization(obj *stateObject, domain kvdomains.KV
 		obj.accountVotesLoaded = false
 		return
 	}
-	if domain == kvdomains.AccountFrozenV2Aux || domain == kvdomains.AccountUnfrozenV2Aux {
+	if domain == kvdomains.AccountFrozenV2Aux {
+		obj.accountStakeV2Loaded = false
+		clearAccountFrozenV2PointCache(obj)
+		return
+	}
+	if domain == kvdomains.AccountUnfrozenV2Aux {
 		obj.accountStakeV2Loaded = false
 		return
 	}

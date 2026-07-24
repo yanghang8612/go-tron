@@ -122,6 +122,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		obj.accountPermissionsLoaded = false
 		obj.accountVotesLoaded = false
 		obj.accountStakeV2Loaded = false
+		clearAccountFrozenV2PointCache(obj)
 		obj.accountFrozenSupplyLoaded = false
 		obj.accountResourceLoaded = false
 		obj.accountFrozenBandwidthLoaded = false
@@ -311,6 +312,7 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountPermissionsLoaded = false
 	obj.accountVotesLoaded = false
 	obj.accountStakeV2Loaded = false
+	clearAccountFrozenV2PointCache(obj)
 	obj.accountFrozenSupplyLoaded = false
 	obj.accountResourceLoaded = false
 	obj.accountFrozenBandwidthLoaded = false

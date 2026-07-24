@@ -13,6 +13,8 @@ import (
 
 const accountFrozenV2ValueLength = 12
 
+const accountFrozenV2PointCacheMask uint8 = 0b111
+
 type accountFrozenV2Row struct {
 	resource corepb.ResourceCode
 	ordinal  uint32
@@ -81,6 +83,46 @@ func clearAccountStakeV2Proto(pb *corepb.Account) {
 	pb.UnfrozenV2 = nil
 }
 
+func accountFrozenV2PointSlot(resource corepb.ResourceCode) (int, uint8, bool) {
+	if resource < corepb.ResourceCode_BANDWIDTH || resource > corepb.ResourceCode_TRON_POWER {
+		return 0, 0, false
+	}
+	slot := int(resource)
+	return slot, uint8(1) << slot, true
+}
+
+func clearAccountFrozenV2PointCache(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	obj.accountFrozenV2PointLoaded = 0
+	obj.accountFrozenV2PointExists = 0
+	obj.accountFrozenV2PointAmounts = [3]int64{}
+}
+
+func cacheAccountFrozenV2Point(obj *stateObject, resource corepb.ResourceCode, amount int64, exists bool) {
+	slot, bit, ok := accountFrozenV2PointSlot(resource)
+	if obj == nil || !ok {
+		return
+	}
+	obj.accountFrozenV2PointLoaded |= bit
+	if exists {
+		obj.accountFrozenV2PointExists |= bit
+		obj.accountFrozenV2PointAmounts[slot] = amount
+		return
+	}
+	obj.accountFrozenV2PointExists &^= bit
+	obj.accountFrozenV2PointAmounts[slot] = 0
+}
+
+func cachedAccountFrozenV2Point(obj *stateObject, resource corepb.ResourceCode) (amount int64, exists, loaded bool) {
+	slot, bit, ok := accountFrozenV2PointSlot(resource)
+	if obj == nil || !ok || obj.accountFrozenV2PointLoaded&bit == 0 {
+		return 0, false, false
+	}
+	return obj.accountFrozenV2PointAmounts[slot], obj.accountFrozenV2PointExists&bit != 0, true
+}
+
 func (s *StateDB) accountFrozenV2Rows(obj *stateObject) ([]accountFrozenV2Row, error) {
 	if obj == nil || obj.account == nil {
 		return nil, nil
@@ -141,6 +183,11 @@ func (s *StateDB) materializeAccountStakeV2(obj *stateObject) error {
 	for _, row := range unfrozen {
 		pb.UnfrozenV2 = append(pb.UnfrozenV2, row.entry)
 	}
+	clearAccountFrozenV2PointCache(obj)
+	obj.accountFrozenV2PointLoaded = accountFrozenV2PointCacheMask
+	for _, row := range frozen {
+		cacheAccountFrozenV2Point(obj, row.resource, row.amount, true)
+	}
 	obj.accountStakeV2Loaded = true
 	return nil
 }
@@ -151,20 +198,29 @@ func (s *StateDB) invalidateAccountStakeV2(obj *stateObject) {
 	}
 	clearAccountStakeV2Proto(obj.account.Proto())
 	obj.accountStakeV2Loaded = false
+	clearAccountFrozenV2PointCache(obj)
 }
 
 func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.ResourceCode) (int64, bool, error) {
 	if obj == nil || obj.account == nil {
 		return 0, false, nil
 	}
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(resource))
+	if amount, exists, loaded := cachedAccountFrozenV2Point(obj, resource); loaded {
+		return amount, exists, nil
+	}
+	key := accountFrozenV2Key(resource)
+	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil || !exists {
+		if err == nil {
+			cacheAccountFrozenV2Point(obj, resource, 0, false)
+		}
 		return 0, exists, err
 	}
-	row, err := decodeAccountFrozenV2Row(accountFrozenV2Key(resource), value)
+	row, err := decodeAccountFrozenV2Row(key, value)
 	if err != nil {
 		return 0, false, err
 	}
+	cacheAccountFrozenV2Point(obj, resource, row.amount, true)
 	return row.amount, true, nil
 }
 
@@ -201,6 +257,7 @@ func (s *StateDB) setAccountFrozenV2Amount(obj *stateObject, resource corepb.Res
 		return err
 	}
 	s.invalidateAccountStakeV2(obj)
+	cacheAccountFrozenV2Point(obj, resource, amount, true)
 	return nil
 }
 

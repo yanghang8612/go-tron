@@ -4,11 +4,22 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+type frozenV2PointReadStore struct {
+	ethdb.Database
+	getCalls int
+}
+
+func (s *frozenV2PointReadStore) Get(key []byte) ([]byte, error) {
+	s.getCalls++
+	return s.Database.Get(key)
+}
 
 func assertUnfrozenV2(t *testing.T, got []*corepb.Account_UnFreezeV2, want ...*corepb.Account_UnFreezeV2) {
 	t.Helper()
@@ -49,6 +60,66 @@ func TestAccountFrozenV2SingleResourceUpdateWritesOneHistoryRow(t *testing.T) {
 	}
 	if len(matching) != 1 || !bytes.Equal(matching[0].Key, accountFrozenV2Key(corepb.ResourceCode_ENERGY)) {
 		t.Fatalf("FrozenV2 history rows = %+v, want one ENERGY row", matching)
+	}
+}
+
+func TestAccountFrozenV2PointReadCacheAndSnapshotInvalidation(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x9d)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 100)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &frozenV2PointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("reopened account missing")
+	}
+
+	amount, exists, err := reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+	if err != nil || !exists || amount != 100 {
+		t.Fatalf("first bandwidth read = (%d,%v,%v), want (100,true,nil)", amount, exists, err)
+	}
+	firstGetCalls := store.getCalls
+	amount, exists, err = reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+	if err != nil || !exists || amount != 100 || store.getCalls != firstGetCalls {
+		t.Fatalf("cached bandwidth read = (%d,%v,%v), gets %d -> %d", amount, exists, err, firstGetCalls, store.getCalls)
+	}
+	_, exists, err = reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
+	if err != nil || exists {
+		t.Fatalf("first missing energy read = (%v,%v), want (false,nil)", exists, err)
+	}
+	missingGetCalls := store.getCalls
+	_, exists, err = reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
+	if err != nil || exists || store.getCalls != missingGetCalls {
+		t.Fatalf("cached missing energy read = (%v,%v), gets %d -> %d", exists, err, missingGetCalls, store.getCalls)
+	}
+
+	snapshot := reopened.Snapshot()
+	key := accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH)
+	if err := reopened.SetAccountKV(addr, kvdomains.AccountFrozenV2Aux, key, encodeAccountFrozenV2Value(0, 150)); err != nil {
+		t.Fatal(err)
+	}
+	amount, exists, err = reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+	if err != nil || !exists || amount != 150 {
+		t.Fatalf("updated bandwidth read = (%d,%v,%v), want (150,true,nil)", amount, exists, err)
+	}
+	reopened.RevertToSnapshot(snapshot)
+	getCallsBeforeRevertRead := store.getCalls
+	amount, exists, err = reopened.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+	if err != nil || !exists || amount != 100 {
+		t.Fatalf("reverted bandwidth read = (%d,%v,%v), want (100,true,nil)", amount, exists, err)
+	}
+	if store.getCalls == getCallsBeforeRevertRead {
+		t.Fatal("snapshot revert retained stale frozen-v2 point cache")
 	}
 }
 

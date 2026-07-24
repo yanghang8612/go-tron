@@ -81,8 +81,14 @@ type stateObject struct {
 	accountResourceLoaded        bool
 	accountFrozenBandwidthLoaded bool
 	accountTronPowerLoaded       bool
-	deleted                      bool
-	created                      bool
+	// FrozenV2 uses three point-addressable resource keys. Resource accounting
+	// reads BANDWIDTH more than once per transaction, so retain typed point-read
+	// results without materializing the unrelated V2 unfreeze queue.
+	accountFrozenV2PointLoaded  uint8
+	accountFrozenV2PointExists  uint8
+	accountFrozenV2PointAmounts [3]int64
+	deleted                     bool
+	created                     bool
 
 	// Contract fields
 	code              []byte                    // contract bytecode
