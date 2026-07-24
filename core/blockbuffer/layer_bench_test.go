@@ -41,6 +41,40 @@ func BenchmarkLayerLookupParallelMiss(b *testing.B) { benchmarkLayerLookup(b, tr
 func BenchmarkLayerLookupSerialHit(b *testing.B)    { benchmarkLayerLookup(b, false, true) }
 func BenchmarkLayerLookupParallelHit(b *testing.B)  { benchmarkLayerLookup(b, true, true) }
 
+func benchmarkLayerLookupTombstone(b *testing.B, parallel bool) {
+	l := newLayer([32]byte{}, 1)
+	writer := &Buffer{}
+	keys := make([][]byte, 256)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("state-commitment-branch-v1-%064x", i))
+		writer.deleteInto(l, keys[i])
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	if !parallel {
+		for i := 0; i < b.N; i++ {
+			l.lookup(keys[i&(len(keys)-1)])
+		}
+		return
+	}
+	var next atomic.Uint64
+	b.SetParallelism(1)
+	b.RunParallel(func(pb *testing.PB) {
+		key := keys[int(next.Add(1)-1)&(len(keys)-1)]
+		for pb.Next() {
+			l.lookup(key)
+		}
+	})
+}
+
+func BenchmarkLayerLookupSerialTombstone(b *testing.B) {
+	benchmarkLayerLookupTombstone(b, false)
+}
+
+func BenchmarkLayerLookupParallelTombstone(b *testing.B) {
+	benchmarkLayerLookupTombstone(b, true)
+}
+
 func benchmarkBufferGetNoCopy(b *testing.B, parallel bool, hit bool) {
 	buf := New(rawdb.NewMemoryDatabase())
 	for layerN := 0; layerN < 4; layerN++ {

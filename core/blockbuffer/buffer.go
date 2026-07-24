@@ -899,11 +899,14 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 	s := l.shardForBytes(key)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, t := s.deletes[string(key)]; t {
-		return nil, false, true
-	}
+	// Writes vastly outnumber tombstones during sync. Probe them first so a
+	// live overlay hit hashes the physical key once instead of first checking
+	// the usually-empty delete map. Put/Delete keep the maps mutually exclusive.
 	if val, ok := s.writes[string(key)]; ok {
 		return val, true, false
+	}
+	if _, t := s.deletes[string(key)]; t {
+		return nil, false, true
 	}
 	return nil, false, false
 }
