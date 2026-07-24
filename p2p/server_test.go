@@ -275,6 +275,41 @@ func TestServerMaintainReconnectsToSeed(t *testing.T) {
 	// No assertion needed — this just exercises the reconnect path without panic.
 }
 
+// TestServerMaintainConnectsBootstrapWithoutDiscoveryReply covers the restart
+// recovery fallback: built-in bootstrap endpoints remain direct TCP candidates
+// even when the discovery service has not produced a UDP pong/neighbours reply.
+func TestServerMaintainConnectsBootstrapWithoutDiscoveryReply(t *testing.T) {
+	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := seed.Start(); err != nil {
+		t.Fatalf("start bootstrap: %v", err)
+	}
+	defer seed.Stop()
+
+	discovery := &fakeDiscovery{}
+	client := NewServer(ServerConfig{
+		ListenAddr:     "127.0.0.1:0",
+		MaxPeers:       5,
+		BootstrapNodes: []string{seed.ListenAddr()},
+		Discovery:      discovery,
+	}, &testHandler{})
+	if err := client.Start(); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	defer client.Stop()
+
+	client.maintainPeers()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && client.PeerCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := client.PeerCount(); got != 1 {
+		t.Fatalf("bootstrap TCP fallback peer count = %d, want 1", got)
+	}
+	if got := discovery.snapshot(); len(got) != 1 || got[0] != seed.ListenAddr() {
+		t.Fatalf("discovery bootstraps = %v, want [%s]", got, seed.ListenAddr())
+	}
+}
+
 // TestServer_BootstrapNodesFedToDiscovery covers the M3.5 follow-up: built-in
 // bootstrap addresses (params.MainnetBootstrapNodes / NileBootstrapNodes) must
 // reach the Discovery routing table, not just the explicit --seednode flags.

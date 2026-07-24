@@ -513,8 +513,9 @@ func (s *Server) countInboundFromIPLocked(remoteHost string) int {
 	return count
 }
 
-// maintainLoop periodically reconnects to configured seed nodes when we are
-// below capacity. Mirrors java-tron ConnPoolService.connect() + triggerConnect().
+// maintainLoop periodically reconnects to configured seed/bootstrap nodes when
+// we are below capacity. Mirrors java-tron ConnPoolService.connect() +
+// triggerConnect().
 func (s *Server) maintainLoop() {
 	defer s.wg.Done()
 	ticker := time.NewTicker(maintainInterval)
@@ -531,9 +532,13 @@ func (s *Server) maintainLoop() {
 	}
 }
 
-// maintainPeers dials seed nodes that are not yet connected, up to MaxPeers.
+// maintainPeers dials configured peers that are not yet connected, up to the
+// currently available peer slots. BootstrapNodes are also direct TCP fallback
+// candidates: relying on their UDP discovery replies alone can leave a freshly
+// restarted node at zero peers indefinitely when UDP is filtered, even though
+// the same bootstrap endpoints accept the TRON TCP handshake.
 func (s *Server) maintainPeers() {
-	if len(s.config.SeedNodes) == 0 {
+	if len(s.config.SeedNodes) == 0 && len(s.config.BootstrapNodes) == 0 {
 		return
 	}
 	s.mu.RLock()
@@ -547,13 +552,33 @@ func (s *Server) maintainPeers() {
 	if current >= s.config.MaxPeers {
 		return
 	}
-	for _, addr := range s.config.SeedNodes {
+
+	remaining := s.config.MaxPeers - current
+	candidates := make([]string, 0, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
+	seen := make(map[string]struct{}, cap(candidates))
+	for _, group := range [][]string{s.config.SeedNodes, s.config.BootstrapNodes} {
+		for _, addr := range group {
+			if _, ok := seen[addr]; ok {
+				continue
+			}
+			seen[addr] = struct{}{}
+			candidates = append(candidates, addr)
+		}
+	}
+	for _, addr := range candidates {
+		if remaining == 0 {
+			break
+		}
 		if connected[addr] {
 			continue
 		}
+		remaining--
 		go func(a string) {
-			if err := s.AddPeer(a); err != nil && !errors.Is(err, errDialThrottled) {
-				log.Debug("Seed reconnect failed", "addr", a, "err", err)
+			if err := s.AddPeer(a); err != nil &&
+				!errors.Is(err, errDialThrottled) &&
+				!errors.Is(err, errAlreadyConnected) &&
+				!errors.Is(err, errPeerCapacity) {
+				log.Debug("Configured peer reconnect failed", "addr", a, "err", err)
 			}
 		}(addr)
 	}
