@@ -63,12 +63,12 @@ type layer struct {
 	shards    [layerShardCount]layerShard
 }
 
-const layerShardCount = 64
+const layerShardCount = 16
 
 // layerShard is padded to one 64-byte cache line on the deployment target
 // (amd64). Without the padding, adjacent shard RWMutex counters can still
 // false-share under the 16-way commitment fold even though their maps differ.
-// The fixed ~4 KiB per live layer is small relative to the layer values and the
+// The fixed ~1 KiB per live layer is small relative to the layer values and the
 // configured 24 GiB Pebble cache, and maps remain lazily allocated.
 type layerShard struct {
 	mu                 sync.RWMutex
@@ -112,11 +112,11 @@ func (l *layer) shardForString(key string) *layerShard {
 // The middle and tail of hot state keys carry their highest-entropy bytes: a
 // commitment path nibble, account/address byte, contract-storage slot, or key
 // suffix. Sampling three tail bytes plus one middle byte avoids hashing the full
-// 30-100 byte physical key a second time (the Go map will hash it once already),
-// while two independently distributed commitment nibbles provide all 64 shard
-// combinations. Include length so short prefixes that share a suffix do not
-// systematically collide. The byte/string forms must remain identical for
-// write/read routing.
+// 30-100 byte physical key a second time (the Go map will hash it once already).
+// Sixteen shards match the maximum commitment root-worker fan-out while avoiding
+// four times as many tiny per-layer maps. Include length so short prefixes that
+// share a suffix do not systematically collide. The byte/string forms must
+// remain identical for write/read routing.
 func layerShardIndexBytes(key []byte) uint32 {
 	n := len(key)
 	if n == 0 {
