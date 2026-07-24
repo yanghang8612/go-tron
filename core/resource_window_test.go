@@ -118,7 +118,7 @@ func TestChargeStakedNet_PerAccountWindow_SingleStepGolden(t *testing.T) {
 	statedb.GetAccount(addr).SetNewNetWindowSizeV2(14_400_000)
 
 	const now = int64(9_999 + 7_155)
-	if ok := chargeStakedNet(statedb, dynProps, addr, statedb.GetAccount(addr), 50_000, now); !ok {
+	if ok := chargeStakedNet(statedb, dynProps, addr, 50_000, now); !ok {
 		t.Fatal("chargeStakedNet returned false; stake should cover the cost")
 	}
 	if got := statedb.GetNetUsage(addr); got != 553_125 {
@@ -153,7 +153,7 @@ func TestChargeStakedNet_FeedForward(t *testing.T) {
 	statedb.GetAccount(addr).SetNewNetWindowSizeV2(14_400_000)
 
 	// tx1 at slot 17154 -> net_usage 553125, window 9_193_462 (per single-step golden).
-	if ok := chargeStakedNet(statedb, dynProps, addr, statedb.GetAccount(addr), 50_000, 17_154); !ok {
+	if ok := chargeStakedNet(statedb, dynProps, addr, 50_000, 17_154); !ok {
 		t.Fatal("tx1 chargeStakedNet false")
 	}
 	w1 := statedb.GetAccount(addr).RawNetWindowSize()
@@ -163,7 +163,7 @@ func TestChargeStakedNet_FeedForward(t *testing.T) {
 
 	// tx2 recovers tx1's usage against the WRITTEN window (~9193 slots), not 28800.
 	now2 := int64(17_154 + 4_581) // ~half the written window
-	if ok := chargeStakedNet(statedb, dynProps, addr, statedb.GetAccount(addr), 0, now2); !ok {
+	if ok := chargeStakedNet(statedb, dynProps, addr, 0, now2); !ok {
 		t.Fatal("tx2 chargeStakedNet false")
 	}
 	if w2 := statedb.GetAccount(addr).RawNetWindowSize(); w2 == 14_400_000 {
@@ -192,7 +192,7 @@ func TestChargeStakedNet_NonV2_GlobalWindowUnchanged(t *testing.T) {
 	statedb.SetNetUsage(addr, 1_000_000)
 	statedb.SetLatestConsumeTime(addr, 1_000_000-7_200)
 
-	if ok := chargeStakedNet(statedb, dynProps, addr, statedb.GetAccount(addr), 50_000, 1_000_000); !ok {
+	if ok := chargeStakedNet(statedb, dynProps, addr, 50_000, 1_000_000); !ok {
 		t.Fatal("chargeStakedNet false")
 	}
 	if got := statedb.GetNetUsage(addr); got != 800_000 {

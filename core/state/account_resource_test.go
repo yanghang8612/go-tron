@@ -107,6 +107,26 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	bandwidth, err := reopened.GetAccountFrozenBandwidth(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bandwidth != 104 {
+		t.Fatalf("frozen bandwidth total = %d, want 104", bandwidth)
+	}
+	obj := reopened.stateObjects[addr]
+	if obj == nil {
+		t.Fatal("bandwidth read did not load account envelope")
+	}
+	if obj.accountResourceLoaded || obj.accountMapsLoaded || obj.accountPermissionsLoaded ||
+		obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded ||
+		obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
+		t.Fatalf("bandwidth read materialized split domains: resource=%t maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t frozenBandwidth=%t tronPower=%t",
+			obj.accountResourceLoaded, obj.accountMapsLoaded, obj.accountPermissionsLoaded,
+			obj.accountVotesLoaded, obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded,
+			obj.accountFrozenBandwidthLoaded, obj.accountTronPowerLoaded)
+	}
+
 	bandwidth, energy, err := reopened.GetAccountFrozenResourceTotals(addr)
 	if err != nil {
 		t.Fatal(err)
@@ -118,10 +138,6 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 		t.Fatalf("frozen energy total = %d, want 108", energy)
 	}
 
-	obj := reopened.stateObjects[addr]
-	if obj == nil {
-		t.Fatal("resource read did not load account envelope")
-	}
 	if !obj.accountResourceLoaded {
 		t.Fatal("resource read did not load AccountResource")
 	}

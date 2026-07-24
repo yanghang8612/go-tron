@@ -73,6 +73,47 @@ func (s *StateDB) mutateAccountResource(obj *stateObject, mutate func(*corepb.Ac
 	return s.writeAccountResource(obj)
 }
 
+// GetAccountFrozenBandwidth returns the frozen balance that contributes to an
+// account's bandwidth limit. It reads the compact account envelope, the V1
+// bandwidth rows, and the point-addressable V2 bandwidth row without loading
+// any other split account domain.
+func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return 0, nil
+	}
+	return s.accountFrozenBandwidthForLimit(obj)
+}
+
+func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject) (int64, error) {
+	acct := obj.account
+	var frozenV1 int64
+	var err error
+	if obj.accountFrozenBandwidthLoaded {
+		frozenV1 = acct.TotalFrozenBandwidth()
+	} else {
+		frozenV1, err = s.accountFrozenBandwidthTotal(obj)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	var frozenV2 int64
+	if obj.accountStakeV2Loaded {
+		frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
+	} else {
+		frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return frozenV1 +
+		acct.AcquiredDelegatedFrozenBandwidth() +
+		frozenV2 +
+		acct.AcquiredDelegatedFrozenV2BalanceForBandwidth(), nil
+}
+
 // GetAccountFrozenResourceTotals returns the frozen balances that contribute
 // to the account's bandwidth and energy limits. It intentionally reads only
 // the resource-bearing account data needed by java-tron's
@@ -91,39 +132,25 @@ func (s *StateDB) GetAccountFrozenResourceTotals(addr tcommon.Address) (bandwidt
 	}
 	acct := obj.account
 
-	var frozenV1Bandwidth int64
-	if obj.accountFrozenBandwidthLoaded {
-		frozenV1Bandwidth = acct.TotalFrozenBandwidth()
-	} else {
-		frozenV1Bandwidth, err = s.accountFrozenBandwidthTotal(obj)
-		if err != nil {
-			return 0, 0, err
-		}
+	bandwidth, err = s.accountFrozenBandwidthForLimit(obj)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	if err := s.materializeAccountResource(obj); err != nil {
 		return 0, 0, err
 	}
 
-	var frozenV2Bandwidth, frozenV2Energy int64
+	var frozenV2Energy int64
 	if obj.accountStakeV2Loaded {
-		frozenV2Bandwidth = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
 		frozenV2Energy = acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
 	} else {
-		frozenV2Bandwidth, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
-		if err != nil {
-			return 0, 0, err
-		}
 		frozenV2Energy, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
 		if err != nil {
 			return 0, 0, err
 		}
 	}
 
-	bandwidth = frozenV1Bandwidth +
-		acct.AcquiredDelegatedFrozenBandwidth() +
-		frozenV2Bandwidth +
-		acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 	energy = acct.FrozenEnergyAmount() +
 		acct.AcquiredDelegatedFrozenEnergy() +
 		frozenV2Energy +

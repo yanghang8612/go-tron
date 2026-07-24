@@ -4,6 +4,9 @@ import (
 	"strconv"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -445,6 +448,56 @@ func TestConsumeBandwidth_InsufficientBalance(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for insufficient balance to pay bandwidth")
 	}
+}
+
+func BenchmarkChargeStakedNetAccountRead(b *testing.B) {
+	db := state.NewDatabase(ethrawdb.NewMemoryDatabase())
+	sdb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	owner := testProcessorAddr(1)
+	sdb.CreateAccount(owner, corepb.AccountType_Normal)
+	sdb.FreezeV1Bandwidth(owner, 1_000_000, 200)
+	sdb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 1_000_000)
+	for tokenID := int64(1_000_000); tokenID < 1_000_256; tokenID++ {
+		sdb.SetTRC10Balance(owner, tokenID, tokenID)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetTotalNetWeight(2)
+	dynProps.Set("unfreeze_delay_days", 14)
+
+	b.Run("targeted-bandwidth-read", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			view, err := state.New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if !chargeStakedNet(view, dynProps, owner, 100, 1) {
+				b.Fatal("targeted bandwidth charge failed")
+			}
+		}
+	})
+	b.Run("legacy-full-account-read", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			view, err := state.New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if view.GetAccount(owner) == nil {
+				b.Fatal("full account read failed")
+			}
+			if !chargeStakedNet(view, dynProps, owner, 100, 1) {
+				b.Fatal("legacy bandwidth charge failed")
+			}
+		}
+	})
 }
 
 // TestConsumeBandwidth_CreateNewAccount_Fee verifies the create_account_fee

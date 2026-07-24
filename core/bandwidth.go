@@ -130,10 +130,14 @@ func availableAccountNetForFrozen(frozen int64, dp *state.DynamicProperties) int
 //     increase(ac, BANDWIDTH, usage, cost, latestConsumeTime, now) that
 //     renormalizes and persists the window (V2/optimized under
 //     supportCancelAllUnfreezeV2).
-func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, addr tcommon.Address, acct *types.Account, cost, now int64) bool {
+func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, addr tcommon.Address, cost, now int64) bool {
 	netUsage := statedb.GetNetUsage(addr)
 	lastTime := statedb.GetLatestConsumeTime(addr)
-	netLimit := availableAccountNet(acct, dynProps)
+	frozen, err := statedb.GetAccountFrozenBandwidth(addr)
+	if err != nil {
+		return false
+	}
+	netLimit := availableAccountNetForFrozen(frozen, dynProps)
 
 	if !dynProps.SupportUnfreezeDelay() {
 		recovered := recoverUsageForDP(netUsage, lastTime, now, dynProps)
@@ -149,6 +153,7 @@ func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, 
 	cancelAllV2 := dynProps.SupportCancelAllUnfreezeV2()
 	var rawWindow int64
 	var optimized bool
+	acct := statedb.AccountReference(addr)
 	if acct != nil {
 		rawWindow, optimized = acct.RawNetWindowSize(), acct.NetWindowOptimized()
 	}
@@ -223,8 +228,7 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 		}
 	}
 
-	acct := statedb.GetAccount(sender)
-	if chargeStakedNet(statedb, dynProps, sender, acct, txSize, resourceTime) {
+	if chargeStakedNet(statedb, dynProps, sender, txSize, resourceTime) {
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
 		return BandwidthResult{NetUsage: txSize}, nil
 	}
@@ -344,15 +348,14 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	}
 
 	issuer := tcommon.BytesToAddress(asset.OwnerAddress)
-	issuerAccount := statedb.GetAccount(issuer)
-	if issuerAccount == nil {
+	if statedb.AccountReference(issuer) == nil {
 		return false, nil
 	}
 	// java useAssetAccountNet charges the issuer's own staked net via the same
 	// recovery + per-account-window increase path as useAccountNet. The asset
 	// free/public usages below stay on the global window (java uses the base
 	// increase() for those).
-	if !chargeStakedNet(statedb, dynProps, issuer, issuerAccount, txSize, resourceTime) {
+	if !chargeStakedNet(statedb, dynProps, issuer, txSize, resourceTime) {
 		return false, nil
 	}
 	statedb.SetLatestOperationTime(sender, prevBlockTime)
@@ -433,8 +436,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	ratio := dynProps.CreateNewAccountBandwidthRate()
 	netCost := txSize * ratio
 
-	acct := statedb.GetAccount(sender)
-	if chargeStakedNet(statedb, dynProps, sender, acct, netCost, resourceTime) {
+	if chargeStakedNet(statedb, dynProps, sender, netCost, resourceTime) {
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
 		return BandwidthResult{NetUsage: netCost}, nil
 	}
