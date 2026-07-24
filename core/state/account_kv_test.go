@@ -85,6 +85,40 @@ func BenchmarkAccountKVDirtyLookup(b *testing.B) {
 	}
 }
 
+func BenchmarkAccountKVSetDirty(b *testing.B) {
+	key := bytes.Repeat([]byte{0x7f}, 32)
+	b.Run("noop", func(b *testing.B) {
+		sdb := newTestStateDB(b)
+		owner := testAddr(0x19)
+		if err := sdb.setAccountKV(owner, kvdomains.ContractStorage, key, []byte{1}, false); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			if err := sdb.setAccountKV(owner, kvdomains.ContractStorage, key, []byte{1}, false); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("changed", func(b *testing.B) {
+		sdb := newTestStateDB(b)
+		owner := testAddr(0x1a)
+		if err := sdb.setAccountKV(owner, kvdomains.ContractStorage, key, []byte{0}, false); err != nil {
+			b.Fatal(err)
+		}
+		var value [1]byte
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; b.Loop(); i++ {
+			value[0] = byte(i&1) + 1
+			if err := sdb.setAccountKV(owner, kvdomains.ContractStorage, key, value[:], false); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestKVCompositeKeyStringOwnsInputAndPreservesLayout(t *testing.T) {
 	key := []byte("logical-key")
 	mapKey := kvCompositeKeyString(kvdomains.ContractStorage, key)

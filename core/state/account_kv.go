@@ -1419,7 +1419,7 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		prevExists bool
 		prevLoaded bool
 	)
-	_, dirty := lookupKVEntry(obj.kvDirty, domain, key)
+	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
 	if !dirty {
 		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -1429,7 +1429,7 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		prevExists = exists
 		prevLoaded = true
 	}
-	return s.setAccountKVWithPrev(owner, domain, key, value, journal, prevValue, prevExists, prevLoaded)
+	return s.setAccountKVResolved(obj, domain, key, value, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }
 
 func (s *StateDB) setAccountKVFinalWithPrev(owner tcommon.Address, domain kvdomains.KVDomain, key, prev, value []byte, prevExists bool) error {
@@ -1448,8 +1448,14 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	mk := kvCompositeKeyString(domain, key)
-	prevDirty, dirty := obj.kvDirty[mk]
+	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
+	return s.setAccountKVResolved(obj, domain, key, value, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
+}
+
+// setAccountKVResolved receives the allocation-free dirty lookup performed by
+// its caller. Delay owning the composite map key until after no-op detection so
+// repeated writes of an identical dirty value allocate nothing.
+func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool, prevDirty kvEntry, dirty bool) error {
 	if dirty {
 		if !prevDirty.deleted && bytes.Equal(prevDirty.val, value) {
 			return nil
@@ -1457,10 +1463,11 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	} else if prevLoaded && prevExists && bytes.Equal(prevValue, value) {
 		return nil
 	}
+	mk := kvCompositeKeyString(domain, key)
 	if journal {
-		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
+		s.journal.append(kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
-		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
+		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
 	entry := newKVEntry(value, false)
 	if dirty {

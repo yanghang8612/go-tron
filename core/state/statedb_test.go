@@ -12,7 +12,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-func newTestStateDB(t *testing.T) *StateDB {
+func newTestStateDB(t testing.TB) *StateDB {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)
