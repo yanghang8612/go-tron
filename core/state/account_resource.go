@@ -82,10 +82,22 @@ func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
-	return s.accountFrozenBandwidthForLimit(obj)
+	return s.accountFrozenBandwidthForLimit(obj, true)
 }
 
-func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject) (int64, error) {
+// GetAccountFrozenBandwidthV1 is the pre-Stake-2.0 counterpart of
+// GetAccountFrozenBandwidth. Before proposal #70 activates, valid java-tron
+// state cannot contain V2 freezes, so resource accounting can avoid probing
+// that split domain entirely.
+func (s *StateDB) GetAccountFrozenBandwidthV1(addr tcommon.Address) (int64, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return 0, nil
+	}
+	return s.accountFrozenBandwidthForLimit(obj, false)
+}
+
+func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 bool) (int64, error) {
 	acct := obj.account
 	// The owner resource snapshot and the consensus bandwidth charge both read
 	// this value for the same transaction. Valid java-tron state has at most one
@@ -97,21 +109,24 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject) (int64, error
 	}
 	frozenV1 := acct.TotalFrozenBandwidth()
 
-	var frozenV2 int64
-	var err error
-	if obj.accountStakeV2Loaded {
-		frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
-	} else {
-		frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
-		if err != nil {
-			return 0, err
+	var frozenV2, acquiredV2 int64
+	if includeV2 {
+		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+		if obj.accountStakeV2Loaded {
+			frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
+		} else {
+			var err error
+			frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
 
 	return frozenV1 +
 		acct.AcquiredDelegatedFrozenBandwidth() +
 		frozenV2 +
-		acct.AcquiredDelegatedFrozenV2BalanceForBandwidth(), nil
+		acquiredV2, nil
 }
 
 // GetAccountFrozenEnergy returns the frozen balance that contributes to an
@@ -123,30 +138,44 @@ func (s *StateDB) GetAccountFrozenEnergy(addr tcommon.Address) (int64, error) {
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
-	return s.accountFrozenEnergyForLimit(obj)
+	return s.accountFrozenEnergyForLimit(obj, true)
 }
 
-func (s *StateDB) accountFrozenEnergyForLimit(obj *stateObject) (int64, error) {
+// GetAccountFrozenEnergyV1 avoids the impossible V2 resource row lookup before
+// Stake 2.0 activation while preserving the full accessor for later blocks and
+// general callers.
+func (s *StateDB) GetAccountFrozenEnergyV1(addr tcommon.Address) (int64, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return 0, nil
+	}
+	return s.accountFrozenEnergyForLimit(obj, false)
+}
+
+func (s *StateDB) accountFrozenEnergyForLimit(obj *stateObject, includeV2 bool) (int64, error) {
 	acct := obj.account
 	if err := s.materializeAccountResource(obj); err != nil {
 		return 0, err
 	}
 
-	var frozenV2Energy int64
-	var err error
-	if obj.accountStakeV2Loaded {
-		frozenV2Energy = acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
-	} else {
-		frozenV2Energy, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
-		if err != nil {
-			return 0, err
+	var frozenV2Energy, acquiredV2Energy int64
+	if includeV2 {
+		acquiredV2Energy = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+		if obj.accountStakeV2Loaded {
+			frozenV2Energy = acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
+		} else {
+			var err error
+			frozenV2Energy, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
 
 	return acct.FrozenEnergyAmount() +
 		acct.AcquiredDelegatedFrozenEnergy() +
 		frozenV2Energy +
-		acct.AcquiredDelegatedFrozenV2BalanceForEnergy(), nil
+		acquiredV2Energy, nil
 }
 
 // GetAccountFrozenResourceTotals returns the frozen balances that contribute
@@ -161,16 +190,26 @@ func (s *StateDB) accountFrozenEnergyForLimit(obj *stateObject) (int64, error) {
 // suitable for per-transaction resource accounting and diagnostics where a
 // full GetAccount would make unrelated account state part of the hot path.
 func (s *StateDB) GetAccountFrozenResourceTotals(addr tcommon.Address) (bandwidth, energy int64, err error) {
+	return s.getAccountFrozenResourceTotals(addr, true)
+}
+
+// GetAccountFrozenResourceTotalsV1 returns the two pre-Stake-2.0 resource
+// totals without touching AccountFrozenV2Aux.
+func (s *StateDB) GetAccountFrozenResourceTotalsV1(addr tcommon.Address) (bandwidth, energy int64, err error) {
+	return s.getAccountFrozenResourceTotals(addr, false)
+}
+
+func (s *StateDB) getAccountFrozenResourceTotals(addr tcommon.Address, includeV2 bool) (bandwidth, energy int64, err error) {
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, 0, nil
 	}
-	bandwidth, err = s.accountFrozenBandwidthForLimit(obj)
+	bandwidth, err = s.accountFrozenBandwidthForLimit(obj, includeV2)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	energy, err = s.accountFrozenEnergyForLimit(obj)
+	energy, err = s.accountFrozenEnergyForLimit(obj, includeV2)
 	if err != nil {
 		return 0, 0, err
 	}

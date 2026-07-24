@@ -60,7 +60,12 @@ func captureOwnerResourceSnapshot(statedb *state.StateDB, dp *state.DynamicPrope
 	if !statedb.AccountExists(owner) {
 		return ownerResourceSnapshot{}
 	}
-	frozenNet, frozenEnergy, _ := statedb.GetAccountFrozenResourceTotals(owner)
+	var frozenNet, frozenEnergy int64
+	if dp != nil && dp.SupportUnfreezeDelay() {
+		frozenNet, frozenEnergy, _ = statedb.GetAccountFrozenResourceTotals(owner)
+	} else {
+		frozenNet, frozenEnergy, _ = statedb.GetAccountFrozenResourceTotalsV1(owner)
+	}
 	snap := ownerResourceSnapshot{
 		Balance:                statedb.GetBalance(owner),
 		NetLastConsumeTime:     statedb.GetLatestConsumeTime(owner),

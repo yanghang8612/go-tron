@@ -188,7 +188,7 @@ func TestChargeStakedNet_NonV2_GlobalWindowUnchanged(t *testing.T) {
 
 	addr := testProcessorAddr(3)
 	statedb.CreateAccount(addr, corepb.AccountType_Normal)
-	statedb.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 1_000_000)
+	statedb.FreezeV1Bandwidth(addr, 1_000_000, 2_000_000)
 	statedb.SetNetUsage(addr, 1_000_000)
 	statedb.SetLatestConsumeTime(addr, 1_000_000-7_200)
 

@@ -106,10 +106,25 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bandwidth, energy, err := reopened.GetAccountFrozenResourceTotalsV1(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bandwidth != 42 || energy != 44 {
+		t.Fatalf("pre-Stake-2.0 resource totals = (%d,%d), want (42,44)", bandwidth, energy)
+	}
+	if obj := reopened.stateObjects[addr]; obj == nil || obj.accountFrozenV2PointLoaded != 0 || obj.accountStakeV2Loaded {
+		t.Fatalf("pre-Stake-2.0 resource read loaded Stake V2: %+v", obj)
+	}
+
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(store)
 
-	bandwidth, err := reopened.GetAccountFrozenBandwidth(addr)
+	bandwidth, err = reopened.GetAccountFrozenBandwidth(addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +147,7 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 			obj.accountFrozenBandwidthLoaded, obj.accountTronPowerLoaded)
 	}
 
-	bandwidth, energy, err := reopened.GetAccountFrozenResourceTotals(addr)
+	bandwidth, energy, err = reopened.GetAccountFrozenResourceTotals(addr)
 	if err != nil {
 		t.Fatal(err)
 	}

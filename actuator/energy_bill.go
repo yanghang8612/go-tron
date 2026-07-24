@@ -195,7 +195,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 		// energy low and burning energy java covers (the Nile 9,220,578 stall, where a
 		// 10M-TRX energy stake collapsed the limit far below stored usage).
 		if dp != nil && !dp.AllowTvmFreeze() {
-			if acct, frozen := accountEnergyResourceView(ctx.State, addr); acct != nil &&
+			if acct, frozen := accountEnergyResourceView(ctx.State, dp, addr); acct != nil &&
 				usage > calcAccountEnergyLimitFromFrozen(frozen, dp)-recovered {
 				return
 			}
@@ -212,7 +212,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 
 	var rawWindow int64
 	var optimized bool
-	if acct, _ := accountEnergyResourceView(ctx.State, addr); acct != nil {
+	if acct, _ := accountEnergyResourceView(ctx.State, dp, addr); acct != nil {
 		rawWindow, optimized = acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized()
 	}
 
@@ -361,7 +361,7 @@ func extractOwnerAddress(ctx *Context) common.Address {
 // Returns 0 if the caller has no frozen-for-energy stake or if recovered
 // usage already meets the entitled limit.
 func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties, addr common.Address, now int64) int64 {
-	acct, frozen := accountEnergyResourceView(s, addr)
+	acct, frozen := accountEnergyResourceView(s, dp, addr)
 	if acct == nil {
 		return 0
 	}
@@ -380,8 +380,14 @@ func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties
 // needed by VM limit/billing code. The returned account is the live envelope
 // with AccountResource materialized; frozen includes the point-read V2 ENERGY
 // amount that is intentionally not expanded into the full FrozenV2 slice.
-func accountEnergyResourceView(s *state.StateDB, addr common.Address) (*types.Account, int64) {
-	frozen, err := s.GetAccountFrozenEnergy(addr)
+func accountEnergyResourceView(s *state.StateDB, dp *state.DynamicProperties, addr common.Address) (*types.Account, int64) {
+	var frozen int64
+	var err error
+	if dp != nil && dp.SupportUnfreezeDelay() {
+		frozen, err = s.GetAccountFrozenEnergy(addr)
+	} else {
+		frozen, err = s.GetAccountFrozenEnergyV1(addr)
+	}
 	if err != nil {
 		return nil, 0
 	}

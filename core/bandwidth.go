@@ -133,7 +133,13 @@ func availableAccountNetForFrozen(frozen int64, dp *state.DynamicProperties) int
 func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, addr tcommon.Address, cost, now int64) bool {
 	netUsage := statedb.GetNetUsage(addr)
 	lastTime := statedb.GetLatestConsumeTime(addr)
-	frozen, err := statedb.GetAccountFrozenBandwidth(addr)
+	var frozen int64
+	var err error
+	if dynProps.SupportUnfreezeDelay() {
+		frozen, err = statedb.GetAccountFrozenBandwidth(addr)
+	} else {
+		frozen, err = statedb.GetAccountFrozenBandwidthV1(addr)
+	}
 	if err != nil {
 		return false
 	}

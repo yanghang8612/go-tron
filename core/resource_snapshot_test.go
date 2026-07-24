@@ -34,6 +34,7 @@ func TestCaptureOwnerResourceSnapshot(t *testing.T) {
 
 	dp := newDP(1000, 1) // total_net_limit=1000, total_net_weight=1 -> 1 TRX frozen => 1000 net
 	dp.Set("free_net_limit", 600)
+	dp.SetUnfreezeDelayDays(14)
 
 	snap := captureOwnerResourceSnapshot(sdb, dp, owner, 100)
 
@@ -80,6 +81,7 @@ func TestCaptureOwnerResourceSnapshot_OverusedClampsToZero(t *testing.T) {
 
 	dp := newDP(1000, 1)
 	dp.Set("free_net_limit", 600)
+	dp.SetUnfreezeDelayDays(14)
 
 	snap := captureOwnerResourceSnapshot(sdb, dp, owner, 100)
 	if snap.FrozenNetLeft != 0 {
@@ -117,6 +119,7 @@ func BenchmarkCaptureOwnerResourceSnapshot(b *testing.B) {
 	}
 	dp := newDP(10_000, 4)
 	dp.Set("free_net_limit", 600)
+	dp.SetUnfreezeDelayDays(14)
 
 	b.Run("targeted-resource-read", func(b *testing.B) {
 		b.ReportAllocs()
