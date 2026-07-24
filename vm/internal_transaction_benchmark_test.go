@@ -9,6 +9,14 @@ import (
 )
 
 var internalTransactionBenchmarkSink *corepb.InternalTransaction
+var tvmConstructionBenchmarkSink *TVM
+
+func BenchmarkNewTVMNoCreate(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		tvmConstructionBenchmarkSink = NewTVM(nil, nil, tcommon.Address{}, 1, 2, tcommon.Address{}, 3, TVMConfig{})
+	}
+}
 
 // addInternalTransactionLegacy preserves the pre-optimization construction
 // shape so the benchmark measures the removed concatenation, field-copy and

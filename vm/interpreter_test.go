@@ -997,7 +997,7 @@ func TestSelfDestructRestrictionDeletesNewContract(t *testing.T) {
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 	evm.StateDB.AddBalance(contractAddr, 123)
-	evm.newContracts[contractAddr] = true
+	evm.markNewContract(contractAddr)
 
 	contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergySelfDestruct+EnergyCallNewAcct)
 	stack := newStack()

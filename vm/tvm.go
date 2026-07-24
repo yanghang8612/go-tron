@@ -251,15 +251,14 @@ func (tvm *TVM) ResourceTime() int64 {
 // parity (slice 2c) fires.
 func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *TVM {
 	tvm := &TVM{
-		StateDB:      stateDB,
-		DynProps:     dp,
-		Origin:       origin,
-		BlockNumber:  blockNum,
-		Timestamp:    timestamp,
-		Coinbase:     coinbase,
-		ChainID:      chainID,
-		cfg:          cfg,
-		newContracts: make(map[tcommon.Address]bool),
+		StateDB:     stateDB,
+		DynProps:    dp,
+		Origin:      origin,
+		BlockNumber: blockNum,
+		Timestamp:   timestamp,
+		Coinbase:    coinbase,
+		ChainID:     chainID,
+		cfg:         cfg,
 	}
 	tvm.interpreter = NewInterpreter(tvm, cfg)
 	return tvm
@@ -683,8 +682,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 			tvm.StateDB.SetCode(contractAddr, legacyCreateContractCode(code))
 		}
 	}
-	wasNew := tvm.newContracts[contractAddr]
-	tvm.newContracts[contractAddr] = true
+	wasNew := tvm.markNewContract(contractAddr)
 
 	if value > 0 {
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
@@ -831,6 +829,17 @@ func (tvm *TVM) restoreNewContractMark(addr tcommon.Address, wasNew bool) {
 		return
 	}
 	delete(tvm.newContracts, addr)
+}
+
+func (tvm *TVM) markNewContract(addr tcommon.Address) bool {
+	if tvm.newContracts[addr] {
+		return true
+	}
+	if tvm.newContracts == nil {
+		tvm.newContracts = make(map[tcommon.Address]bool)
+	}
+	tvm.newContracts[addr] = true
+	return false
 }
 
 func (tvm *TVM) isNewContract(addr tcommon.Address) bool {
