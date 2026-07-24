@@ -633,6 +633,31 @@ func TestDomainCommitmentPrefersImmutableAccountBorrow(t *testing.T) {
 	}
 }
 
+func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
+	owner := testAddr(0x7f)
+	encoded := rawdb.EncodeStateKVLatestValue([]byte("encoded-kv-value"))
+	commitment := NewDomainCommitmentStateWithGenerationResolver(&StateDB{}, func(tcommon.Address) (uint64, error) {
+		return 11, nil
+	})
+	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{{
+		Kind:         statedomains.MutationPut,
+		Owner:        owner,
+		Domain:       kvdomains.SystemReward,
+		Key:          []byte("encoded-key"),
+		Value:        []byte("encoded-kv-value"),
+		EncodedValue: encoded,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 || len(updates[0].Value) == 0 || &updates[0].Value[0] != &encoded[0] {
+		t.Fatal("commitment update copied transferred encoded KV value")
+	}
+}
+
 func (v *commitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
 	v.checkOwner(owner)
 	return append([]byte(nil), v.account...), true, nil

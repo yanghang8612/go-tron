@@ -360,6 +360,18 @@ func (b *bufferBatch) PutStateKVLatest(prefix []byte, accountID common.AccountID
 	return nil
 }
 
+// PutStateKVLatestOwnedValue retains a freshly encoded immutable value while
+// still constructing the structured map key directly.
+func (b *bufferBatch) PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
+	return nil
+}
+
 // PutOwnedValue is an optional hot-path extension for freshly encoded values.
 // It still owns the key via an immutable string copy, but retains value
 // directly. The caller transfers ownership and must never mutate value after
@@ -1206,6 +1218,18 @@ func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, gen
 		panic("blockbuffer: PutStateKVLatest called with no active layer")
 	}
 	b.putIntoStateKVLatest(active, prefix, accountID, generation, domain, logicalKey, value)
+	return nil
+}
+
+// PutStateKVLatestOwnedValue is the structured ownership-taking write path.
+func (b *Buffer) PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutStateKVLatestOwnedValue called with no active layer")
+	}
+	b.putIntoStateKVLatestOwnedValue(active, prefix, accountID, generation, domain, logicalKey, value)
 	return nil
 }
 

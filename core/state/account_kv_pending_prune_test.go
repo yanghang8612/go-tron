@@ -2,12 +2,16 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -67,6 +71,52 @@ func BenchmarkAccountKVLatestPendingOverlay(b *testing.B) {
 	})
 }
 
+func BenchmarkAccountKVLatestTemporalMutationBatch(b *testing.B) {
+	const mutationsPerBatch = 256
+	owner := pruneTestOwner(1)
+	keys := make([][]byte, mutationsPerBatch)
+	values := make([][]byte, mutationsPerBatch)
+	encodedValues := make([][]byte, mutationsPerBatch)
+	for i := range mutationsPerBatch {
+		keys[i] = bytes.Repeat([]byte{byte(i)}, 32)
+		values[i] = bytes.Repeat([]byte{byte(i + 1)}, 32)
+		encodedValues[i] = rawdb.EncodeStateKVLatestValue(values[i])
+	}
+	for _, mode := range []string{"defensive", "owned", "encoded-owned"} {
+		b.Run(mode, func(b *testing.B) {
+			buf := blockbuffer.New(ethrawdb.NewMemoryDatabase())
+			buf.BeginBlock(pruneBlockHash(1), 1)
+			writer := newAccountKVLatestDomainBatch(buf, zeroGeneration, nil, nil)
+			tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{Writer: writer})
+			defer tx.Close()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				for i := range mutationsPerBatch {
+					var err error
+					switch mode {
+					case "owned":
+						err = tx.DomainPutOwned(owner, kvdomains.ContractStorage, keys[i], values[i])
+					case "encoded-owned":
+						err = tx.DomainPutEncodedOwned(owner, kvdomains.ContractStorage, keys[i], values[i], encodedValues[i])
+					default:
+						err = tx.DomainPut(owner, kvdomains.ContractStorage, keys[i], values[i])
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := tx.Flush(context.Background()); err != nil {
+					b.Fatal(err)
+				}
+				if err := writer.flush(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestAccountKVLatestPendingStructuredKeysPreserveIdentity(t *testing.T) {
 	writer := &accountKVLatestBatch{}
 	owner := pruneTestOwner(1)
@@ -122,6 +172,20 @@ func TestAccountKVLatestCommitmentReadBorrowsImmutablePendingValue(t *testing.T)
 	}
 	if &borrowed[0] != &value[0] {
 		t.Fatal("commitment account read copied its immutable pending value")
+	}
+}
+
+func TestAccountKVLatestOwnedPutRetainsTransferredPendingValue(t *testing.T) {
+	writer := newAccountKVLatestDomainBatch(ethrawdb.NewMemoryDatabase(), zeroGeneration, nil, nil)
+	owner := pruneTestOwner(2)
+	key := []byte("owned-pending-key")
+	value := []byte("owned-pending-value")
+	if err := writer.DomainPutOwned(owner, kvdomains.SystemReward, key, value); err != nil {
+		t.Fatal(err)
+	}
+	pending := writer.pending[pruneKVKey(owner, kvdomains.SystemReward, key)]
+	if &pending.value[0] != &value[0] {
+		t.Fatal("owned domain put copied pending value")
 	}
 }
 

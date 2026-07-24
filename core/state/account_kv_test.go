@@ -1601,9 +1601,11 @@ type ownedMutationWriterSpy struct {
 	regularPuts    int
 	regularDeletes int
 	ownedPuts      int
+	encodedPuts    int
 	ownedDeletes   int
 	putKey         []byte
 	putValue       []byte
+	encodedValue   []byte
 	deleteKey      []byte
 }
 
@@ -1634,12 +1636,20 @@ func (w *ownedMutationWriterSpy) DomainDelOwned(_ tcommon.Address, _ kvdomains.K
 	return nil
 }
 
+func (w *ownedMutationWriterSpy) DomainPutEncodedOwned(_ tcommon.Address, _ kvdomains.KVDomain, key, value, encodedValue []byte) error {
+	w.encodedPuts++
+	w.putKey = key
+	w.putValue = value
+	w.encodedValue = encodedValue
+	return nil
+}
+
 func TestCommitAccountKVLatestTransfersPlanStorage(t *testing.T) {
 	putKey := []byte("put-key")
-	putValue := []byte("put-value")
+	putEntry := newKVEntry(nil, []byte("put-value"), false)
 	deleteKey := []byte("delete-key")
 	plan := &accountKVCommitPlan{items: []kvCommitItem{
-		{domain: kvdomains.SystemReward, logicalKey: putKey, entry: kvEntry{val: putValue}},
+		{domain: kvdomains.SystemReward, logicalKey: putKey, entry: putEntry},
 		{domain: kvdomains.ContractStorage, logicalKey: deleteKey, entry: kvEntry{deleted: true}},
 	}}
 	writer := new(ownedMutationWriterSpy)
@@ -1647,10 +1657,10 @@ func TestCommitAccountKVLatestTransfersPlanStorage(t *testing.T) {
 	if err != nil || !wrote {
 		t.Fatalf("commitAccountKVLatest wrote=%v err=%v", wrote, err)
 	}
-	if writer.regularPuts != 0 || writer.regularDeletes != 0 || writer.ownedPuts != 1 || writer.ownedDeletes != 1 {
-		t.Fatalf("writer calls regular=%d/%d owned=%d/%d", writer.regularPuts, writer.regularDeletes, writer.ownedPuts, writer.ownedDeletes)
+	if writer.regularPuts != 0 || writer.regularDeletes != 0 || writer.ownedPuts != 0 || writer.ownedDeletes != 1 || writer.encodedPuts != 1 {
+		t.Fatalf("writer calls regular=%d/%d owned=%d/%d encoded=%d", writer.regularPuts, writer.regularDeletes, writer.ownedPuts, writer.ownedDeletes, writer.encodedPuts)
 	}
-	if &writer.putKey[0] != &putKey[0] || &writer.putValue[0] != &putValue[0] || &writer.deleteKey[0] != &deleteKey[0] {
+	if &writer.putKey[0] != &putKey[0] || &writer.putValue[0] != &putEntry.val[0] || &writer.encodedValue[0] != &putEntry.wrapped[0] || &writer.deleteKey[0] != &deleteKey[0] {
 		t.Fatal("commit path cloned storage before owned writer")
 	}
 }

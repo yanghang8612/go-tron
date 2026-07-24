@@ -121,6 +121,10 @@ func (b *Buffer) putIntoStateKVLatest(l *layer, prefix []byte, accountID common.
 	b.putIntoString(l, joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey), value)
 }
 
+func (b *Buffer) putIntoStateKVLatestOwnedValue(l *layer, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) {
+	b.putIntoStringOwnedValue(l, joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey), value)
+}
+
 func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
 	v := append([]byte(nil), value...)
 	b.putIntoStringOwnedValue(l, key, v)
@@ -214,6 +218,12 @@ func (v *LayerView) DeleteKeyParts(first, second []byte) error {
 // The value keeps ordinary Put's defensive-copy ownership contract.
 func (v *LayerView) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
 	v.b.putIntoStateKVLatest(v.l, prefix, accountID, generation, domain, logicalKey, value)
+	return nil
+}
+
+// PutStateKVLatestOwnedValue is the structured ownership-taking write path.
+func (v *LayerView) PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	v.b.putIntoStateKVLatestOwnedValue(v.l, prefix, accountID, generation, domain, logicalKey, value)
 	return nil
 }
 

@@ -16,6 +16,31 @@ type cachedStateReadProbe struct {
 	structuredReads int
 }
 
+type ownedStateKVWriteProbe struct {
+	putCalled  bool
+	owner      common.AccountID
+	generation uint64
+	domain     uint16
+	logicalKey []byte
+	value      []byte
+}
+
+func (p *ownedStateKVWriteProbe) Put(_, _ []byte) error {
+	p.putCalled = true
+	return nil
+}
+
+func (*ownedStateKVWriteProbe) Delete([]byte) error { return nil }
+
+func (p *ownedStateKVWriteProbe) PutStateKVLatestOwnedValue(_ []byte, owner common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	p.owner = owner
+	p.generation = generation
+	p.domain = domain
+	p.logicalKey = append([]byte(nil), logicalKey...)
+	p.value = value
+	return nil
+}
+
 func (p *cachedStateReadProbe) GetNoCopyCached(key []byte) ([]byte, error) {
 	p.cachedReads++
 	return p.KeyValueReader.Get(key)
@@ -58,6 +83,25 @@ func TestAppendStateKVLatestValueReusesDestination(t *testing.T) {
 	}
 	if string(decoded) != "replacement" {
 		t.Fatalf("decoded value = %q, want replacement", decoded)
+	}
+}
+
+func TestWriteStateKVLatestEncodedOwnedUsesStructuredWriter(t *testing.T) {
+	owner := stateKVTestAddress(0x41, 0x31)
+	logicalKey := []byte("owned-slot")
+	encoded := EncodeStateKVLatestValue([]byte("owned-value"))
+	probe := new(ownedStateKVWriteProbe)
+	if err := WriteStateKVLatestEncodedOwned(probe, owner, 9, kvdomains.ContractStorage, logicalKey, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if probe.putCalled {
+		t.Fatal("owned structured writer fell back to Put")
+	}
+	if probe.owner != owner.AccountID() || probe.generation != 9 || probe.domain != uint16(kvdomains.ContractStorage) || string(probe.logicalKey) != "owned-slot" {
+		t.Fatalf("structured write metadata = owner:%x generation:%d domain:%x key:%q", probe.owner, probe.generation, probe.domain, probe.logicalKey)
+	}
+	if &probe.value[0] != &encoded[0] {
+		t.Fatal("structured owned writer copied encoded value")
 	}
 }
 

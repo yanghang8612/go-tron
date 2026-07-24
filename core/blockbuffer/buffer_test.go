@@ -360,6 +360,58 @@ func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {
 	}
 }
 
+func TestStructuredStateKVLatestOwnedWritersRetainValueAndOwnKey(t *testing.T) {
+	type writer interface {
+		PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
+	}
+	tests := []struct {
+		name  string
+		write func(t *testing.T, b *Buffer, w writer)
+	}{
+		{name: "buffer", write: func(t *testing.T, _ *Buffer, w writer) {}},
+		{name: "layer-view", write: func(t *testing.T, _ *Buffer, w writer) {}},
+		{name: "batch", write: func(t *testing.T, _ *Buffer, w writer) {
+			if err := w.(ethdb.Batch).Write(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := New(rawdb.NewMemoryDatabase())
+			b.BeginBlock(bufHash(1), 1)
+			h, _ := b.NewestInflight()
+			var w writer
+			switch tc.name {
+			case "buffer":
+				w = b
+			case "layer-view":
+				w = b.ViewLayer(h)
+			case "batch":
+				w = b.NewBatch().(writer)
+			}
+			prefix := []byte("state-prefix-")
+			var accountID common.AccountID
+			accountID[0] = 0x7a
+			logicalKey := []byte("owned-logical-key")
+			wantKey := []byte(joinStateKVLatestKey(prefix, accountID, 17, 3, logicalKey))
+			value := []byte("owned-encoded-value")
+			if err := w.PutStateKVLatestOwnedValue(prefix, accountID, 17, 3, logicalKey, value); err != nil {
+				t.Fatal(err)
+			}
+			logicalKey[0] = 'X'
+			tc.write(t, b, w)
+			got, err := b.GetNoCopy(wantKey)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("owned structured value read = (%q,%v)", got, err)
+			}
+			if &got[0] != &value[0] {
+				t.Fatal("structured owned writer copied value")
+			}
+		})
+	}
+}
+
 func BenchmarkBufferBatchWrite(b *testing.B) {
 	benchmarkBufferBatchWrite(b, false)
 }

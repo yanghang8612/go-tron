@@ -41,6 +41,14 @@ type stateKVLatestStructuredWriter interface {
 	DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error
 }
 
+// stateKVLatestStructuredOwnedWriter retains a freshly encoded immutable value
+// while still assembling the structured physical key without an intermediate
+// byte slice. It is intentionally optional; ordinary writes preserve the
+// defensive-copy contract of stateKVLatestStructuredWriter.
+type stateKVLatestStructuredOwnedWriter interface {
+	PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
+}
+
 type StateKVLatestRow struct {
 	Owner      common.Address
 	Generation uint64
@@ -78,6 +86,19 @@ func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, ge
 		return writer.PutStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
 	}
 	return db.Put(stateKVLatestKey(owner, generation, domain, logicalKey), wrapped)
+}
+
+// WriteStateKVLatestEncodedOwned transfers an already encoded immutable value
+// to writers that advertise an ownership-taking path. Fallback writers retain
+// the normal copying Put semantics.
+func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if writer, ok := db.(stateKVLatestStructuredOwnedWriter); ok {
+		return writer.PutStateKVLatestOwnedValue(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(stateKVLatestKey(owner, generation, domain, logicalKey), wrapped)
+	}
+	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, wrapped)
 }
 
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {

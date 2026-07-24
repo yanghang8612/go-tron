@@ -2,8 +2,10 @@ package domains
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -148,6 +150,61 @@ func TestOverlayOwnsMutationInputs(t *testing.T) {
 	mutations := overlay.Mutations()
 	if len(mutations) != 1 || string(mutations[0].Key) != "key" || string(mutations[0].Value) != "value" {
 		t.Fatalf("mutations = %+v", mutations)
+	}
+}
+
+type ownedFlushWriter struct {
+	key   []byte
+	value []byte
+}
+
+func (*ownedFlushWriter) DomainPut(common.Address, kvdomains.KVDomain, []byte, []byte) error {
+	return errors.New("unexpected defensive put")
+}
+func (*ownedFlushWriter) DomainDel(common.Address, kvdomains.KVDomain, []byte) error {
+	return errors.New("unexpected defensive delete")
+}
+func (*ownedFlushWriter) DomainDelPrefix(common.Address, kvdomains.KVDomain, []byte) error {
+	return nil
+}
+func (w *ownedFlushWriter) DomainPutOwned(_ common.Address, _ kvdomains.KVDomain, key, value []byte) error {
+	w.key, w.value = key, value
+	return nil
+}
+func (*ownedFlushWriter) DomainDelOwned(common.Address, kvdomains.KVDomain, []byte) error {
+	return nil
+}
+
+func TestOverlayFlushTransfersOwnedMutationStorage(t *testing.T) {
+	overlay := NewOverlay(nil)
+	if err := overlay.DomainPut(testAddress(0x29), kvdomains.ContractStorage, []byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	view := overlay.mutationsView()[0]
+	writer := new(ownedFlushWriter)
+	if err := overlay.FlushTo(writer); err != nil {
+		t.Fatal(err)
+	}
+	if &writer.key[0] != &view.Key[0] || &writer.value[0] != &view.Value[0] {
+		t.Fatal("FlushTo cloned storage before owned writer")
+	}
+}
+
+func TestOverlayFlushTransferPreservesPublicInputOwnership(t *testing.T) {
+	overlay := NewOverlay(nil)
+	key := []byte("public-key")
+	value := []byte("public-value")
+	if err := overlay.DomainPut(testAddress(0x2a), kvdomains.ContractStorage, key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0] = 'X'
+	value[0] = 'X'
+	writer := new(ownedFlushWriter)
+	if err := overlay.FlushTo(writer); err != nil {
+		t.Fatal(err)
+	}
+	if string(writer.key) != "public-key" || string(writer.value) != "public-value" {
+		t.Fatalf("public mutation input leaked through ownership transfer: key=%q value=%q", writer.key, writer.value)
 	}
 }
 

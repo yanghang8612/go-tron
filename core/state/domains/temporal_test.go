@@ -124,21 +124,27 @@ func TestSharedDomainTxOwnedMutationKeepsObservableCopiesIsolated(t *testing.T) 
 	owner := testAddress(0x47)
 	latest := NewMemoryStore()
 	key := []byte("owned-key")
-	value := []byte("owned-value")
+	encodedValue := append([]byte{0x01}, []byte("owned-value")...)
+	value := encodedValue[1:]
 	tx := NewSharedDomainTx(SharedDomainTxConfig{
 		Latest: latest,
 		Writer: latest,
 		Hooks: Hooks{OnMutation: func(m Mutation) {
 			m.Key[0] = 'x'
 			m.Value[0] = 'x'
+			m.EncodedValue[0] = 'x'
 		}},
 	})
-	if err := tx.DomainPutOwned(owner, kvdomains.SystemDynamicProperty, key, value); err != nil {
+	if err := tx.DomainPutEncodedOwned(owner, kvdomains.SystemDynamicProperty, key, value, encodedValue); err != nil {
 		t.Fatal(err)
 	}
 	mutations := tx.Mutations()
 	mutations[0].Key[0] = 'y'
 	mutations[0].Value[0] = 'y'
+	mutations[0].EncodedValue[0] = 'y'
+	if encodedValue[0] != 0x01 {
+		t.Fatal("mutation observer changed transferred encoded value")
+	}
 	got, ok, err := tx.GetLatest(owner, kvdomains.SystemDynamicProperty, key)
 	if err != nil || !ok || string(got) != "owned-value" {
 		t.Fatalf("owned overlay read = %q ok=%v err=%v", got, ok, err)
@@ -218,6 +224,9 @@ func TestSharedDomainTxCloseRejectsFutureWork(t *testing.T) {
 	}
 	if err := tx.DomainPutOwned(testAddress(0x43), kvdomains.SystemReward, []byte("k"), []byte("v")); !errors.Is(err, ErrTemporalTxClosed) {
 		t.Fatalf("DomainPutOwned after close err = %v, want %v", err, ErrTemporalTxClosed)
+	}
+	if err := tx.DomainPutEncodedOwned(testAddress(0x43), kvdomains.SystemReward, []byte("k"), []byte("v"), []byte("encoded")); !errors.Is(err, ErrTemporalTxClosed) {
+		t.Fatalf("DomainPutEncodedOwned after close err = %v, want %v", err, ErrTemporalTxClosed)
 	}
 	if err := tx.DomainDelOwned(testAddress(0x43), kvdomains.SystemReward, []byte("k")); !errors.Is(err, ErrTemporalTxClosed) {
 		t.Fatalf("DomainDelOwned after close err = %v, want %v", err, ErrTemporalTxClosed)

@@ -225,7 +225,11 @@ func (d *DomainCommitmentState) RecordCommitmentMutations(ctx context.Context, m
 		}
 		switch mutation.Kind {
 		case statedomains.MutationPut:
-			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, true)
+			if len(mutation.EncodedValue) != 0 {
+				d.recordKVLatestEncodedValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.EncodedValue)
+			} else {
+				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, true)
+			}
 		case statedomains.MutationDel:
 			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, nil, false)
 		case statedomains.MutationDelPrefix:
@@ -433,6 +437,24 @@ func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, gener
 		domain:     domain,
 		key:        string(key),
 	}, captured)
+}
+
+func (d *DomainCommitmentState) recordKVLatestEncodedValue(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key, encodedValue []byte) {
+	if d == nil {
+		return
+	}
+	ownerID := owner.AccountID()
+	if index, ok := d.kvLatestTouchIndex(ownerID, generation, domain, key); ok {
+		d.touchValues[index] = domainCommitmentCapturedValue{encodedValue: encodedValue, exists: true, loaded: true}
+		return
+	}
+	d.recordTouchWithValue(domainCommitmentTouch{
+		flatDomain: rawdb.StateFlatDomainKVLatest,
+		owner:      ownerID,
+		generation: generation,
+		domain:     domain,
+		key:        string(key),
+	}, domainCommitmentCapturedValue{encodedValue: encodedValue, exists: true, loaded: true})
 }
 
 func (d *DomainCommitmentState) hasKVLatestTouch(owner tcommon.AccountID, generation uint64, domain kvdomains.KVDomain, key []byte) bool {
