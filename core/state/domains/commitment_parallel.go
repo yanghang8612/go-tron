@@ -158,19 +158,21 @@ func (s *bufferedBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (boo
 }
 
 func (s *bufferedBranchStore) PutBranch(prefix []byte, b BranchData) error {
-	k := string(prefix)
-	delete(s.dels, k)
+	// Direct []byte-to-string map lookups do not allocate. Keep the transient
+	// lookup separate from the insertion so a hot upper branch that is rebuilt
+	// repeatedly only owns its prefix string on the first PUT.
+	delete(s.dels, string(prefix))
+	if dst := s.puts[string(prefix)]; dst != nil {
+		*dst = b
+		return nil
+	}
 	if s.puts == nil {
 		s.puts = make(map[string]*BranchData)
 	}
-	// Reuse the already-borrowed destination on re-PUT. This avoids both a fresh
-	// large object and map-bucket churn for hot upper branches rebuilt repeatedly
-	// during one fold.
-	dst := s.puts[k]
-	if dst == nil {
-		dst = borrowBranch()
-		s.puts[k] = dst
-	}
+	dst := borrowBranch()
+	// This conversion escapes into the map and owns the immutable prefix. It is
+	// reached exactly once per distinct prefix in this buffered sibling fold.
+	s.puts[string(prefix)] = dst
 	*dst = b
 	return nil
 }

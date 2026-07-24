@@ -24,6 +24,23 @@ func newParallelTrie(store branchStore) *commitmentTrie {
 	return t
 }
 
+func BenchmarkBufferedBranchStorePutBranchOverwrite(b *testing.B) {
+	store := newBufferedBranchStore(nil)
+	prefix := bytes.Repeat([]byte{0x0a}, 32)
+	branch := BranchData{}
+	if err := store.PutBranch(prefix, branch); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(store.releasePuts)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := store.PutBranch(prefix, branch); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 type concurrentFlushProbe struct {
 	mu      sync.Mutex
 	base    *mapBranchStore
