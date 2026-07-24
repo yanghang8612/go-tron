@@ -988,12 +988,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// Async commit threads the previous block's finalized dynamic properties
 	// directly into this block (decision-b): the commit worker publishes
 	// dynPropsCache lazily, so reading the cache here could observe a stale,
-	// not-yet-published value from several blocks back. With async off,
-	// parentDynProps is nil and this reads the head cache exactly as before —
-	// byte-identical.
+	// not-yet-published value from several blocks back. The range executor owns
+	// parentDynProps exclusively after the previous block's worker snapshot has
+	// been taken, so transfer that object instead of deep-copying the complete
+	// ~130-key property maps again. A block-level undo frame below preserves the
+	// old value if this speculative apply fails. With async off, parentDynProps
+	// is nil and this reads the head cache exactly as before — byte-identical.
 	var dynProps *state.DynamicProperties
-	if plan.parentDynProps != nil {
-		dynProps = plan.parentDynProps.Copy()
+	dynPropsTransferred := plan.parentDynProps != nil
+	if dynPropsTransferred {
+		dynProps = plan.parentDynProps
 	} else {
 		dynProps = bc.cachedDynProps()
 	}
@@ -1025,6 +1029,22 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 	}
 	stats.mark(&stats.Validate)
+
+	// From here onward block execution mutates dynamic properties. An async
+	// range reuses the previous block's finalized object in place; retain its
+	// pre-block image with the existing lazy journal so every error path restores
+	// the executor's last good value. processBlock and transaction snapshots nest
+	// inside this frame, and a successful apply clears the merged journal here.
+	if dynPropsTransferred {
+		dynPropsSnapshot := dynProps.Snapshot()
+		defer func() {
+			if retErr != nil {
+				dynProps.RevertToSnapshot(dynPropsSnapshot)
+				return
+			}
+			dynProps.CommitSnapshot(dynPropsSnapshot)
+		}()
+	}
 
 	// Open a fresh buffer layer for this block. The layer holds legacy
 	// rawdb-shaped mirror writes so that switchFork can drop orphan-branch

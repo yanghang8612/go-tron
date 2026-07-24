@@ -323,6 +323,85 @@ func TestAsyncCommit_SameRootAcrossMaintenance(t *testing.T) {
 	}
 }
 
+type failAtStageProgressStore struct {
+	stage rawdb.StageID
+	err   error
+}
+
+func (s failAtStageProgressStore) WriteWithHash(stage rawdb.StageID, _ uint64, _ tcommon.Hash) error {
+	if stage == s.stage {
+		return s.err
+	}
+	return nil
+}
+
+func (failAtStageProgressStore) RewindCanonicalWithHash(uint64, tcommon.Hash) error {
+	return nil
+}
+
+func (failAtStageProgressStore) Read(rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	return rawdb.StageProgress{}, false, nil
+}
+
+// TestAsyncCommit_TransfersDynPropsAndRollsBackFailedApply guards the ownership
+// optimization in decision-(b): once the worker has copied block N's finalized
+// properties, block N+1 reuses the range-owned object rather than copying all
+// property maps again. The second half fails after ProcessBlock has advanced
+// BLOCK_FILLED_SLOTS_INDEX and requires the outer lazy snapshot to restore the
+// carried parent value.
+func TestAsyncCommit_TransfersDynPropsAndRollsBackFailedApply(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
+	bc.SetAsyncCommit(true)
+	defer bc.Close()
+
+	blocks := chainFrom(bc.CurrentBlock(), witnessAddr, 3, 0)
+	executor := newCanonicalRangeExecutor(bc, true)
+	defer executor.Abort()
+
+	if err := executor.Apply(blocks[0]); err != nil {
+		t.Fatalf("apply block 1: %v", err)
+	}
+	bc.WaitForCommitSettled()
+	carried := executor.lastDynProps
+	if carried == nil {
+		t.Fatal("block 1 did not carry finalized dynamic properties")
+	}
+
+	if err := executor.Apply(blocks[1]); err != nil {
+		t.Fatalf("apply block 2: %v", err)
+	}
+	bc.WaitForCommitSettled()
+	if executor.lastDynProps != carried {
+		t.Fatal("block 2 replaced the range-owned dynamic properties instead of transferring them")
+	}
+
+	beforeIndex := carried.BlockFilledSlotsIndex()
+	plannedTxRange, err := executor.txRanges.next(blocks[2])
+	if err != nil {
+		t.Fatalf("plan block 3 tx range: %v", err)
+	}
+	txInfoBatch := executor.txInfoBatches.acquire()
+	defer executor.txInfoBatches.release(txInfoBatch)
+	injected := errors.New("injected execution-stage progress failure")
+	plan := &canonicalBlockExecution{
+		state:           executor.state,
+		commit:          executor.commit,
+		txRange:         plannedTxRange,
+		pipeline:        &canonicalStagePipeline{progress: failAtStageProgressStore{stage: rawdb.StageExecution, err: injected}, blockNum: blocks[2].Number(), hash: blocks[2].Hash(), last: -1},
+		parent:          blocks[1],
+		parentDynProps:  carried,
+		txInfoBatch:     txInfoBatch,
+		txInfoBatchPool: executor.txInfoBatches,
+	}
+	if err := bc.applyBlockWithPlan(blocks[2], plan); !errors.Is(err, injected) {
+		t.Fatalf("apply block 3 error = %v, want injected stage failure", err)
+	}
+	if got := carried.BlockFilledSlotsIndex(); got != beforeIndex {
+		t.Fatalf("carried block_filled_slots_index after failed apply = %d, want %d", got, beforeIndex)
+	}
+}
+
 // TestAsyncCommit_ReorgMatchesSync drives a fork switch through the async path
 // (the switchFork re-apply uses the shared-commit range executor, so it commits
 // asynchronously) and requires the post-reorg head + per-block roots of the

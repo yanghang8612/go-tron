@@ -24,12 +24,14 @@ type canonicalBlockExecution struct {
 	// parent-linkage and parent-state-root reads. Nil falls back to
 	// bc.CurrentBlock() for callers that do not plan a range.
 	parent *types.Block
-	// parentDynProps threads the previous block's finalized dynamic properties
-	// into this block under async commit (decision-b), so execution never reads
-	// the lazily-published dynPropsCache. nil ⇒ read the head cache as usual
-	// (the synchronous path and the first block of a range). finalDynProps is
-	// the output: this block's finalized DP, which the executor carries forward
-	// as the next block's parentDynProps.
+	// parentDynProps transfers ownership of the previous block's finalized
+	// dynamic properties into this block under async commit (decision-b), so
+	// execution never reads the lazily-published dynPropsCache or deep-copies the
+	// full property maps a second time. The commit worker has its own immutable
+	// copy before the transfer. nil ⇒ read the head cache as usual (the
+	// synchronous path and the first block of a range). finalDynProps is the
+	// output: this block's finalized DP, which the executor carries forward as
+	// the next block's parentDynProps.
 	parentDynProps *state.DynamicProperties
 	finalDynProps  *state.DynamicProperties
 	// txInfoBatch is range-owned receipt storage. The synchronous path returns
