@@ -512,6 +512,12 @@ func (d *Database) View(key []byte, fn func([]byte) error) (err error) {
 	return fn(dat)
 }
 
+// IsKeyNotFound exposes Pebble's native absence sentinel to generic caching
+// wrappers without making those packages import Pebble directly.
+func (d *Database) IsKeyNotFound(err error) bool {
+	return errors.Is(err, pebble.ErrNotFound)
+}
+
 // Put inserts the given value into the key-value store.
 func (d *Database) Put(key []byte, value []byte) error {
 	d.quitLock.RLock()

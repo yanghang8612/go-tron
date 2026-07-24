@@ -18,6 +18,12 @@ type countingKeyValueReader struct {
 	views int
 }
 
+type classifiedMissingReader struct {
+	*countingKeyValueReader
+}
+
+func (*classifiedMissingReader) IsKeyNotFound(err error) bool { return err != nil }
+
 type getOnlyReader struct {
 	ethdb.KeyValueReader
 }
@@ -453,6 +459,33 @@ func (r *countingKeyValueReader) View(key []byte, fn func([]byte) error) error {
 		return err
 	}
 	return fn(value)
+}
+
+func TestGetNoCopyCached_CachesConfirmedDurableMiss(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	counting := &countingKeyValueReader{KeyValueReader: disk}
+	base := &classifiedMissingReader{countingKeyValueReader: counting}
+	b := New(base)
+	b.SetBaseReadCacheSize(1 << 20)
+	key := []byte("absent-default-owner-permission")
+
+	for i := 0; i < 3; i++ {
+		if value, err := b.GetNoCopyCached(key); value != nil || err != ErrNotFound {
+			t.Fatalf("read %d = (%v,%v), want (nil,ErrNotFound)", i+1, value, err)
+		}
+	}
+	if counting.gets != 2 {
+		t.Fatalf("durable reads = %d, want 2 before negative-cache hit", counting.gets)
+	}
+
+	// A newer overlay always wins over the cached durable miss.
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put(key, []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.GetNoCopyCached(key); err != nil || string(got) != "updated" {
+		t.Fatalf("overlay read = (%q,%v), want (updated,nil)", got, err)
+	}
 }
 
 // TestGetNoCopy_MatchesGet is the correctness gate for the commitment-fold

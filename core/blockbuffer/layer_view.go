@@ -447,6 +447,9 @@ func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	var cacheEpoch baseReadCacheEpoch
 	if cacheBase && cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			if value == nil {
+				return nil, ErrNotFound
+			}
 			return value, nil
 		} else {
 			cacheEpoch = epoch
@@ -543,6 +546,9 @@ func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, st
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			if cached == nil {
+				return false, nil
+			}
 			return true, fn(cached, true)
 		} else {
 			cacheEpoch = epoch
@@ -577,6 +583,9 @@ func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			if cached == nil {
+				return false, nil
+			}
 			return true, fn(cached, true)
 		} else {
 			cacheEpoch = epoch
@@ -630,6 +639,9 @@ func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			if cached == nil {
+				return nil, ErrNotFound
+			}
 			return cached, nil
 		} else {
 			cacheEpoch = epoch

@@ -77,6 +77,9 @@ type baseReadCacheEpoch struct {
 }
 
 type baseReadCacheEntry struct {
+	// A nil value is the durable-miss sentinel. Present empty values are stored
+	// as a non-nil zero-length slice by cloneBaseReadCacheKeyValue, so callers
+	// can distinguish the two without growing every entry with another field.
 	value  []byte
 	charge int
 	gen    uint64
@@ -133,6 +136,20 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 // whether the returned slice is cache-owned; a callback-backed reader must copy
 // it before returning when false.
 func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) ([]byte, bool) {
+	return c.setEntryIfEpoch(key, value, false, epoch)
+}
+
+// setMissingIfEpoch records a confirmed durable-base miss. Missing rows are
+// subject to the same two-hit admission and generation checks as values: cold
+// one-shot scans stay out of the resident cache, while repeated permission and
+// storage probes stop reopening Pebble iterators. Overlay layers are consulted
+// first, and flush/discard invalidation uses the same complete physical key.
+func (c *baseReadCache) setMissingIfEpoch(key []byte, epoch baseReadCacheEpoch) bool {
+	_, stored := c.setEntryIfEpoch(key, nil, true, epoch)
+	return stored
+}
+
+func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch baseReadCacheEpoch) ([]byte, bool) {
 	if c == nil {
 		return value, false
 	}
@@ -160,6 +177,9 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) 
 		return value, false
 	}
 	k, v := cloneBaseReadCacheKeyValue(key, value)
+	if missing {
+		v = nil
+	}
 	s.nextGen++
 	gen := s.nextGen
 	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen}

@@ -50,6 +50,35 @@ func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_MissingAdmissionAndFlushRefresh(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("missing-permission-row")
+
+	_, _, epoch := c.getWithEpoch(key)
+	if c.setMissingIfEpoch(key, epoch) {
+		t.Fatal("first missing-row sighting bypassed probation")
+	}
+	_, _, epoch = c.getWithEpoch(key)
+	if !c.setMissingIfEpoch(key, epoch) {
+		t.Fatal("second missing-row sighting was not admitted")
+	}
+	if got, ok, _ := c.getWithEpoch(key); !ok || got != nil {
+		t.Fatalf("cached missing row = (%v,%v), want (nil,true)", got, ok)
+	}
+
+	// A canonical put refreshes the resident miss before its layer is dropped.
+	c.setFlushed(string(key), []byte("permission"))
+	if got, ok, _ := c.getWithEpoch(key); !ok || string(got) != "permission" {
+		t.Fatalf("flushed replacement = (%q,%v), want (permission,true)", got, ok)
+	}
+
+	// Present empty values must stay distinct from the nil miss sentinel.
+	c.setFlushed(string(key), []byte{})
+	if got, ok, _ := c.getWithEpoch(key); !ok || got == nil || len(got) != 0 {
+		t.Fatalf("present empty replacement = (%v,%v), want (non-nil empty,true)", got, ok)
+	}
+}
+
 func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {
 	const size = 64 * 256
 	c := newBaseReadCache(size)

@@ -240,6 +240,25 @@ type valueViewReader interface {
 	View(key []byte, fn func([]byte) error) error
 }
 
+// keyNotFoundClassifier lets a durable backend identify its native not-found
+// sentinel without coupling blockbuffer to that backend's error package.
+// Confirmed misses may then use the same bounded, versioned cache as values;
+// transient I/O errors are never retained.
+type keyNotFoundClassifier interface {
+	IsKeyNotFound(error) bool
+}
+
+func isKeyNotFound(base ethdb.KeyValueReader, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNotFound) {
+		return true
+	}
+	classifier, ok := base.(keyNotFoundClassifier)
+	return ok && classifier.IsKeyNotFound(err)
+}
+
 // stringKeyWriter is an optional synchronous writer fast path for layer maps,
 // which already own immutable string keys. Implementations must copy key before
 // returning. Pebble batches satisfy it with DeferredBatchOp, copying the string
@@ -1000,6 +1019,9 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	var cacheEpoch baseReadCacheEpoch
 	if cacheBase && cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			if value == nil {
+				return nil, ErrNotFound
+			}
 			return value, nil
 		} else {
 			cacheEpoch = epoch
@@ -1080,6 +1102,9 @@ func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bo
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			if value == nil {
+				return false, nil
+			}
 			return true, fn(value, true)
 		} else {
 			cacheEpoch = epoch
@@ -1134,6 +1159,9 @@ func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			if value == nil {
+				return nil, ErrNotFound
+			}
 			return value, nil
 		} else {
 			cacheEpoch = epoch
@@ -1161,10 +1189,18 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 			}
 			return nil
 		})
+		if isKeyNotFound(base, err) {
+			cache.setMissingIfEpoch(key, epoch)
+			return nil, ErrNotFound
+		}
 		return out, err
 	}
 	value, err := base.Get(key)
 	if err != nil {
+		if isKeyNotFound(base, err) {
+			cache.setMissingIfEpoch(key, epoch)
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	stored, _ := cache.setIfEpoch(key, value, epoch)
@@ -1199,10 +1235,16 @@ func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 		}
 		// Preserve the commitment accessor's established missing-row contract:
 		// backends report absence as an error, while callers receive found=false.
+		if isKeyNotFound(base, err) && cache != nil {
+			cache.setMissingIfEpoch(key, epoch)
+		}
 		return false, nil
 	}
 	value, err := base.Get(key)
 	if err != nil {
+		if isKeyNotFound(base, err) && cache != nil {
+			cache.setMissingIfEpoch(key, epoch)
+		}
 		return false, nil
 	}
 	if cache != nil {
