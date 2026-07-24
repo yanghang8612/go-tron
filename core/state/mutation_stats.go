@@ -248,17 +248,9 @@ func summarizeCommitMutations(plans []*accountCommitPlan) CommitMutationStats {
 				stats.ContractMetaUpdates++
 			}
 		}
-		for _, op := range plan.storageOps {
-			if !op.staged {
-				stats.StorageNoops++
-				continue
-			}
-			if op.delete {
-				stats.StorageDeletes++
-			} else {
-				stats.StoragePuts++
-			}
-		}
+		stats.StoragePuts += plan.storagePuts
+		stats.StorageDeletes += plan.storageDeletes
+		stats.StorageNoops += plan.storageNoops
 		if plan.kvPlan == nil {
 			continue
 		}

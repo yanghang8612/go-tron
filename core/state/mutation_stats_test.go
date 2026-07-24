@@ -9,6 +9,41 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+var prepareStorageCommitPlanBenchmarkSink int
+
+func BenchmarkPrepareStorageCommitPlan(b *testing.B) {
+	const slots = 256
+	sdb := newTestStateDB(b)
+	addr := testAddr(0x30)
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	obj := sdb.getStateObject(addr)
+	obj.ensureStorage()
+	obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin, slots)
+	for i := 0; i < slots; i++ {
+		var key, value tcommon.Hash
+		key[30] = byte(i >> 8)
+		key[31] = byte(i)
+		value[30] = byte((i + 1) >> 8)
+		value[31] = byte(i + 1)
+		obj.storage[key] = storageSlot{value: value, exists: true}
+		obj.dirtyStorage[key] = storageOrigin{loaded: true}
+	}
+	// Warm the contract storage-key layout outside the measured loop.
+	_ = sdb.storageRowKey(addr, tcommon.Hash{})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var plan accountCommitPlan
+		if err := sdb.prepareAccountCommitPlan(addr, obj, &plan); err != nil {
+			b.Fatal(err)
+		}
+		prepareStorageCommitPlanBenchmarkSink = len(plan.kvPlan.items)
+		releaseAccountKVCommitPlan(plan.kvPlan)
+		obj.releaseKVDirty()
+	}
+}
+
 func TestCommitMutationStatsReportsStateTypesAndDomains(t *testing.T) {
 	sdb := newTestStateDB(t)
 	acct := testAddr(0x31)
@@ -49,6 +84,19 @@ func TestCommitMutationStatsCoversEveryRegisteredDomain(t *testing.T) {
 		if _, ok := kvDomainStatIndex(domain); !ok {
 			t.Fatalf("registered domain %s (%#04x) missing mutation stats slot", kvdomains.Name(domain), uint16(domain))
 		}
+	}
+}
+
+func TestSummarizeCommitMutationsAggregatesStorageCounts(t *testing.T) {
+	plans := []*accountCommitPlan{{
+		obj:            new(stateObject),
+		storagePuts:    3,
+		storageDeletes: 2,
+		storageNoops:   1,
+	}}
+	stats := summarizeCommitMutations(plans)
+	if stats.StoragePuts != 3 || stats.StorageDeletes != 2 || stats.StorageNoops != 1 {
+		t.Fatalf("storage stats put=%d delete=%d noop=%d, want 3/2/1", stats.StoragePuts, stats.StorageDeletes, stats.StorageNoops)
 	}
 }
 

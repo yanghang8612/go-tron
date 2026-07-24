@@ -2914,18 +2914,16 @@ func (s *StateDB) Copy() (*StateDB, error) {
 	return cp, nil
 }
 
-type storageCommitOp struct {
-	rowKey tcommon.Hash
-	value  []byte
-	delete bool
-	staged bool
-}
-
 type accountCommitPlan struct {
-	addr               tcommon.Address
-	obj                *stateObject
-	deleteAccount      bool
-	storageOps         []storageCommitOp
+	addr          tcommon.Address
+	obj           *stateObject
+	deleteAccount bool
+	// Storage staging only needs per-kind totals after preparation. Keeping
+	// counters here avoids retaining one result object (and a duplicate value)
+	// for every dirty slot until mutation statistics are summarized.
+	storagePuts        int
+	storageDeletes     int
+	storageNoops       int
 	kvPlan             *accountKVCommitPlan
 	hadKVDirty         bool
 	accountLatestDirty bool
@@ -3004,7 +3002,6 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 		sort.Slice(storageKeys, func(i, j int) bool {
 			return bytes.Compare(storageKeys[i].Bytes(), storageKeys[j].Bytes()) < 0
 		})
-		plan.storageOps = make([]storageCommitOp, 0, len(storageKeys))
 		for _, key := range storageKeys {
 			value := obj.storage[key].value
 			origin := obj.dirtyStorage[key]
@@ -3018,22 +3015,22 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 				if err != nil {
 					return err
 				}
-				plan.storageOps = append(plan.storageOps, storageCommitOp{
-					rowKey: rowKey,
-					delete: true,
-					staged: staged,
-				})
+				if staged {
+					plan.storageDeletes++
+				} else {
+					plan.storageNoops++
+				}
 				continue
 			}
 			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, prevValue, origin.exists, origin.loaded)
 			if err != nil {
 				return err
 			}
-			plan.storageOps = append(plan.storageOps, storageCommitOp{
-				rowKey: rowKey,
-				value:  append([]byte(nil), value.Bytes()...),
-				staged: staged,
-			})
+			if staged {
+				plan.storagePuts++
+			} else {
+				plan.storageNoops++
+			}
 		}
 	}
 
