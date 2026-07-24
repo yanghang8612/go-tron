@@ -821,9 +821,9 @@ func makeLog(topicCount int) executionFunc {
 		if !size.IsUint64() {
 			return nil, ErrOutOfEnergy
 		}
-		var dataCost uint256.Int
-		dataCost.Mul(&size, uint256.NewInt(EnergyLogData))
-		if !dataCost.IsUint64() || dataCost.Uint64() > contract.Energy {
+		// Compare before multiplying so a uint64-sized operand cannot wrap and
+		// no temporary uint256 value is needed on every emitted log.
+		if size.Uint64() > contract.Energy/EnergyLogData {
 			return nil, ErrOutOfEnergy
 		}
 
@@ -839,15 +839,26 @@ func makeLog(topicCount int) executionFunc {
 		}
 		resizeMemory(memory, off, sz)
 
+		// Topics and data leave execution memory with the receipt, so they must
+		// be copied. Keep all immutable bytes in one arena rather than allocating
+		// every 32-byte topic and the data range independently. Capacity-limit
+		// each view so appending to one field cannot overwrite its neighbor.
+		topicBytes := topicCount * 32
+		payload := make([]byte, topicBytes+int(sz))
 		topics := make([][]byte, topicCount)
 		for i := 0; i < topicCount; i++ {
 			t := stack.pop()
 			b := t.Bytes32()
-			topics[i] = make([]byte, 32)
+			start := i * 32
+			topics[i] = payload[start : start+32 : start+32]
 			copy(topics[i], b[:])
 		}
 
-		data := memory.getCopy(int64(off), int64(sz))
+		var data []byte
+		if sz > 0 {
+			data = payload[topicBytes : topicBytes+int(sz) : topicBytes+int(sz)]
+			copy(data, memory.getPtr(int64(off), int64(sz)))
+		}
 
 		interpreter.tvm.Logs = append(interpreter.tvm.Logs, Log{
 			Address: contract.Address,
