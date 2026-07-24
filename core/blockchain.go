@@ -1579,7 +1579,26 @@ func (bc *BlockChain) startFlushWorker() {
 	go func() {
 		defer bc.flushWorkerWg.Done()
 		for cutoff := range bc.flushQueue {
-			bc.runFlushCutoff(cutoff)
+			// A sync range can publish several monotonically cumulative
+			// solidified cutoffs before this worker is scheduled. Snapshot the
+			// queue depth and collapse only those already-waiting requests into
+			// the highest cutoff. FlushUpTo(highest) covers every earlier cutoff
+			// atomically, lets blockbuffer merge overwritten keys across the
+			// newly-solidified layers, and avoids one large Pebble batch per
+			// block. Bounding the drain to the initial depth prevents a steady
+			// producer from starving the actual disk flush.
+			pending := 1
+			for queued := len(bc.flushQueue); queued > 0; queued-- {
+				next, ok := <-bc.flushQueue
+				if !ok {
+					break
+				}
+				pending++
+				if next > cutoff {
+					cutoff = next
+				}
+			}
+			bc.runFlushCutoffs(cutoff, pending)
 		}
 	}()
 }
@@ -1593,7 +1612,19 @@ func (bc *BlockChain) startFlushWorker() {
 // We still log so operators see the failure when it happens, not only when
 // the next block tries to advance.
 func (bc *BlockChain) runFlushCutoff(cutoff uint64) {
-	defer bc.flushPending.done()
+	bc.runFlushCutoffs(cutoff, 1)
+}
+
+// runFlushCutoffs executes one cumulative flush on behalf of pending posted
+// cutoffs. Every post owns one flushPending count, including cutoffs collapsed
+// by the worker, so all counts are released only after their shared durable
+// flush finishes.
+func (bc *BlockChain) runFlushCutoffs(cutoff uint64, pending int) {
+	defer func() {
+		for ; pending > 0; pending-- {
+			bc.flushPending.done()
+		}
+	}()
 	if err := bc.flushBufferUpToSolidified(int64(cutoff)); err != nil {
 		wrapped := fmt.Errorf("flush buffer up to solidified: %w", err)
 		// First failure wins. A later flush attempt that also fails (e.g.

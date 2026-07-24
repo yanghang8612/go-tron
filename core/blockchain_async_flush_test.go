@@ -2,14 +2,26 @@ package core
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 )
+
+type flushBatchProbe struct {
+	ethdb.Database
+	batches atomic.Int64
+}
+
+func (p *flushBatchProbe) NewBatchWithSize(size int) ethdb.Batch {
+	p.batches.Add(1)
+	return p.Database.NewBatchWithSize(size)
+}
 
 // newAsyncFlushChainOn spins up a single-witness chain on the supplied
 // store. Single-SR setup keeps `solidified == head` every block, so the
@@ -84,6 +96,40 @@ func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 	}
 	if got := len(bc.buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
+	}
+}
+
+func TestAsyncFlush_WorkerCoalescesQueuedCutoffs(t *testing.T) {
+	disk := &flushBatchProbe{Database: ethrawdb.NewMemoryDatabase()}
+	buffer := blockbuffer.New(disk)
+	for i := uint64(1); i <= 3; i++ {
+		buffer.BeginBlock(tcommon.BytesToHash([]byte{byte(i)}), i)
+		if err := buffer.Put([]byte{byte('a' + i)}, []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+		buffer.CommitBlock()
+	}
+
+	bc := &BlockChain{
+		db:           disk,
+		buffer:       buffer,
+		flushQueue:   make(chan uint64, flushQueueCap),
+		flushPending: newFlushBarrier(),
+	}
+	for cutoff := uint64(1); cutoff <= 3; cutoff++ {
+		bc.flushPending.post()
+		bc.flushQueue <- cutoff
+	}
+	close(bc.flushQueue)
+	bc.startFlushWorker()
+	bc.flushWorkerWg.Wait()
+	bc.flushPending.wait()
+
+	if got := disk.batches.Load(); got != 1 {
+		t.Fatalf("durable batch count = %d, want 1 cumulative flush", got)
+	}
+	if got := len(buffer.PendingBlocks()); got != 0 {
+		t.Fatalf("pending layers = %d, want 0", got)
 	}
 }
 
