@@ -94,3 +94,50 @@ func TestCaptureOwnerResourceSnapshot_OverusedClampsToZero(t *testing.T) {
 		t.Errorf("missing account snapshot = %+v, want zero value", missing)
 	}
 }
+
+func BenchmarkCaptureOwnerResourceSnapshot(b *testing.B) {
+	db := state.NewDatabase(ethrawdb.NewMemoryDatabase())
+	sdb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	owner := testCoreAddr(1)
+	sdb.GetOrCreateAccount(owner)
+	sdb.AddBalance(owner, 5_000_000)
+	sdb.FreezeV1Bandwidth(owner, 1_000_000, 200)
+	sdb.FreezeV1Energy(owner, 2_000_000, 200)
+	sdb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
+	sdb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 4_000_000)
+	for tokenID := int64(1_000_000); tokenID < 1_000_256; tokenID++ {
+		sdb.SetTRC10Balance(owner, tokenID, tokenID)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	dp := newDP(10_000, 4)
+	dp.Set("free_net_limit", 600)
+
+	b.Run("targeted-resource-read", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			view, err := state.New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = captureOwnerResourceSnapshot(view, dp, owner, 100)
+		}
+	})
+	b.Run("legacy-full-account-read", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			view, err := state.New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			acct := view.GetAccount(owner)
+			_ = frozenForNet(acct)
+			_ = frozenForEnergy(acct)
+		}
+	})
+}

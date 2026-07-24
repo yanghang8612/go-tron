@@ -60,16 +60,16 @@ func captureOwnerResourceSnapshot(statedb *state.StateDB, dp *state.DynamicPrope
 	if !statedb.AccountExists(owner) {
 		return ownerResourceSnapshot{}
 	}
-	acct := statedb.GetAccount(owner)
+	frozenNet, frozenEnergy, _ := statedb.GetAccountFrozenResourceTotals(owner)
 	snap := ownerResourceSnapshot{
 		Balance:                statedb.GetBalance(owner),
 		NetLastConsumeTime:     statedb.GetLatestConsumeTime(owner),
 		FreeNetLastConsumeTime: statedb.GetLatestConsumeFreeTime(owner),
-		FrozenForNet:           frozenForNet(acct),
-		FrozenForEnergy:        frozenForEnergy(acct),
+		FrozenForNet:           frozenNet,
+		FrozenForEnergy:        frozenEnergy,
 	}
 
-	frozenLimit := availableAccountNet(acct, dp)
+	frozenLimit := availableAccountNetForFrozen(frozenNet, dp)
 	frozenUsed := recoverUsageForDP(statedb.GetNetUsage(owner), snap.NetLastConsumeTime, resourceTime, dp)
 	snap.FrozenNetLeft = max(0, frozenLimit-frozenUsed)
 

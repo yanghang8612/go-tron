@@ -90,7 +90,13 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 	if acct == nil {
 		return 0
 	}
-	frozen := frozenForNet(acct)
+	return availableAccountNetForFrozen(frozenForNet(acct), dp)
+}
+
+// availableAccountNetForFrozen applies the global bandwidth formula to an
+// already-computed frozen balance. Keeping this separate lets hot paths use
+// StateDB's targeted resource reads without materializing a full Account.
+func availableAccountNetForFrozen(frozen int64, dp *state.DynamicProperties) int64 {
 
 	totalWeight := dp.TotalNetWeight()
 	if totalWeight <= 0 {

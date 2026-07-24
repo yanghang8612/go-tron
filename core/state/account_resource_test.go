@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -73,6 +74,69 @@ func TestAccountResourcePersistsOutsideAccountEnvelopeAndLoadsLazily(t *testing.
 	}
 	if !obj.accountResourceLoaded || obj.account.Proto().AccountResource == nil {
 		t.Fatal("typed resource read did not materialize AccountResource")
+	}
+}
+
+func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xa3)
+	delegator := testAddr(0xa4)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.CreateAccount(delegator, corepb.AccountType_Normal)
+	sdb.FreezeV1Bandwidth(addr, 11, 100)
+	sdb.FreezeV1Energy(addr, 12, 100)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 21)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, 22)
+	sdb.FreezeV1DelegatedBandwidth(delegator, addr, 31)
+	sdb.FreezeV1DelegatedEnergy(delegator, addr, 32)
+	sdb.AddAcquiredDelegatedFrozenV2(addr, corepb.ResourceCode_BANDWIDTH, 41)
+	sdb.AddAcquiredDelegatedFrozenV2(addr, corepb.ResourceCode_ENERGY, 42)
+	sdb.AddUnfreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 51, 200)
+	for tokenID := int64(1_000_000); tokenID < 1_000_128; tokenID++ {
+		sdb.SetTRC10Balance(addr, tokenID, tokenID)
+	}
+	sdb.SetVotes(addr, []*corepb.Vote{{VoteAddress: testAddr(0xb0).Bytes(), VoteCount: 7}})
+	sdb.SetPermissions(addr, types.MakeDefaultOwnerPermission(addr), nil, nil)
+
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bandwidth, energy, err := reopened.GetAccountFrozenResourceTotals(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bandwidth != 104 {
+		t.Fatalf("frozen bandwidth total = %d, want 104", bandwidth)
+	}
+	if energy != 108 {
+		t.Fatalf("frozen energy total = %d, want 108", energy)
+	}
+
+	obj := reopened.stateObjects[addr]
+	if obj == nil {
+		t.Fatal("resource read did not load account envelope")
+	}
+	if !obj.accountResourceLoaded {
+		t.Fatal("resource read did not load AccountResource")
+	}
+	if obj.accountMapsLoaded || obj.accountPermissionsLoaded || obj.accountVotesLoaded ||
+		obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded ||
+		obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
+		t.Fatalf("resource read materialized unrelated domains: maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t frozenBandwidth=%t tronPower=%t",
+			obj.accountMapsLoaded, obj.accountPermissionsLoaded, obj.accountVotesLoaded,
+			obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded,
+			obj.accountFrozenBandwidthLoaded, obj.accountTronPowerLoaded)
+	}
+	pb := obj.account.Proto()
+	if len(pb.AssetV2) != 0 || pb.OwnerPermission != nil || len(pb.Votes) != 0 ||
+		len(pb.Frozen) != 0 || len(pb.FrozenV2) != 0 || len(pb.UnfrozenV2) != 0 {
+		t.Fatalf("resource read leaked unrelated split fields into account proto: %+v", pb)
 	}
 }
 

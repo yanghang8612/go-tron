@@ -201,15 +201,19 @@ func (s *StateDB) setAccountFrozenBandwidth(obj *stateObject, amount, expireTime
 }
 
 func (s *StateDB) accountFrozenBandwidthTotal(obj *stateObject) (int64, error) {
-	rows, err := s.accountFrozenBandwidthRows(obj)
-	if err != nil {
-		return 0, err
+	if obj == nil || obj.account == nil {
+		return 0, nil
 	}
 	var total int64
-	for _, row := range rows {
+	err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, nil, func(key, value []byte) (bool, error) {
+		row, err := decodeAccountFrozenBandwidthRow(key, value)
+		if err != nil {
+			return false, err
+		}
 		total += row.entry.FrozenBalance
-	}
-	return total, nil
+		return true, nil
+	})
+	return total, err
 }
 
 func (s *StateDB) accountFrozenBandwidthMaxExpire(obj *stateObject) (int64, error) {
