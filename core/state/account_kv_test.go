@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -13,6 +14,56 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+var (
+	benchmarkAccountKVCommitPlan *accountKVCommitPlan
+	benchmarkKVLookupEntry       kvEntry
+	benchmarkKVLookupFound       bool
+)
+
+func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
+	const count = 256
+	keys := make([][]byte, count)
+	value := bytes.Repeat([]byte{0x42}, 32)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		obj := new(stateObject)
+		for _, key := range keys {
+			obj.stageKV(kvdomains.ContractStorage, key, value)
+		}
+		plan, err := new(StateDB).prepareAccountKVCommitPlan(obj)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkAccountKVCommitPlan = plan
+	}
+}
+
+func BenchmarkAccountKVDirtyLookup(b *testing.B) {
+	key := bytes.Repeat([]byte{0x7f}, 32)
+	obj := new(stateObject)
+	obj.stageKV(kvdomains.ContractStorage, key, []byte("value"))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkKVLookupEntry, benchmarkKVLookupFound = lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, key)
+	}
+}
+
+func TestKVCompositeKeyStringOwnsInputAndPreservesLayout(t *testing.T) {
+	key := []byte("logical-key")
+	mapKey := kvCompositeKeyString(kvdomains.ContractStorage, key)
+	key[0] = 'X'
+	bytesView := ownedStringBytes(mapKey)
+	if len(bytesView) != 2+len("logical-key") || binary.BigEndian.Uint16(bytesView[:2]) != uint16(kvdomains.ContractStorage) || string(bytesView[2:]) != "logical-key" {
+		t.Fatalf("composite map key = %x", bytesView)
+	}
+}
 
 func TestAccountKVSetGet(t *testing.T) {
 	sdb := newTestStateDB(t)
@@ -1646,7 +1697,7 @@ func (w *ownedMutationWriterSpy) DomainPutEncodedOwned(_ tcommon.Address, _ kvdo
 
 func TestCommitAccountKVLatestTransfersPlanStorage(t *testing.T) {
 	putKey := []byte("put-key")
-	putEntry := newKVEntry(nil, []byte("put-value"), false)
+	putEntry := newKVEntry([]byte("put-value"), false)
 	deleteKey := []byte("delete-key")
 	plan := &accountKVCommitPlan{items: []kvCommitItem{
 		{domain: kvdomains.SystemReward, logicalKey: putKey, entry: putEntry},

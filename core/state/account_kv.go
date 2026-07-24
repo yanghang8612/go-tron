@@ -906,15 +906,33 @@ func accountKVLatestPendingKeyOwned(owner tcommon.Address, generation uint64, do
 	}
 }
 
-// kvCompositeKey is the pre-hash logical key: domain (big-endian u16) || key.
-func kvCompositeKey(domain kvdomains.KVDomain, key []byte) []byte {
+// kvCompositeKeyString owns the pre-hash map key domainBE2||key in one
+// allocation. The previous []byte construction followed by string conversion
+// copied every staged key twice.
+func kvCompositeKeyString(domain kvdomains.KVDomain, key []byte) string {
 	out := make([]byte, 2+len(key))
 	binary.BigEndian.PutUint16(out, uint16(domain))
 	copy(out[2:], key)
-	return out
+	return ownedBytesString(out)
 }
 
-func newKVEntry(composite, value []byte, deleted bool) kvEntry {
+// lookupKVEntry builds the common <=64-byte logical key in stack storage. The
+// transient []byte-to-string conversion is allocation-free for map lookup.
+func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []byte) (kvEntry, bool) {
+	var stack [66]byte
+	var composite []byte
+	if size := 2 + len(key); size <= len(stack) {
+		composite = stack[:size]
+	} else {
+		composite = make([]byte, size)
+	}
+	binary.BigEndian.PutUint16(composite, uint16(domain))
+	copy(composite[2:], key)
+	entry, ok := entries[string(composite)]
+	return entry, ok
+}
+
+func newKVEntry(value []byte, deleted bool) kvEntry {
 	e := kvEntry{deleted: deleted}
 	if !deleted {
 		e.wrapped = make([]byte, 1+len(value))
@@ -1077,8 +1095,7 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
-	comp := kvCompositeKey(domain, key)
-	if e, ok := obj.kvDirty[string(comp)]; ok {
+	if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
 		if e.deleted {
 			return nil, false, nil
 		}
@@ -1187,8 +1204,7 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 		return out, nil
 	}
 	for _, key := range keys {
-		comp := kvCompositeKey(domain, key)
-		if e, ok := obj.kvDirty[string(comp)]; ok {
+		if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
 			if !e.deleted {
 				out[string(key)] = append([]byte{}, e.val...)
 			}
@@ -1225,7 +1241,7 @@ func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDom
 		return err
 	}
 	for mapKey, entry := range obj.kvDirty {
-		d, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
+		d, logicalKey, ok := splitKVCompositeKey(ownedStringBytes(mapKey))
 		if !ok || d != domain || !bytes.HasPrefix(logicalKey, prefix) {
 			continue
 		}
@@ -1269,14 +1285,12 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
 	var (
 		prevValue  []byte
 		prevExists bool
 		prevLoaded bool
 	)
-	_, dirty := obj.kvDirty[mk]
+	_, dirty := lookupKVEntry(obj.kvDirty, domain, key)
 	if !dirty {
 		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -1305,8 +1319,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	if dirty {
 		if !prevDirty.deleted && bytes.Equal(prevDirty.val, value) {
@@ -1320,7 +1333,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
 		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
-	entry := newKVEntry(comp, value, false)
+	entry := newKVEntry(value, false)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
@@ -1347,10 +1360,9 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 	if obj == nil {
 		return false, nil
 	}
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
-	entry := newKVEntry(comp, value, deleted)
+	entry := newKVEntry(value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
@@ -1382,8 +1394,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	if obj == nil {
 		return nil
 	}
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	var (
 		prevValue  []byte
@@ -1403,7 +1414,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		prevLoaded = true
 	}
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
-	entry := newKVEntry(comp, nil, true)
+	entry := newKVEntry(nil, true)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
@@ -1470,7 +1481,9 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
 	plan := &accountKVCommitPlan{items: make([]kvCommitItem, 0, len(obj.kvDirty))}
 	for mk, e := range obj.kvDirty {
-		composite := []byte(mk)
+		// kvDirty owns immutable composite strings through commit finalization;
+		// lend that backing to the plan and downstream ownership pipeline.
+		composite := ownedStringBytes(mk)
 		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
 		if !ok {
 			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
