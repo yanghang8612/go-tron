@@ -3,6 +3,8 @@ package core
 import (
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,14 +31,23 @@ import (
 //
 //	go test ./core -run '^$' -bench BenchmarkPrewarmBlockSignatures -benchmem
 func BenchmarkPrewarmBlockSignatures(b *testing.B) {
-	b.Run("parallel", func(b *testing.B) { benchPrewarm(b, defaultParallelSigVerifyMinTxs) })
-	b.Run("serial_killswitch", func(b *testing.B) { benchPrewarm(b, 0) })
+	for _, workers := range []int{1, 2, 3, 4} {
+		b.Run(fmt.Sprintf("workers_%d", workers), func(b *testing.B) {
+			benchPrewarm(b, defaultParallelSigVerifyMinTxs, workers)
+		})
+	}
+	b.Run("serial_killswitch", func(b *testing.B) { benchPrewarm(b, 0, 0) })
 }
 
-func benchPrewarm(b *testing.B, minTxs int) {
+func benchPrewarm(b *testing.B, minTxs, maxWorkers int) {
 	prev := ParallelSigVerifyMinTxs
+	prevWorkers := ParallelSigVerifyMaxWorkers
 	ParallelSigVerifyMinTxs = minTxs
-	defer func() { ParallelSigVerifyMinTxs = prev }()
+	ParallelSigVerifyMaxWorkers = maxWorkers
+	defer func() {
+		ParallelSigVerifyMinTxs = prev
+		ParallelSigVerifyMaxWorkers = prevWorkers
+	}()
 
 	// Build raw signed-tx blocks once; clone wrappers per-iteration so the
 	// signers memo is cold each time (mirrors fresh-from-wire sync blocks).
@@ -230,28 +241,59 @@ func BenchmarkInsertBlocksSignaturePipeline(b *testing.B) {
 		{name: "batch_barrier", synchronous: true},
 		{name: "overlap"},
 	} {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				bc := newVerifierChain(b, genesis)
-				blocks := unmarshalBatch(b, raw)
-				prevMin := ParallelSigVerifyMinTxs
-				ParallelSigVerifyMinTxs = 1
-				b.StartTimer()
-				if tc.synchronous {
-					prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
-					ParallelSigVerifyMinTxs = 0
+		for _, workers := range []int{1, 2, 3, 4} {
+			b.Run(fmt.Sprintf("%s/workers_%d", tc.name, workers), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					bc := newVerifierChain(b, genesis)
+					blocks := unmarshalBatch(b, raw)
+					prevMin := ParallelSigVerifyMinTxs
+					prevWorkers := ParallelSigVerifyMaxWorkers
+					ParallelSigVerifyMinTxs = 1
+					ParallelSigVerifyMaxWorkers = workers
+					b.StartTimer()
+					if tc.synchronous {
+						prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
+						ParallelSigVerifyMinTxs = 0
+					}
+					err := bc.InsertBlocks(blocks)
+					b.StopTimer()
+					ParallelSigVerifyMinTxs = prevMin
+					ParallelSigVerifyMaxWorkers = prevWorkers
+					if closeErr := bc.Close(); err == nil {
+						err = closeErr
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
 				}
-				err := bc.InsertBlocks(blocks)
-				b.StopTimer()
-				ParallelSigVerifyMinTxs = prevMin
-				if closeErr := bc.Close(); err == nil {
-					err = closeErr
-				}
-				if err != nil {
-					b.Fatal(err)
-				}
+			})
+		}
+	}
+}
+
+func TestSignaturePrewarmWorkerCount(t *testing.T) {
+	prevProcs := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(prevProcs)
+	prevWorkers := ParallelSigVerifyMaxWorkers
+	defer func() { ParallelSigVerifyMaxWorkers = prevWorkers }()
+
+	for _, tc := range []struct {
+		name     string
+		max      int
+		jobs     int
+		expected int
+	}{
+		{name: "auto_reserves_one", jobs: 100, expected: 3},
+		{name: "explicit_cap", max: 2, jobs: 100, expected: 2},
+		{name: "job_count_caps", jobs: 2, expected: 2},
+		{name: "empty", jobs: 0, expected: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ParallelSigVerifyMaxWorkers = tc.max
+			if got := signaturePrewarmWorkerCount(tc.jobs); got != tc.expected {
+				t.Fatalf("workers = %d, want %d", got, tc.expected)
 			}
 		})
 	}

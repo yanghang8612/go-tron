@@ -30,6 +30,14 @@ import (
 // critical path.
 var ParallelSigVerifyMinTxs = defaultParallelSigVerifyMinTxs
 
+// ParallelSigVerifyMaxWorkers caps the signature prewarm worker pool. A
+// positive value is an explicit cap; zero or less uses the automatic policy,
+// which reserves one GOMAXPROCS slot for overlapping state/commitment work.
+// ECDSA recovery runs in cgo and releases its P, so a GOMAXPROCS-sized recovery
+// pool otherwise lets the Go scheduler start another GOMAXPROCS CPU-bound
+// workers on the same host and oversubscribe it during sync.
+var ParallelSigVerifyMaxWorkers int
+
 const defaultParallelSigVerifyMinTxs = 16
 
 // headerSignaturePrewarmer is the optional capability a consensus engine exposes
@@ -132,21 +140,7 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 		}
 	}
 
-	workers := runtime.GOMAXPROCS(0)
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	// Single worker collapses to the serial warm — still off the execution
-	// path's later read, but no goroutine churn.
-	if workers == 1 {
-		for i := range jobs {
-			runSigJob(jobs[i], engine)
-		}
-		return nil
-	}
+	workers := signaturePrewarmWorkerCount(len(jobs))
 
 	run := new(signaturePrewarmRun)
 	var next atomic.Int64
@@ -165,6 +159,27 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 		}()
 	}
 	return run
+}
+
+func signaturePrewarmWorkerCount(jobCount int) int {
+	if jobCount <= 0 {
+		return 0
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if ParallelSigVerifyMaxWorkers > 0 {
+		if workers > ParallelSigVerifyMaxWorkers {
+			workers = ParallelSigVerifyMaxWorkers
+		}
+	} else if workers > 1 {
+		workers--
+	}
+	if workers > jobCount {
+		workers = jobCount
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
 }
 
 // runSigJob executes one recovery job. A non-nil block warms the header
