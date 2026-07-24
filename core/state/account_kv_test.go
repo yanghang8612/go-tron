@@ -184,6 +184,7 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	defer scope.Close()
 	sharedTx := scope.tx
 	sharedWriter := scope.latestWriter
+	sharedCommitmentState := scope.commitmentState
 
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("set k1: %v", err)
@@ -192,11 +193,14 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit1: %v", err)
 	}
-	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter || scope.commitmentState != sharedCommitmentState {
 		t.Fatal("commit scope replaced shared domain transaction objects after first commit")
 	}
 	if scope.commits != 1 {
 		t.Fatalf("scope commits after first commit = %d, want 1", scope.commits)
+	}
+	if len(sharedCommitmentState.touches) != 0 || len(sharedCommitmentState.touchValues) != 0 || sharedCommitmentState.generation != nil || sharedCommitmentState.latestReader != nil {
+		t.Fatal("shared commitment state retained first commit's references")
 	}
 	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
 		t.Fatalf("shared tx retained %d mutations after first commit", len(mutations))
@@ -212,11 +216,14 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	if root2 == root1 {
 		t.Fatal("second scoped commit did not move commitment root")
 	}
-	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter || scope.commitmentState != sharedCommitmentState {
 		t.Fatal("commit scope replaced shared domain transaction objects after second commit")
 	}
 	if scope.commits != 2 {
 		t.Fatalf("scope commits after second commit = %d, want 2", scope.commits)
+	}
+	if len(sharedCommitmentState.touches) != 0 || len(sharedCommitmentState.touchValues) != 0 || sharedCommitmentState.generation != nil || sharedCommitmentState.latestReader != nil {
+		t.Fatal("shared commitment state retained second commit's references")
 	}
 	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
 		t.Fatalf("shared tx retained %d mutations after second commit", len(mutations))

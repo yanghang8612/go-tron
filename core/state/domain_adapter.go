@@ -102,11 +102,12 @@ func (d *DomainHistoryState) GetAsOf(owner tcommon.Address, domain kvdomains.KVD
 }
 
 type DomainCommitmentState struct {
-	state        *StateDB
-	generation   statedomains.GenerationResolver
-	latestReader domainCommitmentLatestReader
-	touches      map[domainCommitmentTouch]int
-	touchValues  []domainCommitmentCapturedValue
+	state             *StateDB
+	generation        statedomains.GenerationResolver
+	latestReader      domainCommitmentLatestReader
+	touches           map[domainCommitmentTouch]int
+	touchCapacityHint int
+	touchValues       []domainCommitmentCapturedValue
 }
 
 type domainCommitmentTouch struct {
@@ -189,19 +190,83 @@ func NewDomainCommitmentStateWithGenerationResolver(s *StateDB, generation state
 	}
 }
 
-// reserveTouches sizes the per-commit mutation index and its parallel captured-
-// value slice from the commit plan's already-known upper bound. A fresh
-// DomainCommitmentState is created for every block; letting both containers grow
-// from zero repeatedly otherwise allocates and rehashes the same sequence of map
-// buckets throughout a long sync range.
-func (d *DomainCommitmentState) reserveTouches(capacity int) {
-	if d == nil || capacity <= len(d.touches) {
+func (d *DomainCommitmentState) resetForCommit(s *StateDB, generation statedomains.GenerationResolver) {
+	if d == nil {
 		return
 	}
-	if len(d.touches) == 0 {
-		d.touches = make(map[domainCommitmentTouch]int, capacity)
+	d.finishCommit()
+	d.state = s
+	d.generation = generation
+}
+
+// finishCommit drops references to per-block keys and captured values while
+// retaining the allocation backing the touch index for the next scoped block.
+// latestUpdatesFromTouches has already copied physical keys into its own arena;
+// update values borrow the layer-owned encodings, not these slice headers.
+func (d *DomainCommitmentState) finishCommit() {
+	if d == nil {
+		return
 	}
-	if cap(d.touchValues) < capacity {
+	clear(d.touches)
+	clear(d.touchValues)
+	d.touchValues = d.touchValues[:0]
+	d.generation = nil
+	d.latestReader = nil
+}
+
+func (d *DomainCommitmentState) release() {
+	if d == nil {
+		return
+	}
+	d.finishCommit()
+	d.state = nil
+	d.touches = nil
+	d.touchCapacityHint = 0
+	d.touchValues = nil
+}
+
+// reserveTouches sizes the per-commit mutation index and its parallel captured-
+// value slice from the commit plan's already-known upper bound. Scoped range
+// execution retains these containers across blocks; standalone commits still
+// reserve once instead of growing and rehashing through multiple sizes.
+func (d *DomainCommitmentState) reserveTouches(capacity int) {
+	if d == nil {
+		return
+	}
+	if capacity <= 0 {
+		if d.touchCapacityHint > 4096 {
+			d.touches = nil
+			d.touchCapacityHint = 0
+		}
+		if cap(d.touchValues) > 4096 {
+			d.touchValues = nil
+		}
+		return
+	}
+	if capacity <= len(d.touches) {
+		return
+	}
+	// Reuse the prior block's exact-sized map while its capacity remains a good
+	// fit. Grow explicitly from the commit plan's upper bound, and discard a
+	// rare oversized outlier once the workload falls below a quarter of it so
+	// map clear/GC scanning does not stay inflated for the rest of the range.
+	resizeMap := d.touches == nil || capacity > d.touchCapacityHint
+	if d.touchCapacityHint > 4096 && capacity < d.touchCapacityHint/4 {
+		resizeMap = true
+	}
+	if resizeMap {
+		touches := make(map[domainCommitmentTouch]int, capacity)
+		for touch, index := range d.touches {
+			touches[touch] = index
+		}
+		d.touches = touches
+		d.touchCapacityHint = capacity
+	}
+	resizeValues := cap(d.touchValues) < capacity
+	if cap(d.touchValues) > 4096 && capacity < cap(d.touchValues)/4 {
+		resizeValues = true
+	}
+	if resizeValues {
 		values := make([]domainCommitmentCapturedValue, len(d.touchValues), capacity)
 		copy(values, d.touchValues)
 		d.touchValues = values
@@ -503,6 +568,9 @@ func (d *DomainCommitmentState) recordTouchWithValue(touch domainCommitmentTouch
 	}
 	d.touches[touch] = len(d.touchValues)
 	d.touchValues = append(d.touchValues, captured)
+	if len(d.touches) > d.touchCapacityHint {
+		d.touchCapacityHint = len(d.touches)
+	}
 }
 
 func (d *DomainCommitmentState) resolveGeneration(owner tcommon.Address) (uint64, error) {

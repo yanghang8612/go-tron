@@ -92,6 +92,32 @@ func BenchmarkDomainCommitmentRecordEncodedTouches(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainCommitmentRecordEncodedTouchesReused(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	values := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+		values[i] = rawdb.EncodeStateKVLatestValue([]byte{byte(i)})
+	}
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.reserveTouches(count)
+	commitment.finishCommit()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment.resetForCommit(commitment.state, nil)
+		commitment.reserveTouches(count)
+		for i := range keys {
+			commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, keys[i], values[i])
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+		commitment.finishCommit()
+	}
+}
+
 func BenchmarkDomainCommitmentLatestUpdatesFromCapturedTouches(b *testing.B) {
 	const count = 1024
 	owner := testAddr(0x7e)
@@ -119,6 +145,64 @@ func BenchmarkDomainCommitmentLatestUpdatesFromCapturedTouches(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkDomainCommitmentUpdates = updates
+	}
+}
+
+func TestDomainCommitmentStateReusableContainers(t *testing.T) {
+	state := &StateDB{}
+	generation := func(tcommon.Address) (uint64, error) { return 7, nil }
+	commitment := NewDomainCommitmentStateWithGenerationResolver(state, generation)
+	commitment.reserveTouches(8)
+	owner := testAddr(0x7e)
+	key := []byte("slot")
+	value := rawdb.EncodeStateKVLatestValue([]byte("value"))
+	commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, key, value)
+	if len(commitment.touches) != 1 || len(commitment.touchValues) != 1 {
+		t.Fatalf("captured containers = %d/%d, want 1/1", len(commitment.touches), len(commitment.touchValues))
+	}
+	originalValueCap := cap(commitment.touchValues)
+
+	// Growing after a touch is present must preserve its index and captured
+	// value, even though production reserves before recording any touches.
+	commitment.reserveTouches(16)
+	index, ok := commitment.kvLatestTouchIndex(owner.AccountID(), 7, kvdomains.ContractStorage, key)
+	if !ok || index != 0 {
+		t.Fatalf("touch after reserve growth = index:%d ok:%v, want 0/true", index, ok)
+	}
+	if !bytes.Equal(commitment.touchValues[index].encodedValue, value) {
+		t.Fatalf("touch after reserve growth value = %x, want %x", commitment.touchValues[index].encodedValue, value)
+	}
+
+	commitment.finishCommit()
+	if len(commitment.touches) != 0 || len(commitment.touchValues) != 0 {
+		t.Fatalf("finished containers = %d/%d, want 0/0", len(commitment.touches), len(commitment.touchValues))
+	}
+	if commitment.generation != nil || commitment.latestReader != nil {
+		t.Fatal("finish retained per-block resolver or reader")
+	}
+	if cap(commitment.touchValues) < originalValueCap {
+		t.Fatalf("finish dropped reusable value capacity: got %d, want >= %d", cap(commitment.touchValues), originalValueCap)
+	}
+
+	commitment.resetForCommit(state, generation)
+	commitment.reserveTouches(8)
+	commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, key, value)
+	if len(commitment.touches) != 1 || len(commitment.touchValues) != 1 {
+		t.Fatalf("reused containers = %d/%d, want 1/1", len(commitment.touches), len(commitment.touchValues))
+	}
+
+	// Do not retain a one-off giant block's containers for a much smaller tail.
+	commitment.finishCommit()
+	commitment.reserveTouches(8192)
+	commitment.finishCommit()
+	commitment.reserveTouches(16)
+	if commitment.touchCapacityHint != 16 || cap(commitment.touchValues) != 16 {
+		t.Fatalf("oversized containers retained: map hint=%d value cap=%d, want 16/16", commitment.touchCapacityHint, cap(commitment.touchValues))
+	}
+
+	commitment.release()
+	if commitment.state != nil || commitment.touches != nil || commitment.touchValues != nil {
+		t.Fatal("release retained scope-owned commitment storage")
 	}
 }
 

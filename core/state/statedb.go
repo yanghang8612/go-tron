@@ -272,6 +272,7 @@ type CommitScope struct {
 	generationResolver statedomains.GenerationResolver
 	history            *DomainHistoryState
 	commitment         *commitScopeCommitment
+	commitmentState    *DomainCommitmentState
 	latestWriter       *accountKVLatestBatch
 	latestReader       *commitScopeLatestReader
 	tx                 *statedomains.SharedDomainTx
@@ -296,6 +297,7 @@ func (s *StateDB) NewCommitScope() *CommitScope {
 	index := s.accountKVIndex()
 	scope.history = NewDomainHistoryState(s, 0)
 	scope.commitment = &commitScopeCommitment{}
+	scope.commitmentState = NewDomainCommitmentState(s)
 	scope.latestWriter = newAccountKVLatestDomainBatch(index, resolveGeneration, &s.changeSet, nil)
 	scope.latestReader = &commitScopeLatestReader{writer: scope.latestWriter, state: s}
 	scope.tx = statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
@@ -384,6 +386,9 @@ func (scope *CommitScope) discard() {
 	}
 	if scope.commitment != nil {
 		scope.commitment.current = nil
+	}
+	if scope.commitmentState != nil {
+		scope.commitmentState.release()
 	}
 	if scope.latestReader != nil {
 		scope.latestReader.generation = nil
@@ -3258,7 +3263,18 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 
 	accountKVIndex := s.accountKVIndex()
 	generationResolver := accountCommitPlanGenerationResolver(plans)
-	commitmentState := NewDomainCommitmentStateWithGenerationResolver(s, generationResolver)
+	var commitmentState *DomainCommitmentState
+	if scope != nil {
+		commitmentState = scope.commitmentState
+		if commitmentState == nil {
+			commitmentState = NewDomainCommitmentState(s)
+			scope.commitmentState = commitmentState
+		}
+		commitmentState.resetForCommit(s, generationResolver)
+		defer commitmentState.finishCommit()
+	} else {
+		commitmentState = NewDomainCommitmentStateWithGenerationResolver(s, generationResolver)
+	}
 	// The commit plans expose the exact maximum number of distinct commitment
 	// touches before any writes begin. Reserve it once instead of growing the
 	// per-block mutation map and captured-value slice through multiple sizes.
