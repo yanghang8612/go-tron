@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	common "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -41,6 +42,66 @@ func clearAccountPermissionProto(pb *corepb.Account) {
 	pb.OwnerPermission = nil
 	pb.WitnessPermission = nil
 	pb.ActivePermission = nil
+}
+
+// AccountPermissionByID returns one permission row without materializing the
+// account's other split fields. Transaction envelope validation calls this for
+// every transaction, so routing it through GetAccount would also load every
+// asset, vote, stake, frozen-supply, and resource row owned by the account.
+//
+// The returned permission is read-only. Pending writes and deletes are visible
+// because GetAccountKV merges the StateDB dirty overlay with the latest store.
+func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.Permission, error) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil, nil
+	}
+
+	// Reuse an already-materialized permission set. This preserves the existing
+	// live-object semantics for callers that obtained and retained GetAccount's
+	// account pointer earlier in the same StateDB lifecycle.
+	if obj.accountPermissionsLoaded {
+		switch id {
+		case 0:
+			return obj.account.OwnerPermission(), nil
+		case 1:
+			return obj.account.WitnessPermission(), nil
+		default:
+			for _, permission := range obj.account.ActivePermission() {
+				if permission.GetId() == id {
+					return permission, nil
+				}
+			}
+			return nil, nil
+		}
+	}
+
+	var key []byte
+	switch id {
+	case 0:
+		key = accountOwnerPermissionKey
+	case 1:
+		key = accountWitnessPermissionKey
+	default:
+		if id < 2 {
+			return nil, nil
+		}
+		key = accountActivePermissionKey(id)
+	}
+	value, exists, err := s.GetAccountKV(addr, kvdomains.AccountPermissionAux, key)
+	if err != nil || !exists {
+		return nil, err
+	}
+	permission, _, err := decodeAccountPermissionRow(key, value)
+	if err != nil {
+		return nil, err
+	}
+	// Every writer stores an active row under its protobuf id. Treat a mismatch
+	// as corrupted state instead of silently authorizing the wrong permission.
+	if id >= 2 && permission.GetId() != id {
+		return nil, fmt.Errorf("account active permission row %d contains id %d", id, permission.GetId())
+	}
+	return permission, nil
 }
 
 func (s *StateDB) materializeAccountPermissions(obj *stateObject) error {

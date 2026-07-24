@@ -336,6 +336,40 @@ func TestValidateTxEnvelope_ExistingAccount_OwnerPermission(t *testing.T) {
 	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept, got %v", err)
 	}
+	// Envelope validation needs only one permission row. It must not populate
+	// the account proto's split permission and asset fields as a side effect.
+	account := statedb.AccountReference(owner)
+	if account == nil {
+		t.Fatal("owner account missing after validation")
+	}
+	if pb := account.Proto(); pb.OwnerPermission != nil || pb.WitnessPermission != nil || len(pb.ActivePermission) != 0 || len(pb.AssetV2) != 0 {
+		t.Fatalf("envelope validation materialized split account fields: %+v", pb)
+	}
+}
+
+func TestValidateTxEnvelope_DoesNotMaterializeAccountAux(t *testing.T) {
+	statedb, dp := newValidatorState(t)
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.ApplyDefaultAccountPermissions(owner, dp)
+	statedb.SetTRC10Balance(owner, 1_000_001, 99)
+
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+	account := statedb.AccountReference(owner)
+	if account == nil {
+		t.Fatal("owner account missing after validation")
+	}
+	if pb := account.Proto(); pb.OwnerPermission != nil || len(pb.AssetV2) != 0 {
+		t.Fatalf("envelope validation materialized split fields: owner=%+v assetV2=%+v", pb.OwnerPermission, pb.AssetV2)
+	}
+	if got := statedb.GetTRC10Balance(owner, 1_000_001); got != 99 {
+		t.Fatalf("point-read balance = %d, want 99", got)
+	}
 }
 
 // TestValidateTxEnvelope_ActivePermission_AllowedOp: a custom Active

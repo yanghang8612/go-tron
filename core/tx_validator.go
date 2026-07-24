@@ -117,7 +117,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 
 	permID := contract.PermissionId
 	var perm *corepb.Permission
-	account := statedb.GetAccount(ownerAddr)
+	account := statedb.AccountReference(ownerAddr)
 	if account == nil {
 		// Account not yet materialized. java-tron's
 		// AccountCapsule.getDefaultPermission returns a single-key Owner
@@ -137,7 +137,10 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 			return ErrPermissionNotFound
 		}
 	} else {
-		perm = types.PermissionByID(account, permID)
+		perm, err = statedb.AccountPermissionByID(ownerAddr, permID)
+		if err != nil {
+			return err
+		}
 		if perm == nil {
 			// Legacy account materialized before the multi-sign fork
 			// stored an explicit owner_permission, OR a fresh account

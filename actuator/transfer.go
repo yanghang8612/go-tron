@@ -36,7 +36,10 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	toAccount := ctx.State.GetAccount(toAddr)
+	// Validation only needs immutable fields from the account envelope. Avoid
+	// GetAccount here: it materializes every split account domain, including all
+	// TRC10 maps, votes, permissions, and stake rows.
+	toAccount := ctx.State.AccountReference(toAddr)
 	if ctx.DynProps.ForbidTransferToContract() && toAccount != nil {
 		if toAccount.Type() == corepb.AccountType_Contract {
 			return errors.New("cannot transfer TRX to a smart contract")

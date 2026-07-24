@@ -97,7 +97,9 @@ func (a *TransferAssetActuator) Validate(ctx *Context) error {
 	if ctx.State.GetTRC10BalanceFinal(from, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) < c.Amount {
 		return errors.New("insufficient TRC10 balance")
 	}
-	toAccount := ctx.State.GetAccount(to)
+	// Type lives in the compact account envelope; loading the full account here
+	// would scan every split auxiliary domain for each TRC10 recipient.
+	toAccount := ctx.State.AccountReference(to)
 	if toAccount != nil {
 		if ctx.DynProps.ForbidTransferToContract() && toAccount.Type() == corepb.AccountType_Contract {
 			return errors.New("cannot transfer TRC10 to a smart contract")

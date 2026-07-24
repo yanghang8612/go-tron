@@ -1,8 +1,12 @@
 package state
 
 import (
+	"strconv"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -88,6 +92,55 @@ func TestAccountPermissionsPersistOutsideAccountEnvelope(t *testing.T) {
 	}
 }
 
+func TestAccountPermissionByIDDoesNotMaterializeSplitAccount(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x96)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	owner := splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x41)
+	witness := splitTestPermission(corepb.Permission_Witness, 1, "witness", 0x42)
+	active := splitTestPermission(corepb.Permission_Active, 3, "active-3", 0x43)
+	sdb.SetPermissions(addr, owner, witness, []*corepb.Permission{active})
+	if err := sdb.SetAccountKV(addr, kvdomains.AccountAssetV2, []byte("1000001"), encodeAccountAuxInt64(99)); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		id   int32
+		want *corepb.Permission
+	}{
+		{id: 0, want: owner},
+		{id: 1, want: witness},
+		{id: 3, want: active},
+		{id: 4, want: nil},
+	} {
+		got, lookupErr := reopened.AccountPermissionByID(addr, test.id)
+		if lookupErr != nil {
+			t.Fatalf("permission %d: %v", test.id, lookupErr)
+		}
+		if !proto.Equal(got, test.want) {
+			t.Fatalf("permission %d = %+v, want %+v", test.id, got, test.want)
+		}
+	}
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing after permission lookup")
+	}
+	if obj.accountPermissionsLoaded || obj.accountMapsLoaded {
+		t.Fatalf("point lookup materialized split account: permissions=%v maps=%v", obj.accountPermissionsLoaded, obj.accountMapsLoaded)
+	}
+	if pb := obj.account.Proto(); pb.OwnerPermission != nil || pb.WitnessPermission != nil || len(pb.ActivePermission) != 0 || len(pb.AssetV2) != 0 {
+		t.Fatalf("point lookup populated account proto: %+v", pb)
+	}
+}
+
 func TestAccountPermissionsSnapshotRevertInvalidatesMaterializedCache(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x93)
@@ -155,4 +208,53 @@ func TestAccountPermissionsReplaceRemovesStaleActiveRows(t *testing.T) {
 	if actives := account.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active3Updated) {
 		t.Fatalf("active permissions after replacement = %+v", actives)
 	}
+}
+
+func BenchmarkAccountPermissionLookup(b *testing.B) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	addr := testAddr(0x97)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	owner := splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x51)
+	sdb.SetPermissions(addr, owner, nil, nil)
+	for i := 0; i < 128; i++ {
+		key := []byte(strconv.Itoa(1_000_000 + i))
+		if err := sdb.SetAccountKV(addr, kvdomains.AccountAssetV2, key, encodeAccountAuxInt64(int64(i+1))); err != nil {
+			b.Fatal(err)
+		}
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("point-read", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			view, err := New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			permission, err := view.AccountPermissionByID(addr, 0)
+			if err != nil || permission == nil {
+				b.Fatalf("permission lookup: permission=%+v err=%v", permission, err)
+			}
+		}
+	})
+	b.Run("full-account", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			view, err := New(root, db)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if account := view.GetAccount(addr); account == nil || account.OwnerPermission() == nil {
+				b.Fatal("account permission missing")
+			}
+		}
+	})
 }
