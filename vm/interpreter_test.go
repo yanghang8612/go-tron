@@ -52,6 +52,45 @@ func BenchmarkInterpreterArithmetic(b *testing.B) {
 	}
 }
 
+func BenchmarkInterpreterRepeatedMissingSload(b *testing.B) {
+	const loads = 1000
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	address := tcommon.Address{0x41, 0x22}
+	sdb.CreateAccount(address, corepb.AccountType_Contract)
+	root, err := sdb.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	sdb, err = state.New(root, db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	tvm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	code := make([]byte, 0, loads*4+1)
+	for i := 0; i < loads; i++ {
+		code = append(code, byte(PUSH1), 0x01, byte(SLOAD), byte(POP))
+	}
+	code = append(code, byte(STOP))
+	contract := NewContract(tcommon.Address{0x41, 0x11}, address, 0, 1_000_000_000)
+	contract.SetCode(address, code)
+
+	b.ReportAllocs()
+	b.ReportMetric(loads, "sloads/run")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		contract.Energy = 1_000_000_000
+		contract.EnergyUsed = 0
+		if _, err := tvm.interpreter.Run(contract); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestInterpretersShareImmutableJumpTable(t *testing.T) {
 	first := NewInterpreter(new(TVM), TVMConfig{})
 	second := NewInterpreter(new(TVM), TVMConfig{Constantinople: true, Istanbul: true})

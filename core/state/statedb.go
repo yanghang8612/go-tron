@@ -63,11 +63,12 @@ type StateDB struct {
 	// full stateObjects map to flip zero-valued storage rows non-existent and
 	// delete self-destructed accounts at the transaction boundary.
 	//
-	// Completeness: a zero-valued cached storage slot can only come from
-	// SetState — GetStateWithExist never caches a zero/absent disk row (it
-	// early-returns), so every object the old full scan would have marked is in
-	// this set. Self-destructs are the only other thing the scan acted on, and
-	// SelfDestruct populates the set too.
+	// Completeness: a zero-valued slot that needs a present→absent transition can
+	// only come from SetState. GetStateWithExist may cache a durable miss as an
+	// already-absent clean slot, but it never enters dirtyStorage and needs no
+	// transaction-finalization work. Thus every object the old full scan would
+	// have changed is in this set. Self-destructs are the only other thing the
+	// scan acted on, and SelfDestruct populates the set too.
 	//
 	// Stale entries (left by a reverted write/self-destruct) are harmless:
 	// FinalizeTransaction re-resolves the live object by address via
@@ -2385,12 +2386,23 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	}
 	// Load from persistent storage on cache miss.
 	raw, ok, err := s.GetAccountKV(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil {
+		return tcommon.Hash{}, false
+	}
+	// Cache durable misses as an explicit non-existent slot. Contracts often
+	// probe the same empty mapping/array position repeatedly; without this entry
+	// every SLOAD crosses the blockbuffer and reaches Pebble again. Keep errors
+	// uncached above because a transient read failure must remain retryable.
+	if !ok || len(raw) == 0 {
+		obj.ensureStorage()
+		obj.storage[key] = storageSlot{}
 		return tcommon.Hash{}, false
 	}
 	var h tcommon.Hash
 	copy(h[len(h)-len(raw):], raw)
 	if h == (tcommon.Hash{}) {
+		obj.ensureStorage()
+		obj.storage[key] = storageSlot{}
 		return tcommon.Hash{}, false
 	}
 	obj.ensureStorage()
