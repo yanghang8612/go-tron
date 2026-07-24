@@ -305,6 +305,22 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 	genesis := h.chain.GetBlockByNumber(0)
 	genesisID := genesis.ID()
 	headID := head.ID()
+	solidID := genesisID
+	if solidNum := h.chain.DynProps().LatestSolidifiedBlockNum(); solidNum > 0 {
+		if uint64(solidNum) <= headID.Num {
+			if id, ok := h.chain.BlockIDByNumber(uint64(solidNum)); ok {
+				solidID = id
+			} else {
+				log.Warn("Solidified block unavailable for hello; advertising genesis",
+					"solid", solidNum,
+					"head", headID.Num)
+			}
+		} else {
+			log.Warn("Solidified block is above head; advertising genesis",
+				"solid", solidNum,
+				"head", headID.Num)
+		}
+	}
 
 	// HelloMessage.Version is java-tron's `p2p.version` (network
 	// discriminator), distinct from the libp2p-handshake protocol version.
@@ -322,8 +338,8 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 			Number: int64(genesisID.Num),
 		},
 		SolidBlockId: &corepb.HelloMessage_BlockId{
-			Hash:   headID.Hash[:],
-			Number: int64(headID.Num),
+			Hash:   solidID.Hash[:],
+			Number: int64(solidID.Num),
 		},
 		HeadBlockId: &corepb.HelloMessage_BlockId{
 			Hash:   headID.Hash[:],

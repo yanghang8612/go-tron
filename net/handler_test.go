@@ -13,8 +13,10 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -115,6 +117,83 @@ func TestBuildHelloIncludesFromEndpoint(t *testing.T) {
 	}
 	if hello.Version != params.NileNetworkID {
 		t.Fatalf("hello.version = %d, want %d", hello.Version, params.NileNetworkID)
+	}
+}
+
+func TestBuildHelloUsesSolidifiedBlockInsteadOfHead(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	witnesses := []tcommon.Address{
+		{0x41, 1},
+		{0x41, 2},
+		{0x41, 3},
+		{0x41, 4},
+	}
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	for _, addr := range witnesses {
+		genesis.Accounts = append(genesis.Accounts, params.GenesisAccount{
+			Address: addr,
+			Balance: 1_000_000,
+		})
+		genesis.Witnesses = append(genesis.Witnesses, params.GenesisWitness{
+			Address:   addr,
+			VoteCount: 1,
+			URL:       "test",
+		})
+	}
+	if _, _, err := core.SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := core.NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+
+	for i := 1; i <= 3; i++ {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnesses[i-1].Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("insert block %d: %v", i, err)
+		}
+	}
+
+	if got := bc.DynProps().LatestSolidifiedBlockNum(); got != 1 {
+		t.Fatalf("test setup solidified block = %d, want 1", got)
+	}
+
+	handler := NewTronHandler(bc, txpool.New(), nil)
+	hello := handler.buildHello()
+	solidID, ok := bc.BlockIDByNumber(1)
+	if !ok {
+		t.Fatal("solidified block #1 is unavailable")
+	}
+	if got := hello.GetSolidBlockId().GetNumber(); got != int64(solidID.Num) {
+		t.Fatalf("hello solid block number = %d, want %d", got, solidID.Num)
+	}
+	if got := hello.GetSolidBlockId().GetHash(); !bytes.Equal(got, solidID.Hash[:]) {
+		t.Fatalf("hello solid block hash = %x, want %x", got, solidID.Hash)
+	}
+	if got := hello.GetHeadBlockId().GetNumber(); got != 3 {
+		t.Fatalf("hello head block number = %d, want 3", got)
+	}
+	if bytes.Equal(hello.GetSolidBlockId().GetHash(), hello.GetHeadBlockId().GetHash()) {
+		t.Fatal("hello solid block must not be the unsolidified head")
 	}
 }
 
