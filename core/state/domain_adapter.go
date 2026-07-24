@@ -117,15 +117,16 @@ type domainCommitmentTouch struct {
 	key        string
 }
 
-// domainCommitmentCapturedValue is the final value carried by a KV-latest
-// mutation. The temporal overlay already owns this value before it is flushed,
-// so retaining one immutable copy avoids reading the just-written row back from
-// the latest store when commitment updates are assembled. Account-latest and
-// generation touches still use the reader and leave loaded false.
+// domainCommitmentCapturedValue is the final presence-prefixed value carried by
+// a KV-latest mutation. Encoding it while capturing replaces the former raw
+// copy plus a second allocation during update assembly. The temporal overlay
+// can then release its mutation storage while the commitment update borrows
+// this immutable buffer. Account-latest and generation touches still use the
+// reader and leave loaded false.
 type domainCommitmentCapturedValue struct {
-	value  []byte
-	exists bool
-	loaded bool
+	encodedValue []byte
+	exists       bool
+	loaded       bool
 }
 
 type domainCommitmentLatestReader interface {
@@ -368,7 +369,7 @@ func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLat
 		}
 		if captured.loaded {
 			if captured.exists {
-				return rawdb.NewStateCommitmentPutOwned(commitmentKey, rawdb.EncodeStateKVLatestValue(captured.value)), nil
+				return rawdb.NewStateCommitmentPutOwned(commitmentKey, captured.encodedValue), nil
 			}
 			return rawdb.NewStateCommitmentDeleteOwned(commitmentKey), nil
 		}
@@ -415,15 +416,15 @@ func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, gener
 		captured.exists = exists
 		captured.loaded = true
 		if exists {
-			captured.value = append(captured.value[:0], value...)
+			captured.encodedValue = rawdb.AppendStateKVLatestValue(captured.encodedValue[:0], value)
 		} else {
-			captured.value = nil
+			captured.encodedValue = nil
 		}
 		return
 	}
 	captured := domainCommitmentCapturedValue{exists: exists, loaded: true}
 	if exists {
-		captured.value = append([]byte(nil), value...)
+		captured.encodedValue = rawdb.EncodeStateKVLatestValue(value)
 	}
 	d.recordTouchWithValue(domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainKVLatest,

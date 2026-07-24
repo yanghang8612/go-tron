@@ -44,6 +44,23 @@ func TestStateKVLatestReadWriteEmptyAndAccountID(t *testing.T) {
 	}
 }
 
+func TestAppendStateKVLatestValueReusesDestination(t *testing.T) {
+	dst := make([]byte, 0, 64)
+	encoded := AppendStateKVLatestValue(dst, []byte("first"))
+	firstPtr := &encoded[0]
+	encoded = AppendStateKVLatestValue(encoded[:0], []byte("replacement"))
+	if &encoded[0] != firstPtr {
+		t.Fatal("latest value encoder did not reuse destination capacity")
+	}
+	decoded, err := DecodeStateKVLatestValue(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != "replacement" {
+		t.Fatalf("decoded value = %q, want replacement", decoded)
+	}
+}
+
 func TestStateKVLatestIterateScopesAndSorts(t *testing.T) {
 	db := NewMemoryDatabase()
 	owner := stateKVTestAddress(0x41, 0x22)

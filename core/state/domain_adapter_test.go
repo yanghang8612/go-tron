@@ -83,9 +83,9 @@ func BenchmarkDomainCommitmentLatestUpdatesFromCapturedTouches(b *testing.B) {
 			domain:     kvdomains.ContractStorage,
 			key:        string(key),
 		}, domainCommitmentCapturedValue{
-			loaded: true,
-			exists: true,
-			value:  []byte{byte(i)},
+			loaded:       true,
+			exists:       true,
+			encodedValue: rawdb.EncodeStateKVLatestValue([]byte{byte(i)}),
 		})
 	}
 	b.ReportAllocs()

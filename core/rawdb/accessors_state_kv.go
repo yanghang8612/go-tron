@@ -59,10 +59,15 @@ func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generatio
 }
 
 func EncodeStateKVLatestValue(value []byte) []byte {
-	wrapped := make([]byte, 1+len(value))
-	wrapped[0] = stateKVLatestPresencePrefix
-	copy(wrapped[1:], value)
-	return wrapped
+	return AppendStateKVLatestValue(nil, value)
+}
+
+// AppendStateKVLatestValue appends the latest-state presence envelope to dst.
+// Callers that repeatedly replace a captured value can pass dst[:0] to reuse
+// its backing allocation; EncodeStateKVLatestValue remains the owning helper.
+func AppendStateKVLatestValue(dst, value []byte) []byte {
+	dst = append(dst, stateKVLatestPresencePrefix)
+	return append(dst, value...)
 }
 
 // WriteStateKVLatestEncoded writes a value that is already encoded with the
