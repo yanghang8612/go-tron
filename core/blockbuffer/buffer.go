@@ -1036,7 +1036,7 @@ func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
 // view and fn must not retain slices that alias it. Commitment branch decoding
 // uses this distinction to avoid copying an entire cold branch merely to keep a
 // handful of leaf keys alive after the callback.
-func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error {
+func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	total := len(first) + len(second)
 	if total > splitReadKeyStackSize {
 		key := make([]byte, 0, total)
@@ -1045,41 +1045,42 @@ func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []
 		return b.viewNoCopyCachedKey(key, fn)
 	}
 
-	var stack [splitReadKeyStackSize]byte
-	key := stack[:total]
+	keyBuf := borrowSplitReadKey()
+	defer returnSplitReadKey(keyBuf)
+	key := keyBuf[:total]
 	n := copy(key, first)
 	copy(key[n:], second)
 	return b.viewNoCopyCachedKey(key, fn)
 }
 
-func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) error {
+func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	view := b.loadReadView()
 	for i := len(view.inflight) - 1; i >= 0; i-- {
 		value, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			return ErrNotFound
+			return false, nil
 		}
 		if found {
-			return fn(value, true)
+			return true, fn(value, true)
 		}
 	}
 	for i := len(view.layers) - 1; i >= 0; i-- {
 		value, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			return ErrNotFound
+			return false, nil
 		}
 		if found {
-			return fn(value, true)
+			return true, fn(value, true)
 		}
 	}
 	if b.base == nil {
-		return ErrNotFound
+		return false, nil
 	}
 	cache := view.baseReadCache
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
-			return fn(value, true)
+			return true, fn(value, true)
 		} else {
 			cacheEpoch = epoch
 		}
@@ -1175,27 +1176,41 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // closer is released, avoiding the owned fallback copy readBaseIntoCache must
 // create. A value admitted into the cache is stable; a rejected/probationary
 // callback view is transient. Generic Get results are caller-owned and stable.
-func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) error {
+func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) (bool, error) {
 	if viewer, ok := base.(valueViewReader); ok {
-		return viewer.View(key, func(value []byte) error {
+		called := false
+		var callbackErr error
+		err := viewer.View(key, func(value []byte) error {
+			called = true
 			if cache != nil {
 				if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
-					return fn(stored, true)
+					callbackErr = fn(stored, true)
+					return callbackErr
 				}
 			}
-			return fn(value, false)
+			callbackErr = fn(value, false)
+			return callbackErr
 		})
+		if called {
+			if callbackErr != nil {
+				return true, callbackErr
+			}
+			return true, err
+		}
+		// Preserve the commitment accessor's established missing-row contract:
+		// backends report absence as an error, while callers receive found=false.
+		return false, nil
 	}
 	value, err := base.Get(key)
 	if err != nil {
-		return err
+		return false, nil
 	}
 	if cache != nil {
 		if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
 			value = stored
 		}
 	}
-	return fn(value, true)
+	return true, fn(value, true)
 }
 
 // Has reports whether key exists, honoring tombstones. Safe to call

@@ -846,13 +846,17 @@ func BenchmarkBaseReadCacheColdFill(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			buf.baseReadCache.del(key)
-			if err := buf.ViewNoCopyCachedKeyParts(nil, key, func(got []byte, stable bool) error {
+			found, err := buf.ViewNoCopyCachedKeyParts(nil, key, func(got []byte, stable bool) error {
 				if len(got) != len(value) || stable {
 					b.Fatalf("ViewNoCopyCachedKeyParts = %d bytes stable=%v", len(got), stable)
 				}
 				return nil
-			}); err != nil {
+			})
+			if err != nil {
 				b.Fatal(err)
+			}
+			if !found {
+				b.Fatal("ViewNoCopyCachedKeyParts did not find value")
 			}
 		}
 	})

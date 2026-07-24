@@ -13,6 +13,18 @@ import (
 
 const splitReadKeyStackSize = 128
 
+var splitReadKeyPool = sync.Pool{
+	New: func() any { return new([splitReadKeyStackSize]byte) },
+}
+
+func borrowSplitReadKey() *[splitReadKeyStackSize]byte {
+	return splitReadKeyPool.Get().(*[splitReadKeyStackSize]byte)
+}
+
+func returnSplitReadKey(key *[splitReadKeyStackSize]byte) {
+	splitReadKeyPool.Put(key)
+}
+
 // A parallel commitment root fold publishes at most one batch from each of
 // its 16 first-nibble siblings. The first sibling reaching a layer shard uses
 // this fan-out to reserve the map once for the batches likely to follow.
@@ -457,7 +469,7 @@ func (v *LayerView) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error
 // ViewNoCopyCachedKeyParts is the layer-bound callback counterpart of
 // GetNoCopyCachedKeyParts. See Buffer.ViewNoCopyCachedKeyParts for the stable
 // lifetime contract.
-func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error {
+func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	total := len(first) + len(second)
 	if total > splitReadKeyStackSize {
 		key := make([]byte, 0, total)
@@ -466,40 +478,41 @@ func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value
 		return v.viewNoCopyCachedKey(key, fn)
 	}
 
-	var stack [splitReadKeyStackSize]byte
-	key := stack[:total]
+	keyBuf := borrowSplitReadKey()
+	defer returnSplitReadKey(keyBuf)
+	key := keyBuf[:total]
 	n := copy(key, first)
 	copy(key[n:], second)
 	return v.viewNoCopyCachedKey(key, fn)
 }
 
-func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) error {
+func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	b := v.b
 	view := b.loadReadView()
 	value, found, tomb := v.l.lookup(key)
 	if tomb {
-		return ErrNotFound
+		return false, nil
 	}
 	if found {
-		return fn(value, true)
+		return true, fn(value, true)
 	}
 	for i := len(view.layers) - 1; i >= 0; i-- {
 		value, found, tomb = view.layers[i].lookup(key)
 		if tomb {
-			return ErrNotFound
+			return false, nil
 		}
 		if found {
-			return fn(value, true)
+			return true, fn(value, true)
 		}
 	}
 	if b.base == nil {
-		return ErrNotFound
+		return false, nil
 	}
 	cache := view.baseReadCache
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if cached, ok, epoch := cache.getWithEpoch(key); ok {
-			return fn(cached, true)
+			return true, fn(cached, true)
 		} else {
 			cacheEpoch = epoch
 		}

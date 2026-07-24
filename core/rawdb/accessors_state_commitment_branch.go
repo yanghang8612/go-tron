@@ -11,7 +11,7 @@ type cachedNoCopyKeyPartsReader interface {
 }
 
 type cachedNoCopyKeyPartsViewer interface {
-	ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error
+	ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
 }
 
 // keyPartsWriter is an optional writer fast path for layered stores whose
@@ -149,25 +149,7 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 // allocating a full encoded-value copy solely for lifetime extension.
 func ViewCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
 	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
-		called := false
-		var callbackErr error
-		err := viewer.ViewNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix, func(encoded []byte, stable bool) error {
-			called = true
-			callbackErr = fn(encoded, stable)
-			return callbackErr
-		})
-		if called {
-			if callbackErr != nil {
-				return true, callbackErr
-			}
-			return true, err
-		}
-		if err != nil {
-			// Match ReadCommitmentBranchNoCopy's long-standing missing-row
-			// contract: storage backends surface absence as an error.
-			return false, nil
-		}
-		return false, nil
+		return viewer.ViewNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix, fn)
 	}
 
 	encoded, ok, err := ReadCommitmentBranchNoCopy(db, prefix)

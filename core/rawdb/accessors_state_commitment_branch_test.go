@@ -191,19 +191,19 @@ type splitCachedNoCopyViewProbe struct {
 	missing   bool
 }
 
-func (p *splitCachedNoCopyViewProbe) ViewNoCopyCachedKeyParts(first, second []byte, fn func([]byte, bool) error) error {
+func (p *splitCachedNoCopyViewProbe) ViewNoCopyCachedKeyParts(first, second []byte, fn func([]byte, bool) error) (bool, error) {
 	p.viewCalls++
 	p.first = append(p.first[:0], first...)
 	p.second = append(p.second[:0], second...)
 	if p.missing {
-		return errors.New("missing")
+		return false, nil
 	}
 	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
 	value, err := p.KeyValueReader.Get(key)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return fn(value, p.stable)
+	return true, fn(value, p.stable)
 }
 
 func (p *splitCachedNoCopyProbe) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
