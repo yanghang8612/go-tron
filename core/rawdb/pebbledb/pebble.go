@@ -752,9 +752,34 @@ func (b *batch) Put(key, value []byte) error {
 	return nil
 }
 
+// PutString copies an immutable string key directly into Pebble's batch arena.
+// It is discovered structurally by blockbuffer's layer flush path and avoids
+// allocating []byte(key) only to have Batch.Set copy it again.
+func (b *batch) PutString(key string, value []byte) error {
+	op := b.b.SetDeferred(len(key), len(value))
+	copy(op.Key, key)
+	copy(op.Value, value)
+	if err := op.Finish(); err != nil {
+		return err
+	}
+	b.size += len(key) + len(value)
+	return nil
+}
+
 // Delete inserts the key removal into the batch for later committing.
 func (b *batch) Delete(key []byte) error {
 	if err := b.b.Delete(key, nil); err != nil {
+		return err
+	}
+	b.size += len(key)
+	return nil
+}
+
+// DeleteString is the delete counterpart of PutString.
+func (b *batch) DeleteString(key string) error {
+	op := b.b.DeleteDeferred(len(key))
+	copy(op.Key, key)
+	if err := op.Finish(); err != nil {
 		return err
 	}
 	b.size += len(key)

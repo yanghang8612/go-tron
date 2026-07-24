@@ -1,0 +1,41 @@
+package pebbledb
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestBatchStringKeyOperationsCopyIntoBatch(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "string-batch-test", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	deleteKey := "delete-key"
+	if err := db.Put([]byte(deleteKey), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	batch := db.NewBatch().(*batch)
+	defer batch.Close()
+	value := []byte("immutable-value")
+	want := append([]byte(nil), value...)
+	if err := batch.PutString("put-key", value); err != nil {
+		t.Fatal(err)
+	}
+	clear(value)
+	if err := batch.DeleteString(deleteKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.Get([]byte("put-key"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("string-key put = (%q,%v), want (%q,nil)", got, err, want)
+	}
+	if ok, err := db.Has([]byte(deleteKey)); err != nil || ok {
+		t.Fatalf("string-key delete = (exists:%v, err:%v), want false/nil", ok, err)
+	}
+}

@@ -239,6 +239,15 @@ type valueViewReader interface {
 	View(key []byte, fn func([]byte) error) error
 }
 
+// stringKeyWriter is an optional synchronous writer fast path for layer maps,
+// which already own immutable string keys. Implementations must copy key before
+// returning. Pebble batches satisfy it with DeferredBatchOp, copying the string
+// directly into batch storage instead of allocating a temporary []byte.
+type stringKeyWriter interface {
+	PutString(key string, value []byte) error
+	DeleteString(key string) error
+}
+
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
 	b := &Buffer{base: base}
@@ -1450,17 +1459,30 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 }
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
+	stringWriter, writesString := w.(stringKeyWriter)
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
 		for k, v := range s.writes {
-			if err := w.Put([]byte(k), v); err != nil {
+			var err error
+			if writesString {
+				err = stringWriter.PutString(k, v)
+			} else {
+				err = w.Put([]byte(k), v)
+			}
+			if err != nil {
 				s.mu.RUnlock()
 				return err
 			}
 		}
 		for k := range s.deletes {
-			if err := w.Delete([]byte(k)); err != nil {
+			var err error
+			if writesString {
+				err = stringWriter.DeleteString(k)
+			} else {
+				err = w.Delete([]byte(k))
+			}
+			if err != nil {
 				s.mu.RUnlock()
 				return err
 			}

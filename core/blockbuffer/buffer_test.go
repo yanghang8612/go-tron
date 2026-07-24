@@ -27,10 +27,56 @@ type blockingWriter struct {
 	puts    atomic.Int32
 }
 
+type stringKeyWriterProbe struct {
+	putKeys       []string
+	deleteKeys    []string
+	genericWrites int
+}
+
+func (w *stringKeyWriterProbe) Put([]byte, []byte) error {
+	w.genericWrites++
+	return nil
+}
+
+func (w *stringKeyWriterProbe) Delete([]byte) error {
+	w.genericWrites++
+	return nil
+}
+
+func (w *stringKeyWriterProbe) PutString(key string, _ []byte) error {
+	w.putKeys = append(w.putKeys, key)
+	return nil
+}
+
+func (w *stringKeyWriterProbe) DeleteString(key string) error {
+	w.deleteKeys = append(w.deleteKeys, key)
+	return nil
+}
+
 func newBlockingWriter() *blockingWriter {
 	return &blockingWriter{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
+	}
+}
+
+func TestWriteLayerUsesStringKeyWriter(t *testing.T) {
+	buf := New(nil)
+	layer := newLayer(bufHash(1), 1)
+	buf.putIntoString(layer, "put-key", []byte("value"))
+	buf.deleteIntoString(layer, "delete-key")
+	probe := new(stringKeyWriterProbe)
+	if err := writeLayer(layer, probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.genericWrites != 0 {
+		t.Fatalf("generic []byte writes = %d, want 0", probe.genericWrites)
+	}
+	if len(probe.putKeys) != 1 || probe.putKeys[0] != "put-key" {
+		t.Fatalf("string put keys = %q, want [put-key]", probe.putKeys)
+	}
+	if len(probe.deleteKeys) != 1 || probe.deleteKeys[0] != "delete-key" {
+		t.Fatalf("string delete keys = %q, want [delete-key]", probe.deleteKeys)
 	}
 }
 
