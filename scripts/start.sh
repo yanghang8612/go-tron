@@ -85,9 +85,15 @@ if [[ -n "$(git status --porcelain --untracked-files=no --ignore-submodules=dirt
 fi
 
 log "checking origin/$BRANCH"
-git fetch --prune --tags --recurse-submodules origin "$BRANCH"
+remote_ref="refs/remotes/origin/$BRANCH"
+# Older Git releases only update FETCH_HEAD for `git fetch origin <branch>`;
+# they leave origin/<branch> stale. Fetch into the remote-tracking ref
+# explicitly so revision comparison and the later fast-forward use the commit
+# that was actually advertised by the remote on every supported server.
+git fetch --prune --tags --recurse-submodules origin \
+  "+refs/heads/$BRANCH:$remote_ref"
 
-remote_rev="$(git rev-parse "origin/$BRANCH")"
+remote_rev="$(git rev-parse "$remote_ref")"
 deployed_rev=""
 if [[ -f "$STATE_FILE" ]]; then
   deployed_rev="$(tr -d '[:space:]' <"$STATE_FILE")"
