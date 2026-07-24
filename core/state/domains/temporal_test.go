@@ -37,14 +37,18 @@ func (r *benchmarkCommitmentRecorder) RecordCommitmentMutations(_ context.Contex
 var sharedDomainMutationBenchmarkSink int
 
 func BenchmarkSharedDomainTxMutationBatch(b *testing.B) {
-	benchmarkSharedDomainTxMutationBatch(b, false)
+	benchmarkSharedDomainTxMutationBatch(b, false, false)
 }
 
 func BenchmarkSharedDomainTxOwnedMutationBatch(b *testing.B) {
-	benchmarkSharedDomainTxMutationBatch(b, true)
+	benchmarkSharedDomainTxMutationBatch(b, true, false)
 }
 
-func benchmarkSharedDomainTxMutationBatch(b *testing.B, owned bool) {
+func BenchmarkSharedDomainTxUnindexedOwnedMutationBatch(b *testing.B) {
+	benchmarkSharedDomainTxMutationBatch(b, true, true)
+}
+
+func benchmarkSharedDomainTxMutationBatch(b *testing.B, owned, unindexedWrites bool) {
 	const mutationsPerBatch = 256
 	owner := testAddress(0x7a)
 	keys := make([][]byte, mutationsPerBatch)
@@ -55,8 +59,9 @@ func benchmarkSharedDomainTxMutationBatch(b *testing.B, owned bool) {
 	}
 	recorder := new(benchmarkCommitmentRecorder)
 	tx := NewSharedDomainTx(SharedDomainTxConfig{
-		Writer:     benchmarkDomainSink{},
-		Commitment: recorder,
+		Writer:          benchmarkDomainSink{},
+		Commitment:      recorder,
+		UnindexedWrites: unindexedWrites,
 	})
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -77,6 +82,38 @@ func benchmarkSharedDomainTxMutationBatch(b *testing.B, owned bool) {
 		}
 	}
 	sharedDomainMutationBenchmarkSink = recorder.count
+}
+
+func TestSharedDomainTxUnindexedWritesFlushAndThenReadParent(t *testing.T) {
+	owner := testAddress(0x49)
+	latest := NewMemoryStore()
+	recorder := new(benchmarkCommitmentRecorder)
+	tx := NewSharedDomainTx(SharedDomainTxConfig{
+		Latest:          latest,
+		Writer:          latest,
+		Commitment:      recorder,
+		UnindexedWrites: true,
+	})
+	key := []byte("unindexed")
+	if err := tx.DomainPutOwned(owner, kvdomains.ContractStorage, key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if tx.overlay.exact != nil || len(tx.overlay.prefixes) != 0 {
+		t.Fatalf("unindexed overlay built read indexes: exact=%v prefixes=%d", tx.overlay.exact != nil, len(tx.overlay.prefixes))
+	}
+	if _, _, err := tx.GetLatest(owner, kvdomains.ContractStorage, key); !errors.Is(err, ErrTemporalTxPendingReadsUnsupported) {
+		t.Fatalf("pending GetLatest err = %v, want %v", err, ErrTemporalTxPendingReadsUnsupported)
+	}
+	if err := tx.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := tx.GetLatest(owner, kvdomains.ContractStorage, key)
+	if err != nil || !ok || string(got) != "value" {
+		t.Fatalf("value read through parent after flush = %q ok=%v err=%v", got, ok, err)
+	}
+	if recorder.count != 1 {
+		t.Fatalf("recorded mutations = %d, want 1", recorder.count)
+	}
 }
 
 func TestSharedDomainTxStagesLatestAndFlushes(t *testing.T) {

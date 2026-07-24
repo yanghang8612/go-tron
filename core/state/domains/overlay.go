@@ -119,24 +119,31 @@ func WithHooks(h Hooks) Option {
 // reads through to a parent latest-state reader, and can be discarded or flushed
 // in operation order.
 type Overlay struct {
-	parent   LatestReader
-	hooks    Hooks
-	metrics  Metrics
-	nextSeq  uint64
-	exact    map[string]Mutation
-	prefixes []Mutation
-	ops      []Mutation
+	parent          LatestReader
+	hooks           Hooks
+	metrics         Metrics
+	nextSeq         uint64
+	unindexedWrites bool
+	exact           map[string]Mutation
+	prefixes        []Mutation
+	ops             []Mutation
 }
 
 func NewOverlay(parent LatestReader, opts ...Option) *Overlay {
 	o := &Overlay{
 		parent: parent,
-		exact:  make(map[string]Mutation),
 	}
 	for _, opt := range opts {
 		opt(o)
 	}
+	if !o.unindexedWrites {
+		o.exact = make(map[string]Mutation)
+	}
 	return o
+}
+
+func withoutPendingReadIndex() Option {
+	return func(o *Overlay) { o.unindexedWrites = true }
 }
 
 func (o *Overlay) GetLatest(owner common.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
@@ -146,22 +153,27 @@ func (o *Overlay) GetLatest(owner common.Address, domain kvdomains.KVDomain, key
 	if o == nil {
 		return nil, false, nil
 	}
+	if o.unindexedWrites && len(o.ops) != 0 {
+		return nil, false, ErrTemporalTxPendingReadsUnsupported
+	}
 	o.metrics.Gets++
-	prefixSeq := o.latestPrefixDeleteSeq(owner, domain, key)
-	if m, ok := o.exact[logicalKey(owner, domain, key)]; ok && m.Seq > prefixSeq {
-		if m.Kind == MutationDel {
+	if !o.unindexedWrites {
+		prefixSeq := o.latestPrefixDeleteSeq(owner, domain, key)
+		if m, ok := o.exact[logicalKey(owner, domain, key)]; ok && m.Seq > prefixSeq {
+			if m.Kind == MutationDel {
+				o.metrics.Misses++
+				o.emitGet(owner, domain, key, false, GetSourceOverlay)
+				return nil, false, nil
+			}
+			o.metrics.OverlayHits++
+			o.emitGet(owner, domain, key, true, GetSourceOverlay)
+			return append([]byte(nil), m.Value...), true, nil
+		}
+		if prefixSeq > 0 {
 			o.metrics.Misses++
-			o.emitGet(owner, domain, key, false, GetSourceOverlay)
+			o.emitGet(owner, domain, key, false, GetSourcePrefixDelete)
 			return nil, false, nil
 		}
-		o.metrics.OverlayHits++
-		o.emitGet(owner, domain, key, true, GetSourceOverlay)
-		return append([]byte(nil), m.Value...), true, nil
-	}
-	if prefixSeq > 0 {
-		o.metrics.Misses++
-		o.emitGet(owner, domain, key, false, GetSourcePrefixDelete)
-		return nil, false, nil
 	}
 	if o.parent == nil {
 		o.metrics.Misses++
@@ -324,13 +336,19 @@ func (o *Overlay) appendMutationWithOwnership(m Mutation, owned bool) error {
 	switch m.Kind {
 	case MutationPut:
 		o.metrics.Puts++
-		o.exact[logicalKey(m.Owner, m.Domain, m.Key)] = m
+		if !o.unindexedWrites {
+			o.exact[logicalKey(m.Owner, m.Domain, m.Key)] = m
+		}
 	case MutationDel:
 		o.metrics.Deletes++
-		o.exact[logicalKey(m.Owner, m.Domain, m.Key)] = m
+		if !o.unindexedWrites {
+			o.exact[logicalKey(m.Owner, m.Domain, m.Key)] = m
+		}
 	case MutationDelPrefix:
 		o.metrics.PrefixDeletes++
-		o.prefixes = append(o.prefixes, m)
+		if !o.unindexedWrites {
+			o.prefixes = append(o.prefixes, m)
+		}
 	default:
 		return fmt.Errorf("domains: unknown mutation kind %d", m.Kind)
 	}

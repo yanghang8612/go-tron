@@ -300,10 +300,11 @@ func (s *StateDB) NewCommitScope() *CommitScope {
 	scope.latestWriter = newAccountKVLatestDomainBatch(index, resolveGeneration, &s.changeSet, nil)
 	scope.latestReader = &commitScopeLatestReader{writer: scope.latestWriter, state: s}
 	scope.tx = statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
-		Latest:     scope.latestReader,
-		Writer:     scope.latestWriter,
-		History:    scope.history,
-		Commitment: scope.commitment,
+		Latest:          scope.latestReader,
+		Writer:          scope.latestWriter,
+		History:         scope.history,
+		Commitment:      scope.commitment,
+		UnindexedWrites: true,
 	})
 	s.setAccountKVLatestView(scope.latestReader, scope.latestReader)
 	s.flatLatestReader = scope.latestReader
@@ -3408,10 +3409,11 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	} else {
 		accountKVLatestWriter = newAccountKVLatestDomainBatch(accountKVIndex, generationResolver, &s.changeSet, nil)
 		tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
-			Latest:     statedomains.NewFlatStoreWithGenerationResolver(accountKVIndex, 0, generationResolver),
-			Writer:     accountKVLatestWriter,
-			History:    NewDomainHistoryState(s, s.changeSet.endTxNum),
-			Commitment: commitmentState,
+			Latest:          statedomains.NewFlatStoreWithGenerationResolver(accountKVIndex, 0, generationResolver),
+			Writer:          accountKVLatestWriter,
+			History:         NewDomainHistoryState(s, s.changeSet.endTxNum),
+			Commitment:      commitmentState,
+			UnindexedWrites: true,
 		})
 		tx.SetTxNum(s.changeSet.endTxNum)
 		defer tx.Close()

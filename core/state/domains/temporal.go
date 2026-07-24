@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrTemporalTxClosed       = errors.New("domains: temporal transaction closed")
-	ErrNilCommitmentProcessor = errors.New("domains: nil commitment processor")
+	ErrTemporalTxClosed                  = errors.New("domains: temporal transaction closed")
+	ErrTemporalTxPendingReadsUnsupported = errors.New("domains: pending writes are not indexed for reads")
+	ErrNilCommitmentProcessor            = errors.New("domains: nil commitment processor")
 )
 
 // AsOfReader is the history side of a temporal domain. The timestamp is named
@@ -63,6 +64,10 @@ type SharedDomainTxConfig struct {
 	History    AsOfReader
 	Commitment CommitmentProcessor
 	Hooks      Hooks
+	// UnindexedWrites skips the overlay's read-your-writes indexes. Commit
+	// plumbing uses this when the transaction only records ordered mutations
+	// before flush. Reads remain available whenever no mutations are pending.
+	UnindexedWrites bool
 }
 
 // SharedDomainTx is a thin adapter shaped after Erigon's SharedDomains. It
@@ -87,8 +92,14 @@ var _ OwnedWriter = (*SharedDomainTx)(nil)
 var _ EncodedOwnedWriter = (*SharedDomainTx)(nil)
 
 func NewSharedDomainTx(cfg SharedDomainTxConfig) *SharedDomainTx {
+	var overlay *Overlay
+	if cfg.UnindexedWrites {
+		overlay = NewOverlay(cfg.Latest, WithHooks(cfg.Hooks), withoutPendingReadIndex())
+	} else {
+		overlay = NewOverlay(cfg.Latest, WithHooks(cfg.Hooks))
+	}
 	return &SharedDomainTx{
-		overlay:    NewOverlay(cfg.Latest, WithHooks(cfg.Hooks)),
+		overlay:    overlay,
 		writer:     cfg.Writer,
 		history:    cfg.History,
 		commitment: cfg.Commitment,
