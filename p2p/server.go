@@ -232,8 +232,21 @@ func (s *Server) Stop() error {
 	s.peerNodeIDs = make(map[string]string)
 	s.mu.Unlock()
 
+	// Tell java-tron peers this node is intentionally leaving before closing
+	// sockets. Abrupt deployment restarts can leave remote duplicate-peer and
+	// dial-throttle state behind for minutes, defeating the durable peer cache.
+	// Send concurrently so one write deadline does not multiply by MaxPeers.
+	var goodbyeWG sync.WaitGroup
+	goodbyeWG.Add(len(peers))
 	for _, p := range peers {
-		p.Stop()
+		go func(p *Peer) {
+			defer goodbyeWG.Done()
+			p.GoodbyeAndClose(p2ppb.DisconnectReason_PEER_QUITING)
+		}(p)
+	}
+	goodbyeWG.Wait()
+	for _, p := range peers {
+		p.Stop() // waits for read/write/keepalive goroutines after Close
 	}
 
 	s.wg.Wait()

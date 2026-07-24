@@ -104,6 +104,10 @@ func (p *Peer) Send(code byte, payload []byte) {
 // closes the peer. The write is best-effort (sent directly on the conn to
 // bypass the write buffer which may be full or draining).
 func (p *Peer) GoodbyeAndClose(reason p2ppb.DisconnectReason) {
+	// Shutdown must not wait indefinitely behind a wedged remote or an existing
+	// blocked writer. The disconnect frame is tiny; a live TCP peer accepts it
+	// immediately, while the deadline preserves Stop's bounded behaviour.
+	_ = p.conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
 	dm := BuildDisconnect(reason)
 	if payload, err := EncodeDisconnect(dm); err == nil {
 		if body, err := WrapPostHandshake(MsgLibp2pDisconnect, payload); err == nil {

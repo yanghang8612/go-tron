@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	p2ppb "github.com/tronprotocol/go-tron/proto/p2p"
 )
 
 type testHandler struct {
@@ -78,6 +80,43 @@ func TestPeerDisconnectNotifiesHandler(t *testing.T) {
 		t.Fatalf("expected 1 disconnect, got %d", len(h.disconnected))
 	}
 	h.mu.Unlock()
+}
+
+func TestPeerGoodbyeAndCloseWritesDisconnectReason(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	p := NewPeer(c1, "pipe:goodbye", false, &testHandler{})
+	done := make(chan struct{})
+	go func() {
+		p.GoodbyeAndClose(p2ppb.DisconnectReason_PEER_QUITING)
+		close(done)
+	}()
+
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+	body, err := ReadFrameBody(c2)
+	if err != nil {
+		t.Fatalf("read goodbye frame: %v", err)
+	}
+	code, payload, err := UnwrapPostHandshake(body)
+	if err != nil {
+		t.Fatalf("unwrap goodbye frame: %v", err)
+	}
+	if code != MsgLibp2pDisconnect {
+		t.Fatalf("goodbye code = %#x, want %#x", code, MsgLibp2pDisconnect)
+	}
+	msg, err := ParseDisconnect(payload)
+	if err != nil {
+		t.Fatalf("parse goodbye: %v", err)
+	}
+	if msg.Reason != p2ppb.DisconnectReason_PEER_QUITING {
+		t.Fatalf("goodbye reason = %v, want PEER_QUITING", msg.Reason)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("GoodbyeAndClose did not return")
+	}
+	p.Stop()
 }
 
 func TestPeerRefreshesLastSeenOnInboundFrame(t *testing.T) {
