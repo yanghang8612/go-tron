@@ -69,7 +69,7 @@ func assetBytesKey(tag byte, raw []byte) []byte {
 // nil to match the prior rawdb reader's defensive behavior (read sites treat
 // nil as absent).
 func (s *StateDB) readAssetMeta(key []byte) *contractpb.AssetIssueContract {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, key)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, key)
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
@@ -117,7 +117,7 @@ func (s *StateDB) WriteAssetIssueByName(name []byte, c *contractpb.AssetIssueCon
 // exists. A KV error or short value reads as not-found, matching the prior
 // rawdb reader.
 func (s *StateDB) ReadAssetNameIndex(name []byte) (int64, bool) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name))
 	if err != nil || !ok || len(raw) < 8 {
 		return 0, false
 	}
@@ -134,7 +134,7 @@ func (s *StateDB) WriteAssetNameIndex(name []byte, tokenID int64) error {
 // ReadAssetOwnerIndex returns the token id issued by ownerAddr (21-byte TRON
 // address), and whether it exists.
 func (s *StateDB) ReadAssetOwnerIndex(ownerAddr []byte) (int64, bool) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr))
 	if err != nil || !ok || len(raw) < 8 {
 		return 0, false
 	}
@@ -152,7 +152,7 @@ func (s *StateDB) WriteAssetOwnerIndex(ownerAddr []byte, tokenID int64) error {
 // ReadAssetIssueTime returns the issuance block timestamp (ms) for tokenID, or 0
 // if absent.
 func (s *StateDB) ReadAssetIssueTime(tokenID int64) int64 {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, assetIDKey(assetIssueTimeTag, tokenID))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetIDKey(assetIssueTimeTag, tokenID))
 	if err != nil || !ok || len(raw) < 8 {
 		return 0
 	}

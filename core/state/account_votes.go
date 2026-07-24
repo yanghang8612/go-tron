@@ -46,7 +46,7 @@ func (s *StateDB) materializeAccountVotes(obj *stateObject) error {
 	// older sparse rows remain readable.
 	for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
 		key := accountVoteKey(index)
-		value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountVotesAux, key)
+		value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountVotesAux, key)
 		if err != nil {
 			clearAccountVotesProto(obj.account.Proto())
 			return err

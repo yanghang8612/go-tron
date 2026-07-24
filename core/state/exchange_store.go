@@ -54,7 +54,7 @@ func exchangeKVKey(discriminator byte, id int64) []byte {
 // readExchange resolves one exchange leg, swallowing a KV error to nil to match
 // the prior rawdb reader's defensive behavior (read sites treat nil as absent).
 func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}

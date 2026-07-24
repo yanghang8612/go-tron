@@ -152,7 +152,7 @@ func accountAuxMap(pb *corepb.Account, domain kvdomains.KVDomain, create bool) m
 }
 
 func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) (int64, bool, error) {
-	value, ok, err := s.GetAccountKV(addr, domain, key)
+	value, ok, err := s.getAccountKVForDecoding(addr, domain, key)
 	if err != nil || !ok {
 		return 0, ok, err
 	}

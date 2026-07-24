@@ -40,7 +40,7 @@ func votesStoreKey(addr tcommon.Address) []byte {
 // (nil if absent or on a decode/KV error, matching the prior rawdb reader's
 // defensive behavior).
 func (s *StateDB) ReadVotes(addr tcommon.Address) *corepb.Votes {
-	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreKey(addr))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreKey(addr))
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
@@ -84,7 +84,7 @@ func (s *StateDB) DeleteVotes(addr tcommon.Address) error {
 // ReadVotesIndex returns the rooted voter index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadVotesIndex() []tcommon.Address {
-	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreIndexKey)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreIndexKey)
 	if err != nil || !ok {
 		return nil
 	}
@@ -104,7 +104,7 @@ func (s *StateDB) WriteVotesIndex(voters []tcommon.Address) error {
 // the WitnessVoteState domain directly (not the witness-schedule-scoped
 // readAddressList helper) so the round-trip stays within this store's domain.
 func (s *StateDB) AppendVotesIndex(addr tcommon.Address) error {
-	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreIndexKey)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreIndexKey)
 	if err != nil {
 		return err
 	}

@@ -208,11 +208,22 @@ type accountLatestNoCopyPhysicalStore interface {
 	ReadAccountLatestNoCopy(owner tcommon.Address) ([]byte, bool, error)
 }
 
+type accountKVLatestNoCopyPhysicalStore interface {
+	ReadKVLatestNoCopy(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error)
+}
+
 // accountLatestHydrationBorrower is package-private because its result is only
 // valid for immediate RLP decoding. General AccountLatest callers keep their
 // defensive-copy contract.
 type accountLatestHydrationBorrower interface {
 	accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error)
+}
+
+// accountKVLatestDecodingBorrower is package-private because its result is
+// borrowed only for immediate protobuf or scalar decoding. General KVLatest
+// callers retain their defensive-copy contract.
+type accountKVLatestDecodingBorrower interface {
+	kvLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error)
 }
 
 func newAccountKVLatestBatch(index accountKVIndexStore, record func(rawdb.StateCommitmentUpdate)) *accountKVLatestBatch {
@@ -578,7 +589,14 @@ func (w *accountKVLatestBatch) kvPendingDurable(key accountKVLatestPendingMapKey
 		return true
 	}
 	owner := key.owner.Address(tcommon.AddressPrefixMainnet)
-	val, exists, err := w.latestStore.ReadKVLatest(owner, key.generation, key.domain, []byte(key.logicalKey))
+	var val []byte
+	var exists bool
+	var err error
+	if reader, ok := w.latestStore.(accountKVLatestNoCopyPhysicalStore); ok {
+		val, exists, err = reader.ReadKVLatestNoCopy(owner, key.generation, key.domain, []byte(key.logicalKey))
+	} else {
+		val, exists, err = w.latestStore.ReadKVLatest(owner, key.generation, key.domain, []byte(key.logicalKey))
+	}
 	if err != nil {
 		return false
 	}
@@ -788,6 +806,27 @@ func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint
 	}
 	if w == nil || w.latestStore == nil {
 		return nil, false, nil
+	}
+	return w.latestStore.ReadKVLatest(owner, generation, domain, logicalKey)
+}
+
+// readLatestForDecoding lends immutable bytes only until the caller's
+// immediate decode completes. Pending values and blockbuffer cache values are
+// immutable; generic stores fall back to their ordinary owned read.
+func (w *accountKVLatestBatch) readLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.pending[accountKVLatestPendingKey(owner, generation, domain, logicalKey)]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	if reader, ok := w.latestStore.(accountKVLatestNoCopyPhysicalStore); ok {
+		return reader.ReadKVLatestNoCopy(owner, generation, domain, logicalKey)
 	}
 	return w.latestStore.ReadKVLatest(owner, generation, domain, logicalKey)
 }
@@ -1093,6 +1132,20 @@ func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, 
 	return s.accountKVPhysicalLatestStore().ReadKVLatest(owner, generation, domain, key)
 }
 
+func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if s != nil && s.accountKVLatestReader != nil {
+		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
+			return reader.kvLatestForDecoding(owner, generation, domain, key)
+		}
+		return s.readAccountKVLatest(owner, generation, domain, key)
+	}
+	store := s.accountKVPhysicalLatestStore()
+	if reader, ok := store.(accountKVLatestNoCopyPhysicalStore); ok {
+		return reader.ReadKVLatestNoCopy(owner, generation, domain, key)
+	}
+	return store.ReadKVLatest(owner, generation, domain, key)
+}
+
 func (s *StateDB) iterateAccountKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
 	if s != nil && s.accountKVLatestIterator != nil {
 		if iterator, ok := s.accountKVLatestIterator.(accountKVLatestGenerationIterator); ok {
@@ -1158,6 +1211,26 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		return append([]byte{}, e.val...), true, nil
 	}
 	return s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
+}
+
+// getAccountKVForDecoding borrows immutable state bytes for immediate package-
+// internal decoding. Callers must neither mutate nor retain the returned slice.
+// GetAccountKV remains the owning public API.
+func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if !kvdomains.IsRegistered(domain) {
+		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	obj := s.getStateObject(owner)
+	if obj == nil || obj.deleted {
+		return nil, false, nil
+	}
+	if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
+		if e.deleted {
+			return nil, false, nil
+		}
+		return e.val, true, nil
+	}
+	return s.readAccountKVLatestForDecoding(owner, obj.accountKVGeneration, domain, key)
 }
 
 // GetAccountKVAsOf reconstructs owner's domain key at the end of targetBlock

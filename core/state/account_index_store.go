@@ -69,7 +69,8 @@ func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 // a compatibility fallback for unit tests and legacy databases without the
 // index row.
 func (s *StateDB) BlackholeAddress() tcommon.Address {
-	if raw := s.ReadAccountNameIndex([]byte("Blackhole")); len(raw) == tcommon.AddressLength {
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountNameIndexKVKey([]byte("Blackhole")))
+	if err == nil && ok && len(raw) == tcommon.AddressLength {
 		return tcommon.BytesToAddress(raw)
 	}
 	return params.BlackholeAddress
@@ -79,7 +80,7 @@ func (s *StateDB) BlackholeAddress() tcommon.Address {
 // java-tron AccountIndexStore.has, used by AccountUpdateActuator's uniqueness
 // precheck.
 func (s *StateDB) HasAccountNameIndex(accountName []byte) bool {
-	_, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
+	_, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
 	return err == nil && ok
 }
 
@@ -109,7 +110,7 @@ func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 // Mirrors java-tron AccountIdIndexStore.has, used by SetAccountIdActuator's
 // uniqueness precheck.
 func (s *StateDB) HasAccountIdIndex(accountID []byte) bool {
-	_, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
+	_, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
 	return err == nil && ok
 }
 

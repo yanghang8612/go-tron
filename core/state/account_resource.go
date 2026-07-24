@@ -24,7 +24,7 @@ func (s *StateDB) materializeAccountResource(obj *stateObject) error {
 	}
 	pb := obj.account.Proto()
 	clearAccountResourceProto(pb)
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountResourceAux, accountResourceKey)
+	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountResourceAux, accountResourceKey)
 	if err != nil {
 		return err
 	}

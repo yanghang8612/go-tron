@@ -59,7 +59,7 @@ func decodeAddressList(data []byte) []tcommon.Address {
 // callers that do read-modify-write (AppendWitnessIndex) never truncate on a
 // transient trie error.
 func (s *StateDB) readAddressList(key []byte) ([]tcommon.Address, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemWitnessSchedule, key)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemWitnessSchedule, key)
 	if err != nil || !ok {
 		return nil, err
 	}

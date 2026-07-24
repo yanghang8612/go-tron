@@ -50,7 +50,8 @@ func clearAccountPermissionProto(pb *corepb.Account) {
 // asset, vote, stake, frozen-supply, and resource row owned by the account.
 //
 // The returned permission is read-only. Pending writes and deletes are visible
-// because GetAccountKV merges the StateDB dirty overlay with the latest store.
+// because the decoding read merges the StateDB dirty overlay with the latest
+// store while retaining the public GetAccountKV ownership boundary.
 func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.Permission, error) {
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
@@ -88,7 +89,7 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 		}
 		key = accountActivePermissionKey(id)
 	}
-	value, exists, err := s.GetAccountKV(addr, kvdomains.AccountPermissionAux, key)
+	value, exists, err := s.getAccountKVForDecoding(addr, kvdomains.AccountPermissionAux, key)
 	if err != nil || !exists {
 		return nil, err
 	}

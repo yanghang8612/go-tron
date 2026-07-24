@@ -102,6 +102,18 @@ func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Addres
 }
 
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
+	value, ok, err := ReadStateKVLatestNoCopy(db, owner, generation, domain, logicalKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return append([]byte(nil), value...), true, nil
+}
+
+// ReadStateKVLatestNoCopy returns the unwrapped state value without a trailing
+// defensive copy. The returned bytes may alias the reader's cache or overlay
+// and must be consumed before the next database operation. Internal StateDB
+// decode paths use it only for immediate protobuf or scalar decoding.
+func ReadStateKVLatestNoCopy(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	var (
 		raw []byte
 		err error
@@ -114,7 +126,7 @@ func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation
 	if err != nil {
 		return nil, false, nil
 	}
-	value, err := DecodeStateKVLatestValue(raw)
+	value, err := decodeStateKVLatestValueNoCopy(raw)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w for %s domain %#04x", err, owner.Hex(), uint16(domain))
 	}
@@ -214,13 +226,21 @@ func DecodeStateKVLatestKey(key []byte) (common.Address, uint64, kvdomains.KVDom
 }
 
 func DecodeStateKVLatestValue(raw []byte) ([]byte, error) {
+	value, err := decodeStateKVLatestValueNoCopy(raw)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), value...), nil
+}
+
+func decodeStateKVLatestValueNoCopy(raw []byte) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("state kv latest: empty encoded value")
 	}
 	if raw[0] != stateKVLatestPresencePrefix {
 		return nil, fmt.Errorf("state kv latest: bad presence prefix %#x", raw[0])
 	}
-	return append([]byte(nil), raw[1:]...), nil
+	return raw[1:], nil
 }
 
 func DeleteStateKVLatestPrefix(db stateKVLatestStore, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) error {

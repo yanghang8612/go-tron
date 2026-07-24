@@ -114,7 +114,7 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (a
 		return accountFrozenBandwidthRow{}, false, nil
 	}
 	key := accountFrozenBandwidthKey(index)
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
+	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
 		return accountFrozenBandwidthRow{}, exists, err
 	}
@@ -151,7 +151,7 @@ func (s *StateDB) accountTronPower(obj *stateObject) (*corepb.Account_Frozen, bo
 	if obj == nil || obj.account == nil {
 		return nil, false, nil
 	}
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountTronPowerAux, accountTronPowerKey)
+	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountTronPowerAux, accountTronPowerKey)
 	if err != nil || !exists {
 		return nil, exists, err
 	}

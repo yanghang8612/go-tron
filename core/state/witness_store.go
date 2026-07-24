@@ -10,7 +10,7 @@ import (
 )
 
 func (s *StateDB) readWitnessCapsule(addr tcommon.Address) (*types.Witness, error) {
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr))
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr))
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (s *StateDB) ReadWitnessLatestBlock(addr tcommon.Address) int64 {
 	if w := s.GetWitness(addr); w != nil {
 		return w.LatestBlockNum()
 	}
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr))
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr))
 	if err == nil && ok && len(raw) == 8 {
 		return int64(binary.BigEndian.Uint64(raw))
 	}
@@ -64,7 +64,7 @@ func (s *StateDB) WriteWitnessLatestBlock(addr tcommon.Address, num int64) error
 // ReadWitnessBrokerage returns the current brokerage rate set by
 // UpdateBrokerage. Missing rows default to java-tron's DEFAULT_BROKERAGE (20).
 func (s *StateDB) ReadWitnessBrokerage(addr tcommon.Address) int64 {
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr))
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr))
 	if err != nil || !ok || len(raw) != 8 {
 		return int64(rawdb.DefaultBrokerage)
 	}

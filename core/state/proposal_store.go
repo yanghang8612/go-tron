@@ -65,7 +65,7 @@ func decodeProposalIndex(data []byte) []int64 {
 // absent or on a decode/KV error, matching the prior rawdb reader's defensive
 // behavior).
 func (s *StateDB) ReadProposal(id int64) *rawdb.Proposal {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreKey(id))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreKey(id))
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (s *StateDB) WriteProposal(id int64, p *rawdb.Proposal) error {
 // ReadProposalIndex returns the rooted proposal index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadProposalIndex() []int64 {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreIndexKey)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreIndexKey)
 	if err != nil || !ok {
 		return nil
 	}
@@ -107,7 +107,7 @@ func (s *StateDB) WriteProposalIndex(ids []int64) error {
 // instead of overwriting the index with a truncated list. Proposal ids are
 // strictly increasing (LatestProposalNum pre-increment), so no dedup is needed.
 func (s *StateDB) AppendProposalIndex(id int64) error {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreIndexKey)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreIndexKey)
 	if err != nil {
 		return err
 	}

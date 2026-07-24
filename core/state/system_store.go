@@ -10,6 +10,10 @@ func (s *StateDB) SystemKVGet(domain kvdomains.KVDomain, key []byte) ([]byte, bo
 	return s.GetAccountKV(tcommon.SystemAccountAddress, domain, key)
 }
 
+func (s *StateDB) systemKVGetForDecoding(domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	return s.getAccountKVForDecoding(tcommon.SystemAccountAddress, domain, key)
+}
+
 // SystemKVPut writes a chain-global value owned by the reserved system account.
 func (s *StateDB) SystemKVPut(domain kvdomains.KVDomain, key, value []byte) error {
 	return s.SetAccountKV(tcommon.SystemAccountAddress, domain, key, value)

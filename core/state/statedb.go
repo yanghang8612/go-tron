@@ -483,6 +483,13 @@ func (r *commitScopeLatestReader) KVLatest(owner tcommon.Address, generation uin
 	return r.writer.readLatest(owner, generation, domain, key)
 }
 
+func (r *commitScopeLatestReader) kvLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readLatestForDecoding(owner, generation, domain, key)
+}
+
 func (r *commitScopeLatestReader) KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
 	if r == nil || r.writer == nil {
 		return nil
@@ -2537,7 +2544,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
 	if err != nil {
 		return tcommon.Hash{}, false
 	}
@@ -2609,7 +2616,7 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 
 func (s *StateDB) loadContract(obj *stateObject) *contractpb.SmartContract {
 	if obj.contractMeta == nil && !obj.contractMetaDirty {
-		data, ok, err := s.GetAccountKV(obj.address, kvdomains.ContractMetadata, contractMetaKVKey)
+		data, ok, err := s.getAccountKVForDecoding(obj.address, kvdomains.ContractMetadata, contractMetaKVKey)
 		if err == nil && ok && len(data) > 0 {
 			var sc contractpb.SmartContract
 			if err := proto.Unmarshal(data, &sc); err == nil {
@@ -2671,7 +2678,7 @@ func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
 	if obj == nil || obj.deleted {
 		return nil
 	}
-	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey)
+	data, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractRuntimeState, contractStateKVKey)
 	if err != nil || !ok || len(data) == 0 {
 		return nil
 	}
@@ -2700,7 +2707,7 @@ func (s *StateDB) ReadContractABI(addr tcommon.Address) *contractpb.SmartContrac
 	if obj == nil || obj.deleted {
 		return nil
 	}
-	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractABI, contractABIKVKey)
+	data, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractABI, contractABIKVKey)
 	if err != nil || !ok {
 		return nil
 	}

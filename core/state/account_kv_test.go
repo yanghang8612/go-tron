@@ -107,6 +107,32 @@ func TestAccountKVSetGet(t *testing.T) {
 	}
 }
 
+func TestAccountKVDecodingReadBorrowsButPublicReadOwnsDirtyValue(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x12)
+	key := []byte("ownership")
+	if err := sdb.SetAccountKV(addr, kvdomains.ContractStorage, key, []byte("value")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	borrowed, ok, err := sdb.getAccountKVForDecoding(addr, kvdomains.ContractStorage, key)
+	if err != nil || !ok || string(borrowed) != "value" {
+		t.Fatalf("borrowed get = (%q,%v,%v)", borrowed, ok, err)
+	}
+	owned, ok, err := sdb.GetAccountKV(addr, kvdomains.ContractStorage, key)
+	if err != nil || !ok || string(owned) != "value" {
+		t.Fatalf("owned get = (%q,%v,%v)", owned, ok, err)
+	}
+	if &borrowed[0] == &owned[0] {
+		t.Fatal("public GetAccountKV exposed dirty overlay storage")
+	}
+	owned[0] = 'X'
+	again, _, _ := sdb.getAccountKVForDecoding(addr, kvdomains.ContractStorage, key)
+	if string(again) != "value" {
+		t.Fatalf("mutating public result changed dirty state: %q", again)
+	}
+}
+
 func TestAccountKVDomainIsolation(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x11)

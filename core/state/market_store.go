@@ -99,7 +99,7 @@ func marketPriceListKVKey(sellTokenID, buyTokenID []byte) []byte {
 // A KV/unmarshal error is swallowed to nil, matching the prior rawdb reader (its
 // callers treat nil as "no order").
 func (s *StateDB) ReadMarketOrder(orderID []byte) *corepb.MarketOrder {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderKVKey(orderID))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemMarket, marketOrderKVKey(orderID))
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
@@ -126,7 +126,7 @@ func (s *StateDB) WriteMarketOrder(orderID []byte, order *corepb.MarketOrder) er
 // yields a zero-value struct with OwnerAddress set, because callers mutate the
 // result in place (e.g. mao.TotalCount++).
 func (s *StateDB) ReadMarketAccountOrder(ownerAddr []byte) *corepb.MarketAccountOrder {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr))
 	if err != nil || !ok || len(raw) == 0 {
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}
 	}
@@ -149,7 +149,7 @@ func (s *StateDB) WriteMarketAccountOrder(ownerAddr []byte, mao *corepb.MarketAc
 // ReadMarketOrderBook returns the rooted MarketOrderIdList for the (sellToken,
 // buyToken, priceKey) triple, or nil if absent (callers nil-check).
 func (s *StateDB) ReadMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byte) *corepb.MarketOrderIdList {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
@@ -177,7 +177,7 @@ func (s *StateDB) DeleteMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]b
 // ReadMarketPairPriceCount returns the distinct-price count for a pair (zero if
 // absent or malformed), mirroring java-tron MarketPairToPriceStore.getPriceNum.
 func (s *StateDB) ReadMarketPairPriceCount(sellTokenID, buyTokenID []byte) int64 {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID))
 	if err != nil || !ok || len(raw) != 8 {
 		return 0
 	}
@@ -210,7 +210,7 @@ func (s *StateDB) IncrMarketPairPriceCount(sellTokenID, buyTokenID []byte, delta
 // prior rawdb reader it never returns nil: an absent or malformed entry yields a
 // zero-value struct with the token ids set, because callers append to it in place.
 func (s *StateDB) ReadMarketPriceList(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
 	if err != nil || !ok || len(raw) == 0 {
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
 	}

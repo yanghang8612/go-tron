@@ -81,6 +81,13 @@ func (s rawdbAccountKVPhysicalLatestStore) ReadKVLatest(owner tcommon.Address, g
 	return rawdb.ReadStateKVLatest(s.reader, owner, generation, domain, logicalKey)
 }
 
+func (s rawdbAccountKVPhysicalLatestStore) ReadKVLatestNoCopy(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
+	if s.reader == nil {
+		return nil, false, nil
+	}
+	return rawdb.ReadStateKVLatestNoCopy(s.reader, owner, generation, domain, logicalKey)
+}
+
 func (s rawdbAccountKVPhysicalLatestStore) WriteKVLatestEncoded(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, encodedValue []byte) error {
 	if s.writer == nil {
 		return fmt.Errorf("account kv latest store: nil writer")

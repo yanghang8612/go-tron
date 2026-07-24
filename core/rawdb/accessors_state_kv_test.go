@@ -16,6 +16,15 @@ type cachedStateReadProbe struct {
 	structuredReads int
 }
 
+type stateKVAliasingReadProbe struct {
+	ethdb.KeyValueReader
+	value []byte
+}
+
+func (p *stateKVAliasingReadProbe) GetNoCopyCachedStateKVLatest([]byte, common.AccountID, uint64, uint16, []byte) ([]byte, error) {
+	return p.value, nil
+}
+
 type ownedStateKVWriteProbe struct {
 	putCalled  bool
 	owner      common.AccountID
@@ -84,6 +93,48 @@ func TestAppendStateKVLatestValueReusesDestination(t *testing.T) {
 	if string(decoded) != "replacement" {
 		t.Fatalf("decoded value = %q, want replacement", decoded)
 	}
+}
+
+func TestReadStateKVLatestNoCopyAliasesReaderValue(t *testing.T) {
+	owner := stateKVTestAddress(0x41, 0x57)
+	backing := EncodeStateKVLatestValue([]byte("state-value"))
+	probe := &stateKVAliasingReadProbe{value: backing}
+	borrowed, ok, err := ReadStateKVLatestNoCopy(probe, owner, 3, kvdomains.ContractStorage, []byte("slot"))
+	if err != nil || !ok || string(borrowed) != "state-value" {
+		t.Fatalf("borrowed read = (%q,%v,%v)", borrowed, ok, err)
+	}
+	if &borrowed[0] != &backing[1] {
+		t.Fatal("no-copy state KV read copied the reader value")
+	}
+	owned, ok, err := ReadStateKVLatest(probe, owner, 3, kvdomains.ContractStorage, []byte("slot"))
+	if err != nil || !ok || string(owned) != "state-value" {
+		t.Fatalf("owned read = (%q,%v,%v)", owned, ok, err)
+	}
+	if &owned[0] == &backing[1] {
+		t.Fatal("ordinary state KV read exposed the reader value")
+	}
+	owned[0] = 'X'
+	if string(backing[1:]) != "state-value" {
+		t.Fatalf("ordinary read mutated backing value: %q", backing[1:])
+	}
+}
+
+func BenchmarkReadStateKVLatestOwnership(b *testing.B) {
+	owner := stateKVTestAddress(0x41, 0x58)
+	probe := &stateKVAliasingReadProbe{value: EncodeStateKVLatestValue(make([]byte, 32))}
+	key := []byte("slot")
+	b.Run("owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_, _, _ = ReadStateKVLatest(probe, owner, 3, kvdomains.ContractStorage, key)
+		}
+	})
+	b.Run("borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_, _, _ = ReadStateKVLatestNoCopy(probe, owner, 3, kvdomains.ContractStorage, key)
+		}
+	})
 }
 
 func TestWriteStateKVLatestEncodedOwnedUsesStructuredWriter(t *testing.T) {

@@ -209,7 +209,7 @@ func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.Resour
 		return amount, exists, nil
 	}
 	key := accountFrozenV2Key(resource)
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenV2Aux, key)
+	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil || !exists {
 		if err == nil {
 			cacheAccountFrozenV2Point(obj, resource, 0, false)
@@ -229,7 +229,7 @@ func (s *StateDB) setAccountFrozenV2Amount(obj *stateObject, resource corepb.Res
 		return nil
 	}
 	key := accountFrozenV2Key(resource)
-	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenV2Aux, key)
+	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil {
 		return err
 	}
