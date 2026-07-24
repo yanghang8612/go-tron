@@ -41,7 +41,39 @@ func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkAccountKVCommitPlan = plan
+		releaseAccountKVCommitPlan(plan)
 		obj.releaseKVDirty()
+	}
+}
+
+func TestAccountKVCommitPlanPoolClearsReferences(t *testing.T) {
+	obj := new(stateObject)
+	obj.stageKV(kvdomains.ContractStorage, []byte("old-key"), []byte("old-value"))
+	plan, err := new(StateDB).prepareAccountKVCommitPlan(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.items) != 1 || plan.pooledItems == nil {
+		t.Fatalf("plan items=%d pooled=%v, want one pooled item", len(plan.items), plan.pooledItems != nil)
+	}
+	releaseAccountKVCommitPlan(plan)
+	if plan.items != nil || plan.pooledItems != nil {
+		t.Fatal("released plan retained its pooled slice")
+	}
+	reused, handle := borrowAccountKVCommitItems(1)
+	reused = reused[:1]
+	if reused[0].logicalKey != nil || reused[0].entry.val != nil || reused[0].entry.wrapped != nil || reused[0].entry.prev != nil {
+		t.Fatal("reused plan item retained prior references")
+	}
+	clear(reused)
+	*handle = reused[:0]
+	accountKVCommitItemsPool.Put(handle)
+}
+
+func TestAccountKVCommitPlanPoolRejectsOversizedSlice(t *testing.T) {
+	items, handle := borrowAccountKVCommitItems(maxPooledKVCommitItems + 1)
+	if handle != nil || cap(items) < maxPooledKVCommitItems+1 {
+		t.Fatalf("oversized borrow cap=%d pooled=%v", cap(items), handle != nil)
 	}
 }
 

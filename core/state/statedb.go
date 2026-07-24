@@ -3307,6 +3307,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	if err != nil {
 		return tcommon.Hash{}, stats, err
 	}
+	defer releaseAccountKVCommitPlans(plans)
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
 	commitmentTouchCapacity := 0

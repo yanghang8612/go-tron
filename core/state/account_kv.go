@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -40,6 +41,53 @@ type accountKVCommitPlan struct {
 	items        []kvCommitItem
 	noopItems    int
 	noopByDomain [kvDomainStatCount]int
+	pooledItems  *[]kvCommitItem
+}
+
+// Account-KV commit plans live only until the current block's flat writes have
+// been flushed. Reuse their item backing arrays across blocks to avoid making
+// every dirty account allocate a short-lived sort/work slice. The cap prevents
+// one pathological contract from pinning a very large array in sync.Pool.
+const maxPooledKVCommitItems = 1024
+
+var accountKVCommitItemsPool = sync.Pool{
+	New: func() any {
+		items := make([]kvCommitItem, 0, 8)
+		return &items
+	},
+}
+
+func borrowAccountKVCommitItems(size int) ([]kvCommitItem, *[]kvCommitItem) {
+	if size > maxPooledKVCommitItems {
+		return make([]kvCommitItem, 0, size), nil
+	}
+	itemsPtr := accountKVCommitItemsPool.Get().(*[]kvCommitItem)
+	if cap(*itemsPtr) < size {
+		*itemsPtr = make([]kvCommitItem, 0, size)
+	}
+	return (*itemsPtr)[:0], itemsPtr
+}
+
+func releaseAccountKVCommitPlan(plan *accountKVCommitPlan) {
+	if plan == nil {
+		return
+	}
+	itemsPtr := plan.pooledItems
+	if itemsPtr != nil {
+		clear(plan.items)
+		*itemsPtr = plan.items[:0]
+		accountKVCommitItemsPool.Put(itemsPtr)
+	}
+	plan.items = nil
+	plan.pooledItems = nil
+}
+
+func releaseAccountKVCommitPlans(plans []*accountCommitPlan) {
+	for _, plan := range plans {
+		if plan != nil {
+			releaseAccountKVCommitPlan(plan.kvPlan)
+		}
+	}
 }
 
 type accountKVLatestBatch struct {
@@ -1478,13 +1526,15 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 }
 
 func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
-	plan := &accountKVCommitPlan{items: make([]kvCommitItem, 0, len(obj.kvDirty))}
+	items, pooledItems := borrowAccountKVCommitItems(len(obj.kvDirty))
+	plan := &accountKVCommitPlan{items: items, pooledItems: pooledItems}
 	for mk, e := range obj.kvDirty {
 		// kvDirty owns immutable composite strings through commit finalization;
 		// lend that backing to the plan and downstream ownership pipeline.
 		composite := ownedStringBytes(mk)
 		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
 		if !ok {
+			releaseAccountKVCommitPlan(plan)
 			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
 		}
 		if noop, known := e.latestNoop(); known && noop {
