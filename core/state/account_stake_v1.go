@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -223,6 +224,71 @@ func (s *StateDB) accountFrozenBandwidthTotal(obj *stateObject) (int64, error) {
 		total += row.entry.FrozenBalance
 	}
 	return total, nil
+}
+
+// FrozenV1BandwidthCount returns the number of legacy bandwidth-freeze rows
+// without materializing any unrelated split account domain.
+func (s *StateDB) FrozenV1BandwidthCount(addr tcommon.Address) int {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return 0
+	}
+	rows, err := s.accountFrozenBandwidthRows(obj)
+	if err != nil {
+		return 0
+	}
+	return len(rows)
+}
+
+// FrozenV1ResourceAmount returns the owner-side legacy frozen amount for one
+// resource. It loads only the corresponding V1 split domain.
+func (s *StateDB) FrozenV1ResourceAmount(addr tcommon.Address, resource corepb.ResourceCode) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return 0
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		amount, err := s.accountFrozenBandwidthTotal(obj)
+		if err != nil {
+			return 0
+		}
+		return amount
+	case corepb.ResourceCode_ENERGY:
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0
+		}
+		return obj.account.FrozenEnergyAmount()
+	case corepb.ResourceCode_TRON_POWER:
+		entry, exists, err := s.accountTronPower(obj)
+		if err != nil || !exists || entry == nil {
+			return 0
+		}
+		return entry.FrozenBalance
+	default:
+		return 0
+	}
+}
+
+// AcquiredDelegatedFrozenV1Amount returns the receiver-side legacy delegated
+// amount while loading only the account envelope (bandwidth) or resource row
+// (energy).
+func (s *StateDB) AcquiredDelegatedFrozenV1Amount(addr tcommon.Address, resource corepb.ResourceCode) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return 0
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		return obj.account.AcquiredDelegatedFrozenBandwidth()
+	case corepb.ResourceCode_ENERGY:
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0
+		}
+		return obj.account.AcquiredDelegatedFrozenEnergy()
+	default:
+		return 0
+	}
 }
 
 func (s *StateDB) accountFrozenBandwidthMaxExpire(obj *stateObject) (int64, error) {

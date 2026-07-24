@@ -89,6 +89,61 @@ func TestAccountVotesSnapshotRevertInvalidatesMaterializedCache(t *testing.T) {
 	}
 }
 
+func TestAccountVotesUseBoundedPointReadsAndPreserveSparseSlots(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x99)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	first := splitTestVote(0x73, 11)
+	last := splitTestVote(0x74, 22)
+	for index, vote := range map[uint32]*corepb.Vote{0: first, 29: last} {
+		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(vote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sdb.SetAccountKV(addr, kvdomains.AccountVotesAux, accountVoteKey(index), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	votes := reopened.GetVotes(addr)
+	if store.iteratorCalls != 0 {
+		t.Fatalf("vote point read opened %d iterators", store.iteratorCalls)
+	}
+	if len(votes) != 2 || !proto.Equal(votes[0], first) || !proto.Equal(votes[1], last) {
+		t.Fatalf("sparse votes = %+v, want first/last", votes)
+	}
+
+	replacement := splitTestVote(0x75, 33)
+	reopened.SetVotes(addr, []*corepb.Vote{replacement})
+	if store.iteratorCalls != 0 {
+		t.Fatalf("vote rewrite opened %d iterators", store.iteratorCalls)
+	}
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.GetVotes(addr); len(got) != 1 || !proto.Equal(got[0], replacement) {
+		t.Fatalf("rewritten votes = %+v, want replacement", got)
+	}
+	if _, exists, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.AccountVotesAux, accountVoteKey(29)); err != nil || exists {
+		t.Fatalf("old sparse vote survived rewrite: exists=%v err=%v", exists, err)
+	}
+}
+
 func TestStateDBCopyKeepsSplitFieldsOutOfAccountEnvelope(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x98)

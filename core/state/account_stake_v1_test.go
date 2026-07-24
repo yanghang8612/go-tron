@@ -154,6 +154,19 @@ func TestAccountFrozenBandwidthRowsUseDensePointReads(t *testing.T) {
 			t.Fatalf("frozen-bandwidth row %d = index %d %+v, want %+v", i, rows[i].index, rows[i].entry, want[i])
 		}
 	}
+	if got := reopened.FrozenV1BandwidthCount(addr); got != len(want) {
+		t.Fatalf("frozen-bandwidth count = %d, want %d", got, len(want))
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("frozen-bandwidth count opened %d iterators", store.iteratorCalls)
+	}
+	if got := reopened.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 66 {
+		t.Fatalf("frozen-bandwidth amount = %d, want 66", got)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj.accountMapsLoaded || obj.accountPermissionsLoaded || obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded || obj.accountResourceLoaded || obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
+		t.Fatalf("point reads materialized split account domains: %+v", obj)
+	}
 }
 
 func TestAccountStakeV1PreservesPresentEmptyMessages(t *testing.T) {

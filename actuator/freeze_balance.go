@@ -40,10 +40,8 @@ func (a *FreezeBalanceActuator) Validate(ctx *Context) error {
 	if ctx.State.GetBalance(ownerAddr) < fc.FrozenBalance {
 		return errors.New("insufficient balance")
 	}
-	if acct := ctx.State.GetAccount(ownerAddr); acct != nil {
-		if len(acct.FrozenBandwidthList()) > 1 {
-			return errors.New("frozenCount must be 0 or 1")
-		}
+	if ctx.State.FrozenV1BandwidthCount(ownerAddr) > 1 {
+		return errors.New("frozenCount must be 0 or 1")
 	}
 	switch fc.Resource {
 	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
@@ -70,7 +68,7 @@ func (a *FreezeBalanceActuator) Validate(ctx *Context) error {
 			return errors.New("receiver account does not exist")
 		}
 		if ctx.DynProps.AllowTvmConstantinople() {
-			receiver := ctx.State.GetAccount(receiverAddr)
+			receiver := ctx.State.AccountReference(receiverAddr)
 			if receiver != nil && receiver.Type() == corepb.AccountType_Contract {
 				return errors.New("Do not allow delegate resources to contract addresses")
 			}
@@ -194,33 +192,9 @@ func frozenV2WithDelegatedWeight(s *state.StateDB, addr common.Address, resource
 }
 
 func v1FrozenResourceWeight(s *state.StateDB, addr common.Address, resource corepb.ResourceCode) int64 {
-	acct := s.GetAccount(addr)
-	if acct == nil {
-		return 0
-	}
-	switch resource {
-	case corepb.ResourceCode_BANDWIDTH:
-		return acct.TotalFrozenBandwidth() / trxPrecisionActuator
-	case corepb.ResourceCode_ENERGY:
-		return acct.FrozenEnergyAmount() / trxPrecisionActuator
-	case corepb.ResourceCode_TRON_POWER:
-		return acct.V1TronPowerFrozen() / trxPrecisionActuator
-	default:
-		return 0
-	}
+	return s.FrozenV1ResourceAmount(addr, resource) / trxPrecisionActuator
 }
 
 func v1AcquiredDelegatedWeight(s *state.StateDB, addr common.Address, resource corepb.ResourceCode) int64 {
-	acct := s.GetAccount(addr)
-	if acct == nil {
-		return 0
-	}
-	switch resource {
-	case corepb.ResourceCode_BANDWIDTH:
-		return acct.AcquiredDelegatedFrozenBandwidth() / trxPrecisionActuator
-	case corepb.ResourceCode_ENERGY:
-		return acct.AcquiredDelegatedFrozenEnergy() / trxPrecisionActuator
-	default:
-		return 0
-	}
+	return s.AcquiredDelegatedFrozenV1Amount(addr, resource) / trxPrecisionActuator
 }

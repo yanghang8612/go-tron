@@ -3,9 +3,9 @@ package state
 import (
 	"encoding/binary"
 	"fmt"
-	"sort"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,28 +37,33 @@ func (s *StateDB) materializeAccountVotes(obj *stateObject) error {
 	if obj == nil || obj.account == nil || obj.accountVotesLoaded {
 		return nil
 	}
-	type indexedVote struct {
-		index uint32
-		vote  *corepb.Vote
-	}
-	rows := make([]indexedVote, 0)
-	if err := s.IterateAccountKV(obj.address, kvdomains.AccountVotesAux, nil, func(key, value []byte) (bool, error) {
-		index, vote, err := decodeAccountVoteRow(key, value)
+	votes := make([]*corepb.Vote, 0, params.MaxVoteNumber)
+	// VoteWitnessContract is consensus-limited to MaxVoteNumber entries and
+	// writeAccountVotes persists each entry in its bounded numeric slot. Point
+	// reads avoid constructing a blockbuffer prefix iterator, whose overlay walk
+	// scans every write in every live layer even though there can be at most 30
+	// relevant rows. Check every slot rather than stopping at the first miss so
+	// older sparse rows remain readable.
+	for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
+		key := accountVoteKey(index)
+		value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountVotesAux, key)
 		if err != nil {
-			return false, err
+			clearAccountVotesProto(obj.account.Proto())
+			return err
 		}
-		rows = append(rows, indexedVote{index: index, vote: vote})
-		return true, nil
-	}); err != nil {
-		clearAccountVotesProto(obj.account.Proto())
-		return err
+		if !exists {
+			continue
+		}
+		_, vote, err := decodeAccountVoteRow(key, value)
+		if err != nil {
+			clearAccountVotesProto(obj.account.Proto())
+			return err
+		}
+		votes = append(votes, vote)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].index < rows[j].index })
 	pb := obj.account.Proto()
 	clearAccountVotesProto(pb)
-	for _, row := range rows {
-		pb.Votes = append(pb.Votes, row.vote)
-	}
+	pb.Votes = append(pb.Votes, votes...)
 	obj.accountVotesLoaded = true
 	return nil
 }
@@ -67,8 +72,12 @@ func (s *StateDB) writeAccountVotes(obj *stateObject, votes []*corepb.Vote) erro
 	if obj == nil || obj.account == nil {
 		return nil
 	}
-	if err := s.DeleteAccountKVPrefix(obj.address, kvdomains.AccountVotesAux, nil); err != nil {
-		return err
+	// The protocol admits at most MaxVoteNumber rows. Delete those bounded slots
+	// directly instead of opening a prefix iterator over the whole block overlay.
+	for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
+		if err := s.DeleteAccountKV(obj.address, kvdomains.AccountVotesAux, accountVoteKey(index)); err != nil {
+			return err
+		}
 	}
 	for index, vote := range votes {
 		if vote == nil {
