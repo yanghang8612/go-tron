@@ -53,7 +53,7 @@ func BenchmarkRawdbBranchStorePutBranch(b *testing.B) {
 }
 
 func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
-	for _, count := range []int{16, 256, 1024} {
+	for _, count := range []int{16, 32, 64, 128, 256, 1024} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
 			keys := make([]string, count)
 			branches := make(map[string]*BranchData, count)

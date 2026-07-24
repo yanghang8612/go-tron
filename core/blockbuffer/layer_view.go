@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -11,6 +12,41 @@ import (
 )
 
 const splitReadKeyStackSize = 128
+
+// A parallel commitment root fold publishes at most one batch from each of
+// its 16 first-nibble siblings. The first sibling reaching a layer shard uses
+// this fan-out to reserve the map once for the batches likely to follow.
+const commitmentSiblingBatchCount = 16
+
+type ownedValueBatchLink struct {
+	end  int
+	next int // next entry index + 1; zero terminates the shard chain
+}
+
+var ownedValueBatchLinksPool = sync.Pool{
+	New: func() any {
+		links := make([]ownedValueBatchLink, 0, 256)
+		return &links
+	},
+}
+
+func borrowOwnedValueBatchLinks(size int) *[]ownedValueBatchLink {
+	linksPtr := ownedValueBatchLinksPool.Get().(*[]ownedValueBatchLink)
+	if cap(*linksPtr) < size {
+		*linksPtr = make([]ownedValueBatchLink, size)
+	} else {
+		*linksPtr = (*linksPtr)[:size]
+	}
+	return linksPtr
+}
+
+func returnOwnedValueBatchLinks(linksPtr *[]ownedValueBatchLink) {
+	links := *linksPtr
+	if cap(links) <= 4096 {
+		*linksPtr = links[:0]
+		ownedValueBatchLinksPool.Put(linksPtr)
+	}
+}
 
 // LayerView is a read/write view bound to ONE in-flight layer. Reads resolve
 // that layer's own writes/tombstones first, then the committed stack
@@ -129,16 +165,56 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 		totalSize += len(second)
 	}
 	keyArena := make([]byte, totalSize)
+	linksPtr := borrowOwnedValueBatchLinks(len(seconds))
+	defer returnOwnedValueBatchLinks(linksPtr)
+	links := *linksPtr
+	var heads, tails, counts [layerShardCount]int
 	offset := 0
 	for i, second := range seconds {
 		start := offset
 		offset += copy(keyArena[offset:], first)
 		offset += copy(keyArena[offset:], second)
-		var key string
-		if offset > start {
-			key = unsafe.String(unsafe.SliceData(keyArena[start:offset]), offset-start)
+		shard := layerShardIndexBytes(keyArena[start:offset])
+		links[i] = ownedValueBatchLink{end: offset}
+		entry := i + 1
+		if tails[shard] == 0 {
+			heads[shard] = entry
+		} else {
+			links[tails[shard]-1].next = entry
 		}
-		b.putIntoStringOwnedValue(l, key, values[i])
+		tails[shard] = entry
+		counts[shard]++
+	}
+	for shard, head := range heads {
+		if head == 0 {
+			continue
+		}
+		s := &l.shards[shard]
+		s.mu.Lock()
+		if !s.commitmentReserved {
+			capacity := len(s.writes) + counts[shard]*commitmentSiblingBatchCount
+			reserved := make(map[string][]byte, capacity)
+			for key, value := range s.writes {
+				reserved[key] = value
+			}
+			s.writes = reserved
+			s.commitmentReserved = true
+		}
+		for entry := head; entry != 0; entry = links[entry-1].next {
+			i := entry - 1
+			start := 0
+			if i > 0 {
+				start = links[i-1].end
+			}
+			end := links[i].end
+			var key string
+			if end > start {
+				key = unsafe.String(unsafe.SliceData(keyArena[start:end]), end-start)
+			}
+			delete(s.deletes, key)
+			s.writes[key] = values[i]
+		}
+		s.mu.Unlock()
 	}
 }
 

@@ -71,10 +71,11 @@ const layerShardCount = 64
 // The fixed ~4 KiB per live layer is small relative to the layer values and the
 // configured 24 GiB Pebble cache, and maps remain lazily allocated.
 type layerShard struct {
-	mu      sync.RWMutex
-	writes  map[string][]byte
-	deletes map[string]struct{}
-	_       [24]byte
+	mu                 sync.RWMutex
+	writes             map[string][]byte
+	deletes            map[string]struct{}
+	commitmentReserved bool
+	_                  [23]byte
 }
 
 // bufferReadView is an immutable snapshot of the layer topology used by the

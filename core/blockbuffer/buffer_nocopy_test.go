@@ -2,6 +2,7 @@ package blockbuffer
 
 import (
 	"bytes"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -27,6 +28,8 @@ type getOnlyReader struct {
 type keyValueWriterOnly struct {
 	ethdb.KeyValueWriter
 }
+
+var benchmarkCommitmentLayerSink *layer
 
 // cachedLayerReaderOnly preserves rawdb's generic cached no-copy extension but
 // intentionally hides the structured state-latest extension. Benchmarks use it
@@ -809,6 +812,54 @@ func BenchmarkCommitmentBranchLayerWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkCommitmentBranchLayerOwnedBatches(b *testing.B) {
+	const batchCount = 16
+	for _, batchSize := range []int{64, 256} {
+		b.Run(strconv.Itoa(batchSize), func(b *testing.B) {
+			prefix := []byte("state-commitment-branch-v1-")
+			seconds := make([][]string, batchCount)
+			values := make([][][]byte, batchCount)
+			for batch := 0; batch < batchCount; batch++ {
+				seconds[batch] = make([]string, batchSize)
+				values[batch] = make([][]byte, batchSize)
+				for i := 0; i < batchSize; i++ {
+					seconds[batch][i] = string([]byte{byte(batch), byte(i >> 8), byte(i)})
+					values[batch][i] = bytes.Repeat([]byte{byte(batch + 1)}, 256)
+				}
+			}
+			buf := new(Buffer)
+
+			b.Run("sequential", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					l := newLayer(common.Hash{}, 1)
+					for batch := 0; batch < batchCount; batch++ {
+						buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch])
+					}
+					benchmarkCommitmentLayerSink = l
+				}
+			})
+
+			b.Run("parallel-siblings", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					l := newLayer(common.Hash{}, 1)
+					var wg sync.WaitGroup
+					wg.Add(batchCount)
+					for batch := 0; batch < batchCount; batch++ {
+						go func(batch int) {
+							defer wg.Done()
+							buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch])
+						}(batch)
+					}
+					wg.Wait()
+					benchmarkCommitmentLayerSink = l
+				}
+			})
+		})
+	}
+}
+
 func TestCommitmentBranchLayerOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
 	buf := New(rawdb.NewMemoryDatabase())
 	buf.BeginBlock(bufHash(1), 1)
@@ -860,6 +911,76 @@ func TestCommitmentBranchLayerOwnedBatchRetainsValues(t *testing.T) {
 	}
 	if err := view.PutKeyPartsStringsOwnedValues([]byte("prefix"), prefixes, values[:1]); err == nil {
 		t.Fatal("mismatched layer batch lengths were accepted")
+	}
+}
+
+func TestCommitmentBranchLayerOwnedBatchPreservesLastWrite(t *testing.T) {
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	prefixes := []string{"duplicate", "duplicate"}
+	values := [][]byte{[]byte("first"), []byte("last")}
+	if err := rawdb.WriteCommitmentBranchesOwnedStrings(view, prefixes, values); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := rawdb.ReadCommitmentBranchNoCopy(view, []byte("duplicate"))
+	if err != nil || !found || !bytes.Equal(got, values[1]) {
+		t.Fatalf("duplicate branch read = (%q,%v,%v), want (%q,true,nil)", got, found, err, values[1])
+	}
+}
+
+func TestCommitmentBranchLayerOwnedBatchesPublishConcurrently(t *testing.T) {
+	const (
+		batchCount = 16
+		batchSize  = 128
+	)
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	prefixes := make([][]string, batchCount)
+	values := make([][][]byte, batchCount)
+	for batch := 0; batch < batchCount; batch++ {
+		prefixes[batch] = make([]string, batchSize)
+		values[batch] = make([][]byte, batchSize)
+		for i := 0; i < batchSize; i++ {
+			prefixes[batch][i] = string([]byte{byte(batch), byte(i)})
+			values[batch][i] = []byte{byte(batch + 1), byte(i)}
+		}
+	}
+
+	var (
+		wg   sync.WaitGroup
+		errs [batchCount]error
+	)
+	wg.Add(batchCount)
+	for batch := 0; batch < batchCount; batch++ {
+		go func(batch int) {
+			defer wg.Done()
+			errs[batch] = rawdb.WriteCommitmentBranchesOwnedStrings(view, prefixes[batch], values[batch])
+		}(batch)
+	}
+	wg.Wait()
+	for batch, err := range errs {
+		if err != nil {
+			t.Fatalf("batch %d write: %v", batch, err)
+		}
+	}
+	for batch := 0; batch < batchCount; batch++ {
+		for i, prefix := range prefixes[batch] {
+			got, found, err := rawdb.ReadCommitmentBranchNoCopy(view, []byte(prefix))
+			if err != nil || !found || !bytes.Equal(got, values[batch][i]) {
+				t.Fatalf("batch %d branch %d read = (%x,%v,%v), want (%x,true,nil)",
+					batch, i, got, found, err, values[batch][i])
+			}
+		}
 	}
 }
 
