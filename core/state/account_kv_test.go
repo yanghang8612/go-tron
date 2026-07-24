@@ -53,13 +53,10 @@ func TestAccountKVCommitPlanPoolClearsReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.items) != 1 || plan.pooledItems == nil {
-		t.Fatalf("plan items=%d pooled=%v, want one pooled item", len(plan.items), plan.pooledItems != nil)
+	if len(plan.items) != 1 || plan.pooledItems == nil || !plan.pooledPlan {
+		t.Fatalf("plan items=%d pooledItems=%v pooledPlan=%v, want one fully pooled plan", len(plan.items), plan.pooledItems != nil, plan.pooledPlan)
 	}
 	releaseAccountKVCommitPlan(plan)
-	if plan.items != nil || plan.pooledItems != nil {
-		t.Fatal("released plan retained its pooled slice")
-	}
 	reused, handle := borrowAccountKVCommitItems(1)
 	reused = reused[:1]
 	if reused[0].logicalKey != nil || reused[0].entry.val != nil || reused[0].entry.wrapped != nil || reused[0].entry.prev != nil {

@@ -42,6 +42,7 @@ type accountKVCommitPlan struct {
 	noopItems    int
 	noopByDomain [kvDomainStatCount]int
 	pooledItems  *[]kvCommitItem
+	pooledPlan   bool
 }
 
 // Account-KV commit plans live only until the current block's flat writes have
@@ -55,6 +56,10 @@ var accountKVCommitItemsPool = sync.Pool{
 		items := make([]kvCommitItem, 0, 8)
 		return &items
 	},
+}
+
+var accountKVCommitPlanPool = sync.Pool{
+	New: func() any { return new(accountKVCommitPlan) },
 }
 
 func borrowAccountKVCommitItems(size int) ([]kvCommitItem, *[]kvCommitItem) {
@@ -78,8 +83,11 @@ func releaseAccountKVCommitPlan(plan *accountKVCommitPlan) {
 		*itemsPtr = plan.items[:0]
 		accountKVCommitItemsPool.Put(itemsPtr)
 	}
-	plan.items = nil
-	plan.pooledItems = nil
+	pooledPlan := plan.pooledPlan
+	*plan = accountKVCommitPlan{}
+	if pooledPlan {
+		accountKVCommitPlanPool.Put(plan)
+	}
 }
 
 func releaseAccountKVCommitPlans(plans []*accountCommitPlan) {
@@ -1527,7 +1535,8 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 
 func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
 	items, pooledItems := borrowAccountKVCommitItems(len(obj.kvDirty))
-	plan := &accountKVCommitPlan{items: items, pooledItems: pooledItems}
+	plan := accountKVCommitPlanPool.Get().(*accountKVCommitPlan)
+	*plan = accountKVCommitPlan{items: items, pooledItems: pooledItems, pooledPlan: true}
 	for mk, e := range obj.kvDirty {
 		// kvDirty owns immutable composite strings through commit finalization;
 		// lend that backing to the plan and downstream ownership pipeline.
