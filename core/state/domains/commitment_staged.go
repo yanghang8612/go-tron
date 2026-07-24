@@ -18,6 +18,36 @@ type rawdbBranchStore struct {
 	readParentBranches bool
 }
 
+// branchDecodeView owns the callback passed through rawdb/blockbuffer's
+// callback-scoped value API. Keeping the bound method once on a pooled context
+// avoids allocating a fresh capturing closure for every deep-trie branch read.
+// The callback is strictly synchronous, so dst can be cleared and the context
+// returned immediately after the view call.
+type branchDecodeView struct {
+	dst     *BranchData
+	consume func(encoded []byte, stable bool) error
+}
+
+var branchDecodeViewPool = sync.Pool{
+	New: func() any {
+		view := new(branchDecodeView)
+		view.consume = view.decode
+		return view
+	},
+}
+
+func (v *branchDecodeView) decode(encoded []byte, stable bool) error {
+	if stable {
+		// Immutable overlay/cache values (and generic owned Get results) live
+		// for the full fold descent, so leaf keys may alias them directly.
+		return decodeBranchDataIntoNoCopy(encoded, v.dst)
+	}
+	// A cold Pebble value is valid only inside this callback. Copy only its
+	// leaf keys into BranchData instead of copying the complete encoded branch
+	// (which is dominated by fixed child hashes) before decoding.
+	return DecodeBranchDataInto(encoded, v.dst)
+}
+
 var branchEncodingSlicesPool = sync.Pool{
 	New: func() any {
 		values := make([][]byte, 0, 256)
@@ -112,17 +142,12 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	if s.readParentBranches {
 		view = rawdb.ViewCommitmentParentBranchNoCopy
 	}
-	return view(s.db, prefix, func(encoded []byte, stable bool) error {
-		if stable {
-			// Immutable overlay/cache values (and generic owned Get results) live
-			// for the full fold descent, so leaf keys may alias them directly.
-			return decodeBranchDataIntoNoCopy(encoded, dst)
-		}
-		// A cold Pebble value is valid only inside this callback. Copy only its
-		// leaf keys into BranchData instead of copying the complete encoded
-		// branch (which is dominated by fixed child hashes) before decoding.
-		return DecodeBranchDataInto(encoded, dst)
-	})
+	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
+	decodeView.dst = dst
+	found, err := view(s.db, prefix, decodeView.consume)
+	decodeView.dst = nil
+	branchDecodeViewPool.Put(decodeView)
+	return found, err
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {

@@ -52,6 +52,36 @@ func BenchmarkRawdbBranchStorePutBranch(b *testing.B) {
 	}
 }
 
+func BenchmarkRawdbBranchStoreGetBranchInto(b *testing.B) {
+	buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+	buffer.BeginBlock(common.Hash{1}, 1)
+	handle, ok := buffer.NewestInflight()
+	if !ok {
+		b.Fatal("missing in-flight layer")
+	}
+	store := newRawdbBranchStore(buffer.ViewLayer(handle))
+	prefix := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	var branch BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		var hash common.Hash
+		hash[0] = nibble + 1
+		branch.SetHashChild(nibble, hash)
+	}
+	if err := store.PutBranch(prefix, branch); err != nil {
+		b.Fatal(err)
+	}
+
+	dst := new(BranchData)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		found, err := store.GetBranchInto(prefix, dst)
+		if err != nil || !found {
+			b.Fatalf("GetBranchInto = found %v err %v", found, err)
+		}
+	}
+}
+
 func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
 	for _, count := range []int{16, 32, 64, 128, 256, 1024} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
