@@ -106,6 +106,8 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
 
 	bandwidth, err := reopened.GetAccountFrozenBandwidth(addr)
 	if err != nil {
@@ -113,6 +115,9 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	}
 	if bandwidth != 104 {
 		t.Fatalf("frozen bandwidth total = %d, want 104", bandwidth)
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("bandwidth point read opened %d iterators, want 0", store.iteratorCalls)
 	}
 	obj := reopened.stateObjects[addr]
 	if obj == nil {
@@ -136,6 +141,9 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	}
 	if energy != 108 {
 		t.Fatalf("frozen energy total = %d, want 108", energy)
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("resource totals opened %d iterators, want 0", store.iteratorCalls)
 	}
 
 	if !obj.accountResourceLoaded {

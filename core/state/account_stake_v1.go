@@ -179,6 +179,28 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
 	return nil
 }
 
+// materializeAccountFrozenBandwidthFast caches the valid java-tron V1 shape
+// using point reads. accountFrozenBandwidthFastRows retains the iterator
+// fallback for migrated or synthetic states that contain a second physical
+// row, so callers on the consensus hot path avoid a prefix scan without
+// weakening compatibility handling.
+func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error {
+	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
+		return nil
+	}
+	rows, err := s.accountFrozenBandwidthFastRows(obj)
+	if err != nil {
+		obj.account.Proto().Frozen = nil
+		return err
+	}
+	entries := make([]*corepb.Account_Frozen, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, row.entry)
+	}
+	cacheAccountFrozenBandwidth(obj, entries)
+	return nil
+}
+
 func (s *StateDB) materializeAccountTronPower(obj *stateObject) error {
 	if obj == nil || obj.account == nil || obj.accountTronPowerLoaded {
 		return nil

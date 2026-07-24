@@ -88,11 +88,11 @@ func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error)
 func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject) (int64, error) {
 	acct := obj.account
 	// The owner resource snapshot and the consensus bandwidth charge both read
-	// this value for the same transaction. Materialize this small, relevant
-	// domain once so the second read (and later transactions from the same
-	// account while it remains in the StateDB cache) does not open another
-	// prefix iterator over the block overlay.
-	if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
+	// this value for the same transaction. Valid java-tron state has at most one
+	// V1 bandwidth row, so point-read and cache it instead of opening a prefix
+	// iterator over the block overlay. The fast materializer keeps a generic
+	// fallback for non-standard multi-row state.
+	if err := s.materializeAccountFrozenBandwidthFast(obj); err != nil {
 		return 0, err
 	}
 	frozenV1 := acct.TotalFrozenBandwidth()
