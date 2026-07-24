@@ -2413,8 +2413,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 // SetState sets a storage value on a contract.
 func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 	obj := s.GetOrCreateAccount(addr)
-	prev, prevExists, _ := obj.getStorageWithExist(key)
-	if _, cached := obj.storage[key]; !cached {
+	prev, prevExists, cached := obj.getStorageWithExist(key)
+	if !cached {
 		prev, prevExists = s.GetStateWithExist(addr, key)
 	}
 	if prevExists && prev == value {
@@ -2430,14 +2430,8 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		// same account-KV/Pebble lookup a second time.
 		obj.dirtyStorage[key] = storageOrigin{value: prev, exists: prevExists, loaded: true}
 	}
-	s.journal.append(storageChange{
-		address:    addr,
-		key:        key,
-		prev:       prev,
-		prevExists: prevExists,
-		prevDirty:  prevDirty,
-	})
-	obj.setStorage(key, value, true)
+	s.journal.append(acquireStorageChange(addr, key, prev, prevExists, prevDirty))
+	obj.setStorageValue(key, value, true)
 	// A write to zero leaves a present-zero row that FinalizeTransaction must
 	// flip to non-existent; record the address so the boundary scan can skip
 	// untouched objects. (Non-zero writes here are harmless no-ops there.)

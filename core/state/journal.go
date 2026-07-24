@@ -163,7 +163,26 @@ type storageChange struct {
 	prevDirty  bool
 }
 
-func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+var storageChangePool = sync.Pool{
+	New: func() any { return new(storageChange) },
+}
+
+func acquireStorageChange(address tcommon.Address, key, prev tcommon.Hash, prevExists, prevDirty bool) *storageChange {
+	e := storageChangePool.Get().(*storageChange)
+	e.address = address
+	e.key = key
+	e.prev = prev
+	e.prevExists = prevExists
+	e.prevDirty = prevDirty
+	return e
+}
+
+func (e *storageChange) release() {
+	*e = storageChange{}
+	storageChangePool.Put(e)
+}
+
+func (e *storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj != nil {
 		// A zero/non-existent value from an earlier successful transaction in

@@ -180,7 +180,6 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 }
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
-	s.ensureStorage()
 	if s.dirtyStorage == nil {
 		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 	}
@@ -190,6 +189,15 @@ func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 		// entry that makes commit planning use the durable reader.
 		s.dirtyStorage[key] = storageOrigin{}
 	}
+	s.setStorageValue(key, value, exists)
+}
+
+// setStorageValue updates a slot after StateDB.SetState has already installed
+// its durable origin. Keeping that production fast path separate avoids a
+// second dirtyStorage lookup on every SSTORE; setStorage retains the defensive
+// origin setup used by direct stateObject helpers and tests.
+func (s *stateObject) setStorageValue(key, value tcommon.Hash, exists bool) {
+	s.ensureStorage()
 	s.storage[key] = storageSlot{value: value, exists: exists}
 	s.markDirty()
 }

@@ -176,3 +176,26 @@ func BenchmarkGetStateUniqueMissingStorageRows(b *testing.B) {
 		sdb.GetStateWithExist(addr, slot)
 	}
 }
+
+func BenchmarkSetStateCachedDirtySlot(b *testing.B) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	addr := testAddr(0xa4)
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	obj := sdb.getStateObject(addr)
+	obj.contractMetaDirty = true
+	slot := tcommon.Hash{0x01}
+	values := [2]tcommon.Hash{{0x11}, {0x22}}
+	sdb.SetState(addr, slot, values[0])
+	// Retain one journal backing slot and warm the recyclable change pool so the
+	// benchmark isolates steady-state SetState work.
+	sdb.journal.reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sdb.journal.reset()
+		sdb.SetState(addr, slot, values[(i+1)&1])
+	}
+}

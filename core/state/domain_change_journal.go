@@ -153,7 +153,7 @@ func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb
 				touch.prev = append([]byte(nil), cur.prev...)
 			}
 			kvs[id] = touch
-		case storageChange:
+		case *storageChange:
 			id := string(e.address.Bytes()) + string(e.key.Bytes())
 			if _, ok := storages[id]; ok {
 				continue
