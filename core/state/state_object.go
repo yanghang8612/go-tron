@@ -24,8 +24,18 @@ type stateObject struct {
 	// rooted KV/storage/code changes so net-zero KV overlays can skip account
 	// trie updates at commit.
 	accountDirty bool
-	deleted      bool
-	created      bool
+	// Split account fields are materialized only for full Account responses or
+	// the typed mutators that need them.
+	accountMapsLoaded            bool
+	accountPermissionsLoaded     bool
+	accountVotesLoaded           bool
+	accountStakeV2Loaded         bool
+	accountFrozenSupplyLoaded    bool
+	accountResourceLoaded        bool
+	accountFrozenBandwidthLoaded bool
+	accountTronPowerLoaded       bool
+	deleted                      bool
+	created                      bool
 
 	// Contract fields
 	code              []byte                        // contract bytecode
@@ -62,7 +72,7 @@ func (s *stateObject) deterministicAccountProto() ([]byte, error) {
 	if s.accountProto != nil {
 		return s.accountProto, nil
 	}
-	data, err := s.account.Marshal()
+	data, err := s.account.MarshalStorageCore()
 	if err != nil {
 		return nil, err
 	}

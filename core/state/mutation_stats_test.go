@@ -44,6 +44,14 @@ func TestCommitMutationStatsReportsStateTypesAndDomains(t *testing.T) {
 	}
 }
 
+func TestCommitMutationStatsCoversEveryRegisteredDomain(t *testing.T) {
+	for _, domain := range kvdomains.All() {
+		if _, ok := kvDomainStatIndex(domain); !ok {
+			t.Fatalf("registered domain %s (%#04x) missing mutation stats slot", kvdomains.Name(domain), uint16(domain))
+		}
+	}
+}
+
 func mutationTestHash(b byte) tcommon.Hash {
 	var h tcommon.Hash
 	h[31] = b

@@ -13,6 +13,8 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // historyFixture spins up an in-memory disk store and a StateDB that persists
@@ -24,6 +26,59 @@ type historyFixture struct {
 	state    *StateDB
 	head     uint64
 	endTxNum uint64
+}
+
+type splitAccountColdLatestStub struct {
+	values  map[kvdomains.KVDomain]map[string]int64
+	changes []*rawdb.StateDomainChange
+}
+
+type splitAccountPermissionColdLatestStub struct {
+	values  map[string][]byte
+	changes []*rawdb.StateDomainChange
+}
+
+func (s *splitAccountPermissionColdLatestStub) IterateStateDomainChanges(_, _ uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	for _, change := range s.changes {
+		cont, err := fn(change)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *splitAccountPermissionColdLatestStub) IterateKVLatestPrefix(domain kvdomains.KVDomain, _ tcommon.Address, _ uint64, _ []byte, _ uint64, fn func([]byte, []byte) (bool, error)) error {
+	if domain != kvdomains.AccountPermissionAux {
+		return nil
+	}
+	for key, value := range s.values {
+		cont, err := fn([]byte(key), value)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *splitAccountColdLatestStub) IterateStateDomainChanges(_, _ uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	for _, change := range s.changes {
+		cont, err := fn(change)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *splitAccountColdLatestStub) IterateKVLatestPrefix(domain kvdomains.KVDomain, _ tcommon.Address, _ uint64, _ []byte, _ uint64, fn func([]byte, []byte) (bool, error)) error {
+	for key, value := range s.values[domain] {
+		cont, err := fn([]byte(key), encodeAccountAuxInt64(value))
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
 }
 
 func newHistoryFixture(t *testing.T) *historyFixture {
@@ -61,6 +116,267 @@ func (f *historyFixture) applyBlock(blockHash tcommon.Hash, fn func(*StateDB)) {
 // reader builds a fresh per-request reader pinned to the current head.
 func (f *historyFixture) reader() *PersistentHistoryReader {
 	return NewPersistentHistoryReader(f.disk, f.state, f.head)
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountMaps(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x21)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.SetTRC10BalanceLegacyAndV2(addr, []byte("TOKEN"), 1_000_001, 11)
+		s.SetFreeAssetNetUsage(addr, "TOKEN", 12)
+		s.SetLatestAssetOperationTimeV2(addr, "1000001", 13)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SetTRC10BalanceLegacyAndV2(addr, []byte("TOKEN"), 1_000_001, 21)
+		s.SetFreeAssetNetUsage(addr, "TOKEN", 22)
+		s.SetLatestAssetOperationTimeV2(addr, "1000001", 23)
+	})
+
+	at1, err := f.reader().AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at1 == nil || at1.Proto().Asset["TOKEN"] != 11 || at1.Proto().AssetV2["1000001"] != 11 {
+		t.Fatalf("block 1 split balances = %+v", at1)
+	}
+	if at1.Proto().FreeAssetNetUsage["TOKEN"] != 12 || at1.Proto().LatestAssetOperationTimeV2["1000001"] != 13 {
+		t.Fatalf("block 1 split resource maps = %+v", at1.Proto())
+	}
+
+	at2, err := f.reader().AccountAt(addr, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at2 == nil || at2.Proto().AssetV2["1000001"] != 21 || at2.Proto().FreeAssetNetUsage["TOKEN"] != 22 || at2.Proto().LatestAssetOperationTimeV2["1000001"] != 23 {
+		t.Fatalf("block 2 split maps = %+v", at2)
+	}
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountPermissions(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x23)
+	owner1 := splitTestPermission(corepb.Permission_Owner, 0, "owner-1", 0x21)
+	owner2 := splitTestPermission(corepb.Permission_Owner, 0, "owner-2", 0x22)
+	witness2 := splitTestPermission(corepb.Permission_Witness, 1, "witness-2", 0x23)
+	active2 := splitTestPermission(corepb.Permission_Active, 2, "active-2", 0x24)
+	active3 := splitTestPermission(corepb.Permission_Active, 3, "active-3", 0x25)
+	f.applyBlock(tcommon.Hash{0x11}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.SetPermissions(addr, owner1, nil, []*corepb.Permission{active2})
+	})
+	f.applyBlock(tcommon.Hash{0x12}, func(s *StateDB) {
+		s.SetPermissions(addr, owner2, witness2, []*corepb.Permission{active3})
+	})
+
+	at1, err := f.reader().AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at1 == nil || !proto.Equal(at1.OwnerPermission(), owner1) || at1.WitnessPermission() != nil {
+		t.Fatalf("block 1 singleton permissions = %+v", at1)
+	}
+	if actives := at1.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active2) {
+		t.Fatalf("block 1 active permissions = %+v", actives)
+	}
+
+	at2, err := f.reader().AccountAt(addr, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at2 == nil || !proto.Equal(at2.OwnerPermission(), owner2) || !proto.Equal(at2.WitnessPermission(), witness2) {
+		t.Fatalf("block 2 singleton permissions = %+v", at2)
+	}
+	if actives := at2.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active3) {
+		t.Fatalf("block 2 active permissions = %+v", actives)
+	}
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountPermissionsFromColdLatest(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x24)
+	owner1 := splitTestPermission(corepb.Permission_Owner, 0, "owner-1", 0x41)
+	owner2 := splitTestPermission(corepb.Permission_Owner, 0, "owner-2", 0x42)
+	active2 := splitTestPermission(corepb.Permission_Active, 2, "active-2", 0x43)
+	active3 := splitTestPermission(corepb.Permission_Active, 3, "active-3", 0x44)
+	f.applyBlock(tcommon.Hash{0x21}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.SetPermissions(addr, owner1, nil, []*corepb.Permission{active2})
+	})
+	f.applyBlock(tcommon.Hash{0x22}, func(s *StateDB) {
+		s.SetPermissions(addr, owner2, nil, []*corepb.Permission{active3})
+	})
+	f.applyBlock(tcommon.Hash{0x23}, func(s *StateDB) {
+		s.AddBalance(testAddr(0x25), 1)
+	})
+
+	owner1Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(owner1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner2Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(owner2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active2Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(active2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active3Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(active3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cold := &splitAccountPermissionColdLatestStub{
+		values: map[string][]byte{
+			string(accountOwnerPermissionKey):     owner1Data,
+			string(accountActivePermissionKey(2)): active2Data,
+		},
+		changes: []*rawdb.StateDomainChange{
+			{
+				FlatDomain: rawdb.StateFlatDomainKVLatest,
+				Owner:      addr,
+				Domain:     kvdomains.AccountPermissionAux,
+				Key:        accountOwnerPermissionKey,
+				PrevExists: true,
+				Prev:       owner1Data,
+				NextExists: true,
+				Next:       owner2Data,
+			},
+			{
+				FlatDomain: rawdb.StateFlatDomainKVLatest,
+				Owner:      addr,
+				Domain:     kvdomains.AccountPermissionAux,
+				Key:        accountActivePermissionKey(2),
+				PrevExists: true,
+				Prev:       active2Data,
+			},
+			{
+				FlatDomain: rawdb.StateFlatDomainKVLatest,
+				Owner:      addr,
+				Domain:     kvdomains.AccountPermissionAux,
+				Key:        accountActivePermissionKey(3),
+				NextExists: true,
+				Next:       active3Data,
+			},
+		},
+	}
+	account, err := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, cold).AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || !proto.Equal(account.OwnerPermission(), owner1) || account.WitnessPermission() != nil {
+		t.Fatalf("cold singleton permissions = %+v", account)
+	}
+	if actives := account.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active2) {
+		t.Fatalf("cold active permissions = %+v", actives)
+	}
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountVotes(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x26)
+	vote1 := splitTestVote(0x81, 11)
+	vote2 := splitTestVote(0x82, 22)
+	vote3 := splitTestVote(0x83, 33)
+	f.applyBlock(tcommon.Hash{0x31}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.SetVotes(addr, []*corepb.Vote{vote2, vote1})
+	})
+	f.applyBlock(tcommon.Hash{0x32}, func(s *StateDB) {
+		s.SetVotes(addr, []*corepb.Vote{vote3})
+	})
+
+	at1, err := f.reader().AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at1 == nil || len(at1.Votes()) != 2 || !proto.Equal(at1.Votes()[0], vote2) || !proto.Equal(at1.Votes()[1], vote1) {
+		t.Fatalf("block 1 votes = %+v", at1)
+	}
+	at2, err := f.reader().AccountAt(addr, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at2 == nil || len(at2.Votes()) != 1 || !proto.Equal(at2.Votes()[0], vote3) {
+		t.Fatalf("block 2 votes = %+v", at2)
+	}
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountStakeV2(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x27)
+	f.applyBlock(tcommon.Hash{0x41}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, 100)
+		s.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 200)
+		s.AddUnfreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 11, 10)
+		s.AddUnfreezeV2(addr, corepb.ResourceCode_ENERGY, 22, 30)
+	})
+	f.applyBlock(tcommon.Hash{0x42}, func(s *StateDB) {
+		s.ReduceFreezeV2(addr, corepb.ResourceCode_ENERGY, 40)
+		s.AddFreezeV2(addr, corepb.ResourceCode_TRON_POWER, 50)
+		if withdrawn := s.RemoveExpiredUnfreezeV2(addr, 20); withdrawn != 11 {
+			t.Fatalf("withdrawn at block 2 = %d, want 11", withdrawn)
+		}
+	})
+
+	at1, err := f.reader().AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at1 == nil || len(at1.FrozenV2()) != 2 || at1.FrozenV2()[0].GetType() != corepb.ResourceCode_ENERGY || at1.FrozenV2()[0].GetAmount() != 100 || at1.FrozenV2()[1].GetType() != corepb.ResourceCode_BANDWIDTH {
+		t.Fatalf("block 1 frozen-v2 = %+v", at1)
+	}
+	assertUnfrozenV2(t, at1.UnfrozenV2(),
+		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_BANDWIDTH, UnfreezeAmount: 11, UnfreezeExpireTime: 10},
+		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_ENERGY, UnfreezeAmount: 22, UnfreezeExpireTime: 30},
+	)
+
+	at2, err := f.reader().AccountAt(addr, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at2 == nil || len(at2.FrozenV2()) != 3 || at2.FrozenV2()[0].GetAmount() != 60 || at2.FrozenV2()[2].GetType() != corepb.ResourceCode_TRON_POWER || at2.FrozenV2()[2].GetAmount() != 50 {
+		t.Fatalf("block 2 frozen-v2 = %+v", at2)
+	}
+	assertUnfrozenV2(t, at2.UnfrozenV2(),
+		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_ENERGY, UnfreezeAmount: 22, UnfreezeExpireTime: 30},
+	)
+}
+
+func TestPersistentHistoryReaderMaterializesSplitAccountMapsFromColdLatest(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x20)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 1)
+		s.SetTRC10Balance(addr, 1_000_001, 11)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SetTRC10Balance(addr, 1_000_001, 22)
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(testAddr(0x19), 1)
+	})
+
+	cold := &splitAccountColdLatestStub{values: map[kvdomains.KVDomain]map[string]int64{
+		kvdomains.AccountAssetV2: {"1000001": 11},
+	}, changes: []*rawdb.StateDomainChange{{
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      addr,
+		Domain:     kvdomains.AccountAssetV2,
+		Key:        []byte("1000001"),
+		PrevExists: true,
+		Prev:       encodeAccountAuxInt64(11),
+		NextExists: true,
+		Next:       encodeAccountAuxInt64(22),
+	}}}
+	account, err := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, cold).AccountAt(addr, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || account.Proto().AssetV2["1000001"] != 11 {
+		t.Fatalf("cold split account = %+v", account)
+	}
 }
 
 func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {

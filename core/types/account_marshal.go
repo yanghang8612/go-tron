@@ -234,3 +234,24 @@ func marshalAccountDirectMaps(pb *corepb.Account, hint int) ([]byte, error, bool
 	out = append(out, unknown...)
 	return out, nil, true
 }
+
+// marshalAccountStorageCore encodes the Account fields retained in the v3
+// account-latest envelope. The six TRC10 maps, Owner/Witness/Active permissions,
+// votes, Stake V1/V2 fields, TRC10 frozen supply, and AccountResource live in
+// account-local KV domains and are materialized only for full wire/API Account
+// responses.
+func marshalAccountStorageCore(pb *corepb.Account, hint int) ([]byte, error) {
+	core := accountWithoutMaps(pb)
+	core.OwnerPermission = nil
+	core.WitnessPermission = nil
+	core.ActivePermission = nil
+	core.Votes = nil
+	core.FrozenV2 = nil
+	core.UnfrozenV2 = nil
+	core.FrozenSupply = nil
+	core.AccountResource = nil
+	core.Frozen = nil
+	core.TronPower = nil
+	core.ProtoReflect().SetUnknown(pb.ProtoReflect().GetUnknown())
+	return marshalMessageDeterministic(core.ProtoReflect(), hint)
+}

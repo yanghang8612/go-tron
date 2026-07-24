@@ -38,39 +38,65 @@ const (
 	ContractABI          KVDomain = 0x0102
 	ContractRuntimeState KVDomain = 0x0103
 
-	AccountLocalIndex    KVDomain = 0x0200
-	AccountPermissionAux KVDomain = 0x0201
+	AccountLocalIndex           KVDomain = 0x0200
+	AccountPermissionAux        KVDomain = 0x0201
+	AccountAsset                KVDomain = 0x0202
+	AccountAssetV2              KVDomain = 0x0203
+	AccountFreeAssetNetUsage    KVDomain = 0x0204
+	AccountFreeAssetNetUsageV2  KVDomain = 0x0205
+	AccountAssetOperationTime   KVDomain = 0x0206
+	AccountAssetOperationTimeV2 KVDomain = 0x0207
+	AccountVotesAux             KVDomain = 0x0208
+	AccountFrozenV2Aux          KVDomain = 0x0209
+	AccountUnfrozenV2Aux        KVDomain = 0x020a
+	AccountFrozenSupplyAux      KVDomain = 0x020b
+	AccountResourceAux          KVDomain = 0x020c
+	AccountFrozenBandwidthAux   KVDomain = 0x020d
+	AccountTronPowerAux         KVDomain = 0x020e
 
 	WitnessCapsule   KVDomain = 0x0300
 	WitnessVoteState KVDomain = 0x0301
 )
 
 var registry = map[KVDomain]string{
-	SystemDynamicProperty: "SystemDynamicProperty",
-	SystemWitnessSchedule: "SystemWitnessSchedule",
-	SystemProposal:        "SystemProposal",
-	SystemForkVote:        "SystemForkVote",
-	SystemAsset:           "SystemAsset",
-	SystemExchange:        "SystemExchange",
-	SystemDelegation:      "SystemDelegation",
-	SystemAccountIndex:    "SystemAccountIndex",
-	SystemMarket:          "SystemMarket",
-	SystemReward:          "SystemReward",
-	SystemShielded:        "SystemShielded",
-	SystemForkAux:         "SystemForkAux",
-	SystemPBFT:            "SystemPBFT",
-	SystemTapos:           "SystemTapos",
-	SystemTrace:           "SystemTrace",
-	SystemBloom:           "SystemBloom",
-	SystemCheckpoint:      "SystemCheckpoint",
-	ContractStorage:       "ContractStorage",
-	ContractMetadata:      "ContractMetadata",
-	ContractABI:           "ContractABI",
-	ContractRuntimeState:  "ContractRuntimeState",
-	AccountLocalIndex:     "AccountLocalIndex",
-	AccountPermissionAux:  "AccountPermissionAux",
-	WitnessCapsule:        "WitnessCapsule",
-	WitnessVoteState:      "WitnessVoteState",
+	SystemDynamicProperty:       "SystemDynamicProperty",
+	SystemWitnessSchedule:       "SystemWitnessSchedule",
+	SystemProposal:              "SystemProposal",
+	SystemForkVote:              "SystemForkVote",
+	SystemAsset:                 "SystemAsset",
+	SystemExchange:              "SystemExchange",
+	SystemDelegation:            "SystemDelegation",
+	SystemAccountIndex:          "SystemAccountIndex",
+	SystemMarket:                "SystemMarket",
+	SystemReward:                "SystemReward",
+	SystemShielded:              "SystemShielded",
+	SystemForkAux:               "SystemForkAux",
+	SystemPBFT:                  "SystemPBFT",
+	SystemTapos:                 "SystemTapos",
+	SystemTrace:                 "SystemTrace",
+	SystemBloom:                 "SystemBloom",
+	SystemCheckpoint:            "SystemCheckpoint",
+	ContractStorage:             "ContractStorage",
+	ContractMetadata:            "ContractMetadata",
+	ContractABI:                 "ContractABI",
+	ContractRuntimeState:        "ContractRuntimeState",
+	AccountLocalIndex:           "AccountLocalIndex",
+	AccountPermissionAux:        "AccountPermissionAux",
+	AccountAsset:                "AccountAsset",
+	AccountAssetV2:              "AccountAssetV2",
+	AccountFreeAssetNetUsage:    "AccountFreeAssetNetUsage",
+	AccountFreeAssetNetUsageV2:  "AccountFreeAssetNetUsageV2",
+	AccountAssetOperationTime:   "AccountAssetOperationTime",
+	AccountAssetOperationTimeV2: "AccountAssetOperationTimeV2",
+	AccountVotesAux:             "AccountVotesAux",
+	AccountFrozenV2Aux:          "AccountFrozenV2Aux",
+	AccountUnfrozenV2Aux:        "AccountUnfrozenV2Aux",
+	AccountFrozenSupplyAux:      "AccountFrozenSupplyAux",
+	AccountResourceAux:          "AccountResourceAux",
+	AccountFrozenBandwidthAux:   "AccountFrozenBandwidthAux",
+	AccountTronPowerAux:         "AccountTronPowerAux",
+	WitnessCapsule:              "WitnessCapsule",
+	WitnessVoteState:            "WitnessVoteState",
 }
 
 // IsRegistered reports whether d is a known domain.

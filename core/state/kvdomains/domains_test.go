@@ -10,6 +10,14 @@ func TestRegisteredDomains(t *testing.T) {
 		SystemForkAux, SystemPBFT, SystemTapos, SystemTrace, SystemBloom,
 		SystemCheckpoint, ContractStorage, ContractMetadata, ContractABI,
 		ContractRuntimeState, AccountLocalIndex, AccountPermissionAux,
+		AccountAsset, AccountAssetV2, AccountFreeAssetNetUsage,
+		AccountFreeAssetNetUsageV2, AccountAssetOperationTime,
+		AccountAssetOperationTimeV2,
+		AccountVotesAux,
+		AccountFrozenV2Aux, AccountUnfrozenV2Aux,
+		AccountFrozenSupplyAux,
+		AccountResourceAux,
+		AccountFrozenBandwidthAux, AccountTronPowerAux,
 		WitnessCapsule, WitnessVoteState,
 	}
 	for _, d := range registered {

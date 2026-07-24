@@ -97,6 +97,9 @@ func (s *StateDB) finishDomainChangeFlush() {
 }
 
 func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb.StateDomainChange, error) {
+	// Copy journal-owned slices exactly once while constructing the published
+	// changes. This isolates rollback/current-state data from custom publishers;
+	// prepareDomainChange and the rawdb writer must not copy them again.
 	accounts := make(map[tcommon.Address]accountDomainJournalTouch)
 	kvs := make(map[string]kvDomainJournalTouch)
 	storages := make(map[string]storageDomainJournalTouch)
@@ -348,23 +351,14 @@ func (c *domainChangeSetCapture) prepareDomainChange(change *rawdb.StateDomainCh
 		return nil
 	}
 	c.seq++
-	prepared := cloneStateDomainChange(change)
-	prepared.BlockNum = c.blockNum
-	prepared.BlockHash = c.blockHash
-	prepared.TxNum = c.txNum
-	prepared.Seq = c.seq
-	return prepared
-}
-
-func cloneStateDomainChange(change *rawdb.StateDomainChange) *rawdb.StateDomainChange {
-	if change == nil {
-		return nil
-	}
-	clone := *change
-	clone.Key = append([]byte(nil), change.Key...)
-	clone.Prev = append([]byte(nil), change.Prev...)
-	clone.Next = append([]byte(nil), change.Next...)
-	return &clone
+	// All callers construct a fresh change for this capture. Stamp it in place:
+	// cloning Key/Prev/Next here would duplicate large account envelopes before
+	// the synchronous publisher immediately encodes them into owned DB bytes.
+	change.BlockNum = c.blockNum
+	change.BlockHash = c.blockHash
+	change.TxNum = c.txNum
+	change.Seq = c.seq
+	return change
 }
 
 func sortedAccountTouches(touches map[tcommon.Address]accountDomainJournalTouch) []tcommon.Address {

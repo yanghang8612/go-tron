@@ -43,7 +43,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -402,20 +401,20 @@ func main() {
 		voters, contractVoters := 0, 0
 		var total int64
 		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-			env, derr := state.DecodeStateAccountV2(row.Value)
-			if derr != nil {
+			envelope, err := state.DecodeStateAccountV3(row.Value)
+			if err != nil {
 				return true, nil
 			}
-			acct, aerr := types.UnmarshalAccount(env.AccountProto)
-			if aerr != nil || acct == nil {
+			var accountCore corepb.Account
+			if err := proto.Unmarshal(envelope.AccountProto, &accountCore); err != nil {
 				return true, nil
 			}
-			for _, v := range acct.Votes() {
+			for _, v := range statedb.GetVotes(row.Owner) {
 				if tcommon.BytesToAddress(v.VoteAddress) == w {
 					voters++
 					total += v.VoteCount
 					mark := ""
-					if acct.Type() == corepb.AccountType_Contract {
+					if accountCore.GetType() == corepb.AccountType_Contract {
 						contractVoters++
 						mark = "  <<< CONTRACT"
 					}
@@ -435,15 +434,7 @@ func main() {
 	if *tallyAudit {
 		sum := make(map[tcommon.Address]int64)
 		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-			env, derr := state.DecodeStateAccountV2(row.Value)
-			if derr != nil {
-				return true, nil
-			}
-			acct, aerr := types.UnmarshalAccount(env.AccountProto)
-			if aerr != nil || acct == nil {
-				return true, nil
-			}
-			for _, v := range acct.Votes() {
+			for _, v := range statedb.GetVotes(row.Owner) {
 				sum[tcommon.BytesToAddress(v.VoteAddress)] += v.VoteCount
 			}
 			return true, nil

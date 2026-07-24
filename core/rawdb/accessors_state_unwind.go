@@ -24,10 +24,9 @@ type StateUnwindStore = StateKVLatestStore
 // pruned the returned delta is incomplete, which the caller detects when the
 // re-folded root fails to match the target block's persisted anchor.
 //
-// Memory aliasing: IterateStateDomainChanges already calls cloneStateDomainChange
-// on every yielded row, so each *StateDomainChange callback argument is a freshly
-// allocated struct with owned Key/Prev/Next slices. CollectStateUnwind stores the
-// pointer directly without additional copying.
+// Memory aliasing: IterateStateDomainChanges decodes every yielded row into a
+// freshly allocated struct with owned Key/Prev/Next slices. CollectStateUnwind
+// stores the pointer directly without additional copying.
 func CollectStateUnwind(db StateUnwindStore, fromBlock, toBlock uint64) ([]StateCommitmentUpdate, error) {
 	if fromBlock < toBlock {
 		return nil, fmt.Errorf("rawdb: unwind fromBlock %d < toBlock %d", fromBlock, toBlock)

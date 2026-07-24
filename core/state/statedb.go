@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -688,6 +687,27 @@ func (s *StateDB) GetAccount(addr tcommon.Address) *types.Account {
 	if obj == nil || obj.deleted {
 		return nil
 	}
+	if err := s.materializeAccountAux(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountPermissions(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountVotes(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountStakeV1(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountStakeV2(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountFrozenSupply(obj); err != nil {
+		return nil
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return nil
+	}
 	return obj.account
 }
 
@@ -749,11 +769,11 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 
 // CopyAccount returns a detached copy of the cached/live account.
 func (s *StateDB) CopyAccount(addr tcommon.Address) *types.Account {
-	obj := s.getStateObject(addr)
-	if obj == nil || obj.deleted {
+	account := s.GetAccount(addr)
+	if account == nil {
 		return nil
 	}
-	return obj.account.Copy()
+	return account.Copy()
 }
 
 // AccountReference returns the cached/live account pointer without copying it.
@@ -874,66 +894,33 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 	return nil
 }
 
-// GetTRC10Balance returns the TRC10 token balance of addr for the given tokenID.
-// Balances are stored in the account proto's AssetV2 map (persisted through state commits).
+// GetTRC10Balance returns the split Account.assetV2 value for tokenID.
 func (s *StateDB) GetTRC10Balance(addr tcommon.Address, tokenID int64) int64 {
-	obj := s.getStateObject(addr)
-	if obj == nil {
-		return 0
-	}
-	return obj.account.Proto().GetAssetV2()[strconv.FormatInt(tokenID, 10)]
+	return s.trc10Balance(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID))
 }
 
 // GetTRC10BalanceByName returns the legacy pre-AllowSameTokenName TRC10
 // balance stored in Account.asset keyed by token name.
 func (s *StateDB) GetTRC10BalanceByName(addr tcommon.Address, name []byte) int64 {
-	obj := s.getStateObject(addr)
-	if obj == nil {
-		return 0
-	}
-	return obj.account.Proto().GetAsset()[string(name)]
+	return s.trc10Balance(addr, kvdomains.AccountAsset, string(name))
 }
 
-// SetTRC10Balance sets the TRC10 token balance in the account proto's AssetV2 map.
+// SetTRC10Balance writes one split Account.assetV2 row.
 func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
-	obj := s.GetOrCreateAccount(addr)
-	s.journalAccount(addr, obj)
-	pb := obj.account.Proto()
-	if pb.AssetV2 == nil {
-		pb.AssetV2 = make(map[string]int64)
-	}
-	pb.AssetV2[strconv.FormatInt(tokenID, 10)] = amount
-	obj.markDirty()
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID), amount)
 }
 
 // SetTRC10BalanceByName sets the legacy Account.asset balance keyed by token name.
 func (s *StateDB) SetTRC10BalanceByName(addr tcommon.Address, name []byte, amount int64) {
-	obj := s.GetOrCreateAccount(addr)
-	s.journalAccount(addr, obj)
-	pb := obj.account.Proto()
-	if pb.Asset == nil {
-		pb.Asset = make(map[string]int64)
-	}
-	pb.Asset[string(name)] = amount
-	obj.markDirty()
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, string(name), amount)
 }
 
 // SetTRC10BalanceLegacyAndV2 mirrors java-tron AccountCapsule.addAssetAmountV2
 // before AllowSameTokenName: the legacy Account.asset value is authoritative,
 // and Account.assetV2 is kept in lockstep under the token ID.
 func (s *StateDB) SetTRC10BalanceLegacyAndV2(addr tcommon.Address, name []byte, tokenID int64, amount int64) {
-	obj := s.GetOrCreateAccount(addr)
-	s.journalAccount(addr, obj)
-	pb := obj.account.Proto()
-	if pb.Asset == nil {
-		pb.Asset = make(map[string]int64)
-	}
-	if pb.AssetV2 == nil {
-		pb.AssetV2 = make(map[string]int64)
-	}
-	pb.Asset[string(name)] = amount
-	pb.AssetV2[strconv.FormatInt(tokenID, 10)] = amount
-	obj.markDirty()
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, string(name), amount)
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID), amount)
 }
 
 func (s *StateDB) GetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) int64 {
@@ -978,18 +965,13 @@ func (s *StateDB) SetAssetIssued(addr tcommon.Address, name []byte, id string) {
 	obj.markDirty()
 }
 
-// AddFrozenSupply appends frozen-supply entries to the account proto's
-// frozen_supply field. java-tron's AssetIssueActuator writes these onto the
-// issuer account when a TRC10 token is issued with a FrozenSupply list.
+// AddFrozenSupply appends split frozen-supply rows in java-tron list order.
 func (s *StateDB) AddFrozenSupply(addr tcommon.Address, frozen []*corepb.Account_Frozen) {
 	if len(frozen) == 0 {
 		return
 	}
 	obj := s.GetOrCreateAccount(addr)
-	s.journalAccount(addr, obj)
-	pb := obj.account.Proto()
-	pb.FrozenSupply = append(pb.FrozenSupply, frozen...)
-	obj.markDirty()
+	_ = s.addAccountFrozenSupply(obj, frozen)
 }
 
 func (s *StateDB) RemoveExpiredFrozenSupply(addr tcommon.Address, now int64) int64 {
@@ -997,22 +979,10 @@ func (s *StateDB) RemoveExpiredFrozenSupply(addr tcommon.Address, now int64) int
 	if obj == nil {
 		return 0
 	}
-	pb := obj.account.Proto()
-	if len(pb.FrozenSupply) == 0 {
+	amount, err := s.removeExpiredAccountFrozenSupply(obj, now)
+	if err != nil {
 		return 0
 	}
-	s.journalAccount(addr, obj)
-	var remaining []*corepb.Account_Frozen
-	var amount int64
-	for _, frozen := range pb.FrozenSupply {
-		if frozen.ExpireTime <= now {
-			amount += frozen.FrozenBalance
-			continue
-		}
-		remaining = append(remaining, frozen)
-	}
-	pb.FrozenSupply = remaining
-	obj.markDirty()
 	return amount
 }
 
@@ -1040,23 +1010,22 @@ func (s *StateDB) TransferAllTRC10Balance(from, to tcommon.Address) {
 	if fromObj == nil || fromObj.account == nil {
 		return
 	}
-	fromPB := fromObj.account.Proto()
-	if len(fromPB.AssetV2) == 0 {
+	balances := make(map[string]int64)
+	if err := s.IterateAccountKV(from, kvdomains.AccountAssetV2, nil, func(key, value []byte) (bool, error) {
+		amount, err := decodeAccountAuxInt64(value)
+		if err != nil {
+			return false, err
+		}
+		balances[string(key)] = amount
+		return true, nil
+	}); err != nil {
 		return
 	}
-	toObj := s.GetOrCreateAccount(to)
-	s.journalAccount(from, fromObj)
-	s.journalAccount(to, toObj)
-	toPB := toObj.account.Proto()
-	if toPB.AssetV2 == nil {
-		toPB.AssetV2 = make(map[string]int64)
+	for tokenID, amount := range balances {
+		toAmount := s.trc10Balance(to, kvdomains.AccountAssetV2, tokenID)
+		s.setTRC10BalanceKey(to, kvdomains.AccountAssetV2, tokenID, toAmount+amount)
+		s.setTRC10BalanceKey(from, kvdomains.AccountAssetV2, tokenID, 0)
 	}
-	for tokenID, amount := range fromPB.AssetV2 {
-		toPB.AssetV2[tokenID] += amount
-		fromPB.AssetV2[tokenID] = 0
-	}
-	fromObj.markDirty()
-	toObj.markDirty()
 }
 
 // IsFrozenClaimed returns whether frozen_supply entry at index has been claimed.
@@ -1087,9 +1056,7 @@ func (s *StateDB) AddFreezeV2(addr tcommon.Address, resourceType corepb.Resource
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.AddFreezeV2(resourceType, amount)
-	obj.markDirty()
+	_ = s.addAccountFrozenV2(obj, resourceType, amount)
 }
 
 // ClearV2Freeze zeroes an account's Stake-2.0 freeze state in place, mirroring
@@ -1104,13 +1071,17 @@ func (s *StateDB) ClearV2Freeze(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return
+	}
 	s.journalAccount(addr, obj)
-	obj.account.ClearFrozenV2()
+	_ = s.clearAccountFrozenV2(obj)
 	obj.account.SetNetUsage(0)
 	obj.account.SetNewNetWindowSize(0)
 	obj.account.SetEnergyUsage(0)
 	obj.account.SetNewEnergyWindowSize(0)
-	obj.account.ClearUnfrozenV2()
+	_ = s.writeAccountResource(obj)
+	_ = s.clearAccountUnfrozenV2(obj)
 	obj.markDirty()
 }
 
@@ -1121,9 +1092,11 @@ func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs i
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetFrozenBandwidth(obj.account.TotalFrozenBandwidth()+amount, expireTimeMs)
-	obj.markDirty()
+	total, err := s.accountFrozenBandwidthTotal(obj)
+	if err != nil {
+		return
+	}
+	_ = s.setAccountFrozenBandwidth(obj, total+amount, expireTimeMs)
 }
 
 func (s *StateDB) UnfreezeV1Bandwidth(addr tcommon.Address, blockTimeMs int64) int64 {
@@ -1131,9 +1104,10 @@ func (s *StateDB) UnfreezeV1Bandwidth(addr tcommon.Address, blockTimeMs int64) i
 	if obj == nil {
 		return 0
 	}
-	s.journalAccount(addr, obj)
-	refunded := obj.account.RemoveExpiredFrozenBandwidth(blockTimeMs)
-	obj.markDirty()
+	refunded, err := s.removeExpiredAccountFrozenBandwidth(obj, blockTimeMs)
+	if err != nil {
+		return 0
+	}
 	return refunded
 }
 
@@ -1142,9 +1116,9 @@ func (s *StateDB) FreezeV1Energy(addr tcommon.Address, amount, expireTimeMs int6
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.AddFrozenEnergy(amount, expireTimeMs)
-	obj.markDirty()
+	_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+		obj.account.AddFrozenEnergy(amount, expireTimeMs)
+	})
 }
 
 // ClearV1Freeze zeroes an account's V1 frozen bandwidth and energy slots in
@@ -1157,10 +1131,12 @@ func (s *StateDB) ClearV1Freeze(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetFrozenBandwidth(0, 0)
+	if err := s.materializeAccountResource(obj); err != nil {
+		return
+	}
+	_ = s.setAccountFrozenBandwidth(obj, 0, 0)
 	obj.account.SetFrozenEnergy(0, 0)
-	obj.markDirty()
+	_ = s.writeAccountResource(obj)
 }
 
 func (s *StateDB) FreezeV1TronPower(addr tcommon.Address, amount, expireTimeMs int64) {
@@ -1168,9 +1144,7 @@ func (s *StateDB) FreezeV1TronPower(addr tcommon.Address, amount, expireTimeMs i
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.AddV1TronPower(amount, expireTimeMs)
-	obj.markDirty()
+	_ = s.addAccountTronPower(obj, amount, expireTimeMs)
 }
 
 func (s *StateDB) UnfreezeV1TronPower(addr tcommon.Address, blockTimeMs int64) int64 {
@@ -1178,22 +1152,19 @@ func (s *StateDB) UnfreezeV1TronPower(addr tcommon.Address, blockTimeMs int64) i
 	if obj == nil {
 		return 0
 	}
-	if obj.account.V1TronPowerExpireTime() > blockTimeMs {
+	amount, err := s.removeExpiredAccountTronPower(obj, blockTimeMs)
+	if err != nil {
 		return 0
 	}
-	amount := obj.account.V1TronPowerFrozen()
-	if amount == 0 {
-		return 0
-	}
-	s.journalAccount(addr, obj)
-	obj.account.ClearV1TronPower()
-	obj.markDirty()
 	return amount
 }
 
 func (s *StateDB) UnfreezeV1Energy(addr tcommon.Address, blockTimeMs int64) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return 0
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
 		return 0
 	}
 	if obj.account.FrozenEnergyExpireTime() > blockTimeMs {
@@ -1203,9 +1174,8 @@ func (s *StateDB) UnfreezeV1Energy(addr tcommon.Address, blockTimeMs int64) int6
 	if amount == 0 {
 		return 0
 	}
-	s.journalAccount(addr, obj)
 	obj.account.ClearFrozenEnergy()
-	obj.markDirty()
+	_ = s.writeAccountResource(obj)
 	return amount
 }
 
@@ -1220,6 +1190,9 @@ func (s *StateDB) GetDelegatedFrozenV1Bandwidth(addr tcommon.Address) int64 {
 func (s *StateDB) GetDelegatedFrozenV1Energy(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return 0
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
 		return 0
 	}
 	return obj.account.DelegatedFrozenEnergy()
@@ -1270,17 +1243,19 @@ func (s *StateDB) FreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amoun
 	if ownerObj == nil {
 		return
 	}
-	s.journalAccount(owner, ownerObj)
-	ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() + amount)
-	ownerObj.markDirty()
+	if err := s.mutateAccountResource(ownerObj, func(_ *corepb.Account_AccountResource) {
+		ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() + amount)
+	}); err != nil {
+		return
+	}
 
 	recvObj := s.getStateObject(receiver)
 	if recvObj == nil {
 		return
 	}
-	s.journalAccount(receiver, recvObj)
-	recvObj.account.SetAcquiredDelegatedFrozenEnergy(recvObj.account.AcquiredDelegatedFrozenEnergy() + amount)
-	recvObj.markDirty()
+	_ = s.mutateAccountResource(recvObj, func(_ *corepb.Account_AccountResource) {
+		recvObj.account.SetAcquiredDelegatedFrozenEnergy(recvObj.account.AcquiredDelegatedFrozenEnergy() + amount)
+	})
 }
 
 func (s *StateDB) UnfreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amount int64) {
@@ -1288,21 +1263,23 @@ func (s *StateDB) UnfreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amo
 	if ownerObj == nil {
 		return
 	}
-	s.journalAccount(owner, ownerObj)
-	ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() - amount)
-	ownerObj.markDirty()
+	if err := s.mutateAccountResource(ownerObj, func(_ *corepb.Account_AccountResource) {
+		ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() - amount)
+	}); err != nil {
+		return
+	}
 
 	recvObj := s.getStateObject(receiver)
 	if recvObj == nil {
 		return
 	}
-	s.journalAccount(receiver, recvObj)
-	v := recvObj.account.AcquiredDelegatedFrozenEnergy() - amount
-	if v < 0 {
-		v = 0
-	}
-	recvObj.account.SetAcquiredDelegatedFrozenEnergy(v)
-	recvObj.markDirty()
+	_ = s.mutateAccountResource(recvObj, func(_ *corepb.Account_AccountResource) {
+		v := recvObj.account.AcquiredDelegatedFrozenEnergy() - amount
+		if v < 0 {
+			v = 0
+		}
+		recvObj.account.SetAcquiredDelegatedFrozenEnergy(v)
+	})
 }
 
 // trxPrecisionState is SUN per TRX, used for V1 delegated-weight rounding.
@@ -1318,14 +1295,16 @@ func (s *StateDB) UnfreezeV1DelegatedOwner(owner tcommon.Address, amount int64, 
 	if obj == nil {
 		return
 	}
-	s.journalAccount(owner, obj)
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
+		s.journalAccount(owner, obj)
 		obj.account.SetDelegatedFrozenBandwidth(obj.account.DelegatedFrozenBandwidth() - amount)
+		obj.markDirty()
 	case corepb.ResourceCode_ENERGY:
-		obj.account.SetDelegatedFrozenEnergy(obj.account.DelegatedFrozenEnergy() - amount)
+		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+			obj.account.SetDelegatedFrozenEnergy(obj.account.DelegatedFrozenEnergy() - amount)
+		})
 	}
-	obj.markDirty()
 }
 
 // DecrementReceiverAcquired mirrors java-tron UnfreezeBalanceActuator's
@@ -1340,12 +1319,15 @@ func (s *StateDB) DecrementReceiverAcquired(receiver tcommon.Address, amount int
 	if obj == nil {
 		return 0
 	}
-	s.journalAccount(receiver, obj)
 	var acquired int64
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
+		s.journalAccount(receiver, obj)
 		acquired = obj.account.AcquiredDelegatedFrozenBandwidth()
 	case corepb.ResourceCode_ENERGY:
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0
+		}
 		acquired = obj.account.AcquiredDelegatedFrozenEnergy()
 	default:
 		return 0
@@ -1361,20 +1343,17 @@ func (s *StateDB) DecrementReceiverAcquired(receiver tcommon.Address, amount int
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
 		obj.account.SetAcquiredDelegatedFrozenBandwidth(newAcquired)
+		obj.markDirty()
 	case corepb.ResourceCode_ENERGY:
 		obj.account.SetAcquiredDelegatedFrozenEnergy(newAcquired)
+		_ = s.writeAccountResource(obj)
 	}
-	obj.markDirty()
 	return newAcquired/trxPrecisionState - oldW
 }
 
 // GetStateObject returns the account for addr (nil if not found). Used by tests and later tasks.
 func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
-	obj := s.getStateObject(addr)
-	if obj == nil || obj.deleted {
-		return nil
-	}
-	return obj.account
+	return s.GetAccount(addr)
 }
 
 // GetWitness returns the witness at addr.
@@ -1642,6 +1621,9 @@ func (s *StateDB) ClearAcquiredDelegatedResource(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return
+	}
 	s.journalAccount(addr, obj)
 	pb := obj.account.Proto()
 	pb.AcquiredDelegatedFrozenBalanceForBandwidth = 0
@@ -1650,6 +1632,7 @@ func (s *StateDB) ClearAcquiredDelegatedResource(addr tcommon.Address) {
 		pb.AccountResource.AcquiredDelegatedFrozenBalanceForEnergy = 0
 		pb.AccountResource.AcquiredDelegatedFrozenV2BalanceForEnergy = 0
 	}
+	_ = s.writeAccountResource(obj)
 	obj.markDirty()
 }
 
@@ -1679,7 +1662,11 @@ func (s *StateDB) GetFrozenV2Amount(addr tcommon.Address, resourceType corepb.Re
 	if obj == nil {
 		return 0
 	}
-	return obj.account.GetFrozenV2Amount(resourceType)
+	amount, _, err := s.accountFrozenV2Amount(obj, resourceType)
+	if err != nil {
+		return 0
+	}
+	return amount
 }
 
 // ReduceFreezeV2 reduces the frozen amount for a resource type.
@@ -1688,9 +1675,7 @@ func (s *StateDB) ReduceFreezeV2(addr tcommon.Address, resourceType corepb.Resou
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.ReduceFreezeV2(resourceType, amount)
-	obj.markDirty()
+	_ = s.reduceAccountFrozenV2(obj, resourceType, amount)
 }
 
 // AddUnfreezeV2 adds a pending unfreeze entry with expiration time.
@@ -1699,9 +1684,7 @@ func (s *StateDB) AddUnfreezeV2(addr tcommon.Address, resourceType corepb.Resour
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.AddUnfreezeV2(resourceType, amount, expireTime)
-	obj.markDirty()
+	_ = s.addAccountUnfrozenV2(obj, resourceType, amount, expireTime)
 }
 
 // GetFreezeV1ExpireTime returns the expire time (ms) of the V1 frozen balance
@@ -1713,14 +1696,15 @@ func (s *StateDB) GetFreezeV1ExpireTime(addr tcommon.Address, resourceType int64
 	}
 	switch resourceType {
 	case 0: // BANDWIDTH: max expire time across Frozen list
-		var maxExpire int64
-		for _, f := range obj.account.FrozenBandwidthList() {
-			if f.ExpireTime > maxExpire {
-				maxExpire = f.ExpireTime
-			}
+		maxExpire, err := s.accountFrozenBandwidthMaxExpire(obj)
+		if err != nil {
+			return 0
 		}
 		return maxExpire
 	case 1: // ENERGY
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0
+		}
 		return obj.account.FrozenEnergyExpireTime()
 	}
 	return 0
@@ -1760,26 +1744,25 @@ func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) (int64, m
 	if obj == nil {
 		return 0, nil
 	}
-	entries := obj.account.UnfrozenV2()
-	if len(entries) == 0 {
+	rows, err := s.accountUnfrozenV2Rows(obj)
+	if err != nil || len(rows) == 0 {
 		return 0, nil
 	}
-	s.journalAccount(addr, obj)
 	var withdrawExpire int64
 	weightDeltas := make(map[corepb.ResourceCode]int64, 3)
-	for _, u := range entries {
+	for _, row := range rows {
+		u := row.entry
 		if u.UnfreezeExpireTime > now {
 			// Refreeze and record the global resource weight delta for the caller.
 			oldWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
-			obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+			_ = s.addAccountFrozenV2(obj, u.Type, u.UnfreezeAmount)
 			newWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
 			weightDeltas[u.Type] += newWeight - oldWeight
 		} else {
 			withdrawExpire += u.UnfreezeAmount
 		}
 	}
-	obj.account.ClearUnfrozenV2()
-	obj.markDirty()
+	_ = s.clearAccountUnfrozenV2(obj)
 	return withdrawExpire, weightDeltas
 }
 
@@ -1824,7 +1807,11 @@ func (s *StateDB) UnfreezeV2Count(addr tcommon.Address) int {
 	if obj == nil {
 		return 0
 	}
-	return len(obj.account.UnfrozenV2())
+	rows, err := s.accountUnfrozenV2Rows(obj)
+	if err != nil {
+		return 0
+	}
+	return len(rows)
 }
 
 // RemoveExpiredUnfreezeV2 removes expired entries and returns the total withdrawn.
@@ -1833,20 +1820,25 @@ func (s *StateDB) RemoveExpiredUnfreezeV2(addr tcommon.Address, now int64) int64
 	if obj == nil {
 		return 0
 	}
-	// Check if any entries would expire before journaling.
-	hasExpired := false
-	for _, u := range obj.account.UnfrozenV2() {
-		if u.UnfreezeExpireTime <= now {
-			hasExpired = true
-			break
-		}
-	}
-	if !hasExpired {
+	rows, err := s.accountUnfrozenV2Rows(obj)
+	if err != nil {
 		return 0
 	}
-	s.journalAccount(addr, obj)
-	amount := obj.account.RemoveExpiredUnfreezeV2(now)
-	obj.markDirty()
+	var amount int64
+	removed := false
+	for _, row := range rows {
+		if row.entry.UnfreezeExpireTime > now {
+			continue
+		}
+		if err := s.DeleteAccountKV(addr, kvdomains.AccountUnfrozenV2Aux, row.key); err != nil {
+			return 0
+		}
+		amount += row.entry.UnfreezeAmount
+		removed = true
+	}
+	if removed {
+		s.invalidateAccountStakeV2(obj)
+	}
 	return amount
 }
 
@@ -1856,13 +1848,30 @@ func (s *StateDB) TotalFrozenV2(addr tcommon.Address) int64 {
 	if obj == nil {
 		return 0
 	}
-	return obj.account.TotalFrozenV2()
+	rows, err := s.accountFrozenV2Rows(obj)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, row := range rows {
+		total += row.amount
+	}
+	return total
 }
 
 // GetLegacyTronPower returns the pre-AllowNewResourceModel voting power in drops.
 func (s *StateDB) GetLegacyTronPower(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return 0
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return 0
+	}
+	if err := s.materializeAccountStakeV1(obj); err != nil {
+		return 0
+	}
+	if err := s.materializeAccountStakeV2(obj); err != nil {
 		return 0
 	}
 	return obj.account.LegacyTronPower()
@@ -1874,6 +1883,15 @@ func (s *StateDB) GetAllTronPower(addr tcommon.Address) int64 {
 	if obj == nil {
 		return 0
 	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return 0
+	}
+	if err := s.materializeAccountStakeV1(obj); err != nil {
+		return 0
+	}
+	if err := s.materializeAccountStakeV2(obj); err != nil {
+		return 0
+	}
 	return obj.account.AllTronPower()
 }
 
@@ -1882,6 +1900,15 @@ func (s *StateDB) GetAllTronPower(addr tcommon.Address) int64 {
 func (s *StateDB) InitializeOldTronPowerIfNeeded(addr tcommon.Address) {
 	obj := s.getStateObject(addr)
 	if obj == nil || !obj.account.OldTronPowerIsNotInitialized() {
+		return
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return
+	}
+	if err := s.materializeAccountStakeV1(obj); err != nil {
+		return
+	}
+	if err := s.materializeAccountStakeV2(obj); err != nil {
 		return
 	}
 	s.journalAccount(addr, obj)
@@ -1907,6 +1934,9 @@ func (s *StateDB) GetVotes(addr tcommon.Address) []*corepb.Vote {
 	if obj == nil {
 		return nil
 	}
+	if err := s.materializeAccountVotes(obj); err != nil {
+		return nil
+	}
 	return obj.account.Votes()
 }
 
@@ -1916,9 +1946,7 @@ func (s *StateDB) SetVotes(addr tcommon.Address, votes []*corepb.Vote) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetVotes(votes)
-	obj.markDirty()
+	_ = s.writeAccountVotes(obj, votes)
 }
 
 // ClearVotes clears all votes on an account.
@@ -1927,9 +1955,7 @@ func (s *StateDB) ClearVotes(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.ClearVotes()
-	obj.markDirty()
+	_ = s.writeAccountVotes(obj, nil)
 }
 
 // AddWitnessVoteCount adds delta to a witness's vote count. Marks the
@@ -2136,11 +2162,7 @@ func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
 }
 
 func (s *StateDB) GetFreeAssetNetUsage(addr tcommon.Address, key string) int64 {
-	obj := s.getStateObject(addr)
-	if obj == nil {
-		return 0
-	}
-	return obj.account.FreeAssetNetUsage(key)
+	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsage, key)
 }
 
 func (s *StateDB) SetFreeAssetNetUsage(addr tcommon.Address, key string, usage int64) {
@@ -2148,9 +2170,7 @@ func (s *StateDB) SetFreeAssetNetUsage(addr tcommon.Address, key string, usage i
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetFreeAssetNetUsage(key, usage)
-	obj.markDirty()
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsage, []byte(key), usage)
 }
 
 func (s *StateDB) GetFreeAssetNetUsageV2(addr tcommon.Address, key string) int64 {
@@ -2158,7 +2178,7 @@ func (s *StateDB) GetFreeAssetNetUsageV2(addr tcommon.Address, key string) int64
 	if obj == nil {
 		return 0
 	}
-	return obj.account.FreeAssetNetUsageV2(key)
+	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsageV2, key)
 }
 
 func (s *StateDB) SetFreeAssetNetUsageV2(addr tcommon.Address, key string, usage int64) {
@@ -2166,9 +2186,7 @@ func (s *StateDB) SetFreeAssetNetUsageV2(addr tcommon.Address, key string, usage
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetFreeAssetNetUsageV2(key, usage)
-	obj.markDirty()
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsageV2, []byte(key), usage)
 }
 
 func (s *StateDB) GetLatestAssetOperationTime(addr tcommon.Address, key string) int64 {
@@ -2176,7 +2194,7 @@ func (s *StateDB) GetLatestAssetOperationTime(addr tcommon.Address, key string) 
 	if obj == nil {
 		return 0
 	}
-	return obj.account.LatestAssetOperationTime(key)
+	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTime, key)
 }
 
 func (s *StateDB) SetLatestAssetOperationTime(addr tcommon.Address, key string, t int64) {
@@ -2184,9 +2202,7 @@ func (s *StateDB) SetLatestAssetOperationTime(addr tcommon.Address, key string, 
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetLatestAssetOperationTime(key, t)
-	obj.markDirty()
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTime, []byte(key), t)
 }
 
 func (s *StateDB) GetLatestAssetOperationTimeV2(addr tcommon.Address, key string) int64 {
@@ -2194,7 +2210,7 @@ func (s *StateDB) GetLatestAssetOperationTimeV2(addr tcommon.Address, key string
 	if obj == nil {
 		return 0
 	}
-	return obj.account.LatestAssetOperationTimeV2(key)
+	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTimeV2, key)
 }
 
 func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string, t int64) {
@@ -2202,15 +2218,16 @@ func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetLatestAssetOperationTimeV2(key, t)
-	obj.markDirty()
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTimeV2, []byte(key), t)
 }
 
 // GetEnergyUsage returns the energy usage for an account.
 func (s *StateDB) GetEnergyUsage(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return 0
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
 		return 0
 	}
 	return obj.account.EnergyUsage()
@@ -2222,15 +2239,18 @@ func (s *StateDB) SetEnergyUsage(addr tcommon.Address, usage int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccountScalars(addr, obj)
-	obj.account.SetEnergyUsage(usage)
-	obj.markDirty()
+	_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+		obj.account.SetEnergyUsage(usage)
+	})
 }
 
 // GetLatestConsumeTimeForEnergy returns the latest energy consume time for an account.
 func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return 0
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
 		return 0
 	}
 	return obj.account.LatestConsumeTimeForEnergy()
@@ -2242,9 +2262,9 @@ func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
 	if obj == nil {
 		return
 	}
-	s.journalAccountScalars(addr, obj)
-	obj.account.SetLatestConsumeTimeForEnergy(t)
-	obj.markDirty()
+	_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+		obj.account.SetLatestConsumeTimeForEnergy(t)
+	})
 }
 
 // SetEnergyWindow sets the per-account energy recovery window (raw field +
@@ -2255,9 +2275,9 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 	if obj == nil {
 		return
 	}
-	s.journalAccountScalars(addr, obj)
-	obj.account.SetEnergyWindow(raw, optimized)
-	obj.markDirty()
+	_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+		obj.account.SetEnergyWindow(raw, optimized)
+	})
 }
 
 // SetNetWindow sets the per-account bandwidth recovery window (raw field +
@@ -2676,7 +2696,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			data, _ := obj.account.Marshal()
 			acc, _ := types.UnmarshalAccount(data)
 			newObj.account = acc
-			newObj.accountProto = data
+			newObj.accountProto, _ = acc.MarshalStorageCore()
 		}
 		for k, v := range obj.storage {
 			newObj.storage[k] = v
@@ -3341,11 +3361,7 @@ func (s *StateDB) SetPermissions(addr tcommon.Address, owner, witness *corepb.Pe
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.SetOwnerPermission(owner)
-	obj.account.SetWitnessPermission(witness)
-	obj.account.SetActivePermission(actives)
-	obj.markDirty()
+	_ = s.writeAccountPermissions(obj, owner, witness, actives)
 }
 
 // ApplyDefaultAccountPermissions installs the default Owner permission and a
@@ -3362,12 +3378,9 @@ func (s *StateDB) ApplyDefaultAccountPermissions(addr tcommon.Address, dp *Dynam
 	if obj == nil || obj.deleted {
 		return
 	}
-	s.journalAccount(addr, obj)
 	owner := types.MakeDefaultOwnerPermission(addr)
 	active := types.MakeDefaultActivePermission(addr, dp.ActiveDefaultOperations())
-	obj.account.SetOwnerPermission(owner)
-	obj.account.SetActivePermission([]*corepb.Permission{active})
-	obj.markDirty()
+	_ = s.writeAccountPermissions(obj, owner, nil, []*corepb.Permission{active})
 }
 
 // ApplyWitnessPermissions installs the witness permission on addr and
@@ -3388,19 +3401,22 @@ func (s *StateDB) ApplyWitnessPermissions(addr tcommon.Address, dp *DynamicPrope
 	if obj == nil || obj.deleted {
 		return
 	}
-	s.journalAccount(addr, obj)
-	// Witness: unconditional (overwrite if any).
-	obj.account.SetWitnessPermission(types.MakeDefaultWitnessPermission(addr))
+	if err := s.materializeAccountPermissions(obj); err != nil {
+		return
+	}
+	owner := obj.account.OwnerPermission()
+	actives := obj.account.ActivePermission()
+	witness := types.MakeDefaultWitnessPermission(addr)
 	// Owner: only fill if missing.
-	if obj.account.OwnerPermission() == nil {
-		obj.account.SetOwnerPermission(types.MakeDefaultOwnerPermission(addr))
+	if owner == nil {
+		owner = types.MakeDefaultOwnerPermission(addr)
 	}
 	// Active: only fill if list is empty.
-	if len(obj.account.ActivePermission()) == 0 {
+	if len(actives) == 0 {
 		active := types.MakeDefaultActivePermission(addr, dp.ActiveDefaultOperations())
-		obj.account.SetActivePermission([]*corepb.Permission{active})
+		actives = []*corepb.Permission{active}
 	}
-	obj.markDirty()
+	_ = s.writeAccountPermissions(obj, owner, witness, actives)
 }
 
 // GetDelegatedFrozenV2 returns the delegated (outgoing) frozen balance for a resource type.
@@ -3412,6 +3428,9 @@ func (s *StateDB) GetDelegatedFrozenV2(addr tcommon.Address, resourceType corepb
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
 		return obj.account.DelegatedFrozenV2BalanceForBandwidth()
 	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return 0
+	}
 	return obj.account.DelegatedFrozenV2BalanceForEnergy()
 }
 
@@ -3421,13 +3440,15 @@ func (s *StateDB) AddDelegatedFrozenV2(addr tcommon.Address, resourceType corepb
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		s.journalAccount(addr, obj)
 		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(obj.account.DelegatedFrozenV2BalanceForBandwidth() + amount)
+		obj.markDirty()
 	} else {
-		obj.account.SetDelegatedFrozenV2BalanceForEnergy(obj.account.DelegatedFrozenV2BalanceForEnergy() + amount)
+		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+			obj.account.SetDelegatedFrozenV2BalanceForEnergy(obj.account.DelegatedFrozenV2BalanceForEnergy() + amount)
+		})
 	}
-	obj.markDirty()
 }
 
 // SubDelegatedFrozenV2 subtracts from the delegated (outgoing) frozen balance for a resource.
@@ -3436,21 +3457,23 @@ func (s *StateDB) SubDelegatedFrozenV2(addr tcommon.Address, resourceType corepb
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		s.journalAccount(addr, obj)
 		v := obj.account.DelegatedFrozenV2BalanceForBandwidth() - amount
 		if v < 0 {
 			v = 0
 		}
 		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(v)
+		obj.markDirty()
 	} else {
-		v := obj.account.DelegatedFrozenV2BalanceForEnergy() - amount
-		if v < 0 {
-			v = 0
-		}
-		obj.account.SetDelegatedFrozenV2BalanceForEnergy(v)
+		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+			v := obj.account.DelegatedFrozenV2BalanceForEnergy() - amount
+			if v < 0 {
+				v = 0
+			}
+			obj.account.SetDelegatedFrozenV2BalanceForEnergy(v)
+		})
 	}
-	obj.markDirty()
 }
 
 // AddAcquiredDelegatedFrozenV2 adds to the acquired (incoming) delegated frozen balance.
@@ -3459,13 +3482,15 @@ func (s *StateDB) AddAcquiredDelegatedFrozenV2(addr tcommon.Address, resourceTyp
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		s.journalAccount(addr, obj)
 		obj.account.SetAcquiredDelegatedFrozenV2BalanceForBandwidth(obj.account.AcquiredDelegatedFrozenV2BalanceForBandwidth() + amount)
+		obj.markDirty()
 	} else {
-		obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() + amount)
+		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+			obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() + amount)
+		})
 	}
-	obj.markDirty()
 }
 
 // SubAcquiredDelegatedFrozenV2 subtracts from the acquired (incoming) delegated frozen balance.
@@ -3474,21 +3499,23 @@ func (s *StateDB) SubAcquiredDelegatedFrozenV2(addr tcommon.Address, resourceTyp
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		s.journalAccount(addr, obj)
 		v := obj.account.AcquiredDelegatedFrozenV2BalanceForBandwidth() - amount
 		if v < 0 {
 			v = 0
 		}
 		obj.account.SetAcquiredDelegatedFrozenV2BalanceForBandwidth(v)
+		obj.markDirty()
 	} else {
-		v := obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() - amount
-		if v < 0 {
-			v = 0
-		}
-		obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(v)
+		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
+			v := obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() - amount
+			if v < 0 {
+				v = 0
+			}
+			obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(v)
+		})
 	}
-	obj.markDirty()
 }
 
 // ClearUnfrozenV2 removes all pending unfreeze entries.
@@ -3497,9 +3524,7 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
-	s.journalAccount(addr, obj)
-	obj.account.ClearUnfrozenV2()
-	obj.markDirty()
+	_ = s.clearAccountUnfrozenV2(obj)
 }
 
 // getStateObject returns the state object for addr, loading from the flat
@@ -3621,13 +3646,6 @@ func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) 
 	change.latestConsumeFreeTime = pb.LatestConsumeFreeTime
 	change.netWindowSize = pb.NetWindowSize
 	change.netWindowOptimized = pb.NetWindowOptimized
-	change.accountResourcePresent = pb.AccountResource != nil
-	if resource := pb.AccountResource; resource != nil {
-		change.energyUsage = resource.EnergyUsage
-		change.latestConsumeTimeForEnergy = resource.LatestConsumeTimeForEnergy
-		change.energyWindowSize = resource.EnergyWindowSize
-		change.energyWindowOptimized = resource.EnergyWindowOptimized
-	}
 	pos := s.journal.length()
 	s.journal.append(change)
 	if len(s.snapshots) > 0 {

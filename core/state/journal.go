@@ -51,12 +51,6 @@ type accountScalarChange struct {
 	latestConsumeFreeTime int64
 	netWindowSize         int64
 	netWindowOptimized    bool
-
-	accountResourcePresent     bool
-	energyUsage                int64
-	latestConsumeTimeForEnergy int64
-	energyWindowSize           int64
-	energyWindowOptimized      bool
 }
 
 var accountScalarChangePool = sync.Pool{
@@ -90,18 +84,10 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 	pb.LatestConsumeFreeTime = e.latestConsumeFreeTime
 	pb.NetWindowSize = e.netWindowSize
 	pb.NetWindowOptimized = e.netWindowOptimized
-	if e.accountResourcePresent {
-		if pb.AccountResource == nil {
-			pb.AccountResource = &corepb.Account_AccountResource{}
-		}
-		pb.AccountResource.EnergyUsage = e.energyUsage
-		pb.AccountResource.LatestConsumeTimeForEnergy = e.latestConsumeTimeForEnergy
-		pb.AccountResource.EnergyWindowSize = e.energyWindowSize
-		pb.AccountResource.EnergyWindowOptimized = e.energyWindowOptimized
-	} else {
-		pb.AccountResource = nil
-	}
 	obj.accountProto = e.prevProto
+	obj.accountResourceLoaded = false
+	obj.accountFrozenBandwidthLoaded = false
+	obj.accountTronPowerLoaded = false
 	obj.dirty = true
 	obj.accountDirty = true
 }
@@ -126,6 +112,14 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// mutation. The journal owns the backing slice for as long as the object
 		// can reference it, including after the entry is removed on revert.
 		obj.accountProto = e.prev
+		obj.accountMapsLoaded = false
+		obj.accountPermissionsLoaded = false
+		obj.accountVotesLoaded = false
+		obj.accountStakeV2Loaded = false
+		obj.accountFrozenSupplyLoaded = false
+		obj.accountResourceLoaded = false
+		obj.accountFrozenBandwidthLoaded = false
+		obj.accountTronPowerLoaded = false
 		obj.dirty = true
 		obj.accountDirty = true
 		obj.deleted = e.prevDeleted
@@ -251,6 +245,9 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 	} else {
 		delete(obj.kvDirty, e.mapKey)
 	}
+	if domain, _, ok := splitKVCompositeKeyView([]byte(e.mapKey)); ok {
+		invalidateAccountSplitMaterialization(obj, domain)
+	}
 }
 
 // kvResetChange records a generic-KV reset (generation bump) for revert. It
@@ -274,6 +271,14 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountKVGeneration = e.prevGeneration
 	obj.accountKVGenerationDirty = e.prevGenerationDirty
 	obj.kvDirty = e.prevDirty
+	obj.accountMapsLoaded = false
+	obj.accountPermissionsLoaded = false
+	obj.accountVotesLoaded = false
+	obj.accountStakeV2Loaded = false
+	obj.accountFrozenSupplyLoaded = false
+	obj.accountResourceLoaded = false
+	obj.accountFrozenBandwidthLoaded = false
+	obj.accountTronPowerLoaded = false
 }
 
 // transientStorageChange records a single EIP-1153 transient storage write for

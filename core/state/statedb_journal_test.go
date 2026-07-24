@@ -5,7 +5,10 @@ import (
 	"strconv"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -283,6 +286,12 @@ func TestAccountScalarJournalNestedSnapshotRevert(t *testing.T) {
 	obj := newMapRichJournalAccount(addr, 8)
 	obj.dirtySet = sdb.dirtyObjects
 	sdb.stateObjects[addr] = obj
+	for key, value := range obj.account.Proto().AssetV2 {
+		if err := sdb.SetAccountKV(addr, kvdomains.AccountAssetV2, []byte(key), encodeAccountAuxInt64(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sdb.journal = newJournal()
 	original, err := obj.deterministicAccountProto()
 	if err != nil {
 		t.Fatal(err)
@@ -300,20 +309,25 @@ func TestAccountScalarJournalNestedSnapshotRevert(t *testing.T) {
 	sdb.SetEnergyUsage(addr, 90)
 	sdb.SetLatestConsumeTimeForEnergy(addr, 100)
 	sdb.SetEnergyWindow(addr, 110, true)
-	if got := len(sdb.journal.entries); got != 1 {
-		t.Fatalf("outer scalar journal entries = %d, want 1", got)
+	if got := len(sdb.journal.entries); got != 4 {
+		t.Fatalf("outer journal entries = %d, want 1 account scalar + 3 resource KV", got)
 	}
 	if _, ok := sdb.journal.entries[0].(*accountScalarChange); !ok {
 		t.Fatalf("outer journal type = %T, want accountScalarChange", sdb.journal.entries[0])
+	}
+	for i := 1; i < 4; i++ {
+		if _, ok := sdb.journal.entries[i].(kvChange); !ok {
+			t.Fatalf("outer journal entry %d type = %T, want kvChange", i, sdb.journal.entries[i])
+		}
 	}
 
 	inner := sdb.Snapshot()
 	sdb.AddBalance(addr, 1)
 	sdb.SetEnergyUsage(addr, 2)
-	sdb.SetTRC10Balance(addr, 1_000_001, 999) // forces a full Account pre-image
-	sdb.SetNetUsage(addr, 3)                  // covered by the full pre-image
-	if got := len(sdb.journal.entries); got != 3 {
-		t.Fatalf("nested mixed journal entries = %d, want scalar+scalar+full", got)
+	sdb.SetTRC10Balance(addr, 1_000_001, 999) // journals one split KV pre-image
+	sdb.SetNetUsage(addr, 3)                  // covered by the scalar pre-image
+	if got := len(sdb.journal.entries); got != 7 {
+		t.Fatalf("nested mixed journal entries = %d, want outer 4 + scalar + resource KV + TRC10 KV", got)
 	}
 	sdb.RevertToSnapshot(inner)
 	if got := sdb.GetBalance(addr); got != 1_000_000_010 {
@@ -337,6 +351,9 @@ func TestAccountScalarJournalNestedSnapshotRevert(t *testing.T) {
 	}
 	if !bytes.Equal(got, original) {
 		t.Fatal("outer revert did not restore the exact deterministic Account bytes")
+	}
+	if err := sdb.materializeAccountResource(restored); err != nil {
+		t.Fatal(err)
 	}
 	if restored.account.Proto().AccountResource != nil {
 		t.Fatal("outer revert did not restore nil AccountResource presence")
@@ -362,12 +379,16 @@ func TestAccountScalarJournalTransactionBoundaries(t *testing.T) {
 		sdb.SetEnergyUsage(addr, tx*100)
 		sdb.FinalizeTransaction()
 	}
-	if got := len(sdb.journal.entries); got != 3 {
-		t.Fatalf("journal entries across tx boundaries = %d, want 3", got)
+	if got := len(sdb.journal.entries); got != 6 {
+		t.Fatalf("journal entries across tx boundaries = %d, want 3 scalar + 3 resource KV", got)
 	}
 	for i, entry := range sdb.journal.entries {
-		if _, ok := entry.(*accountScalarChange); !ok {
-			t.Fatalf("journal entry %d type = %T, want accountScalarChange", i, entry)
+		if i%2 == 0 {
+			if _, ok := entry.(*accountScalarChange); !ok {
+				t.Fatalf("journal entry %d type = %T, want accountScalarChange", i, entry)
+			}
+		} else if _, ok := entry.(kvChange); !ok {
+			t.Fatalf("journal entry %d type = %T, want resource kvChange", i, entry)
 		}
 	}
 	sdb.RevertToSnapshot(block)
@@ -396,8 +417,8 @@ func TestAccountScalarJournalHistoryEnabledKeepsFullPreimage(t *testing.T) {
 	sdb.Snapshot()
 	sdb.AddBalance(addr, -1)
 	sdb.SetEnergyUsage(addr, 123)
-	if got := len(sdb.journal.entries); got != 1 {
-		t.Fatalf("history journal entries = %d, want 1", got)
+	if got := len(sdb.journal.entries); got != 2 {
+		t.Fatalf("history journal entries = %d, want account + resource KV", got)
 	}
 	change, ok := sdb.journal.entries[0].(accountChange)
 	if !ok {
@@ -412,6 +433,9 @@ func TestAccountScalarJournalHistoryEnabledKeepsFullPreimage(t *testing.T) {
 	}
 	if !bytes.Equal(envelope.AccountProto, original) {
 		t.Fatal("history-enabled latest pre-image did not retain exact Account bytes")
+	}
+	if _, ok := sdb.journal.entries[1].(kvChange); !ok {
+		t.Fatalf("history resource journal type = %T, want kvChange", sdb.journal.entries[1])
 	}
 }
 
@@ -440,6 +464,9 @@ func TestAccountScalarJournalCommitAndRootsMatchFullJournal(t *testing.T) {
 		obj.account.SetEnergyUsage(15)
 		obj.account.SetLatestConsumeTimeForEnergy(16)
 		obj.account.SetEnergyWindow(17, true)
+		if err := sdb.writeAccountResource(obj); err != nil {
+			t.Fatal(err)
+		}
 		obj.markDirty()
 	}
 
@@ -528,7 +555,7 @@ func BenchmarkJournalAccountMapRichRepeatedSnapshot(b *testing.B) {
 func BenchmarkJournalAccountMapRichCached(b *testing.B) {
 	addr := testAddr(0x86)
 	obj := newMapRichJournalAccount(addr, 64)
-	cached, err := obj.account.Marshal()
+	cached, err := obj.account.MarshalStorageCore()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -550,27 +577,28 @@ func BenchmarkJournalAccountMapRichSmartContractBlock(b *testing.B) {
 	const txsPerBlock = 32
 	addr := testAddr(0x87)
 	obj := newMapRichJournalAccount(addr, 64)
-	sdb := &StateDB{
-		stateObjects:    map[tcommon.Address]*stateObject{addr: obj},
-		dirtyObjects:    make(map[tcommon.Address]struct{}),
-		txFinalizeDirty: make(map[tcommon.Address]struct{}),
-		journal:         newJournal(),
+	disk := ethrawdb.NewMemoryDatabase()
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(disk))
+	if err != nil {
+		b.Fatal(err)
 	}
+	sdb.stateObjects[addr] = obj
 	obj.dirtySet = sdb.dirtyObjects
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sdb.resetJournal()
+		clear(sdb.dirtyObjects)
+		clear(obj.kvDirty)
 		obj.account.SetBalance(1_000_000_000)
 		obj.account.SetNetUsage(0)
 		obj.account.SetLatestConsumeTime(0)
 		obj.account.SetLatestOperationTime(0)
 		obj.account.SetFreeNetUsage(0)
 		obj.account.SetLatestConsumeFreeTime(0)
-		obj.account.SetEnergyUsage(0)
-		obj.account.SetLatestConsumeTimeForEnergy(0)
 		obj.account.SetNetWindow(0, false)
-		obj.account.SetEnergyWindow(0, false)
+		obj.account.Proto().AccountResource = nil
+		obj.accountResourceLoaded = false
 		obj.accountProto = nil
 		for tx := int64(1); tx <= txsPerBlock; tx++ {
 			sdb.Snapshot()

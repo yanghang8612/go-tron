@@ -12,6 +12,7 @@ var (
 	headBlockKey             = []byte("LastBlock")
 	headSolidBlockKey        = []byte("LastSolidBlock")
 	totalTransactionCountKey = []byte("total-tx-count")
+	stateSchemaVersionKey    = []byte("state-schema-version")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does
 	// not put account_state_root on the genesis block header (we mirror that
@@ -192,12 +193,12 @@ var (
 
 	// stateAccountLatestPrefix is the Erigon-style flat account latest
 	// domain. Values are opaque to rawdb; state.StateDB stores its internal
-	// StateAccountV2 envelope here so account reads no longer require
+	// StateAccountV3 envelope here so account reads no longer require
 	// resolving the account MPT in latest-mode sync.
 	//
-	// Key:   state-account-latest-v1- || owner AccountID20
-	// Value: state.StateAccountV2 RLP bytes
-	stateAccountLatestPrefix = []byte("state-account-latest-v1-")
+	// Key:   state-account-latest-v2- || owner AccountID20
+	// Value: state.StateAccountV3 RLP bytes (slim AccountProto)
+	stateAccountLatestPrefix = []byte("state-account-latest-v2-")
 
 	// stateCodePrefix is the content-addressed TVM bytecode domain.
 	// Account envelopes commit only the code hash; code bytes are immutable

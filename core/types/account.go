@@ -741,8 +741,9 @@ func (a *Account) ClearFrozenV2() {
 
 // Marshal serializes the complete Account protobuf deterministically. The six
 // string→int64 maps use a direct sorted encoder to avoid protobuf reflection;
-// all other fields retain generated-protobuf encoding. The returned bytes stay
-// byte-compatible with protobuf's deterministic representation.
+// all other fields retain generated-protobuf encoding. StateAccount v3 storage
+// uses MarshalStorageCore instead, while full account/API consumers keep the
+// complete byte-compatible representation returned here.
 func (a *Account) Marshal() ([]byte, error) {
 	hint := int(a.marshalSizeHint.Load())
 	if data, err, handled := marshalAccountDirectMaps(a.pb, hint); handled {
@@ -757,6 +758,17 @@ func (a *Account) Marshal() ([]byte, error) {
 		return nil, err
 	}
 	a.marshalSizeHint.Store(int64(len(data)))
+	return data, nil
+}
+
+// MarshalStorageCore serializes the v3 account-latest core without the split
+// TRC10 maps, Owner/Witness/Active permissions, votes, Stake V1/V2 fields,
+// frozen supply, and AccountResource persisted in account-local KV domains.
+func (a *Account) MarshalStorageCore() ([]byte, error) {
+	data, err := marshalAccountStorageCore(a.pb, int(a.marshalSizeHint.Load()))
+	if err != nil {
+		return nil, err
+	}
 	return data, nil
 }
 

@@ -1145,6 +1145,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 		entry.setPrev(prevValue, prevExists)
 	}
 	obj.kvDirty[mk] = entry
+	invalidateAccountSplitMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
 }
@@ -1213,6 +1214,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		entry.setPrev(prevValue, prevExists)
 	}
 	obj.kvDirty[mk] = entry
+	invalidateAccountSplitMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
 }

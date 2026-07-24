@@ -200,4 +200,15 @@ func BenchmarkAccountDeterministicMapMarshal(b *testing.B) {
 			benchmarkAccountMarshalBytes, _ = account.Marshal()
 		}
 	})
+	b.Run("storage-core-no-maps", func(b *testing.B) {
+		account := NewAccountFromPB(pb)
+		if _, err := account.MarshalStorageCore(); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			benchmarkAccountMarshalBytes, _ = account.MarshalStorageCore()
+		}
+	})
 }

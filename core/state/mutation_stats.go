@@ -9,9 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-const kvDomainStatCount = 25
-
-var kvDomainStatOrder = [kvDomainStatCount]kvdomains.KVDomain{
+var kvDomainStatOrder = [...]kvdomains.KVDomain{
 	kvdomains.SystemDynamicProperty,
 	kvdomains.SystemWitnessSchedule,
 	kvdomains.SystemProposal,
@@ -35,9 +33,24 @@ var kvDomainStatOrder = [kvDomainStatCount]kvdomains.KVDomain{
 	kvdomains.ContractRuntimeState,
 	kvdomains.AccountLocalIndex,
 	kvdomains.AccountPermissionAux,
+	kvdomains.AccountAsset,
+	kvdomains.AccountAssetV2,
+	kvdomains.AccountFreeAssetNetUsage,
+	kvdomains.AccountFreeAssetNetUsageV2,
+	kvdomains.AccountAssetOperationTime,
+	kvdomains.AccountAssetOperationTimeV2,
+	kvdomains.AccountVotesAux,
+	kvdomains.AccountFrozenV2Aux,
+	kvdomains.AccountUnfrozenV2Aux,
+	kvdomains.AccountFrozenSupplyAux,
+	kvdomains.AccountResourceAux,
+	kvdomains.AccountFrozenBandwidthAux,
+	kvdomains.AccountTronPowerAux,
 	kvdomains.WitnessCapsule,
 	kvdomains.WitnessVoteState,
 }
+
+const kvDomainStatCount = len(kvDomainStatOrder)
 
 // KVDomainMutationStats counts final committed KV mutations for one domain.
 type KVDomainMutationStats struct {
@@ -197,60 +210,12 @@ func (s *CommitMutationStats) addKV(domain kvdomains.KVDomain, deleted bool) {
 }
 
 func kvDomainStatIndex(domain kvdomains.KVDomain) (int, bool) {
-	switch domain {
-	case kvdomains.SystemDynamicProperty:
-		return 0, true
-	case kvdomains.SystemWitnessSchedule:
-		return 1, true
-	case kvdomains.SystemProposal:
-		return 2, true
-	case kvdomains.SystemForkVote:
-		return 3, true
-	case kvdomains.SystemAsset:
-		return 4, true
-	case kvdomains.SystemExchange:
-		return 5, true
-	case kvdomains.SystemDelegation:
-		return 6, true
-	case kvdomains.SystemAccountIndex:
-		return 7, true
-	case kvdomains.SystemMarket:
-		return 8, true
-	case kvdomains.SystemReward:
-		return 9, true
-	case kvdomains.SystemShielded:
-		return 10, true
-	case kvdomains.SystemForkAux:
-		return 11, true
-	case kvdomains.SystemPBFT:
-		return 12, true
-	case kvdomains.SystemTapos:
-		return 13, true
-	case kvdomains.SystemTrace:
-		return 14, true
-	case kvdomains.SystemBloom:
-		return 15, true
-	case kvdomains.SystemCheckpoint:
-		return 16, true
-	case kvdomains.ContractStorage:
-		return 17, true
-	case kvdomains.ContractMetadata:
-		return 18, true
-	case kvdomains.ContractABI:
-		return 19, true
-	case kvdomains.ContractRuntimeState:
-		return 20, true
-	case kvdomains.AccountLocalIndex:
-		return 21, true
-	case kvdomains.AccountPermissionAux:
-		return 22, true
-	case kvdomains.WitnessCapsule:
-		return 23, true
-	case kvdomains.WitnessVoteState:
-		return 24, true
-	default:
-		return 0, false
+	for i, registered := range kvDomainStatOrder {
+		if registered == domain {
+			return i, true
+		}
 	}
+	return 0, false
 }
 
 func summarizeCommitMutations(plans []*accountCommitPlan) CommitMutationStats {

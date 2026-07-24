@@ -16,6 +16,8 @@ import (
 
 var errDomainChangeSetWriterUsed = errors.New("domain change set writer used")
 
+var benchmarkPreparedDomainChange *rawdb.StateDomainChange
+
 type failingDomainChangeSetWriter struct{}
 
 func (failingDomainChangeSetWriter) Put([]byte, []byte) error { return errDomainChangeSetWriterUsed }
@@ -34,6 +36,30 @@ func TestDefaultStateDomainChangePublicationConfigUsesRegisteredHistoryDomain(t 
 	cfg := DefaultStateDomainChangePublicationConfig()
 	if cfg.Name != "HistoryDomain" || cfg.WriteTxRange == nil || cfg.WriteRow == nil || cfg.WriteInverseIndex == nil {
 		t.Fatalf("default publication config = %+v", cfg)
+	}
+}
+
+func TestPrepareDomainChangeStampsFreshChangeInPlace(t *testing.T) {
+	capture := domainChangeSetCapture{
+		enabled:   true,
+		blockNum:  10,
+		blockHash: tcommon.Hash{0x10},
+		txNum:     42,
+	}
+	change := &rawdb.StateDomainChange{
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      tcommon.Address{0x41, 0x22},
+		PrevExists: true,
+		Prev:       []byte("old"),
+		NextExists: true,
+		Next:       []byte("new"),
+	}
+	prepared := capture.prepareDomainChange(change)
+	if prepared != change {
+		t.Fatal("prepareDomainChange copied a freshly owned change")
+	}
+	if prepared.BlockNum != 10 || prepared.BlockHash != (tcommon.Hash{0x10}) || prepared.TxNum != 42 || prepared.Seq != 1 {
+		t.Fatalf("prepared metadata = %+v", prepared)
 	}
 }
 
@@ -608,4 +634,26 @@ func hasDomainChange(changes []*rawdb.StateDomainChange, owner tcommon.Address, 
 			bytes.Equal(change.Next, next)
 	}
 	return false
+}
+
+func BenchmarkPrepareAccountDomainChange(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xab}, 16*1024)
+	capture := domainChangeSetCapture{
+		enabled:   true,
+		blockNum:  10,
+		blockHash: tcommon.Hash{0x10},
+		txNum:     42,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkPreparedDomainChange = capture.prepareDomainChange(&rawdb.StateDomainChange{
+			FlatDomain: rawdb.StateFlatDomainAccountLatest,
+			Owner:      tcommon.Address{0x41, 0x22},
+			PrevExists: true,
+			Prev:       payload,
+			NextExists: true,
+			Next:       payload,
+		})
+	}
 }
