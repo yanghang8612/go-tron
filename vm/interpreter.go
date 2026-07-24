@@ -39,7 +39,7 @@ type Interpreter struct {
 func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 	return &Interpreter{
 		tvm:       tvm,
-		table:     &sharedJumpTable,
+		table:     jumpTableForConfig(cfg),
 		tvmConfig: cfg,
 	}
 }
@@ -102,6 +102,22 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		op := contract.GetOp(*pc)
 		operation := in.table[op]
 		if operation == nil {
+			// A known-but-disabled opcode is nil only in the config-resolved
+			// table. Preserve the former runtime-gate bookkeeping/tracer order on
+			// this cold error path; genuinely unknown opcodes retain the original
+			// early return below.
+			if isForkGatedOpcode(op) {
+				in.currentOp = op
+				in.energyErr = nil
+				in.opBaseAccum = 0
+				pcStart := *pc
+				energyBefore := contract.Energy
+				opErr := newInvalidOpCodeError(op)
+				if tracer != nil {
+					in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
+				}
+				return nil, opErr
+			}
 			opErr := newInvalidOpCodeError(op)
 			if tracer != nil {
 				in.traceState(tracer, *pc, op, contract.Energy, 0, mem, stack, contract, opErr)
@@ -117,15 +133,6 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// the step's "gas" and the energyBefore-energyAfter delta as the cost.
 		pcStart := *pc
 		energyBefore := contract.Energy
-
-		// Fork gate
-		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
-			opErr := newInvalidOpCodeError(op)
-			if tracer != nil {
-				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
-			}
-			return nil, opErr
-		}
 
 		// Stack validation
 		stackLen := stack.len()

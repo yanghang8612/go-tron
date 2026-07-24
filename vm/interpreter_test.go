@@ -91,20 +91,70 @@ func BenchmarkInterpreterRepeatedMissingSload(b *testing.B) {
 	}
 }
 
-func TestInterpretersShareImmutableJumpTable(t *testing.T) {
+func TestInterpretersShareResolvedImmutableJumpTables(t *testing.T) {
 	first := NewInterpreter(new(TVM), TVMConfig{})
+	same := NewInterpreter(new(TVM), TVMConfig{})
 	second := NewInterpreter(new(TVM), TVMConfig{Constantinople: true, Istanbul: true})
-	if first.table != second.table {
-		t.Fatal("interpreters should share the immutable opcode table")
+	if first.table != same.table {
+		t.Fatal("same fork flags should reuse one immutable resolved table")
 	}
-	if first.table[SHL] == nil || first.table[SHL].enabledFn == nil {
-		t.Fatal("shared table lost Constantinople opcode metadata")
+	if first.table == second.table {
+		t.Fatal("different fork flags unexpectedly shared a resolved table")
 	}
-	if first.table[SHL].enabledFn(first.tvmConfig) {
-		t.Fatal("SHL unexpectedly enabled for the pre-Constantinople config")
+	if first.table[SHL] != nil || first.table[CHAINID] != nil {
+		t.Fatal("pre-fork table retained gated opcodes")
 	}
-	if !second.table[SHL].enabledFn(second.tvmConfig) {
-		t.Fatal("SHL unexpectedly disabled for the Constantinople config")
+	if second.table[SHL] == nil || second.table[CHAINID] == nil {
+		t.Fatal("post-fork table removed enabled opcodes")
+	}
+	if sharedJumpTable[SHL] == nil || sharedJumpTable[SHL].enabledFn == nil {
+		t.Fatal("source table lost fork-gate metadata")
+	}
+}
+
+func TestForkGatedOpcodeListMatchesJumpTableMetadata(t *testing.T) {
+	for opcode, operation := range sharedJumpTable {
+		want := operation != nil && operation.enabledFn != nil
+		if got := isForkGatedOpcode(OpCode(opcode)); got != want {
+			t.Fatalf("opcode 0x%02x gated=%v, metadata=%v", opcode, got, want)
+		}
+	}
+}
+
+func TestJumpTableForkKeyCoversEveryGate(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  TVMConfig
+		bit  uint16
+		op   OpCode
+	}{
+		{"transfer_trc10", TVMConfig{TransferTrc10: true}, 1 << 0, CALLTOKEN},
+		{"constantinople", TVMConfig{Constantinople: true}, 1 << 1, SHL},
+		{"solidity059", TVMConfig{Solidity059: true}, 1 << 2, ISCONTRACT},
+		{"istanbul", TVMConfig{Istanbul: true}, 1 << 3, CHAINID},
+		{"freeze", TVMConfig{Freeze: true}, 1 << 4, FREEZE},
+		{"vote", TVMConfig{Vote: true}, 1 << 5, VOTEWITNESS},
+		{"staking_v2", TVMConfig{StakingV2: true}, 1 << 6, FREEZEBALANCEV2},
+		{"london", TVMConfig{London: true}, 1 << 7, BASEFEE},
+		{"shanghai", TVMConfig{Shanghai: true}, 1 << 8, PUSH0},
+		{"blob", TVMConfig{Blob: true}, 1 << 9, BLOBHASH},
+		{"cancun", TVMConfig{Cancun: true}, 1 << 10, TLOAD},
+		{"osaka", TVMConfig{Osaka: true}, 1 << 11, CLZ},
+	}
+	base := jumpTableForConfig(TVMConfig{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jumpTableForkKey(tt.cfg); got != tt.bit {
+				t.Fatalf("fork key=%#x, want %#x", got, tt.bit)
+			}
+			resolved := jumpTableForConfig(tt.cfg)
+			if base[tt.op] != nil {
+				t.Fatalf("opcode %s unexpectedly enabled in base table", tt.op)
+			}
+			if resolved[tt.op] == nil {
+				t.Fatalf("opcode %s not enabled by its fork bit", tt.op)
+			}
+		})
 	}
 }
 
