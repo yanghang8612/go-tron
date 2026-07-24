@@ -483,11 +483,38 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	s.mu.Unlock()
 
 	p.Start()
-	if !inbound {
-		s.rememberPeer(id)
-	}
 	s.handler.OnPeerConnected(p)
 	return nil
+}
+
+// RememberApplicationPeer persists a peer only after the caller has completed
+// the TRON application Hello and established that the peer can serve the
+// caller's current chain range. A successful libp2p handshake alone is not a
+// useful cache admission signal: pruned mainnet nodes can accept the transport
+// connection while being unable to serve an early syncing node.
+//
+// Outbound peers keep the exact endpoint that was successfully dialled. For an
+// inbound peer, the TCP source port is ephemeral, so combine the observed
+// source IP with the listening port advertised in its application Hello.
+func (s *Server) RememberApplicationPeer(peer *Peer, from *corepb.Endpoint) {
+	if peer == nil {
+		return
+	}
+	if !peer.Inbound() && validCachedPeerAddress(peer.ID()) {
+		s.rememberPeer(peer.ID())
+		return
+	}
+	if from == nil || from.Port <= 0 || from.Port > 65535 {
+		return
+	}
+	host, _, err := net.SplitHostPort(peer.ID())
+	if err != nil || host == "" {
+		return
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(int(from.Port)))
+	if validCachedPeerAddress(addr) {
+		s.rememberPeer(addr)
+	}
 }
 
 // removePeer removes a peer from the map (called on disconnect) and nudges

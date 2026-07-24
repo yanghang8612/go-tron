@@ -3,6 +3,8 @@ package net
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -113,6 +115,49 @@ func TestBuildHelloIncludesFromEndpoint(t *testing.T) {
 	}
 	if hello.Version != params.NileNetworkID {
 		t.Fatalf("hello.version = %d, want %d", hello.Version, params.NileNetworkID)
+	}
+}
+
+func TestHandleHelloCachesOnlyPeerCoveringNextBlock(t *testing.T) {
+	bc := makeTestChain(t)
+	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
+	handler := NewTronHandler(bc, txpool.New(), nil)
+	srv := p2p.NewServer(p2p.ServerConfig{
+		ListenAddr:    "127.0.0.1:0",
+		MaxPeers:      5,
+		PeerCachePath: cachePath,
+	}, handler)
+	handler.SetServer(srv)
+
+	peer := p2p.NewPeer(nil, "198.51.100.7:18888", false, nil)
+	handler.mu.Lock()
+	handler.peers[peer.ID()] = &peerState{peer: peer, rl: p2p.NewRateLimiter()}
+	handler.mu.Unlock()
+
+	hello := handler.buildHello()
+	hello.HeadBlockId.Number = 10
+	hello.LowestBlockNum = 2 // local next block is 1, so this peer cannot serve it
+	payload, err := proto.Marshal(hello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.handleHello(peer, payload)
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("unusable peer must not populate cache: %v", err)
+	}
+
+	hello.LowestBlockNum = 1
+	payload, err = proto.Marshal(hello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.handleHello(peer, payload)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), peer.ID()+"\n"; got != want {
+		t.Fatalf("cached peer = %q, want %q", got, want)
 	}
 }
 

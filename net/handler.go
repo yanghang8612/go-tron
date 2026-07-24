@@ -388,6 +388,15 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 		"localHead", localHead,
 		"lag", int64(ps.headNum)-int64(localHead))
 
+	// Keep only application-compatible peers whose retained range covers our
+	// next block. A libp2p-compatible but heavily pruned peer is healthy for a
+	// caught-up node yet useless while this node is replaying early history;
+	// persisting it would make deployment restarts repeatedly reconnect to a
+	// peer that can never join the current sync session.
+	if h.server != nil && ps.headNum >= localHead && ps.canServeSyncFrom(localHead+1) {
+		h.server.RememberApplicationPeer(peer, hello.From)
+	}
+
 	// Trigger sync if peer has more blocks
 	if h.syncService != nil && ps.headNum > localHead {
 		h.syncService.StartSync(peer)

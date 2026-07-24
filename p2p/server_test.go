@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // fakeDiscovery records calls into the Discovery surface so server tests can
@@ -312,7 +314,7 @@ func TestServerMaintainConnectsBootstrapWithoutDiscoveryReply(t *testing.T) {
 	}
 }
 
-func TestServerPersistsSuccessfulPeerAndReconnectsItOnRestart(t *testing.T) {
+func TestServerPersistsApplicationPeerAndReconnectsItOnRestart(t *testing.T) {
 	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
 	if err := seed.Start(); err != nil {
 		t.Fatalf("start seed: %v", err)
@@ -330,13 +332,16 @@ func TestServerPersistsSuccessfulPeerAndReconnectsItOnRestart(t *testing.T) {
 		t.Fatalf("start first client: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(cachePath)
-		if first.PeerCount() == 1 && err == nil && string(data) == seed.ListenAddr()+"\n" {
-			break
-		}
+	for time.Now().Before(deadline) && first.PeerCount() == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
+	if got := first.PeerCount(); got != 1 {
+		t.Fatalf("first client peer count = %d, want 1", got)
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("transport handshake must not populate application peer cache: %v", err)
+	}
+	first.RememberApplicationPeer(first.Peers()[0], nil)
 	data, err := os.ReadFile(cachePath)
 	if err != nil || string(data) != seed.ListenAddr()+"\n" {
 		t.Fatalf("persisted peer cache = %q err %v, want %q", data, err, seed.ListenAddr()+"\n")
@@ -362,6 +367,27 @@ func TestServerPersistsSuccessfulPeerAndReconnectsItOnRestart(t *testing.T) {
 	}
 	if got := second.PeerCount(); got != 1 {
 		t.Fatalf("restarted client peer count = %d, want 1 from cache", got)
+	}
+}
+
+func TestRememberApplicationPeerUsesObservedHostForInboundPeer(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
+	srv := NewServer(ServerConfig{PeerCachePath: cachePath}, &testHandler{})
+	peer := NewPeer(nil, "198.51.100.9:54321", true, nil)
+
+	// The advertised address is deliberately unrelated: an inbound TCP source
+	// proves the reachable host, while Hello supplies only its stable listen port.
+	srv.RememberApplicationPeer(peer, &corepb.Endpoint{
+		Address: []byte("203.0.113.99"),
+		Port:    18888,
+	})
+
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "198.51.100.9:18888\n"; got != want {
+		t.Fatalf("cached inbound endpoint = %q, want %q", got, want)
 	}
 }
 
