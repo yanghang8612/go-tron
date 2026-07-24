@@ -65,11 +65,23 @@ func accountHasMaps(pb *corepb.Account) bool {
 		len(pb.AssetV2)+len(pb.LatestAssetOperationTimeV2)+len(pb.FreeAssetNetUsageV2) > 0
 }
 
-// accountWithoutMaps makes a shallow, marshal-only Account view. Slice and
-// nested-message fields are read synchronously and never mutated; the six map
-// fields and unknown bytes are emitted separately by marshalAccountDirectMaps.
-func accountWithoutMaps(pb *corepb.Account) *corepb.Account {
-	return &corepb.Account{
+var accountMarshalViewPool = sync.Pool{
+	New: func() any { return new(corepb.Account) },
+}
+
+var accountMarshalBasePool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, 256)
+		return &buf
+	},
+}
+
+// borrowAccountWithoutMaps fills a pooled shallow, marshal-only Account view.
+// Slice and nested-message fields are read synchronously and never mutated;
+// the six map fields and unknown bytes are emitted separately.
+func borrowAccountWithoutMaps(pb *corepb.Account) *corepb.Account {
+	view := accountMarshalViewPool.Get().(*corepb.Account)
+	*view = corepb.Account{
 		AccountName: pb.AccountName,
 		Type:        pb.Type,
 		Address:     pb.Address,
@@ -108,6 +120,12 @@ func accountWithoutMaps(pb *corepb.Account) *corepb.Account {
 		DelegatedFrozenV2BalanceForBandwidth:       pb.DelegatedFrozenV2BalanceForBandwidth,
 		AcquiredDelegatedFrozenV2BalanceForBandwidth: pb.AcquiredDelegatedFrozenV2BalanceForBandwidth,
 	}
+	return view
+}
+
+func releaseAccountWithoutMaps(view *corepb.Account) {
+	*view = corepb.Account{}
+	accountMarshalViewPool.Put(view)
 }
 
 type accountMapField struct {
@@ -160,16 +178,25 @@ func appendAccountMap(dst []byte, number protowire.Number, values map[string]int
 }
 
 func marshalMessageDeterministic(message protoreflect.Message, hint int) ([]byte, error) {
-	methods := message.ProtoMethods()
-	if methods == nil || methods.Marshal == nil || methods.Flags&protoiface.SupportMarshalDeterministic == 0 {
-		return proto.MarshalOptions{Deterministic: true}.Marshal(message.Interface())
-	}
+	return marshalMessageDeterministicAppend(message, nil, hint)
+}
+
+func marshalMessageDeterministicAppend(message protoreflect.Message, buf []byte, hint int) ([]byte, error) {
 	if hint < 256 {
 		hint = 256
 	}
+	if cap(buf) < hint {
+		buf = make([]byte, 0, hint)
+	} else {
+		buf = buf[:0]
+	}
+	methods := message.ProtoMethods()
+	if methods == nil || methods.Marshal == nil || methods.Flags&protoiface.SupportMarshalDeterministic == 0 {
+		return proto.MarshalOptions{Deterministic: true}.MarshalAppend(buf, message.Interface())
+	}
 	out, err := methods.Marshal(protoiface.MarshalInput{
 		Message: message,
-		Buf:     make([]byte, 0, hint),
+		Buf:     buf,
 		Flags:   protoiface.MarshalDeterministic,
 	})
 	if err != nil {
@@ -187,10 +214,24 @@ func marshalAccountDirectMaps(pb *corepb.Account, hint int) ([]byte, error, bool
 	if !accountDirectMapLayoutOK || !accountHasMaps(pb) {
 		return nil, nil, false
 	}
-	base, err := marshalMessageDeterministic(accountWithoutMaps(pb).ProtoReflect(), 256)
+	view := borrowAccountWithoutMaps(pb)
+	basePtr := accountMarshalBasePool.Get().(*[]byte)
+	base, err := marshalMessageDeterministicAppend(view.ProtoReflect(), (*basePtr)[:0], 256)
+	releaseAccountWithoutMaps(view)
 	if err != nil {
+		if cap(base) <= 1<<20 {
+			*basePtr = base[:0]
+			accountMarshalBasePool.Put(basePtr)
+		}
 		return nil, err, true
 	}
+	baseStorage := base[:0]
+	defer func() {
+		if cap(baseStorage) <= 1<<20 {
+			*basePtr = baseStorage
+			accountMarshalBasePool.Put(basePtr)
+		}
+	}()
 	maps := [...]accountMapField{
 		{number: 6, values: pb.Asset},
 		{number: 18, values: pb.LatestAssetOperationTime},
