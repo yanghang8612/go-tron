@@ -61,7 +61,7 @@ func newValidatorState(t *testing.T) (*state.StateDB, *state.DynamicProperties) 
 // bc.ValidateTransaction (which checks TAPOS) should rebuild via
 // buildTransferTxWithRef pointing at a real recent-block ring slot. The
 // unit-level ValidateTxEnvelope tests bypass TAPOS and don't care.
-func buildTransferTx(t *testing.T, owner, recipient tcommon.Address, amount, permissionID int32, signers ...*ecdsa.PrivateKey) *types.Transaction {
+func buildTransferTx(t testing.TB, owner, recipient tcommon.Address, amount, permissionID int32, signers ...*ecdsa.PrivateKey) *types.Transaction {
 	t.Helper()
 	return buildTransferTxWithRef(t, owner, recipient, amount, permissionID, nil, nil, signers...)
 }
@@ -69,7 +69,7 @@ func buildTransferTx(t *testing.T, owner, recipient tcommon.Address, amount, per
 // buildTransferTxWithRef extends buildTransferTx with caller-supplied
 // ref_block_bytes (2B) / ref_block_hash (8B). Pass nil for both to skip
 // (default zero-value protobuf encoding).
-func buildTransferTxWithRef(t *testing.T, owner, recipient tcommon.Address, amount, permissionID int32, refBytes, refHash []byte, signers ...*ecdsa.PrivateKey) *types.Transaction {
+func buildTransferTxWithRef(t testing.TB, owner, recipient tcommon.Address, amount, permissionID int32, refBytes, refHash []byte, signers ...*ecdsa.PrivateKey) *types.Transaction {
 	t.Helper()
 	tc := &contractpb.TransferContract{
 		OwnerAddress: owner.Bytes(),
@@ -104,7 +104,7 @@ func buildTransferTxWithRef(t *testing.T, owner, recipient tcommon.Address, amou
 	return tx
 }
 
-func keyAndAddr(t *testing.T) (*ecdsa.PrivateKey, tcommon.Address) {
+func keyAndAddr(t testing.TB) (*ecdsa.PrivateKey, tcommon.Address) {
 	t.Helper()
 	k, err := crypto.GenerateKey()
 	if err != nil {

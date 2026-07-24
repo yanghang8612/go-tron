@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -121,6 +122,14 @@ func TestFindCommonBlockSharedPrefix(t *testing.T) {
 	}
 }
 
+func TestFindCommonBlockAscendingSummaryChoosesHighest(t *testing.T) {
+	bc := newTestChain(t, 10)
+	summary := BuildChainSummary(bc)
+	if got := FindCommonBlock(bc, summary); got != bc.CurrentBlock().Number() {
+		t.Fatalf("ascending summary common block = %d, want head %d", got, bc.CurrentBlock().Number())
+	}
+}
+
 func TestFindCommonBlockNoMatch(t *testing.T) {
 	bc := newTestChain(t, 0)
 	fakeID := types.BlockID{Hash: tcommon.Hash{0xFF}, Num: 100}
@@ -152,4 +161,82 @@ func TestFindCommonBlockSkipsBlocksAboveHead(t *testing.T) {
 	if got := FindCommonBlock(bc, []types.BlockID{future, block2.ID()}); got != 2 {
 		t.Fatalf("expected #2 (skipping future), got #%d", got)
 	}
+}
+
+func BenchmarkBuildChainSummaryBlockIDOnly(b *testing.B) {
+	const (
+		blocks       = 1024
+		txsPerBlock  = 20
+		payloadBytes = 512
+	)
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{
+			{Address: tcommon.Address{0x41, 1}, Balance: 1_000_000},
+		},
+	}
+	core.SetupGenesisBlock(diskdb, genesis)
+	bc, err := core.NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = bc.Close() })
+	for i := 1; i <= blocks; i++ {
+		txs := make([]*corepb.Transaction, txsPerBlock)
+		for j := range txs {
+			txs[j] = &corepb.Transaction{
+				RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{byte(j)}, payloadBytes)},
+			}
+		}
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+				Number:     int64(i),
+				Timestamp:  int64(i) * 3000,
+				ParentHash: parent.Hash().Bytes(),
+			}},
+			Transactions: txs,
+		})
+		if err := bc.InsertBlockWithoutVerify(block); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.Run("legacy-full-block", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if got := buildChainSummaryLegacy(bc); len(got) == 0 {
+				b.Fatal("empty summary")
+			}
+		}
+	})
+	b.Run("block-id-only", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if got := BuildChainSummary(bc); len(got) == 0 {
+				b.Fatal("empty summary")
+			}
+		}
+	})
+}
+
+func buildChainSummaryLegacy(chain *core.BlockChain) []types.BlockID {
+	headNum := chain.CurrentBlock().Number()
+	var summary []types.BlockID
+	for num, step := headNum, uint64(1); ; step *= 2 {
+		if block := chain.GetBlockByNumber(num); block != nil {
+			summary = append(summary, block.ID())
+		}
+		if num == 0 {
+			break
+		}
+		if num < step {
+			num = 0
+		} else {
+			num -= step
+		}
+	}
+	return summary
 }

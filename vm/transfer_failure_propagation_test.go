@@ -43,7 +43,7 @@ func endowmentOverflowCallee() []byte {
 }
 
 func TestNestedTransferFailureSurfacesAsRevert(t *testing.T) {
-	evm := newTestEVM(t)
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
 
 	addrA := tcommon.Address{0x41, 0x0A}
 	addrB := tcommon.Address{0x41, 0x0B}
@@ -84,7 +84,7 @@ func TestNestedTransferFailureSurfacesAsRevert(t *testing.T) {
 }
 
 func TestEntryFrameTransferFailureStaysTransferFailed(t *testing.T) {
-	evm := newTestEVM(t)
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
 
 	addrB := tcommon.Address{0x41, 0x0B}
 	evm.StateDB.SetCode(addrB, endowmentOverflowCallee())

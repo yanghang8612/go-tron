@@ -9,15 +9,7 @@ import (
 type WitnessCreateActuator struct{}
 
 func (a *WitnessCreateActuator) getContract(ctx *Context) (*contractpb.WitnessCreateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	wc := &contractpb.WitnessCreateContract{}
-	if err := contract.Parameter.UnmarshalTo(wc); err != nil {
-		return nil, errors.New("failed to unmarshal WitnessCreateContract")
-	}
-	return wc, nil
+	return decodedContract[*contractpb.WitnessCreateContract](ctx, "WitnessCreateContract")
 }
 
 func (a *WitnessCreateActuator) Validate(ctx *Context) error {

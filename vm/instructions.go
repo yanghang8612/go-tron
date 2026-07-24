@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/holiman/uint256"
@@ -353,8 +354,7 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Input, javaCopySourceOffset(&dataOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, contract.Input, javaCopySourceOffset(&dataOffset))
 	return nil, nil
 }
 
@@ -378,8 +378,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	data := getDataSlice(contract.Code, javaCopySourceOffset(&codeOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, contract.Code, javaCopySourceOffset(&codeOffset))
 	return nil, nil
 }
 
@@ -405,8 +404,7 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	}
 	resizeMemory(memory, off, size)
 	code := interpreter.tvm.StateDB.GetCode(address)
-	data := getDataSlice(code, javaCopySourceOffset(&codeOffset), size)
-	memory.set(off, size, data)
+	memory.setPadded(off, size, code, javaCopySourceOffset(&codeOffset))
 	return nil, nil
 }
 
@@ -820,9 +818,9 @@ func makeLog(topicCount int) executionFunc {
 		if !size.IsUint64() {
 			return nil, ErrOutOfEnergy
 		}
-		var dataCost uint256.Int
-		dataCost.Mul(&size, uint256.NewInt(EnergyLogData))
-		if !dataCost.IsUint64() || dataCost.Uint64() > contract.Energy {
+		// Compare before multiplying so a uint64-sized operand cannot wrap and
+		// no temporary uint256 value is needed on every emitted log.
+		if size.Uint64() > contract.Energy/EnergyLogData {
 			return nil, ErrOutOfEnergy
 		}
 
@@ -838,15 +836,26 @@ func makeLog(topicCount int) executionFunc {
 		}
 		resizeMemory(memory, off, sz)
 
+		// Topics and data leave execution memory with the receipt, so they must
+		// be copied. Keep all immutable bytes in one arena rather than allocating
+		// every 32-byte topic and the data range independently. Capacity-limit
+		// each view so appending to one field cannot overwrite its neighbor.
+		topicBytes := topicCount * 32
+		payload := make([]byte, topicBytes+int(sz))
 		topics := make([][]byte, topicCount)
 		for i := 0; i < topicCount; i++ {
 			t := stack.pop()
 			b := t.Bytes32()
-			topics[i] = make([]byte, 32)
+			start := i * 32
+			topics[i] = payload[start : start+32 : start+32]
 			copy(topics[i], b[:])
 		}
 
-		data := memory.getCopy(int64(off), int64(sz))
+		var data []byte
+		if sz > 0 {
+			data = payload[topicBytes : topicBytes+int(sz) : topicBytes+int(sz)]
+			copy(data, memory.getPtr(int64(off), int64(sz)))
+		}
 
 		interpreter.tvm.Logs = append(interpreter.tvm.Logs, Log{
 			Address: contract.Address,
@@ -970,6 +979,20 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			// stamps create_time and (when AllowMultiSign is on) default
 			// permissions, matching RepositoryImpl.createNormalAccount.
 			interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
+			// MUtil.transfer validates the beneficiary even though StateDB's
+			// AddBalance would implicitly create it. Before Solidity059 a missing
+			// beneficiary therefore fails SELFDESTRUCT. Constantinople changed
+			// only the exception class/energy treatment, not the validation rule.
+			var transferFailure string
+			switch {
+			case !interpreter.tvm.StateDB.AccountExists(address):
+				transferFailure = "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract."
+			case interpreter.tvm.StateDB.GetBalance(address) > math.MaxInt64-balance:
+				transferFailure = "long overflow"
+			}
+			if transferFailure != "" {
+				return nil, newSelfDestructTransferError(interpreter.tvmConfig.Constantinople, transferFailure)
+			}
 			interpreter.tvm.StateDB.AddBalance(address, balance)
 			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
 				return nil, err
@@ -1089,17 +1112,6 @@ func addressToUint256WithMode(addr tcommon.Address, multiSign bool) uint256.Int 
 		return addressToUint256(addr)
 	}
 	return addressToUint256WithPrefix(addr)
-}
-
-func getDataSlice(data []byte, offset, size uint64) []byte {
-	if size == 0 {
-		return nil
-	}
-	result := make([]byte, size)
-	if offset < uint64(len(data)) {
-		copy(result, data[offset:])
-	}
-	return result
 }
 
 // javaCopySourceOffset mirrors how java decodes the SOURCE offset of the

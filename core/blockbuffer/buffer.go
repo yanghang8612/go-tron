@@ -29,6 +29,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -42,22 +44,49 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 
 // layer is a single applyBlock's worth of buffered mutations.
 //
-// mu guards this layer's writes/deletes maps. It is INDEPENDENT of the buffer's
-// b.mu (which guards the inflight/layers slices): a writer mutating one layer's
-// maps (foreground on the newest in-flight layer, the commit worker on an older
-// one, writeFiltered/flush on committed ones) takes only that layer's mu, so
-// writers targeting DISJOINT layers run concurrently instead of serializing on
-// b.mu. Lock ordering is always b.mu → layer.mu, never the reverse: map writers
-// capture the target under a brief b.mu.RLock, release it, then take layer.mu;
-// readers hold b.mu.RLock for the (in-memory, fast) layer walk and take each
-// layer's mu.RLock as they touch it. No path holds a layer.mu while acquiring
-// b.mu, so the two never deadlock.
+// A layer shards its writes/deletes maps by key. This is important for the
+// commitment fold: its 16 root workers concurrently walk the same few buffered
+// layers, and a single layer-wide RWMutex turns every read-lock operation into
+// contention on one cache line. Independent shards preserve the exact same
+// per-key last-write/tombstone semantics while letting unrelated branch keys be
+// read concurrently.
+//
+// Shard locks are INDEPENDENT of b.mu (which guards the inflight/layers slices).
+// Lock ordering is always b.mu → shard.mu, never the reverse: map writers capture
+// the target under a brief b.mu.RLock, release it, then take one shard lock. Hot
+// readers load an immutable topology view atomically and take only one shard
+// RLock at a time. No path holds a shard lock while acquiring b.mu, so the two
+// never deadlock.
 type layer struct {
 	blockHash common.Hash
 	number    uint64
-	mu        sync.RWMutex
-	writes    map[string][]byte
-	deletes   map[string]struct{}
+	shards    [layerShardCount]layerShard
+}
+
+const layerShardCount = 64
+
+// layerShard is padded to one 64-byte cache line on the deployment target
+// (amd64). Without the padding, adjacent shard RWMutex counters can still
+// false-share under the 16-way commitment fold even though their maps differ.
+// The fixed ~4 KiB per live layer is small relative to the layer values and the
+// configured 24 GiB Pebble cache, and maps remain lazily allocated.
+type layerShard struct {
+	mu                 sync.RWMutex
+	writes             map[string][]byte
+	deletes            map[string]struct{}
+	commitmentReserved bool
+	_                  [23]byte
+}
+
+// bufferReadView is an immutable snapshot of the layer topology used by the
+// read hot path. Structural writers build a fresh slice copy under Buffer.mu
+// and publish it atomically; readers can then walk stable layer references
+// without contending on the global RWMutex. Individual layer contents remain
+// protected by their shard locks.
+type bufferReadView struct {
+	inflight      []*layer
+	layers        []*layer
+	baseReadCache *baseReadCache
 }
 
 const (
@@ -69,9 +98,59 @@ func newLayer(hash common.Hash, number uint64) *layer {
 	return &layer{
 		blockHash: hash,
 		number:    number,
-		writes:    make(map[string][]byte),
-		deletes:   make(map[string]struct{}),
 	}
+}
+
+func (l *layer) shardForBytes(key []byte) *layerShard {
+	return &l.shards[layerShardIndexBytes(key)]
+}
+
+func (l *layer) shardForString(key string) *layerShard {
+	return &l.shards[layerShardIndexString(key)]
+}
+
+// The middle and tail of hot state keys carry their highest-entropy bytes: a
+// commitment path nibble, account/address byte, contract-storage slot, or key
+// suffix. Sampling three tail bytes plus one middle byte avoids hashing the full
+// 30-100 byte physical key a second time (the Go map will hash it once already),
+// while two independently distributed commitment nibbles provide all 64 shard
+// combinations. Include length so short prefixes that share a suffix do not
+// systematically collide. The byte/string forms must remain identical for
+// write/read routing.
+func layerShardIndexBytes(key []byte) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) ^ uint32(key[n-1])
+	if n > 1 {
+		h ^= uint32(key[n-2]) << 2
+	}
+	if n > 3 {
+		h ^= uint32(key[n-4]) << 4
+	}
+	if n > 8 {
+		h ^= uint32(key[n/2]) << 1
+	}
+	return h & (layerShardCount - 1)
+}
+
+func layerShardIndexString(key string) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) ^ uint32(key[n-1])
+	if n > 1 {
+		h ^= uint32(key[n-2]) << 2
+	}
+	if n > 3 {
+		h ^= uint32(key[n-4]) << 4
+	}
+	if n > 8 {
+		h ^= uint32(key[n/2]) << 1
+	}
+	return h & (layerShardCount - 1)
 }
 
 // Buffer is a layered in-memory write-set over a base reader.
@@ -86,8 +165,8 @@ func newLayer(hash common.Hash, number uint64) *layer {
 //
 // Foreground mutators (Begin/CommitBlock/DiscardActive/Put/Delete) assume the
 // caller serializes them — typically via core.BlockChain's chainmu. The
-// internal mu guards the inflight/layers slices and per-layer maps so that
-// uncoordinated readers (RPC handlers, metrics, txpool) can call
+// internal mu guards the inflight/layers slices and per-shard locks guard layer
+// maps, so uncoordinated readers (RPC handlers, metrics, txpool) can call
 // Get/Has/PendingBlocks concurrently with a writer holding chainmu without
 // triggering a Go race detector report.
 //
@@ -99,10 +178,10 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // holds a handle to an OLDER in-flight layer (block N) and writes it via
 // ViewLayer/LayerWriter while the foreground writes the newer layer (N+1); the
 // worker promotes its layer with CommitInflight or drops it with DiscardInflight.
-// The two threads target DISJOINT layers and every method takes mu, so the
-// per-layer maps and the slices stay race-free. With maxInflight==1 (the
-// default) only one layer is ever in flight, so this degenerates to the
-// single-active model and is byte-identical to it.
+// The two threads target DISJOINT layers and every method takes the applicable
+// locks, so the sharded layer maps and slices stay race-free. With
+// maxInflight==1 (the default), only one layer is ever in flight; this then
+// degenerates to the single-active model and is byte-identical to it.
 //
 // flushMu serializes FlushUpTo/Flush calls against each other so the
 // snapshot→disk-I/O→drop phases of two concurrent flushers can't
@@ -113,17 +192,18 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // inline fallback, and Close; only one runs the body at a time.
 //
 // FlushUpTo/Flush/DiscardBlock operate on COMMITTED layers only and never
-// touch in-flight layers, so the lock-free immutable-committed-layer read in
-// FlushUpTo is unaffected by the multi-active-layer change: a layer becomes
+// touch in-flight layers, so the b.mu-free committed-layer read in FlushUpTo is
+// unaffected by the multi-active-layer change: a layer becomes
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
 	base ethdb.KeyValueReader
-	// baseReadCache is populated only through GetNoCopyCached, the optional
-	// commitment/flat-latest read path. Overlay layers always win; flush
-	// invalidates changed base keys and Discard clears the cache before
-	// reset/unwind.
+	// baseReadCache is populated through GetNoCopyCached. Overlay layers always
+	// win; a successful canonical flush refreshes already-cached keys directly
+	// from immutable layer values and invalidates tombstones, while Discard clears
+	// the cache before reset/unwind.
 	baseReadCache *baseReadCache
+	readView      atomic.Pointer[bufferReadView]
 	mu            sync.RWMutex
 	flushMu       sync.Mutex
 	layers        []*layer
@@ -140,7 +220,7 @@ type Buffer struct {
 
 type bufferBatchOp struct {
 	delete bool
-	key    []byte
+	key    string
 	value  []byte
 	target *layer
 }
@@ -160,9 +240,59 @@ type valueViewReader interface {
 	View(key []byte, fn func([]byte) error) error
 }
 
+// stringKeyWriter is an optional synchronous writer fast path for layer maps,
+// which already own immutable string keys. Implementations must copy key before
+// returning. Pebble batches satisfy it with DeferredBatchOp, copying the string
+// directly into batch storage instead of allocating a temporary []byte.
+type stringKeyWriter interface {
+	PutString(key string, value []byte) error
+	DeleteString(key string) error
+}
+
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
-	return &Buffer{base: base}
+	b := &Buffer{base: base}
+	b.publishReadViewLocked()
+	return b
+}
+
+// ConcurrentReadWriteSafe is a structural marker for higher-level stores that
+// may publish disjoint keys while other workers are still reading. Buffer
+// Put/Delete resolve the target under b.mu and protect the actual map mutation
+// with the key's shard lock; readers use immutable topology views and the same
+// shard locks.
+func (*Buffer) ConcurrentReadWriteSafe() {}
+
+// publishReadViewLocked publishes copies of the topology slices. The layer
+// pointers themselves are stable: dropping a layer only removes the owning
+// slice reference, while a reader that already loaded an older view keeps the
+// layer alive until that read completes. Caller holds b.mu for every mutation
+// after construction (construction itself is single-threaded).
+func (b *Buffer) publishReadViewLocked() {
+	view := &bufferReadView{baseReadCache: b.baseReadCache}
+	if len(b.inflight) > 0 {
+		view.inflight = append([]*layer(nil), b.inflight...)
+	}
+	if len(b.layers) > 0 {
+		view.layers = append([]*layer(nil), b.layers...)
+	}
+	b.readView.Store(view)
+}
+
+// loadReadView supports Buffer's zero value for tests and lightweight wrappers:
+// New and every structural mutator publish a view, but a never-mutated literal
+// may not have one yet. The fallback takes the old read lock once and returns a
+// private immutable copy without publishing under a read lock.
+func (b *Buffer) loadReadView() *bufferReadView {
+	if view := b.readView.Load(); view != nil {
+		return view
+	}
+	b.mu.RLock()
+	view := &bufferReadView{baseReadCache: b.baseReadCache}
+	view.inflight = append(view.inflight, b.inflight...)
+	view.layers = append(view.layers, b.layers...)
+	b.mu.RUnlock()
+	return view
 }
 
 // SetBaseReadCacheSize configures the bounded durable-base read cache used by
@@ -176,6 +306,7 @@ func (b *Buffer) SetBaseReadCacheSize(sizeBytes int) {
 	b.mu.Lock()
 	old := b.baseReadCache
 	b.baseReadCache = newBaseReadCache(sizeBytes)
+	b.publishReadViewLocked()
 	b.mu.Unlock()
 	if old != nil {
 		old.clear()
@@ -206,10 +337,71 @@ func (b *bufferBatch) Put(key, value []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
-	k := append([]byte(nil), key...)
+	// The layer ultimately indexes by string. Own that immutable string now so
+	// Write can publish it directly instead of first copying []byte here and
+	// then allocating the same key again during []byte→string conversion.
+	k := string(key)
 	v := append([]byte(nil), value...)
 	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
 	b.size += len(k) + len(v)
+	return nil
+}
+
+// PutStateKVLatest implements rawdb's structured flat-latest writer path for
+// buffered batches. The final immutable string is owned here, while value is
+// defensively copied exactly like ordinary Batch.Put.
+func (b *bufferBatch) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
+	v := append([]byte(nil), value...)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
+	b.size += len(k) + len(v)
+	return nil
+}
+
+// PutStateKVLatestOwnedValue retains a freshly encoded immutable value while
+// still constructing the structured map key directly.
+func (b *bufferBatch) PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
+	return nil
+}
+
+// PutOwnedValue is an optional hot-path extension for freshly encoded values.
+// It still owns the key via an immutable string copy, but retains value
+// directly. The caller transfers ownership and must never mutate value after
+// this call. Ordinary ethdb.Batch.Put keeps its defensive-copy semantics.
+func (b *bufferBatch) PutOwnedValue(key, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := string(key)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
+	return nil
+}
+
+// PutOwnedKeyValue retains a freshly constructed immutable key and value.
+// The account-latest commit path builds all physical keys in one exact-size
+// arena and transfers that arena to the batch, so converting the slices to
+// strings without copying avoids one allocation per updated account. The
+// string keeps the arena alive for as long as an operation or layer needs it.
+func (b *bufferBatch) PutOwnedKeyValue(key, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	var k string
+	if len(key) != 0 {
+		k = unsafe.String(unsafe.SliceData(key), len(key))
+	}
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	b.size += len(k) + len(value)
 	return nil
 }
 
@@ -217,7 +409,18 @@ func (b *bufferBatch) Delete(key []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
-	k := append([]byte(nil), key...)
+	k := string(key)
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
+	b.size += len(k)
+	return nil
+}
+
+// DeleteStateKVLatest is the structured flat-latest batch delete counterpart.
+func (b *bufferBatch) DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
 	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
 	b.size += len(k)
 	return nil
@@ -259,19 +462,26 @@ func (b *bufferBatch) Write() error {
 }
 
 func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
-	k := string(op.key)
-	target.mu.Lock()
-	defer target.mu.Unlock()
+	k := op.key
+	s := target.shardForString(k)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if op.delete {
-		delete(target.writes, k)
-		target.deletes[k] = struct{}{}
+		delete(s.writes, k)
+		if s.deletes == nil {
+			s.deletes = make(map[string]struct{})
+		}
+		s.deletes[k] = struct{}{}
 		return
 	}
-	delete(target.deletes, k)
+	delete(s.deletes, k)
 	// Put already copied the caller's value into storage owned by the batch.
 	// Batches never mutate those bytes, so the layer can retain that owned
 	// slice directly instead of allocating and copying it a second time.
-	target.writes[k] = op.value
+	if s.writes == nil {
+		s.writes = make(map[string][]byte)
+	}
+	s.writes[k] = op.value
 }
 
 func bufferBatchOpSize(op bufferBatchOp) int {
@@ -362,19 +572,26 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 }
 
 func (b *bufferBatch) Reset() {
+	// Operations may retain caller-transferred key arenas and values. Clear the
+	// reusable backing slice so Reset releases them immediately.
+	clear(b.ops)
 	b.ops = b.ops[:0]
 	b.size = 0
 }
 
 func (b *bufferBatch) Replay(w ethdb.KeyValueWriter) error {
 	for _, op := range b.ops {
+		// Replay targets an arbitrary ethdb writer whose ownership contract may
+		// retain the key. Give it an owned []byte; the normal blockbuffer Write /
+		// WriteUpTo paths publish the batch-owned string without this conversion.
+		key := []byte(op.key)
 		if op.delete {
-			if err := w.Delete(op.key); err != nil {
+			if err := w.Delete(key); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := w.Put(op.key, op.value); err != nil {
+		if err := w.Put(key, op.value); err != nil {
 			return err
 		}
 	}
@@ -509,6 +726,7 @@ func (b *Buffer) BeginBlock(hash common.Hash, number uint64) {
 		panic("blockbuffer: BeginBlock would exceed maxInflight in-flight layers")
 	}
 	b.inflight = append(b.inflight, newLayer(hash, number))
+	b.publishReadViewLocked()
 }
 
 // CommitBlock promotes the OLDEST in-flight layer onto the committed stack
@@ -534,6 +752,7 @@ func (b *Buffer) promoteOldestInflightLocked() {
 	b.inflight[len(b.inflight)-1] = nil
 	b.inflight = b.inflight[:len(b.inflight)-1]
 	b.layers = append(b.layers, l)
+	b.publishReadViewLocked()
 }
 
 // DiscardActive drops the NEWEST in-flight layer without promoting it (the
@@ -545,6 +764,7 @@ func (b *Buffer) DiscardActive() {
 	if n := len(b.inflight); n > 0 {
 		b.inflight[n-1] = nil
 		b.inflight = b.inflight[:n-1]
+		b.publishReadViewLocked()
 	}
 }
 
@@ -611,6 +831,7 @@ func (b *Buffer) DiscardInflight(h InflightHandle) {
 			copy(b.inflight[i:], b.inflight[i+1:])
 			b.inflight[len(b.inflight)-1] = nil
 			b.inflight = b.inflight[:len(b.inflight)-1]
+			b.publishReadViewLocked()
 			return
 		}
 	}
@@ -634,6 +855,7 @@ func (b *Buffer) DiscardBlock(hash common.Hash) {
 		b.layers[i] = nil
 	}
 	b.layers = out
+	b.publishReadViewLocked()
 }
 
 // Discard drops every layer (active and committed). Used as a
@@ -652,6 +874,7 @@ func (b *Buffer) Discard() {
 	if b.baseReadCache != nil {
 		b.baseReadCache.clear()
 	}
+	b.publishReadViewLocked()
 }
 
 // PendingBlocks returns the block hashes for currently-pending committed
@@ -666,21 +889,25 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 	return out
 }
 
-// lookup checks one layer for key under that layer's read lock. The returned
-// value ALIASES the layer's storage (no copy); it stays valid even after a
+// lookup checks one layer for key under the matching shard's read lock. The
+// returned value ALIASES the layer's storage (no copy); it stays valid even after a
 // concurrent write because writes replace the map entry with a fresh slice and
 // never mutate the backing array in place. found and tomb are mutually
 // exclusive. Taking key as []byte keeps the `m[string(key)]` map index
 // allocation-free (the compiler elides the conversion), so GetNoCopy stays
 // alloc-free on a buffer hit.
 func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if _, t := l.deletes[string(key)]; t {
-		return nil, false, true
-	}
-	if val, ok := l.writes[string(key)]; ok {
+	s := l.shardForBytes(key)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// Writes vastly outnumber tombstones during sync. Probe them first so a
+	// live overlay hit hashes the physical key once instead of first checking
+	// the usually-empty delete map. Put/Delete keep the maps mutually exclusive.
+	if val, ok := s.writes[string(key)]; ok {
 		return val, true, false
+	}
+	if _, t := s.deletes[string(key)]; t {
+		return nil, false, true
 	}
 	return nil, false, false
 }
@@ -689,39 +916,33 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 // layered stack newest-first, then the base reader. Tombstones short-
 // circuit and return ErrNotFound. Safe to call concurrently with mutators.
 //
-// b.mu.RLock is held only for the in-memory layer walk (keeping the
-// inflight/layers slices stable); each layer's own map is read under its
-// layer.mu via lookup. The (potentially slow) base read runs after b.mu is
-// released, exactly as before.
+// The layer topology comes from an atomically published immutable view; each
+// layer's matching map shard is read under its shard lock via lookup. The
+// (potentially slow) base read therefore runs without holding Buffer.mu.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
-	b.mu.RLock()
+	view := b.loadReadView()
 	// In-flight layers first, newest-first (the foreground's active layer wins
 	// over an older worker-owned layer), then committed layers newest-first.
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := b.inflight[i].lookup(key)
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		v, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
 			out := append([]byte(nil), v...)
-			b.mu.RUnlock()
 			return out, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		v, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		v, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
 			out := append([]byte(nil), v...)
-			b.mu.RUnlock()
 			return out, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
@@ -750,38 +971,33 @@ func (b *Buffer) GetNoCopyCached(key []byte) ([]byte, error) {
 func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	// lookup keeps the map index allocation-free (string(key) in the index
 	// expression is elided by the compiler), so this read stays alloc-free on a
-	// buffer hit — it returns the layer's internal slice directly. b.mu.RLock
-	// keeps the slices stable for the walk; each layer's map is read under its
-	// own lock inside lookup.
-	b.mu.RLock()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := b.inflight[i].lookup(key)
+	// buffer hit — it returns the layer's internal slice directly. The immutable
+	// read view keeps topology stable for the walk; lookup locks only the key's
+	// matching map shard.
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		v, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
-			b.mu.RUnlock()
 			return v, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		v, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		v, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
 		if found {
-			b.mu.RUnlock()
 			return v, nil
 		}
 	}
-	cache := b.baseReadCache
-	b.mu.RUnlock()
+	cache := view.baseReadCache
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
-	var cacheEpoch uint64
+	var cacheEpoch baseReadCacheEpoch
 	if cacheBase && cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
 			return value, nil
@@ -795,11 +1011,88 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
 }
 
+// GetNoCopyCachedKeyParts is the split-key counterpart of GetNoCopyCached. It
+// avoids materialising the physical key on overlay/cache hits; uncommon keys
+// above splitReadKeyStackSize and genuine durable misses use an owned key.
+func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return b.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return b.getNoCopyCachedStackKey(key)
+}
+
+// GetNoCopyCachedStateKVLatest implements rawdb's structured flat-latest read
+// path for the synchronous pipeline. Typical storage keys are assembled in
+// stack storage and never materialised on overlay/base-cache hits.
+func (b *Buffer) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
+	total := len(prefix) + common.AccountIDLength + 10 + len(logicalKey)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = appendStateKVLatestKey(key, prefix, accountID, generation, domain, logicalKey)
+		return b.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := appendStateKVLatestKey(stack[:0], prefix, accountID, generation, domain, logicalKey)
+	return b.getNoCopyCachedStackKey(key)
+}
+
+// getNoCopyCachedStackKey resolves a key backed by caller stack storage. A
+// durable miss takes an exact-sized owned copy before the interface call/cache
+// fill, avoiding escape of the entire fixed scratch array.
+func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		value, found, tomb := view.inflight[i].lookup(key)
+		if tomb {
+			return nil, ErrNotFound
+		}
+		if found {
+			return value, nil
+		}
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb := view.layers[i].lookup(key)
+		if tomb {
+			return nil, ErrNotFound
+		}
+		if found {
+			return value, nil
+		}
+	}
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	cache := view.baseReadCache
+	var cacheEpoch baseReadCacheEpoch
+	if cache != nil {
+		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			return value, nil
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	owned := append([]byte(nil), key...)
+	if cache == nil {
+		return b.base.Get(owned)
+	}
+	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
+}
+
 // readBaseIntoCache fills cache directly from a callback-style base reader
 // when available. If a concurrent flush invalidates the observed epoch, the
 // cache rejects the late fill; in that case we make one owned fallback copy
 // before View returns so no Pebble-backed slice escapes its valid lifetime.
-func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch uint64) ([]byte, error) {
+func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) ([]byte, error) {
 	if viewer, ok := base.(valueViewReader); ok {
 		var out []byte
 		err := viewer.View(key, func(value []byte) error {
@@ -823,30 +1116,25 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // Has reports whether key exists, honoring tombstones. Safe to call
 // concurrently with mutators.
 func (b *Buffer) Has(key []byte) (bool, error) {
-	b.mu.RLock()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		_, found, tomb := b.inflight[i].lookup(key)
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		_, found, tomb := view.inflight[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return false, nil
 		}
 		if found {
-			b.mu.RUnlock()
 			return true, nil
 		}
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		_, found, tomb := b.layers[i].lookup(key)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		_, found, tomb := view.layers[i].lookup(key)
 		if tomb {
-			b.mu.RUnlock()
 			return false, nil
 		}
 		if found {
-			b.mu.RUnlock()
 			return true, nil
 		}
 	}
-	b.mu.RUnlock()
 	if b.base == nil {
 		return false, nil
 	}
@@ -866,6 +1154,21 @@ func (b *Buffer) Put(key, value []byte) error {
 	return nil
 }
 
+// PutOwnedValue is Put for a freshly encoded immutable value. The caller keeps
+// the value immutable after this call; Buffer may retain its backing bytes
+// directly. This is used for large staged block payloads and encoded account
+// rows that are also consumed read-only by a later publish step.
+func (b *Buffer) PutOwnedValue(key, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutOwnedValue called with no active layer")
+	}
+	b.putIntoStringOwnedValue(active, string(key), value)
+	return nil
+}
+
 // PutKeyParts implements the optional rawdb split-key writer path for the
 // synchronous commitment pipeline. It joins both key fragments directly into
 // the layer's immutable string key, avoiding an intermediate []byte allocation.
@@ -877,6 +1180,77 @@ func (b *Buffer) PutKeyParts(first, second, value []byte) error {
 		panic("blockbuffer: PutKeyParts called with no active layer")
 	}
 	b.putIntoKeyParts(active, first, second, value)
+	return nil
+}
+
+// PutKeyPartsOwnedValue is PutKeyParts for a freshly encoded immutable value.
+// The caller transfers value ownership to the active layer; ordinary Put and
+// PutKeyParts continue to copy caller-owned slices defensively.
+func (b *Buffer) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsOwnedValue called with no active layer")
+	}
+	b.putIntoKeyPartsOwnedValue(active, first, second, value)
+	return nil
+}
+
+// PutKeyPartsStringOwnedValue is PutKeyPartsOwnedValue with an immutable string
+// suffix. Commitment sibling batches already index final branches by string;
+// accepting it directly avoids allocating []byte only to copy it into the
+// layer's physical string key.
+func (b *Buffer) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsStringOwnedValue called with no active layer")
+	}
+	b.putIntoKeyPartsStringOwnedValue(active, first, second, value)
+	return nil
+}
+
+// PutKeyPartsStringsOwnedValues is the active-layer batch form of
+// PutKeyPartsStringOwnedValue. It joins all physical keys into one immutable
+// arena and retains each caller-owned value directly.
+func (b *Buffer) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	if len(seconds) != len(values) {
+		return errors.New("blockbuffer: key/value batch length mismatch")
+	}
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsStringsOwnedValues called with no active layer")
+	}
+	b.putIntoKeyPartsStringsOwnedValues(active, first, seconds, values)
+	return nil
+}
+
+// PutStateKVLatest implements rawdb's structured flat-latest writer path for
+// the synchronous pipeline.
+func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutStateKVLatest called with no active layer")
+	}
+	b.putIntoStateKVLatest(active, prefix, accountID, generation, domain, logicalKey, value)
+	return nil
+}
+
+// PutStateKVLatestOwnedValue is the structured ownership-taking write path.
+func (b *Buffer) PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutStateKVLatestOwnedValue called with no active layer")
+	}
+	b.putIntoStateKVLatestOwnedValue(active, prefix, accountID, generation, domain, logicalKey, value)
 	return nil
 }
 
@@ -905,6 +1279,18 @@ func (b *Buffer) DeleteKeyParts(first, second []byte) error {
 	return nil
 }
 
+// DeleteStateKVLatest is the structured flat-latest delete counterpart.
+func (b *Buffer) DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: DeleteStateKVLatest called with no active layer")
+	}
+	b.deleteIntoStateKVLatest(active, prefix, accountID, generation, domain, logicalKey)
+	return nil
+}
+
 // Flush drains all committed layers (oldest first) into w and clears them.
 // The active layer, if any, is left untouched. Returns the first write
 // error encountered. Used by callers that want a nuclear "drain everything"
@@ -925,12 +1311,13 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 			}
 			return err
 		}
-		b.invalidateBaseReadCacheLayer(l)
+		b.promoteBaseReadCacheLayer(l)
 	}
 	for i := range b.layers {
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:0]
+	b.publishReadViewLocked()
 	return nil
 }
 
@@ -957,12 +1344,13 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 // holding b.mu, so concurrent readers — most importantly the
 // LoadDynamicProperties(buffer) scan that every applyBlock runs in its
 // prologue — are not blocked by an in-flight flush. This is safe because
-// committed layers are immutable once CommitBlock promotes them: their
-// write/delete maps are never mutated again, only the slice that holds them
-// is. We therefore:
+// FlushUpTo holds flushMu, which excludes writeFiltered (the only path that can
+// finish range-owned batch writes into a committed layer); ordinary
+// foreground/worker writes target in-flight layers only. Per-shard read locks
+// additionally make every map traversal race-free. We therefore:
 //
 //  1. briefly RLock to snapshot the layer pointers,
-//  2. run numberOf + flushLayer lock-free on that snapshot,
+//  2. run numberOf + flushLayer without b.mu on that snapshot,
 //  3. briefly Lock to drop the flushed prefix.
 //
 // flushMu serializes flushers against each other; DiscardBlock (the only
@@ -986,9 +1374,9 @@ func (b *Buffer) FlushUpTo(
 		return nil
 	}
 
-	// Step 2: lock-free disk I/O. Layers are immutable post-commit, so
-	// reading blockHash + number + write/delete maps without b.mu is race-free,
-	// and readers can RLock concurrently.
+	// Step 2: disk I/O without b.mu. flushMu excludes committed-layer batch
+	// mutations, and writeLayer's shard RLocks protect each map traversal, so
+	// readers can continue resolving unrelated shards concurrently.
 	eligible := 0
 	for _, l := range snapshot {
 		if l.number > cutoff {
@@ -1009,7 +1397,7 @@ func (b *Buffer) FlushUpTo(
 	if flushed == 0 {
 		return nil
 	}
-	b.invalidateBaseReadCacheLayers(snapshot[:flushed])
+	b.promoteBaseReadCacheLayers(snapshot[:flushed])
 
 	// Step 3: drop the flushed prefix under the write lock.
 	b.dropFlushedPrefix(flushed)
@@ -1034,6 +1422,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:len(b.layers)-n]
+	b.publishReadViewLocked()
 }
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
@@ -1090,24 +1479,45 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 			}
 		}
 
+		// A single layer has already coalesced duplicate keys while it was built,
+		// so keep its allocation-free direct write path. Multi-layer groups need
+		// only the newest operation for each physical key: every layer in this
+		// group is solidified and the group is committed atomically, making the
+		// intermediate versions unobservable. This cuts WAL/memtable/compaction
+		// write amplification for hot latest-state and commitment-branch keys.
+		var merged *flushMergedOps
+		if end-start > 1 {
+			merged = borrowFlushMergedOps()
+			mergeLayers(layers[start:end], merged)
+			_, finalEncodedSize := mergedLayerWriteStats(merged.ops)
+			queuedEncodedSize = pebbleBatchHeaderSize + finalEncodedSize
+		}
+
 		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
 		// Reset. Reusing one large batch therefore made every group after the
 		// first grow geometrically from an empty buffer despite our size
-		// calculation. Allocate each bounded group at its encoded size plus the
-		// one-record scratch allowance so every batch performs one final
+		// calculation. Allocate each bounded group at its FINAL encoded size plus
+		// the one-record scratch allowance so every batch performs one final
 		// allocation and no grow/copy cycle.
 		batch := batcher.NewBatchWithSize(queuedEncodedSize + pebbleBatchRecordSlack)
-		for i := start; i < end; i++ {
-			if err := writeLayer(layers[i], batch); err != nil {
-				closeBatch(batch)
-				return flushed, err
-			}
+		var writeErr error
+		if merged == nil {
+			writeErr = writeLayer(layers[start], batch)
+		} else {
+			writeErr = writeMergedLayerOps(merged.ops, batch)
+		}
+		if writeErr != nil {
+			closeBatch(batch)
+			returnFlushMergedOps(merged)
+			return flushed, writeErr
 		}
 		if err := batch.Write(); err != nil {
 			closeBatch(batch)
+			returnFlushMergedOps(merged)
 			return flushed, err
 		}
 		closeBatch(batch)
+		returnFlushMergedOps(merged)
 		flushed += end - start
 		start = end
 	}
@@ -1115,15 +1525,35 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 }
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
-	for k, v := range l.writes {
-		if err := w.Put([]byte(k), v); err != nil {
-			return err
+	stringWriter, writesString := w.(stringKeyWriter)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			var err error
+			if writesString {
+				err = stringWriter.PutString(k, v)
+			} else {
+				err = w.Put([]byte(k), v)
+			}
+			if err != nil {
+				s.mu.RUnlock()
+				return err
+			}
 		}
-	}
-	for k := range l.deletes {
-		if err := w.Delete([]byte(k)); err != nil {
-			return err
+		for k := range s.deletes {
+			var err error
+			if writesString {
+				err = stringWriter.DeleteString(k)
+			} else {
+				err = w.Delete([]byte(k))
+			}
+			if err != nil {
+				s.mu.RUnlock()
+				return err
+			}
 		}
+		s.mu.RUnlock()
 	}
 	return nil
 }
@@ -1149,6 +1579,108 @@ type layerBatchSize struct {
 	encoded int
 }
 
+// mergedLayerOp is the final operation for one physical key across a bounded
+// group of committed layers. Values and keys borrow the immutable layer maps;
+// flushLayers keeps every source layer alive until the Pebble batch has copied
+// the operation, so no additional key/value ownership is needed here.
+type mergedLayerOp struct {
+	value  []byte
+	delete bool
+}
+
+// flushMergedOpsPool reuses the hash table needed to collapse consecutive
+// solidified layers. A flush group is already bounded to roughly one MiB, so a
+// modest entry cap covers normal groups while preventing an exceptional set of
+// tiny keys from pinning an oversized map for the process lifetime.
+const maxPooledFlushMergedOps = 32768
+
+type flushMergedOps struct {
+	ops       map[string]mergedLayerOp
+	highWater int
+}
+
+var flushMergedOpsPool = sync.Pool{
+	New: func() any {
+		return &flushMergedOps{ops: make(map[string]mergedLayerOp)}
+	},
+}
+
+func borrowFlushMergedOps() *flushMergedOps {
+	merged := flushMergedOpsPool.Get().(*flushMergedOps)
+	merged.highWater = 0
+	return merged
+}
+
+func returnFlushMergedOps(merged *flushMergedOps) {
+	if merged == nil {
+		return
+	}
+	clear(merged.ops)
+	if merged.highWater > maxPooledFlushMergedOps {
+		return
+	}
+	flushMergedOpsPool.Put(merged)
+}
+
+// mergeLayers records the newest operation for each physical key. Layers are
+// visited oldest to newest, exactly matching the pre-merge batch order, so a
+// later Put/Delete replaces every earlier version of the same key.
+func mergeLayers(layers []*layer, merged *flushMergedOps) {
+	for _, l := range layers {
+		if l == nil {
+			continue
+		}
+		for i := range l.shards {
+			s := &l.shards[i]
+			s.mu.RLock()
+			for k, v := range s.writes {
+				merged.ops[k] = mergedLayerOp{value: v}
+			}
+			for k := range s.deletes {
+				merged.ops[k] = mergedLayerOp{delete: true}
+			}
+			s.mu.RUnlock()
+		}
+	}
+	if len(merged.ops) > merged.highWater {
+		merged.highWater = len(merged.ops)
+	}
+}
+
+func mergedLayerWriteStats(ops map[string]mergedLayerOp) (valueSize, encodedSize int) {
+	for k, op := range ops {
+		if op.delete {
+			valueSize += len(k)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k)
+			continue
+		}
+		valueSize += len(k) + len(op.value)
+		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(op.value)) + len(op.value)
+	}
+	return valueSize, encodedSize
+}
+
+func writeMergedLayerOps(ops map[string]mergedLayerOp, w ethdb.KeyValueWriter) error {
+	stringWriter, writesString := w.(stringKeyWriter)
+	for k, op := range ops {
+		var err error
+		switch {
+		case op.delete && writesString:
+			err = stringWriter.DeleteString(k)
+		case op.delete:
+			err = w.Delete([]byte(k))
+		case writesString:
+			err = stringWriter.PutString(k, op.value)
+		default:
+			err = w.Put([]byte(k), op.value)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // layerWriteStats returns both ethdb's logical ValueSize and the encoded
 // Pebble batch record size. Pebble records use one kind byte followed by
 // uvarint-framed keys and values; deletes omit the value. Supplying this exact
@@ -1159,13 +1691,18 @@ func layerWriteStats(l *layer) (valueSize, encodedSize int) {
 	if l == nil {
 		return 0, 0
 	}
-	for k, v := range l.writes {
-		valueSize += len(k) + len(v)
-		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
-	}
-	for k := range l.deletes {
-		valueSize += len(k)
-		encodedSize += 1 + uvarintSize(len(k)) + len(k)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			valueSize += len(k) + len(v)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
+		}
+		for k := range s.deletes {
+			valueSize += len(k)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k)
+		}
+		s.mu.RUnlock()
 	}
 	return valueSize, encodedSize
 }
@@ -1200,17 +1737,16 @@ func closeBatch(batch ethdb.Batch) {
 // recognize it and replace its 133 point Gets per applyBlock with one scan.
 func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	// Step 1: collect the overlay newest-first (in-flight newest→oldest, then
-	// committed newest→oldest) under a brief read lock. Step 2-4 (base merge +
-	// sort) are shared with LayerView via finishIterator.
-	b.mu.RLock()
+	// committed newest→oldest) from one immutable topology view. Step 2-4 (base
+	// merge + sort) are shared with LayerView via finishIterator.
+	view := b.loadReadView()
 	overlay := newOverlayState()
-	for i := len(b.inflight) - 1; i >= 0; i-- {
-		overlay.walk(b.inflight[i], prefix, start)
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		overlay.walk(view.inflight[i], prefix, start)
 	}
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		overlay.walk(b.layers[i], prefix, start)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walk(view.layers[i], prefix, start)
 	}
-	b.mu.RUnlock()
 	return b.finishIterator(overlay, prefix, start)
 }
 
@@ -1230,8 +1766,8 @@ type overlayState struct {
 func newOverlayState() *overlayState { return &overlayState{m: make(map[string]overlayOp)} }
 
 // walk folds layer l into the overlay, keeping only keys in [prefix+start, …)
-// that have the given prefix. Caller holds the buffer read lock (for slice
-// stability); this takes l's own lock for the map iteration so it is race-free
+// that have the given prefix. The caller's immutable read view keeps the layer
+// alive; this takes each layer shard's lock for map iteration so it is race-free
 // against a concurrent foreground/worker write to l.
 func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if l == nil {
@@ -1245,25 +1781,28 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 		}
 		return k >= lo
 	}
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	for k, v := range l.writes {
-		if !matches(k) {
-			continue
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for k, v := range s.writes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := o.m[k]; set {
+				continue
+			}
+			o.m[k] = overlayOp{value: append([]byte(nil), v...)}
 		}
-		if _, set := o.m[k]; set {
-			continue
+		for k := range s.deletes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := o.m[k]; set {
+				continue
+			}
+			o.m[k] = overlayOp{deleted: true}
 		}
-		o.m[k] = overlayOp{value: append([]byte(nil), v...)}
-	}
-	for k := range l.deletes {
-		if !matches(k) {
-			continue
-		}
-		if _, set := o.m[k]; set {
-			continue
-		}
-		o.m[k] = overlayOp{deleted: true}
+		s.mu.RUnlock()
 	}
 }
 

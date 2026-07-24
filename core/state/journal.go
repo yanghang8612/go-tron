@@ -24,6 +24,7 @@ type accountChange struct {
 	address          tcommon.Address
 	prev             []byte // serialized Account protobuf before mutation, nil if account didn't exist
 	prevLatest       []byte // encoded flat account-latest envelope before mutation
+	prevProtoLoaded  bool   // prev came directly from this block's durable envelope load
 	prevDeleted      bool
 	prevCreated      bool
 	prevSelfDestruct bool
@@ -39,6 +40,9 @@ type accountChange struct {
 type accountScalarChange struct {
 	address   tcommon.Address
 	prevProto []byte
+	// prevProtoLoaded restores the one-block retention marker when a mutation
+	// reverts back to the original durable envelope bytes.
+	prevProtoLoaded bool
 
 	balance            int64
 	allowance          int64
@@ -85,6 +89,7 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 	pb.NetWindowSize = e.netWindowSize
 	pb.NetWindowOptimized = e.netWindowOptimized
 	obj.accountProto = e.prevProto
+	obj.accountProtoLoaded = e.prevProtoLoaded
 	obj.accountResourceLoaded = false
 	obj.accountFrozenBandwidthLoaded = false
 	obj.accountTronPowerLoaded = false
@@ -112,6 +117,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		// mutation. The journal owns the backing slice for as long as the object
 		// can reference it, including after the entry is removed on revert.
 		obj.accountProto = e.prev
+		obj.accountProtoLoaded = e.prevProtoLoaded
 		obj.accountMapsLoaded = false
 		obj.accountPermissionsLoaded = false
 		obj.accountVotesLoaded = false
@@ -151,21 +157,48 @@ type storageChange struct {
 	prevDirty  bool
 }
 
-func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+var storageChangePool = sync.Pool{
+	New: func() any { return new(storageChange) },
+}
+
+func acquireStorageChange(address tcommon.Address, key, prev tcommon.Hash, prevExists, prevDirty bool) *storageChange {
+	e := storageChangePool.Get().(*storageChange)
+	e.address = address
+	e.key = key
+	e.prev = prev
+	e.prevExists = prevExists
+	e.prevDirty = prevDirty
+	return e
+}
+
+func (e *storageChange) release() {
+	*e = storageChange{}
+	storageChangePool.Put(e)
+}
+
+func (e *storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj != nil {
-		if e.prev == (tcommon.Hash{}) && !e.prevExists {
+		// A zero/non-existent value from an earlier successful transaction in
+		// the same block is a pending delete that must continue to shadow the
+		// durable pre-block row. Dropping it from the cache here would make the
+		// next SLOAD fall through to disk and resurrect the old non-zero value.
+		// Only a clean absent pre-image can safely be uncached.
+		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
-			delete(obj.storageExists, e.key)
 		} else {
-			obj.storage[e.key] = e.prev
-			obj.storageExists[e.key] = e.prevExists
+			obj.ensureStorage()
+			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
 		}
 		if obj.dirtyStorage == nil {
-			obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
 		}
 		if e.prevDirty {
-			obj.dirtyStorage[e.key] = struct{}{}
+			if _, ok := obj.dirtyStorage[e.key]; !ok {
+				// A valid production path always retains the first-write origin.
+				// Preserve fallback behavior if a synthetic stateObject omitted it.
+				obj.dirtyStorage[e.key] = storageOrigin{}
+			}
 		} else {
 			delete(obj.dirtyStorage, e.key)
 		}
@@ -212,6 +245,7 @@ func (e contractMetaChange) revert(stateObjects map[tcommon.Address]*stateObject
 	}
 	obj.contractMeta = e.prevMeta
 	obj.contractMetaDirty = e.prevMeta != nil
+	obj.invalidateStorageKeyLayout()
 }
 
 // selfDestructChange records a self-destruct for revert.
@@ -241,7 +275,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 		return
 	}
 	if e.hadEntry {
-		obj.kvDirty[e.mapKey] = e.prevEntry
+		obj.setKVDirty(e.mapKey, e.prevEntry)
 	} else {
 		delete(obj.kvDirty, e.mapKey)
 	}
@@ -270,7 +304,9 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountKVRoot = e.prevRoot
 	obj.accountKVGeneration = e.prevGeneration
 	obj.accountKVGenerationDirty = e.prevGenerationDirty
+	obj.releaseKVDirty()
 	obj.kvDirty = e.prevDirty
+	obj.kvDirtyHighWater = len(e.prevDirty)
 	obj.accountMapsLoaded = false
 	obj.accountPermissionsLoaded = false
 	obj.accountVotesLoaded = false

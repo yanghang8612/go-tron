@@ -64,11 +64,50 @@ func AppendStateAccountLatestCommitmentKey(dst []byte, owner common.Address) []b
 }
 
 func StateKVLatestCommitmentKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
-	return stateKVLatestKey(owner, generation, domain, logicalKey)
+	key := make([]byte, 0, StateKVLatestCommitmentKeySize(len(logicalKey)))
+	return AppendStateKVLatestCommitmentKey(key, owner, generation, domain, logicalKey)
 }
 
 func StateKVGenerationCommitmentKey(owner common.Address) []byte {
-	return stateKVGenerationKey(owner)
+	key := make([]byte, 0, StateKVGenerationCommitmentKeySize())
+	return AppendStateKVGenerationCommitmentKey(key, owner)
+}
+
+// StateKVLatestCommitmentKeySize returns the exact encoded size of a KV-latest
+// physical key. Commit collectors use it to reserve one arena for all keys.
+func StateKVLatestCommitmentKeySize(logicalKeyLen int) int {
+	return len(stateKVLatestPrefix) + common.AccountIDLength + 8 + 2 + logicalKeyLen
+}
+
+// AppendStateKVLatestCommitmentKey appends a KV-latest physical key to dst.
+// With exact reserved capacity it performs no allocation.
+func AppendStateKVLatestCommitmentKey(dst []byte, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
+	dst = appendStateKVLatestCommitmentKeyHeader(dst, owner, generation, domain)
+	return append(dst, logicalKey...)
+}
+
+// AppendStateKVLatestCommitmentKeyString is the string-key counterpart used by
+// commitment touch maps. append supports string bytes directly, avoiding an
+// otherwise escaping string-to-[]byte conversion per touched slot.
+func AppendStateKVLatestCommitmentKeyString(dst []byte, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey string) []byte {
+	dst = appendStateKVLatestCommitmentKeyHeader(dst, owner, generation, domain)
+	return append(dst, logicalKey...)
+}
+
+func appendStateKVLatestCommitmentKeyHeader(dst []byte, owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
+	return appendStateKVLatestKeyHeader(dst, owner, generation, domain)
+}
+
+// StateKVGenerationCommitmentKeySize is the fixed encoded size of a
+// KV-generation physical key.
+func StateKVGenerationCommitmentKeySize() int {
+	return len(stateKVGenerationPrefix) + common.AccountIDLength
+}
+
+// AppendStateKVGenerationCommitmentKey appends a KV-generation physical key
+// to dst without allocation when the caller reserved enough capacity.
+func AppendStateKVGenerationCommitmentKey(dst []byte, owner common.Address) []byte {
+	return appendStateKVGenerationKey(dst, owner)
 }
 
 // IterateLatestDomainCommitmentSources iterates every row in the three

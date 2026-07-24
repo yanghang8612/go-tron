@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -154,6 +155,54 @@ func TestAccountDirectMapMarshalInvalidUTF8MatchesStandard(t *testing.T) {
 	}
 }
 
+func TestAccountDirectMapMarshalConcurrentPoolIsolation(t *testing.T) {
+	const (
+		accounts   = 16
+		iterations = 200
+	)
+	testAccounts := make([]*Account, accounts)
+	want := make([][]byte, accounts)
+	for i := range testAccounts {
+		pb := benchmarkMapRichAccount(1 + i%8)
+		pb.Address = []byte{0x41, byte(i)}
+		pb.Balance = int64(i + 1)
+		pb.AccountName = []byte("pool-account-" + strconv.Itoa(i))
+		unknown := protowire.AppendTag(nil, 19000, protowire.BytesType)
+		pb.ProtoReflect().SetUnknown(protowire.AppendString(unknown, strconv.Itoa(i)))
+		var err error
+		want[i], err = standardDeterministicAccount(pb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testAccounts[i] = NewAccountFromPB(pb)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, accounts)
+	for i, account := range testAccounts {
+		wg.Add(1)
+		go func(i int, account *Account) {
+			defer wg.Done()
+			for iteration := 0; iteration < iterations; iteration++ {
+				got, err := account.Marshal()
+				if err != nil {
+					errs <- fmt.Errorf("account %d iteration %d: %w", i, iteration, err)
+					return
+				}
+				if !bytes.Equal(got, want[i]) {
+					errs <- fmt.Errorf("account %d iteration %d: marshal bytes differ", i, iteration)
+					return
+				}
+			}
+		}(i, account)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
 func benchmarkMapRichAccount(entries int) *corepb.Account {
 	pb := &corepb.Account{
 		Address:                    []byte{0x41, 0x22},
@@ -211,4 +260,20 @@ func BenchmarkAccountDeterministicMapMarshal(b *testing.B) {
 			benchmarkAccountMarshalBytes, _ = account.MarshalStorageCore()
 		}
 	})
+}
+
+func BenchmarkAccountDirectMapMarshalSizes(b *testing.B) {
+	for _, entries := range []int{1, 8, 64} {
+		b.Run(strconv.Itoa(entries), func(b *testing.B) {
+			account := NewAccountFromPB(benchmarkMapRichAccount(entries))
+			if _, err := account.Marshal(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				benchmarkAccountMarshalBytes, _ = account.Marshal()
+			}
+		})
+	}
 }

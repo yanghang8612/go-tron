@@ -11,15 +11,7 @@ import (
 type WithdrawExpireUnfreezeActuator struct{}
 
 func (a *WithdrawExpireUnfreezeActuator) getContract(ctx *Context) (*contractpb.WithdrawExpireUnfreezeContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	wc := &contractpb.WithdrawExpireUnfreezeContract{}
-	if err := contract.Parameter.UnmarshalTo(wc); err != nil {
-		return nil, errors.New("failed to unmarshal WithdrawExpireUnfreezeContract")
-	}
-	return wc, nil
+	return decodedContract[*contractpb.WithdrawExpireUnfreezeContract](ctx, "WithdrawExpireUnfreezeContract")
 }
 
 func (a *WithdrawExpireUnfreezeActuator) Validate(ctx *Context) error {

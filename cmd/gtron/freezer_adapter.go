@@ -39,6 +39,14 @@ func (a *freezerChainSource) ReadTransactionInfosRaw(number uint64) []byte {
 	return rawdb.ReadTransactionInfosRaw(a.chain.DB(), number)
 }
 
+func (a *freezerChainSource) ViewBlockRaw(number uint64, fn func([]byte) error) (bool, error) {
+	return rawdb.ViewBlockRaw(a.chain.DB(), number, fn)
+}
+
+func (a *freezerChainSource) ViewTransactionInfosRaw(number uint64, fn func([]byte) error) (bool, error) {
+	return rawdb.ViewTransactionInfosRaw(a.chain.DB(), number, fn)
+}
+
 func (a *freezerChainSource) ReadBlockHash(_ uint64, blockRaw []byte) tcommon.Hash {
 	return rawdb.ReadBlockHashRaw(blockRaw)
 }

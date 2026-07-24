@@ -7,6 +7,7 @@ package core
 // margin 128 < the opcode's 256-block window).
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -93,5 +94,35 @@ func TestVMKVStoreBlockHashFallsThroughToAncient(t *testing.T) {
 				t.Fatalf("BlockHashByNumber(%d) = %x,%v want %x,%v", tc.number, got, ok, tc.want, tc.found)
 			}
 		})
+	}
+}
+
+func BenchmarkVMKVStoreBlockHashCompactIndex(b *testing.B) {
+	kv := ethrawdb.NewMemoryDatabase()
+	pb := &corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 250, Timestamp: 750000}},
+		Transactions: make([]*corepb.Transaction, 100),
+	}
+	for i := range pb.Transactions {
+		pb.Transactions[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{byte(i)}, 1024)},
+		}
+	}
+	block := types.NewBlockFromPB(pb)
+	buf := blockbuffer.New(kv)
+	buf.SetBaseReadCacheSize(1 << 20)
+	buf.BeginBlock(block.Hash(), block.Number())
+	if err := rawdb.WriteBlock(buf, block); err != nil {
+		b.Fatal(err)
+	}
+	store := vmKVStore{BufferedKVStore: buf, chaindb: rawdb.NewChainDB(kv, rawdb.NoopAncient{})}
+	want := block.Hash()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, ok := store.BlockHashByNumber(block.Number())
+		if !ok || got != want {
+			b.Fatal("block hash mismatch")
+		}
 	}
 }

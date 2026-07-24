@@ -3,8 +3,33 @@ package vm
 import (
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 )
+
+func TestNewTVMAllocatesNewContractSetLazily(t *testing.T) {
+	tvm := NewTVM(nil, nil, tcommon.Address{}, 1, 2, tcommon.Address{}, 3, TVMConfig{})
+	if tvm.newContracts != nil {
+		t.Fatal("NewTVM eagerly allocated the new-contract set")
+	}
+	addr := tcommon.Address{0x41, 0x22}
+	if tvm.isNewContract(addr) {
+		t.Fatal("nil new-contract set reported a contract as new")
+	}
+	if wasNew := tvm.markNewContract(addr); wasNew {
+		t.Fatal("first mark reported an existing new contract")
+	}
+	if tvm.newContracts == nil || !tvm.isNewContract(addr) {
+		t.Fatal("first mark did not lazily allocate and record the contract")
+	}
+	if wasNew := tvm.markNewContract(addr); !wasNew {
+		t.Fatal("second mark did not report the existing new contract")
+	}
+	tvm.restoreNewContractMark(addr, false)
+	if tvm.isNewContract(addr) {
+		t.Fatal("restoring an unmarked contract left a stale mark")
+	}
+}
 
 func TestNewTVMConfig_AllFalseByDefault(t *testing.T) {
 	dp := state.NewDynamicProperties()

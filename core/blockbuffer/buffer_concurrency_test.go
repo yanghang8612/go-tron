@@ -18,7 +18,7 @@ import (
 // while -race watches for unsynchronized map/slice access.
 //
 // On the single-lock buffer this passes (every method is mutually exclusive
-// under b.mu). It is the regression net for the per-layer-lock change, which
+// under b.mu). It is the regression net for the sharded-layer-lock change, which
 // must keep it green under -race.
 func TestBuffer_ConcurrentPipelineRaceFree(t *testing.T) {
 	const (

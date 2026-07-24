@@ -3,8 +3,10 @@ package core
 import (
 	"crypto/ecdsa"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -128,7 +130,7 @@ func fixedVerifyGenesis(witnessAddr tcommon.Address, funded ...tcommon.Address) 
 }
 
 // newVerifierChain stands up a fresh DPoS-wired chain from the given genesis.
-func newVerifierChain(t *testing.T, genesis *params.Genesis) *BlockChain {
+func newVerifierChain(t testing.TB, genesis *params.Genesis) *BlockChain {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
@@ -147,9 +149,10 @@ func newVerifierChain(t *testing.T, genesis *params.Genesis) *BlockChain {
 // already pool-added) and returns the wire bytes. Re-unmarshalling these into
 // fresh *Block instances gives the verifier a cold cache, exactly like a peer
 // delivering blocks during sync.
-func produceSignedBlocks(t *testing.T, genesis *params.Genesis, witnessKey *ecdsa.PrivateKey, n int, txsFor func(height uint64) []*types.Transaction) [][]byte {
+func produceSignedBlocks(t testing.TB, genesis *params.Genesis, witnessKey *ecdsa.PrivateKey, n int, txsFor func(height uint64) []*types.Transaction) [][]byte {
 	t.Helper()
 	bc := newVerifierChain(t, genesis)
+	defer func() { _ = bc.Close() }()
 	witnessAddr := bc.ActiveWitnesses()[0]
 	out := make([][]byte, 0, n)
 	for h := uint64(1); h <= uint64(n); h++ {
@@ -176,7 +179,7 @@ func produceSignedBlocks(t *testing.T, genesis *params.Genesis, witnessKey *ecds
 	return out
 }
 
-func unmarshalBatch(t *testing.T, raw [][]byte) []*types.Block {
+func unmarshalBatch(t testing.TB, raw [][]byte) []*types.Block {
 	t.Helper()
 	blocks := make([]*types.Block, len(raw))
 	for i, b := range raw {
@@ -195,6 +198,142 @@ func withMinTxs(v int, fn func()) {
 	ParallelSigVerifyMinTxs = v
 	defer func() { ParallelSigVerifyMinTxs = prev }()
 	fn()
+}
+
+// BenchmarkInsertBlocksSignaturePipeline compares the old batch barrier with
+// the production pipeline. Chain construction and wire decoding stay outside the
+// timed region; both arms perform the same signature recovery and block/state
+// validation work on fresh memos and a fresh verifier DB.
+func BenchmarkInsertBlocksSignaturePipeline(b *testing.B) {
+	witnessKey, witnessAddr := keyAndAddr(b)
+	senderKey, sender := keyAndAddr(b)
+	_, recipient := keyAndAddr(b)
+	genesis := fixedVerifyGenesis(witnessAddr, sender)
+	refChain := newVerifierChain(b, genesis)
+	refBytes, refHash := genesisTaposRef(b, refChain)
+	_ = refChain.Close()
+
+	const blocksPerBatch, txsPerBlock = 8, 32
+	raw := produceSignedBlocks(b, genesis, witnessKey, blocksPerBatch, func(height uint64) []*types.Transaction {
+		txs := make([]*types.Transaction, txsPerBlock)
+		for i := range txs {
+			amount := int32(height*txsPerBlock + uint64(i) + 1)
+			txs[i] = buildTransferTxWithRef(b, sender, recipient, amount, 0, refBytes, refHash, senderKey)
+		}
+		return txs
+	})
+
+	for _, tc := range []struct {
+		name        string
+		synchronous bool
+	}{
+		{name: "batch_barrier", synchronous: true},
+		{name: "overlap"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				bc := newVerifierChain(b, genesis)
+				blocks := unmarshalBatch(b, raw)
+				prevMin := ParallelSigVerifyMinTxs
+				ParallelSigVerifyMinTxs = 1
+				b.StartTimer()
+				if tc.synchronous {
+					prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
+					ParallelSigVerifyMinTxs = 0
+				}
+				err := bc.InsertBlocks(blocks)
+				b.StopTimer()
+				ParallelSigVerifyMinTxs = prevMin
+				if closeErr := bc.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartBlockSignaturePrewarmReturnsBeforeWorkersFinish(t *testing.T) {
+	blocks := make([]*types.Block, 2)
+	for i := range blocks {
+		pbTxs := make([]*corepb.Transaction, 32)
+		for j := range pbTxs {
+			pbTxs[j] = &corepb.Transaction{
+				RawData:   &corepb.TransactionRaw{Timestamp: int64(i*32 + j + 1)},
+				Signature: [][]byte{make([]byte, 65)},
+			}
+		}
+		blocks[i] = types.NewBlockFromPB(&corepb.Block{Transactions: pbTxs})
+	}
+
+	prevMin := ParallelSigVerifyMinTxs
+	ParallelSigVerifyMinTxs = 1
+	defer func() { ParallelSigVerifyMinTxs = prevMin }()
+	prevHook := sigPrewarmJobHook
+	defer func() { sigPrewarmJobHook = prevHook }()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var jobs atomic.Int64
+	sigPrewarmJobHook = func() {
+		jobs.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+
+	returned := make(chan *signaturePrewarmRun, 1)
+	go func() { returned <- startBlockSignaturePrewarm(blocks, nil) }()
+	var run *signaturePrewarmRun
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		run.Wait()
+	}()
+	select {
+	case run = <-returned:
+	case <-time.After(2 * time.Second):
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case run = <-returned:
+			run.Wait()
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatal("startBlockSignaturePrewarm waited for blocked workers")
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("signature prewarm workers did not start")
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		run.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("prewarm Wait returned before workers were released")
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("prewarm Wait did not join released workers")
+	}
+	if got, want := jobs.Load(), int64(64); got != want {
+		t.Fatalf("prewarm jobs = %d, want %d", got, want)
+	}
 }
 
 // TestPrewarm_IdenticalAccept_OnVsOff: a batch of validly-signed blocks (header

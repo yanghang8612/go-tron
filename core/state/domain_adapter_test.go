@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"testing"
+	"unsafe"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -13,7 +14,10 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-var benchmarkDomainCommitmentTouchCount int
+var (
+	benchmarkDomainCommitmentTouchCount int
+	benchmarkDomainCommitmentUpdates    []rawdb.StateCommitmentUpdate
+)
 
 func BenchmarkDomainCommitmentRecordTouches(b *testing.B) {
 	const count = 1024
@@ -34,6 +38,26 @@ func BenchmarkDomainCommitmentRecordTouches(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainCommitmentRecordTouchesReserved(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment := NewDomainCommitmentState(&StateDB{})
+		commitment.reserveTouches(count)
+		for _, key := range keys {
+			commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+	}
+}
+
 func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
 	owner := testAddr(0x7e)
 	key := make([]byte, 32)
@@ -43,6 +67,142 @@ func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	}
+}
+
+func BenchmarkDomainCommitmentRecordEncodedTouches(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	values := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+		values[i] = rawdb.EncodeStateKVLatestValue([]byte{byte(i)})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment := NewDomainCommitmentState(&StateDB{})
+		commitment.reserveTouches(count)
+		for i := range keys {
+			commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, keys[i], values[i])
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+	}
+}
+
+func BenchmarkDomainCommitmentRecordEncodedTouchesReused(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	values := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+		values[i] = rawdb.EncodeStateKVLatestValue([]byte{byte(i)})
+	}
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.reserveTouches(count)
+	commitment.finishCommit()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment.resetForCommit(commitment.state, nil)
+		commitment.reserveTouches(count)
+		for i := range keys {
+			commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, keys[i], values[i])
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
+		commitment.finishCommit()
+	}
+}
+
+func BenchmarkDomainCommitmentLatestUpdatesFromCapturedTouches(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	commitment := NewDomainCommitmentState(&StateDB{})
+	for i := range count {
+		key := make([]byte, 32)
+		binary.BigEndian.PutUint64(key[24:], uint64(i))
+		commitment.recordTouchWithValue(domainCommitmentTouch{
+			flatDomain: rawdb.StateFlatDomainKVLatest,
+			owner:      owner.AccountID(),
+			generation: 7,
+			domain:     kvdomains.ContractStorage,
+			key:        string(key),
+		}, domainCommitmentCapturedValue{
+			loaded:       true,
+			exists:       true,
+			encodedValue: rawdb.EncodeStateKVLatestValue([]byte{byte(i)}),
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		updates, err := commitment.latestUpdatesFromTouches()
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDomainCommitmentUpdates = updates
+	}
+}
+
+func TestDomainCommitmentStateReusableContainers(t *testing.T) {
+	state := &StateDB{}
+	generation := func(tcommon.Address) (uint64, error) { return 7, nil }
+	commitment := NewDomainCommitmentStateWithGenerationResolver(state, generation)
+	commitment.reserveTouches(8)
+	owner := testAddr(0x7e)
+	key := []byte("slot")
+	value := rawdb.EncodeStateKVLatestValue([]byte("value"))
+	commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, key, value)
+	if len(commitment.touches) != 1 || len(commitment.touchValues) != 1 {
+		t.Fatalf("captured containers = %d/%d, want 1/1", len(commitment.touches), len(commitment.touchValues))
+	}
+	originalValueCap := cap(commitment.touchValues)
+
+	// Growing after a touch is present must preserve its index and captured
+	// value, even though production reserves before recording any touches.
+	commitment.reserveTouches(16)
+	index, ok := commitment.kvLatestTouchIndex(owner.AccountID(), 7, kvdomains.ContractStorage, key)
+	if !ok || index != 0 {
+		t.Fatalf("touch after reserve growth = index:%d ok:%v, want 0/true", index, ok)
+	}
+	if !bytes.Equal(commitment.touchValues[index].encodedValue, value) {
+		t.Fatalf("touch after reserve growth value = %x, want %x", commitment.touchValues[index].encodedValue, value)
+	}
+
+	commitment.finishCommit()
+	if len(commitment.touches) != 0 || len(commitment.touchValues) != 0 {
+		t.Fatalf("finished containers = %d/%d, want 0/0", len(commitment.touches), len(commitment.touchValues))
+	}
+	if commitment.generation != nil || commitment.latestReader != nil {
+		t.Fatal("finish retained per-block resolver or reader")
+	}
+	if cap(commitment.touchValues) < originalValueCap {
+		t.Fatalf("finish dropped reusable value capacity: got %d, want >= %d", cap(commitment.touchValues), originalValueCap)
+	}
+
+	commitment.resetForCommit(state, generation)
+	commitment.reserveTouches(8)
+	commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, key, value)
+	if len(commitment.touches) != 1 || len(commitment.touchValues) != 1 {
+		t.Fatalf("reused containers = %d/%d, want 1/1", len(commitment.touches), len(commitment.touchValues))
+	}
+
+	// Do not retain a one-off giant block's containers for a much smaller tail.
+	commitment.finishCommit()
+	commitment.reserveTouches(8192)
+	commitment.finishCommit()
+	commitment.reserveTouches(16)
+	if commitment.touchCapacityHint != 16 || cap(commitment.touchValues) != 16 {
+		t.Fatalf("oversized containers retained: map hint=%d value cap=%d, want 16/16", commitment.touchCapacityHint, cap(commitment.touchValues))
+	}
+
+	commitment.release()
+	if commitment.state != nil || commitment.touches != nil || commitment.touchValues != nil {
+		t.Fatal("release retained scope-owned commitment storage")
 	}
 }
 
@@ -445,7 +605,7 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	commitment.recordKVGenerationTouch(owner)
 	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
 		{Kind: statedomains.MutationDelPrefix, Owner: owner, Domain: domain, Key: []byte("prefix/")},
-		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/3")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/3"), Value: []byte("three")},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +638,53 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	}
 }
 
+func TestDomainCommitmentStateUsesCapturedFinalKVMutations(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(disk)
+	sdb, err := New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testAddr(0x7e)
+	domain := kvdomains.ContractStorage
+	view := &commitmentLatestView{
+		t:            t,
+		owner:        owner,
+		domain:       domain,
+		generation:   9,
+		failKVLatest: true,
+	}
+	sdb.flatLatestReader = view
+	sdb.setAccountKVLatestView(view, view)
+
+	finalValue := []byte("final")
+	commitment := NewDomainCommitmentState(sdb)
+	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/final"), Value: []byte("first")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/gone"), Value: []byte("gone")},
+		{Kind: statedomains.MutationDelPrefix, Owner: owner, Domain: domain, Key: []byte("prefix/")},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/final"), Value: finalValue},
+		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("empty"), Value: nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The recorder must own retained bytes because the temporal overlay releases
+	// its mutation storage immediately after Flush.
+	finalValue[0] = 'X'
+
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatalf("commitment updates from captured mutations: %v", err)
+	}
+	if len(updates) != 3 {
+		t.Fatalf("captured updates = %+v, want final put, prefix delete, and empty put", updates)
+	}
+	byKey := stateCommitmentUpdatesByKey(updates)
+	assertCommitmentPut(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("prefix/final")), rawdb.EncodeStateKVLatestValue([]byte("final")))
+	assertCommitmentDelete(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("prefix/gone")))
+	assertCommitmentPut(t, byKey, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte("empty")), rawdb.EncodeStateKVLatestValue(nil))
+}
+
 type commitmentLatestView struct {
 	t                 *testing.T
 	owner             tcommon.Address
@@ -488,6 +695,80 @@ type commitmentLatestView struct {
 	prefixKeys        []string
 	kvGenerations     []uint64
 	prefixGenerations []uint64
+	failKVLatest      bool
+}
+
+type borrowingCommitmentLatestView struct {
+	*commitmentLatestView
+	borrowed      []byte
+	ordinaryReads int
+	borrowedReads int
+}
+
+func (v *borrowingCommitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
+	v.checkOwner(owner)
+	v.ordinaryReads++
+	return append([]byte(nil), v.account...), true, nil
+}
+
+func (v *borrowingCommitmentLatestView) accountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	v.checkOwner(owner)
+	v.borrowedReads++
+	return v.borrowed, true, nil
+}
+
+func TestDomainCommitmentPrefersImmutableAccountBorrow(t *testing.T) {
+	owner := testAddr(0x7e)
+	borrowed := []byte("borrowed-account-envelope")
+	reader := &borrowingCommitmentLatestView{
+		commitmentLatestView: &commitmentLatestView{t: t, owner: owner, account: []byte("ordinary-copy")},
+		borrowed:             borrowed,
+	}
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.latestReader = reader
+	commitment.recordAccountLatestTouch(owner)
+
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatalf("latestUpdatesFromTouches: %v", err)
+	}
+	if reader.borrowedReads != 1 || reader.ordinaryReads != 0 {
+		t.Fatalf("account reads: borrowed=%d ordinary=%d, want 1/0", reader.borrowedReads, reader.ordinaryReads)
+	}
+	if len(updates) != 1 || len(updates[0].Value) == 0 || &updates[0].Value[0] != &borrowed[0] {
+		t.Fatal("commitment update did not retain the borrowed immutable account value")
+	}
+}
+
+func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
+	owner := testAddr(0x7f)
+	key := []byte("encoded-key")
+	encoded := rawdb.EncodeStateKVLatestValue([]byte("encoded-kv-value"))
+	commitment := NewDomainCommitmentStateWithGenerationResolver(&StateDB{}, func(tcommon.Address) (uint64, error) {
+		return 11, nil
+	})
+	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{{
+		Kind:         statedomains.MutationPut,
+		Owner:        owner,
+		Domain:       kvdomains.SystemReward,
+		Key:          key,
+		Value:        []byte("encoded-kv-value"),
+		EncodedValue: encoded,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	updates, err := commitment.latestUpdatesFromTouches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 || len(updates[0].Value) == 0 || &updates[0].Value[0] != &encoded[0] {
+		t.Fatal("commitment update copied transferred encoded KV value")
+	}
+	for touch := range commitment.touches {
+		if unsafe.StringData(touch.key) != unsafe.SliceData(key) {
+			t.Fatal("commitment touch copied transferred logical key")
+		}
+	}
 }
 
 func (v *commitmentLatestView) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
@@ -503,6 +784,9 @@ func (v *commitmentLatestView) KVGeneration(owner tcommon.Address) (uint64, bool
 func (v *commitmentLatestView) KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	v.checkOwner(owner)
 	v.checkDomain(domain)
+	if v.failKVLatest {
+		v.t.Fatalf("unexpected KVLatest read for captured mutation %q", key)
+	}
 	v.kvGenerations = append(v.kvGenerations, generation)
 	value, ok := v.kv[string(key)]
 	if !ok {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -17,6 +18,42 @@ import (
 	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+var transactionInfoBenchmarkSink *corepb.TransactionInfo
+
+func BenchmarkTransactionInfoLogBuild(b *testing.B) {
+	contractAddr := testProcessorAddr(2)
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	for _, tc := range []struct {
+		name       string
+		logCount   int
+		topicCount int
+	}{
+		{name: "logs_1_topics_1", logCount: 1, topicCount: 1},
+		{name: "logs_4_topics_4", logCount: 4, topicCount: 4},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			result := &actuator.Result{ContractRet: int32(corepb.Transaction_Result_SUCCESS)}
+			result.Logs = make([]vm.Log, tc.logCount)
+			for i := range result.Logs {
+				result.Logs[i] = vm.Log{
+					Address: contractAddr,
+					Data:    bytes.Repeat([]byte{byte(i + 1)}, 64),
+					Topics:  make([][]byte, tc.topicCount),
+				}
+				for topic := range result.Logs[i].Topics {
+					result.Logs[i].Topics[topic] = bytes.Repeat([]byte{byte(topic + 1)}, 32)
+				}
+			}
+			slot := new(transactionInfoSlot)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				transactionInfoBenchmarkSink = slot.build(tx, result, 1, 3000, false)
+			}
+		})
+	}
+}
 
 func newTestState(t *testing.T) *state.StateDB {
 	t.Helper()
@@ -638,6 +675,22 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 			t.Fatalf("txInfo[%d] has empty ID", i)
 		}
 	}
+	if txInfos[0] == txInfos[1] || txInfos[0].Receipt == txInfos[1].Receipt {
+		t.Fatal("transaction info slots alias each other's fixed-size messages")
+	}
+	secondIDFirstByte := txInfos[1].Id[0]
+	txInfos[0].Id[0] ^= 0xff
+	if txInfos[1].Id[0] != secondIDFirstByte {
+		t.Fatal("transaction IDs share mutable backing storage")
+	}
+	txInfos[0].ContractResult[0] = []byte{1}
+	if len(txInfos[1].ContractResult[0]) != 0 {
+		t.Fatal("contract-result cells share mutable backing storage")
+	}
+	txInfos[0].Receipt.EnergyFee = 99
+	if txInfos[1].Receipt.EnergyFee == 99 {
+		t.Fatal("resource receipts share mutable backing storage")
+	}
 }
 
 func TestBuildTransactionInfo_PackingFee(t *testing.T) {
@@ -812,11 +865,79 @@ func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) 
 	if string(info.Log[0].Address) != string(wantLogAddress) {
 		t.Fatalf("log address: got %x, want %x", info.Log[0].Address, wantLogAddress)
 	}
+	if len(info.Log[0].Topics) != 1 || string(info.Log[0].Topics[0]) != string([]byte{0x01}) {
+		t.Fatalf("log topics: got %x, want 01", info.Log[0].Topics)
+	}
 	if len(info.InternalTransactions) != 1 {
 		t.Fatalf("internal_transactions: got %d, want 1", len(info.InternalTransactions))
 	}
 	if string(info.InternalTransactions[0].Note) != "call" {
 		t.Fatalf("internal transaction note: got %q, want call", info.InternalTransactions[0].Note)
+	}
+}
+
+func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
+	contractAddr := testProcessorAddr(2)
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	internalA := &corepb.InternalTransaction{Note: []byte("a")}
+	internalB := &corepb.InternalTransaction{Note: []byte("b")}
+	slot := new(transactionInfoSlot)
+
+	first := &actuator.Result{
+		ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+		Logs: []vm.Log{
+			{Address: contractAddr, Topics: [][]byte{{0x01}, {0x02}}, Data: []byte{0xa1}},
+			{Address: contractAddr, Topics: [][]byte{{0x03}}, Data: []byte{0xa2}},
+		},
+		InternalTransactions: []*corepb.InternalTransaction{internalA, internalB},
+	}
+	info := slot.build(tx, first, 1, 3000, false)
+	if len(info.Log) != 2 || len(info.InternalTransactions) != 2 {
+		t.Fatalf("first build shape: logs=%d internal=%d", len(info.Log), len(info.InternalTransactions))
+	}
+
+	info = slot.build(tx, &actuator.Result{ContractRet: int32(corepb.Transaction_Result_SUCCESS)}, 2, 6000, false)
+	if info.Log != nil || info.InternalTransactions != nil {
+		t.Fatalf("empty reuse retained variable fields: logs=%v internal=%v", info.Log, info.InternalTransactions)
+	}
+
+	nonMainnet := tcommon.Address{0x42, 0x11}
+	third := &actuator.Result{
+		ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+		Logs: []vm.Log{{
+			Address: nonMainnet,
+			Data:    []byte{0xb1},
+		}},
+		InternalTransactions: []*corepb.InternalTransaction{internalB},
+	}
+	info = slot.build(tx, third, 3, 9000, false)
+	if len(info.Log) != 1 || len(info.Log[0].Topics) != 0 || len(info.Log[0].Address) != tcommon.AddressLength {
+		t.Fatalf("third build log shape: %+v", info.Log)
+	}
+	if !bytes.Equal(info.Log[0].Address, nonMainnet[:]) {
+		t.Fatalf("non-mainnet log address = %x, want %x", info.Log[0].Address, nonMainnet)
+	}
+	if len(info.InternalTransactions) != 1 || info.InternalTransactions[0] != internalB {
+		t.Fatalf("third build internal transactions = %+v", info.InternalTransactions)
+	}
+	if cap(info.Log) != len(info.Log) || cap(info.InternalTransactions) != len(info.InternalTransactions) {
+		t.Fatal("receipt repeated fields expose spare reusable capacity")
+	}
+}
+
+func TestTransactionInfoLogSlotsDoNotAlias(t *testing.T) {
+	tx := makeTestTriggerTx(1, testProcessorAddr(2), nil)
+	results := [2]*actuator.Result{
+		{ContractRet: int32(corepb.Transaction_Result_SUCCESS), Logs: []vm.Log{{Address: testProcessorAddr(2), Topics: [][]byte{{0x01}}}}},
+		{ContractRet: int32(corepb.Transaction_Result_SUCCESS), Logs: []vm.Log{{Address: testProcessorAddr(3), Topics: [][]byte{{0x02}}}}},
+	}
+	slots := make([]transactionInfoSlot, 2)
+	first := slots[0].build(tx, results[0], 1, 3000, false)
+	second := slots[1].build(tx, results[1], 1, 3000, false)
+	secondAddress := append([]byte(nil), second.Log[0].Address...)
+	first.Log[0].Address[0] ^= 0xff
+	if !bytes.Equal(second.Log[0].Address, secondAddress) {
+		t.Fatal("receipt log address buffers alias across transaction slots")
 	}
 }
 

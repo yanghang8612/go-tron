@@ -128,11 +128,15 @@ func returnBranch(b *BranchData) {
 	branchPool.Put(b)
 }
 
-// opsBufPool reuses op slices for apply's bucket-sort scratch space. apply
+// opsBufPool reuses op slices for Fold's resolved updates and apply's
+// bucket-sort scratch space. apply
 // formerly used `var buckets [16][]op` + append per op, which heap-allocated up
 // to 16 backing arrays per recursive call (the fold is recursive to depth 64).
 // The replacement counting-sort writes into a single pooled scratch buffer per
-// apply invocation, cutting per-descent slice churn.
+// apply invocation, cutting per-descent slice churn. Capping pooled capacity
+// prevents an exceptional block from pinning an oversized backing array.
+const maxPooledOps = 4096
+
 var opsBufPool = sync.Pool{
 	New: func() any { b := make([]op, 0, 64); return &b },
 }
@@ -148,7 +152,15 @@ func borrowOpsBuf(size int) *[]op {
 }
 
 func returnOpsBuf(bp *[]op) {
-	*bp = (*bp)[:0]
+	ops := *bp
+	// op.key borrows the Fold input. Clear every used entry before pooling so
+	// the buffer cannot extend the lifetime of update key/value arenas.
+	clear(ops)
+	if cap(ops) > maxPooledOps {
+		*bp = nil
+		return
+	}
+	*bp = ops[:0]
 	opsBufPool.Put(bp)
 }
 
@@ -226,34 +238,43 @@ func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
-// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
-// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
-// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
-// per-PutBranch allocations observed on Nile sync.
-func (b *BranchData) EncodeTo(dst []byte) []byte {
-	// Compute childMask.
+func (b *BranchData) encodingLayout() (uint16, int) {
 	var mask uint16
-	for i := uint8(0); i < 16; i++ {
-		if b.children[i].present {
-			mask |= 1 << i
-		}
-	}
-
-	// Pre-compute required capacity for a single grow.
 	size := 2 // childMask
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
 		if !c.present {
 			continue
 		}
+		mask |= 1 << i
 		size++ // kind byte
 		if c.kind == kindHash {
 			size += common.HashLength
 		} else {
-			// Uvarint for keyLen + key bytes + valHash
-			size += binary.MaxVarintLen64 + len(c.leafKey) + common.HashLength
+			// Uvarint for keyLen + key bytes + valHash.
+			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey) + common.HashLength
 		}
 	}
+	return mask, size
+}
+
+// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
+// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
+// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
+// per-PutBranch allocations observed on Nile sync.
+func (b *BranchData) EncodeTo(dst []byte) []byte {
+	// Compute the mask and exact wire length together. Leaf key lengths are
+	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
+	// each one over-allocates the immutable encoding retained by blockbuffer.
+	mask, size := b.encodingLayout()
+	return b.encodeToLayout(dst, mask, size)
+}
+
+// encodeToLayout is EncodeTo with a caller-supplied layout. Bulk sibling
+// persistence needs every encoded size up front to allocate one exact arena;
+// retaining the computed mask/size lets its encoding pass avoid rescanning all
+// 16 child slots a second time.
+func (b *BranchData) encodeToLayout(dst []byte, mask uint16, size int) []byte {
 	if cap(dst)-len(dst) < size {
 		grown := make([]byte, len(dst), len(dst)+size)
 		copy(grown, dst)
@@ -281,6 +302,15 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 		}
 	}
 	return dst
+}
+
+func uvarintEncodedLen(v uint64) int {
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
 }
 
 // Equal reports whether b and other represent the same branch node.
@@ -525,9 +555,12 @@ func newCommitmentTrie(store branchStore) *commitmentTrie {
 // pathLen is the number of nibbles in a hashed key path (keccak256 → 32 bytes).
 const pathLen = common.HashLength * 2
 
-// op is a resolved update: its full 64-nibble path plus the leaf value hash.
+// op is a resolved update: its 32-byte path digest plus the leaf value hash.
+// Trie traversal extracts high/low nibbles on demand. Keeping the compact
+// digest avoids expanding and clearing another 32 bytes in every top-level and
+// recursive scratch op while preserving the identical 64-nibble path.
 type op struct {
-	path    [pathLen]byte
+	path    common.Hash
 	key     []byte
 	valHash common.Hash
 	delete  bool
@@ -539,9 +572,16 @@ type op struct {
 // Calling Fold with no updates re-derives and returns the current root without
 // modifying the store.
 func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
-	ops, err := buildOps(updates)
+	opsP, err := buildOps(updates)
 	if err != nil {
 		return common.Hash{}, err
+	}
+	if opsP != nil {
+		defer returnOpsBuf(opsP)
+	}
+	var ops []op
+	if opsP != nil {
+		ops = *opsP
 	}
 
 	// Load the root branch (empty prefix), if any.
@@ -607,7 +647,7 @@ func rootHash(root *BranchData) common.Hash {
 // 64-nibble path and leaf value hash, and returns them sorted by path. Sorting
 // makes the in-tree walk order deterministic but does not affect the final
 // structure (which is path-keyed).
-func buildOps(updates []Update) ([]op, error) {
+func buildOps(updates []Update) (*[]op, error) {
 	if len(updates) == 0 {
 		return nil, nil
 	}
@@ -626,24 +666,28 @@ func buildOps(updates []Update) ([]op, error) {
 		}
 	}
 	if strictlySorted {
-		ops := make([]op, 0, len(updates))
-		for _, u := range updates {
-			ops = append(ops, resolveOp(u))
+		opsP := borrowOpsBuf(len(updates))
+		ops := *opsP
+		for i, u := range updates {
+			ops[i] = resolveOp(u)
 		}
 		sortOps(ops)
-		return ops, nil
+		return opsP, nil
 	}
 
 	byKey := make(map[string]Update, len(updates))
 	for _, u := range updates {
 		byKey[string(u.Key)] = u
 	}
-	ops := make([]op, 0, len(byKey))
+	opsP := borrowOpsBuf(len(byKey))
+	ops := *opsP
+	i := 0
 	for _, u := range byKey {
-		ops = append(ops, resolveOp(u))
+		ops[i] = resolveOp(u)
+		i++
 	}
 	sortOps(ops)
-	return ops, nil
+	return opsP, nil
 }
 
 func resolveOp(u Update) op {
@@ -675,7 +719,7 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 	// (recursive depth up to 64 → high churn on dense fold passes).
 	var counts [16]int
 	for _, o := range ops {
-		counts[o.path[depth]]++
+		counts[pathNibble(o.path, depth)]++
 	}
 	var starts [16]int
 	for i := 1; i < 16; i++ {
@@ -685,7 +729,7 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 	defer returnOpsBuf(scratch)
 	heads := starts
 	for _, o := range ops {
-		nb := o.path[depth]
+		nb := pathNibble(o.path, depth)
 		(*scratch)[heads[nb]] = o
 		heads[nb]++
 	}
@@ -930,13 +974,19 @@ func livePutsInPlace(group []op) []op {
 
 func sortOps(ops []op) {
 	sort.Slice(ops, func(i, j int) bool {
-		for n := 0; n < pathLen; n++ {
-			if ops[i].path[n] != ops[j].path[n] {
-				return ops[i].path[n] < ops[j].path[n]
-			}
+		if cmp := bytes.Compare(ops[i].path[:], ops[j].path[:]); cmp != 0 {
+			return cmp < 0
 		}
 		return string(ops[i].key) < string(ops[j].key)
 	})
+}
+
+func pathNibble(path common.Hash, depth int) uint8 {
+	b := path[depth>>1]
+	if depth&1 == 0 {
+		return b >> 4
+	}
+	return b & 0x0f
 }
 
 // appendNibble extends the fold-local path stack with nb. Fold and each
@@ -948,19 +998,13 @@ func appendNibble(prefix []byte, nb uint8) []byte {
 	return append(prefix, nb)
 }
 
-// keyPath expands keccak256(lenPrefixed(key)) into pathLen nibbles, high nibble
-// first.
-func keyPath(key []byte) [pathLen]byte {
+// keyPath hashes lenPrefixed(key). pathNibble exposes its pathLen high-first
+// nibbles without materializing a second expanded array.
+func keyPath(key []byte) common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
 	writeLen8Prefixed(h, key)
-	sum := readKeccakHash(h)
-	var out [pathLen]byte
-	for i := 0; i < common.HashLength; i++ {
-		out[2*i] = sum[i] >> 4
-		out[2*i+1] = sum[i] & 0x0f
-	}
-	return out
+	return readKeccakHash(h)
 }
 
 // leafValueHash is the value hash of a key: keccak256(0x00 || lenPrefixed(key) ||

@@ -23,6 +23,32 @@ type StateKVLatestStore interface {
 
 type stateKVLatestStore = StateKVLatestStore
 
+// cachedNoCopyStateKVLatestReader is the optional layered-store fast path for
+// the hot flat-latest lookup. Keeping the structured fields separate lets the
+// store assemble the physical key in stack storage for overlay/cache hits;
+// passing a prebuilt []byte here would make stateKVLatestKey allocate before
+// the store has a chance to avoid it.
+type cachedNoCopyStateKVLatestReader interface {
+	GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error)
+}
+
+// stateKVLatestStructuredWriter is the write/delete counterpart. Layered
+// stores whose native map key is a string can join the schema fields directly
+// into that owned string instead of allocating a temporary []byte and then
+// copying it again during Put/Delete.
+type stateKVLatestStructuredWriter interface {
+	PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
+	DeleteStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) error
+}
+
+// stateKVLatestStructuredOwnedWriter retains a freshly encoded immutable value
+// while still assembling the structured physical key without an intermediate
+// byte slice. It is intentionally optional; ordinary writes preserve the
+// defensive-copy contract of stateKVLatestStructuredWriter.
+type stateKVLatestStructuredOwnedWriter interface {
+	PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
+}
+
 type StateKVLatestRow struct {
 	Owner      common.Address
 	Generation uint64
@@ -41,21 +67,50 @@ func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generatio
 }
 
 func EncodeStateKVLatestValue(value []byte) []byte {
-	wrapped := make([]byte, 1+len(value))
-	wrapped[0] = stateKVLatestPresencePrefix
-	copy(wrapped[1:], value)
-	return wrapped
+	return AppendStateKVLatestValue(nil, value)
+}
+
+// AppendStateKVLatestValue appends the latest-state presence envelope to dst.
+// Callers that repeatedly replace a captured value can pass dst[:0] to reuse
+// its backing allocation; EncodeStateKVLatestValue remains the owning helper.
+func AppendStateKVLatestValue(dst, value []byte) []byte {
+	dst = append(dst, stateKVLatestPresencePrefix)
+	return append(dst, value...)
 }
 
 // WriteStateKVLatestEncoded writes a value that is already encoded with the
 // latest-state presence prefix. State commit uses it to share the same encoded
 // bytes with the account KV trie and avoid wrapping each update twice.
 func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if writer, ok := db.(stateKVLatestStructuredWriter); ok {
+		return writer.PutStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
+	}
 	return db.Put(stateKVLatestKey(owner, generation, domain, logicalKey), wrapped)
 }
 
+// WriteStateKVLatestEncodedOwned transfers an already encoded immutable value
+// to writers that advertise an ownership-taking path. Fallback writers retain
+// the normal copying Put semantics.
+func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if writer, ok := db.(stateKVLatestStructuredOwnedWriter); ok {
+		return writer.PutStateKVLatestOwnedValue(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(stateKVLatestKey(owner, generation, domain, logicalKey), wrapped)
+	}
+	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, wrapped)
+}
+
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
-	raw, err := readStateNoCopyCached(db, stateKVLatestKey(owner, generation, domain, logicalKey))
+	var (
+		raw []byte
+		err error
+	)
+	if reader, ok := db.(cachedNoCopyStateKVLatestReader); ok {
+		raw, err = reader.GetNoCopyCachedStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey)
+	} else {
+		raw, err = readStateNoCopyCached(db, stateKVLatestKey(owner, generation, domain, logicalKey))
+	}
 	if err != nil {
 		return nil, false, nil
 	}
@@ -67,6 +122,9 @@ func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation
 }
 
 func DeleteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if writer, ok := db.(stateKVLatestStructuredWriter); ok {
+		return writer.DeleteStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey)
+	}
 	return db.Delete(stateKVLatestKey(owner, generation, domain, logicalKey))
 }
 

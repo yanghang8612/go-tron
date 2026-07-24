@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm"
+	"google.golang.org/protobuf/proto"
 )
 
 // BufferedKVStore is the read+write capability that actuators need from
@@ -74,12 +75,20 @@ type Context struct {
 	// transactions carry unsigned Ret data, so producers and txpool validation
 	// must ignore it.
 	TrustTransactionRet bool
-	// ForkPassCache memoizes already-activated SR fork versions so the per-tx
-	// fork gates (PassVersion below) skip the fork-stats read + vote tally for
-	// a version that passed long ago. Node-local, supplied only on the
-	// block-apply path and reset on reorg; nil on producer / pool / unit-test
-	// contexts, which then fall through to the uncached store tally.
+	// ForkPassCache memoizes already-activated SR fork versions across blocks
+	// and, on the block-apply path, pending versions within the current block.
+	// This skips identical fork-stats reads from every transaction while a fresh
+	// block scope still observes quorum transitions at the next boundary.
+	// Node-local and reset on reorg; nil contexts fall through to the uncached
+	// store tally.
 	ForkPassCache *forks.VersionPassCache
+	// ResultSink is an optional block-local scratch result. The canonical block
+	// replay path consumes an actuator result completely before executing the
+	// next transaction, so simple actuators can fill this object instead of
+	// allocating one result per transaction. Callers that return Result to
+	// their own caller leave this nil and retain the existing ownership model.
+	// Execute implementations must never retain the sink after returning.
+	ResultSink *Result
 	// Tracer, when non-nil, is installed into the TVM config for this tx so the
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.
@@ -90,8 +99,9 @@ type Context struct {
 // this transaction's context (ceil-aligned HardForkTime + vote-rate quorum,
 // java-tron ForkController.pass). It routes through ForkPassCache when the
 // block-execution path supplied one — answering an already-activated version
-// without re-reading and re-tallying its fork-stats bitmap once per tx — and a
-// nil cache falls through to the plain uncached store tally, so the result is
+// across blocks and a pending version within the current block without
+// re-reading and re-tallying its fork-stats bitmap once per tx. A nil cache
+// falls through to the plain uncached store tally, so the result is
 // byte-identical either way. Returns false when State or DynProps is absent,
 // matching the defensive guards the call sites carried before.
 func (ctx *Context) PassVersion(version int32) bool {
@@ -230,9 +240,42 @@ type Result struct {
 	ResMessage                    []byte
 }
 
+// newResult returns the caller-provided block-local result after clearing all
+// scalar and reference fields. The nil-sink path preserves the public
+// Execute/ApplyTransaction contract: the returned result is independently
+// owned and remains valid after the next transaction executes.
+func (ctx *Context) newResult() *Result {
+	if ctx != nil && ctx.ResultSink != nil {
+		*ctx.ResultSink = Result{}
+		return ctx.ResultSink
+	}
+	return new(Result)
+}
+
 type Actuator interface {
 	Validate(ctx *Context) error
 	Execute(ctx *Context) (*Result, error)
+}
+
+// decodedContract returns the transaction-owned, read-only contract message.
+// Validation, bandwidth charging, actuator execution and energy settlement can
+// all inspect the first contract, so reusing one message avoids unmarshalling
+// the same Any again in both Validate and Execute. Actuators that mutate their
+// input must keep a private decode or clone instead.
+func decodedContract[T proto.Message](ctx *Context, typeName string) (T, error) {
+	var zero T
+	if ctx.Tx.Contract() == nil {
+		return zero, errors.New("no contract in transaction")
+	}
+	msg, err := ctx.Tx.DecodedContract()
+	if err != nil {
+		return zero, errors.New("failed to unmarshal " + typeName)
+	}
+	contract, ok := msg.(T)
+	if !ok {
+		return zero, errors.New("failed to unmarshal " + typeName)
+	}
+	return contract, nil
 }
 
 func CreateActuator(tx *types.Transaction) (Actuator, error) {

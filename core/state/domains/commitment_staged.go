@@ -2,6 +2,7 @@ package domains
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -12,11 +13,79 @@ import (
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
-	db CommitmentDB
+	db         CommitmentDB
+	ownedValue bool
+}
+
+var branchEncodingSlicesPool = sync.Pool{
+	New: func() any {
+		values := make([][]byte, 0, 256)
+		return &values
+	},
+}
+
+type branchEncodingPlan struct {
+	branch *BranchData
+	mask   uint16
+	size   int
+}
+
+var branchEncodingPlansPool = sync.Pool{
+	New: func() any {
+		plans := make([]branchEncodingPlan, 0, 256)
+		return &plans
+	},
+}
+
+func borrowBranchEncodingSlices(size int) *[][]byte {
+	valuesPtr := branchEncodingSlicesPool.Get().(*[][]byte)
+	if cap(*valuesPtr) < size {
+		*valuesPtr = make([][]byte, size)
+	} else {
+		*valuesPtr = (*valuesPtr)[:size]
+	}
+	return valuesPtr
+}
+
+func returnBranchEncodingSlices(valuesPtr *[][]byte) {
+	values := *valuesPtr
+	clear(values)
+	if cap(values) <= 4096 {
+		*valuesPtr = values[:0]
+		branchEncodingSlicesPool.Put(valuesPtr)
+	}
+}
+
+func borrowBranchEncodingPlans(size int) *[]branchEncodingPlan {
+	plansPtr := branchEncodingPlansPool.Get().(*[]branchEncodingPlan)
+	if cap(*plansPtr) < size {
+		*plansPtr = make([]branchEncodingPlan, size)
+	} else {
+		*plansPtr = (*plansPtr)[:size]
+	}
+	return plansPtr
+}
+
+func returnBranchEncodingPlans(plansPtr *[]branchEncodingPlan) {
+	plans := *plansPtr
+	clear(plans)
+	if cap(plans) <= 4096 {
+		*plansPtr = plans[:0]
+		branchEncodingPlansPool.Put(plansPtr)
+	}
 }
 
 func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
-	return &rawdbBranchStore{db: db}
+	return &rawdbBranchStore{db: db, ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db)}
+}
+
+// concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
+// explicitly advertises concurrent reads and writes. The steady-state sync path
+// uses blockbuffer.Buffer/LayerView, which provide the marker; direct Pebble,
+// memorydb, and custom stores keep serial flushes unless separately audited.
+func (s *rawdbBranchStore) concurrentSiblingFlushSafe() bool {
+	_, ok := s.db.(interface{ ConcurrentReadWriteSafe() })
+	return ok
 }
 
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -52,6 +121,12 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
+	// A blockbuffer layer can retain a freshly allocated encoding directly.
+	// Encode into that final immutable slice and transfer it, avoiding the
+	// scratch-to-layer copy on every branch flushed by the commitment fold.
+	if s.ownedValue {
+		return rawdb.WriteCommitmentBranchOwned(s.db, prefix, b.Encode())
+	}
 	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
 	// copies the value into its own arena during the call, so the buffer is
 	// safe to return as soon as WriteCommitmentBranch returns.
@@ -59,6 +134,42 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	defer returnEncodeBuf(bp)
 	*bp = b.EncodeTo((*bp)[:0])
 	return rawdb.WriteCommitmentBranch(s.db, prefix, *bp)
+}
+
+// putBranchesSorted encodes one sibling fold's final branches into a single
+// immutable arena before transferring its disjoint slices to blockbuffer. The
+// layer retains those slices until commit/drop, so a scratch buffer cannot be
+// reused; sharing one exact-sized arena removes the per-branch heap object while
+// preserving the owned-value lifetime. keys must be sorted by the caller.
+func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]*BranchData) error {
+	if !s.ownedValue {
+		for _, key := range keys {
+			if err := s.PutBranch([]byte(key), *branches[key]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	plansPtr := borrowBranchEncodingPlans(len(keys))
+	defer returnBranchEncodingPlans(plansPtr)
+	plans := *plansPtr
+	totalSize := 0
+	for i, key := range keys {
+		branch := branches[key]
+		mask, size := branch.encodingLayout()
+		plans[i] = branchEncodingPlan{branch: branch, mask: mask, size: size}
+		totalSize += size
+	}
+	arena := make([]byte, 0, totalSize)
+	valuesPtr := borrowBranchEncodingSlices(len(keys))
+	defer returnBranchEncodingSlices(valuesPtr)
+	values := *valuesPtr
+	for i, plan := range plans {
+		start := len(arena)
+		arena = plan.branch.encodeToLayout(arena, plan.mask, plan.size)
+		values[i] = arena[start:len(arena):len(arena)]
+	}
+	return rawdb.WriteCommitmentBranchesOwnedStrings(s.db, keys, values)
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {

@@ -14,15 +14,7 @@ import (
 type UpdateAssetActuator struct{}
 
 func (a *UpdateAssetActuator) getContract(ctx *Context) (*contractpb.UpdateAssetContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.UpdateAssetContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal UpdateAssetContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.UpdateAssetContract](ctx, "UpdateAssetContract")
 }
 
 func (a *UpdateAssetActuator) Validate(ctx *Context) error {

@@ -71,15 +71,7 @@ var historicalShieldedProofCompatEntries = []historicalShieldedProofCompat{
 }
 
 func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.ShieldedTransferContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ShieldedTransferContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ShieldedTransferContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ShieldedTransferContract](ctx, "ShieldedTransferContract")
 }
 
 // calcFee returns the fee charged for this shielded transaction in ZEN smallest units.

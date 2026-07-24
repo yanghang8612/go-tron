@@ -59,9 +59,12 @@ func (s *InsertSession) Insert(blocks []*types.Block) error {
 	if s.bc.closed.Load() {
 		return ErrBlockChainClosed
 	}
-	// Warm signature recovery for this batch (off the critical path), matching
-	// insertBlocksLocked. Pure cache-warming.
-	prewarmBlockSignatures(blocks, s.bc.headerSigPrewarmer())
+	// Start signature recovery for the whole batch, then immediately execute the
+	// first block. Workers stay ahead on later blocks while state execution runs;
+	// sync.Once makes an early serial read wait for only its own recovery. Join
+	// before returning so no worker retains the caller's batch.
+	sigPrewarm := startBlockSignaturePrewarm(blocks, s.bc.headerSigPrewarmer())
+	defer sigPrewarm.Wait()
 	for i, block := range blocks {
 		if err := s.bc.insertBlockLockedWithExecutor(block, s.executor); err != nil {
 			var blockNum uint64

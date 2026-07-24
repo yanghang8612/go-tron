@@ -58,7 +58,18 @@ func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynPr
 	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
 }
 
+// applyTransactionScratch owns the per-block actuator objects whose contents
+// are consumed synchronously before processBlock advances to the next tx.
+type applyTransactionScratch struct {
+	context actuator.Context
+	result  actuator.Result
+}
+
 func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
+	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil)
+}
+
+func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch) (result *actuator.Result, err error) {
 	var revertOnOverflow func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -150,7 +161,15 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("create actuator: %w", err)
 	}
 
-	ctx := &actuator.Context{
+	var ctx *actuator.Context
+	var resultSink *actuator.Result
+	if scratch == nil {
+		ctx = new(actuator.Context)
+	} else {
+		ctx = &scratch.context
+		resultSink = &scratch.result
+	}
+	*ctx = actuator.Context{
 		State:                      statedb,
 		DynProps:                   dynProps,
 		Tx:                         tx,
@@ -167,6 +186,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		ActiveWitnesses:            activeWitnesses,
 		TrustTransactionRet:        trustTransactionRet,
 		ForkPassCache:              forkPassCache,
+		ResultSink:                 resultSink,
 		Tracer:                     tracer,
 	}
 
@@ -266,9 +286,111 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	return result, nil
 }
 
-// buildTransactionInfo constructs a TransactionInfo proto from the execution result.
+// transactionInfoSlot keeps the fixed-size pieces of one transaction receipt
+// in one allocation. Each slot owns its ID and repeated-contract-result cell,
+// preserving per-TransactionInfo mutation isolation.
+type transactionInfoSlot struct {
+	info                 corepb.TransactionInfo
+	receipt              corepb.ResourceReceipt
+	id                   tcommon.Hash
+	contractResult       [1][]byte
+	logs                 []*transactionInfoLogSlot
+	logPointers          []*corepb.TransactionInfo_Log
+	internalTransactions []*corepb.InternalTransaction
+}
+
+// transactionInfoLogSlot owns the stable-address protobuf shell and slice
+// headers for one receipt log. transactionInfoSlot is recycled only after
+// async metadata serialization completes, so these can be reused without
+// crossing ownership boundaries while the VM-owned topic/data bytes remain
+// borrowed as before. The parent stores pointers so slice growth never copies
+// a protobuf message after its internal message state has been used.
+type transactionInfoLogSlot struct {
+	log     corepb.TransactionInfo_Log
+	address [tcommon.AddressLength]byte
+	topics  [][]byte
+}
+
+// transactionInfoBatch owns the contiguous receipt storage for one block.
+// Canonical range execution may recycle a batch after the metadata writer has
+// consumed every TransactionInfo; public ProcessBlock callers keep the
+// allocation-per-call ownership contract by passing no batch.
+type transactionInfoBatch struct {
+	slots []transactionInfoSlot
+	infos []*corepb.TransactionInfo
+}
+
+func (b *transactionInfoBatch) prepare(n int) ([]transactionInfoSlot, []*corepb.TransactionInfo) {
+	if n == 0 {
+		b.slots = b.slots[:0]
+		b.infos = b.infos[:0]
+		return b.slots, b.infos
+	}
+	if cap(b.slots) < n {
+		newCap := n
+		if grown := cap(b.slots) + cap(b.slots)/2; grown > newCap {
+			newCap = grown
+		}
+		if newCap < 16 {
+			newCap = 16
+		}
+		b.slots = make([]transactionInfoSlot, n, newCap)
+		b.infos = make([]*corepb.TransactionInfo, n, newCap)
+	} else {
+		b.slots = b.slots[:n]
+		b.infos = b.infos[:n]
+	}
+	return b.slots, b.infos
+}
+
+// transactionInfoBatchPool is bounded by the commit pipeline depth. A batch
+// handed to async commit is returned only after the worker has serialized its
+// infos, so foreground execution can never overwrite worker-owned protobufs.
+type transactionInfoBatchPool struct {
+	free chan *transactionInfoBatch
+}
+
+func newTransactionInfoBatchPool(depth int) *transactionInfoBatchPool {
+	if depth < 1 {
+		depth = 1
+	}
+	return &transactionInfoBatchPool{free: make(chan *transactionInfoBatch, depth)}
+}
+
+func (p *transactionInfoBatchPool) acquire() *transactionInfoBatch {
+	select {
+	case batch := <-p.free:
+		return batch
+	default:
+		return new(transactionInfoBatch)
+	}
+}
+
+func (p *transactionInfoBatchPool) release(batch *transactionInfoBatch) {
+	if p == nil || batch == nil {
+		return
+	}
+	select {
+	case p.free <- batch:
+	default:
+		// The pool is only a reuse hint. Dropping an unexpected surplus keeps
+		// retention bounded without adding synchronization to block execution.
+	}
+}
+
+// buildTransactionInfo constructs an independently owned TransactionInfo.
+// processBlock uses transactionInfoSlot.build with a block-sized slot array;
+// standalone callers retain the same ownership through one dedicated slot.
 func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
-	txID := tx.Hash()
+	return new(transactionInfoSlot).build(tx, result, blockNum, blockTime, supportTransactionFeePool)
+}
+
+func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
+	// Break a prior occupant's result reference even when the new transaction
+	// does not publish ContractResult. The full info assignment below clears all
+	// other pointer-bearing protobuf fields before they are rebuilt.
+	slot.contractResult[0] = nil
+	slot.id = tx.Hash()
 	isVMContract := isVMContractType(tx.ContractType())
 
 	// Receipt fields mirror java-tron `Protocol.ResourceReceipt`: EnergyUsage
@@ -276,50 +398,52 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 	// the full VM energy spent (proto field 4) and EnergyFee is the
 	// balance-paid bill in SUN (proto field 2). The split between
 	// EnergyUsed/EnergyFee is set by actuator.PayEnergyBill.
-	info := &corepb.TransactionInfo{
-		Id:             txID[:],
+	slot.receipt = corepb.ResourceReceipt{
+		EnergyUsage:       result.EnergyUsed,
+		EnergyFee:         result.EnergyFee,
+		OriginEnergyUsage: result.OriginEnergyUsage,
+		EnergyUsageTotal:  result.EnergyUsageTotal,
+		NetUsage:          result.NetUsage,
+		NetFee:            result.NetFee,
+		// Diagnostic (cross-impl parity): available energy of origin/caller
+		// at contract execution start; set unconditionally in vm_actuator.
+		OriginEnergyLeft: result.OriginEnergyLeft,
+		CallerEnergyLeft: result.CallerEnergyLeft,
+		// Diagnostic (cross-impl parity), non-consensus. Owner* are the
+		// fee-payer's balance/bandwidth state at exec start (set for every
+		// tx type in applyTransaction); *EnergyWindow are the origin/caller
+		// energy recovery windows (set for VM txs in vm_actuator).
+		OwnerBalance:                result.OwnerBalance,
+		OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
+		OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
+		OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
+		OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
+		OwnerFrozenForNet:           result.OwnerFrozenForNet,
+		OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
+		OriginEnergyWindow:          result.OriginEnergyWindow,
+		CallerEnergyWindow:          result.CallerEnergyWindow,
+		// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
+		// Decompose the energy bill: recovered = *_energy_limit -
+		// *_energy_left, limit = floor(frozen_for_energy/TRX *
+		// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
+		// vm_actuator at execution start.
+		CallerEnergyLimit:           result.CallerEnergyLimit,
+		OriginEnergyLimit:           result.OriginEnergyLimit,
+		OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
+		CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
+		OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
+		CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
+		OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
+		TotalEnergyWeight:           result.TotalEnergyWeight,
+		TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
+	}
+	info := &slot.info
+	*info = corepb.TransactionInfo{
+		Id:             slot.id[:],
 		Fee:            result.Fee + result.NetFee,
 		BlockNumber:    int64(blockNum),
 		BlockTimeStamp: blockTime,
-		Receipt: &corepb.ResourceReceipt{
-			EnergyUsage:       result.EnergyUsed,
-			EnergyFee:         result.EnergyFee,
-			OriginEnergyUsage: result.OriginEnergyUsage,
-			EnergyUsageTotal:  result.EnergyUsageTotal,
-			NetUsage:          result.NetUsage,
-			NetFee:            result.NetFee,
-			// Diagnostic (cross-impl parity): available energy of origin/caller
-			// at contract execution start; set unconditionally in vm_actuator.
-			OriginEnergyLeft: result.OriginEnergyLeft,
-			CallerEnergyLeft: result.CallerEnergyLeft,
-			// Diagnostic (cross-impl parity), non-consensus. Owner* are the
-			// fee-payer's balance/bandwidth state at exec start (set for every
-			// tx type in applyTransaction); *EnergyWindow are the origin/caller
-			// energy recovery windows (set for VM txs in vm_actuator).
-			OwnerBalance:                result.OwnerBalance,
-			OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
-			OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
-			OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
-			OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
-			OwnerFrozenForNet:           result.OwnerFrozenForNet,
-			OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
-			OriginEnergyWindow:          result.OriginEnergyWindow,
-			CallerEnergyWindow:          result.CallerEnergyWindow,
-			// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
-			// Decompose the energy bill: recovered = *_energy_limit -
-			// *_energy_left, limit = floor(frozen_for_energy/TRX *
-			// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
-			// vm_actuator at execution start.
-			CallerEnergyLimit:           result.CallerEnergyLimit,
-			OriginEnergyLimit:           result.OriginEnergyLimit,
-			OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
-			CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
-			OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
-			CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
-			OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
-			TotalEnergyWeight:           result.TotalEnergyWeight,
-			TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
-		},
+		Receipt:        &slot.receipt,
 	}
 	if isVMContract {
 		info.Receipt.Result = corepb.Transaction_ResultContractResult(result.ContractRet)
@@ -334,9 +458,11 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 	}
 
 	if result.ContractResultPresent || len(result.ContractResult) > 0 {
-		info.ContractResult = [][]byte{result.ContractResult}
+		slot.contractResult[0] = result.ContractResult
+		info.ContractResult = slot.contractResult[:]
 	} else if !isVMContract && result.ContractRet == int32(corepb.Transaction_Result_SUCCESS) {
-		info.ContractResult = [][]byte{{}}
+		slot.contractResult[0] = []byte{}
+		info.ContractResult = slot.contractResult[:]
 	}
 
 	if len(result.ContractAddress) > 0 {
@@ -379,18 +505,23 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 		info.OrderDetails = result.OrderDetails
 	}
 
-	for _, l := range result.Logs {
-		pbLog := &corepb.TransactionInfo_Log{
-			Address: transactionInfoLogAddress(l.Address),
+	slot.prepareLogs(len(result.Logs))
+	for i, l := range result.Logs {
+		logSlot := slot.logs[i]
+		pbLog := &logSlot.log
+		*pbLog = corepb.TransactionInfo_Log{
+			Address: logSlot.setAddress(l.Address),
 			Data:    l.Data,
 		}
-		for _, topic := range l.Topics {
-			pbLog.Topics = append(pbLog.Topics, topic)
-		}
-		info.Log = append(info.Log, pbLog)
+		pbLog.Topics = logSlot.setTopics(l.Topics)
+		slot.logPointers[i] = pbLog
 	}
-	if len(result.InternalTransactions) > 0 {
-		info.InternalTransactions = append(info.InternalTransactions, result.InternalTransactions...)
+	if len(slot.logPointers) > 0 {
+		info.Log = slot.logPointers[:len(slot.logPointers):len(slot.logPointers)]
+	}
+	slot.setInternalTransactions(result.InternalTransactions)
+	if len(slot.internalTransactions) > 0 {
+		info.InternalTransactions = slot.internalTransactions[:len(slot.internalTransactions):len(slot.internalTransactions)]
 	}
 
 	if result.ContractRet > 1 {
@@ -452,11 +583,73 @@ func isVMContractType(contractType corepb.Transaction_Contract_ContractType) boo
 		contractType == corepb.Transaction_Contract_TriggerSmartContract
 }
 
-func transactionInfoLogAddress(addr tcommon.Address) []byte {
+func (slot *transactionInfoLogSlot) setAddress(addr tcommon.Address) []byte {
 	if addr[0] == tcommon.AddressPrefixMainnet {
-		return append([]byte(nil), addr[1:]...)
+		copy(slot.address[:tcommon.AccountIDLength], addr[1:])
+		return slot.address[:tcommon.AccountIDLength:tcommon.AccountIDLength]
 	}
-	return addr.Bytes()
+	copy(slot.address[:], addr[:])
+	return slot.address[:tcommon.AddressLength:tcommon.AddressLength]
+}
+
+func (slot *transactionInfoLogSlot) setTopics(topics [][]byte) [][]byte {
+	oldLen := len(slot.topics)
+	if cap(slot.topics) < len(topics) {
+		slot.topics = make([][]byte, len(topics))
+	} else {
+		if len(topics) < oldLen {
+			clear(slot.topics[len(topics):oldLen])
+		}
+		slot.topics = slot.topics[:len(topics)]
+	}
+	copy(slot.topics, topics)
+	if len(slot.topics) > 0 {
+		return slot.topics[:len(slot.topics):len(slot.topics)]
+	}
+	return nil
+}
+
+func (slot *transactionInfoSlot) prepareLogs(n int) {
+	oldLogs := len(slot.logs)
+	for i := n; i < oldLogs; i++ {
+		slot.logs[i].log = corepb.TransactionInfo_Log{}
+		clear(slot.logs[i].topics)
+		slot.logs[i].topics = slot.logs[i].topics[:0]
+	}
+	if cap(slot.logs) < n {
+		old := slot.logs[:cap(slot.logs)]
+		slot.logs = make([]*transactionInfoLogSlot, n)
+		copy(slot.logs, old)
+	} else {
+		slot.logs = slot.logs[:n]
+	}
+	for i := oldLogs; i < n; i++ {
+		if slot.logs[i] == nil {
+			slot.logs[i] = new(transactionInfoLogSlot)
+		}
+	}
+	oldPointers := len(slot.logPointers)
+	if cap(slot.logPointers) < n {
+		slot.logPointers = make([]*corepb.TransactionInfo_Log, n)
+	} else {
+		if n < oldPointers {
+			clear(slot.logPointers[n:oldPointers])
+		}
+		slot.logPointers = slot.logPointers[:n]
+	}
+}
+
+func (slot *transactionInfoSlot) setInternalTransactions(txs []*corepb.InternalTransaction) {
+	oldLen := len(slot.internalTransactions)
+	if cap(slot.internalTransactions) < len(txs) {
+		slot.internalTransactions = make([]*corepb.InternalTransaction, len(txs))
+	} else {
+		if len(txs) < oldLen {
+			clear(slot.internalTransactions[len(txs):oldLen])
+		}
+		slot.internalTransactions = slot.internalTransactions[:len(txs)]
+	}
+	copy(slot.internalTransactions, txs)
 }
 
 // ProcessBlock executes all transactions in a block and pays the block reward.
@@ -472,21 +665,21 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, -1, nil)
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, -1, nil)
 }
 
 // ProcessBlockTraced re-executes block against the supplied (copied) PARENT
@@ -495,7 +688,7 @@ func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, d
 // tracer captures just the target tx's opcode/call stream (every other tx runs
 // with a nil tracer at zero overhead). genesisHash is optional.
 func ProcessBlockTraced(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, forkPassCache *forks.VersionPassCache, traceTxIndex int, tracer vm.Tracer, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, forkPassCache, traceTxIndex, tracer)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, forkPassCache, nil, traceTxIndex, tracer)
 	return txInfos, err
 }
 
@@ -506,7 +699,16 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+	// Fork stats and prevBlockTime are immutable throughout this block. Share
+	// permanently-passed versions with the chain cache, but keep pending/false
+	// results in a disposable block view so per-tx gates read each version only
+	// once without delaying a quorum transition at the next block boundary.
+	if forkPassCache == nil {
+		forkPassCache = forks.NewVersionPassCache()
+	}
+	forkPassCache = forkPassCache.BlockScope()
+
 	blockSnap := statedb.Snapshot()
 	dpSnap := dynProps.Snapshot()
 	defer func() {
@@ -533,8 +735,17 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
+	var txScratch applyTransactionScratch
+	transactions := block.Transactions()
+	var txInfoSlots []transactionInfoSlot
+	if txInfoBatch != nil {
+		txInfoSlots, txInfos = txInfoBatch.prepare(len(transactions))
+	} else {
+		txInfoSlots = make([]transactionInfoSlot, len(transactions))
+		txInfos = make([]*corepb.TransactionInfo, len(transactions))
+	}
 
-	for i, tx := range block.Transactions() {
+	for i, tx := range transactions {
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()
@@ -558,15 +769,14 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if traceTxIndex >= 0 && i == traceTxIndex {
 			txTracer = traceTracer
 		}
-		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer)
+		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
 		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
-		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
-		txInfos = append(txInfos, info)
+		txInfos[i] = txInfoSlots[i].build(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		statedb.FinalizeTransaction()
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {

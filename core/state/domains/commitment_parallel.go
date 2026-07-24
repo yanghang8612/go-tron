@@ -40,24 +40,26 @@ const maxFoldNibbles = 16
 // bufferedBranchStore wraps a base branchStore with read-through reads and
 // locally-buffered writes. The parallel root fold gives each first-nibble subtrie
 // its own bufferedBranchStore so the subtries can fold concurrently while sharing
-// the base for reads; the buffers are flushed to the base serially after every
-// subtrie has completed.
+// the base for reads. As each subtrie completes, opted-in rawdb production stores
+// flush its disjoint sibling buffer immediately; stores that do not explicitly
+// advertise concurrent read/write safety retain the serial path after all workers
+// join.
 //
 // Correctness rests on three properties of a single Fold descent:
 //
 //   - The 16 first-nibble subtries write DISJOINT branch-key prefixes (every row
 //     a nibble-nb subtrie touches begins with nibble nb), so no two buffers ever
-//     hold the same prefix and the serial flush order cannot affect the final
-//     base state.
+//     hold the same prefix and flush order cannot affect the final base state.
 //   - The descent is single-pass and bottom-up: a subtrie writes a branch only
 //     after computing it from its children, and never re-reads a prefix it has
 //     written within the same fold. Read-through to the unmodified base is
 //     therefore correct. (Buffer-first reads are kept anyway, so the store is
 //     correct even if that invariant ever changes.)
-//   - Base reads are concurrent-safe and the base is not mutated during the
-//     parallel phase (writes are buffered): blockbuffer Get/GetNoCopy take a read
-//     lock and are documented safe to call concurrently with mutators, pebble Get
-//     is concurrent-safe, and go-ethereum memorydb guards reads with an RWMutex.
+//   - Before a worker finishes, its writes stay private. An opted-in production
+//     blockbuffer may publish that FINISHED nibble while siblings still read
+//     their disjoint prefixes; its immutable topology view plus shard locks make
+//     those concurrent reads/writes safe. All other stores retain a serial flush
+//     after every worker has joined.
 type bufferedBranchStore struct {
 	base branchStore
 	// puts holds the latest buffered branch per prefix (one byte per nibble). A
@@ -85,8 +87,50 @@ type bufferedBranchStore struct {
 	dels map[string]struct{} // prefix -> tombstone
 }
 
+var bufferedBranchStorePool = sync.Pool{
+	New: func() any { return new(bufferedBranchStore) },
+}
+
+// concurrentSiblingFlushStore is an opt-in marker for a branchStore whose
+// PutBranch/DelBranch methods may safely execute concurrently with each other
+// and with reads of disjoint keys. The parallel root fold never reads or writes
+// the same prefix from two sibling workers.
+type concurrentSiblingFlushStore interface {
+	branchStore
+	concurrentSiblingFlushSafe() bool
+}
+
+// branchBatchStore accepts the sorted final writes from one sibling fold. The
+// rawdb adapter uses this seam to arena-pack immutable encodings; generic test
+// stores keep the ordinary one-PutBranch-at-a-time path.
+type branchBatchStore interface {
+	putBranchesSorted(keys []string, branches map[string]*BranchData) error
+}
+
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
 	return &bufferedBranchStore{base: base}
+}
+
+func borrowBufferedBranchStore(base branchStore) *bufferedBranchStore {
+	s := bufferedBranchStorePool.Get().(*bufferedBranchStore)
+	s.base = base
+	return s
+}
+
+func returnBufferedBranchStore(s *bufferedBranchStore) {
+	if s == nil {
+		return
+	}
+	s.releasePuts()
+	clear(s.dels)
+	s.base = nil
+	bufferedBranchStorePool.Put(s)
+}
+
+func returnSiblingBuffers(buffers [maxFoldNibbles]*bufferedBranchStore) {
+	for _, buf := range buffers {
+		returnBufferedBranchStore(buf)
+	}
 }
 
 func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -148,7 +192,8 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 // prefixes, and across all sibling buffers every prefix is written at most once,
 // so the resulting base state is independent of flush order; the sorted
 // iteration only makes the emitted write stream deterministic. Each surviving
-// branch is encoded here exactly once (inside base.PutBranch).
+// branch is encoded here exactly once (inside base.PutBranch). Sorting stabilizes
+// each sibling's stream; opted-in concurrent siblings may interleave freely.
 func (s *bufferedBranchStore) flush(base branchStore) error {
 	// A buffered store is single-use: after applyRootParallel flushes it, no
 	// caller reads it again. Return every large BranchData destination even when
@@ -173,6 +218,9 @@ func (s *bufferedBranchStore) flush(base branchStore) error {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		if batch, ok := base.(branchBatchStore); ok {
+			return batch.putBranchesSorted(keys, s.puts)
+		}
 		for _, k := range keys {
 			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
 				return err
@@ -192,8 +240,8 @@ func (s *bufferedBranchStore) releasePuts() {
 // applyRootParallel is the parallel counterpart of apply at the root (prefix nil,
 // depth 0). It buckets ops by their first nibble and folds each non-empty
 // first-nibble subtrie concurrently, each against a private bufferedBranchStore,
-// then flushes the buffers into the shared store serially and returns the updated
-// root branch.
+// then flushes the buffers into the shared store (concurrently when it opts in)
+// and returns the updated root branch.
 //
 // The shared root branch is safe to mutate concurrently: each subtrie touches
 // only its own children[nb] slot (an independent array element), and the slots
@@ -211,7 +259,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	// released at function exit after the flush.
 	var counts [maxFoldNibbles]int
 	for i := range ops {
-		counts[ops[i].path[0]]++
+		counts[pathNibble(ops[i].path, 0)]++
 	}
 	var starts [maxFoldNibbles]int
 	for i := 1; i < maxFoldNibbles; i++ {
@@ -222,7 +270,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	grouped := *groupedP
 	heads := starts
 	for i := range ops {
-		nb := ops[i].path[0]
+		nb := pathNibble(ops[i].path, 0)
 		grouped[heads[nb]] = ops[i]
 		heads[nb]++
 	}
@@ -237,6 +285,10 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	if limit < 1 {
 		limit = 1
 	}
+	concurrentFlush := false
+	if store, ok := t.store.(concurrentSiblingFlushStore); ok && limit > 1 {
+		concurrentFlush = store.concurrentSiblingFlushSafe()
+	}
 
 	var (
 		buffers [maxFoldNibbles]*bufferedBranchStore
@@ -250,44 +302,62 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 			continue
 		}
 		group := grouped[starts[nb] : starts[nb]+n]
-		buf := newBufferedBranchStore(t.store)
-		// flush releases successful buffers itself; this fallback also releases
-		// every sibling buffer if any parallel fold or an earlier flush fails.
-		defer buf.releasePuts()
+		buf := borrowBufferedBranchStore(t.store)
 		buffers[nb] = buf
-		// Each subtrie folds sequentially against its private buffer.
-		sub := &commitmentTrie{store: buf}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(nb uint8, sub *commitmentTrie, group []op) {
+		go func(nb uint8, buf *bufferedBranchStore, group []op) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Each subtrie folds sequentially against its private buffer. Keep
+			// this tiny owner on the goroutine stack instead of allocating one
+			// beside every spawned worker.
+			sub := commitmentTrie{store: buf}
 			// The worker owns its path backing array, so recursive appends can
 			// reuse all 64 nibble slots without aliasing sibling workers.
 			var path [pathLen]byte
-			errs[nb] = sub.applyNibble(path[:0], 0, branch, nb, group)
-		}(uint8(nb), sub, group)
+			err := sub.applyNibble(path[:0], 0, branch, nb, group)
+			if err == nil && concurrentFlush {
+				// This worker only reads/writes prefixes beginning with nb. Publishing
+				// its finished buffer cannot affect any still-running sibling, so overlap
+				// encoding/writes with their computation and avoid a second goroutine wave.
+				err = buf.flush(t.store)
+			}
+			errs[nb] = err
+		}(uint8(nb), buf, group)
 	}
 	wg.Wait()
 
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if errs[nb] != nil {
+			returnSiblingBuffers(buffers)
 			return nil, errs[nb]
 		}
 	}
-	// Serial flush in nibble order. Disjoint keyspaces make the base state
-	// order-independent; nibble order keeps the emitted write stream deterministic.
-	for nb := 0; nb < maxFoldNibbles; nb++ {
-		if buffers[nb] == nil {
-			continue
-		}
-		if err := buffers[nb].flush(t.store); err != nil {
+	if !concurrentFlush {
+		if err := flushSiblingBuffersSerial(t.store, buffers); err != nil {
+			returnSiblingBuffers(buffers)
 			return nil, err
 		}
 	}
+	returnSiblingBuffers(buffers)
 
 	if branch.childCount() == 0 {
 		return nil, nil
 	}
 	return branch, nil
+}
+
+// flushSiblingBuffersSerial publishes first-nibble buffers in deterministic
+// order for stores that do not opt into concurrent read/write access.
+func flushSiblingBuffersSerial(base branchStore, buffers [maxFoldNibbles]*bufferedBranchStore) error {
+	for nb := 0; nb < maxFoldNibbles; nb++ {
+		if buffers[nb] == nil {
+			continue
+		}
+		if err := buffers[nb].flush(base); err != nil {
+			return err
+		}
+	}
+	return nil
 }

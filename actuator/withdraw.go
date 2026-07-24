@@ -14,15 +14,7 @@ const withdrawCooldown = 86_400_000 // 24 hours in ms
 type WithdrawBalanceActuator struct{}
 
 func (a *WithdrawBalanceActuator) getContract(ctx *Context) (*contractpb.WithdrawBalanceContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	wc := &contractpb.WithdrawBalanceContract{}
-	if err := contract.Parameter.UnmarshalTo(wc); err != nil {
-		return nil, errors.New("failed to unmarshal WithdrawBalanceContract")
-	}
-	return wc, nil
+	return decodedContract[*contractpb.WithdrawBalanceContract](ctx, "WithdrawBalanceContract")
 }
 
 func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {

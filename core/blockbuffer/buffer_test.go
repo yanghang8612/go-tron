@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -25,10 +27,56 @@ type blockingWriter struct {
 	puts    atomic.Int32
 }
 
+type stringKeyWriterProbe struct {
+	putKeys       []string
+	deleteKeys    []string
+	genericWrites int
+}
+
+func (w *stringKeyWriterProbe) Put([]byte, []byte) error {
+	w.genericWrites++
+	return nil
+}
+
+func (w *stringKeyWriterProbe) Delete([]byte) error {
+	w.genericWrites++
+	return nil
+}
+
+func (w *stringKeyWriterProbe) PutString(key string, _ []byte) error {
+	w.putKeys = append(w.putKeys, key)
+	return nil
+}
+
+func (w *stringKeyWriterProbe) DeleteString(key string) error {
+	w.deleteKeys = append(w.deleteKeys, key)
+	return nil
+}
+
 func newBlockingWriter() *blockingWriter {
 	return &blockingWriter{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
+	}
+}
+
+func TestWriteLayerUsesStringKeyWriter(t *testing.T) {
+	buf := New(nil)
+	layer := newLayer(bufHash(1), 1)
+	buf.putIntoString(layer, "put-key", []byte("value"))
+	buf.deleteIntoString(layer, "delete-key")
+	probe := new(stringKeyWriterProbe)
+	if err := writeLayer(layer, probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.genericWrites != 0 {
+		t.Fatalf("generic []byte writes = %d, want 0", probe.genericWrites)
+	}
+	if len(probe.putKeys) != 1 || probe.putKeys[0] != "put-key" {
+		t.Fatalf("string put keys = %q, want [put-key]", probe.putKeys)
+	}
+	if len(probe.deleteKeys) != 1 || probe.deleteKeys[0] != "delete-key" {
+		t.Fatalf("string delete keys = %q, want [delete-key]", probe.deleteKeys)
 	}
 }
 
@@ -47,6 +95,7 @@ type countingBatcher struct {
 	ethdb.KeyValueStore
 	batches  atomic.Int32
 	writes   atomic.Int32
+	ops      atomic.Int32
 	sizeHint atomic.Int64
 }
 
@@ -55,6 +104,7 @@ func (w *countingBatcher) NewBatch() ethdb.Batch {
 	return &countingBatch{
 		Batch:  w.KeyValueStore.NewBatch(),
 		writes: &w.writes,
+		ops:    &w.ops,
 	}
 }
 
@@ -64,17 +114,51 @@ func (w *countingBatcher) NewBatchWithSize(size int) ethdb.Batch {
 	return &countingBatch{
 		Batch:  w.KeyValueStore.NewBatchWithSize(size),
 		writes: &w.writes,
+		ops:    &w.ops,
 	}
 }
 
 type countingBatch struct {
 	ethdb.Batch
 	writes *atomic.Int32
+	ops    *atomic.Int32
+}
+
+func (b *countingBatch) Put(key, value []byte) error {
+	b.ops.Add(1)
+	return b.Batch.Put(key, value)
+}
+
+func (b *countingBatch) Delete(key []byte) error {
+	b.ops.Add(1)
+	return b.Batch.Delete(key)
 }
 
 func (b *countingBatch) Write() error {
 	b.writes.Add(1)
 	return b.Batch.Write()
+}
+
+var errForcedBatchWrite = errors.New("forced batch write failure")
+
+type failingBatcher struct {
+	ethdb.KeyValueStore
+}
+
+func (w *failingBatcher) NewBatch() ethdb.Batch {
+	return &failingBatch{Batch: w.KeyValueStore.NewBatch()}
+}
+
+func (w *failingBatcher) NewBatchWithSize(size int) ethdb.Batch {
+	return &failingBatch{Batch: w.KeyValueStore.NewBatchWithSize(size)}
+}
+
+type failingBatch struct {
+	ethdb.Batch
+}
+
+func (b *failingBatch) Write() error {
+	return errForcedBatchWrite
 }
 
 func bufHash(b byte) common.Hash {
@@ -188,7 +272,191 @@ func TestBufferBatchOwnsValuesAfterWrite(t *testing.T) {
 	mustGet(t, b, []byte("key"), []byte("original"))
 }
 
+func TestBufferBatchOwnsKeysBeforeWrite(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+
+	key := []byte("original-key")
+	batch := b.NewBatch()
+	if err := batch.Put(key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	copy(key, "mutated-key!")
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("original-key"), []byte("value"))
+	mustNotFound(t, b, []byte("mutated-key!"))
+}
+
+func TestBufferBatchPutOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	key := []byte("owned-value-key")
+	value := []byte("owned-value")
+	batch := b.NewBatch()
+	owned := batch.(interface {
+		PutOwnedValue(key, value []byte) error
+	})
+	if err := owned.PutOwnedValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0] = 'X'
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-value-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedValue copied the transferred value")
+	}
+	mustNotFound(t, b, []byte("Xwned-value-key"))
+}
+
+func TestBufferBatchPutOwnedKeyValueRetainsBothInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	keyArena := []byte("prefix-owned-key-suffix")
+	key := keyArena[len("prefix-"):len("prefix-owned-key"):len("prefix-owned-key")]
+	value := []byte("owned-value")
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if unsafe.StringData(batch.ops[0].key) != unsafe.SliceData(key) {
+		t.Fatal("PutOwnedKeyValue copied the transferred key")
+	}
+	// The string alias, rather than a live caller slice, must keep the arena
+	// reachable until the batch publishes the operation.
+	keyArena = nil
+	key = nil
+	runtime.GC()
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte("owned-key"))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("owned key/value read = (%q,%v)", got, err)
+	}
+	if &got[0] != &value[0] {
+		t.Fatal("PutOwnedKeyValue copied the transferred value")
+	}
+}
+
+func TestBufferBatchResetReleasesOwnedInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	batch := b.NewBatch().(*bufferBatch)
+	if err := batch.PutOwnedKeyValue([]byte("owned-key"), []byte("owned-value")); err != nil {
+		t.Fatal(err)
+	}
+	batch.Reset()
+	if len(batch.ops) != 0 || batch.size != 0 {
+		t.Fatalf("Reset left len/size = %d/%d", len(batch.ops), batch.size)
+	}
+	if retained := batch.ops[:cap(batch.ops)][0]; retained.key != "" || retained.value != nil || retained.target != nil {
+		t.Fatalf("Reset retained operation references: %+v", retained)
+	}
+}
+
+func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	writers := map[string]interface {
+		PutOwnedValue(key, value []byte) error
+	}{
+		"buffer":     b,
+		"layer-view": b.ViewLayer(h),
+	}
+	for name, writer := range writers {
+		t.Run(name, func(t *testing.T) {
+			key := []byte(name + "-owned-key")
+			wantKey := append([]byte(nil), key...)
+			value := []byte(name + "-owned-value")
+			if err := writer.PutOwnedValue(key, value); err != nil {
+				t.Fatal(err)
+			}
+			key[0] = 'X'
+			got, err := b.GetNoCopy(wantKey)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("owned value read = (%q,%v), want %q", got, err, value)
+			}
+			if &got[0] != &value[0] {
+				t.Fatal("PutOwnedValue copied the transferred value")
+			}
+			mustNotFound(t, b, key)
+		})
+	}
+}
+
+func TestStructuredStateKVLatestOwnedWritersRetainValueAndOwnKey(t *testing.T) {
+	type writer interface {
+		PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
+	}
+	tests := []struct {
+		name  string
+		write func(t *testing.T, b *Buffer, w writer)
+	}{
+		{name: "buffer", write: func(t *testing.T, _ *Buffer, w writer) {}},
+		{name: "layer-view", write: func(t *testing.T, _ *Buffer, w writer) {}},
+		{name: "batch", write: func(t *testing.T, _ *Buffer, w writer) {
+			if err := w.(ethdb.Batch).Write(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := New(rawdb.NewMemoryDatabase())
+			b.BeginBlock(bufHash(1), 1)
+			h, _ := b.NewestInflight()
+			var w writer
+			switch tc.name {
+			case "buffer":
+				w = b
+			case "layer-view":
+				w = b.ViewLayer(h)
+			case "batch":
+				w = b.NewBatch().(writer)
+			}
+			prefix := []byte("state-prefix-")
+			var accountID common.AccountID
+			accountID[0] = 0x7a
+			logicalKey := []byte("owned-logical-key")
+			wantKey := []byte(joinStateKVLatestKey(prefix, accountID, 17, 3, logicalKey))
+			value := []byte("owned-encoded-value")
+			if err := w.PutStateKVLatestOwnedValue(prefix, accountID, 17, 3, logicalKey, value); err != nil {
+				t.Fatal(err)
+			}
+			logicalKey[0] = 'X'
+			tc.write(t, b, w)
+			got, err := b.GetNoCopy(wantKey)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("owned structured value read = (%q,%v)", got, err)
+			}
+			if &got[0] != &value[0] {
+				t.Fatal("structured owned writer copied value")
+			}
+		})
+	}
+}
+
 func BenchmarkBufferBatchWrite(b *testing.B) {
+	benchmarkBufferBatchWrite(b, false)
+}
+
+func BenchmarkBufferBatchWriteOwnedValues(b *testing.B) {
+	benchmarkBufferBatchWrite(b, true)
+}
+
+func benchmarkBufferBatchWrite(b *testing.B, ownedValues bool) {
 	buffer := New(rawdb.NewMemoryDatabase())
 	buffer.BeginBlock(bufHash(1), 1)
 	keys := make([][]byte, 128)
@@ -201,8 +469,17 @@ func BenchmarkBufferBatchWrite(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		batch := buffer.NewBatchWithSize(len(keys) * (len(value) + 16))
+		owned, _ := batch.(interface {
+			PutOwnedValue(key, value []byte) error
+		})
 		for _, key := range keys {
-			if err := batch.Put(key, value); err != nil {
+			var err error
+			if ownedValues {
+				err = owned.PutOwnedValue(key, value)
+			} else {
+				err = batch.Put(key, value)
+			}
+			if err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -222,12 +499,13 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 
 	puts := newLayer(bufHash(1), 1)
 	value := bytes.Repeat([]byte{0xcd}, 1024)
+	setup := &Buffer{}
 	for i := 0; i < 2048; i++ {
-		puts.writes[fmt.Sprintf("flush-key-%04d", i)] = value
+		setup.putIntoString(puts, fmt.Sprintf("flush-key-%04d", i), value)
 	}
 	deletes := newLayer(bufHash(2), 2)
 	for i := 0; i < 32768; i++ {
-		deletes.deletes[fmt.Sprintf("deleted-state-key-%08d", i)] = struct{}{}
+		setup.deleteIntoString(deletes, fmt.Sprintf("deleted-state-key-%08d", i))
 	}
 
 	for _, workload := range []struct {
@@ -266,6 +544,64 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkFlushLayersCoalesced(b *testing.B) {
+	layers := benchmarkFlushLayers()
+	dst := rawdb.NewMemoryDatabase()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := flushLayers(layers, dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkFlushLayersUncoalescedReference(b *testing.B) {
+	layers := benchmarkFlushLayers()
+	dst := rawdb.NewMemoryDatabase()
+	encodedSize := pebbleBatchHeaderSize
+	for _, layer := range layers {
+		_, encoded := layerWriteStats(layer)
+		encodedSize += encoded
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := dst.NewBatchWithSize(encodedSize + pebbleBatchRecordSlack)
+		for _, layer := range layers {
+			if err := writeLayer(layer, batch); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatal(err)
+		}
+		batch.Close()
+	}
+}
+
+func benchmarkFlushLayers() []*layer {
+	const (
+		layerCount = 5
+		hotKeys    = 2000
+		uniqueKeys = 3000
+	)
+	owner := new(Buffer)
+	layers := make([]*layer, layerCount)
+	value := bytes.Repeat([]byte{0xcd}, 16)
+	for layerIndex := range layers {
+		layer := newLayer(bufHash(byte(layerIndex+1)), uint64(layerIndex+1))
+		for keyIndex := 0; keyIndex < hotKeys; keyIndex++ {
+			owner.putIntoString(layer, fmt.Sprintf("hot-%05d", keyIndex), value)
+		}
+		for keyIndex := 0; keyIndex < uniqueKeys; keyIndex++ {
+			owner.putIntoString(layer, fmt.Sprintf("unique-%d-%05d", layerIndex, keyIndex), value)
+		}
+		layers[layerIndex] = layer
+	}
+	return layers
 }
 
 func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
@@ -737,9 +1073,13 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	if got := dst.writes.Load(); got != 1 {
 		t.Fatalf("batch Write calls = %d, want 1", got)
 	}
+	if got := dst.ops.Load(); got != 1 {
+		t.Fatalf("batch operations = %d, want one final operation", got)
+	}
 	// Each Set record is kind(1), key length(1), key(1), value length(1),
 	// value(1), plus the Pebble header and one-record temporary varint slack.
-	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+3*5+pebbleBatchRecordSlack); got != want {
+	// The three layer-local versions collapse to the newest operation.
+	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+5+pebbleBatchRecordSlack); got != want {
 		t.Fatalf("batch size hint = %d, want encoded size plus scratch %d", got, want)
 	}
 	got, err := dst.Get([]byte("k"))
@@ -748,6 +1088,89 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("C")) {
 		t.Fatalf("batched FlushUpTo order = %q, want %q", got, "C")
+	}
+}
+
+func TestBuffer_FlushUpToCoalescesFinalOperation(t *testing.T) {
+	tests := []struct {
+		name      string
+		firstPut  bool
+		secondPut bool
+		want      []byte
+	}{
+		{name: "put then delete", firstPut: true},
+		{name: "delete then put", secondPut: true, want: []byte("new")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New(rawdb.NewMemoryDatabase())
+			b.BeginBlock(bufHash(1), 1)
+			if tt.firstPut {
+				if err := b.Put([]byte("k"), []byte("old")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := b.Delete([]byte("k")); err != nil {
+				t.Fatal(err)
+			}
+			b.CommitBlock()
+
+			b.BeginBlock(bufHash(2), 2)
+			if tt.secondPut {
+				if err := b.Put([]byte("k"), []byte("new")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := b.Delete([]byte("k")); err != nil {
+				t.Fatal(err)
+			}
+			b.CommitBlock()
+
+			dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+			if err := dst.Put([]byte("k"), []byte("base")); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.FlushUpTo(2, dst); err != nil {
+				t.Fatal(err)
+			}
+			if got := dst.ops.Load(); got != 1 {
+				t.Fatalf("batch operations = %d, want one final operation", got)
+			}
+			got, err := dst.Get([]byte("k"))
+			if tt.want == nil {
+				if err == nil {
+					t.Fatalf("dst[k] = %q, want deleted", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dst.Get: %v", err)
+			}
+			if !bytes.Equal(got, tt.want) {
+				t.Fatalf("dst[k] = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuffer_FlushUpToMergedBatchFailureKeepsLayers(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	for i, value := range []string{"old", "new"} {
+		b.BeginBlock(bufHash(byte(i+1)), uint64(i+1))
+		if err := b.Put([]byte("k"), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	dst := &failingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(2, dst); !errors.Is(err, errForcedBatchWrite) {
+		t.Fatalf("FlushUpTo error = %v, want %v", err, errForcedBatchWrite)
+	}
+	if pending := b.PendingBlocks(); len(pending) != 2 {
+		t.Fatalf("pending layers = %d, want 2 after atomic batch failure", len(pending))
+	}
+	mustGet(t, b, []byte("k"), []byte("new"))
+	if has, err := dst.Has([]byte("k")); err != nil || has {
+		t.Fatalf("failed destination Has = (%v, %v), want (false, nil)", has, err)
 	}
 }
 

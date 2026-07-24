@@ -156,9 +156,10 @@ type BlockChain struct {
 	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
 	// failed apply. See proposalScanCache.
 	proposalCache *proposalScanCache
-	// versionPassCache skips the per-tx fork-stats read + vote tally for an SR
-	// fork version that has already activated. Node-local; reset on reorg /
-	// failed apply (same discipline as proposalCache). See forks.VersionPassCache.
+	// versionPassCache skips the per-tx fork-stats read + vote tally for SR fork
+	// versions: passed results persist across blocks, while processBlock derives
+	// a disposable scope for pending results. Node-local; reset on reorg / failed
+	// apply (same discipline as proposalCache). See forks.VersionPassCache.
 	versionPassCache *forks.VersionPassCache
 	fc               *forks.ForkController
 
@@ -486,6 +487,27 @@ func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 	return rawdb.ReadBlock(bc.chaindb, number)
 }
 
+// BlockIDByNumber retrieves only the canonical BlockID at number. Sync
+// summaries and inventory checks use this instead of deserializing the complete
+// block (including every transaction) merely to compare its hash. The head is
+// already resident; older blocks use rawdb's recent-hash ring or allocation-
+// light raw-header scan with ancient fallback.
+func (bc *BlockChain) BlockIDByNumber(number uint64) (types.BlockID, bool) {
+	if current := bc.CurrentBlock(); current != nil {
+		if number > current.Number() {
+			return types.BlockID{}, false
+		}
+		if number == current.Number() {
+			return current.ID(), true
+		}
+	}
+	hash, ok := rawdb.ReadBlockHash(bc.chaindb, number)
+	if !ok {
+		return types.BlockID{}, false
+	}
+	return types.BlockID{Hash: hash, Num: number}, true
+}
+
 // GetBlockByHash retrieves a block by its hash.
 func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	num := rawdb.ReadBlockNumber(bc.chaindb, hash)
@@ -634,12 +656,13 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
-	// Parallel signature pre-verification: warm every tx's sender recovery and
-	// every block's witness-signature recovery ahead of serial execution, off
-	// the critical path. Pure cache-warming — the serial path (envelope
+	// Parallel signature pre-verification: start every tx's sender recovery and
+	// every block's witness-signature recovery, then overlap later-block jobs with
+	// ordered state execution. Pure cache warming — the serial path (envelope
 	// validation, header verification) still owns every accept/reject decision
-	// and reads an identical recovered value, computing inline on any miss.
-	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
+	// and reads an identical memoized value, waiting/computing inline on a miss.
+	sigPrewarm := startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+	defer sigPrewarm.Wait()
 
 	executor := newCanonicalRangeExecutor(bc, true)
 	if bc.asyncCommit {
@@ -1089,6 +1112,12 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// passed for non-rooted chain/runtime data visible during execution (TAPOS,
 	// genesis witness metadata, and similar compatibility reads).
 	blockRoot := block.AccountStateRoot()
+	// Match java-tron's AccountStateCallBack.preExecute: account-state-root
+	// generation and validation are controlled by proposal parameter #25, not
+	// by whether an individual producer put a root in the block header. Mainnet
+	// contains isolated pre-activation headers with this field populated; Java
+	// nodes ignore them while the dynamic property is disabled.
+	accountStateRootEnabled := dynProps.AllowAccountStateRoot()
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
 	var err error
@@ -1111,11 +1140,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
 	}
-	if blockRoot != (tcommon.Hash{}) {
+	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, -1, nil)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, -1, nil)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, -1, nil)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, -1, nil)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -1270,11 +1299,12 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	stats.mark(&stats.Maintenance)
 
-	// Verify java-tron's header accountStateRoot, if present, before committing
-	// the internal StateDB root. The two roots intentionally use different
-	// domains; only the adapter knows how to interpret the wire root.
-	if err := defaultStateRootAdapter.ValidateJavaAccountStateRoot(blockRoot, javaAccountStateRoot); err != nil {
-		return err
+	// Java validates a populated header root only while proposal parameter #25
+	// is enabled. A producer-supplied root before activation is consensus-opaque.
+	if accountStateRootEnabled {
+		if err := defaultStateRootAdapter.ValidateJavaAccountStateRoot(blockRoot, javaAccountStateRoot); err != nil {
+			return err
+		}
 	}
 
 	// Update dynamic properties and fork-vote state before Commit. Non-derived
@@ -1297,8 +1327,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// serves the parent hash — Nile 10,552,292 stalled exactly here (OneSwap
 	// derives limit-order ids from blockhash(block.number-1) ^ tx.origin, so
 	// the zero hash silently diverged the order book at placement). Layered
-	// staging keeps the row fork-rewindable, like the TAPOS ref above.
-	if err := rawdb.WriteBlock(bc.buffer, block); err != nil {
+	// staging keeps the row fork-rewindable, like the TAPOS ref above. Keep this
+	// one immutable encoding for the durable metadata tail as well: the buffer
+	// takes a read-only alias instead of copying it, and neither side mutates it.
+	blockData, err := block.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal staged block body: %w", err)
+	}
+	if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
 		return fmt.Errorf("stage block body: %w", err)
 	}
 	if n := len(block.Transactions()); n > 0 {
@@ -1341,7 +1377,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// is skipped entirely and the synchronous commit runs unchanged —
 	// byte-identical.
 	if bc.asyncCommit && plan.commit != nil {
-		return bc.commitAsync(block, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
+		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
 	}
 
 	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
@@ -1379,7 +1415,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos); err != nil {
 		return err
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
@@ -1490,11 +1526,11 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
-	return rawdb.WriteBlockMetadataBatch(bc.db, block, stateRoot, txInfos)
+	return rawdb.WriteBlockMetadataBatchEncoded(bc.db, block, blockData, stateRoot, txInfos)
 }
 
 // flushBufferUpToSolidified drains every committed buffer layer whose block
@@ -2472,14 +2508,11 @@ func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	// Hot path: the wrapped view (buffer layers fall through to Pebble),
 	// covering everything the freezer has not pruned, including blocks of
 	// an in-flight insert batch that only exist in the buffer.
-	if blk := rawdb.ReadBlockKV(s.BufferedKVStore, number); blk != nil {
-		return blk.Hash(), true
+	if hash, ok := rawdb.ReadBlockHashKV(s.BufferedKVStore, number); ok {
+		return hash, true
 	}
-	// Frozen path: ancient-first ReadBlock (the hot row is already gone).
-	if blk := rawdb.ReadBlock(s.chaindb, number); blk != nil {
-		return blk.Hash(), true
-	}
-	return tcommon.Hash{}, false
+	// Frozen / legacy path: recent BlockID ring first, then raw ancient body.
+	return rawdb.ReadBlockHash(s.chaindb, number)
 }
 
 // vmKV wraps a processing view for handoff to the actuator/VM layer.

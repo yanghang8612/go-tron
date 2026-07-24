@@ -39,7 +39,7 @@ type Interpreter struct {
 func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 	return &Interpreter{
 		tvm:       tvm,
-		table:     &sharedJumpTable,
+		table:     jumpTableForConfig(cfg),
 		tvmConfig: cfg,
 	}
 }
@@ -91,7 +91,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	// energy/energyUsage variables that getEnergyCost writes into.
 	in.factor = types.DynamicEnergyFactorDecimal
 	in.rawEnergyUsed = 0
-	if in.tvmConfig.DynamicEnergy {
+	dynamicEnergy := in.tvmConfig.DynamicEnergy
+	if dynamicEnergy {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
 	}
 	for {
@@ -102,6 +103,22 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		op := contract.GetOp(*pc)
 		operation := in.table[op]
 		if operation == nil {
+			// A known-but-disabled opcode is nil only in the config-resolved
+			// table. Preserve the former runtime-gate bookkeeping/tracer order on
+			// this cold error path; genuinely unknown opcodes retain the original
+			// early return below.
+			if isForkGatedOpcode(op) {
+				in.currentOp = op
+				in.energyErr = nil
+				in.opBaseAccum = 0
+				pcStart := *pc
+				energyBefore := contract.Energy
+				opErr := newInvalidOpCodeError(op)
+				if tracer != nil {
+					in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
+				}
+				return nil, opErr
+			}
 			opErr := newInvalidOpCodeError(op)
 			if tracer != nil {
 				in.traceState(tracer, *pc, op, contract.Energy, 0, mem, stack, contract, opErr)
@@ -111,21 +128,14 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		in.currentOp = op
 		in.energyErr = nil
 		// Per-op base accumulator for the single-floor dynamic-energy penalty.
-		in.opBaseAccum = 0
+		if dynamicEnergy {
+			in.opBaseAccum = 0
+		}
 
 		// Remaining energy before this opcode's charges; the tracer reports it as
 		// the step's "gas" and the energyBefore-energyAfter delta as the cost.
 		pcStart := *pc
 		energyBefore := contract.Energy
-
-		// Fork gate
-		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
-			opErr := newInvalidOpCodeError(op)
-			if tracer != nil {
-				in.traceState(tracer, pcStart, op, energyBefore, 0, mem, stack, contract, opErr)
-			}
-			return nil, opErr
-		}
 
 		// Stack validation
 		stackLen := stack.len()
@@ -156,7 +166,15 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// rawEnergyUsed accumulation are applied uniformly here and in all
 		// instruction-function callsites.
 		if operation.energyCost > 0 {
-			if !in.useEnergy(contract, operation.energyCost) {
+			if !dynamicEnergy {
+				if !contract.UseEnergy(operation.energyCost) {
+					opErr := newOutOfEnergyError(op, contract, operation.energyCost, 0, false)
+					if tracer != nil {
+						in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, stack, contract, opErr)
+					}
+					return nil, opErr
+				}
+			} else if !in.useEnergy(contract, operation.energyCost) {
 				opErr := in.outOfEnergyError()
 				if tracer != nil {
 					in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, stack, contract, opErr)
@@ -182,7 +200,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		}
 
 		if err != nil {
-			if in.tvmConfig.DynamicEnergy {
+			if dynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}
 			if errors.Is(err, ErrOutOfEnergy) {
@@ -193,7 +211,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 		// Terminal opcodes
 		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
-			if in.tvmConfig.DynamicEnergy {
+			if dynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}
 			if op == REVERT {
@@ -205,7 +223,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		(*pc)++
 	}
 
-	if in.tvmConfig.DynamicEnergy {
+	if dynamicEnergy {
 		recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 	}
 	return nil, nil
@@ -246,16 +264,23 @@ func operationStackReturns(op OpCode, operation *operation) int {
 // op.getEnergyCost(program) returns the full cost before the single
 // dynamic-energy penalty calculation.
 //
-// baseCost is the raw (pre-penalty) cost. It is added to rawEnergyUsed
-// unconditionally (mirrors energyUsage accumulation in java-tron VM.play).
-// If DynamicEnergy is active and factor > 1.0×, the penalty is applied
-// and the total scaled cost is debited from the contract.
+// baseCost is the raw (pre-penalty) cost. When DynamicEnergy is active it is
+// added to rawEnergyUsed (mirroring energyUsage accumulation in java-tron
+// VM.play), and factor > 1.0× adds the incremental penalty. Before that fork,
+// rawEnergyUsed is unobservable and the fast path debits baseCost directly.
 //
 // Returns false (out-of-energy) if the contract cannot pay. Callers must
 // propagate ErrOutOfEnergy on false return.
 func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 	if baseCost == 0 {
 		return true
+	}
+	if !in.tvmConfig.DynamicEnergy {
+		if contract.UseEnergy(baseCost) {
+			return true
+		}
+		in.energyErr = newOutOfEnergyError(in.currentOp, contract, baseCost, 0, false)
+		return false
 	}
 	in.rawEnergyUsed += baseCost
 	cost := baseCost
@@ -295,9 +320,7 @@ func makePush(size int) executionFunc {
 			endMin = uint64(len(contract.Code))
 		}
 
-		var v uint256.Int
-		v.SetBytes(contract.Code[startMin:endMin])
-		stack.push(&v)
+		stack.pushBytes(contract.Code[startMin:endMin])
 		*pc += uint64(size)
 		return nil, nil
 	}

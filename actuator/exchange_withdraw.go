@@ -14,15 +14,7 @@ import (
 type ExchangeWithdrawActuator struct{}
 
 func (a *ExchangeWithdrawActuator) getContract(ctx *Context) (*contractpb.ExchangeWithdrawContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ExchangeWithdrawContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ExchangeWithdrawContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ExchangeWithdrawContract](ctx, "ExchangeWithdrawContract")
 }
 
 // Validate checks all preconditions for an ExchangeWithdraw transaction.

@@ -156,7 +156,7 @@ func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb
 				touch.prev = append([]byte(nil), cur.prev...)
 			}
 			kvs[id] = touch
-		case storageChange:
+		case *storageChange:
 			id := string(e.address.Bytes()) + string(e.key.Bytes())
 			if _, ok := storages[id]; ok {
 				continue
@@ -311,7 +311,7 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 	if obj == nil || obj.deleted || obj.selfDestructed {
 		return nil, nil
 	}
-	value := obj.storage[touch.slot]
+	value := obj.storage[touch.slot].value
 	nextExist := value != (tcommon.Hash{})
 	var next []byte
 	if nextExist {

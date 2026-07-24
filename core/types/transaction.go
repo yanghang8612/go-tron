@@ -150,9 +150,19 @@ func signatureForRecovery(sig []byte) ([]byte, error) {
 	if header >= 31 {
 		header -= 4
 	}
+	recoveryID := header - 27
+	// Signatures produced by java-tron and gtron normally already carry the
+	// geth recovery id (0/1). Transaction protobufs are immutable after their
+	// wrapper is constructed and Ecrecover only reads its input, so the common
+	// case can borrow the first 65 bytes directly. Historical Java-style v=27/28
+	// (and v=31..34) still need a private normalized copy. Besides the copy this
+	// removes one heap allocation per ordinary signature from sync prewarming.
+	if sig[64] == recoveryID {
+		return sig[:65], nil
+	}
 	out := make([]byte, 65)
 	copy(out, sig[:65])
-	out[64] = header - 27
+	out[64] = recoveryID
 	return out, nil
 }
 

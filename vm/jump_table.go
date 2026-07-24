@@ -1,5 +1,7 @@
 package vm
 
+import "sync/atomic"
+
 // executionFunc is the signature for opcode implementations.
 type executionFunc func(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error)
 
@@ -23,6 +25,99 @@ type JumpTable [256]*operation
 // Building this table per transaction allocated hundreds of operation objects
 // and generated PUSH/DUP/SWAP/LOG closures on the historical-sync hot path.
 var sharedJumpTable = newJumpTable()
+
+// resolvedJumpTables caches the immutable opcode view for each combination of
+// the 12 TVM flags used by operation.enabledFn. Historical sync executes tens
+// of millions of ordinary opcodes that are never fork-gated; resolving the few
+// gated entries once per flag combination removes an enabledFn pointer load and
+// branch from every opcode dispatch without rebuilding a table per transaction.
+//
+// Disabled entries are nil in the resolved table. Interpreter.Run distinguishes
+// them from genuinely unknown opcodes through a static gated-opcode classifier
+// only on the cold error path, preserving the same invalid-opcode result and
+// tracer event.
+const jumpTableForkVariantCount = 1 << 12
+
+var resolvedJumpTables [jumpTableForkVariantCount]atomic.Pointer[JumpTable]
+
+func jumpTableForkKey(cfg TVMConfig) uint16 {
+	var key uint16
+	if cfg.TransferTrc10 {
+		key |= 1 << 0
+	}
+	if cfg.Constantinople {
+		key |= 1 << 1
+	}
+	if cfg.Solidity059 {
+		key |= 1 << 2
+	}
+	if cfg.Istanbul {
+		key |= 1 << 3
+	}
+	if cfg.Freeze {
+		key |= 1 << 4
+	}
+	if cfg.Vote {
+		key |= 1 << 5
+	}
+	if cfg.StakingV2 {
+		key |= 1 << 6
+	}
+	if cfg.London {
+		key |= 1 << 7
+	}
+	if cfg.Shanghai {
+		key |= 1 << 8
+	}
+	if cfg.Blob {
+		key |= 1 << 9
+	}
+	if cfg.Cancun {
+		key |= 1 << 10
+	}
+	if cfg.Osaka {
+		key |= 1 << 11
+	}
+	return key
+}
+
+func jumpTableForConfig(cfg TVMConfig) *JumpTable {
+	key := jumpTableForkKey(cfg)
+	if table := resolvedJumpTables[key].Load(); table != nil {
+		return table
+	}
+	table := new(JumpTable)
+	*table = sharedJumpTable
+	for opcode, operation := range table {
+		if operation != nil && operation.enabledFn != nil && !operation.enabledFn(cfg) {
+			table[opcode] = nil
+		}
+	}
+	if resolvedJumpTables[key].CompareAndSwap(nil, table) {
+		return table
+	}
+	return resolvedJumpTables[key].Load()
+}
+
+// isForkGatedOpcode identifies a nil resolved-table entry as a known opcode
+// disabled by this transaction's fork flags. It is called only on the error
+// path; keeping the list independent of sharedJumpTable avoids introducing an
+// initialization cycle through opcode handlers that recursively invoke Run.
+func isForkGatedOpcode(op OpCode) bool {
+	switch op {
+	case SHL, SHR, SAR, EXTCODEHASH, CREATE2,
+		CHAINID, SELFBALANCE, BASEFEE, PUSH0, CLZ,
+		TLOAD, TSTORE, MCOPY, BLOBHASH, BLOBBASEFEE,
+		CALLTOKEN, TOKENBALANCE, CALLTOKENVALUE, CALLTOKENID,
+		ISCONTRACT, FREEZE, UNFREEZE, FREEZEEXPIRETIME,
+		VOTEWITNESS, WITHDRAWREWARD,
+		FREEZEBALANCEV2, UNFREEZEBALANCEV2, CANCELALLUNFREEZEV2,
+		WITHDRAWEXPIREUNFREEZE, DELEGATERESOURCE, UNDELEGATERESOURCE:
+		return true
+	default:
+		return false
+	}
+}
 
 // newJumpTable creates the standard jump table with all supported opcodes.
 func newJumpTable() JumpTable {

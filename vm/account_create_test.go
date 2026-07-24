@@ -250,6 +250,108 @@ func TestMainnet3422904AccountlessCALLReplay(t *testing.T) {
 	}
 }
 
+// TestMainnet6280352AccountlessCALLTOKENReplay pins mainnet block 6,280,352,
+// tx 1e3bb85c895e6484f71619265295f52335814ca5e33d82071d2473ec8443a005.
+// TorrentFarmer.buyPeers first transferred token 1001090 to an existing
+// account, then attempted another CALLTOKEN to an account that did not exist.
+// Before ALLOW_TVM_SOLIDITY_059 java did not create that recipient; before
+// ALLOW_TVM_CONSTANTINOPLE the validation error escaped as an UNKNOWN result
+// and consumed all energy. The first internal transaction was then rejected
+// with the enclosing frame, exactly as recorded by java-tron.
+func TestMainnet6280352AccountlessCALLTOKENReplay(t *testing.T) {
+	const tokenID = int64(1_001_090)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	owner := tcommon.BytesToAddress(tcommon.FromHex("4132fddeef7c749da4e558c575f1a944fe8e0abd29"))
+	contractAddr := tcommon.BytesToAddress(tcommon.FromHex("41f1f93d582ad145225f14bdbd81c0c2a07ef7e705"))
+	existingDest := tcommon.BytesToAddress(tcommon.FromHex("4141b0ce8043b3bea082c41c5d7342dc5ab5c9ee9c"))
+	missingDest := tcommon.BytesToAddress(tcommon.FromHex("418fdf29a831570206d694c803c55f3e0b7c375ae7"))
+
+	sdb.CreateAccount(owner, corepb.AccountType_Normal)
+	sdb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	sdb.CreateAccount(existingDest, corepb.AccountType_Normal)
+	sdb.AddTRC10Balance(owner, tokenID, 100)
+
+	appendCallToken := func(code []byte, dest tcommon.Address) []byte {
+		code = append(code,
+			byte(PUSH1), 0x00, // retSize
+			byte(PUSH1), 0x00, // retOffset
+			byte(PUSH1), 0x00, // inSize
+			byte(PUSH1), 0x00, // inOffset
+			byte(PUSH3), 0x0f, 0x46, 0x82, // tokenId = 1001090
+			byte(PUSH1), 0x04, // tokenValue
+			byte(PUSH20),
+		)
+		code = append(code, dest[1:]...)
+		return append(code,
+			byte(PUSH2), 0x08, 0xfc, // gas = 2300
+			byte(CALLTOKEN),
+			byte(POP),
+		)
+	}
+	code := appendCallToken(nil, existingDest)
+	code = appendCallToken(code, missingDest)
+	// The historical Solidity wrapper reverted after a soft CALLTOKEN failure.
+	// Java's validation exception must escape before this REVERT is reached.
+	code = append(code,
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(REVERT),
+	)
+	sdb.SetCode(contractAddr, code)
+
+	const energyLimit = uint64(100_000_000)
+	_, left, err := tvm.CallToken(owner, contractAddr, nil, energyLimit, 0, tokenID, 100)
+	if !errors.Is(err, ErrValidateForSmartContract) {
+		t.Fatalf("CallToken error: got %v, want validateForSmartContract failure", err)
+	}
+	if left != 0 {
+		t.Fatalf("remaining energy: got %d, want 0", left)
+	}
+	if sdb.AccountExists(missingDest) {
+		t.Fatal("missing recipient must not be implicitly created before Solidity059")
+	}
+	if got := sdb.GetTRC10Balance(owner, tokenID); got != 100 {
+		t.Fatalf("owner token balance after reverted trigger: got %d, want 100", got)
+	}
+	if got := sdb.GetTRC10Balance(contractAddr, tokenID); got != 0 {
+		t.Fatalf("contract token balance after reverted trigger: got %d, want 0", got)
+	}
+	if got := sdb.GetTRC10Balance(existingDest, tokenID); got != 0 {
+		t.Fatalf("first recipient balance after rejected frame: got %d, want 0", got)
+	}
+	if len(tvm.InternalTransactions) != 1 || !tvm.InternalTransactions[0].Rejected {
+		t.Fatalf("internal transactions: got %+v, want one rejected transfer", tvm.InternalTransactions)
+	}
+}
+
+func TestAccountlessCALLTOKENConstantinopleBeforeSolidity059ReturnsTransferFailed(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{
+		TransferTrc10:  true,
+		Constantinople: true,
+	}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.CreateAccount(caller, corepb.AccountType_Contract)
+	sdb.AddTRC10Balance(caller, tokenID, 10)
+
+	_, left, err := tvm.CallToken(caller, dest, nil, 100_000, 0, tokenID, 1)
+	if !errors.Is(err, ErrTokenTransferFailed) {
+		t.Fatalf("CallToken error: got %v, want TRANSFER_FAILED classification", err)
+	}
+	if got, want := err.Error(), "transfer trc10 failed: Validate InternalTransfer error, no ToAccount. And not allowed to create account in smart contract."; got != want {
+		t.Fatalf("CallToken error message: got %q, want %q", got, want)
+	}
+	if left != 100_000 {
+		t.Fatalf("remaining energy: got %d, want refunded 100000", left)
+	}
+	if sdb.AccountExists(dest) {
+		t.Fatal("missing recipient must not be implicitly created before Solidity059")
+	}
+}
+
 // TestMainnet4997510PreConstantinopleSelfCALLReplay pins mainnet block
 // 4,997,510, tx d52b35bb078dfd695623ffbcb50259b051a25e2396ac8bf357dc6f1e061bdff2.
 // Before ALLOW_MULTI_SIGN, ADDRESS retained TRON's 0x41 prefix while Solidity
@@ -731,7 +833,7 @@ func TestChildCallVMFailureDoesNotPropagateToParent(t *testing.T) {
 func TestCallTokenValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	const tokenID = int64(1_000_002)
 
-	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true, Constantinople: true}, nil)
 	caller := tcommon.Address{0x41, 0x11}
 	dest := tcommon.Address{0x41, 0x22}
 	sdb.GetOrCreateAccount(caller)
@@ -760,7 +862,7 @@ func TestCallTokenValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	}
 }
 
-func TestCreateValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
+func TestCreateValueOutOfLongRangeReturnsLegacyArithmeticError(t *testing.T) {
 	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
 	caller := tcommon.Address{0x41, 0x11}
 
@@ -774,15 +876,15 @@ func TestCreateValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	contract := NewContract(caller, caller, 0, 100_000)
 	contract.SetCode(caller, code)
 
-	if _, err := tvm.interpreter.Run(contract); err != ErrEndowmentOutOfRange {
-		t.Fatalf("Run error: got %v, want %v", err, ErrEndowmentOutOfRange)
+	if _, err := tvm.interpreter.Run(contract); err != ErrLegacyEndowmentOutOfRange {
+		t.Fatalf("Run error: got %v, want %v", err, ErrLegacyEndowmentOutOfRange)
 	}
 	if tvm.Nonce != 0 {
 		t.Fatalf("nonce after failed CREATE: got %d, want 0", tvm.Nonce)
 	}
 }
 
-func TestCreate2ValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
+func TestCreate2ValueOutOfLongRangeReturnsLegacyArithmeticError(t *testing.T) {
 	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
 	caller := tcommon.Address{0x41, 0x11}
 
@@ -797,8 +899,8 @@ func TestCreate2ValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	contract := NewContract(caller, caller, 0, 100_000)
 	contract.SetCode(caller, code)
 
-	if _, err := tvm.interpreter.Run(contract); err != ErrEndowmentOutOfRange {
-		t.Fatalf("Run error: got %v, want %v", err, ErrEndowmentOutOfRange)
+	if _, err := tvm.interpreter.Run(contract); err != ErrLegacyEndowmentOutOfRange {
+		t.Fatalf("Run error: got %v, want %v", err, ErrLegacyEndowmentOutOfRange)
 	}
 	if tvm.Nonce != 0 {
 		t.Fatalf("nonce after failed CREATE2: got %d, want 0", tvm.Nonce)

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
@@ -618,6 +619,33 @@ func gtron(ctx *cli.Context) error {
 			result = append(result, &tronapi.PeerInfo{Host: host, Port: port})
 		}
 		return result
+	})
+	backend.SetSyncInfoProvider(func() tronapi.SyncInfo {
+		status := syncService.Status()
+		info := tronapi.SyncInfo{
+			Active:                status.Active,
+			Paused:                status.Paused,
+			PeerCount:             handler.HandshakedPeerCount(),
+			SyncPeerCount:         status.SyncPeerCount,
+			TargetHead:            status.TargetHead,
+			AppliedTip:            status.AppliedTip,
+			Remaining:             status.Remaining,
+			Inflight:              status.Inflight,
+			BufferedBlocks:        status.BufferedBlocks,
+			BufferedBytes:         status.BufferedBytes,
+			RequestedBlocks:       status.RequestedBlocks,
+			RetryBlocks:           status.RetryBlocks,
+			RetainedDecodedBlocks: status.RetainedDecodedBlocks,
+			RetainedDecodedBytes:  status.RetainedDecodedBytes,
+			PauseBlock:            status.PauseBlock,
+		}
+		if !status.PauseTime.IsZero() {
+			info.PauseTime = status.PauseTime.UTC().Format(time.RFC3339Nano)
+		}
+		if status.PauseError != nil {
+			info.PauseError = status.PauseError.Error()
+		}
+		return info
 	})
 
 	// Wire PBFT block hook before node start so commit results are validated

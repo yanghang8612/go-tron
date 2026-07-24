@@ -50,6 +50,7 @@ type stubBackend struct {
 	proposals []*tronapi.ProposalInfo
 	// Canned chain parameters returned from GetChainParameters.
 	chainParams []tronapi.ChainParameter
+	nodeInfo    *tronapi.NodeInfo
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -60,8 +61,13 @@ func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types
 	return nil, nil
 }
 func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
-func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
-func (s *stubBackend) PendingTransactionCount() int                     { return 0 }
+func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo {
+	if s.nodeInfo != nil {
+		return s.nodeInfo
+	}
+	return &tronapi.NodeInfo{}
+}
+func (s *stubBackend) PendingTransactionCount() int { return 0 }
 func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	return nil, nil
 }
@@ -522,6 +528,50 @@ func TestListNodes(t *testing.T) {
 	}
 	if addr["host"] != "127.0.0.1" {
 		t.Fatalf("unexpected host: %v", addr["host"])
+	}
+}
+
+func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
+	stub := &stubBackend{nodeInfo: &tronapi.NodeInfo{
+		Version:        "test-version",
+		CurrentBlock:   123,
+		LastInsertTime: 456,
+		Sync: &tronapi.SyncInfo{
+			Active:                false,
+			Paused:                true,
+			PeerCount:             16,
+			SyncPeerCount:         0,
+			TargetHead:            789,
+			AppliedTip:            124,
+			Remaining:             665,
+			Inflight:              3,
+			BufferedBlocks:        4,
+			BufferedBytes:         5000,
+			RequestedBlocks:       6,
+			RetryBlocks:           7,
+			RetainedDecodedBlocks: 8,
+			RetainedDecodedBytes:  9000,
+			PauseBlock:            125,
+			PauseTime:             "2026-07-24T00:00:00Z",
+			PauseError:            "state root mismatch",
+		},
+	}}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getnodeinfo", `{}`)
+	if result["version"] != "test-version" || result["currentBlock"] != float64(123) || result["lastInsertTime"] != float64(456) {
+		t.Fatalf("node info base fields = %v", result)
+	}
+	syncInfo, ok := result["syncInfo"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("syncInfo missing or not an object: %v", result)
+	}
+	if syncInfo["paused"] != true || syncInfo["peerCount"] != float64(16) || syncInfo["pauseBlock"] != float64(125) || syncInfo["pauseError"] != "state root mismatch" {
+		t.Fatalf("syncInfo diagnostics = %v", syncInfo)
+	}
+	if syncInfo["bufferedBlocks"] != float64(4) || syncInfo["retainedDecodedBytes"] != float64(9000) {
+		t.Fatalf("syncInfo backlog fields = %v", syncInfo)
 	}
 }
 

@@ -33,9 +33,44 @@ func mustReadStateAccountEnvelope(t *testing.T, sdb *StateDB, addr tcommon.Addre
 }
 
 type recordingStateCodeStore struct {
-	codes  map[tcommon.Hash][]byte
-	reads  []tcommon.Hash
-	writes []tcommon.Hash
+	codes    map[tcommon.Hash][]byte
+	reads    []tcommon.Hash
+	writes   []tcommon.Hash
+	lastRead []byte
+}
+
+var stateCodeBenchmarkSink []byte
+
+// BenchmarkStateDBGetCodeCold exercises the production code-hash lookup while
+// forcing the state-object bytecode cache cold on every iteration. The backing
+// KeyValueReader already returns caller-owned bytes, so this benchmark exposes
+// redundant accessor/StateDB ownership copies without mixing in account decode.
+func BenchmarkStateDBGetCodeCold(b *testing.B) {
+	const codeSize = 32 << 10
+	code := make([]byte, codeSize)
+	for i := range code {
+		code[i] = byte(i)
+	}
+	hash := tcommon.Keccak256(code)
+	disk := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateCode(disk, hash, code); err != nil {
+		b.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x01, 0x10}
+	obj := newStateObject(addr, types.NewAccount(addr, corepb.AccountType_Contract))
+	obj.codeHash = hash
+	sdb := &StateDB{
+		stateObjects: map[tcommon.Address]*stateObject{addr: obj},
+		dirtyObjects: make(map[tcommon.Address]struct{}),
+		codeStore:    newRawDBStateCodeStore(disk),
+	}
+
+	b.SetBytes(codeSize)
+	b.ReportAllocs()
+	for b.Loop() {
+		obj.code = nil
+		stateCodeBenchmarkSink = sdb.GetCode(addr)
+	}
 }
 
 func newRecordingStateCodeStore() *recordingStateCodeStore {
@@ -48,7 +83,8 @@ func (s *recordingStateCodeStore) ReadStateCode(hash tcommon.Hash) []byte {
 	if len(code) == 0 {
 		return nil
 	}
-	return append([]byte(nil), code...)
+	s.lastRead = append([]byte(nil), code...)
+	return s.lastRead
 }
 
 func (s *recordingStateCodeStore) WriteStateCode(hash tcommon.Hash, code []byte) error {
@@ -110,6 +146,9 @@ func TestStateDBCodeUsesTypedStoreBoundary(t *testing.T) {
 	reloaded.codeStore = store
 	if got := reloaded.GetCode(addr); !bytes.Equal(got, code) {
 		t.Fatalf("typed store code reload = %x, want %x", got, code)
+	}
+	if &reloaded.GetCode(addr)[0] != &store.lastRead[0] {
+		t.Fatal("StateDB copied caller-owned code returned by typed store")
 	}
 	if len(store.reads) != 1 || store.reads[0] != hash {
 		t.Fatalf("typed code reads = %x, want [%x]", store.reads, hash)

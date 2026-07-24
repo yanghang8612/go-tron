@@ -10,15 +10,7 @@ import (
 type ProposalCreateActuator struct{}
 
 func (a *ProposalCreateActuator) getContract(ctx *Context) (*contractpb.ProposalCreateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ProposalCreateContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ProposalCreateContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ProposalCreateContract](ctx, "ProposalCreateContract")
 }
 
 func (a *ProposalCreateActuator) Validate(ctx *Context) error {

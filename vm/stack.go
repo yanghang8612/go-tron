@@ -43,6 +43,15 @@ func (s *Stack) push(v *uint256.Int) {
 	s.data = append(s.data, *v)
 }
 
+// pushBytes decodes a big-endian immediate directly into the new top-of-stack
+// slot. PUSH handlers otherwise build a 32-byte uint256.Int local and copy it
+// into the slice on every opcode; appending the zero slot first removes that
+// redundant full-width copy.
+func (s *Stack) pushBytes(v []byte) {
+	s.data = append(s.data, uint256.Int{})
+	s.data[len(s.data)-1].SetBytes(v)
+}
+
 func (s *Stack) pop() uint256.Int {
 	ret := s.data[len(s.data)-1]
 	s.data = s.data[:len(s.data)-1]

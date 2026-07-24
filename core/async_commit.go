@@ -53,17 +53,21 @@ func resolveCommitPipelineDepth() int {
 
 // commitJob is one block's deferred commit: the captured commitment fold plus
 // the inputs the publish tail consumes. Everything here is either immutable
-// (block, txInfos, root-to-be) or a deep snapshot taken at handoff (dynProps,
-// cycleRewards) so the worker never reads foreground-mutable state of a LATER
-// block — see commitAsync.
+// (block, blockData, txInfos, root-to-be) or a deep snapshot taken at handoff
+// (dynProps, cycleRewards) so the worker never reads foreground-mutable state
+// of a LATER block — see commitAsync. blockData aliases the staged layer value;
+// both the worker and buffer only read it.
 type commitJob struct {
 	plan              *canonicalBlockExecution
 	block             *types.Block
+	blockData         []byte
 	captured          *state.CapturedCommit
 	layer             blockbuffer.InflightHandle
 	dynProps          *state.DynamicProperties
 	cycleRewards      cycleRewardAccumulatorSnapshot
 	txInfos           []*corepb.TransactionInfo
+	txInfoBatch       *transactionInfoBatch
+	txInfoBatchPool   *transactionInfoBatchPool
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
 	checkpoint        bool
@@ -143,6 +147,7 @@ func (bc *BlockChain) startCommitWorker() {
 // Callers hold chainmu.
 func (bc *BlockChain) commitAsync(
 	block *types.Block,
+	blockData []byte,
 	plan *canonicalBlockExecution,
 	statedb *state.StateDB,
 	dynProps *state.DynamicProperties,
@@ -192,15 +197,18 @@ func (bc *BlockChain) commitAsync(
 	//      - dynProps: a Copy (decision-(b)); the worker also publishes it to
 	//        dynPropsCache, so ProcessOnBlock(N) reads block N's DP.
 	//      - cycleRewards: a deep snapshot of the pending accumulator.
-	//    block / root / txInfos are immutable.
+	//    block / blockData / root / txInfos are immutable.
 	job := &commitJob{
 		plan:              plan,
 		block:             block,
+		blockData:         blockData,
 		captured:          captured,
 		layer:             hN,
 		dynProps:          dynProps.Copy(),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
+		txInfoBatch:       plan.txInfoBatch,
+		txInfoBatchPool:   plan.txInfoBatchPool,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
@@ -209,6 +217,7 @@ func (bc *BlockChain) commitAsync(
 	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
 	//    bounds the pipeline to depth 2). After this returns the foreground may
 	//    begin the next block's layer.
+	plan.txInfoBatchHandedOff = true
 	bc.enqueueCommit(job)
 
 	// 6. Flush the scope's latest-domain rows + drop solidified buffer layers,
@@ -284,6 +293,7 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 // KEEP IN SYNC with applyBlockWithPlan's synchronous commit tail.
 func (bc *BlockChain) runCommitJob(job *commitJob) {
 	defer bc.commitPending.done()
+	defer job.txInfoBatchPool.release(job.txInfoBatch)
 	if errPtr := bc.commitErr.Load(); errPtr != nil {
 		// A prior commit already failed; do not apply further state. Drop the
 		// layer so it is not left dangling.
@@ -325,7 +335,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 	// Out-of-band metadata batch to disk (block, state root, TAPOS, tx infos,
 	// tx index) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
-	if err := bc.writeBlockMetadataBatch(job.block, root, job.txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
 	}

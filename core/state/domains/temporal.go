@@ -83,6 +83,8 @@ type SharedDomainTx struct {
 }
 
 var _ TemporalTx = (*SharedDomainTx)(nil)
+var _ OwnedWriter = (*SharedDomainTx)(nil)
+var _ EncodedOwnedWriter = (*SharedDomainTx)(nil)
 
 func NewSharedDomainTx(cfg SharedDomainTxConfig) *SharedDomainTx {
 	return &SharedDomainTx{
@@ -146,6 +148,52 @@ func (tx *SharedDomainTx) DomainDelPrefix(owner common.Address, domain kvdomains
 		return err
 	}
 	return tx.overlay.DomainDelPrefix(owner, domain, prefix)
+}
+
+// DomainPutOwned permanently transfers immutable key/value storage to this
+// transaction. It is intentionally outside TemporalTx so ordinary callers
+// keep the defensive-copy contract of DomainPut.
+func (tx *SharedDomainTx) DomainPutOwned(owner common.Address, domain kvdomains.KVDomain, key, value []byte) error {
+	if err := tx.checkOpen(); err != nil {
+		return err
+	}
+	return tx.overlay.appendOwnedMutation(Mutation{
+		Kind:   MutationPut,
+		Owner:  owner,
+		Domain: domain,
+		Key:    key,
+		Value:  value,
+	})
+}
+
+// DomainPutEncodedOwned transfers both a semantic value and its immutable
+// persisted representation. State commit uses it when both are slices of the
+// same freshly built presence envelope.
+func (tx *SharedDomainTx) DomainPutEncodedOwned(owner common.Address, domain kvdomains.KVDomain, key, value, encodedValue []byte) error {
+	if err := tx.checkOpen(); err != nil {
+		return err
+	}
+	return tx.overlay.appendOwnedMutation(Mutation{
+		Kind:         MutationPut,
+		Owner:        owner,
+		Domain:       domain,
+		Key:          key,
+		Value:        value,
+		EncodedValue: encodedValue,
+	})
+}
+
+// DomainDelOwned is the delete counterpart of DomainPutOwned.
+func (tx *SharedDomainTx) DomainDelOwned(owner common.Address, domain kvdomains.KVDomain, key []byte) error {
+	if err := tx.checkOpen(); err != nil {
+		return err
+	}
+	return tx.overlay.appendOwnedMutation(Mutation{
+		Kind:   MutationDel,
+		Owner:  owner,
+		Domain: domain,
+		Key:    key,
+	})
 }
 
 func (tx *SharedDomainTx) Flush(ctx context.Context) error {

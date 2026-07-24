@@ -9,15 +9,7 @@ import (
 type AccountUpdateActuator struct{}
 
 func (a *AccountUpdateActuator) getContract(ctx *Context) (*contractpb.AccountUpdateContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.AccountUpdateContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal AccountUpdateContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.AccountUpdateContract](ctx, "AccountUpdateContract")
 }
 
 func (a *AccountUpdateActuator) Validate(ctx *Context) error {

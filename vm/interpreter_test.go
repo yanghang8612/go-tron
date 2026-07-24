@@ -52,20 +52,109 @@ func BenchmarkInterpreterArithmetic(b *testing.B) {
 	}
 }
 
-func TestInterpretersShareImmutableJumpTable(t *testing.T) {
+func BenchmarkInterpreterRepeatedMissingSload(b *testing.B) {
+	const loads = 1000
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	address := tcommon.Address{0x41, 0x22}
+	sdb.CreateAccount(address, corepb.AccountType_Contract)
+	root, err := sdb.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	sdb, err = state.New(root, db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	tvm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	code := make([]byte, 0, loads*4+1)
+	for i := 0; i < loads; i++ {
+		code = append(code, byte(PUSH1), 0x01, byte(SLOAD), byte(POP))
+	}
+	code = append(code, byte(STOP))
+	contract := NewContract(tcommon.Address{0x41, 0x11}, address, 0, 1_000_000_000)
+	contract.SetCode(address, code)
+
+	b.ReportAllocs()
+	b.ReportMetric(loads, "sloads/run")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		contract.Energy = 1_000_000_000
+		contract.EnergyUsed = 0
+		if _, err := tvm.interpreter.Run(contract); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestInterpretersShareResolvedImmutableJumpTables(t *testing.T) {
 	first := NewInterpreter(new(TVM), TVMConfig{})
+	same := NewInterpreter(new(TVM), TVMConfig{})
 	second := NewInterpreter(new(TVM), TVMConfig{Constantinople: true, Istanbul: true})
-	if first.table != second.table {
-		t.Fatal("interpreters should share the immutable opcode table")
+	if first.table != same.table {
+		t.Fatal("same fork flags should reuse one immutable resolved table")
 	}
-	if first.table[SHL] == nil || first.table[SHL].enabledFn == nil {
-		t.Fatal("shared table lost Constantinople opcode metadata")
+	if first.table == second.table {
+		t.Fatal("different fork flags unexpectedly shared a resolved table")
 	}
-	if first.table[SHL].enabledFn(first.tvmConfig) {
-		t.Fatal("SHL unexpectedly enabled for the pre-Constantinople config")
+	if first.table[SHL] != nil || first.table[CHAINID] != nil {
+		t.Fatal("pre-fork table retained gated opcodes")
 	}
-	if !second.table[SHL].enabledFn(second.tvmConfig) {
-		t.Fatal("SHL unexpectedly disabled for the Constantinople config")
+	if second.table[SHL] == nil || second.table[CHAINID] == nil {
+		t.Fatal("post-fork table removed enabled opcodes")
+	}
+	if sharedJumpTable[SHL] == nil || sharedJumpTable[SHL].enabledFn == nil {
+		t.Fatal("source table lost fork-gate metadata")
+	}
+}
+
+func TestForkGatedOpcodeListMatchesJumpTableMetadata(t *testing.T) {
+	for opcode, operation := range sharedJumpTable {
+		want := operation != nil && operation.enabledFn != nil
+		if got := isForkGatedOpcode(OpCode(opcode)); got != want {
+			t.Fatalf("opcode 0x%02x gated=%v, metadata=%v", opcode, got, want)
+		}
+	}
+}
+
+func TestJumpTableForkKeyCoversEveryGate(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  TVMConfig
+		bit  uint16
+		op   OpCode
+	}{
+		{"transfer_trc10", TVMConfig{TransferTrc10: true}, 1 << 0, CALLTOKEN},
+		{"constantinople", TVMConfig{Constantinople: true}, 1 << 1, SHL},
+		{"solidity059", TVMConfig{Solidity059: true}, 1 << 2, ISCONTRACT},
+		{"istanbul", TVMConfig{Istanbul: true}, 1 << 3, CHAINID},
+		{"freeze", TVMConfig{Freeze: true}, 1 << 4, FREEZE},
+		{"vote", TVMConfig{Vote: true}, 1 << 5, VOTEWITNESS},
+		{"staking_v2", TVMConfig{StakingV2: true}, 1 << 6, FREEZEBALANCEV2},
+		{"london", TVMConfig{London: true}, 1 << 7, BASEFEE},
+		{"shanghai", TVMConfig{Shanghai: true}, 1 << 8, PUSH0},
+		{"blob", TVMConfig{Blob: true}, 1 << 9, BLOBHASH},
+		{"cancun", TVMConfig{Cancun: true}, 1 << 10, TLOAD},
+		{"osaka", TVMConfig{Osaka: true}, 1 << 11, CLZ},
+	}
+	base := jumpTableForConfig(TVMConfig{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jumpTableForkKey(tt.cfg); got != tt.bit {
+				t.Fatalf("fork key=%#x, want %#x", got, tt.bit)
+			}
+			resolved := jumpTableForConfig(tt.cfg)
+			if base[tt.op] != nil {
+				t.Fatalf("opcode %s unexpectedly enabled in base table", tt.op)
+			}
+			if resolved[tt.op] == nil {
+				t.Fatalf("opcode %s not enabled by its fork bit", tt.op)
+			}
+		})
 	}
 }
 
@@ -881,6 +970,7 @@ func TestSelfDestructRestrictionKeepsExistingContract(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x44}
 	beneficiary := tcommon.Address{0x41, 0x55}
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 	evm.StateDB.AddBalance(contractAddr, 123)
 
 	contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergySelfDestruct+EnergyCallNewAcct)
@@ -905,8 +995,9 @@ func TestSelfDestructRestrictionDeletesNewContract(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x66}
 	beneficiary := tcommon.Address{0x41, 0x77}
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 	evm.StateDB.AddBalance(contractAddr, 123)
-	evm.newContracts[contractAddr] = true
+	evm.markNewContract(contractAddr)
 
 	contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergySelfDestruct+EnergyCallNewAcct)
 	stack := newStack()
@@ -990,6 +1081,7 @@ func TestSelfDestructAddressComparisonFollowsEnergyAdjustment(t *testing.T) {
 		t.Helper()
 		evm := newTestEVMWithConfig(t, cfg)
 		evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+		evm.StateDB.CreateAccount(beneficiary, corepb.AccountType_Normal)
 		evm.StateDB.AddBalance(contractAddr, 100)
 
 		contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergyCallNewAcct)

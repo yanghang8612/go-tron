@@ -315,7 +315,7 @@ func TestChain_ValidateTransaction_AcceptsOwnerSig(t *testing.T) {
 // genesisTaposRef returns ref_block_bytes and ref_block_hash for a tx that
 // references genesis. Production wallets pick a recent block; for tests on
 // a 1-block chain only block #0 is available, so we point at that.
-func genesisTaposRef(t *testing.T, bc *BlockChain) ([]byte, []byte) {
+func genesisTaposRef(t testing.TB, bc *BlockChain) ([]byte, []byte) {
 	t.Helper()
 	genesis := bc.GetBlockByNumber(0)
 	if genesis == nil {

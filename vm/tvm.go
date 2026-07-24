@@ -163,6 +163,16 @@ func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value
 	return tvm.addInternalTransactionWithTokenInfo(caller, transferTo, value, data, note, tokenInfo)
 }
 
+// internalTransactionRecord keeps the protobuf message, its mandatory value,
+// and the one-element pointer backing array in one allocation. A pointer to tx
+// is an interior pointer into the record, so retaining the returned protobuf
+// keeps the complete record alive.
+type internalTransactionRecord struct {
+	tx         corepb.InternalTransaction
+	baseValue  corepb.InternalTransaction_CallValueInfo
+	callValues [1]*corepb.InternalTransaction_CallValueInfo
+}
+
 func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
 	// java-tron's identity is keccak(parent || receive || data || value ||
 	// nonce). Absorb the fields directly: the former concatenation allocated
@@ -187,15 +197,15 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	copy(identityBytes[off:], note)
 	noteBytes := identityBytes[off : off+len(note) : off+len(note)]
 
-	it := &corepb.InternalTransaction{
-		Hash:              hashBytes,
-		CallerAddress:     callerBytes,
-		TransferToAddress: transferBytes,
-		CallValueInfo: []*corepb.InternalTransaction_CallValueInfo{{
-			CallValue: value,
-		}},
-		Note: noteBytes,
-	}
+	record := new(internalTransactionRecord)
+	record.baseValue.CallValue = value
+	record.callValues[0] = &record.baseValue
+	it := &record.tx
+	it.Hash = hashBytes
+	it.CallerAddress = callerBytes
+	it.TransferToAddress = transferBytes
+	it.CallValueInfo = record.callValues[:]
+	it.Note = noteBytes
 	if len(tokenInfo) > 0 {
 		callValues := make([]*corepb.InternalTransaction_CallValueInfo, 1, 1+len(tokenInfo))
 		callValues[0] = it.CallValueInfo[0]
@@ -241,15 +251,14 @@ func (tvm *TVM) ResourceTime() int64 {
 // parity (slice 2c) fires.
 func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *TVM {
 	tvm := &TVM{
-		StateDB:      stateDB,
-		DynProps:     dp,
-		Origin:       origin,
-		BlockNumber:  blockNum,
-		Timestamp:    timestamp,
-		Coinbase:     coinbase,
-		ChainID:      chainID,
-		cfg:          cfg,
-		newContracts: make(map[tcommon.Address]bool),
+		StateDB:     stateDB,
+		DynProps:    dp,
+		Origin:      origin,
+		BlockNumber: blockNum,
+		Timestamp:   timestamp,
+		Coinbase:    coinbase,
+		ChainID:     chainID,
+		cfg:         cfg,
 	}
 	tvm.interpreter = NewInterpreter(tvm, cfg)
 	return tvm
@@ -343,6 +352,12 @@ func (tvm *TVM) validateAndPrepareTRXEndowment(caller, addr tcommon.Address, val
 		return transferValidationError{
 			reason: "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract.",
 		}
+	}
+	if tvm.StateDB.GetBalance(addr) > math.MaxInt64-value {
+		if !tvm.cfg.Constantinople {
+			return ErrValidateForSmartContract
+		}
+		return transferValidationError{reason: "long overflow"}
 	}
 	return nil
 }
@@ -667,8 +682,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 			tvm.StateDB.SetCode(contractAddr, legacyCreateContractCode(code))
 		}
 	}
-	wasNew := tvm.newContracts[contractAddr]
-	tvm.newContracts[contractAddr] = true
+	wasNew := tvm.markNewContract(contractAddr)
 
 	if value > 0 {
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
@@ -815,6 +829,17 @@ func (tvm *TVM) restoreNewContractMark(addr tcommon.Address, wasNew bool) {
 		return
 	}
 	delete(tvm.newContracts, addr)
+}
+
+func (tvm *TVM) markNewContract(addr tcommon.Address) bool {
+	if tvm.newContracts[addr] {
+		return true
+	}
+	if tvm.newContracts == nil {
+		tvm.newContracts = make(map[tcommon.Address]bool)
+	}
+	tvm.newContracts[addr] = true
+	return false
 }
 
 func (tvm *TVM) isNewContract(addr tcommon.Address) bool {
@@ -1010,15 +1035,35 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			// addresses are never auto-created on this path, so surface
 			// ErrPrecompileTransferFailure (propagated by shouldPropagateCallError
 			// → spend-all) instead of the swallowed ErrInsufficientBalance.
-			// Plain-contract/plain-address targets are pre-created above by
-			// maybeCreateNormalAccountForValueTransfer, so they never reach here.
+			// Plain-contract/plain-address targets are pre-created above only
+			// after Solidity059. Legacy calls can therefore reach this branch.
 			if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) != nil {
 				tvm.RevertLogs(logSnap)
 				tvm.StateDB.RevertToSnapshot(snap)
 				return nil, 0, ErrPrecompileTransferFailure
 			}
+			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, energy, ErrInsufficientBalance
+			// Before ALLOW_TVM_SOLIDITY_059, createAccountIfNotExist is a
+			// no-op. java-tron's subsequent TRC10 validateForSmartContract
+			// rejects the missing recipient. The exception class is gated by
+			// Constantinople exactly like the ordinary TRX path: legacy
+			// BytecodeExecutionException (UNKNOWN + spend-all) before it, then
+			// TransferException (TRANSFER_FAILED + refund) afterwards.
+			if !tvm.cfg.Constantinople {
+				return nil, 0, ErrValidateForSmartContract
+			}
+			return nil, energy, tokenTransferValidationError{
+				reason: "Validate InternalTransfer error, no ToAccount. And not allowed to create account in smart contract.",
+			}
+		}
+		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil && tvm.StateDB.GetTRC10Balance(addr, tokenID) > math.MaxInt64-tokenValue {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			if !tvm.cfg.Constantinople {
+				return nil, 0, ErrValidateForSmartContract
+			}
+			return nil, energy, tokenTransferValidationError{reason: "long overflow"}
 		}
 		if err := tvm.StateDB.SubTRC10Balance(caller, tokenID, tokenValue); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)

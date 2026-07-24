@@ -144,6 +144,21 @@ type accountKVPhysicalLatestStore interface {
 	IterateKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
 }
 
+type accountKVOwnedPhysicalLatestStore interface {
+	WriteKVLatestEncodedOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, encodedValue []byte) error
+}
+
+type accountLatestNoCopyPhysicalStore interface {
+	ReadAccountLatestNoCopy(owner tcommon.Address) ([]byte, bool, error)
+}
+
+// accountLatestHydrationBorrower is package-private because its result is only
+// valid for immediate RLP decoding. General AccountLatest callers keep their
+// defensive-copy contract.
+type accountLatestHydrationBorrower interface {
+	accountLatestForHydration(owner tcommon.Address) ([]byte, bool, error)
+}
+
 func newAccountKVLatestBatch(index accountKVIndexStore, record func(rawdb.StateCommitmentUpdate)) *accountKVLatestBatch {
 	w := &accountKVLatestBatch{index: index, writer: index, record: record}
 	if batcher, ok := index.(ethdb.Batcher); ok {
@@ -162,6 +177,8 @@ func newAccountKVLatestDomainBatch(index accountKVIndexStore, generation func(tc
 }
 
 var _ statedomains.Writer = (*accountKVLatestBatch)(nil)
+var _ statedomains.OwnedWriter = (*accountKVLatestBatch)(nil)
+var _ statedomains.EncodedOwnedWriter = (*accountKVLatestBatch)(nil)
 
 func (w *accountKVLatestBatch) DomainPut(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey, value []byte) error {
 	generation, err := w.resolveGeneration(owner)
@@ -174,6 +191,31 @@ func (w *accountKVLatestBatch) DomainPut(owner tcommon.Address, domain kvdomains
 	return w.put(owner, generation, domain, logicalKey, rawdb.EncodeStateKVLatestValue(value))
 }
 
+// DomainPutOwned transfers the immutable raw value through the latest batch.
+// The encoded envelope is separately transferred to the physical writer,
+// while pending read-your-writes state retains value without decode/copy.
+func (w *accountKVLatestBatch) DomainPutOwned(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey, value []byte) error {
+	generation, err := w.resolveGeneration(owner)
+	if err != nil {
+		return err
+	}
+	if err := w.writeDomainChange(owner, generation, domain, logicalKey, true, value); err != nil {
+		return err
+	}
+	return w.putOwned(owner, generation, domain, logicalKey, value, rawdb.EncodeStateKVLatestValue(value))
+}
+
+func (w *accountKVLatestBatch) DomainPutEncodedOwned(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey, value, encodedValue []byte) error {
+	generation, err := w.resolveGeneration(owner)
+	if err != nil {
+		return err
+	}
+	if err := w.writeDomainChange(owner, generation, domain, logicalKey, true, value); err != nil {
+		return err
+	}
+	return w.putOwned(owner, generation, domain, logicalKey, value, encodedValue)
+}
+
 func (w *accountKVLatestBatch) DomainDel(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey []byte) error {
 	generation, err := w.resolveGeneration(owner)
 	if err != nil {
@@ -183,6 +225,17 @@ func (w *accountKVLatestBatch) DomainDel(owner tcommon.Address, domain kvdomains
 		return err
 	}
 	return w.delete(owner, generation, domain, logicalKey)
+}
+
+func (w *accountKVLatestBatch) DomainDelOwned(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey []byte) error {
+	generation, err := w.resolveGeneration(owner)
+	if err != nil {
+		return err
+	}
+	if err := w.writeDomainChange(owner, generation, domain, logicalKey, false, nil); err != nil {
+		return err
+	}
+	return w.deleteOwned(owner, generation, domain, logicalKey)
 }
 
 func (w *accountKVLatestBatch) DomainDelPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
@@ -267,6 +320,27 @@ func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, dom
 	return w.maybeFlush()
 }
 
+func (w *accountKVLatestBatch) putOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value, encodedValue []byte) error {
+	if w == nil || w.latestStore == nil {
+		return fmt.Errorf("account kv latest domain writer: nil latest store")
+	}
+	if store, ok := w.latestStore.(accountKVOwnedPhysicalLatestStore); ok {
+		if err := store.WriteKVLatestEncodedOwned(owner, generation, domain, logicalKey, encodedValue); err != nil {
+			return err
+		}
+	} else if err := w.latestStore.WriteKVLatestEncoded(owner, generation, domain, logicalKey, encodedValue); err != nil {
+		return err
+	}
+	w.rememberPutOwned(owner, generation, domain, logicalKey, value)
+	if w.record != nil {
+		w.record(rawdb.NewStateCommitmentPutOwned(
+			rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey),
+			encodedValue,
+		))
+	}
+	return w.maybeFlush()
+}
+
 func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
@@ -275,6 +349,20 @@ func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, 
 		return err
 	}
 	w.rememberDelete(owner, generation, domain, logicalKey)
+	if w.record != nil {
+		w.record(rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
+	}
+	return w.maybeFlush()
+}
+
+func (w *accountKVLatestBatch) deleteOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if w == nil || w.latestStore == nil {
+		return fmt.Errorf("account kv latest domain writer: nil latest store")
+	}
+	if err := w.latestStore.DeleteKVLatest(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
+	w.rememberDeleteOwned(owner, generation, domain, logicalKey)
 	if w.record != nil {
 		w.record(rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
 	}
@@ -503,16 +591,17 @@ func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value [
 	return w.maybeFlush()
 }
 
-// writeAccountLatestByKey accepts a physical latest key from the commit-wide
-// key arena. The backing writer owns/copies Put inputs before returning.
-func (w *accountKVLatestBatch) writeAccountLatestByKey(owner tcommon.Address, physicalKey, value []byte) error {
+// writeAccountLatestOwnedByKey accepts a physical latest key from the
+// commit-wide key arena and takes ownership of the freshly encoded value.
+// Both the layer batch and pending read overlay retain it as immutable data.
+func (w *accountKVLatestBatch) writeAccountLatestOwnedByKey(owner tcommon.Address, physicalKey, value []byte) error {
 	if w == nil || w.writer == nil {
 		return fmt.Errorf("account kv latest domain writer: nil writer")
 	}
-	if err := rawdb.WriteStateAccountLatestByKey(w.writer, physicalKey, value); err != nil {
+	if err := rawdb.WriteStateAccountLatestOwnedByKey(w.writer, physicalKey, value); err != nil {
 		return err
 	}
-	w.rememberAccountLatestPut(owner, value)
+	w.rememberAccountLatestPutOwned(owner, value)
 	return w.maybeFlush()
 }
 
@@ -549,6 +638,48 @@ func (w *accountKVLatestBatch) readAccountLatest(owner tcommon.Address) ([]byte,
 	}
 	if w == nil || w.latestStore == nil {
 		return nil, false, nil
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
+// readAccountLatestForCommitment is the synchronous commitment-fold variant
+// of readAccountLatest. Pending account values are freshly encoded immutable
+// buffers whose ownership was transferred to this batch. The fold only hashes
+// them before returning, so borrowing the pending slice avoids a defensive copy
+// per touched account without weakening readAccountLatest's public ownership
+// contract. The durable-store fallback already returns an owned value.
+func (w *accountKVLatestBatch) readAccountLatestForCommitment(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	return w.latestStore.ReadAccountLatest(owner)
+}
+
+// readAccountLatestForHydration lends immutable bytes only until the caller's
+// immediate decode completes. Pending values and blockbuffer cache values are
+// already immutable; generic stores fall back to their ordinary owned read.
+func (w *accountKVLatestBatch) readAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if w != nil {
+		if pending, ok := w.accountPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return nil, false, nil
+			}
+			return pending.value, true, nil
+		}
+	}
+	if w == nil || w.latestStore == nil {
+		return nil, false, nil
+	}
+	if reader, ok := w.latestStore.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
 	}
 	return w.latestStore.ReadAccountLatest(owner)
 }
@@ -662,17 +793,31 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 	if w == nil {
 		return
 	}
+	w.rememberPutWithKey(accountKVLatestPendingKey(owner, generation, domain, logicalKey), append([]byte(nil), value...))
+}
+
+func (w *accountKVLatestBatch) rememberPutOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) {
+	if w == nil {
+		return
+	}
+	w.rememberPutWithKey(accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey), value)
+}
+
+func (w *accountKVLatestBatch) rememberPutWithKey(mapKey accountKVLatestPendingMapKey, value []byte) {
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
-	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
 	w.pending[mapKey] = accountKVLatestPending{
-		value:  append([]byte(nil), value...),
+		value:  value,
 		number: w.commitBlock,
 	}
 }
 
 func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, value []byte) {
+	w.rememberAccountLatestPutOwned(owner, append([]byte(nil), value...))
+}
+
+func (w *accountKVLatestBatch) rememberAccountLatestPutOwned(owner tcommon.Address, value []byte) {
 	if w == nil {
 		return
 	}
@@ -680,7 +825,7 @@ func (w *accountKVLatestBatch) rememberAccountLatestPut(owner tcommon.Address, v
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
 	w.accountPending[owner.AccountID()] = accountLatestPending{
-		value:  append([]byte(nil), value...),
+		value:  value,
 		number: w.commitBlock,
 	}
 }
@@ -729,6 +874,20 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 	}
 }
 
+func (w *accountKVLatestBatch) rememberDeleteOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {
+	if w == nil {
+		return
+	}
+	if w.pending == nil {
+		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
+	}
+	mapKey := accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey)
+	w.pending[mapKey] = accountKVLatestPending{
+		deleted: true,
+		number:  w.commitBlock,
+	}
+}
+
 func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
 	return accountKVLatestPendingMapKey{
 		owner:      owner.AccountID(),
@@ -738,15 +897,42 @@ func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain 
 	}
 }
 
-// kvCompositeKey is the pre-hash logical key: domain (big-endian u16) || key.
-func kvCompositeKey(domain kvdomains.KVDomain, key []byte) []byte {
+func accountKVLatestPendingKeyOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
+	return accountKVLatestPendingMapKey{
+		owner:      owner.AccountID(),
+		generation: generation,
+		domain:     domain,
+		logicalKey: ownedBytesString(logicalKey),
+	}
+}
+
+// kvCompositeKeyString owns the pre-hash map key domainBE2||key in one
+// allocation. The previous []byte construction followed by string conversion
+// copied every staged key twice.
+func kvCompositeKeyString(domain kvdomains.KVDomain, key []byte) string {
 	out := make([]byte, 2+len(key))
 	binary.BigEndian.PutUint16(out, uint16(domain))
 	copy(out[2:], key)
-	return out
+	return ownedBytesString(out)
 }
 
-func newKVEntry(composite, value []byte, deleted bool) kvEntry {
+// lookupKVEntry builds the common <=64-byte logical key in stack storage. The
+// transient []byte-to-string conversion is allocation-free for map lookup.
+func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []byte) (kvEntry, bool) {
+	var stack [66]byte
+	var composite []byte
+	if size := 2 + len(key); size <= len(stack) {
+		composite = stack[:size]
+	} else {
+		composite = make([]byte, size)
+	}
+	binary.BigEndian.PutUint16(composite, uint16(domain))
+	copy(composite[2:], key)
+	entry, ok := entries[string(composite)]
+	return entry, ok
+}
+
+func newKVEntry(value []byte, deleted bool) kvEntry {
 	e := kvEntry{deleted: deleted}
 	if !deleted {
 		e.wrapped = make([]byte, 1+len(value))
@@ -868,6 +1054,20 @@ func (s *StateDB) readStateAccountLatest(owner tcommon.Address) ([]byte, bool, e
 	return s.accountKVPhysicalLatestStore().ReadAccountLatest(owner)
 }
 
+func (s *StateDB) readStateAccountLatestForHydration(owner tcommon.Address) ([]byte, bool, error) {
+	if s != nil && s.flatLatestReader != nil {
+		if reader, ok := s.flatLatestReader.(accountLatestHydrationBorrower); ok {
+			return reader.accountLatestForHydration(owner)
+		}
+		return s.flatLatestReader.AccountLatest(owner)
+	}
+	store := s.accountKVPhysicalLatestStore()
+	if reader, ok := store.(accountLatestNoCopyPhysicalStore); ok {
+		return reader.ReadAccountLatestNoCopy(owner)
+	}
+	return store.ReadAccountLatest(owner)
+}
+
 func (s *StateDB) readStateKVGeneration(owner tcommon.Address) (uint64, bool, error) {
 	if s != nil && s.flatLatestReader != nil {
 		return s.flatLatestReader.KVGeneration(owner)
@@ -895,8 +1095,7 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
-	comp := kvCompositeKey(domain, key)
-	if e, ok := obj.kvDirty[string(comp)]; ok {
+	if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
 		if e.deleted {
 			return nil, false, nil
 		}
@@ -1005,8 +1204,7 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 		return out, nil
 	}
 	for _, key := range keys {
-		comp := kvCompositeKey(domain, key)
-		if e, ok := obj.kvDirty[string(comp)]; ok {
+		if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
 			if !e.deleted {
 				out[string(key)] = append([]byte{}, e.val...)
 			}
@@ -1043,7 +1241,7 @@ func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDom
 		return err
 	}
 	for mapKey, entry := range obj.kvDirty {
-		d, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
+		d, logicalKey, ok := splitKVCompositeKey(ownedStringBytes(mapKey))
 		if !ok || d != domain || !bytes.HasPrefix(logicalKey, prefix) {
 			continue
 		}
@@ -1087,14 +1285,12 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
 	var (
 		prevValue  []byte
 		prevExists bool
 		prevLoaded bool
 	)
-	_, dirty := obj.kvDirty[mk]
+	_, dirty := lookupKVEntry(obj.kvDirty, domain, key)
 	if !dirty {
 		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -1123,8 +1319,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	if dirty {
 		if !prevDirty.deleted && bytes.Equal(prevDirty.val, value) {
@@ -1138,31 +1333,43 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
 		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
-	entry := newKVEntry(comp, value, false)
+	entry := newKVEntry(value, false)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	invalidateAccountSplitMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
 }
 
 func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool) (bool, error) {
+	return s.stageAccountKVCommitWithPrev(obj, domain, key, value, deleted, nil, false, false)
+}
+
+// stageAccountKVCommitWithPrev stages a commit-generated account-KV mutation.
+// Callers that already loaded the durable pre-image can pass it here to avoid a
+// duplicate flat-latest lookup. prevLoaded=true with prevExists=false denotes a
+// known absent row.
+func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool, prevValue []byte, prevExists, prevLoaded bool) (bool, error) {
 	if !kvdomains.IsRegistered(domain) {
 		return false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	if obj == nil {
 		return false, nil
 	}
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
-	entry := newKVEntry(comp, value, deleted)
+	entry := newKVEntry(value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
+	} else if prevLoaded {
+		entry.setPrev(prevValue, prevExists)
+		if noop, known := entry.latestNoop(); known && noop {
+			return false, nil
+		}
 	} else {
 		current, exists, err := s.readAccountKVLatest(obj.address, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -1173,7 +1380,7 @@ func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDoma
 			return false, nil
 		}
 	}
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	return true, nil
 }
 
@@ -1186,8 +1393,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	if obj == nil {
 		return nil
 	}
-	comp := kvCompositeKey(domain, key)
-	mk := string(comp)
+	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	var (
 		prevValue  []byte
@@ -1207,13 +1413,13 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		prevLoaded = true
 	}
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
-	entry := newKVEntry(comp, nil, true)
+	entry := newKVEntry(nil, true)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	invalidateAccountSplitMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
@@ -1263,7 +1469,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 		prevGenerationDirty:  obj.accountKVGenerationDirty,
 		prevDirty:            prevDirty,
 	})
-	obj.kvDirty = make(map[string]kvEntry)
+	obj.releaseKVDirty()
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.accountKVGenerationDirty = true
@@ -1274,7 +1480,9 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
 	plan := &accountKVCommitPlan{items: make([]kvCommitItem, 0, len(obj.kvDirty))}
 	for mk, e := range obj.kvDirty {
-		composite := []byte(mk)
+		// kvDirty owns immutable composite strings through commit finalization;
+		// lend that backing to the plan and downstream ownership pipeline.
+		composite := ownedStringBytes(mk)
 		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
 		if !ok {
 			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
@@ -1306,11 +1514,40 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitP
 		return false, nil
 	}
 	wrote := false
+	owned, canTransfer := latest.(statedomains.OwnedWriter)
+	encoded, canTransferEncoded := latest.(statedomains.EncodedOwnedWriter)
 	for _, item := range plan.items {
 		entry := item.entry
 		wrote = true
 		if entry.deleted {
+			if canTransfer {
+				// logicalKey is backed by this commit plan and remains immutable
+				// until SharedDomainTx.Flush completes below the plan loop.
+				if err := owned.DomainDelOwned(obj.address, item.domain, item.logicalKey); err != nil {
+					return false, err
+				}
+				continue
+			}
 			if err := latest.DomainDel(obj.address, item.domain, item.logicalKey); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if canTransferEncoded && len(entry.wrapped) != 0 {
+			// wrapped owns the persisted presence envelope and entry.val is its
+			// semantic suffix. Neither is mutated after this commit plan forms,
+			// so latest, pending reads and commitment capture can share it.
+			if err := encoded.DomainPutEncodedOwned(obj.address, item.domain, item.logicalKey, entry.val, entry.wrapped); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if canTransfer {
+			// entry.val is owned by obj.kvDirty, which is finalized only after
+			// the temporal transaction has synchronously recorded and flushed
+			// every mutation. Transfer both slices instead of cloning them into
+			// the short-lived overlay.
+			if err := owned.DomainPutOwned(obj.address, item.domain, item.logicalKey, entry.val); err != nil {
 				return false, err
 			}
 			continue

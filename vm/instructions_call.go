@@ -88,7 +88,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
-		return nil, ErrEndowmentOutOfRange
+		return nil, ErrLegacyEndowmentOutOfRange
 	}
 
 	energyForCall := interpreter.tvm.adjustedCreateEnergy(contract)
@@ -167,7 +167,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
-		return nil, ErrEndowmentOutOfRange
+		return nil, ErrLegacyEndowmentOutOfRange
 	}
 	salt := saltVal.Bytes32()
 
@@ -254,6 +254,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	energyVal, addrVal, value, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
 
 	addr := uint256ToAddress(&addrVal)
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
 	valueNonZero := !value.IsZero()
 	val, valueOK := uint256ToInt64Exact(&value)
 	gas := javaCallEnergyRequest(&energyVal)
@@ -305,11 +306,13 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		gas += EnergyCallStipend
 	}
 	if !valueOK {
-		contract.Energy += gas
-		return nil, ErrEndowmentOutOfRange
+		rangeErr := callEndowmentOutOfRangeError(interpreter.tvm.cfg.Constantinople, toPrecompile)
+		if rangeErr == ErrEndowmentOutOfRange {
+			contract.Energy += gas
+		}
+		return nil, rangeErr
 	}
 
-	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
 	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.Call(contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
@@ -337,6 +340,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	energyVal, addrVal, value, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
 
 	addr := uint256ToAddress(&addrVal)
+	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
 	valueNonZero := !value.IsZero()
 	val, valueOK := uint256ToInt64Exact(&value)
 	gas := javaCallEnergyRequest(&energyVal)
@@ -372,11 +376,13 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		gas += EnergyCallStipend
 	}
 	if !valueOK {
-		contract.Energy += gas
-		return nil, ErrEndowmentOutOfRange
+		rangeErr := callEndowmentOutOfRangeError(interpreter.tvm.cfg.Constantinople, toPrecompile)
+		if rangeErr == ErrEndowmentOutOfRange {
+			contract.Energy += gas
+		}
+		return nil, rangeErr
 	}
 
-	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
 	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val, val)
 	contract.Energy += remainingEnergy

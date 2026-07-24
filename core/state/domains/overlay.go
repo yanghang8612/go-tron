@@ -24,6 +24,23 @@ type Writer interface {
 	DomainDelPrefix(owner common.Address, domain kvdomains.KVDomain, prefix []byte) error
 }
 
+// OwnedWriter is an optional exact-mutation fast path for callers that can
+// permanently transfer immutable key/value storage to the writer. The writer
+// may retain or pass those slices downstream; callers must never mutate them
+// after a successful call. General callers must use Writer, whose methods
+// defensively copy mutation inputs.
+type OwnedWriter interface {
+	DomainPutOwned(owner common.Address, domain kvdomains.KVDomain, key, value []byte) error
+	DomainDelOwned(owner common.Address, domain kvdomains.KVDomain, key []byte) error
+}
+
+// EncodedOwnedWriter extends the ownership path for callers that already hold
+// the immutable persisted representation of value. encodedValue must represent
+// the same semantic bytes as value.
+type EncodedOwnedWriter interface {
+	DomainPutEncodedOwned(owner common.Address, domain kvdomains.KVDomain, key, value, encodedValue []byte) error
+}
+
 type IterateFunc func(key, value []byte) (bool, error)
 
 type Iterator interface {
@@ -49,12 +66,13 @@ const (
 )
 
 type Mutation struct {
-	Seq    uint64
-	Kind   MutationKind
-	Owner  common.Address
-	Domain kvdomains.KVDomain
-	Key    []byte
-	Value  []byte
+	Seq          uint64
+	Kind         MutationKind
+	Owner        common.Address
+	Domain       kvdomains.KVDomain
+	Key          []byte
+	Value        []byte
+	EncodedValue []byte
 }
 
 type GetSource string
@@ -196,13 +214,33 @@ func (o *Overlay) FlushTo(w Writer) error {
 	if w == nil {
 		return ErrNilWriter
 	}
+	owned, canTransfer := w.(OwnedWriter)
+	encoded, canTransferEncoded := w.(EncodedOwnedWriter)
 	for _, m := range o.ops {
 		switch m.Kind {
 		case MutationPut:
+			if canTransferEncoded && len(m.EncodedValue) != 0 {
+				if err := encoded.DomainPutEncodedOwned(m.Owner, m.Domain, m.Key, m.Value, m.EncodedValue); err != nil {
+					return err
+				}
+				continue
+			}
+			if canTransfer {
+				if err := owned.DomainPutOwned(m.Owner, m.Domain, m.Key, m.Value); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := w.DomainPut(m.Owner, m.Domain, m.Key, m.Value); err != nil {
 				return err
 			}
 		case MutationDel:
+			if canTransfer {
+				if err := owned.DomainDelOwned(m.Owner, m.Domain, m.Key); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := w.DomainDel(m.Owner, m.Domain, m.Key); err != nil {
 				return err
 			}
@@ -263,6 +301,14 @@ func (o *Overlay) Metrics() Metrics {
 }
 
 func (o *Overlay) appendMutation(m Mutation) error {
+	return o.appendMutationWithOwnership(m, false)
+}
+
+func (o *Overlay) appendOwnedMutation(m Mutation) error {
+	return o.appendMutationWithOwnership(m, true)
+}
+
+func (o *Overlay) appendMutationWithOwnership(m Mutation, owned bool) error {
 	if o == nil {
 		return errors.New("domains: nil overlay")
 	}
@@ -271,7 +317,9 @@ func (o *Overlay) appendMutation(m Mutation) error {
 	}
 	o.nextSeq++
 	m.Seq = o.nextSeq
-	m = cloneMutation(m)
+	if !owned {
+		m = cloneMutation(m)
+	}
 	o.ops = append(o.ops, m)
 	switch m.Kind {
 	case MutationPut:
@@ -325,5 +373,6 @@ func validateDomain(domain kvdomains.KVDomain) error {
 func cloneMutation(m Mutation) Mutation {
 	m.Key = append([]byte(nil), m.Key...)
 	m.Value = append([]byte(nil), m.Value...)
+	m.EncodedValue = append([]byte(nil), m.EncodedValue...)
 	return m
 }

@@ -12,15 +12,7 @@ import (
 type UnDelegateResourceActuator struct{}
 
 func (a *UnDelegateResourceActuator) getContract(ctx *Context) (*contractpb.UnDelegateResourceContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.UnDelegateResourceContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal UnDelegateResourceContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.UnDelegateResourceContract](ctx, "UnDelegateResourceContract")
 }
 
 func (a *UnDelegateResourceActuator) Validate(ctx *Context) error {

@@ -24,6 +24,11 @@ var (
 	ErrJVMStackOverflow      = errors.New("StackOverflowError:  exceed default JVM stack size!")
 	ErrPrecompiledContract   = errors.New("precompiled contract error")
 	ErrEndowmentOutOfRange   = errors.New("endowment out of long range")
+	// ErrLegacyEndowmentOutOfRange mirrors BigInteger.longValueExact before
+	// Program.callToAddress began converting the ArithmeticException into a
+	// TransferException under ALLOW_TVM_CONSTANTINOPLE. It also applies to
+	// CREATE/CREATE2 and precompile calls, whose java paths never catch it.
+	ErrLegacyEndowmentOutOfRange = errors.New("BigInteger out of long range")
 	// ErrLegacyCreateEmptyCode mirrors java-tron's pre-ALLOW_MULTI_SIGN
 	// internal-CREATE bug. A constructor that returned empty runtime code was
 	// stored in DepositImpl as a Value whose type remained nil; commitCodeCache
@@ -43,6 +48,11 @@ var (
 	// gtron mirrors that by surfacing this sentinel, which contractRetFromError
 	// maps to its default UNKNOWN(13) and which propagates from sub-calls.
 	ErrPrecompileUnknown = errors.New("precompiled contract: uncaught exception")
+	// ErrSelfDestructTransferFailure mirrors java-tron's pre-Constantinople
+	// Program.suicide BytecodeExecutionException when the beneficiary transfer
+	// fails validation. VM.play spends all remaining energy and records UNKNOWN
+	// with the byte-exact message "transfer failure".
+	ErrSelfDestructTransferFailure = errors.New("transfer failure")
 	// ErrPrecompileTransferFailure mirrors java-tron
 	// Program.callToPrecompiledAddress's BytecodeExecutionException("transfer
 	// failure"): a TRX endowment on a precompile-targeted CALL whose
@@ -94,6 +104,50 @@ func (e transferValidationError) Error() string {
 
 func (e transferValidationError) Is(target error) bool {
 	return target == ErrTransferFailed
+}
+
+type tokenTransferValidationError struct {
+	reason string
+}
+
+func (e tokenTransferValidationError) Error() string {
+	return "transfer trc10 failed: " + e.reason
+}
+
+func (e tokenTransferValidationError) Is(target error) bool {
+	return target == ErrTokenTransferFailed
+}
+
+// selfDestructTransferValidationError mirrors java-tron's TransferException
+// after ALLOW_TVM_CONSTANTINOPLE. Unlike the legacy bytecode exception, this
+// classifies as TRANSFER_FAILED and preserves the remaining transaction energy.
+type selfDestructTransferValidationError struct {
+	reason string
+}
+
+func (e selfDestructTransferValidationError) Error() string {
+	return "transfer all token or transfer all trx failed in suicide: " + e.reason
+}
+
+func (e selfDestructTransferValidationError) Is(target error) bool {
+	return target == ErrTransferFailed
+}
+
+func newSelfDestructTransferError(constantinople bool, reason string) error {
+	if constantinople {
+		return selfDestructTransferValidationError{reason: reason}
+	}
+	return ErrSelfDestructTransferFailure
+}
+
+// callEndowmentOutOfRangeError selects the java exception class for CALL-like
+// opcodes. Ordinary callToAddress converts the ArithmeticException only after
+// ALLOW_TVM_CONSTANTINOPLE; callToPrecompiledAddress has no such catch.
+func callEndowmentOutOfRangeError(constantinople, precompile bool) error {
+	if constantinople && !precompile {
+		return ErrEndowmentOutOfRange
+	}
+	return ErrLegacyEndowmentOutOfRange
 }
 
 type outOfEnergyError struct {

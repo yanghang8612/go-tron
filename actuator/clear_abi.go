@@ -11,15 +11,7 @@ import (
 type ClearABIActuator struct{}
 
 func (a *ClearABIActuator) getContract(ctx *Context) (*contractpb.ClearABIContract, error) {
-	contract := ctx.Tx.Contract()
-	if contract == nil {
-		return nil, errors.New("no contract in transaction")
-	}
-	c := &contractpb.ClearABIContract{}
-	if err := contract.Parameter.UnmarshalTo(c); err != nil {
-		return nil, errors.New("failed to unmarshal ClearABIContract")
-	}
-	return c, nil
+	return decodedContract[*contractpb.ClearABIContract](ctx, "ClearABIContract")
 }
 
 func (a *ClearABIActuator) Validate(ctx *Context) error {

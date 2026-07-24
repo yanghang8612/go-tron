@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -13,6 +14,57 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+var (
+	benchmarkAccountKVCommitPlan *accountKVCommitPlan
+	benchmarkKVLookupEntry       kvEntry
+	benchmarkKVLookupFound       bool
+)
+
+func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
+	const count = 256
+	keys := make([][]byte, count)
+	value := bytes.Repeat([]byte{0x42}, 32)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		obj := new(stateObject)
+		for _, key := range keys {
+			obj.stageKV(kvdomains.ContractStorage, key, value)
+		}
+		plan, err := new(StateDB).prepareAccountKVCommitPlan(obj)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkAccountKVCommitPlan = plan
+		obj.releaseKVDirty()
+	}
+}
+
+func BenchmarkAccountKVDirtyLookup(b *testing.B) {
+	key := bytes.Repeat([]byte{0x7f}, 32)
+	obj := new(stateObject)
+	obj.stageKV(kvdomains.ContractStorage, key, []byte("value"))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkKVLookupEntry, benchmarkKVLookupFound = lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, key)
+	}
+}
+
+func TestKVCompositeKeyStringOwnsInputAndPreservesLayout(t *testing.T) {
+	key := []byte("logical-key")
+	mapKey := kvCompositeKeyString(kvdomains.ContractStorage, key)
+	key[0] = 'X'
+	bytesView := ownedStringBytes(mapKey)
+	if len(bytesView) != 2+len("logical-key") || binary.BigEndian.Uint16(bytesView[:2]) != uint16(kvdomains.ContractStorage) || string(bytesView[2:]) != "logical-key" {
+		t.Fatalf("composite map key = %x", bytesView)
+	}
+}
 
 func TestAccountKVSetGet(t *testing.T) {
 	sdb := newTestStateDB(t)
@@ -133,6 +185,7 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	defer scope.Close()
 	sharedTx := scope.tx
 	sharedWriter := scope.latestWriter
+	sharedCommitmentState := scope.commitmentState
 
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("set k1: %v", err)
@@ -141,11 +194,14 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit1: %v", err)
 	}
-	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter || scope.commitmentState != sharedCommitmentState {
 		t.Fatal("commit scope replaced shared domain transaction objects after first commit")
 	}
 	if scope.commits != 1 {
 		t.Fatalf("scope commits after first commit = %d, want 1", scope.commits)
+	}
+	if len(sharedCommitmentState.touches) != 0 || len(sharedCommitmentState.touchValues) != 0 || sharedCommitmentState.generation != nil || sharedCommitmentState.latestReader != nil {
+		t.Fatal("shared commitment state retained first commit's references")
 	}
 	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
 		t.Fatalf("shared tx retained %d mutations after first commit", len(mutations))
@@ -161,11 +217,14 @@ func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
 	if root2 == root1 {
 		t.Fatal("second scoped commit did not move commitment root")
 	}
-	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter || scope.commitmentState != sharedCommitmentState {
 		t.Fatal("commit scope replaced shared domain transaction objects after second commit")
 	}
 	if scope.commits != 2 {
 		t.Fatalf("scope commits after second commit = %d, want 2", scope.commits)
+	}
+	if len(sharedCommitmentState.touches) != 0 || len(sharedCommitmentState.touchValues) != 0 || sharedCommitmentState.generation != nil || sharedCommitmentState.latestReader != nil {
+		t.Fatal("shared commitment state retained second commit's references")
 	}
 	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
 		t.Fatalf("shared tx retained %d mutations after second commit", len(mutations))
@@ -796,6 +855,172 @@ func TestSetStateSameValueDoesNotDirtyStorage(t *testing.T) {
 	}
 }
 
+func TestStorageCommitReusesSetStatePreimage(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x19)
+	var slot, original, next tcommon.Hash
+	slot[31] = 0x04
+	original[31] = 0x31
+	next[31] = 0x32
+	sdb.SetState(addr, slot, original)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit original storage: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	reopened.SetAccountKVIndexReads(true)
+	index.resetCounts()
+	reopened.SetState(addr, slot, next)
+	if got := index.getsByDomain[kvdomains.ContractStorage]; got != 1 {
+		t.Fatalf("SetState contract-storage reads = %d, want 1", got)
+	}
+
+	index.resetCounts()
+	root2, err := reopened.Commit()
+	if err != nil {
+		t.Fatalf("commit updated storage: %v", err)
+	}
+	if got := index.getsByDomain[kvdomains.ContractStorage]; got != 0 {
+		t.Fatalf("commit repeated contract-storage reads = %d, want 0", got)
+	}
+
+	check, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen updated root: %v", err)
+	}
+	check.SetAccountKVIndexStore(check.db.DiskDB())
+	check.SetAccountKVIndexReads(true)
+	if got := check.GetState(addr, slot); got != next {
+		t.Fatalf("updated storage = %x, want %x", got, next)
+	}
+}
+
+func TestStorageCommitLazilyRecreatesDirtyOrigins(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x1b)
+	var slot, original, next tcommon.Hash
+	slot[31] = 0x06
+	original[31] = 0x51
+	next[31] = 0x52
+
+	sdb.SetState(addr, slot, original)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatalf("commit original storage: %v", err)
+	}
+	obj := sdb.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing after first commit")
+	}
+	if obj.dirtyStorage != nil {
+		t.Fatalf("dirty origins retained after commit: %d", len(obj.dirtyStorage))
+	}
+
+	// A second write on the same cached state object must lazily recreate the
+	// origin map and preserve the committed value as its pre-image.
+	sdb.SetState(addr, slot, next)
+	origin, ok := obj.dirtyStorage[slot]
+	if !ok || !origin.loaded || !origin.exists || origin.value != original {
+		t.Fatalf("second-write origin = %+v, want loaded existing %x", origin, original)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit updated storage: %v", err)
+	}
+	if obj.dirtyStorage != nil {
+		t.Fatalf("dirty origins retained after second commit: %d", len(obj.dirtyStorage))
+	}
+
+	check, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen updated root: %v", err)
+	}
+	check.SetAccountKVIndexStore(check.db.DiskDB())
+	check.SetAccountKVIndexReads(true)
+	if got := check.GetState(addr, slot); got != next {
+		t.Fatalf("updated storage = %x, want %x", got, next)
+	}
+}
+
+func TestStoragePreimageSurvivesSnapshotAndStateCopy(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x1a)
+	var slot, original, first, reverted tcommon.Hash
+	slot[31] = 0x05
+	original[31] = 0x41
+	first[31] = 0x42
+	reverted[31] = 0x43
+	sdb.SetState(addr, slot, original)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit original storage: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	reopened.SetAccountKVIndexReads(true)
+
+	// Reverting the first write must discard its captured origin. The next
+	// first write then captures the same durable pre-image afresh.
+	snap := reopened.Snapshot()
+	reopened.SetState(addr, slot, reverted)
+	reopened.RevertToSnapshot(snap)
+	obj := reopened.getStateObject(addr)
+	if _, dirty := obj.dirtyStorage[slot]; dirty {
+		t.Fatal("first-write revert retained dirty storage origin")
+	}
+
+	reopened.SetState(addr, slot, first)
+	origin, ok := obj.dirtyStorage[slot]
+	if !ok || !origin.loaded || !origin.exists || origin.value != original {
+		t.Fatalf("captured origin = %+v, want loaded existing %x", origin, original)
+	}
+
+	// A nested write/revert must keep the interval's original pre-image, and a
+	// StateDB copy handed to async commit must retain it as well.
+	nested := reopened.Snapshot()
+	reopened.SetState(addr, slot, reverted)
+	reopened.RevertToSnapshot(nested)
+	if got := obj.dirtyStorage[slot]; got != origin {
+		t.Fatalf("nested revert origin = %+v, want %+v", got, origin)
+	}
+	copyState, err := reopened.Copy()
+	if err != nil {
+		t.Fatalf("copy state: %v", err)
+	}
+	copyObj := copyState.getStateObject(addr)
+	if got := copyObj.dirtyStorage[slot]; got != origin {
+		t.Fatalf("copied origin = %+v, want %+v", got, origin)
+	}
+
+	index.resetCounts()
+	root2, err := copyState.Commit()
+	if err != nil {
+		t.Fatalf("commit copied state: %v", err)
+	}
+	if got := index.getsByDomain[kvdomains.ContractStorage]; got != 0 {
+		t.Fatalf("copied commit repeated contract-storage reads = %d, want 0", got)
+	}
+	check, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen copied root: %v", err)
+	}
+	check.SetAccountKVIndexStore(check.db.DiskDB())
+	check.SetAccountKVIndexReads(true)
+	if got := check.GetState(addr, slot); got != first {
+		t.Fatalf("copied storage = %x, want %x", got, first)
+	}
+}
+
 func TestStorageNetZeroWriteSkipsAccountKVCommit(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x18)
@@ -829,6 +1054,9 @@ func TestStorageNetZeroWriteSkipsAccountKVCommit(t *testing.T) {
 	}
 	if index.puts != 0 || index.deletes != 0 {
 		t.Fatalf("net-zero storage touched latest index: puts=%d deletes=%d", index.puts, index.deletes)
+	}
+	if got := index.getsByDomain[kvdomains.ContractStorage]; got != 0 {
+		t.Fatalf("net-zero commit repeated contract-storage reads = %d, want 0", got)
 	}
 	obj := reopened.getStateObject(addr)
 	if obj == nil {
@@ -1428,6 +1656,74 @@ func TestAccountKVFinalWriteSkipsSnapshotJournal(t *testing.T) {
 	}
 }
 
+type ownedMutationWriterSpy struct {
+	regularPuts    int
+	regularDeletes int
+	ownedPuts      int
+	encodedPuts    int
+	ownedDeletes   int
+	putKey         []byte
+	putValue       []byte
+	encodedValue   []byte
+	deleteKey      []byte
+}
+
+func (w *ownedMutationWriterSpy) DomainPut(tcommon.Address, kvdomains.KVDomain, []byte, []byte) error {
+	w.regularPuts++
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainDel(tcommon.Address, kvdomains.KVDomain, []byte) error {
+	w.regularDeletes++
+	return nil
+}
+
+func (*ownedMutationWriterSpy) DomainDelPrefix(tcommon.Address, kvdomains.KVDomain, []byte) error {
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainPutOwned(_ tcommon.Address, _ kvdomains.KVDomain, key, value []byte) error {
+	w.ownedPuts++
+	w.putKey = key
+	w.putValue = value
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainDelOwned(_ tcommon.Address, _ kvdomains.KVDomain, key []byte) error {
+	w.ownedDeletes++
+	w.deleteKey = key
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainPutEncodedOwned(_ tcommon.Address, _ kvdomains.KVDomain, key, value, encodedValue []byte) error {
+	w.encodedPuts++
+	w.putKey = key
+	w.putValue = value
+	w.encodedValue = encodedValue
+	return nil
+}
+
+func TestCommitAccountKVLatestTransfersPlanStorage(t *testing.T) {
+	putKey := []byte("put-key")
+	putEntry := newKVEntry([]byte("put-value"), false)
+	deleteKey := []byte("delete-key")
+	plan := &accountKVCommitPlan{items: []kvCommitItem{
+		{domain: kvdomains.SystemReward, logicalKey: putKey, entry: putEntry},
+		{domain: kvdomains.ContractStorage, logicalKey: deleteKey, entry: kvEntry{deleted: true}},
+	}}
+	writer := new(ownedMutationWriterSpy)
+	wrote, err := new(StateDB).commitAccountKVLatest(&stateObject{address: testAddr(0x7e)}, plan, writer)
+	if err != nil || !wrote {
+		t.Fatalf("commitAccountKVLatest wrote=%v err=%v", wrote, err)
+	}
+	if writer.regularPuts != 0 || writer.regularDeletes != 0 || writer.ownedPuts != 0 || writer.ownedDeletes != 1 || writer.encodedPuts != 1 {
+		t.Fatalf("writer calls regular=%d/%d owned=%d/%d encoded=%d", writer.regularPuts, writer.regularDeletes, writer.ownedPuts, writer.ownedDeletes, writer.encodedPuts)
+	}
+	if &writer.putKey[0] != &putKey[0] || &writer.putValue[0] != &putEntry.val[0] || &writer.encodedValue[0] != &putEntry.wrapped[0] || &writer.deleteKey[0] != &deleteKey[0] {
+		t.Fatal("commit path cloned storage before owned writer")
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -1442,8 +1738,19 @@ func equalStringSlices(a, b []string) bool {
 
 type countingKVIndexStore struct {
 	ethdb.KeyValueStore
-	puts    int
-	deletes int
+	puts         int
+	deletes      int
+	getsByDomain map[kvdomains.KVDomain]int
+}
+
+func (s *countingKVIndexStore) Get(key []byte) ([]byte, error) {
+	if _, _, domain, _, ok := rawdb.DecodeStateKVLatestKey(key); ok {
+		if s.getsByDomain == nil {
+			s.getsByDomain = make(map[kvdomains.KVDomain]int)
+		}
+		s.getsByDomain[domain]++
+	}
+	return s.KeyValueStore.Get(key)
 }
 
 func (s *countingKVIndexStore) Put(key, value []byte) error {
@@ -1463,4 +1770,5 @@ func (s *countingKVIndexStore) Delete(key []byte) error {
 func (s *countingKVIndexStore) resetCounts() {
 	s.puts = 0
 	s.deletes = 0
+	clear(s.getsByDomain)
 }

@@ -1,8 +1,14 @@
 package rawdb
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+type cachedNoCopyKeyPartsReader interface {
+	GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error)
+}
 
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
@@ -11,6 +17,30 @@ import (
 type keyPartsWriter interface {
 	PutKeyParts(first, second, value []byte) error
 	DeleteKeyParts(first, second []byte) error
+}
+
+// keyPartsOwnedValueWriter is the narrow layered-store extension used when a
+// caller has just encoded a value and can transfer its backing bytes. Ordinary
+// Put/PutKeyParts retain their defensive-copy contract; this method may retain
+// value directly, and the caller must not mutate it after the call.
+type keyPartsOwnedValueWriter interface {
+	PutKeyPartsOwnedValue(first, second, value []byte) error
+}
+
+type keyPartsStringOwnedValueWriter interface {
+	PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error
+}
+
+type keyPartsStringsOwnedValuesWriter interface {
+	PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error
+}
+
+// SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
+// encoded branch value directly. Callers use this to choose between allocating
+// the final immutable encoding and reusing a scratch buffer for copying stores.
+func SupportsCommitmentBranchOwnedValue(db ethdb.KeyValueWriter) bool {
+	_, ok := db.(keyPartsOwnedValueWriter)
+	return ok
 }
 
 // WriteCommitmentBranch persists an encoded BranchData row for the given
@@ -26,6 +56,48 @@ func WriteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte, encoded []byt
 		return writer.PutKeyParts(stateCommitmentBranchPrefix, prefix, encoded)
 	}
 	return db.Put(commitmentBranchKey(prefix), encoded)
+}
+
+// WriteCommitmentBranchOwned is WriteCommitmentBranch for a freshly allocated
+// immutable encoding whose ownership the caller transfers to db. A capable
+// layered writer retains encoded directly; all other writers fall back to the
+// normal copying path. The caller must not mutate encoded after this call.
+func WriteCommitmentBranchOwned(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
+	if writer, ok := db.(keyPartsOwnedValueWriter); ok {
+		return writer.PutKeyPartsOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+	}
+	return WriteCommitmentBranch(db, prefix, encoded)
+}
+
+// WriteCommitmentBranchOwnedString is the batch-flush form of
+// WriteCommitmentBranchOwned. Layered writers can join the already-immutable
+// string prefix directly into their map key; generic writers retain the normal
+// []byte API and copy semantics through the fallback.
+func WriteCommitmentBranchOwnedString(db ethdb.KeyValueWriter, prefix string, encoded []byte) error {
+	if writer, ok := db.(keyPartsStringOwnedValueWriter); ok {
+		return writer.PutKeyPartsStringOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+	}
+	return WriteCommitmentBranchOwned(db, []byte(prefix), encoded)
+}
+
+// WriteCommitmentBranchesOwnedStrings is the sibling-fold batch form of
+// WriteCommitmentBranchOwnedString. A layered writer can pack every physical
+// key into one immutable arena instead of allocating one backing string per
+// branch. Values are already disjoint slices of the fold's immutable encoding
+// arena and may be retained directly.
+func WriteCommitmentBranchesOwnedStrings(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte) error {
+	if len(prefixes) != len(encoded) {
+		return errors.New("rawdb: commitment branch batch length mismatch")
+	}
+	if writer, ok := db.(keyPartsStringsOwnedValuesWriter); ok {
+		return writer.PutKeyPartsStringsOwnedValues(stateCommitmentBranchPrefix, prefixes, encoded)
+	}
+	for i, prefix := range prefixes {
+		if err := WriteCommitmentBranchOwnedString(db, prefix, encoded[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.
@@ -49,8 +121,15 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
-	key := commitmentBranchKey(prefix)
-	raw, err := readStateNoCopyCached(db, key)
+	var (
+		raw []byte
+		err error
+	)
+	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
+		raw, err = reader.GetNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix)
+	} else {
+		raw, err = readStateNoCopyCached(db, commitmentBranchKey(prefix))
+	}
 	if err != nil {
 		// go-ethereum memorydb / pebble both return an error on missing keys.
 		return nil, false, nil
