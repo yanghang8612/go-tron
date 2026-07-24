@@ -87,18 +87,18 @@ func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error)
 
 func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject) (int64, error) {
 	acct := obj.account
-	var frozenV1 int64
-	var err error
-	if obj.accountFrozenBandwidthLoaded {
-		frozenV1 = acct.TotalFrozenBandwidth()
-	} else {
-		frozenV1, err = s.accountFrozenBandwidthTotal(obj)
-		if err != nil {
-			return 0, err
-		}
+	// The owner resource snapshot and the consensus bandwidth charge both read
+	// this value for the same transaction. Materialize this small, relevant
+	// domain once so the second read (and later transactions from the same
+	// account while it remains in the StateDB cache) does not open another
+	// prefix iterator over the block overlay.
+	if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
+		return 0, err
 	}
+	frozenV1 := acct.TotalFrozenBandwidth()
 
 	var frozenV2 int64
+	var err error
 	if obj.accountStakeV2Loaded {
 		frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
 	} else {

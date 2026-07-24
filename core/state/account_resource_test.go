@@ -120,7 +120,7 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	}
 	if obj.accountResourceLoaded || obj.accountMapsLoaded || obj.accountPermissionsLoaded ||
 		obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded ||
-		obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
+		!obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
 		t.Fatalf("bandwidth read materialized split domains: resource=%t maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t frozenBandwidth=%t tronPower=%t",
 			obj.accountResourceLoaded, obj.accountMapsLoaded, obj.accountPermissionsLoaded,
 			obj.accountVotesLoaded, obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded,
@@ -142,16 +142,14 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 		t.Fatal("resource read did not load AccountResource")
 	}
 	if obj.accountMapsLoaded || obj.accountPermissionsLoaded || obj.accountVotesLoaded ||
-		obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded ||
-		obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
-		t.Fatalf("resource read materialized unrelated domains: maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t frozenBandwidth=%t tronPower=%t",
+		obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded || obj.accountTronPowerLoaded {
+		t.Fatalf("resource read materialized unrelated domains: maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t tronPower=%t",
 			obj.accountMapsLoaded, obj.accountPermissionsLoaded, obj.accountVotesLoaded,
-			obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded,
-			obj.accountFrozenBandwidthLoaded, obj.accountTronPowerLoaded)
+			obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded, obj.accountTronPowerLoaded)
 	}
 	pb := obj.account.Proto()
 	if len(pb.AssetV2) != 0 || pb.OwnerPermission != nil || len(pb.Votes) != 0 ||
-		len(pb.Frozen) != 0 || len(pb.FrozenV2) != 0 || len(pb.UnfrozenV2) != 0 {
+		len(pb.FrozenV2) != 0 || len(pb.UnfrozenV2) != 0 {
 		t.Fatalf("resource read leaked unrelated split fields into account proto: %+v", pb)
 	}
 }
