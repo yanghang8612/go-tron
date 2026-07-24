@@ -33,7 +33,10 @@ func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	if err != nil {
 		return nil
 	}
-	return append([]byte(nil), data...)
+	// KeyValueReader.Get returns caller-owned bytes in every production reader
+	// (Pebble, blockbuffer and memorydb). Preserve that ownership instead of
+	// copying immutable content-addressed bytecode a second time here.
+	return data
 }
 
 func DeleteStateCode(db ethdb.KeyValueWriter, hash common.Hash) error {

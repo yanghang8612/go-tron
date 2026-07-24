@@ -9,6 +9,8 @@ import (
 )
 
 type stateCodeReader interface {
+	// ReadStateCode returns caller-owned immutable bytecode. The caller may
+	// retain the slice; changing it must not mutate the backing store.
 	ReadStateCode(hash tcommon.Hash) []byte
 }
 

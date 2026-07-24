@@ -2363,7 +2363,10 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	}
 	if obj.code == nil && !obj.codeDirty && obj.codeHash != (tcommon.Hash{}) {
 		if code := s.readStateCode(obj.codeHash); len(code) > 0 {
-			obj.code = append([]byte(nil), code...)
+			// stateCodeReader transfers ownership. Bytecode is immutable and the
+			// state object retains it for the rest of its cache lifetime, so no
+			// second defensive copy is needed here.
+			obj.code = code
 		} else if s.codeColdHistory != nil {
 			if code, ok, err := s.codeColdHistory.GetCodeAtOrBefore(obj.codeHash, s.codeColdTxNum); err == nil && ok && len(code) > 0 {
 				obj.code = append([]byte(nil), code...)
