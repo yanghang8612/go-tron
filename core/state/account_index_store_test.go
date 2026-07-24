@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
@@ -51,6 +53,23 @@ func TestBlackholeAddressUsesGenesisNameIndex(t *testing.T) {
 	}
 	if got := sdb.BlackholeAddress(); got != nileBlackhole {
 		t.Fatalf("blackhole address = %s, want %s", got.Hex(), nileBlackhole.Hex())
+	}
+}
+
+func BenchmarkBlackholeAddress(b *testing.B) {
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	want := testAddr(0x42)
+	if err := sdb.WriteAccountNameIndex([]byte("Blackhole"), want); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if got := sdb.BlackholeAddress(); got != want {
+			b.Fatalf("blackhole address = %s, want %s", got.Hex(), want.Hex())
+		}
 	}
 }
 

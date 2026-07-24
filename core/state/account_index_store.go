@@ -34,6 +34,10 @@ const (
 	accountIdIndexTag   byte = 0x02
 )
 
+var blackholeAccountNameIndexKey = [...]byte{
+	accountNameIndexTag, 'B', 'l', 'a', 'c', 'k', 'h', 'o', 'l', 'e',
+}
+
 // accountNameIndexKVKey is the SystemAccountIndex logical key for a name entry.
 func accountNameIndexKVKey(accountName []byte) []byte {
 	out := make([]byte, 1+len(accountName))
@@ -69,7 +73,7 @@ func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 // a compatibility fallback for unit tests and legacy databases without the
 // index row.
 func (s *StateDB) BlackholeAddress() tcommon.Address {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountNameIndexKVKey([]byte("Blackhole")))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, blackholeAccountNameIndexKey[:])
 	if err == nil && ok && len(raw) == tcommon.AddressLength {
 		return tcommon.BytesToAddress(raw)
 	}
