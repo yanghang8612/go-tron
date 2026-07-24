@@ -454,6 +454,59 @@ func (v *LayerView) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error
 	return v.getNoCopyCachedStackKey(key)
 }
 
+// ViewNoCopyCachedKeyParts is the layer-bound callback counterpart of
+// GetNoCopyCachedKeyParts. See Buffer.ViewNoCopyCachedKeyParts for the stable
+// lifetime contract.
+func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return v.viewNoCopyCachedKey(key, fn)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return v.viewNoCopyCachedKey(key, fn)
+}
+
+func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) error {
+	b := v.b
+	view := b.loadReadView()
+	value, found, tomb := v.l.lookup(key)
+	if tomb {
+		return ErrNotFound
+	}
+	if found {
+		return fn(value, true)
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb = view.layers[i].lookup(key)
+		if tomb {
+			return ErrNotFound
+		}
+		if found {
+			return fn(value, true)
+		}
+	}
+	if b.base == nil {
+		return ErrNotFound
+	}
+	cache := view.baseReadCache
+	var cacheEpoch baseReadCacheEpoch
+	if cache != nil {
+		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			return fn(cached, true)
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	return viewBaseIntoCache(b.base, cache, key, cacheEpoch, fn)
+}
+
 // GetNoCopyCachedStateKVLatest implements rawdb's structured flat-latest read
 // path. Normal storage keys fit in the fixed stack buffer; only genuinely long
 // logical keys allocate, preserving the generic reader's behaviour.

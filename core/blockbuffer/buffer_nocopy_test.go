@@ -148,6 +148,55 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommitmentSplitViewReportsTransientBaseAndStableCacheOverlay(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	prefix := bytes.Repeat([]byte{0x0b}, 32)
+	baseValue := []byte("durable-branch")
+	if err := rawdb.WriteCommitmentBranch(disk, prefix, baseValue); err != nil {
+		t.Fatal(err)
+	}
+	base := &countingKeyValueReader{KeyValueReader: disk}
+	buf := New(base)
+	buf.SetBaseReadCacheSize(1 << 20)
+
+	view := func(reader ethdb.KeyValueReader, want []byte, wantStable bool) {
+		t.Helper()
+		called := 0
+		found, err := rawdb.ViewCommitmentBranchNoCopy(reader, prefix, func(encoded []byte, stable bool) error {
+			called++
+			if !bytes.Equal(encoded, want) || stable != wantStable {
+				t.Fatalf("callback = (%q, stable=%v), want (%q, %v)", encoded, stable, want, wantStable)
+			}
+			return nil
+		})
+		if err != nil || !found || called != 1 {
+			t.Fatalf("view = found %v called %d err %v, want true/1/nil", found, called, err)
+		}
+	}
+
+	// First sighting remains on admission probation; the second is copied into
+	// the cache and can safely outlive the base View callback. The third is a
+	// cache hit and never reaches the base.
+	view(buf, baseValue, false)
+	view(buf, baseValue, true)
+	view(buf, baseValue, true)
+	if base.views != 2 {
+		t.Fatalf("base views = %d, want 2", base.views)
+	}
+
+	buf.BeginBlock(bufHash(1), 1)
+	h, _ := buf.NewestInflight()
+	layerView := buf.ViewLayer(h)
+	overlayValue := []byte("overlay-branch")
+	if err := rawdb.WriteCommitmentBranch(layerView, prefix, overlayValue); err != nil {
+		t.Fatal(err)
+	}
+	view(layerView, overlayValue, true)
+	if base.views != 2 {
+		t.Fatalf("overlay view reached base: %d views, want 2", base.views)
+	}
+}
+
 func TestCommitmentSplitReadOversizedKey(t *testing.T) {
 	prefix := bytes.Repeat([]byte{0x7b}, splitReadKeyStackSize)
 	want := []byte("oversized-branch")
@@ -788,6 +837,24 @@ func BenchmarkBaseReadCacheColdFill(b *testing.B) {
 	})
 	b.Run("callback-view", func(b *testing.B) {
 		run(b, disk)
+	})
+	b.Run("scoped-callback-view", func(b *testing.B) {
+		buf := New(disk)
+		buf.SetBaseReadCacheSize(1 << 20)
+		b.ReportAllocs()
+		b.SetBytes(int64(len(value)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			buf.baseReadCache.del(key)
+			if err := buf.ViewNoCopyCachedKeyParts(nil, key, func(got []byte, stable bool) error {
+				if len(got) != len(value) || stable {
+					b.Fatalf("ViewNoCopyCachedKeyParts = %d bytes stable=%v", len(got), stable)
+				}
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
 	})
 }
 

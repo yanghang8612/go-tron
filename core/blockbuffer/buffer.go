@@ -1030,6 +1030,63 @@ func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
 	return b.getNoCopyCachedStackKey(key)
 }
 
+// ViewNoCopyCachedKeyParts resolves a split physical key and invokes fn while
+// the value is valid. stable is true for immutable overlay/cache values and
+// owned fallback Get results; false means the value is a callback-scoped Pebble
+// view and fn must not retain slices that alias it. Commitment branch decoding
+// uses this distinction to avoid copying an entire cold branch merely to keep a
+// handful of leaf keys alive after the callback.
+func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return b.viewNoCopyCachedKey(key, fn)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return b.viewNoCopyCachedKey(key, fn)
+}
+
+func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) error {
+	view := b.loadReadView()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		value, found, tomb := view.inflight[i].lookup(key)
+		if tomb {
+			return ErrNotFound
+		}
+		if found {
+			return fn(value, true)
+		}
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb := view.layers[i].lookup(key)
+		if tomb {
+			return ErrNotFound
+		}
+		if found {
+			return fn(value, true)
+		}
+	}
+	if b.base == nil {
+		return ErrNotFound
+	}
+	cache := view.baseReadCache
+	var cacheEpoch baseReadCacheEpoch
+	if cache != nil {
+		if value, ok, epoch := cache.getWithEpoch(key); ok {
+			return fn(value, true)
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	return viewBaseIntoCache(b.base, cache, key, cacheEpoch, fn)
+}
+
 // GetNoCopyCachedStateKVLatest implements rawdb's structured flat-latest read
 // path for the synchronous pipeline. Typical storage keys are assembled in
 // stack storage and never materialised on overlay/base-cache hits.
@@ -1111,6 +1168,34 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 	}
 	stored, _ := cache.setIfEpoch(key, value, epoch)
 	return stored, nil
+}
+
+// viewBaseIntoCache is the callback counterpart of readBaseIntoCache. On a
+// Pebble cold miss the callback consumes the engine-owned value before its
+// closer is released, avoiding the owned fallback copy readBaseIntoCache must
+// create. A value admitted into the cache is stable; a rejected/probationary
+// callback view is transient. Generic Get results are caller-owned and stable.
+func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) error {
+	if viewer, ok := base.(valueViewReader); ok {
+		return viewer.View(key, func(value []byte) error {
+			if cache != nil {
+				if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
+					return fn(stored, true)
+				}
+			}
+			return fn(value, false)
+		})
+	}
+	value, err := base.Get(key)
+	if err != nil {
+		return err
+	}
+	if cache != nil {
+		if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
+			value = stored
+		}
+	}
+	return fn(value, true)
 }
 
 // Has reports whether key exists, honoring tombstones. Safe to call

@@ -107,17 +107,17 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
 // the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
-	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
-	if err != nil || !ok {
-		return ok, err
-	}
-	// The no-copy state reader returns either an owned Get result or an
-	// immutable overlay/cache value. Borrow its leaf-key slices for this fold
-	// descent; branch storage encodes/copies them synchronously before return.
-	if err := decodeBranchDataIntoNoCopy(encoded, dst); err != nil {
-		return false, err
-	}
-	return true, nil
+	return rawdb.ViewCommitmentBranchNoCopy(s.db, prefix, func(encoded []byte, stable bool) error {
+		if stable {
+			// Immutable overlay/cache values (and generic owned Get results) live
+			// for the full fold descent, so leaf keys may alias them directly.
+			return decodeBranchDataIntoNoCopy(encoded, dst)
+		}
+		// A cold Pebble value is valid only inside this callback. Copy only its
+		// leaf keys into BranchData instead of copying the complete encoded
+		// branch (which is dominated by fixed child hashes) before decoding.
+		return DecodeBranchDataInto(encoded, dst)
+	})
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {

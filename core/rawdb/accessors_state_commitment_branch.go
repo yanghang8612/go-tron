@@ -10,6 +10,10 @@ type cachedNoCopyKeyPartsReader interface {
 	GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error)
 }
 
+type cachedNoCopyKeyPartsViewer interface {
+	ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) error
+}
+
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
 // path directly into their owned key instead of allocating an intermediate
@@ -135,6 +139,42 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 		return nil, false, nil
 	}
 	return raw, true, nil
+}
+
+// ViewCommitmentBranchNoCopy invokes fn with the encoded branch and reports
+// whether the row exists. stable is true when fn may retain slices that alias
+// encoded (immutable overlay/cache or an owned Get result); false identifies a
+// callback-scoped durable-base view. The callback form lets the commitment
+// decoder consume a cold Pebble value before its closer is released instead of
+// allocating a full encoded-value copy solely for lifetime extension.
+func ViewCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
+		called := false
+		var callbackErr error
+		err := viewer.ViewNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix, func(encoded []byte, stable bool) error {
+			called = true
+			callbackErr = fn(encoded, stable)
+			return callbackErr
+		})
+		if called {
+			if callbackErr != nil {
+				return true, callbackErr
+			}
+			return true, err
+		}
+		if err != nil {
+			// Match ReadCommitmentBranchNoCopy's long-standing missing-row
+			// contract: storage backends surface absence as an error.
+			return false, nil
+		}
+		return false, nil
+	}
+
+	encoded, ok, err := ReadCommitmentBranchNoCopy(db, prefix)
+	if err != nil || !ok {
+		return ok, err
+	}
+	return true, fn(encoded, true)
 }
 
 // DeleteCommitmentBranch removes the branch row for prefix.

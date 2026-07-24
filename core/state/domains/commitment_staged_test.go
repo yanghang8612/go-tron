@@ -3,11 +3,26 @@ package domains
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type invalidatingCommitmentViewReader struct {
+	ethdb.KeyValueReader
+}
+
+func (r invalidatingCommitmentViewReader) View(key []byte, fn func([]byte) error) error {
+	value, err := r.KeyValueReader.Get(key)
+	if err != nil {
+		return err
+	}
+	err = fn(value)
+	clear(value) // model Pebble's callback-scoped value becoming invalid
+	return err
+}
 
 func TestRawdbBranchStoreBatchRoundTrip(t *testing.T) {
 	buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
@@ -88,6 +103,29 @@ func TestRawdbBranchStoreRoundTrip(t *testing.T) {
 	}
 	if _, ok, err := store.GetBranch(prefix); err != nil || ok {
 		t.Fatalf("GetBranch(after del) = ok %v err %v, want false nil", ok, err)
+	}
+}
+
+func TestRawdbBranchStoreTransientViewCopiesOnlyRetainedLeafKeys(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	prefix := []byte{0x0d, 0x0e}
+	var want BranchData
+	want.SetHashChild(1, common.Hash{0x11})
+	want.SetLeafChild(9, []byte("leaf-must-outlive-view"), common.Hash{0x99})
+	if err := rawdb.WriteCommitmentBranch(disk, prefix, want.Encode()); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := blockbuffer.New(invalidatingCommitmentViewReader{KeyValueReader: disk})
+	buffer.SetBaseReadCacheSize(1 << 20)
+	store := newRawdbBranchStore(buffer)
+	var got BranchData
+	found, err := store.GetBranchInto(prefix, &got)
+	if err != nil || !found {
+		t.Fatalf("GetBranchInto = found %v err %v, want true/nil", found, err)
+	}
+	if !got.Equal(want) {
+		t.Fatal("decoded branch retained bytes from the invalidated base View")
 	}
 }
 

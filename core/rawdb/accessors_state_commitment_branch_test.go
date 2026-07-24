@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -183,6 +184,28 @@ type splitCachedNoCopyProbe struct {
 	second     []byte
 }
 
+type splitCachedNoCopyViewProbe struct {
+	*splitCachedNoCopyProbe
+	stable    bool
+	viewCalls int
+	missing   bool
+}
+
+func (p *splitCachedNoCopyViewProbe) ViewNoCopyCachedKeyParts(first, second []byte, fn func([]byte, bool) error) error {
+	p.viewCalls++
+	p.first = append(p.first[:0], first...)
+	p.second = append(p.second[:0], second...)
+	if p.missing {
+		return errors.New("missing")
+	}
+	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
+	value, err := p.KeyValueReader.Get(key)
+	if err != nil {
+		return err
+	}
+	return fn(value, p.stable)
+}
+
 func (p *splitCachedNoCopyProbe) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
 	p.splitCalls++
 	p.first = append(p.first[:0], first...)
@@ -348,5 +371,48 @@ func TestReadCommitmentBranchNoCopy_PrefersSplitCachedReader(t *testing.T) {
 	}
 	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
 		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
+	}
+}
+
+func TestViewCommitmentBranchNoCopy_PrefersSplitViewerAndPropagatesLifetime(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x07, 0x08, 0x09}
+	want := []byte{0xaa, 0xbb, 0xcc}
+	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
+		t.Fatal(err)
+	}
+	probe := &splitCachedNoCopyViewProbe{
+		splitCachedNoCopyProbe: &splitCachedNoCopyProbe{
+			cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db},
+		},
+		stable: false,
+	}
+	called := 0
+	found, err := ViewCommitmentBranchNoCopy(probe, prefix, func(encoded []byte, stable bool) error {
+		called++
+		if !bytes.Equal(encoded, want) || stable {
+			t.Fatalf("view callback = (%x, stable=%v), want (%x, false)", encoded, stable, want)
+		}
+		return nil
+	})
+	if err != nil || !found || called != 1 {
+		t.Fatalf("ViewCommitmentBranchNoCopy = found %v called %d err %v, want true/1/nil", found, called, err)
+	}
+	if probe.viewCalls != 1 || probe.splitCalls != 0 || probe.cachedCalls != 0 || probe.getCalls != 0 {
+		t.Fatalf("reader calls view/split/cached/noCopy/Get = %d/%d/%d/%d/%d, want 1/0/0/0/0",
+			probe.viewCalls, probe.splitCalls, probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	}
+	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
+		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
+	}
+
+	injected := errors.New("decode failed")
+	if found, err := ViewCommitmentBranchNoCopy(probe, prefix, func([]byte, bool) error { return injected }); !found || !errors.Is(err, injected) {
+		t.Fatalf("callback failure = found %v err %v, want true/%v", found, err, injected)
+	}
+	probe.missing = true
+	called = 0
+	if found, err := ViewCommitmentBranchNoCopy(probe, prefix, func([]byte, bool) error { called++; return nil }); err != nil || found || called != 0 {
+		t.Fatalf("missing view = found %v called %d err %v, want false/0/nil", found, called, err)
 	}
 }
