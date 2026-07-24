@@ -3,6 +3,8 @@ package state
 import (
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -274,6 +276,41 @@ func TestAccountResourceSnapshotRevertInvalidatesMaterializedCache(t *testing.T)
 	}
 }
 
+func TestEnergySettlementWritesResourceFieldsTogether(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xa4)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.SetEnergyUsageWindowAndLatestConsumeTime(addr, 10, 30, 20, false)
+
+	account := sdb.GetAccount(addr)
+	if account == nil || account.EnergyUsage() != 10 || account.LatestConsumeTimeForEnergy() != 20 ||
+		account.RawEnergyWindowSize() != 30 || account.EnergyWindowOptimized() {
+		t.Fatalf("initial combined settlement = %+v", account)
+	}
+
+	snapshot := sdb.Snapshot()
+	sdb.SetEnergyUsageAndLatestConsumeTime(addr, 40, 50)
+	account = sdb.GetAccount(addr)
+	if account == nil || account.EnergyUsage() != 40 || account.LatestConsumeTimeForEnergy() != 50 ||
+		account.RawEnergyWindowSize() != 30 || account.EnergyWindowOptimized() {
+		t.Fatalf("legacy combined settlement = %+v", account)
+	}
+
+	sdb.SetEnergyUsageWindowAndLatestConsumeTime(addr, 60, 70, 80, true)
+	account = sdb.GetAccount(addr)
+	if account == nil || account.EnergyUsage() != 60 || account.LatestConsumeTimeForEnergy() != 80 ||
+		account.RawEnergyWindowSize() != 70 || !account.EnergyWindowOptimized() {
+		t.Fatalf("V2 combined settlement = %+v", account)
+	}
+
+	sdb.RevertToSnapshot(snapshot)
+	account = sdb.GetAccount(addr)
+	if account == nil || account.EnergyUsage() != 10 || account.LatestConsumeTimeForEnergy() != 20 ||
+		account.RawEnergyWindowSize() != 30 || account.EnergyWindowOptimized() {
+		t.Fatalf("combined settlement after revert = %+v", account)
+	}
+}
+
 func TestAccountResourceHotFieldWritesOneHistoryRow(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0xa3)
@@ -317,4 +354,34 @@ func TestAccountResourceHotFieldWritesOneHistoryRow(t *testing.T) {
 	if at2 == nil || at2.EnergyUsage() != 30 || at2.LatestConsumeTimeForEnergy() != 20 {
 		t.Fatalf("block 2 AccountResource = %+v", at2)
 	}
+}
+
+func BenchmarkAccountResourceEnergySettlement(b *testing.B) {
+	disk := ethrawdb.NewMemoryDatabase()
+	sdb, err := New(tcommon.Hash{}, NewDatabase(disk))
+	if err != nil {
+		b.Fatal(err)
+	}
+	addr := testAddr(0xa4)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.SetEnergyUsage(addr, 1)
+	sdb.FinalizeTransaction()
+
+	b.Run("separate-legacy-fields", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			sdb.SetEnergyUsage(addr, int64(i+1))
+			sdb.SetLatestConsumeTimeForEnergy(addr, int64(i+2))
+			sdb.FinalizeTransaction()
+		}
+	})
+	b.Run("combined-legacy-fields", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			sdb.SetEnergyUsageAndLatestConsumeTime(addr, int64(i+1), int64(i+2))
+			sdb.FinalizeTransaction()
+		}
+	})
 }

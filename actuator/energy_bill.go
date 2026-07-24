@@ -201,8 +201,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 			}
 		}
 		final := computeEnergyIncreaseGlobal(recovered, usage, now, now, harden)
-		ctx.State.SetEnergyUsage(addr, final)
-		ctx.State.SetLatestConsumeTimeForEnergy(addr, now)
+		ctx.State.SetEnergyUsageAndLatestConsumeTime(addr, final, now)
 		ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
 		return
 	}
@@ -224,9 +223,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 		finalUsage, rawWindow, optimized = computeEnergyIncrease(rawWindow, optimized, oldUsage, usage, oldTime, now, harden, cancelAllV2)
 	}
 
-	ctx.State.SetEnergyUsage(addr, finalUsage)
-	ctx.State.SetEnergyWindow(addr, rawWindow, optimized)
-	ctx.State.SetLatestConsumeTimeForEnergy(addr, now)
+	ctx.State.SetEnergyUsageWindowAndLatestConsumeTime(addr, finalUsage, rawWindow, now, optimized)
 	ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
 }
 

@@ -2389,6 +2389,37 @@ func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
 	})
 }
 
+// SetEnergyUsageAndLatestConsumeTime updates the legacy energy settlement
+// fields in one AccountResource write. Energy billing always changes these two
+// fields together; serializing the split resource once preserves the same final
+// state and journal predecessor while avoiding a redundant protobuf encode and
+// KV mutation.
+func (s *StateDB) SetEnergyUsageAndLatestConsumeTime(addr tcommon.Address, usage, t int64) {
+	s.setEnergySettlement(addr, usage, t, 0, false, false)
+}
+
+// SetEnergyUsageWindowAndLatestConsumeTime updates all Stake 2.0 energy
+// settlement fields in one AccountResource write.
+func (s *StateDB) SetEnergyUsageWindowAndLatestConsumeTime(addr tcommon.Address, usage, rawWindow, t int64, optimized bool) {
+	s.setEnergySettlement(addr, usage, t, rawWindow, optimized, true)
+}
+
+func (s *StateDB) setEnergySettlement(addr tcommon.Address, usage, t, rawWindow int64, optimized, updateWindow bool) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return
+	}
+	obj.account.SetEnergyUsage(usage)
+	if updateWindow {
+		obj.account.SetEnergyWindow(rawWindow, optimized)
+	}
+	obj.account.SetLatestConsumeTimeForEnergy(t)
+	_ = s.writeAccountResource(obj)
+}
+
 // SetEnergyWindow sets the per-account energy recovery window (raw field +
 // optimized flag) for an account. Mirrors java-tron's
 // setNewWindowSize / setNewWindowSizeV2 persistence.
