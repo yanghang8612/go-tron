@@ -752,6 +752,24 @@ func (b *batch) Put(key, value []byte) error {
 	return nil
 }
 
+// PutValueFunc reserves the final key/value record in Pebble's batch arena and
+// lets fill encode directly into the value storage. It is discovered
+// structurally by rawdb's large composite-row writers, avoiding a full-sized
+// temporary payload followed by Batch.Set's copy. fill must initialize every
+// byte of value and must not retain the slice after returning.
+func (b *batch) PutValueFunc(key []byte, valueLen int, fill func([]byte) error) error {
+	op := b.b.SetDeferred(len(key), valueLen)
+	copy(op.Key, key)
+	if err := fill(op.Value); err != nil {
+		return err
+	}
+	if err := op.Finish(); err != nil {
+		return err
+	}
+	b.size += len(key) + valueLen
+	return nil
+}
+
 // PutString copies an immutable string key directly into Pebble's batch arena.
 // It is discovered structurally by blockbuffer's layer flush path and avoids
 // allocating []byte(key) only to have Batch.Set copy it again.

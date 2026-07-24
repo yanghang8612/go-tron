@@ -18,6 +18,7 @@ type metadataBatchProbe struct {
 	ethdb.KeyValueStore
 	newCalls   int
 	sizedCalls int
+	valueCalls int
 	hint       int
 	actual     int
 }
@@ -46,6 +47,15 @@ type metadataProbeBatch struct {
 func (b *metadataProbeBatch) Put(key, value []byte) error {
 	b.actual += metadataBatchSetRecordSize(key, value)
 	return b.Batch.Put(key, value)
+}
+
+func (b *metadataProbeBatch) PutValueFunc(key []byte, valueLen int, fill func([]byte) error) error {
+	value := make([]byte, valueLen)
+	if err := fill(value); err != nil {
+		return err
+	}
+	b.parent.valueCalls++
+	return b.Put(key, value)
 }
 
 func (b *metadataProbeBatch) Write() error {
@@ -83,6 +93,9 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 	}
 	if probe.newCalls != 0 || probe.sizedCalls != 1 {
 		t.Fatalf("batch constructors: NewBatch=%d NewBatchWithSize=%d, want 0/1", probe.newCalls, probe.sizedCalls)
+	}
+	if probe.valueCalls != 1 {
+		t.Fatalf("deferred value calls = %d, want 1", probe.valueCalls)
 	}
 	if probe.hint != probe.actual+metadataBatchRecordSlack {
 		t.Fatalf("batch size hint = %d, want encoded %d + scratch %d",
@@ -259,6 +272,17 @@ func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 		b.SetBytes(int64(wireSize))
 		for i := 0; i < b.N; i++ {
 			metadataRetBenchmarkSink = marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, rows)
+		}
+	})
+	b.Run("direct-final-buffer", func(b *testing.B) {
+		data := make([]byte, wireSize)
+		b.ReportAllocs()
+		b.SetBytes(int64(wireSize))
+		for i := 0; i < b.N; i++ {
+			encoded := appendTransactionRetRows(data[:0], ret.BlockNumber, ret.BlockTimeStamp, rows)
+			if len(encoded) != wireSize {
+				b.Fatalf("encoded size = %d, want %d", len(encoded), wireSize)
+			}
 		}
 	})
 }
