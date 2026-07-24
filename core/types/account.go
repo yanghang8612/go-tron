@@ -761,8 +761,12 @@ func (a *Account) Marshal() ([]byte, error) {
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {
-	pb := &corepb.Account{}
-	if err := proto.Unmarshal(data, pb); err != nil {
+	pb, err, handled := unmarshalAccountDirectMaps(data)
+	if !handled {
+		pb = &corepb.Account{}
+		err = proto.Unmarshal(data, pb)
+	}
+	if err != nil {
 		return nil, err
 	}
 	account := &Account{pb: pb}

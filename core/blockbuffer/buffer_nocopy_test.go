@@ -575,12 +575,18 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	// was already cached, Flush refreshes it directly from the immutable layer
 	// value and the next read does not round-trip through the durable base.
 	b.BeginBlock(bufHash(2), 2)
+	intermediateValue := bytes.Repeat([]byte{0x32}, 1500)
+	if err := b.Put(key, intermediateValue); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+	b.BeginBlock(bufHash(3), 3)
 	newValue := bytes.Repeat([]byte{0x33}, 1500)
 	if err := b.Put(key, newValue); err != nil {
 		t.Fatal(err)
 	}
 	b.CommitBlock()
-	if err := b.FlushUpTo(2, disk); err != nil {
+	if err := b.FlushUpTo(3, disk); err != nil {
 		t.Fatal(err)
 	}
 	mustCached(newValue)
@@ -590,12 +596,17 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 
 	// A flushed tombstone also invalidates. Missing values are deliberately not
 	// cached, so the durable reader supplies the not-found result.
-	b.BeginBlock(bufHash(3), 3)
+	b.BeginBlock(bufHash(4), 4)
+	if err := b.Put(key, bytes.Repeat([]byte{0x44}, 1500)); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+	b.BeginBlock(bufHash(5), 5)
 	if err := b.Delete(key); err != nil {
 		t.Fatal(err)
 	}
 	b.CommitBlock()
-	if err := b.FlushUpTo(3, disk); err != nil {
+	if err := b.FlushUpTo(5, disk); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.GetNoCopyCached(key); err == nil {

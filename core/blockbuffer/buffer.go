@@ -1479,24 +1479,45 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 			}
 		}
 
+		// A single layer has already coalesced duplicate keys while it was built,
+		// so keep its allocation-free direct write path. Multi-layer groups need
+		// only the newest operation for each physical key: every layer in this
+		// group is solidified and the group is committed atomically, making the
+		// intermediate versions unobservable. This cuts WAL/memtable/compaction
+		// write amplification for hot latest-state and commitment-branch keys.
+		var merged *flushMergedOps
+		if end-start > 1 {
+			merged = borrowFlushMergedOps()
+			mergeLayers(layers[start:end], merged)
+			_, finalEncodedSize := mergedLayerWriteStats(merged.ops)
+			queuedEncodedSize = pebbleBatchHeaderSize + finalEncodedSize
+		}
+
 		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
 		// Reset. Reusing one large batch therefore made every group after the
 		// first grow geometrically from an empty buffer despite our size
-		// calculation. Allocate each bounded group at its encoded size plus the
-		// one-record scratch allowance so every batch performs one final
+		// calculation. Allocate each bounded group at its FINAL encoded size plus
+		// the one-record scratch allowance so every batch performs one final
 		// allocation and no grow/copy cycle.
 		batch := batcher.NewBatchWithSize(queuedEncodedSize + pebbleBatchRecordSlack)
-		for i := start; i < end; i++ {
-			if err := writeLayer(layers[i], batch); err != nil {
-				closeBatch(batch)
-				return flushed, err
-			}
+		var writeErr error
+		if merged == nil {
+			writeErr = writeLayer(layers[start], batch)
+		} else {
+			writeErr = writeMergedLayerOps(merged.ops, batch)
+		}
+		if writeErr != nil {
+			closeBatch(batch)
+			returnFlushMergedOps(merged)
+			return flushed, writeErr
 		}
 		if err := batch.Write(); err != nil {
 			closeBatch(batch)
+			returnFlushMergedOps(merged)
 			return flushed, err
 		}
 		closeBatch(batch)
+		returnFlushMergedOps(merged)
 		flushed += end - start
 		start = end
 	}
@@ -1556,6 +1577,108 @@ const (
 type layerBatchSize struct {
 	value   int
 	encoded int
+}
+
+// mergedLayerOp is the final operation for one physical key across a bounded
+// group of committed layers. Values and keys borrow the immutable layer maps;
+// flushLayers keeps every source layer alive until the Pebble batch has copied
+// the operation, so no additional key/value ownership is needed here.
+type mergedLayerOp struct {
+	value  []byte
+	delete bool
+}
+
+// flushMergedOpsPool reuses the hash table needed to collapse consecutive
+// solidified layers. A flush group is already bounded to roughly one MiB, so a
+// modest entry cap covers normal groups while preventing an exceptional set of
+// tiny keys from pinning an oversized map for the process lifetime.
+const maxPooledFlushMergedOps = 32768
+
+type flushMergedOps struct {
+	ops       map[string]mergedLayerOp
+	highWater int
+}
+
+var flushMergedOpsPool = sync.Pool{
+	New: func() any {
+		return &flushMergedOps{ops: make(map[string]mergedLayerOp)}
+	},
+}
+
+func borrowFlushMergedOps() *flushMergedOps {
+	merged := flushMergedOpsPool.Get().(*flushMergedOps)
+	merged.highWater = 0
+	return merged
+}
+
+func returnFlushMergedOps(merged *flushMergedOps) {
+	if merged == nil {
+		return
+	}
+	clear(merged.ops)
+	if merged.highWater > maxPooledFlushMergedOps {
+		return
+	}
+	flushMergedOpsPool.Put(merged)
+}
+
+// mergeLayers records the newest operation for each physical key. Layers are
+// visited oldest to newest, exactly matching the pre-merge batch order, so a
+// later Put/Delete replaces every earlier version of the same key.
+func mergeLayers(layers []*layer, merged *flushMergedOps) {
+	for _, l := range layers {
+		if l == nil {
+			continue
+		}
+		for i := range l.shards {
+			s := &l.shards[i]
+			s.mu.RLock()
+			for k, v := range s.writes {
+				merged.ops[k] = mergedLayerOp{value: v}
+			}
+			for k := range s.deletes {
+				merged.ops[k] = mergedLayerOp{delete: true}
+			}
+			s.mu.RUnlock()
+		}
+	}
+	if len(merged.ops) > merged.highWater {
+		merged.highWater = len(merged.ops)
+	}
+}
+
+func mergedLayerWriteStats(ops map[string]mergedLayerOp) (valueSize, encodedSize int) {
+	for k, op := range ops {
+		if op.delete {
+			valueSize += len(k)
+			encodedSize += 1 + uvarintSize(len(k)) + len(k)
+			continue
+		}
+		valueSize += len(k) + len(op.value)
+		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(op.value)) + len(op.value)
+	}
+	return valueSize, encodedSize
+}
+
+func writeMergedLayerOps(ops map[string]mergedLayerOp, w ethdb.KeyValueWriter) error {
+	stringWriter, writesString := w.(stringKeyWriter)
+	for k, op := range ops {
+		var err error
+		switch {
+		case op.delete && writesString:
+			err = stringWriter.DeleteString(k)
+		case op.delete:
+			err = w.Delete([]byte(k))
+		case writesString:
+			err = stringWriter.PutString(k, op.value)
+		default:
+			err = w.Put([]byte(k), op.value)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // layerWriteStats returns both ethdb's logical ValueSize and the encoded

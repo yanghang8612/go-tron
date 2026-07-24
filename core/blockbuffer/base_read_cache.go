@@ -510,8 +510,39 @@ func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
 	if b == nil || b.baseReadCache == nil {
 		return
 	}
-	for _, l := range layers {
-		b.promoteBaseReadCacheLayer(l)
+	for start := 0; start < len(layers); {
+		end := start
+		queuedValueSize := 0
+		queuedEncodedSize := pebbleBatchHeaderSize
+		for end < len(layers) {
+			valueSize, encodedSize := layerWriteStats(layers[end])
+			if end > start && (queuedValueSize+valueSize > maxFlushBatchValueSize ||
+				queuedEncodedSize+encodedSize > maxFlushBatchEncodedSize) {
+				break
+			}
+			queuedValueSize += valueSize
+			queuedEncodedSize += encodedSize
+			end++
+			if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
+				break
+			}
+		}
+		if end-start == 1 {
+			b.promoteBaseReadCacheLayer(layers[start])
+			start = end
+			continue
+		}
+		merged := borrowFlushMergedOps()
+		mergeLayers(layers[start:end], merged)
+		for k, op := range merged.ops {
+			if op.delete {
+				b.baseReadCache.delString(k)
+			} else {
+				b.baseReadCache.setFlushed(k, op.value)
+			}
+		}
+		returnFlushMergedOps(merged)
+		start = end
 	}
 }
 

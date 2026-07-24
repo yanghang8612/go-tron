@@ -95,6 +95,7 @@ type countingBatcher struct {
 	ethdb.KeyValueStore
 	batches  atomic.Int32
 	writes   atomic.Int32
+	ops      atomic.Int32
 	sizeHint atomic.Int64
 }
 
@@ -103,6 +104,7 @@ func (w *countingBatcher) NewBatch() ethdb.Batch {
 	return &countingBatch{
 		Batch:  w.KeyValueStore.NewBatch(),
 		writes: &w.writes,
+		ops:    &w.ops,
 	}
 }
 
@@ -112,17 +114,51 @@ func (w *countingBatcher) NewBatchWithSize(size int) ethdb.Batch {
 	return &countingBatch{
 		Batch:  w.KeyValueStore.NewBatchWithSize(size),
 		writes: &w.writes,
+		ops:    &w.ops,
 	}
 }
 
 type countingBatch struct {
 	ethdb.Batch
 	writes *atomic.Int32
+	ops    *atomic.Int32
+}
+
+func (b *countingBatch) Put(key, value []byte) error {
+	b.ops.Add(1)
+	return b.Batch.Put(key, value)
+}
+
+func (b *countingBatch) Delete(key []byte) error {
+	b.ops.Add(1)
+	return b.Batch.Delete(key)
 }
 
 func (b *countingBatch) Write() error {
 	b.writes.Add(1)
 	return b.Batch.Write()
+}
+
+var errForcedBatchWrite = errors.New("forced batch write failure")
+
+type failingBatcher struct {
+	ethdb.KeyValueStore
+}
+
+func (w *failingBatcher) NewBatch() ethdb.Batch {
+	return &failingBatch{Batch: w.KeyValueStore.NewBatch()}
+}
+
+func (w *failingBatcher) NewBatchWithSize(size int) ethdb.Batch {
+	return &failingBatch{Batch: w.KeyValueStore.NewBatchWithSize(size)}
+}
+
+type failingBatch struct {
+	ethdb.Batch
+}
+
+func (b *failingBatch) Write() error {
+	return errForcedBatchWrite
 }
 
 func bufHash(b byte) common.Hash {
@@ -508,6 +544,64 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkFlushLayersCoalesced(b *testing.B) {
+	layers := benchmarkFlushLayers()
+	dst := rawdb.NewMemoryDatabase()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := flushLayers(layers, dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkFlushLayersUncoalescedReference(b *testing.B) {
+	layers := benchmarkFlushLayers()
+	dst := rawdb.NewMemoryDatabase()
+	encodedSize := pebbleBatchHeaderSize
+	for _, layer := range layers {
+		_, encoded := layerWriteStats(layer)
+		encodedSize += encoded
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := dst.NewBatchWithSize(encodedSize + pebbleBatchRecordSlack)
+		for _, layer := range layers {
+			if err := writeLayer(layer, batch); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatal(err)
+		}
+		batch.Close()
+	}
+}
+
+func benchmarkFlushLayers() []*layer {
+	const (
+		layerCount = 5
+		hotKeys    = 2000
+		uniqueKeys = 3000
+	)
+	owner := new(Buffer)
+	layers := make([]*layer, layerCount)
+	value := bytes.Repeat([]byte{0xcd}, 16)
+	for layerIndex := range layers {
+		layer := newLayer(bufHash(byte(layerIndex+1)), uint64(layerIndex+1))
+		for keyIndex := 0; keyIndex < hotKeys; keyIndex++ {
+			owner.putIntoString(layer, fmt.Sprintf("hot-%05d", keyIndex), value)
+		}
+		for keyIndex := 0; keyIndex < uniqueKeys; keyIndex++ {
+			owner.putIntoString(layer, fmt.Sprintf("unique-%d-%05d", layerIndex, keyIndex), value)
+		}
+		layers[layerIndex] = layer
+	}
+	return layers
 }
 
 func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
@@ -979,9 +1073,13 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	if got := dst.writes.Load(); got != 1 {
 		t.Fatalf("batch Write calls = %d, want 1", got)
 	}
+	if got := dst.ops.Load(); got != 1 {
+		t.Fatalf("batch operations = %d, want one final operation", got)
+	}
 	// Each Set record is kind(1), key length(1), key(1), value length(1),
 	// value(1), plus the Pebble header and one-record temporary varint slack.
-	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+3*5+pebbleBatchRecordSlack); got != want {
+	// The three layer-local versions collapse to the newest operation.
+	if got, want := dst.sizeHint.Load(), int64(pebbleBatchHeaderSize+5+pebbleBatchRecordSlack); got != want {
 		t.Fatalf("batch size hint = %d, want encoded size plus scratch %d", got, want)
 	}
 	got, err := dst.Get([]byte("k"))
@@ -990,6 +1088,89 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("C")) {
 		t.Fatalf("batched FlushUpTo order = %q, want %q", got, "C")
+	}
+}
+
+func TestBuffer_FlushUpToCoalescesFinalOperation(t *testing.T) {
+	tests := []struct {
+		name      string
+		firstPut  bool
+		secondPut bool
+		want      []byte
+	}{
+		{name: "put then delete", firstPut: true},
+		{name: "delete then put", secondPut: true, want: []byte("new")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New(rawdb.NewMemoryDatabase())
+			b.BeginBlock(bufHash(1), 1)
+			if tt.firstPut {
+				if err := b.Put([]byte("k"), []byte("old")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := b.Delete([]byte("k")); err != nil {
+				t.Fatal(err)
+			}
+			b.CommitBlock()
+
+			b.BeginBlock(bufHash(2), 2)
+			if tt.secondPut {
+				if err := b.Put([]byte("k"), []byte("new")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := b.Delete([]byte("k")); err != nil {
+				t.Fatal(err)
+			}
+			b.CommitBlock()
+
+			dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+			if err := dst.Put([]byte("k"), []byte("base")); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.FlushUpTo(2, dst); err != nil {
+				t.Fatal(err)
+			}
+			if got := dst.ops.Load(); got != 1 {
+				t.Fatalf("batch operations = %d, want one final operation", got)
+			}
+			got, err := dst.Get([]byte("k"))
+			if tt.want == nil {
+				if err == nil {
+					t.Fatalf("dst[k] = %q, want deleted", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dst.Get: %v", err)
+			}
+			if !bytes.Equal(got, tt.want) {
+				t.Fatalf("dst[k] = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuffer_FlushUpToMergedBatchFailureKeepsLayers(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	for i, value := range []string{"old", "new"} {
+		b.BeginBlock(bufHash(byte(i+1)), uint64(i+1))
+		if err := b.Put([]byte("k"), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	dst := &failingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(2, dst); !errors.Is(err, errForcedBatchWrite) {
+		t.Fatalf("FlushUpTo error = %v, want %v", err, errForcedBatchWrite)
+	}
+	if pending := b.PendingBlocks(); len(pending) != 2 {
+		t.Fatalf("pending layers = %d, want 2 after atomic batch failure", len(pending))
+	}
+	mustGet(t, b, []byte("k"), []byte("new"))
+	if has, err := dst.Has([]byte("k")); err != nil || has {
+		t.Fatalf("failed destination Has = (%v, %v), want (false, nil)", has, err)
 	}
 }
 
