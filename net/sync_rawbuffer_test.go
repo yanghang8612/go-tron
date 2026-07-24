@@ -1,6 +1,7 @@
 package net
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -83,6 +84,27 @@ func TestPopDecodesRawBufferedBlock(t *testing.T) {
 	if n := len(got.Transactions()); n != 3 {
 		t.Fatalf("transactions lost in raw round-trip: got %d want 3", n)
 	}
+	canonical, err := got.MarshalReusable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 0 && &canonical[0] != &raw[0] {
+		t.Fatal("raw-only decode did not reuse the transferred wire capacity")
+	}
+	wantCanonical, err := proto.Marshal(got.Proto())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonical, wantCanonical) {
+		t.Fatal("reused block encoding differs from canonical protobuf marshal")
+	}
+	again, err := got.MarshalReusable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again, canonical) {
+		t.Fatal("second reusable marshal did not fall back to equivalent fresh output")
+	}
 }
 
 // TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath pins that raw bytes
@@ -128,6 +150,15 @@ func TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath(t *testing.T) {
 	}
 	if buf.hash != blk.Hash() || buf.num != 2 {
 		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.hash, buf.num)
+	}
+	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{buf}}
+	ss.decodeBatchBlocks(&batch)
+	reused, err := batch.blocks[0].MarshalReusable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 0 && &reused[0] != &raw[0] {
+		t.Fatal("decoded fast path did not reuse the transferred wire capacity")
 	}
 }
 

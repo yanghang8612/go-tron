@@ -1350,7 +1350,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// staging keeps the row fork-rewindable, like the TAPOS ref above. Keep this
 	// one immutable encoding for the durable metadata tail as well: the buffer
 	// takes a read-only alias instead of copying it, and neither side mutates it.
-	blockData, err := block.Marshal()
+	blockData, err := block.MarshalReusable()
 	if err != nil {
 		return fmt.Errorf("marshal staged block body: %w", err)
 	}

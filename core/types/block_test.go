@@ -11,6 +11,7 @@ import (
 )
 
 var benchmarkBlockHash common.Hash
+var benchmarkBlockBytes []byte
 
 func blockHashRawTestBlock(txCount, dataSize int) *Block {
 	txs := make([]*corepb.Transaction, txCount)
@@ -65,6 +66,34 @@ func BenchmarkBlockHashFromRaw(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			benchmarkBlockHash, err = BlockHashFromRaw(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkBlockMarshalReusable(b *testing.B) {
+	block := blockHashRawTestBlock(200, 256)
+	raw, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(raw)))
+	b.Run("fresh", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkBlockBytes, err = block.Marshal()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("owned-scratch", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			block.AdoptMarshalScratch(raw)
+			benchmarkBlockBytes, err = block.MarshalReusable()
 			if err != nil {
 				b.Fatal(err)
 			}

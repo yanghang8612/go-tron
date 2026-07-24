@@ -33,6 +33,12 @@ type Block struct {
 	hashDone bool
 	hashMu   sync.Mutex
 
+	// marshalScratch is an exclusively-owned wire buffer transferred by the
+	// sync pipeline after decode. Commit marshals the protobuf back into this
+	// capacity, preserving canonical proto.Marshal output while avoiding a
+	// second full-block allocation. It is consumed exactly once.
+	marshalScratch []byte
+
 	// txs memoizes the wrapped Transaction slice so the same *Transaction
 	// instances are returned on every Transactions() call. This is what lets a
 	// parallel signer-recovery pre-pass warm each tx's signers memo and have the
@@ -241,12 +247,51 @@ func (b *Block) Marshal() ([]byte, error) {
 	return proto.Marshal(b.pb)
 }
 
+// MarshalReusable is Marshal with a one-shot, exclusively-owned destination
+// buffer. Sync blocks already own their received frame bytes after decoding;
+// reusing that capacity through MarshalAppend retains canonical protobuf
+// encoding (unlike persisting arbitrary raw wire order) without allocating a
+// second block-sized slice. The returned bytes belong to the caller.
+func (b *Block) MarshalReusable() ([]byte, error) {
+	scratch := b.marshalScratch
+	b.marshalScratch = nil
+	return proto.MarshalOptions{}.MarshalAppend(scratch[:0], b.pb)
+}
+
+// AdoptMarshalScratch transfers an immutable wire buffer's capacity to b for
+// its next MarshalReusable call. The caller must not access or mutate data
+// afterward. It is public only for the network sync package's ownership
+// handoff; ordinary callers should use Marshal.
+func (b *Block) AdoptMarshalScratch(data []byte) {
+	if data == nil {
+		b.marshalScratch = nil
+		return
+	}
+	// Clamp capacity to the owned message bytes. Even if a transport handed us
+	// a subslice of a larger frame allocation, MarshalAppend must never overwrite
+	// adjacent frame storage through spare capacity.
+	b.marshalScratch = data[:len(data):len(data)]
+}
+
 func UnmarshalBlock(data []byte) (*Block, error) {
 	pb := &corepb.Block{}
 	if err := proto.Unmarshal(data, pb); err != nil {
 		return nil, err
 	}
 	return NewBlockFromPB(pb), nil
+}
+
+// UnmarshalBlockOwned is UnmarshalBlock plus ownership transfer of data's
+// backing capacity. protobuf decoding does not alias input bytes, so the block
+// may later overwrite that buffer while producing its canonical durable
+// encoding through MarshalReusable.
+func UnmarshalBlockOwned(data []byte) (*Block, error) {
+	block, err := UnmarshalBlock(data)
+	if err != nil {
+		return nil, err
+	}
+	block.AdoptMarshalScratch(data)
+	return block, nil
 }
 
 // BlockHashFromRaw derives the canonical BlockID directly from bytes produced

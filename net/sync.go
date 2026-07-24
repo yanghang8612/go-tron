@@ -1646,10 +1646,11 @@ func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
 	for i := range batch.buffered {
 		if batch.buffered[i].decoded != nil {
+			batch.buffered[i].decoded.AdoptMarshalScratch(batch.buffered[i].raw)
 			batch.blocks = append(batch.blocks, batch.buffered[i].decoded)
 			continue
 		}
-		blk, err := types.UnmarshalBlock(batch.buffered[i].raw)
+		blk, err := types.UnmarshalBlockOwned(batch.buffered[i].raw)
 		if err != nil {
 			syncLog.Error("Dropping undecodable buffered sync block",
 				"number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
