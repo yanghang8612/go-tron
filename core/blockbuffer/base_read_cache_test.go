@@ -130,6 +130,58 @@ func TestBaseReadCache_SetFlushedRejectsLateOldGenerationFill(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_UnrelatedSameShardFlushKeepsFillEligible(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("hot-account-latest-row")
+	keyShard := baseReadCacheShardIndex(key)
+	keySlot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
+
+	var unrelated string
+	for i := 0; i < 100_000; i++ {
+		candidate := fmt.Sprintf("unrelated-flushed-row-%08d", i)
+		if baseReadCacheShardIndexString(candidate) == keyShard &&
+			baseReadCacheInvalidationSlotString(candidate, len(c.invalidations)) != keySlot {
+			unrelated = candidate
+			break
+		}
+	}
+	if unrelated == "" {
+		t.Fatal("failed to find test keys sharing a payload shard but not an invalidation slot")
+	}
+
+	// Complete the hot key's first probation sighting.
+	_, _, epoch := c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, []byte("first"), epoch); stored {
+		t.Fatal("first sighting bypassed probation")
+	}
+
+	// Capture the generation for its second durable read, then publish an
+	// unrelated key routed to the SAME 64-way payload shard. The old shard-wide
+	// epoch rejected this fill even though the hot key did not change.
+	_, _, epoch = c.getWithEpoch(key)
+	c.setFlushed(unrelated, []byte("unrelated"))
+	if _, stored := c.setIfEpoch(key, []byte("second"), epoch); !stored {
+		t.Fatal("unrelated same-shard flush falsely rejected hot-key fill")
+	}
+}
+
+func TestBaseReadCache_InvalidationSlotByteStringParity(t *testing.T) {
+	for _, size := range []int{baseReadCacheShardCount * 256, 1 << 20, 128 << 20} {
+		slots := baseReadCacheInvalidationSlots(size)
+		for i := 0; i < 1_000; i++ {
+			key := fmt.Sprintf("state-commitment-branch-v1-%02x-%08x-tail", i&15, i*0x9e37)
+			gotBytes := baseReadCacheInvalidationSlotBytes([]byte(key), slots)
+			gotString := baseReadCacheInvalidationSlotString(key, slots)
+			if gotBytes != gotString {
+				t.Fatalf("size=%d key=%q byte slot=%d string slot=%d", size, key, gotBytes, gotString)
+			}
+		}
+	}
+	if got := baseReadCacheInvalidationSlots(128 << 20); got != baseReadCacheMaxInvalidationSlots {
+		t.Fatalf("128 MiB invalidation slots=%d, want %d", got, baseReadCacheMaxInvalidationSlots)
+	}
+}
+
 func TestBaseReadCache_SetFlushedDropsOversizedReplacement(t *testing.T) {
 	// 256 bytes per shard: the original row fits, the replacement does not.
 	c := newBaseReadCache(baseReadCacheShardCount * 256)

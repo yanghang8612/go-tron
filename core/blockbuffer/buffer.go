@@ -993,7 +993,7 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
-	var cacheEpoch uint64
+	var cacheEpoch baseReadCacheEpoch
 	if cacheBase && cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
 			return value, nil
@@ -1069,7 +1069,7 @@ func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	cache := view.baseReadCache
-	var cacheEpoch uint64
+	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
 			return value, nil
@@ -1088,7 +1088,7 @@ func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 // when available. If a concurrent flush invalidates the observed epoch, the
 // cache rejects the late fill; in that case we make one owned fallback copy
 // before View returns so no Pebble-backed slice escapes its valid lifetime.
-func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch uint64) ([]byte, error) {
+func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) ([]byte, error) {
 	if viewer, ok := base.(valueViewReader); ok {
 		var out []byte
 		err := viewer.View(key, func(value []byte) error {

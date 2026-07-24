@@ -346,7 +346,7 @@ func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	if b.base == nil {
 		return nil, ErrNotFound
 	}
-	var cacheEpoch uint64
+	var cacheEpoch baseReadCacheEpoch
 	if cacheBase && cache != nil {
 		if value, ok, epoch := cache.getWithEpoch(key); ok {
 			return value, nil
@@ -420,7 +420,7 @@ func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	cache := view.baseReadCache
-	var cacheEpoch uint64
+	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
 		if cached, ok, epoch := cache.getWithEpoch(key); ok {
 			return cached, nil

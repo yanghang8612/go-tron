@@ -1,6 +1,9 @@
 package blockbuffer
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
 // the same physical state keys, so they share the tested O(1) shard selector
@@ -20,6 +23,17 @@ const baseReadCacheEntryOverhead = 64
 // shards to keep one-hit historical-sync scans out of the resident cache.
 const baseReadCacheMaxAdmissionSlots = 2048
 
+// baseReadCacheMaxInvalidationSlots bounds the generation table used to reject
+// a durable read that races a flush of the SAME key. Cache payload is split into
+// 64 lock shards, but using those shards as invalidation generations makes every
+// unrelated flush in a shard reject all in-flight fills in that shard. Sustained
+// historical sync writes thousands of keys while commitment workers read the
+// durable base, so the 64-way false-conflict rate is effectively 100%.
+//
+// A 128 MiB production cache gets 65,536 generation slots (512 KiB). Collisions
+// remain conservative false rejections; they can never publish a stale value.
+const baseReadCacheMaxInvalidationSlots = 1 << 16
+
 // baseReadCache is a bounded, sharded FIFO cache for values read from Buffer's
 // durable base. It is intentionally below the overlay layers: in-flight and
 // committed writes/tombstones are always resolved first, so a fork discard only
@@ -33,7 +47,8 @@ const baseReadCacheMaxAdmissionSlots = 2048
 // hooks make cached values generation-safe without tagging every lookup with
 // the current head hash.
 type baseReadCache struct {
-	shards [baseReadCacheShardCount]baseReadCacheShard
+	shards        [baseReadCacheShardCount]baseReadCacheShard
+	invalidations []atomic.Uint64
 }
 
 type baseReadCacheShard struct {
@@ -49,11 +64,15 @@ type baseReadCacheShard struct {
 	head      int
 	used      int
 	limit     int
-	// epoch advances before this shard is invalidated or cleared. A base read
-	// captures it on cache miss; if a flush advances it before that read returns,
-	// setIfEpoch rejects the now-stale late fill.
-	epoch   uint64
-	nextGen uint64
+	nextGen   uint64
+}
+
+// baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
+// the generation observed before its durable read. A slot collision only drops
+// a cache fill; resident entries still compare the complete key.
+type baseReadCacheEpoch struct {
+	slot  uint32
+	value uint64
 }
 
 type baseReadCacheEntry struct {
@@ -72,6 +91,7 @@ func newBaseReadCache(sizeBytes int) *baseReadCache {
 		return nil
 	}
 	c := &baseReadCache{}
+	c.invalidations = make([]atomic.Uint64, baseReadCacheInvalidationSlots(sizeBytes))
 	perShard := sizeBytes / baseReadCacheShardCount
 	remainder := sizeBytes % baseReadCacheShardCount
 	for i := range c.shards {
@@ -85,25 +105,24 @@ func newBaseReadCache(sizeBytes int) *baseReadCache {
 	return c
 }
 
-// getWithEpoch returns the shard epoch observed atomically with the lookup. A
-// miss caller passes it to setIfEpoch after reading the durable base, preventing
-// a concurrent flush invalidation from being undone by a late cache fill.
-func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, uint64) {
+// getWithEpoch returns the key's invalidation-slot generation on a miss. A miss
+// caller passes it to setIfEpoch after reading the durable base, preventing a
+// concurrent same-key flush from being undone by a late cache fill.
+func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpoch) {
 	if c == nil {
-		return nil, false, 0
+		return nil, false, baseReadCacheEpoch{}
 	}
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
-	epoch := s.epoch
 	s.mu.RUnlock()
-	if !ok {
-		return nil, false, epoch
+	if ok {
+		return e.value, true, baseReadCacheEpoch{}
 	}
-	// Values are immutable after publication. delete/set replace the entry and
-	// never mutate its backing bytes, so returning the alias is safe even when a
-	// concurrent invalidation removes the map entry immediately afterward.
-	return e.value, true, epoch
+	// Compute/load the invalidation slot only on a miss. The dominant cache-hit
+	// path therefore keeps its existing O(1) shard lookup cost.
+	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
+	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}
 }
 
 // setIfEpoch copies key/value into cache-owned immutable storage only if no
@@ -112,7 +131,7 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, uint64) {
 // or depending on the base reader's value lifetime. The boolean reports
 // whether the returned slice is cache-owned; a callback-backed reader must copy
 // it before returning when false.
-func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, bool) {
+func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) ([]byte, bool) {
 	if c == nil {
 		return value, false
 	}
@@ -123,7 +142,7 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 	}
 
 	s.mu.Lock()
-	if s.epoch != epoch {
+	if c.invalidations[epoch.slot].Load() != epoch.value {
 		s.mu.Unlock()
 		return value, false
 	}
@@ -159,18 +178,18 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch uint64) ([]byte, boo
 // cache is invalidated but not admitted; otherwise unrelated buffered metadata
 // would churn through the cache on every canonical flush.
 //
-// Advancing the shard epoch before replacement rejects any late cache fill
-// that started against the pre-flush durable generation. If the value is too
-// large for its shard, the old entry is still invalidated and no replacement
-// is retained.
+// Advancing the key's invalidation slot before replacement rejects any late
+// cache fill that started against the pre-flush durable generation. If the
+// value is too large for its shard, the old entry is still invalidated and no
+// replacement is retained.
 func (c *baseReadCache) setFlushed(key string, value []byte) {
 	if c == nil {
 		return
 	}
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
+	c.advanceInvalidationString(key)
 	s := &c.shards[baseReadCacheShardIndexString(key)]
 	s.mu.Lock()
-	s.epoch++
 	old, cached := s.entries[key]
 	if cached {
 		delete(s.entries, key)
@@ -205,9 +224,9 @@ func (c *baseReadCache) delString(key string) {
 }
 
 func (c *baseReadCache) delStringAt(key string, shard uint32) {
+	c.advanceInvalidationString(key)
 	s := &c.shards[shard]
 	s.mu.Lock()
-	s.epoch++
 	if old, ok := s.entries[key]; ok {
 		delete(s.entries, key)
 		s.used -= old.charge
@@ -221,10 +240,15 @@ func (c *baseReadCache) clear() {
 	if c == nil {
 		return
 	}
+	// Bracket the clear with generation advances. A read that began before or
+	// during the clear cannot publish after it; reads beginning after the second
+	// pass observe the new stable generation. Clear/discard is rare, so touching
+	// the bounded table twice is preferable to adding a global atomic read to
+	// every ordinary cache miss.
+	c.advanceAllInvalidations()
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		s.epoch++
 		clear(s.entries)
 		clear(s.queue)
 		s.queue = s.queue[:0]
@@ -233,6 +257,93 @@ func (c *baseReadCache) clear() {
 		s.used = 0
 		s.mu.Unlock()
 	}
+	c.advanceAllInvalidations()
+}
+
+func baseReadCacheInvalidationSlots(sizeBytes int) int {
+	target := sizeBytes / 2048
+	if target < baseReadCacheShardCount {
+		target = baseReadCacheShardCount
+	}
+	if target > baseReadCacheMaxInvalidationSlots {
+		target = baseReadCacheMaxInvalidationSlots
+	}
+	slots := 1
+	for slots<<1 <= target {
+		slots <<= 1
+	}
+	return slots
+}
+
+func (c *baseReadCache) advanceInvalidationString(key string) {
+	slot := baseReadCacheInvalidationSlotString(key, len(c.invalidations))
+	c.invalidations[slot].Add(1)
+}
+
+func (c *baseReadCache) advanceAllInvalidations() {
+	for i := range c.invalidations {
+		c.invalidations[i].Add(1)
+	}
+}
+
+// The byte/string forms must match. Physical state keys put their entropy in
+// the middle and tail (commitment nibbles, addresses and storage slots), so a
+// handful of sampled bytes plus avalanche mixing distributes them without
+// hashing the full 30-100 byte key on every flushed write.
+func baseReadCacheInvalidationSlotBytes(key []byte, slots int) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) * 0x9e3779b1
+	mix := func(b byte) {
+		h ^= uint32(b)
+		h *= 0x85ebca6b
+		h ^= h >> 13
+	}
+	mix(key[n-1])
+	if n > 1 {
+		mix(key[n-2])
+	}
+	if n > 3 {
+		mix(key[n-4])
+	}
+	if n > 8 {
+		mix(key[n/2])
+	}
+	if n > 16 {
+		mix(key[n/3])
+		mix(key[(n*2)/3])
+	}
+	return h & uint32(slots-1)
+}
+
+func baseReadCacheInvalidationSlotString(key string, slots int) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	h := uint32(n) * 0x9e3779b1
+	mix := func(b byte) {
+		h ^= uint32(b)
+		h *= 0x85ebca6b
+		h ^= h >> 13
+	}
+	mix(key[n-1])
+	if n > 1 {
+		mix(key[n-2])
+	}
+	if n > 3 {
+		mix(key[n-4])
+	}
+	if n > 8 {
+		mix(key[n/2])
+	}
+	if n > 16 {
+		mix(key[n/3])
+		mix(key[(n*2)/3])
+	}
+	return h & uint32(slots-1)
 }
 
 func baseReadCacheAdmissionSlots(limit int) int {
