@@ -3,6 +3,7 @@ package rawdb
 import (
 	"encoding/binary"
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -23,6 +24,33 @@ const (
 type blockMetadataRow struct {
 	key   []byte
 	value []byte
+}
+
+const maxPooledMetadataInfoArena = 4 << 20
+
+var metadataInfoArenaPool = sync.Pool{
+	New: func() any {
+		arena := make([]byte, 0, 64<<10)
+		return &arena
+	},
+}
+
+func borrowMetadataInfoArena(size int) *[]byte {
+	arenaPtr := metadataInfoArenaPool.Get().(*[]byte)
+	if cap(*arenaPtr) < size {
+		*arenaPtr = make([]byte, 0, size)
+	} else {
+		*arenaPtr = (*arenaPtr)[:0]
+	}
+	return arenaPtr
+}
+
+func returnMetadataInfoArena(arenaPtr *[]byte) {
+	if cap(*arenaPtr) > maxPooledMetadataInfoArena {
+		return
+	}
+	*arenaPtr = (*arenaPtr)[:0]
+	metadataInfoArenaPool.Put(arenaPtr)
 }
 
 // valueFuncBatch is implemented by Pebble batches that can expose their final
@@ -96,12 +124,33 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},
 	)
 	infoRowStart := len(rows)
+	infoBytes := 0
 	for _, info := range infos {
-		data, err := proto.Marshal(info)
+		infoBytes += proto.Size(info)
+	}
+	// Keep the individually indexed TransactionInfo payloads in one temporary
+	// arena. The same bytes feed both the per-transaction rows and the enclosing
+	// TransactionRet row below; every Batch.Put copies them synchronously, so the
+	// arena can return to the pool after batch.Write completes. This replaces one
+	// heap object per transaction without changing either protobuf wire bytes or
+	// durable database layout.
+	var infoArena []byte
+	if infoBytes > 0 {
+		infoArenaPtr := borrowMetadataInfoArena(infoBytes)
+		defer returnMetadataInfoArena(infoArenaPtr)
+		infoArena = *infoArenaPtr
+	}
+	for _, info := range infos {
+		start := len(infoArena)
+		var err error
+		infoArena, err = proto.MarshalOptions{}.MarshalAppend(infoArena, info)
 		if err != nil {
 			return fmt.Errorf("marshal tx info: %w", err)
 		}
-		rows = append(rows, blockMetadataRow{key: metadataKey(txInfoPrefix, info.Id), value: data})
+		rows = append(rows, blockMetadataRow{
+			key:   metadataKey(txInfoPrefix, info.Id),
+			value: infoArena[start:len(infoArena):len(infoArena)],
+		})
 	}
 	var blockTimestamp int64
 	if len(infos) > 0 {

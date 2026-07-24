@@ -13,6 +13,8 @@ import (
 )
 
 var metadataRetBenchmarkSink []byte
+var metadataInfoRowsBenchmarkSink [][]byte
+var metadataInfoArenaSizeBenchmarkSink int
 
 type metadataBatchProbe struct {
 	ethdb.KeyValueStore
@@ -381,6 +383,62 @@ func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
 			if err := WriteBlockMetadataBatchEncoded(db, block, blockData, root, infos); err != nil {
 				b.Fatal(err)
 			}
+		}
+	})
+}
+
+func BenchmarkMarshalTransactionInfoRows(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xab}, 512)
+	infos := make([]*corepb.TransactionInfo, 100)
+	totalSize := 0
+	for i := range infos {
+		infos[i] = &corepb.TransactionInfo{
+			Id:                   bytes.Repeat([]byte{byte(i)}, 32),
+			Fee:                  int64(100 + i),
+			BlockNumber:          21,
+			BlockTimeStamp:       63_000,
+			ContractResult:       [][]byte{payload},
+			WithdrawExpireAmount: int64(i),
+		}
+		totalSize += proto.Size(infos[i])
+	}
+	b.SetBytes(int64(totalSize))
+
+	b.Run("individual", func(b *testing.B) {
+		rows := make([][]byte, len(infos))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			for i, info := range infos {
+				data, err := proto.Marshal(info)
+				if err != nil {
+					b.Fatal(err)
+				}
+				rows[i] = data
+			}
+			metadataInfoRowsBenchmarkSink = rows
+		}
+	})
+
+	b.Run("pooled-arena", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			size := 0
+			for _, info := range infos {
+				size += proto.Size(info)
+			}
+			arenaPtr := borrowMetadataInfoArena(size)
+			arena := *arenaPtr
+			for _, info := range infos {
+				var err error
+				arena, err = proto.MarshalOptions{}.MarshalAppend(arena, info)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			metadataInfoArenaSizeBenchmarkSink = len(arena) + size
+			returnMetadataInfoArena(arenaPtr)
 		}
 	})
 }
