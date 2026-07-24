@@ -116,14 +116,13 @@ func TestAccountStakeV1PersistsOutsideAccountEnvelopeAndPreservesOrder(t *testin
 	assertFrozenBandwidth(t, copy.FrozenBandwidthList(), first, second, duplicate)
 }
 
-func TestAccountFrozenBandwidthRowsUseDensePointReads(t *testing.T) {
+func TestAccountFrozenBandwidthRowsPreserveSparseIndexes(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xab)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
 	want := []*corepb.Account_Frozen{
 		{FrozenBalance: 11, ExpireTime: 30},
 		{FrozenBalance: 22, ExpireTime: 20},
-		{FrozenBalance: 33, ExpireTime: 10},
 	}
 	if err := sdb.writeAccountFrozenBandwidth(sdb.getStateObject(addr), want); err != nil {
 		t.Fatal(err)
@@ -137,35 +136,53 @@ func TestAccountFrozenBandwidthRowsUseDensePointReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := reopened.DeleteAccountKV(addr, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0)); err != nil {
+		t.Fatal(err)
+	}
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(store)
 	rows, err := reopened.accountFrozenBandwidthRows(reopened.getStateObject(addr))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.iteratorCalls != 0 {
-		t.Fatalf("frozen-bandwidth point read opened %d iterators", store.iteratorCalls)
+	if store.iteratorCalls != 1 {
+		t.Fatalf("sparse frozen-bandwidth read opened %d iterators, want 1", store.iteratorCalls)
 	}
-	if len(rows) != len(want) {
-		t.Fatalf("frozen-bandwidth rows = %d, want %d", len(rows), len(want))
+	if len(rows) != 1 {
+		t.Fatalf("sparse frozen-bandwidth rows = %d, want 1", len(rows))
 	}
-	for i := range rows {
-		if rows[i].index != uint32(i) || !proto.Equal(rows[i].entry, want[i]) {
-			t.Fatalf("frozen-bandwidth row %d = index %d %+v, want %+v", i, rows[i].index, rows[i].entry, want[i])
-		}
+	if rows[0].index != 1 || !proto.Equal(rows[0].entry, want[1]) {
+		t.Fatalf("sparse frozen-bandwidth rows = %+v, want index 1", rows)
 	}
-	if got := reopened.FrozenV1BandwidthCount(addr); got != len(want) {
-		t.Fatalf("frozen-bandwidth count = %d, want %d", got, len(want))
+	if got := reopened.FrozenV1BandwidthCount(addr); got != 1 {
+		t.Fatalf("frozen-bandwidth count = %d, want 1", got)
 	}
-	if store.iteratorCalls != 0 {
-		t.Fatalf("frozen-bandwidth count opened %d iterators", store.iteratorCalls)
-	}
-	if got := reopened.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 66 {
-		t.Fatalf("frozen-bandwidth amount = %d, want 66", got)
+	if got := reopened.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 22 {
+		t.Fatalf("frozen-bandwidth amount = %d, want 22", got)
 	}
 	obj := reopened.getStateObject(addr)
 	if obj.accountMapsLoaded || obj.accountPermissionsLoaded || obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded || obj.accountResourceLoaded || obj.accountFrozenBandwidthLoaded || obj.accountTronPowerLoaded {
 		t.Fatalf("point reads materialized split account domains: %+v", obj)
+	}
+	beforeFreezeIterators := store.iteratorCalls
+	reopened.FreezeV1Bandwidth(addr, 4, 40)
+	if store.iteratorCalls != beforeFreezeIterators+1 {
+		t.Fatalf("frozen-bandwidth replacement opened %d iterators, want one", store.iteratorCalls-beforeFreezeIterators)
+	}
+	rows, err = reopened.accountFrozenBandwidthRows(obj)
+	if err != nil || len(rows) != 1 || rows[0].entry.FrozenBalance != 26 || rows[0].entry.ExpireTime != 40 {
+		t.Fatalf("rewritten frozen-bandwidth rows = %+v err=%v, want one 26/40 row", rows, err)
+	}
+	if !reopened.HasExpiredFrozenV1Bandwidth(addr, 40) || reopened.HasExpiredFrozenV1Bandwidth(addr, 39) {
+		t.Fatal("frozen-bandwidth expiry read returned wrong result")
 	}
 }
 
@@ -235,6 +252,38 @@ func TestAccountStakeV1TypedMutationSemantics(t *testing.T) {
 	}
 	if got := sdb.GetAccount(addr); got == nil || got.Proto().TronPower != nil {
 		t.Fatalf("tron-power row remained after unfreeze: %+v", got)
+	}
+}
+
+func TestAccountStakeV1PartialUnfreezePreservesSparsePhysicalRow(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xae)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	expired := &corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 10}
+	live := &corepb.Account_Frozen{FrozenBalance: 22, ExpireTime: 30}
+	if err := sdb.writeAccountFrozenBandwidth(sdb.getStateObject(addr), []*corepb.Account_Frozen{expired, live}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.UnfreezeV1Bandwidth(addr, 20); got != 11 {
+		t.Fatalf("partial refund = %d, want 11", got)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := reopened.accountFrozenBandwidthRows(reopened.getStateObject(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].index != 1 || !proto.Equal(rows[0].entry, live) {
+		t.Fatalf("surviving sparse rows = %+v, want live row at index 1", rows)
+	}
+	if _, exists, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(1)); err != nil || !exists {
+		t.Fatalf("live index 1 was lost: exists=%v err=%v", exists, err)
 	}
 }
 

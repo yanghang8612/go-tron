@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -90,29 +91,60 @@ func (s *StateDB) accountFrozenBandwidthRows(obj *stateObject) ([]accountFrozenB
 		return nil, nil
 	}
 	rows := make([]accountFrozenBandwidthRow, 0, 2)
-	// Frozen-bandwidth rows are written as a dense zero-based sequence by
-	// writeAccountFrozenBandwidth and by the account migration path. Reading the
-	// handful of expected indexes directly avoids opening a prefix iterator,
-	// whose blockbuffer overlay setup otherwise scans every write in every live
-	// layer just to find the usual zero-or-one matching row.
-	for index := uint32(0); ; index++ {
-		key := accountFrozenBandwidthKey(index)
-		value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return rows, nil
-		}
+	// Historical partial unfreezes delete only the expired physical row so
+	// temporal history records exactly that mutation. The remaining indexes may
+	// therefore be sparse; a stop-at-first-miss point loop would silently lose a
+	// live row after reopen. Keep the prefix read for this legacy repeated field.
+	if err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, nil, func(key, value []byte) (bool, error) {
 		row, err := decodeAccountFrozenBandwidthRow(key, value)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		rows = append(rows, row)
-		if index == math.MaxUint32 {
-			return nil, fmt.Errorf("account frozen-bandwidth index overflow")
-		}
+		return true, nil
+	}); err != nil {
+		return nil, err
 	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].index < rows[j].index })
+	return rows, nil
+}
+
+func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (accountFrozenBandwidthRow, bool, error) {
+	if obj == nil || obj.account == nil {
+		return accountFrozenBandwidthRow{}, false, nil
+	}
+	key := accountFrozenBandwidthKey(index)
+	value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
+	if err != nil || !exists {
+		return accountFrozenBandwidthRow{}, exists, err
+	}
+	row, err := decodeAccountFrozenBandwidthRow(key, value)
+	if err != nil {
+		return accountFrozenBandwidthRow{}, false, err
+	}
+	return row, true, nil
+}
+
+// accountFrozenBandwidthFastRows point-reads java-tron's valid V1 shape
+// (MAX_FROZEN_NUMBER == 1). Index 1 is probed as a compatibility guard: when a
+// migrated/synthetic account contains multiple or sparse rows, fall back to the
+// generic iterator so no stored state is lost.
+func (s *StateDB) accountFrozenBandwidthFastRows(obj *stateObject) ([]accountFrozenBandwidthRow, error) {
+	first, firstExists, err := s.accountFrozenBandwidthRowAt(obj, 0)
+	if err != nil {
+		return nil, err
+	}
+	_, secondExists, err := s.accountFrozenBandwidthRowAt(obj, 1)
+	if err != nil {
+		return nil, err
+	}
+	if secondExists {
+		return s.accountFrozenBandwidthRows(obj)
+	}
+	if !firstExists {
+		return nil, nil
+	}
+	return []accountFrozenBandwidthRow{first}, nil
 }
 
 func (s *StateDB) accountTronPower(obj *stateObject) (*corepb.Account_Frozen, bool, error) {
@@ -174,8 +206,24 @@ func (s *StateDB) writeAccountFrozenBandwidth(obj *stateObject, entries []*corep
 	if obj == nil || obj.account == nil {
 		return nil
 	}
-	if err := s.DeleteAccountKVPrefix(obj.address, kvdomains.AccountFrozenBandwidthAux, nil); err != nil {
+	existing, err := s.accountFrozenBandwidthRows(obj)
+	if err != nil {
 		return err
+	}
+	return s.writeAccountFrozenBandwidthReplacing(obj, existing, entries)
+}
+
+// writeAccountFrozenBandwidthReplacing replaces existing with entries. Callers
+// that already read the rows to calculate a total can reuse them and avoid a
+// second prefix iterator over the blockbuffer overlay.
+func (s *StateDB) writeAccountFrozenBandwidthReplacing(obj *stateObject, existing []accountFrozenBandwidthRow, entries []*corepb.Account_Frozen) error {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	for _, row := range existing {
+		if err := s.DeleteAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, row.key); err != nil {
+			return err
+		}
 	}
 	nonNil := uint64(0)
 	for _, entry := range entries {
@@ -233,11 +281,54 @@ func (s *StateDB) FrozenV1BandwidthCount(addr tcommon.Address) int {
 	if obj == nil || obj.deleted {
 		return 0
 	}
-	rows, err := s.accountFrozenBandwidthRows(obj)
+	rows, err := s.accountFrozenBandwidthFastRows(obj)
 	if err != nil {
 		return 0
 	}
 	return len(rows)
+}
+
+// HasExpiredFrozenV1Bandwidth reports whether any legacy bandwidth freeze may
+// be released at now. It examines only the bandwidth split domain.
+func (s *StateDB) HasExpiredFrozenV1Bandwidth(addr tcommon.Address, now int64) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return false
+	}
+	rows, err := s.accountFrozenBandwidthFastRows(obj)
+	if err != nil {
+		return false
+	}
+	for _, row := range rows {
+		if row.entry.ExpireTime <= now {
+			return true
+		}
+	}
+	return false
+}
+
+// FrozenV1ResourceInfo returns the amount and expiry for a single-slot legacy
+// ENERGY or TRON_POWER freeze without materializing other account domains.
+func (s *StateDB) FrozenV1ResourceInfo(addr tcommon.Address, resource corepb.ResourceCode) (amount, expireTime int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return 0, 0
+	}
+	switch resource {
+	case corepb.ResourceCode_ENERGY:
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0, 0
+		}
+		return obj.account.FrozenEnergyAmount(), obj.account.FrozenEnergyExpireTime()
+	case corepb.ResourceCode_TRON_POWER:
+		entry, exists, err := s.accountTronPower(obj)
+		if err != nil || !exists || entry == nil {
+			return 0, 0
+		}
+		return entry.FrozenBalance, entry.ExpireTime
+	default:
+		return 0, 0
+	}
 }
 
 // FrozenV1ResourceAmount returns the owner-side legacy frozen amount for one
@@ -249,9 +340,13 @@ func (s *StateDB) FrozenV1ResourceAmount(addr tcommon.Address, resource corepb.R
 	}
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
-		amount, err := s.accountFrozenBandwidthTotal(obj)
+		rows, err := s.accountFrozenBandwidthFastRows(obj)
 		if err != nil {
 			return 0
+		}
+		var amount int64
+		for _, row := range rows {
+			amount += row.entry.FrozenBalance
 		}
 		return amount
 	case corepb.ResourceCode_ENERGY:

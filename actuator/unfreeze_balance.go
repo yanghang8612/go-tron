@@ -27,39 +27,29 @@ func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {
 		return errors.New("owner account does not exist")
 	}
 	delegated := len(uc.ReceiverAddress) > 0 && ctx.DynProps.AllowDelegateResource()
-	acct := ctx.State.GetStateObject(ownerAddr)
-	if acct == nil {
-		return errors.New("account not found")
-	}
 	if !delegated {
 		switch uc.Resource {
 		case corepb.ResourceCode_BANDWIDTH:
-			hasExpired := false
-			for _, f := range acct.FrozenBandwidthList() {
-				if f.ExpireTime <= ctx.PrevBlockTime {
-					hasExpired = true
-					break
-				}
-			}
-			if !hasExpired {
+			if !ctx.State.HasExpiredFrozenV1Bandwidth(ownerAddr, ctx.PrevBlockTime) {
 				return errors.New("no expired frozen bandwidth")
 			}
 		case corepb.ResourceCode_TRON_POWER:
 			if !ctx.DynProps.AllowNewResourceModel() {
 				return errors.New("invalid resource type")
 			}
-			account := ctx.State.GetAccount(ownerAddr)
-			if account == nil || account.V1TronPowerFrozen() <= 0 {
+			amount, expireTime := ctx.State.FrozenV1ResourceInfo(ownerAddr, corepb.ResourceCode_TRON_POWER)
+			if amount <= 0 {
 				return errors.New("no frozenBalance(TronPower)")
 			}
-			if account.V1TronPowerExpireTime() > ctx.PrevBlockTime {
+			if expireTime > ctx.PrevBlockTime {
 				return errors.New("It's not time to unfreeze(TronPower).")
 			}
 		case corepb.ResourceCode_ENERGY:
-			if acct.FrozenEnergyAmount() == 0 {
+			amount, expireTime := ctx.State.FrozenV1ResourceInfo(ownerAddr, corepb.ResourceCode_ENERGY)
+			if amount == 0 {
 				return errors.New("no frozen energy")
 			}
-			if acct.FrozenEnergyExpireTime() > ctx.PrevBlockTime {
+			if expireTime > ctx.PrevBlockTime {
 				return errors.New("frozen energy not expired")
 			}
 		default:
@@ -188,7 +178,7 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		// a skipped contract receiver. Under the floor model (pre allow_new_reward)
 		// java always uses -removed/TRX.
 		var decrease int64
-		receiver := ctx.State.GetAccount(receiverAddr)
+		receiver := ctx.State.AccountReference(receiverAddr)
 		// java UnfreezeBalanceActuator takes the floor branch
 		// (decrease = -unfreezeBalance / TRX_PRECISION) whenever Constantinople is
 		// active AND the receiver is either a Contract OR no longer exists (a
@@ -216,7 +206,7 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 
 	needToClearVote := true
 	if ctx.DynProps.AllowNewResourceModel() {
-		if account := ctx.State.GetAccount(ownerAddr); account != nil && account.OldTronPowerIsInvalid() {
+		if account := ctx.State.AccountReference(ownerAddr); account != nil && account.OldTronPowerIsInvalid() {
 			switch uc.Resource {
 			case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
 				needToClearVote = false
@@ -232,7 +222,7 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.ClearVotes(ownerAddr)
 	}
 	if ctx.DynProps.AllowNewResourceModel() {
-		if account := ctx.State.GetAccount(ownerAddr); account != nil && !account.OldTronPowerIsInvalid() {
+		if account := ctx.State.AccountReference(ownerAddr); account != nil && !account.OldTronPowerIsInvalid() {
 			ctx.State.InvalidateOldTronPower(ownerAddr)
 		}
 	}

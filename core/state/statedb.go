@@ -1161,11 +1161,18 @@ func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs i
 	if obj == nil {
 		return
 	}
-	total, err := s.accountFrozenBandwidthTotal(obj)
+	rows, err := s.accountFrozenBandwidthRows(obj)
 	if err != nil {
 		return
 	}
-	_ = s.setAccountFrozenBandwidth(obj, total+amount, expireTimeMs)
+	var total int64
+	for _, row := range rows {
+		total += row.entry.FrozenBalance
+	}
+	_ = s.writeAccountFrozenBandwidthReplacing(obj, rows, []*corepb.Account_Frozen{{
+		FrozenBalance: total + amount,
+		ExpireTime:    expireTimeMs,
+	}})
 }
 
 func (s *StateDB) UnfreezeV1Bandwidth(addr tcommon.Address, blockTimeMs int64) int64 {
@@ -1950,9 +1957,13 @@ func (s *StateDB) GetLegacyTronPower(addr tcommon.Address) int64 {
 // rows it uses. In particular it does not scan the unrelated V2 unfreeze queue
 // or materialize the whole StakeV2 account domain.
 func (s *StateDB) legacyTronPower(obj *stateObject) (int64, error) {
-	bandwidth, err := s.accountFrozenBandwidthTotal(obj)
+	bandwidthRows, err := s.accountFrozenBandwidthFastRows(obj)
 	if err != nil {
 		return 0, err
+	}
+	var bandwidth int64
+	for _, row := range bandwidthRows {
+		bandwidth += row.entry.FrozenBalance
 	}
 	if err := s.materializeAccountResource(obj); err != nil {
 		return 0, err
