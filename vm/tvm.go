@@ -61,6 +61,7 @@ type TVM struct {
 	interpreter         *Interpreter
 	newContracts        map[tcommon.Address]bool
 	internalTxHashStack []tcommon.Hash
+	internalTxArena     *InternalTransactionArena
 	pooled              bool
 }
 
@@ -185,6 +186,80 @@ type internalTransactionRecord struct {
 	callValues [1]*corepb.InternalTransaction_CallValueInfo
 }
 
+type internalTransactionArenaEntry struct {
+	record   *internalTransactionRecord
+	identity []byte
+}
+
+// InternalTransactionArena owns the result objects of one TVM transaction
+// until its TransactionInfo has been serialized. Canonical block replay binds
+// one arena to each pooled transaction-info slot, whose async-commit lifetime
+// already extends through metadata persistence. Entries grow only to that
+// slot's observed high-water mark and are then reused without preallocating for
+// executions that emit no internal transactions.
+type InternalTransactionArena struct {
+	entries      []internalTransactionArenaEntry
+	transactions []*corepb.InternalTransaction
+	used         int
+}
+
+const maxRetainedInternalTransactionArenaEntries = 1024
+
+// Reset starts a new transaction after the previous TransactionInfo has left
+// the async commit pipeline. Clearing protobuf shells releases variable token
+// fields while each entry retains only its small identity byte buffer.
+func (a *InternalTransactionArena) Reset() {
+	if a == nil {
+		return
+	}
+	for i := 0; i < a.used; i++ {
+		*a.entries[i].record = internalTransactionRecord{}
+	}
+	a.used = 0
+	clear(a.transactions)
+	if len(a.entries) > maxRetainedInternalTransactionArenaEntries {
+		// A single pathological execution may emit far more internal calls than
+		// ordinary contracts. It is valid for that execution, but should not pin
+		// all record and identity buffers in a long-lived transaction-info slot.
+		clear(a.entries)
+		a.entries = nil
+		a.transactions = nil
+		return
+	}
+	if cap(a.transactions) > maxRetainedInternalTransactionArenaEntries {
+		a.transactions = nil
+	} else {
+		a.transactions = a.transactions[:0]
+	}
+}
+
+func (a *InternalTransactionArena) acquire(identitySize int) (*internalTransactionRecord, []byte) {
+	index := a.used
+	a.used++
+	if index == len(a.entries) {
+		a.entries = append(a.entries, internalTransactionArenaEntry{
+			record:   new(internalTransactionRecord),
+			identity: make([]byte, identitySize),
+		})
+	}
+	entry := &a.entries[index]
+	if cap(entry.identity) < identitySize {
+		entry.identity = make([]byte, identitySize)
+	} else {
+		entry.identity = entry.identity[:identitySize]
+	}
+	return entry.record, entry.identity
+}
+
+// SetInternalTransactionArena installs slot-owned result storage. The caller
+// must Reset the arena only after its previous metadata serialization is done.
+func (tvm *TVM) SetInternalTransactionArena(arena *InternalTransactionArena) {
+	tvm.internalTxArena = arena
+	if arena != nil {
+		tvm.InternalTransactions = arena.transactions[:0]
+	}
+}
+
 func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
 	// java-tron's identity is keccak(parent || receive || data || value ||
 	// nonce). Absorb the fields directly: the former concatenation allocated
@@ -195,7 +270,17 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	// single backing allocation. Full-slice expressions cap each field at its
 	// own length so a future append cannot overwrite the adjacent field.
 	const addressBytes = tcommon.AddressLength
-	identityBytes := make([]byte, tcommon.HashLength+2*addressBytes+len(note))
+	identitySize := tcommon.HashLength + 2*addressBytes + len(note)
+	var (
+		record        *internalTransactionRecord
+		identityBytes []byte
+	)
+	if tvm.internalTxArena != nil {
+		record, identityBytes = tvm.internalTxArena.acquire(identitySize)
+	} else {
+		record = new(internalTransactionRecord)
+		identityBytes = make([]byte, identitySize)
+	}
 	off := 0
 	copy(identityBytes[off:], hash[:])
 	hashBytes := identityBytes[off : off+tcommon.HashLength : off+tcommon.HashLength]
@@ -209,7 +294,6 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	copy(identityBytes[off:], note)
 	noteBytes := identityBytes[off : off+len(note) : off+len(note)]
 
-	record := new(internalTransactionRecord)
 	record.baseValue.CallValue = value
 	record.callValues[0] = &record.baseValue
 	it := &record.tx
@@ -241,6 +325,9 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 		tvm.InternalTransactions = make([]*corepb.InternalTransaction, 0, 8)
 	}
 	tvm.InternalTransactions = append(tvm.InternalTransactions, it)
+	if tvm.internalTxArena != nil {
+		tvm.internalTxArena.transactions = tvm.InternalTransactions
+	}
 	return it
 }
 

@@ -86,4 +86,19 @@ func BenchmarkInternalTransactionConstruction(b *testing.B) {
 			}
 		}
 	})
+
+	b.Run("SlotArena8", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(8 * len(data)))
+		tvm := &TVM{RootTxID: root}
+		arena := new(InternalTransactionArena)
+		for b.Loop() {
+			arena.Reset()
+			tvm.SetInternalTransactionArena(arena)
+			for i := range 8 {
+				tvm.Nonce = uint64(i + 1)
+				internalTransactionBenchmarkSink = tvm.addInternalTransaction(caller, target, 7, data, "call", 0, 0)
+			}
+		}
+	})
 }

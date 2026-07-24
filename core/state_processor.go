@@ -66,10 +66,10 @@ type applyTransactionScratch struct {
 }
 
 func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
-	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil)
+	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil, nil)
 }
 
-func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch) (result *actuator.Result, err error) {
+func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch, internalTxArena *vm.InternalTransactionArena) (result *actuator.Result, err error) {
 	var revertOnOverflow func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -187,6 +187,7 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 		TrustTransactionRet:        trustTransactionRet,
 		ForkPassCache:              forkPassCache,
 		ResultSink:                 resultSink,
+		InternalTransactionArena:   internalTxArena,
 		Tracer:                     tracer,
 	}
 
@@ -294,6 +295,7 @@ type transactionInfoSlot struct {
 	receipt              corepb.ResourceReceipt
 	id                   tcommon.Hash
 	contractResult       [1][]byte
+	internalTxArena      vm.InternalTransactionArena
 	logs                 []*transactionInfoLogSlot
 	logPointers          []*corepb.TransactionInfo_Log
 	internalTransactions []*corepb.InternalTransaction
@@ -769,7 +771,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if traceTxIndex >= 0 && i == traceTxIndex {
 			txTracer = traceTracer
 		}
-		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch)
+		internalTxArena := &txInfoSlots[i].internalTxArena
+		internalTxArena.Reset()
+		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch, internalTxArena)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}

@@ -231,6 +231,7 @@ func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
 	}
 	evm.SetDB(ctx.DB)
 	evm.SetRootTransactionID(ctx.Tx.Hash())
+	evm.SetInternalTransactionArena(ctx.InternalTransactionArena)
 	if ctx.State != nil {
 		if blackhole := ctx.State.ReadAccountNameIndex([]byte("Blackhole")); len(blackhole) > 0 {
 			evm.SetBlackholeAddress(common.BytesToAddress(blackhole))

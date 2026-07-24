@@ -89,6 +89,11 @@ type Context struct {
 	// their own caller leave this nil and retain the existing ownership model.
 	// Execute implementations must never retain the sink after returning.
 	ResultSink *Result
+	// InternalTransactionArena is optional block-local VM result storage. The
+	// canonical replay path binds it to the transaction-info slot that remains
+	// owned by async commit until metadata serialization completes. Public and
+	// standalone actuator callers leave it nil and retain one-shot ownership.
+	InternalTransactionArena *vm.InternalTransactionArena
 	// Tracer, when non-nil, is installed into the TVM config for this tx so the
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.
