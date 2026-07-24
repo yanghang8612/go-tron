@@ -24,6 +24,15 @@ type Writer interface {
 	DomainDelPrefix(owner common.Address, domain kvdomains.KVDomain, prefix []byte) error
 }
 
+// OwnedWriter is an optional exact-mutation fast path for callers that can
+// transfer immutable key/value storage to the writer until its next Flush or
+// Discard. General callers must use Writer, whose methods defensively copy
+// mutation inputs.
+type OwnedWriter interface {
+	DomainPutOwned(owner common.Address, domain kvdomains.KVDomain, key, value []byte) error
+	DomainDelOwned(owner common.Address, domain kvdomains.KVDomain, key []byte) error
+}
+
 type IterateFunc func(key, value []byte) (bool, error)
 
 type Iterator interface {
@@ -263,6 +272,14 @@ func (o *Overlay) Metrics() Metrics {
 }
 
 func (o *Overlay) appendMutation(m Mutation) error {
+	return o.appendMutationWithOwnership(m, false)
+}
+
+func (o *Overlay) appendOwnedMutation(m Mutation) error {
+	return o.appendMutationWithOwnership(m, true)
+}
+
+func (o *Overlay) appendMutationWithOwnership(m Mutation, owned bool) error {
 	if o == nil {
 		return errors.New("domains: nil overlay")
 	}
@@ -271,7 +288,9 @@ func (o *Overlay) appendMutation(m Mutation) error {
 	}
 	o.nextSeq++
 	m.Seq = o.nextSeq
-	m = cloneMutation(m)
+	if !owned {
+		m = cloneMutation(m)
+	}
 	o.ops = append(o.ops, m)
 	switch m.Kind {
 	case MutationPut:

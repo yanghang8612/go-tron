@@ -37,6 +37,14 @@ func (r *benchmarkCommitmentRecorder) RecordCommitmentMutations(_ context.Contex
 var sharedDomainMutationBenchmarkSink int
 
 func BenchmarkSharedDomainTxMutationBatch(b *testing.B) {
+	benchmarkSharedDomainTxMutationBatch(b, false)
+}
+
+func BenchmarkSharedDomainTxOwnedMutationBatch(b *testing.B) {
+	benchmarkSharedDomainTxMutationBatch(b, true)
+}
+
+func benchmarkSharedDomainTxMutationBatch(b *testing.B, owned bool) {
 	const mutationsPerBatch = 256
 	owner := testAddress(0x7a)
 	keys := make([][]byte, mutationsPerBatch)
@@ -54,7 +62,13 @@ func BenchmarkSharedDomainTxMutationBatch(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for i := range mutationsPerBatch {
-			if err := tx.DomainPut(owner, kvdomains.ContractStorage, keys[i], values[i]); err != nil {
+			var err error
+			if owned {
+				err = tx.DomainPutOwned(owner, kvdomains.ContractStorage, keys[i], values[i])
+			} else {
+				err = tx.DomainPut(owner, kvdomains.ContractStorage, keys[i], values[i])
+			}
+			if err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -106,6 +120,60 @@ func TestSharedDomainTxStagesLatestAndFlushes(t *testing.T) {
 	}
 }
 
+func TestSharedDomainTxOwnedMutationKeepsObservableCopiesIsolated(t *testing.T) {
+	owner := testAddress(0x47)
+	latest := NewMemoryStore()
+	key := []byte("owned-key")
+	value := []byte("owned-value")
+	tx := NewSharedDomainTx(SharedDomainTxConfig{
+		Latest: latest,
+		Writer: latest,
+		Hooks: Hooks{OnMutation: func(m Mutation) {
+			m.Key[0] = 'x'
+			m.Value[0] = 'x'
+		}},
+	})
+	if err := tx.DomainPutOwned(owner, kvdomains.SystemDynamicProperty, key, value); err != nil {
+		t.Fatal(err)
+	}
+	mutations := tx.Mutations()
+	mutations[0].Key[0] = 'y'
+	mutations[0].Value[0] = 'y'
+	got, ok, err := tx.GetLatest(owner, kvdomains.SystemDynamicProperty, key)
+	if err != nil || !ok || string(got) != "owned-value" {
+		t.Fatalf("owned overlay read = %q ok=%v err=%v", got, ok, err)
+	}
+	if err := tx.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err = latest.GetLatest(owner, kvdomains.SystemDynamicProperty, key)
+	if err != nil || !ok || string(got) != "owned-value" {
+		t.Fatalf("owned flushed value = %q ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestSharedDomainTxOwnedDeleteFlushes(t *testing.T) {
+	owner := testAddress(0x48)
+	latest := NewMemoryStore()
+	key := []byte("owned-delete")
+	if err := latest.DomainPut(owner, kvdomains.SystemReward, key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	tx := NewSharedDomainTx(SharedDomainTxConfig{Latest: latest, Writer: latest})
+	if err := tx.DomainDelOwned(owner, kvdomains.SystemReward, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := tx.GetLatest(owner, kvdomains.SystemReward, key); err != nil || ok {
+		t.Fatalf("owned delete overlay ok=%v err=%v", ok, err)
+	}
+	if err := tx.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := latest.GetLatest(owner, kvdomains.SystemReward, key); err != nil || ok {
+		t.Fatalf("owned delete flush ok=%v err=%v", ok, err)
+	}
+}
+
 func TestSharedDomainTxDelegatesHistoryAndCommitment(t *testing.T) {
 	owner := testAddress(0x42)
 	history := fakeAsOfReader{
@@ -147,6 +215,12 @@ func TestSharedDomainTxCloseRejectsFutureWork(t *testing.T) {
 	}
 	if err := tx.DomainPut(testAddress(0x43), kvdomains.SystemReward, []byte("k"), []byte("v")); !errors.Is(err, ErrTemporalTxClosed) {
 		t.Fatalf("DomainPut after close err = %v, want %v", err, ErrTemporalTxClosed)
+	}
+	if err := tx.DomainPutOwned(testAddress(0x43), kvdomains.SystemReward, []byte("k"), []byte("v")); !errors.Is(err, ErrTemporalTxClosed) {
+		t.Fatalf("DomainPutOwned after close err = %v, want %v", err, ErrTemporalTxClosed)
+	}
+	if err := tx.DomainDelOwned(testAddress(0x43), kvdomains.SystemReward, []byte("k")); !errors.Is(err, ErrTemporalTxClosed) {
+		t.Fatalf("DomainDelOwned after close err = %v, want %v", err, ErrTemporalTxClosed)
 	}
 	if err := tx.Flush(context.Background()); !errors.Is(err, ErrTemporalTxClosed) {
 		t.Fatalf("Flush after close err = %v, want %v", err, ErrTemporalTxClosed)

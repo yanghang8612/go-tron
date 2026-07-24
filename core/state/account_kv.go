@@ -1392,11 +1392,30 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitP
 		return false, nil
 	}
 	wrote := false
+	owned, canTransfer := latest.(statedomains.OwnedWriter)
 	for _, item := range plan.items {
 		entry := item.entry
 		wrote = true
 		if entry.deleted {
+			if canTransfer {
+				// logicalKey is backed by this commit plan and remains immutable
+				// until SharedDomainTx.Flush completes below the plan loop.
+				if err := owned.DomainDelOwned(obj.address, item.domain, item.logicalKey); err != nil {
+					return false, err
+				}
+				continue
+			}
 			if err := latest.DomainDel(obj.address, item.domain, item.logicalKey); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if canTransfer {
+			// entry.val is owned by obj.kvDirty, which is finalized only after
+			// the temporal transaction has synchronously recorded and flushed
+			// every mutation. Transfer both slices instead of cloning them into
+			// the short-lived overlay.
+			if err := owned.DomainPutOwned(obj.address, item.domain, item.logicalKey, entry.val); err != nil {
 				return false, err
 			}
 			continue

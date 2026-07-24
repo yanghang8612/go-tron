@@ -1597,6 +1597,64 @@ func TestAccountKVFinalWriteSkipsSnapshotJournal(t *testing.T) {
 	}
 }
 
+type ownedMutationWriterSpy struct {
+	regularPuts    int
+	regularDeletes int
+	ownedPuts      int
+	ownedDeletes   int
+	putKey         []byte
+	putValue       []byte
+	deleteKey      []byte
+}
+
+func (w *ownedMutationWriterSpy) DomainPut(tcommon.Address, kvdomains.KVDomain, []byte, []byte) error {
+	w.regularPuts++
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainDel(tcommon.Address, kvdomains.KVDomain, []byte) error {
+	w.regularDeletes++
+	return nil
+}
+
+func (*ownedMutationWriterSpy) DomainDelPrefix(tcommon.Address, kvdomains.KVDomain, []byte) error {
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainPutOwned(_ tcommon.Address, _ kvdomains.KVDomain, key, value []byte) error {
+	w.ownedPuts++
+	w.putKey = key
+	w.putValue = value
+	return nil
+}
+
+func (w *ownedMutationWriterSpy) DomainDelOwned(_ tcommon.Address, _ kvdomains.KVDomain, key []byte) error {
+	w.ownedDeletes++
+	w.deleteKey = key
+	return nil
+}
+
+func TestCommitAccountKVLatestTransfersPlanStorage(t *testing.T) {
+	putKey := []byte("put-key")
+	putValue := []byte("put-value")
+	deleteKey := []byte("delete-key")
+	plan := &accountKVCommitPlan{items: []kvCommitItem{
+		{domain: kvdomains.SystemReward, logicalKey: putKey, entry: kvEntry{val: putValue}},
+		{domain: kvdomains.ContractStorage, logicalKey: deleteKey, entry: kvEntry{deleted: true}},
+	}}
+	writer := new(ownedMutationWriterSpy)
+	wrote, err := new(StateDB).commitAccountKVLatest(&stateObject{address: testAddr(0x7e)}, plan, writer)
+	if err != nil || !wrote {
+		t.Fatalf("commitAccountKVLatest wrote=%v err=%v", wrote, err)
+	}
+	if writer.regularPuts != 0 || writer.regularDeletes != 0 || writer.ownedPuts != 1 || writer.ownedDeletes != 1 {
+		t.Fatalf("writer calls regular=%d/%d owned=%d/%d", writer.regularPuts, writer.regularDeletes, writer.ownedPuts, writer.ownedDeletes)
+	}
+	if &writer.putKey[0] != &putKey[0] || &writer.putValue[0] != &putValue[0] || &writer.deleteKey[0] != &deleteKey[0] {
+		t.Fatal("commit path cloned storage before owned writer")
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
