@@ -1,10 +1,12 @@
 package vm
 
 import (
+	"bytes"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestNewTVMAllocatesNewContractSetLazily(t *testing.T) {
@@ -28,6 +30,43 @@ func TestNewTVMAllocatesNewContractSetLazily(t *testing.T) {
 	tvm.restoreNewContractMark(addr, false)
 	if tvm.isNewContract(addr) {
 		t.Fatal("restoring an unmarked contract left a stale mark")
+	}
+}
+
+func TestReleaseTVMDetachesResultsAndClearsExecutionState(t *testing.T) {
+	first := NewTVM(nil, nil, tcommon.Address{0x41, 1}, 7, 9, tcommon.Address{0x41, 2}, 3, TVMConfig{})
+	first.Depth = 5
+	first.Nonce = 11
+	first.Logs = []Log{{Data: []byte("stable-log")}}
+	first.InternalTransactions = []*corepb.InternalTransaction{{Hash: []byte("stable-internal")}}
+	first.newContracts = map[tcommon.Address]bool{{0x41, 3}: true}
+	first.internalTxHashStack = append(first.internalTxHashStack, tcommon.Hash{4})
+
+	logs := first.Logs
+	internalTransactions := first.InternalTransactions
+	ReleaseTVM(first)
+	// A duplicate release must be harmless; otherwise one pointer can enter the
+	// pool twice and be handed to concurrent executions.
+	ReleaseTVM(first)
+
+	second := NewTVM(nil, nil, tcommon.Address{0x41, 5}, 13, 15, tcommon.Address{0x41, 6}, 17, TVMConfig{})
+	defer ReleaseTVM(second)
+	if second.Depth != 0 || second.Nonce != 0 || len(second.Logs) != 0 || len(second.InternalTransactions) != 0 {
+		t.Fatalf("borrowed TVM retained execution state: depth=%d nonce=%d logs=%d internal=%d",
+			second.Depth, second.Nonce, len(second.Logs), len(second.InternalTransactions))
+	}
+	if second.newContracts != nil || len(second.internalTxHashStack) != 0 {
+		t.Fatalf("borrowed TVM retained private scratch: contracts=%d hashStack=%d",
+			len(second.newContracts), len(second.internalTxHashStack))
+	}
+	if second.interpreter == nil || second.interpreter.tvm != second {
+		t.Fatal("borrowed interpreter was not rebound to its TVM")
+	}
+	if !bytes.Equal(logs[0].Data, []byte("stable-log")) {
+		t.Fatalf("transferred log changed after release: %q", logs[0].Data)
+	}
+	if !bytes.Equal(internalTransactions[0].Hash, []byte("stable-internal")) {
+		t.Fatalf("transferred internal transaction changed after release: %q", internalTransactions[0].Hash)
 	}
 }
 

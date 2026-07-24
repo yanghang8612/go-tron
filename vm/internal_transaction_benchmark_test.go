@@ -14,7 +14,9 @@ var tvmConstructionBenchmarkSink *TVM
 func BenchmarkNewTVMNoCreate(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		tvmConstructionBenchmarkSink = NewTVM(nil, nil, tcommon.Address{}, 1, 2, tcommon.Address{}, 3, TVMConfig{})
+		tvm := NewTVM(nil, nil, tcommon.Address{}, 1, 2, tcommon.Address{}, 3, TVMConfig{})
+		tvmConstructionBenchmarkSink = tvm
+		ReleaseTVM(tvm)
 	}
 }
 

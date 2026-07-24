@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -60,6 +61,17 @@ type TVM struct {
 	interpreter         *Interpreter
 	newContracts        map[tcommon.Address]bool
 	internalTxHashStack []tcommon.Hash
+	pooled              bool
+}
+
+// tvmPool keeps the per-contract control plane (TVM + Interpreter) separate
+// from execution results. Logs and internal transactions are transferred to
+// actuator.Result and are therefore never reused; the two control structs and
+// their private call-stack scratch can be reset once execution returns.
+var tvmPool = sync.Pool{
+	New: func() any {
+		return &TVM{interpreter: new(Interpreter)}
+	},
 }
 
 func (tvm *TVM) LogSnapshot() int {
@@ -250,18 +262,60 @@ func (tvm *TVM) ResourceTime() int64 {
 // *DynamicProperties so the CALL/CALLTOKEN/SUICIDE → createNormalAccount
 // parity (slice 2c) fires.
 func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *TVM {
-	tvm := &TVM{
-		StateDB:     stateDB,
-		DynProps:    dp,
-		Origin:      origin,
-		BlockNumber: blockNum,
-		Timestamp:   timestamp,
-		Coinbase:    coinbase,
-		ChainID:     chainID,
-		cfg:         cfg,
+	// Tracers are an observability path and may retain execution objects beyond
+	// the call. Keep their historical one-shot ownership; production sync has no
+	// tracer and can safely borrow the control structs.
+	if cfg.Tracer != nil {
+		tvm := &TVM{
+			StateDB:     stateDB,
+			DynProps:    dp,
+			Origin:      origin,
+			BlockNumber: blockNum,
+			Timestamp:   timestamp,
+			Coinbase:    coinbase,
+			ChainID:     chainID,
+			cfg:         cfg,
+		}
+		tvm.interpreter = NewInterpreter(tvm, cfg)
+		return tvm
 	}
-	tvm.interpreter = NewInterpreter(tvm, cfg)
+
+	tvm := tvmPool.Get().(*TVM)
+	interpreter := tvm.interpreter
+	internalTxHashStack := tvm.internalTxHashStack[:0]
+	*tvm = TVM{
+		StateDB:             stateDB,
+		DynProps:            dp,
+		Origin:              origin,
+		BlockNumber:         blockNum,
+		Timestamp:           timestamp,
+		Coinbase:            coinbase,
+		ChainID:             chainID,
+		cfg:                 cfg,
+		interpreter:         interpreter,
+		internalTxHashStack: internalTxHashStack,
+		pooled:              true,
+	}
+	resetInterpreter(interpreter, tvm, cfg)
 	return tvm
+}
+
+// ReleaseTVM returns a production TVM's control structs after its Logs and
+// InternalTransactions have been transferred to the caller. The result slices
+// keep their own backing storage alive; clearing these references does not
+// mutate result data. Traced and otherwise non-pooled instances are untouched.
+func ReleaseTVM(tvm *TVM) {
+	if tvm == nil || !tvm.pooled {
+		return
+	}
+	interpreter := tvm.interpreter
+	internalTxHashStack := tvm.internalTxHashStack[:0]
+	*interpreter = Interpreter{}
+	*tvm = TVM{
+		interpreter:         interpreter,
+		internalTxHashStack: internalTxHashStack,
+	}
+	tvmPool.Put(tvm)
 }
 
 // SetDB sets the rawdb store used for access to per-contract state

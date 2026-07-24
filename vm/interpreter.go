@@ -36,7 +36,13 @@ type Interpreter struct {
 
 // NewInterpreter creates a new interpreter.
 func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
-	return &Interpreter{
+	in := new(Interpreter)
+	resetInterpreter(in, tvm, cfg)
+	return in
+}
+
+func resetInterpreter(in *Interpreter, tvm *TVM, cfg TVMConfig) {
+	*in = Interpreter{
 		tvm:       tvm,
 		table:     jumpTableForConfig(cfg),
 		tvmConfig: cfg,

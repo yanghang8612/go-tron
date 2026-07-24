@@ -278,6 +278,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 		tokenValue = csc.CallTokenValue
 	}
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, ctx.Coinbase, 1, cfg)
+	defer vm.ReleaseTVM(evm)
 	configureTVMExecutionContext(evm, ctx)
 
 	sc := proto.Clone(csc.NewContract).(*contractpb.SmartContract)
@@ -376,6 +377,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 		tokenValue = tsc.CallTokenValue
 	}
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, ctx.Coinbase, 1, cfg)
+	defer vm.ReleaseTVM(evm)
 	configureTVMExecutionContext(evm, ctx)
 
 	var (
