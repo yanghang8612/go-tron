@@ -1016,15 +1016,27 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			// addresses are never auto-created on this path, so surface
 			// ErrPrecompileTransferFailure (propagated by shouldPropagateCallError
 			// → spend-all) instead of the swallowed ErrInsufficientBalance.
-			// Plain-contract/plain-address targets are pre-created above by
-			// maybeCreateNormalAccountForValueTransfer, so they never reach here.
+			// Plain-contract/plain-address targets are pre-created above only
+			// after Solidity059. Legacy calls can therefore reach this branch.
 			if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) != nil {
 				tvm.RevertLogs(logSnap)
 				tvm.StateDB.RevertToSnapshot(snap)
 				return nil, 0, ErrPrecompileTransferFailure
 			}
+			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
-			return nil, energy, ErrInsufficientBalance
+			// Before ALLOW_TVM_SOLIDITY_059, createAccountIfNotExist is a
+			// no-op. java-tron's subsequent TRC10 validateForSmartContract
+			// rejects the missing recipient. The exception class is gated by
+			// Constantinople exactly like the ordinary TRX path: legacy
+			// BytecodeExecutionException (UNKNOWN + spend-all) before it, then
+			// TransferException (TRANSFER_FAILED + refund) afterwards.
+			if !tvm.cfg.Constantinople {
+				return nil, 0, ErrValidateForSmartContract
+			}
+			return nil, energy, tokenTransferValidationError{
+				reason: "Validate InternalTransfer error, no ToAccount. And not allowed to create account in smart contract.",
+			}
 		}
 		if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) == nil && tvm.StateDB.GetTRC10Balance(addr, tokenID) > math.MaxInt64-tokenValue {
 			tvm.RevertLogs(logSnap)
