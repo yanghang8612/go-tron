@@ -25,6 +25,15 @@ var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 )
 
+// maxStateObjectCachedStorageSlots bounds the cross-block SLOAD cache of one
+// repeatedly used contract. Large token contracts touch an effectively
+// unbounded stream of mapping slots during a historical sync; retaining all of
+// them made one hot stateObject pin hundreds of MiB even after older account
+// objects were evicted. Slots remain fully cached within a block. At the
+// successful commit boundary an oversized clean map is discarded and later
+// reads reload through the bounded blockbuffer base-read cache.
+const maxStateObjectCachedStorageSlots = 4096
+
 // StateDB manages in-memory account state with Erigon-style flat latest-domain
 // commits backed by a CommitmentDomain root.
 type StateDB struct {
@@ -40,6 +49,15 @@ type StateDB struct {
 	// needed. RevertToSnapshot clears the cache because journal replay may delete
 	// or replace the mapped object.
 	lastStateObject *stateObject
+	// touchedStateObjects contains each account first accessed in the current
+	// block. retainedStateObjects is the previous successful block's working set.
+	// At commit the two slices rotate and clean accounts not reused by the current
+	// block are evicted. This bounds a range-reused StateDB to roughly one block's
+	// account working set instead of retaining every account read since the range
+	// began. The slices alternate backing storage, so steady-state rotation does
+	// not allocate when adjacent blocks have similar working-set sizes.
+	touchedStateObjects  []tcommon.Address
+	retainedStateObjects []tcommon.Address
 
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.
@@ -729,7 +747,8 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 		return
 	}
 	addr := acc.Address()
-	if _, ok := s.stateObjects[addr]; ok {
+	if obj, ok := s.stateObjects[addr]; ok {
+		s.touchStateObject(obj)
 		return
 	}
 	if obj := s.getStateObject(addr); obj != nil {
@@ -740,6 +759,7 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
+	s.touchStateObject(obj)
 }
 
 // LoadAccountReference hydrates an account into the in-memory object cache
@@ -750,7 +770,8 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 		return
 	}
 	addr := acc.Address()
-	if _, ok := s.stateObjects[addr]; ok {
+	if obj, ok := s.stateObjects[addr]; ok {
+		s.touchStateObject(obj)
 		return
 	}
 	if obj := s.getStateObject(addr); obj != nil {
@@ -761,6 +782,7 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
+	s.touchStateObject(obj)
 }
 
 // LoadAccountSnapshotReference hydrates an account envelope into the in-memory
@@ -771,7 +793,8 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 		return
 	}
 	addr := snapshot.Account.Address()
-	if _, ok := s.stateObjects[addr]; ok {
+	if obj, ok := s.stateObjects[addr]; ok {
+		s.touchStateObject(obj)
 		return
 	}
 	obj := newStateObject(addr, snapshot.Account)
@@ -783,6 +806,7 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
+	s.touchStateObject(obj)
 }
 
 // CopyAccount returns a detached copy of the cached/live account.
@@ -878,6 +902,7 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	s.dirtyObjects[addr] = struct{}{}
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
+	s.touchStateObject(obj)
 	return obj
 }
 
@@ -3348,6 +3373,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.deferFold = false
 		s.resetJournal()
 		s.releaseUnusedLoadedAccountProtos()
+		s.rotateStateObjectWorkingSet()
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -3361,6 +3387,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	s.originRoot = ethcommon.Hash(root)
 	s.resetJournal()
 	s.releaseUnusedLoadedAccountProtos()
+	s.rotateStateObjectWorkingSet()
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil
@@ -3651,6 +3678,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	// it before the full 21-byte equality so alternating-account workloads pay
 	// one byte comparison rather than comparing the common 0x41 prefix first.
 	if obj := s.lastStateObject; obj != nil && obj.address[20] == addr[20] && obj.address == addr {
+		s.touchStateObject(obj)
 		return obj
 	}
 	if obj, ok := s.stateObjects[addr]; ok {
@@ -3660,6 +3688,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 			obj.dirtySet = s.dirtyObjects
 		}
 		s.lastStateObject = obj
+		s.touchStateObject(obj)
 		return obj
 	}
 	data, ok, err := s.readStateAccountLatestForHydration(addr)
@@ -3689,7 +3718,53 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
 	s.loadedAccountProtoObjects = append(s.loadedAccountProtoObjects, obj)
+	s.touchStateObject(obj)
 	return obj
+}
+
+// touchStateObject records obj once in the current block's account working set.
+// The common repeated-account path pays only the already-true branch.
+func (s *StateDB) touchStateObject(obj *stateObject) {
+	if obj == nil || obj.cacheTouched {
+		return
+	}
+	obj.cacheTouched = true
+	s.touchedStateObjects = append(s.touchedStateObjects, obj.address)
+}
+
+// rotateStateObjectWorkingSet evicts clean accounts that were retained from the
+// previous block but not accessed by the block that just committed. All dirty
+// objects have normally been finalized before this call. The defensive dirty
+// branch retains an object if a synthetic caller violates that lifecycle rather
+// than risking loss of uncommitted state.
+func (s *StateDB) rotateStateObjectWorkingSet() {
+	previous := s.retainedStateObjects
+	current := s.touchedStateObjects
+	for _, addr := range previous {
+		obj := s.stateObjects[addr]
+		if obj == nil || obj.cacheTouched {
+			continue
+		}
+		if obj.dirty {
+			obj.cacheTouched = true
+			current = append(current, addr)
+			continue
+		}
+		delete(s.stateObjects, addr)
+		if s.lastStateObject == obj {
+			s.lastStateObject = nil
+		}
+	}
+	for _, addr := range current {
+		if obj := s.stateObjects[addr]; obj != nil {
+			if !obj.dirty && len(obj.storage) > maxStateObjectCachedStorageSlots {
+				obj.storage = nil
+			}
+			obj.cacheTouched = false
+		}
+	}
+	s.retainedStateObjects = current
+	s.touchedStateObjects = previous[:0]
 }
 
 // releaseUnusedLoadedAccountProtos drops envelope bytes retained only to avoid

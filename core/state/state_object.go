@@ -33,6 +33,11 @@ type storageSlot struct {
 type stateObject struct {
 	address tcommon.Address
 	account *types.Account
+	// cacheTouched records membership in StateDB.touchedStateObjects for the
+	// current block. StateDB keeps only the previous block's account working set
+	// across a successful commit; the bit makes repeated hot-path lookups a
+	// predictable branch instead of a map insertion on every access.
+	cacheTouched bool
 	// accountProto caches the deterministic protobuf bytes for the current
 	// account value. It is populated when history/commit serialization already
 	// pays that cost and invalidated before every account mutation. Keeping it
