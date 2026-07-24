@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
@@ -27,6 +29,10 @@ type keyPartsOwnedValueWriter interface {
 
 type keyPartsStringOwnedValueWriter interface {
 	PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error
+}
+
+type keyPartsStringsOwnedValuesWriter interface {
+	PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error
 }
 
 // SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
@@ -72,6 +78,26 @@ func WriteCommitmentBranchOwnedString(db ethdb.KeyValueWriter, prefix string, en
 		return writer.PutKeyPartsStringOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
 	}
 	return WriteCommitmentBranchOwned(db, []byte(prefix), encoded)
+}
+
+// WriteCommitmentBranchesOwnedStrings is the sibling-fold batch form of
+// WriteCommitmentBranchOwnedString. A layered writer can pack every physical
+// key into one immutable arena instead of allocating one backing string per
+// branch. Values are already disjoint slices of the fold's immutable encoding
+// arena and may be retained directly.
+func WriteCommitmentBranchesOwnedStrings(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte) error {
+	if len(prefixes) != len(encoded) {
+		return errors.New("rawdb: commitment branch batch length mismatch")
+	}
+	if writer, ok := db.(keyPartsStringsOwnedValuesWriter); ok {
+		return writer.PutKeyPartsStringsOwnedValues(stateCommitmentBranchPrefix, prefixes, encoded)
+	}
+	for i, prefix := range prefixes {
+		if err := WriteCommitmentBranchOwnedString(db, prefix, encoded[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.

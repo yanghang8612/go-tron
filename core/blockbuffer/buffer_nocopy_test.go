@@ -825,6 +825,33 @@ func TestCommitmentBranchLayerOwnedValueRetainsValueAndOwnsKey(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchLayerOwnedBatchRetainsValues(t *testing.T) {
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	prefixes := []string{string([]byte{0x01, 0x02}), string([]byte{0x03, 0x04, 0x05})}
+	values := [][]byte{[]byte("first-branch"), []byte("second-branch")}
+	if err := rawdb.WriteCommitmentBranchesOwnedStrings(view, prefixes, values); err != nil {
+		t.Fatal(err)
+	}
+	for i, prefix := range prefixes {
+		got, found, err := rawdb.ReadCommitmentBranchNoCopy(view, []byte(prefix))
+		if err != nil || !found || !bytes.Equal(got, values[i]) {
+			t.Fatalf("batch branch %d read = (%q,%v,%v), want (%q,true,nil)", i, got, found, err, values[i])
+		}
+		if &got[0] != &values[i][0] {
+			t.Fatalf("batch branch %d copied the transferred value", i)
+		}
+	}
+	if err := view.PutKeyPartsStringsOwnedValues([]byte("prefix"), prefixes, values[:1]); err == nil {
+		t.Fatal("mismatched layer batch lengths were accepted")
+	}
+}
+
 func BenchmarkCommitmentBranchLayerRead(b *testing.B) {
 	prefix := bytes.Repeat([]byte{0x0a}, 48)
 	value := bytes.Repeat([]byte{0xcd}, 512)

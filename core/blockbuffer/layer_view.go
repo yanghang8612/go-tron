@@ -2,7 +2,9 @@ package blockbuffer
 
 import (
 	"encoding/binary"
+	"errors"
 	"strings"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -117,6 +119,29 @@ func (b *Buffer) putIntoKeyPartsStringOwnedValue(l *layer, first []byte, second 
 	b.putIntoStringOwnedValue(l, joinKeyPartsString(first, second), value)
 }
 
+// putIntoKeyPartsStringsOwnedValues publishes a batch of caller-owned values
+// while packing all immutable physical map keys into one exact-size arena.
+// Each unsafe string keeps that shared arena alive until its layer is dropped;
+// the arena is never mutated after publication.
+func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, seconds []string, values [][]byte) {
+	totalSize := len(first) * len(seconds)
+	for _, second := range seconds {
+		totalSize += len(second)
+	}
+	keyArena := make([]byte, totalSize)
+	offset := 0
+	for i, second := range seconds {
+		start := offset
+		offset += copy(keyArena[offset:], first)
+		offset += copy(keyArena[offset:], second)
+		var key string
+		if offset > start {
+			key = unsafe.String(unsafe.SliceData(keyArena[start:offset]), offset-start)
+		}
+		b.putIntoStringOwnedValue(l, key, values[i])
+	}
+}
+
 func (b *Buffer) putIntoStateKVLatest(l *layer, prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) {
 	b.putIntoString(l, joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey), value)
 }
@@ -205,6 +230,17 @@ func (v *LayerView) PutKeyPartsOwnedValue(first, second, value []byte) error {
 // immutable map string, so joining it directly avoids a temporary []byte.
 func (v *LayerView) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
 	v.b.putIntoKeyPartsStringOwnedValue(v.l, first, second, value)
+	return nil
+}
+
+// PutKeyPartsStringsOwnedValues is the sibling-fold batch counterpart of
+// PutKeyPartsStringOwnedValue. The caller transfers immutable values; this
+// layer owns one shared arena containing every joined physical key.
+func (v *LayerView) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	if len(seconds) != len(values) {
+		return errors.New("blockbuffer: key/value batch length mismatch")
+	}
+	v.b.putIntoKeyPartsStringsOwnedValues(v.l, first, seconds, values)
 	return nil
 }
 

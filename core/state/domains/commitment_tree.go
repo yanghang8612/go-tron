@@ -226,11 +226,6 @@ func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
-func (b *BranchData) encodedSize() int {
-	_, size := b.encodingLayout()
-	return size
-}
-
 func (b *BranchData) encodingLayout() (uint16, int) {
 	var mask uint16
 	size := 2 // childMask
@@ -260,6 +255,14 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
 	// each one over-allocates the immutable encoding retained by blockbuffer.
 	mask, size := b.encodingLayout()
+	return b.encodeToLayout(dst, mask, size)
+}
+
+// encodeToLayout is EncodeTo with a caller-supplied layout. Bulk sibling
+// persistence needs every encoded size up front to allocate one exact arena;
+// retaining the computed mask/size lets its encoding pass avoid rescanning all
+// 16 child slots a second time.
+func (b *BranchData) encodeToLayout(dst []byte, mask uint16, size int) []byte {
 	if cap(dst)-len(dst) < size {
 		grown := make([]byte, len(dst), len(dst)+size)
 		copy(grown, dst)

@@ -1208,6 +1208,23 @@ func (b *Buffer) PutKeyPartsStringOwnedValue(first []byte, second string, value 
 	return nil
 }
 
+// PutKeyPartsStringsOwnedValues is the active-layer batch form of
+// PutKeyPartsStringOwnedValue. It joins all physical keys into one immutable
+// arena and retains each caller-owned value directly.
+func (b *Buffer) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	if len(seconds) != len(values) {
+		return errors.New("blockbuffer: key/value batch length mismatch")
+	}
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsStringsOwnedValues called with no active layer")
+	}
+	b.putIntoKeyPartsStringsOwnedValues(active, first, seconds, values)
+	return nil
+}
+
 // PutStateKVLatest implements rawdb's structured flat-latest writer path for
 // the synchronous pipeline.
 func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {

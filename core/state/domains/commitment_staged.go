@@ -2,6 +2,7 @@ package domains
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -14,6 +15,64 @@ import (
 type rawdbBranchStore struct {
 	db         CommitmentDB
 	ownedValue bool
+}
+
+var branchEncodingSlicesPool = sync.Pool{
+	New: func() any {
+		values := make([][]byte, 0, 256)
+		return &values
+	},
+}
+
+type branchEncodingPlan struct {
+	branch *BranchData
+	mask   uint16
+	size   int
+}
+
+var branchEncodingPlansPool = sync.Pool{
+	New: func() any {
+		plans := make([]branchEncodingPlan, 0, 256)
+		return &plans
+	},
+}
+
+func borrowBranchEncodingSlices(size int) *[][]byte {
+	valuesPtr := branchEncodingSlicesPool.Get().(*[][]byte)
+	if cap(*valuesPtr) < size {
+		*valuesPtr = make([][]byte, size)
+	} else {
+		*valuesPtr = (*valuesPtr)[:size]
+	}
+	return valuesPtr
+}
+
+func returnBranchEncodingSlices(valuesPtr *[][]byte) {
+	values := *valuesPtr
+	clear(values)
+	if cap(values) <= 4096 {
+		*valuesPtr = values[:0]
+		branchEncodingSlicesPool.Put(valuesPtr)
+	}
+}
+
+func borrowBranchEncodingPlans(size int) *[]branchEncodingPlan {
+	plansPtr := branchEncodingPlansPool.Get().(*[]branchEncodingPlan)
+	if cap(*plansPtr) < size {
+		*plansPtr = make([]branchEncodingPlan, size)
+	} else {
+		*plansPtr = (*plansPtr)[:size]
+	}
+	return plansPtr
+}
+
+func returnBranchEncodingPlans(plansPtr *[]branchEncodingPlan) {
+	plans := *plansPtr
+	clear(plans)
+	if cap(plans) <= 4096 {
+		*plansPtr = plans[:0]
+		branchEncodingPlansPool.Put(plansPtr)
+	}
 }
 
 func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
@@ -91,20 +150,26 @@ func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]
 		}
 		return nil
 	}
+	plansPtr := borrowBranchEncodingPlans(len(keys))
+	defer returnBranchEncodingPlans(plansPtr)
+	plans := *plansPtr
 	totalSize := 0
-	for _, key := range keys {
-		totalSize += branches[key].encodedSize()
+	for i, key := range keys {
+		branch := branches[key]
+		mask, size := branch.encodingLayout()
+		plans[i] = branchEncodingPlan{branch: branch, mask: mask, size: size}
+		totalSize += size
 	}
 	arena := make([]byte, 0, totalSize)
-	for _, key := range keys {
+	valuesPtr := borrowBranchEncodingSlices(len(keys))
+	defer returnBranchEncodingSlices(valuesPtr)
+	values := *valuesPtr
+	for i, plan := range plans {
 		start := len(arena)
-		arena = branches[key].EncodeTo(arena)
-		encoded := arena[start:len(arena):len(arena)]
-		if err := rawdb.WriteCommitmentBranchOwnedString(s.db, key, encoded); err != nil {
-			return err
-		}
+		arena = plan.branch.encodeToLayout(arena, plan.mask, plan.size)
+		values[i] = arena[start:len(arena):len(arena)]
 	}
-	return nil
+	return rawdb.WriteCommitmentBranchesOwnedStrings(s.db, keys, values)
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {

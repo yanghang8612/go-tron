@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -44,6 +45,42 @@ func BenchmarkRawdbBranchStorePutBranch(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if err := store.PutBranch(prefix, branch); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
+	for _, count := range []int{16, 256, 1024} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			keys := make([]string, count)
+			branches := make(map[string]*BranchData, count)
+			for i := range keys {
+				key := string([]byte{byte(i >> 8), byte(i)})
+				branch := new(BranchData)
+				for nibble := uint8(0); nibble < 16; nibble++ {
+					var hash common.Hash
+					hash[0] = nibble + 1
+					hash[1] = byte(i)
+					branch.SetHashChild(nibble, hash)
+				}
+				keys[i] = key
+				branches[key] = branch
+			}
+
+			buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+			buffer.BeginBlock(common.Hash{1}, 1)
+			handle, ok := buffer.NewestInflight()
+			if !ok {
+				b.Fatal("missing in-flight layer")
+			}
+			store := newRawdbBranchStore(buffer.ViewLayer(handle))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := store.putBranchesSorted(keys, branches); err != nil {
 					b.Fatal(err)
 				}
 			}

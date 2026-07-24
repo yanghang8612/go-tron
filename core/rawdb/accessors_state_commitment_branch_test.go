@@ -24,6 +24,9 @@ type ownedKeyPartsProbeWriter struct {
 	keyPartsProbeWriter
 	ownedCalls       int
 	stringOwnedCalls int
+	batchOwnedCalls  int
+	batchKeys        [][]byte
+	batchValues      [][]byte
 }
 
 func (w *ownedKeyPartsProbeWriter) PutKeyPartsOwnedValue(first, second, value []byte) error {
@@ -37,6 +40,16 @@ func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringOwnedValue(first []byte, sec
 	w.stringOwnedCalls++
 	w.key = append(append(w.key[:0], first...), second...)
 	w.value = value
+	return nil
+}
+
+func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
+	w.batchOwnedCalls++
+	w.batchKeys = make([][]byte, len(seconds))
+	for i, second := range seconds {
+		w.batchKeys[i] = append(append([]byte(nil), first...), second...)
+	}
+	w.batchValues = values
 	return nil
 }
 
@@ -112,6 +125,31 @@ func TestCommitmentBranchOwnedStringUsesTransferWriter(t *testing.T) {
 	}
 	if &w.value[0] != &value[0] {
 		t.Fatal("string-owned commitment writer copied the transferred value")
+	}
+}
+
+func TestCommitmentBranchesOwnedStringsUsesBatchTransferWriter(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	prefixes := []string{string([]byte{1, 2}), string([]byte{3, 4, 5})}
+	values := [][]byte{{6, 7}, {8, 9, 10}}
+	if err := WriteCommitmentBranchesOwnedStrings(w, prefixes, values); err != nil {
+		t.Fatal(err)
+	}
+	if w.batchOwnedCalls != 1 || w.stringOwnedCalls != 0 || w.ownedCalls != 0 || w.putCalls != 0 {
+		t.Fatalf("batch owned calls = batch %d string %d owned %d regular %d, want 1/0/0/0",
+			w.batchOwnedCalls, w.stringOwnedCalls, w.ownedCalls, w.putCalls)
+	}
+	for i, prefix := range prefixes {
+		wantKey := commitmentBranchKey([]byte(prefix))
+		if !bytes.Equal(w.batchKeys[i], wantKey) || !bytes.Equal(w.batchValues[i], values[i]) {
+			t.Fatalf("batch[%d] = key %x value %x, want %x/%x", i, w.batchKeys[i], w.batchValues[i], wantKey, values[i])
+		}
+		if &w.batchValues[i][0] != &values[i][0] {
+			t.Fatalf("batch[%d] copied the transferred value", i)
+		}
+	}
+	if err := WriteCommitmentBranchesOwnedStrings(w, prefixes, values[:1]); err == nil {
+		t.Fatal("mismatched batch lengths were accepted")
 	}
 }
 
