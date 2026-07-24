@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -307,6 +309,59 @@ func TestServerMaintainConnectsBootstrapWithoutDiscoveryReply(t *testing.T) {
 	}
 	if got := discovery.snapshot(); len(got) != 1 || got[0] != seed.ListenAddr() {
 		t.Fatalf("discovery bootstraps = %v, want [%s]", got, seed.ListenAddr())
+	}
+}
+
+func TestServerPersistsSuccessfulPeerAndReconnectsItOnRestart(t *testing.T) {
+	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := seed.Start(); err != nil {
+		t.Fatalf("start seed: %v", err)
+	}
+	defer seed.Stop()
+
+	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
+	first := NewServer(ServerConfig{
+		ListenAddr:    "127.0.0.1:0",
+		MaxPeers:      5,
+		SeedNodes:     []string{seed.ListenAddr()},
+		PeerCachePath: cachePath,
+	}, &testHandler{})
+	if err := first.Start(); err != nil {
+		t.Fatalf("start first client: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(cachePath)
+		if first.PeerCount() == 1 && err == nil && string(data) == seed.ListenAddr()+"\n" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	data, err := os.ReadFile(cachePath)
+	if err != nil || string(data) != seed.ListenAddr()+"\n" {
+		t.Fatalf("persisted peer cache = %q err %v, want %q", data, err, seed.ListenAddr()+"\n")
+	}
+	if err := first.Stop(); err != nil {
+		t.Fatalf("stop first client: %v", err)
+	}
+
+	// No SeedNodes, BootstrapNodes, or discovery service on the restarted
+	// client: the durable successful-peer cache is its only reconnect source.
+	second := NewServer(ServerConfig{
+		ListenAddr:    "127.0.0.1:0",
+		MaxPeers:      5,
+		PeerCachePath: cachePath,
+	}, &testHandler{})
+	if err := second.Start(); err != nil {
+		t.Fatalf("start restarted client: %v", err)
+	}
+	defer second.Stop()
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && second.PeerCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := second.PeerCount(); got != 1 {
+		t.Fatalf("restarted client peer count = %d, want 1 from cache", got)
 	}
 }
 

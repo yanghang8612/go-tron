@@ -1,10 +1,15 @@
 package p2p
 
 import (
+	"bufio"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +56,11 @@ var errDialThrottled = errors.New("dial throttled")
 // herd without making transient drops take minutes to recover.
 const defaultDialThrottleInterval = 30 * time.Second
 
+// maxPersistedPeers keeps enough recently successful endpoints to repopulate a
+// restarted node without letting stale history crowd the built-in bootstrap
+// candidates out of a MaxPeers-sized reconnect round.
+const maxPersistedPeers = 16
+
 // Discovery is the surface the Server uses from the Kademlia discovery service.
 // Real implementation: *discover.Service. Tests can substitute a fake.
 type Discovery interface {
@@ -66,6 +76,10 @@ type ServerConfig struct {
 	SeedNodes      []string  // explicit peers to dial (CLI --seednode)
 	BootstrapNodes []string  // built-in fallback peers fed into Discovery.AddBootstrap (e.g. params.MainnetBootstrapNodes)
 	Discovery      Discovery // optional; nil = no discovery
+	// PeerCachePath stores recently successful outbound endpoints, one per line.
+	// Empty disables persistence. Cached peers are attempted immediately after a
+	// restart, before UDP discovery has to rebuild its in-memory routing table.
+	PeerCachePath string
 
 	// Libp2p handshake parameters. NodeID must be 64 bytes. If NetworkID or
 	// Version is 0, defaults are applied (NetworkID=1, Version=Libp2pProtocolVersion).
@@ -101,6 +115,8 @@ type Server struct {
 	wg          sync.WaitGroup
 	maintainCh  chan struct{} // signals the maintain loop to reconnect now
 	dialLimiter *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
+	peerCacheMu sync.Mutex
+	cachedPeers []string // most recently successful first; bounded by maxPersistedPeers
 }
 
 // NewServer creates a new P2P server.
@@ -132,6 +148,10 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 	if throttle > 0 {
 		limiter = newDialLimiter(throttle)
 	}
+	cachedPeers, err := loadPeerCache(config.PeerCachePath)
+	if err != nil {
+		log.Warn("Failed to load P2P peer cache", "path", config.PeerCachePath, "err", err)
+	}
 
 	return &Server{
 		config:      config,
@@ -141,6 +161,7 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 		quit:        make(chan struct{}),
 		maintainCh:  make(chan struct{}, 1),
 		dialLimiter: limiter,
+		cachedPeers: cachedPeers,
 	}
 }
 
@@ -160,23 +181,7 @@ func (s *Server) Start() error {
 	// Start discovery service if configured
 	if s.config.Discovery != nil {
 		s.config.Discovery.Start()
-		bootstrap := make([]string, 0, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
-		seen := make(map[string]struct{}, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
-		for _, addr := range s.config.SeedNodes {
-			if _, ok := seen[addr]; ok {
-				continue
-			}
-			seen[addr] = struct{}{}
-			bootstrap = append(bootstrap, addr)
-		}
-		for _, addr := range s.config.BootstrapNodes {
-			if _, ok := seen[addr]; ok {
-				continue
-			}
-			seen[addr] = struct{}{}
-			bootstrap = append(bootstrap, addr)
-		}
-		s.config.Discovery.AddBootstrap(bootstrap)
+		s.config.Discovery.AddBootstrap(s.peerCandidates())
 	} else {
 		// Dial seed nodes directly when discovery is disabled
 		for _, addr := range s.config.SeedNodes {
@@ -186,6 +191,21 @@ func (s *Server) Start() error {
 				}
 			}(addr)
 		}
+	}
+
+	// The discovery table is intentionally in-memory, but a deployment restart
+	// should not discard every endpoint that just completed TRON-Hello. Reconnect
+	// only the small durable success set immediately; the normal 10-second loop
+	// adds explicit seeds and static bootstraps without a startup dial storm.
+	for _, addr := range s.cachedPeerSnapshot() {
+		go func(addr string) {
+			if err := s.AddPeer(addr); err != nil &&
+				!errors.Is(err, errDialThrottled) &&
+				!errors.Is(err, errAlreadyConnected) &&
+				!errors.Is(err, errPeerCapacity) {
+				log.Debug("Cached peer reconnect failed", "addr", addr, "err", err)
+			}
+		}(addr)
 	}
 
 	return nil
@@ -450,6 +470,9 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	s.mu.Unlock()
 
 	p.Start()
+	if !inbound {
+		s.rememberPeer(id)
+	}
 	s.handler.OnPeerConnected(p)
 	return nil
 }
@@ -538,7 +561,8 @@ func (s *Server) maintainLoop() {
 // restarted node at zero peers indefinitely when UDP is filtered, even though
 // the same bootstrap endpoints accept the TRON TCP handshake.
 func (s *Server) maintainPeers() {
-	if len(s.config.SeedNodes) == 0 && len(s.config.BootstrapNodes) == 0 {
+	candidates := s.peerCandidates()
+	if len(candidates) == 0 {
 		return
 	}
 	s.mu.RLock()
@@ -554,17 +578,6 @@ func (s *Server) maintainPeers() {
 	}
 
 	remaining := s.config.MaxPeers - current
-	candidates := make([]string, 0, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
-	seen := make(map[string]struct{}, cap(candidates))
-	for _, group := range [][]string{s.config.SeedNodes, s.config.BootstrapNodes} {
-		for _, addr := range group {
-			if _, ok := seen[addr]; ok {
-				continue
-			}
-			seen[addr] = struct{}{}
-			candidates = append(candidates, addr)
-		}
-	}
 	for _, addr := range candidates {
 		if remaining == 0 {
 			break
@@ -581,6 +594,109 @@ func (s *Server) maintainPeers() {
 				log.Debug("Configured peer reconnect failed", "addr", a, "err", err)
 			}
 		}(addr)
+	}
+}
+
+func (s *Server) cachedPeerSnapshot() []string {
+	s.peerCacheMu.Lock()
+	defer s.peerCacheMu.Unlock()
+	return append([]string(nil), s.cachedPeers...)
+}
+
+// peerCandidates returns a deterministic, deduplicated reconnect order:
+// operator-supplied seeds, recently successful endpoints, then static network
+// bootstraps. Keeping the durable set in the middle preserves explicit operator
+// priority while preferring known-good peers over a cold public seed sweep.
+func (s *Server) peerCandidates() []string {
+	cached := s.cachedPeerSnapshot()
+	capacity := len(s.config.SeedNodes) + len(cached) + len(s.config.BootstrapNodes)
+	out := make([]string, 0, capacity)
+	seen := make(map[string]struct{}, capacity)
+	for _, group := range [][]string{s.config.SeedNodes, cached, s.config.BootstrapNodes} {
+		for _, addr := range group {
+			if _, ok := seen[addr]; ok {
+				continue
+			}
+			seen[addr] = struct{}{}
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func validCachedPeerAddress(addr string) bool {
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	return err == nil && port > 0 && port <= 65535
+}
+
+func loadPeerCache(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	peers := make([]string, 0, maxPersistedPeers)
+	seen := make(map[string]struct{}, maxPersistedPeers)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() && len(peers) < maxPersistedPeers {
+		addr := strings.TrimSpace(scanner.Text())
+		if !validCachedPeerAddress(addr) {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		peers = append(peers, addr)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return peers, nil
+}
+
+func (s *Server) rememberPeer(addr string) {
+	path := s.config.PeerCachePath
+	if path == "" || !validCachedPeerAddress(addr) {
+		return
+	}
+
+	s.peerCacheMu.Lock()
+	peers := make([]string, 0, maxPersistedPeers)
+	peers = append(peers, addr)
+	for _, existing := range s.cachedPeers {
+		if existing != addr && len(peers) < maxPersistedPeers {
+			peers = append(peers, existing)
+		}
+	}
+	s.cachedPeers = peers
+	data := []byte(strings.Join(peers, "\n") + "\n")
+	tmp := path + ".tmp"
+	err := os.MkdirAll(filepath.Dir(path), 0o700)
+	if err == nil {
+		err = os.WriteFile(tmp, data, 0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	s.peerCacheMu.Unlock()
+
+	if err != nil {
+		log.Warn("Failed to persist P2P peer cache", "path", path, "err", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -592,6 +593,7 @@ func gtron(ctx *cli.Context) error {
 		SeedNodes:      cfg.SeedNodes,
 		BootstrapNodes: bootstrapNodes,
 		Discovery:      discSvc,
+		PeerCachePath:  filepath.Join(cfg.DataDir, "p2p-peers"),
 		NodeID:         nodeID,
 		NetworkID:      networkID,
 		ExternalIP:     externalIP,
