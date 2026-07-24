@@ -1494,7 +1494,7 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 		entry.setPrev(prevValue, prevExists)
 	}
 	obj.setKVDirty(mk, entry)
-	invalidateAccountSplitMaterialization(obj, domain)
+	invalidateAccountKVMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
 }
@@ -1607,7 +1607,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		entry.setPrev(prevValue, prevExists)
 	}
 	obj.setKVDirty(mk, entry)
-	invalidateAccountSplitMaterialization(obj, domain)
+	invalidateAccountKVMaterialization(obj, domain)
 	obj.markDirty()
 	return nil
 }
@@ -1657,6 +1657,12 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 		prevDirty:            prevDirty,
 	})
 	obj.releaseKVDirty()
+	obj.contractMeta = nil
+	obj.contractMetaDirty = false
+	obj.contractRuntime = ContractRuntimeMetadata{}
+	obj.contractRuntimeLoaded = false
+	obj.contractRuntimeExists = false
+	obj.invalidateStorageKeyLayout()
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.accountKVGenerationDirty = true

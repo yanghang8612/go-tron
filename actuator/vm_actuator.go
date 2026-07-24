@@ -114,7 +114,7 @@ func (a *VMActuator) Validate(ctx *Context) error {
 		if err != nil {
 			return err
 		}
-		if ctx.State.GetContract(contractAddr) == nil {
+		if _, ok := ctx.State.ContractRuntime(contractAddr); !ok {
 			return errors.New("no contract or not a smart contract")
 		}
 		if err := validateVMFeeLimit(ctx); err != nil {
@@ -517,11 +517,11 @@ func accountEnergyLimitWithFloatRatio(ctx *Context, account common.Address, feeL
 }
 
 func triggerEnergyLimit(ctx *Context, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) (int64, error) {
-	contract := ctx.State.GetContract(contractAddr)
-	if contract == nil {
+	contract, ok := ctx.State.ContractRuntime(contractAddr)
+	if !ok {
 		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result), nil
 	}
-	origin := common.BytesToAddress(contract.OriginAddress)
+	origin := contract.OriginAddress
 	if origin == (common.Address{}) || origin == caller {
 		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result), nil
 	}
@@ -539,8 +539,8 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	if origin == caller {
 		return callerEnergyLimit, nil
 	}
-	contract := ctx.State.GetContract(contractAddr)
-	if contract == nil {
+	contract, ok := ctx.State.ContractRuntime(contractAddr)
+	if !ok {
 		return callerEnergyLimit, nil
 	}
 
@@ -557,7 +557,7 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	// proto value. Match java so such a trigger is rejected identically instead of
 	// silently proceeding with a negative limit (a latent consensus divergence).
 	// 0 maps to creatorDefaultEnergyLimit (positive), so the guard is `< 0`.
-	originLimit := contractOriginEnergyLimit(contract)
+	originLimit := contractOriginEnergyLimit(contract.OriginEnergyLimit)
 	if originLimit < 0 {
 		return 0, errors.New("originEnergyLimit can't be < 0")
 	}
@@ -614,8 +614,8 @@ func totalEnergyLimitWithFloatRatio(ctx *Context, origin, caller, contractAddr c
 		return callerEnergyLimit
 	}
 	creatorEnergyLimit := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
-	contract := ctx.State.GetContract(contractAddr)
-	if contract == nil {
+	contract, ok := ctx.State.ContractRuntime(contractAddr)
+	if !ok {
 		return callerEnergyLimit
 	}
 	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
@@ -644,11 +644,11 @@ func energyFeeForFrozenBalance(energyFrozen, energyUsage, energyTotal int64) int
 	return bigMulDivInt64(energyFrozen, energyUsage, energyTotal)
 }
 
-func contractOriginEnergyLimit(contract *contractpb.SmartContract) int64 {
-	if contract == nil || contract.OriginEnergyLimit == 0 {
+func contractOriginEnergyLimit(originEnergyLimit int64) int64 {
+	if originEnergyLimit == 0 {
 		return creatorDefaultEnergyLimit
 	}
-	return contract.OriginEnergyLimit
+	return originEnergyLimit
 }
 
 func clampPercent(percent int64) int64 {

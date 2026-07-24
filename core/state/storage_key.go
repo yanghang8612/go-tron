@@ -15,10 +15,16 @@ func javaStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.
 }
 
 func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) ([storageKeyPrefixBytes]byte, bool) {
+	if meta == nil {
+		return javaStorageKeyLayoutFields(addr, nil, 0)
+	}
+	return javaStorageKeyLayoutFields(addr, meta.GetTrxHash(), meta.GetVersion())
+}
+
+func javaStorageKeyLayoutFields(addr tcommon.Address, trxHash []byte, version int32) ([storageKeyPrefixBytes]byte, bool) {
 	var seed [tcommon.AddressLength + tcommon.HashLength]byte
 	copy(seed[:], addr[:])
 	seedLen := len(addr)
-	trxHash := meta.GetTrxHash()
 	hasTrxHash := !isZeroBytes(trxHash)
 	var addrSeed []byte
 	if hasTrxHash && len(trxHash) > tcommon.HashLength {
@@ -36,7 +42,7 @@ func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) 
 	addrHash := tcommon.Keccak256(addrSeed)
 	var prefix [storageKeyPrefixBytes]byte
 	copy(prefix[:], addrHash[:storageKeyPrefixBytes])
-	return prefix, meta != nil && meta.GetVersion() == 1
+	return prefix, version == 1
 }
 
 func storageRowKeyWithLayout(key tcommon.Hash, prefix [storageKeyPrefixBytes]byte, hashSlot bool) tcommon.Hash {

@@ -45,11 +45,26 @@ func isAccountSplitDomain(domain kvdomains.KVDomain) bool {
 	return false
 }
 
-func invalidateAccountSplitMaterialization(obj *stateObject, domain kvdomains.KVDomain) {
+func invalidateAccountKVMaterialization(obj *stateObject, domain kvdomains.KVDomain) {
+	if obj == nil {
+		return
+	}
+	if domain == kvdomains.ContractMetadata {
+		// Generic domain writers are also allowed to replace the canonical
+		// metadata row. Drop both full and lightweight materializations so the
+		// next reader observes the dirty overlay and recomputes storage layout.
+		obj.contractMeta = nil
+		obj.contractMetaDirty = false
+		obj.contractRuntime = ContractRuntimeMetadata{}
+		obj.contractRuntimeLoaded = false
+		obj.contractRuntimeExists = false
+		obj.invalidateStorageKeyLayout()
+		return
+	}
 	// All split Account domains are deliberately allocated as one contiguous
 	// range. Keep the generic-KV write path cheap for contract/system domains,
 	// which are substantially hotter than direct writes to these auxiliary rows.
-	if obj == nil || domain < kvdomains.AccountPermissionAux || domain > kvdomains.AccountTronPowerAux {
+	if domain < kvdomains.AccountPermissionAux || domain > kvdomains.AccountTronPowerAux {
 		return
 	}
 	if domain == kvdomains.AccountPermissionAux {

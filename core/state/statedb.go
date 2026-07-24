@@ -2604,7 +2604,16 @@ func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.
 	if obj == nil || obj.deleted {
 		return javaStorageRowKey(addr, key, nil)
 	}
-	return obj.storageRowKey(key, s.loadContract(obj))
+	if !obj.storageKeyLayoutCached {
+		if meta, ok := s.contractRuntime(obj); ok {
+			obj.storageKeyPrefix = meta.storageKeyPrefix
+			obj.storageKeyHashSlot = meta.storageKeyHashSlot
+		} else {
+			obj.storageKeyPrefix, obj.storageKeyHashSlot = javaStorageKeyLayoutFields(addr, nil, 0)
+		}
+		obj.storageKeyLayoutCached = true
+	}
+	return storageRowKeyWithLayout(key, obj.storageKeyPrefix, obj.storageKeyHashSlot)
 }
 
 // GetContract returns the contract metadata at addr.
@@ -2734,7 +2743,8 @@ func (s *StateDB) WriteContractABI(addr tcommon.Address, abi *contractpb.SmartCo
 
 // IsContract returns whether the address has contract code or metadata.
 func (s *StateDB) IsContract(addr tcommon.Address) bool {
-	return s.GetContract(addr) != nil || len(s.GetCode(addr)) > 0
+	_, hasMetadata := s.ContractRuntime(addr)
+	return hasMetadata || len(s.GetCode(addr)) > 0
 }
 
 // Exist returns whether an account exists (non-nil and not deleted).

@@ -233,7 +233,7 @@ func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Sta
 	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
 	result := uint256.NewInt(0)
-	if in.tvm.StateDB.GetContract(addr) != nil {
+	if _, ok := in.tvm.StateDB.ContractRuntime(addr); ok {
 		result.SetOne()
 	}
 	stack.push(result)

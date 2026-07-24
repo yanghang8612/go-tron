@@ -119,15 +119,15 @@ func (tvm *TVM) releaseCallFrame(contract *Contract) {
 }
 
 func (tvm *TVM) contractVersion(addr tcommon.Address) int32 {
-	if meta := tvm.StateDB.GetContract(addr); meta != nil {
-		return meta.GetVersion()
+	if meta, ok := tvm.StateDB.ContractRuntime(addr); ok {
+		return meta.Version
 	}
 	return 0
 }
 
 func (tvm *TVM) defaultCreateVersion(caller tcommon.Address) int32 {
-	if meta := tvm.StateDB.GetContract(caller); meta != nil {
-		return meta.GetVersion()
+	if meta, ok := tvm.StateDB.ContractRuntime(caller); ok {
+		return meta.Version
 	}
 	if tvm.cfg.Compatibility {
 		return 1

@@ -251,12 +251,12 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 		return common.Address{}, 0, totalEnergy
 	}
 	contractAddr := common.BytesToAddress(tsc.ContractAddress)
-	contract := ctx.State.GetContract(contractAddr)
-	if contract == nil {
+	contract, ok := ctx.State.ContractRuntime(contractAddr)
+	if !ok {
 		// Metadata went missing. Fall back to caller-only billing.
 		return common.Address{}, 0, totalEnergy
 	}
-	originAddr := common.BytesToAddress(contract.OriginAddress)
+	originAddr := contract.OriginAddress
 	if originAddr == (common.Address{}) || originAddr == caller {
 		return common.Address{}, 0, totalEnergy
 	}
@@ -300,7 +300,7 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 
 	capLeft := originStakeLeft
 	if energyLimitHardForkActive(ctx) {
-		originLimit := contractOriginEnergyLimit(contract)
+		originLimit := contractOriginEnergyLimit(contract.OriginEnergyLimit)
 		if originLimit > 0 && originLimit < capLeft {
 			capLeft = originLimit
 		}

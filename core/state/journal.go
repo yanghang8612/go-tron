@@ -281,7 +281,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 		delete(obj.kvDirty, e.mapKey)
 	}
 	if domain, _, ok := splitKVCompositeKeyView([]byte(e.mapKey)); ok {
-		invalidateAccountSplitMaterialization(obj, domain)
+		invalidateAccountKVMaterialization(obj, domain)
 	}
 }
 

@@ -33,8 +33,9 @@ func deployHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicPrope
 	if statedb == nil || dynProps == nil {
 		return
 	}
+	_, hasMetadata := statedb.ContractRuntime(historyStorageAddress)
 	if len(statedb.GetCode(historyStorageAddress)) > 0 ||
-		statedb.GetContract(historyStorageAddress) != nil {
+		hasMetadata {
 		return
 	}
 

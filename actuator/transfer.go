@@ -46,11 +46,11 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 		}
 	}
 	if ctx.DynProps.AllowTvmCompatibleEvm() && toAccount != nil && toAccount.Type() == corepb.AccountType_Contract {
-		meta := ctx.State.GetContract(toAddr)
-		if meta == nil {
+		meta, ok := ctx.State.ContractRuntime(toAddr)
+		if !ok {
 			return errors.New("contract account missing contract metadata")
 		}
-		if meta.GetVersion() == 1 {
+		if meta.Version == 1 {
 			return errors.New("cannot transfer TRX to a version 1 smart contract")
 		}
 	}

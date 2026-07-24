@@ -96,6 +96,12 @@ type stateObject struct {
 	codeDirty         bool                      // true if code was modified
 	contractMeta      *contractpb.SmartContract // contract metadata
 	contractMetaDirty bool                      // true if contractMeta was modified
+	// contractRuntime caches the scalar metadata and storage-key layout decoded
+	// directly from the committed wire value. Ordinary VM execution does not
+	// need to materialize the embedded ABI graph in SmartContract.
+	contractRuntime       ContractRuntimeMetadata
+	contractRuntimeLoaded bool
+	contractRuntimeExists bool
 	// storageKeyPrefix is the java StorageRow address-derived prefix. Every
 	// slot of one contract shares it, so cache the Keccak result instead of
 	// hashing address||creationTxHash for every first SLOAD/SSTORE.
