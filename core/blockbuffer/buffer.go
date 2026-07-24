@@ -1174,21 +1174,114 @@ func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
 }
 
+// readBaseViewContext and scopedBaseViewContext keep the callback functions
+// passed to Pebble pre-bound. valueViewReader guarantees synchronous callback
+// execution, so one borrowed context exclusively owns all invocation state and
+// can be returned as soon as View completes. This avoids heap-allocating the
+// closure and each captured variable on every durable cache miss.
+type readBaseViewContext struct {
+	cache    *baseReadCache
+	key      []byte
+	epoch    baseReadCacheEpoch
+	out      []byte
+	callback func([]byte) error
+}
+
+func newReadBaseViewContext() any {
+	ctx := new(readBaseViewContext)
+	ctx.callback = ctx.consume
+	return ctx
+}
+
+func (ctx *readBaseViewContext) consume(value []byte) error {
+	if stored, ok := ctx.cache.setIfEpoch(ctx.key, value, ctx.epoch); ok {
+		ctx.out = stored
+	} else {
+		ctx.out = append([]byte(nil), value...)
+	}
+	return nil
+}
+
+var readBaseViewContextPool = sync.Pool{New: newReadBaseViewContext}
+
+func borrowReadBaseViewContext(cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) *readBaseViewContext {
+	ctx := readBaseViewContextPool.Get().(*readBaseViewContext)
+	ctx.cache = cache
+	ctx.key = key
+	ctx.epoch = epoch
+	ctx.out = nil
+	return ctx
+}
+
+func returnReadBaseViewContext(ctx *readBaseViewContext) {
+	ctx.cache = nil
+	ctx.key = nil
+	ctx.epoch = baseReadCacheEpoch{}
+	ctx.out = nil
+	readBaseViewContextPool.Put(ctx)
+}
+
+type scopedBaseViewContext struct {
+	cache       *baseReadCache
+	key         []byte
+	epoch       baseReadCacheEpoch
+	fn          func(value []byte, stable bool) error
+	called      bool
+	callbackErr error
+	callback    func([]byte) error
+}
+
+func newScopedBaseViewContext() any {
+	ctx := new(scopedBaseViewContext)
+	ctx.callback = ctx.consume
+	return ctx
+}
+
+func (ctx *scopedBaseViewContext) consume(value []byte) error {
+	ctx.called = true
+	if ctx.cache != nil {
+		if stored, admitted := ctx.cache.setIfEpoch(ctx.key, value, ctx.epoch); admitted {
+			ctx.callbackErr = ctx.fn(stored, true)
+			return ctx.callbackErr
+		}
+	}
+	ctx.callbackErr = ctx.fn(value, false)
+	return ctx.callbackErr
+}
+
+var scopedBaseViewContextPool = sync.Pool{New: newScopedBaseViewContext}
+
+func borrowScopedBaseViewContext(cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) *scopedBaseViewContext {
+	ctx := scopedBaseViewContextPool.Get().(*scopedBaseViewContext)
+	ctx.cache = cache
+	ctx.key = key
+	ctx.epoch = epoch
+	ctx.fn = fn
+	ctx.called = false
+	ctx.callbackErr = nil
+	return ctx
+}
+
+func returnScopedBaseViewContext(ctx *scopedBaseViewContext) {
+	ctx.cache = nil
+	ctx.key = nil
+	ctx.epoch = baseReadCacheEpoch{}
+	ctx.fn = nil
+	ctx.called = false
+	ctx.callbackErr = nil
+	scopedBaseViewContextPool.Put(ctx)
+}
+
 // readBaseIntoCache fills cache directly from a callback-style base reader
 // when available. If a concurrent flush invalidates the observed epoch, the
 // cache rejects the late fill; in that case we make one owned fallback copy
 // before View returns so no Pebble-backed slice escapes its valid lifetime.
 func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) ([]byte, error) {
 	if viewer, ok := base.(valueViewReader); ok {
-		var out []byte
-		err := viewer.View(key, func(value []byte) error {
-			if stored, ok := cache.setIfEpoch(key, value, epoch); ok {
-				out = stored
-			} else {
-				out = append([]byte(nil), value...)
-			}
-			return nil
-		})
+		ctx := borrowReadBaseViewContext(cache, key, epoch)
+		err := viewer.View(key, ctx.callback)
+		out := ctx.out
+		returnReadBaseViewContext(ctx)
 		if isKeyNotFound(base, err) {
 			cache.setMissingIfEpoch(key, epoch)
 			return nil, ErrNotFound
@@ -1214,19 +1307,11 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // callback view is transient. Generic Get results are caller-owned and stable.
 func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) (bool, error) {
 	if viewer, ok := base.(valueViewReader); ok {
-		called := false
-		var callbackErr error
-		err := viewer.View(key, func(value []byte) error {
-			called = true
-			if cache != nil {
-				if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
-					callbackErr = fn(stored, true)
-					return callbackErr
-				}
-			}
-			callbackErr = fn(value, false)
-			return callbackErr
-		})
+		ctx := borrowScopedBaseViewContext(cache, key, epoch, fn)
+		err := viewer.View(key, ctx.callback)
+		called := ctx.called
+		callbackErr := ctx.callbackErr
+		returnScopedBaseViewContext(ctx)
 		if called {
 			if callbackErr != nil {
 				return true, callbackErr

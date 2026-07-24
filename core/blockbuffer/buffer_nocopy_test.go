@@ -28,6 +28,61 @@ type getOnlyReader struct {
 	ethdb.KeyValueReader
 }
 
+// directValueViewReader models the synchronous callback contract without the
+// storage engine's own allocation noise. The cold-base callback benchmarks use
+// it to make blockbuffer's per-call closure cost visible.
+type directValueViewReader struct {
+	value []byte
+}
+
+func (r *directValueViewReader) Has([]byte) (bool, error) { return true, nil }
+
+func (r *directValueViewReader) Get([]byte) ([]byte, error) { return r.value, nil }
+
+func (r *directValueViewReader) View(_ []byte, fn func([]byte) error) error {
+	return fn(r.value)
+}
+
+func TestViewBaseIntoCachePooledCallbackReentrant(t *testing.T) {
+	base := &directValueViewReader{value: []byte("durable-value")}
+	key := []byte("durable-key")
+	innerCalls := 0
+	inner := func(value []byte, stable bool) error {
+		innerCalls++
+		if !bytes.Equal(value, base.value) || stable {
+			t.Fatalf("inner callback = (%q, stable=%v)", value, stable)
+		}
+		return nil
+	}
+	outer := func(value []byte, stable bool) error {
+		if !bytes.Equal(value, base.value) || stable {
+			t.Fatalf("outer callback = (%q, stable=%v)", value, stable)
+		}
+		found, err := viewBaseIntoCache(base, nil, key, baseReadCacheEpoch{}, inner)
+		if err != nil || !found {
+			t.Fatalf("reentrant view = found %v err %v", found, err)
+		}
+		return ErrNotFound
+	}
+
+	found, err := viewBaseIntoCache(base, nil, key, baseReadCacheEpoch{}, outer)
+	if !found || err != ErrNotFound {
+		t.Fatalf("outer view = found %v err %v, want true/ErrNotFound", found, err)
+	}
+	if innerCalls != 1 {
+		t.Fatalf("inner callback calls = %d, want 1", innerCalls)
+	}
+
+	// A subsequent borrow must not retain the preceding callback or error.
+	found, err = viewBaseIntoCache(base, nil, key, baseReadCacheEpoch{}, inner)
+	if err != nil || !found {
+		t.Fatalf("second view = found %v err %v", found, err)
+	}
+	if innerCalls != 2 {
+		t.Fatalf("inner callback calls = %d, want 2", innerCalls)
+	}
+}
+
 // keyValueWriterOnly intentionally hides optional writer extensions so
 // benchmarks can compare rawdb's generic Put fallback with LayerView's
 // split-key fast path.
@@ -971,17 +1026,18 @@ func BenchmarkBaseReadCacheColdFill(b *testing.B) {
 	b.Run("scoped-callback-view", func(b *testing.B) {
 		buf := New(disk)
 		buf.SetBaseReadCacheSize(1 << 20)
+		consume := func(got []byte, stable bool) error {
+			if len(got) != len(value) || stable {
+				b.Fatalf("ViewNoCopyCachedKeyParts = %d bytes stable=%v", len(got), stable)
+			}
+			return nil
+		}
 		b.ReportAllocs()
 		b.SetBytes(int64(len(value)))
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			buf.baseReadCache.del(key)
-			found, err := buf.ViewNoCopyCachedKeyParts(nil, key, func(got []byte, stable bool) error {
-				if len(got) != len(value) || stable {
-					b.Fatalf("ViewNoCopyCachedKeyParts = %d bytes stable=%v", len(got), stable)
-				}
-				return nil
-			})
+			found, err := buf.ViewNoCopyCachedKeyParts(nil, key, consume)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -990,6 +1046,25 @@ func BenchmarkBaseReadCacheColdFill(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkViewBaseIntoCacheCallback(b *testing.B) {
+	base := &directValueViewReader{value: bytes.Repeat([]byte{0xa5}, 512)}
+	key := []byte("state-commitment-branch-prefix-cold")
+	consume := func(value []byte, stable bool) error {
+		if len(value) != len(base.value) || stable {
+			b.Fatalf("callback value = %d bytes stable=%v", len(value), stable)
+		}
+		return nil
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		found, err := viewBaseIntoCache(base, nil, key, baseReadCacheEpoch{}, consume)
+		if err != nil || !found {
+			b.Fatalf("view = found %v err %v", found, err)
+		}
+	}
 }
 
 func BenchmarkCommitmentBranchLayerWrite(b *testing.B) {
