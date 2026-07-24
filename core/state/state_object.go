@@ -55,14 +55,20 @@ type stateObject struct {
 	created      bool
 
 	// Contract fields
-	code              []byte                         // contract bytecode
-	codeHash          tcommon.Hash                   // Keccak-256 hash of the code
-	codeDirty         bool                           // true if code was modified
-	contractMeta      *contractpb.SmartContract      // contract metadata
-	contractMetaDirty bool                           // true if contractMeta was modified
-	storage           map[tcommon.Hash]storageSlot   // cached current contract storage and StorageRow existence
-	dirtyStorage      map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
-	selfDestructed    bool
+	code              []byte                    // contract bytecode
+	codeHash          tcommon.Hash              // Keccak-256 hash of the code
+	codeDirty         bool                      // true if code was modified
+	contractMeta      *contractpb.SmartContract // contract metadata
+	contractMetaDirty bool                      // true if contractMeta was modified
+	// storageKeyPrefix is the java StorageRow address-derived prefix. Every
+	// slot of one contract shares it, so cache the Keccak result instead of
+	// hashing address||creationTxHash for every first SLOAD/SSTORE.
+	storageKeyPrefix       [storageKeyPrefixBytes]byte
+	storageKeyLayoutCached bool
+	storageKeyHashSlot     bool
+	storage                map[tcommon.Hash]storageSlot   // cached current contract storage and StorageRow existence
+	dirtyStorage           map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
+	selfDestructed         bool
 
 	// Generic-KV generation is the Erigon-style incarnation number. AccountKVRoot
 	// is retained in the envelope as EmptyKVRoot while the flat latest rows carry

@@ -10,22 +10,58 @@ import (
 const storageKeyPrefixBytes = 16
 
 func javaStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.SmartContract) tcommon.Hash {
+	prefix, hashSlot := javaStorageKeyLayout(addr, meta)
+	return storageRowKeyWithLayout(key, prefix, hashSlot)
+}
+
+func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) ([storageKeyPrefixBytes]byte, bool) {
+	var seed [tcommon.AddressLength + tcommon.HashLength]byte
+	copy(seed[:], addr[:])
+	seedLen := len(addr)
+	trxHash := meta.GetTrxHash()
+	hasTrxHash := !isZeroBytes(trxHash)
+	var addrSeed []byte
+	if hasTrxHash && len(trxHash) > tcommon.HashLength {
+		// Protocol hashes are 32 bytes, but preserve the historical behavior for
+		// malformed/imported metadata instead of silently truncating its seed.
+		addrSeed = make([]byte, len(addr)+len(trxHash))
+		copy(addrSeed, addr[:])
+		copy(addrSeed[len(addr):], trxHash)
+	} else {
+		if hasTrxHash {
+			seedLen += copy(seed[seedLen:], trxHash)
+		}
+		addrSeed = seed[:seedLen]
+	}
+	addrHash := tcommon.Keccak256(addrSeed)
+	var prefix [storageKeyPrefixBytes]byte
+	copy(prefix[:], addrHash[:storageKeyPrefixBytes])
+	return prefix, meta != nil && meta.GetVersion() == 1
+}
+
+func storageRowKeyWithLayout(key tcommon.Hash, prefix [storageKeyPrefixBytes]byte, hashSlot bool) tcommon.Hash {
 	keyBytes := key.Bytes()
-	if meta != nil && meta.GetVersion() == 1 {
+	if hashSlot {
 		hashed := tcommon.Keccak256(keyBytes)
 		keyBytes = hashed.Bytes()
 	}
 
-	addrSeed := addr.Bytes()
-	if meta != nil && !isZeroBytes(meta.GetTrxHash()) {
-		addrSeed = append(append([]byte{}, addrSeed...), meta.GetTrxHash()...)
-	}
-	addrHash := tcommon.Keccak256(addrSeed)
-
 	var rowKey tcommon.Hash
-	copy(rowKey[:storageKeyPrefixBytes], addrHash[:storageKeyPrefixBytes])
+	copy(rowKey[:storageKeyPrefixBytes], prefix[:])
 	copy(rowKey[storageKeyPrefixBytes:], keyBytes[storageKeyPrefixBytes:])
 	return rowKey
+}
+
+func (s *stateObject) storageRowKey(key tcommon.Hash, meta *contractpb.SmartContract) tcommon.Hash {
+	if !s.storageKeyLayoutCached {
+		s.storageKeyPrefix, s.storageKeyHashSlot = javaStorageKeyLayout(s.address, meta)
+		s.storageKeyLayoutCached = true
+	}
+	return storageRowKeyWithLayout(key, s.storageKeyPrefix, s.storageKeyHashSlot)
+}
+
+func (s *stateObject) invalidateStorageKeyLayout() {
+	s.storageKeyLayoutCached = false
 }
 
 func storageRowKeyFromFlatLatest(latest accountKVLatestGenerationReader, addr tcommon.Address, generation uint64, key tcommon.Hash) (tcommon.Hash, error) {

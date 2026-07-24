@@ -2445,7 +2445,11 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 }
 
 func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
-	return javaStorageRowKey(addr, key, s.GetContract(addr))
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return javaStorageRowKey(addr, key, nil)
+	}
+	return obj.storageRowKey(key, s.loadContract(obj))
 }
 
 // GetContract returns the contract metadata at addr.
@@ -2454,12 +2458,19 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	if obj == nil || obj.deleted {
 		return nil
 	}
+	return s.loadContract(obj)
+}
+
+func (s *StateDB) loadContract(obj *stateObject) *contractpb.SmartContract {
 	if obj.contractMeta == nil && !obj.contractMetaDirty {
-		data, ok, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey)
+		data, ok, err := s.GetAccountKV(obj.address, kvdomains.ContractMetadata, contractMetaKVKey)
 		if err == nil && ok && len(data) > 0 {
 			var sc contractpb.SmartContract
 			if err := proto.Unmarshal(data, &sc); err == nil {
 				obj.contractMeta = &sc
+				// A prior transient read/unmarshal failure may have derived the
+				// legacy nil-metadata layout. Loading metadata changes that layout.
+				obj.invalidateStorageKeyLayout()
 			}
 		}
 	}
@@ -2504,6 +2515,7 @@ func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartCo
 	})
 	obj.contractMeta = contract
 	obj.contractMetaDirty = true
+	obj.invalidateStorageKeyLayout()
 	obj.markDirty()
 }
 

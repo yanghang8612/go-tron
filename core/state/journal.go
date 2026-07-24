@@ -232,6 +232,7 @@ func (e contractMetaChange) revert(stateObjects map[tcommon.Address]*stateObject
 	}
 	obj.contractMeta = e.prevMeta
 	obj.contractMetaDirty = e.prevMeta != nil
+	obj.invalidateStorageKeyLayout()
 }
 
 // selfDestructChange records a self-destruct for revert.
