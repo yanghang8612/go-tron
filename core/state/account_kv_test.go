@@ -21,6 +21,49 @@ var (
 	benchmarkKVLookupFound       bool
 )
 
+func TestStageStorageCommitWithPrevPreservesGenericSemantics(t *testing.T) {
+	sdb := new(StateDB)
+	rowKey := mutationTestHash(0x51)
+	previous := mutationTestHash(0x61)
+	next := mutationTestHash(0x62)
+
+	absent := new(stateObject)
+	if staged := sdb.stageStorageCommitWithPrev(absent, rowKey, tcommon.Hash{}, true, storageOrigin{loaded: true}); staged {
+		t.Fatal("delete of absent storage row staged")
+	}
+	if len(absent.kvDirty) != 0 {
+		t.Fatalf("absent delete dirty entries = %d, want 0", len(absent.kvDirty))
+	}
+
+	unchanged := new(stateObject)
+	if staged := sdb.stageStorageCommitWithPrev(unchanged, rowKey, previous, false, storageOrigin{value: previous, exists: true, loaded: true}); staged {
+		t.Fatal("unchanged storage value staged")
+	}
+
+	obj := new(stateObject)
+	origin := storageOrigin{value: previous, exists: true, loaded: true}
+	if staged := sdb.stageStorageCommitWithPrev(obj, rowKey, next, false, origin); !staged {
+		t.Fatal("changed storage value was not staged")
+	}
+	mk := kvCompositeHashKeyString(kvdomains.ContractStorage, rowKey)
+	entry := obj.kvDirty[mk]
+	if entry.deleted || !bytes.Equal(entry.val, next[:]) || !entry.prevLoaded || !entry.prevExists || !bytes.Equal(entry.prev, previous[:]) {
+		t.Fatalf("staged put = %+v, want next value with durable pre-image", entry)
+	}
+	// The generic commit helper treats an already-dirty row as staged even when
+	// the current value repeats; preserve that accounting behavior.
+	if staged := sdb.stageStorageCommitWithPrev(obj, rowKey, next, false, origin); !staged {
+		t.Fatal("repeated dirty storage value was not staged")
+	}
+	if staged := sdb.stageStorageCommitWithPrev(obj, rowKey, tcommon.Hash{}, true, origin); !staged {
+		t.Fatal("dirty storage delete was not staged")
+	}
+	entry = obj.kvDirty[mk]
+	if !entry.deleted || !entry.prevLoaded || !entry.prevExists || !bytes.Equal(entry.prev, previous[:]) {
+		t.Fatalf("staged delete = %+v, want tombstone with original pre-image", entry)
+	}
+}
+
 func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
 	const count = 256
 	keys := make([][]byte, count)

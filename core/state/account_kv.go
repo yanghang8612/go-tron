@@ -1011,6 +1011,13 @@ func kvCompositeKeyString(domain kvdomains.KVDomain, key []byte) string {
 	return ownedBytesString(out)
 }
 
+func kvCompositeHashKeyString(domain kvdomains.KVDomain, key tcommon.Hash) string {
+	out := make([]byte, 2+len(key))
+	binary.BigEndian.PutUint16(out, uint16(domain))
+	copy(out[2:], key[:])
+	return ownedBytesString(out)
+}
+
 // lookupKVEntry builds the common <=64-byte logical key in stack storage. The
 // transient []byte-to-string conversion is allocation-free for map lookup.
 func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []byte) (kvEntry, bool) {
@@ -1033,6 +1040,17 @@ func newKVEntry(value []byte, deleted bool) kvEntry {
 		e.wrapped = make([]byte, 1+len(value))
 		e.wrapped[0] = kvPresencePrefix
 		copy(e.wrapped[1:], value)
+		e.val = e.wrapped[1:]
+	}
+	return e
+}
+
+func newKVHashEntry(value tcommon.Hash, deleted bool) kvEntry {
+	e := kvEntry{deleted: deleted}
+	if !deleted {
+		e.wrapped = make([]byte, 1+len(value))
+		e.wrapped[0] = kvPresencePrefix
+		copy(e.wrapped[1:], value[:])
 		e.val = e.wrapped[1:]
 	}
 	return e
@@ -1483,6 +1501,39 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 
 func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool) (bool, error) {
 	return s.stageAccountKVCommitWithPrev(obj, domain, key, value, deleted, nil, false, false)
+}
+
+// stageStorageCommitWithPrev is the fixed-width counterpart of
+// stageAccountKVCommitWithPrev. Passing hashes by value keeps the transient
+// row key and slot value on the caller's stack; only the final composite key,
+// value, and optional pre-image owned by kvDirty are allocated.
+func (s *StateDB) stageStorageCommitWithPrev(obj *stateObject, rowKey, value tcommon.Hash, deleted bool, origin storageOrigin) bool {
+	var lookup [2 + tcommon.HashLength]byte
+	binary.BigEndian.PutUint16(lookup[:2], uint16(kvdomains.ContractStorage))
+	copy(lookup[2:], rowKey[:])
+	prevDirty, dirty := obj.kvDirty[string(lookup[:])]
+	if !dirty && deleted {
+		if !origin.exists {
+			return false
+		}
+	} else if !dirty && origin.exists && origin.value == value {
+		return false
+	}
+
+	mk := kvCompositeHashKeyString(kvdomains.ContractStorage, rowKey)
+	entry := newKVHashEntry(value, deleted)
+	if dirty {
+		entry.inheritPrev(prevDirty)
+	} else {
+		entry.prevLoaded = true
+		entry.prevExists = origin.exists
+		if origin.exists {
+			entry.prev = make([]byte, len(origin.value))
+			copy(entry.prev, origin.value[:])
+		}
+	}
+	obj.setKVDirty(mk, entry)
+	return true
 }
 
 // stageAccountKVCommitWithPrev stages a commit-generated account-KV mutation.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -2999,19 +3000,28 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 		for key := range obj.dirtyStorage {
 			storageKeys = append(storageKeys, key)
 		}
-		sort.Slice(storageKeys, func(i, j int) bool {
-			return bytes.Compare(storageKeys[i].Bytes(), storageKeys[j].Bytes()) < 0
+		slices.SortFunc(storageKeys, func(a, b tcommon.Hash) int {
+			return bytes.Compare(a[:], b[:])
 		})
 		for _, key := range storageKeys {
 			value := obj.storage[key].value
 			origin := obj.dirtyStorage[key]
-			var prevValue []byte
-			if origin.loaded && origin.exists {
-				prevValue = origin.value.Bytes()
-			}
 			rowKey := s.storageRowKey(addr, key)
+			if origin.loaded {
+				staged := s.stageStorageCommitWithPrev(obj, rowKey, value, value == (tcommon.Hash{}), origin)
+				if staged {
+					if value == (tcommon.Hash{}) {
+						plan.storageDeletes++
+					} else {
+						plan.storagePuts++
+					}
+				} else {
+					plan.storageNoops++
+				}
+				continue
+			}
 			if value == (tcommon.Hash{}) {
-				staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true, prevValue, origin.exists, origin.loaded)
+				staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true, nil, origin.exists, false)
 				if err != nil {
 					return err
 				}
@@ -3022,7 +3032,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 				}
 				continue
 			}
-			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, prevValue, origin.exists, origin.loaded)
+			staged, err := s.stageAccountKVCommitWithPrev(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false, nil, origin.exists, false)
 			if err != nil {
 				return err
 			}
