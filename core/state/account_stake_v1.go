@@ -201,6 +201,28 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error 
 	return nil
 }
 
+// materializeAccountFrozenBandwidthCanonical caches java-tron's consensus
+// shape with one index-0 point read. FreezeBalance validation has always
+// enforced MAX_FROZEN_NUMBER == 1, so pre-Stake-2.0 resource accounting does
+// not need the index-1 compatibility probe used by the general fast loader.
+// Full account materialization and mutation paths retain the sparse-row scan.
+func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) error {
+	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
+		return nil
+	}
+	row, exists, err := s.accountFrozenBandwidthRowAt(obj, 0)
+	if err != nil {
+		obj.account.Proto().Frozen = nil
+		return err
+	}
+	if !exists {
+		cacheAccountFrozenBandwidth(obj, nil)
+		return nil
+	}
+	cacheAccountFrozenBandwidth(obj, []*corepb.Account_Frozen{row.entry})
+	return nil
+}
+
 func (s *StateDB) materializeAccountTronPower(obj *stateObject) error {
 	if obj == nil || obj.account == nil || obj.accountTronPowerLoaded {
 		return nil

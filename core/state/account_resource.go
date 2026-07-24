@@ -104,7 +104,13 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 boo
 	// V1 bandwidth row, so point-read and cache it instead of opening a prefix
 	// iterator over the block overlay. The fast materializer keeps a generic
 	// fallback for non-standard multi-row state.
-	if err := s.materializeAccountFrozenBandwidthFast(obj); err != nil {
+	var err error
+	if includeV2 {
+		err = s.materializeAccountFrozenBandwidthFast(obj)
+	} else {
+		err = s.materializeAccountFrozenBandwidthCanonical(obj)
+	}
+	if err != nil {
 		return 0, err
 	}
 	frozenV1 := acct.TotalFrozenBandwidth()
