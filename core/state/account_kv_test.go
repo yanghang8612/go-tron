@@ -41,6 +41,7 @@ func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkAccountKVCommitPlan = plan
+		obj.releaseKVDirty()
 	}
 }
 

@@ -43,6 +43,27 @@ func TestNewEmptyStateObjectDefaultsKVFields(t *testing.T) {
 	}
 }
 
+func TestStateObjectReleaseKVDirtyClearsLifecycleState(t *testing.T) {
+	obj := new(stateObject)
+	obj.stageKV(kvdomains.ContractMetadata, []byte("old"), []byte("value"))
+	if obj.kvDirtyHighWater != 1 {
+		t.Fatalf("high water = %d, want 1", obj.kvDirtyHighWater)
+	}
+	obj.releaseKVDirty()
+	if obj.kvDirty != nil || obj.kvDirtyHighWater != 0 {
+		t.Fatalf("released dirty state = (%v,%d), want (nil,0)", obj.kvDirty, obj.kvDirtyHighWater)
+	}
+
+	obj.stageKV(kvdomains.ContractMetadata, []byte("new"), []byte("next"))
+	if len(obj.kvDirty) != 1 {
+		t.Fatalf("reused dirty map length = %d, want 1", len(obj.kvDirty))
+	}
+	if _, stale := lookupKVEntry(obj.kvDirty, kvdomains.ContractMetadata, []byte("old")); stale {
+		t.Fatal("reused dirty map retained an entry from its previous lifecycle")
+	}
+	obj.releaseKVDirty()
+}
+
 func TestStateDBCopyPreservesLazyStateMaps(t *testing.T) {
 	addr := tcommon.BytesToAddress([]byte{3})
 	original := newStateObject(addr, types.NewAccount(addr, corepb.AccountType_Normal))

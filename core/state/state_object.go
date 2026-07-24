@@ -1,12 +1,27 @@
 package state
 
 import (
+	"sync"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
+
+// kvDirtyMapPool reuses the per-account dirty-KV hash table across commit
+// intervals. Values and composite keys still have commit/journal ownership of
+// their own backing storage; only the cleared map buckets are pooled.
+//
+// A transaction can grow a map and then journal-revert most of its entries, so
+// len at finalization is not a safe retained-size bound. stateObject tracks the
+// high-water mark and drops unusually large maps instead of letting sync.Pool
+// keep their bucket arrays alive. A 1024-entry ceiling covers normal hot
+// contracts while bounding one pooled map to a modest working-set object.
+const maxPooledKVDirtyEntries = 1024
+
+var kvDirtyMapPool sync.Pool
 
 // storageOrigin is the durable value observed before a slot's first write in
 // the current commit interval. SetState already has to load that value for
@@ -83,7 +98,8 @@ type stateObject struct {
 	accountKVGenerationDirty bool
 
 	// kvDirty holds pending generic-KV writes keyed by string(domainBE2||key).
-	kvDirty map[string]kvEntry
+	kvDirty          map[string]kvEntry
+	kvDirtyHighWater int
 
 	// dirtySet is a back-pointer to the owning StateDB's dirtyObjects set. It is
 	// set when the object enters the cache (getStateObject / GetOrCreateAccount /
@@ -149,7 +165,42 @@ func (s *stateObject) ensureStorage() {
 
 func (s *stateObject) ensureKVDirty() {
 	if s.kvDirty == nil {
-		s.kvDirty = make(map[string]kvEntry)
+		if pooled := kvDirtyMapPool.Get(); pooled != nil {
+			s.kvDirty = pooled.(map[string]kvEntry)
+		} else {
+			s.kvDirty = make(map[string]kvEntry)
+		}
+	}
+}
+
+func (s *stateObject) setKVDirty(mapKey string, entry kvEntry) {
+	s.ensureKVDirty()
+	s.kvDirty[mapKey] = entry
+	if len(s.kvDirty) > s.kvDirtyHighWater {
+		s.kvDirtyHighWater = len(s.kvDirty)
+	}
+}
+
+// releaseKVDirty detaches and clears the dirty map before making its buckets
+// available to another account. Callers must first finish every operation that
+// borrows map keys or entries (commit plans do so through finalization).
+func (s *stateObject) releaseKVDirty() {
+	dirty := s.kvDirty
+	highWater := s.kvDirtyHighWater
+	s.kvDirty = nil
+	s.kvDirtyHighWater = 0
+	if dirty == nil {
+		return
+	}
+	// Directly constructed test/genesis objects may install a map without
+	// going through setKVDirty. Current length is still a valid lower bound;
+	// the tracked value preserves a larger pre-revert high-water mark.
+	if len(dirty) > highWater {
+		highWater = len(dirty)
+	}
+	clear(dirty)
+	if highWater <= maxPooledKVDirtyEntries {
+		kvDirtyMapPool.Put(dirty)
 	}
 }
 
@@ -208,14 +259,12 @@ func (s *stateObject) setStorageValue(key, value tcommon.Hash, exists bool) {
 }
 
 func (s *stateObject) stageKV(domain kvdomains.KVDomain, key, value []byte) {
-	s.ensureKVDirty()
-	s.kvDirty[kvCompositeKeyString(domain, key)] = newKVEntry(value, false)
+	s.setKVDirty(kvCompositeKeyString(domain, key), newKVEntry(value, false))
 	s.markDirty()
 }
 
 func (s *stateObject) stageDeleteKV(domain kvdomains.KVDomain, key []byte) {
-	s.ensureKVDirty()
-	s.kvDirty[kvCompositeKeyString(domain, key)] = newKVEntry(nil, true)
+	s.setKVDirty(kvCompositeKeyString(domain, key), newKVEntry(nil, true))
 	s.markDirty()
 }
 

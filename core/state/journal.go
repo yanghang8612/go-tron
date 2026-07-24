@@ -281,8 +281,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 		return
 	}
 	if e.hadEntry {
-		obj.ensureKVDirty()
-		obj.kvDirty[e.mapKey] = e.prevEntry
+		obj.setKVDirty(e.mapKey, e.prevEntry)
 	} else {
 		delete(obj.kvDirty, e.mapKey)
 	}
@@ -308,7 +307,9 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountKVRoot = e.prevRoot
 	obj.accountKVGeneration = e.prevGeneration
 	obj.accountKVGenerationDirty = e.prevGenerationDirty
+	obj.releaseKVDirty()
 	obj.kvDirty = e.prevDirty
+	obj.kvDirtyHighWater = len(e.prevDirty)
 }
 
 // transientStorageChange records a single EIP-1153 transient storage write for

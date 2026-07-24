@@ -1339,8 +1339,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
-	obj.ensureKVDirty()
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	obj.markDirty()
 	return nil
 }
@@ -1380,8 +1379,7 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 			return false, nil
 		}
 	}
-	obj.ensureKVDirty()
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	return true, nil
 }
 
@@ -1420,8 +1418,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	} else if prevLoaded {
 		entry.setPrev(prevValue, prevExists)
 	}
-	obj.ensureKVDirty()
-	obj.kvDirty[mk] = entry
+	obj.setKVDirty(mk, entry)
 	obj.markDirty()
 	return nil
 }
@@ -1470,7 +1467,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 		prevGenerationDirty:  obj.accountKVGenerationDirty,
 		prevDirty:            prevDirty,
 	})
-	obj.kvDirty = nil
+	obj.releaseKVDirty()
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.accountKVGenerationDirty = true

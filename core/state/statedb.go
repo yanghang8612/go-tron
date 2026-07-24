@@ -2781,6 +2781,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			accountKVGeneration:      obj.accountKVGeneration,
 			accountKVGenerationDirty: obj.accountKVGenerationDirty,
 			kvDirty:                  kvDirtyCopy,
+			kvDirtyHighWater:         len(kvDirtyCopy),
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -3160,6 +3161,7 @@ func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRo
 func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 	obj := plan.obj
 	if plan.deleteAccount {
+		obj.releaseKVDirty()
 		obj.deleted = true
 		obj.selfDestructed = false
 		obj.code = nil
@@ -3174,7 +3176,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		return
 	}
 	if plan.hadKVDirty {
-		obj.kvDirty = nil
+		obj.releaseKVDirty()
 	}
 	if obj.codeDirty {
 		obj.codeDirty = false
