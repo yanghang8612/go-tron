@@ -3,7 +3,9 @@ package blockbuffer
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
+	"unsafe"
 )
 
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
@@ -88,16 +90,38 @@ func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
 	cachedKey := []byte("cached-commitment-branch")
 	uncachedKey := "unrelated-block-metadata"
 	oldValue := []byte("old")
-	newValue := []byte("new")
+	// Model commitment's putBranchesSorted layout: this tiny value is a capped
+	// subslice of a much larger sibling arena. The cache must not retain it.
+	arena := make([]byte, 1<<20)
+	copy(arena[123:126], "new")
+	newValue := arena[123:126:126]
 	testBaseReadCacheSet(c, cachedKey, oldValue)
+	shard := &c.shards[baseReadCacheShardIndex(cachedKey)]
+	foundCachedKey := false
+	for key := range shard.entries {
+		if key == string(cachedKey) {
+			foundCachedKey = true
+			break
+		}
+	}
+	if !foundCachedKey {
+		t.Fatal("cached key missing before refresh")
+	}
+	keyArena := strings.Repeat("x", 1<<20) + string(cachedKey)
+	flushedKey := keyArena[1<<20:]
 
-	c.setFlushed(string(cachedKey), newValue)
+	c.setFlushed(flushedKey, newValue)
 	got, ok, _ := c.getWithEpoch(cachedKey)
 	if !ok || string(got) != "new" {
 		t.Fatalf("flushed cached value = (%q,%v), want (new,true)", got, ok)
 	}
-	if len(got) == 0 || &got[0] != &newValue[0] {
-		t.Fatal("flushed immutable layer value was copied instead of retained")
+	if len(got) == 0 || &got[0] == &newValue[0] {
+		t.Fatal("flushed arena slice was retained instead of copied into cache-owned storage")
+	}
+	for key := range shard.entries {
+		if key == string(cachedKey) && unsafe.StringData(key) == unsafe.StringData(flushedKey) {
+			t.Fatal("flush retained the layer-arena string instead of a cache-owned key")
+		}
 	}
 
 	c.setFlushed(uncachedKey, []byte("metadata"))
@@ -105,7 +129,6 @@ func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
 		t.Fatal("flush admitted a key that was never read through the cache")
 	}
 
-	shard := &c.shards[baseReadCacheShardIndex(cachedKey)]
 	for i := 0; i < 10_000; i++ {
 		c.setFlushed(string(cachedKey), newValue)
 	}

@@ -3,6 +3,7 @@ package blockbuffer
 import (
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
@@ -158,8 +159,7 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) 
 		s.mu.Unlock()
 		return value, false
 	}
-	k := string(key)
-	v := append([]byte(nil), value...)
+	k, v := cloneBaseReadCacheKeyValue(key, value)
 	s.nextGen++
 	gen := s.nextGen
 	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen}
@@ -172,11 +172,12 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) 
 }
 
 // setFlushed refreshes an already-cached key from a successfully flushed
-// committed layer. Committed layer values are immutable and owned by the
-// Buffer, so the cache can retain value directly instead of allocating the copy
-// setIfEpoch needs for a Pebble-borrowed read result. A key absent from the
-// cache is invalidated but not admitted; otherwise unrelated buffered metadata
-// would churn through the cache on every canonical flush.
+// committed layer. A key absent from the cache is invalidated but not admitted;
+// otherwise unrelated buffered metadata would churn through the cache on every
+// canonical flush. Cached replacements are copied into exact cache-owned
+// storage: commitment sibling writes arena-pack hundreds of branch values, so
+// retaining one small layer slice directly could pin the whole arena while the
+// byte budget charged only the slice length.
 //
 // Advancing the key's invalidation slot before replacement rejects any late
 // cache fill that started against the pre-flush durable generation. If the
@@ -191,22 +192,44 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 	s := &c.shards[baseReadCacheShardIndexString(key)]
 	s.mu.Lock()
 	old, cached := s.entries[key]
-	if cached {
-		delete(s.entries, key)
-		s.used -= old.charge
-	}
 	if cached && charge <= s.limit {
 		// Preserve the existing generation and its FIFO token. This is a value
 		// refresh, not a new admission; appending one token per block would grow
 		// stale queue metadata for the lifetime of a hot commitment branch.
-		s.entries[key] = baseReadCacheEntry{value: value, charge: charge, gen: old.gen}
-		s.used += charge
+		// Clone key and value into one exact-sized per-entry allocation before
+		// replacing: using either incoming slice/string directly would retain the
+		// block layer's shared key/value arenas well beyond the layer lifetime.
+		ownedKey, ownedValue := cloneBaseReadCacheKeyValue(
+			unsafe.Slice(unsafe.StringData(key), len(key)), value,
+		)
+		delete(s.entries, key)
+		s.entries[ownedKey] = baseReadCacheEntry{value: ownedValue, charge: charge, gen: old.gen}
+		s.used += charge - old.charge
 		s.evict()
 	} else {
+		if cached {
+			delete(s.entries, key)
+			s.used -= old.charge
+		}
 		s.forgetAdmissionString(key)
 	}
 	s.compactIfSparse()
 	s.mu.Unlock()
+}
+
+// cloneBaseReadCacheKeyValue copies key and value into one exact-sized backing
+// allocation. The returned string and slice share only that per-entry storage;
+// neither can retain a larger Pebble or block-layer arena.
+func cloneBaseReadCacheKeyValue(key, value []byte) (string, []byte) {
+	storage := make([]byte, len(key)+len(value))
+	copy(storage, key)
+	copy(storage[len(key):], value)
+	var ownedKey string
+	if len(key) > 0 {
+		ownedKey = unsafe.String(unsafe.SliceData(storage), len(key))
+	}
+	ownedValue := storage[len(key):len(storage):len(storage)]
+	return ownedKey, ownedValue
 }
 
 func (c *baseReadCache) del(key []byte) {
