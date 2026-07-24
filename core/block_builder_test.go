@@ -204,7 +204,42 @@ func TestInsertBlock_RejectsMismatchedJavaAccountStateRoot(t *testing.T) {
 	}
 }
 
+func TestInsertBlock_IgnoresHeaderAccountStateRootBeforeProposal25(t *testing.T) {
+	bc, witnessAddr := newLatestModeAccountRootChainWithProposal25(t, false)
+
+	pool := txpool.New()
+	if err := pool.Add(makeTestTransferTx(1, 2, 1_000_000)); err != nil {
+		t.Fatalf("pool.Add: %v", err)
+	}
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	if err != nil {
+		t.Fatalf("BuildBlock: %v", err)
+	}
+	block := result.Block
+	if root := block.AccountStateRoot(); root != (tcommon.Hash{}) {
+		t.Fatalf("builder emitted accountStateRoot before proposal #25: %x", root)
+	}
+
+	// Mainnet block 8,222,293 contains this isolated root even though proposal
+	// parameter #25 was never activated. java-tron ignores it while the dynamic
+	// property is disabled, so importing the block must not validate the field.
+	historicalRoot := tcommon.HexToHash("a57c51100c8d55b4a5e760260b344adfe7c93a76efccf12283ad8067177e7387")
+	block.SetAccountStateRoot(historicalRoot)
+	block.ResetHash()
+
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("InsertBlock rejected pre-proposal accountStateRoot: %v", err)
+	}
+	if got := bc.CurrentBlock().AccountStateRoot(); got != historicalRoot {
+		t.Fatalf("stored header accountStateRoot = %x, want %x", got, historicalRoot)
+	}
+}
+
 func newLatestModeAccountRootChain(t *testing.T) (*BlockChain, tcommon.Address) {
+	return newLatestModeAccountRootChainWithProposal25(t, true)
+}
+
+func newLatestModeAccountRootChainWithProposal25(t *testing.T, enabled bool) (*BlockChain, tcommon.Address) {
 	t.Helper()
 
 	diskdb := ethrawdb.NewMemoryDatabase()
@@ -213,6 +248,10 @@ func newLatestModeAccountRootChain(t *testing.T) (*BlockChain, tcommon.Address) 
 	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
 
 	witnessAddr := testProcessorAddr(0xFF)
+	allowAccountStateRoot := int64(0)
+	if enabled {
+		allowAccountStateRoot = 1
+	}
 	genesis := &params.Genesis{
 		Config:    &cfg,
 		Timestamp: 0,
@@ -221,7 +260,7 @@ func newLatestModeAccountRootChain(t *testing.T) (*BlockChain, tcommon.Address) 
 			{Address: witnessAddr, Balance: 1_000_000},
 		},
 		DynamicProperties: map[string]int64{
-			"allow_account_state_root": 1,
+			"allow_account_state_root": allowAccountStateRoot,
 			"next_maintenance_time":    1<<62 - 1,
 		},
 	}

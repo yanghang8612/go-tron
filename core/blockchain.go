@@ -1112,6 +1112,12 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// passed for non-rooted chain/runtime data visible during execution (TAPOS,
 	// genesis witness metadata, and similar compatibility reads).
 	blockRoot := block.AccountStateRoot()
+	// Match java-tron's AccountStateCallBack.preExecute: account-state-root
+	// generation and validation are controlled by proposal parameter #25, not
+	// by whether an individual producer put a root in the block header. Mainnet
+	// contains isolated pre-activation headers with this field populated; Java
+	// nodes ignore them while the dynamic property is disabled.
+	accountStateRootEnabled := dynProps.AllowAccountStateRoot()
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
 	var err error
@@ -1134,7 +1140,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
 	}
-	if blockRoot != (tcommon.Hash{}) {
+	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
 		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, -1, nil)
 	} else {
@@ -1293,11 +1299,12 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	stats.mark(&stats.Maintenance)
 
-	// Verify java-tron's header accountStateRoot, if present, before committing
-	// the internal StateDB root. The two roots intentionally use different
-	// domains; only the adapter knows how to interpret the wire root.
-	if err := defaultStateRootAdapter.ValidateJavaAccountStateRoot(blockRoot, javaAccountStateRoot); err != nil {
-		return err
+	// Java validates a populated header root only while proposal parameter #25
+	// is enabled. A producer-supplied root before activation is consensus-opaque.
+	if accountStateRootEnabled {
+		if err := defaultStateRootAdapter.ValidateJavaAccountStateRoot(blockRoot, javaAccountStateRoot); err != nil {
+			return err
+		}
 	}
 
 	// Update dynamic properties and fork-vote state before Commit. Non-derived
