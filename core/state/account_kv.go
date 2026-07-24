@@ -228,7 +228,14 @@ func (w *accountKVLatestBatch) DomainDel(owner tcommon.Address, domain kvdomains
 }
 
 func (w *accountKVLatestBatch) DomainDelOwned(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey []byte) error {
-	return w.DomainDel(owner, domain, logicalKey)
+	generation, err := w.resolveGeneration(owner)
+	if err != nil {
+		return err
+	}
+	if err := w.writeDomainChange(owner, generation, domain, logicalKey, false, nil); err != nil {
+		return err
+	}
+	return w.deleteOwned(owner, generation, domain, logicalKey)
 }
 
 func (w *accountKVLatestBatch) DomainDelPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
@@ -342,6 +349,20 @@ func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, 
 		return err
 	}
 	w.rememberDelete(owner, generation, domain, logicalKey)
+	if w.record != nil {
+		w.record(rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
+	}
+	return w.maybeFlush()
+}
+
+func (w *accountKVLatestBatch) deleteOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if w == nil || w.latestStore == nil {
+		return fmt.Errorf("account kv latest domain writer: nil latest store")
+	}
+	if err := w.latestStore.DeleteKVLatest(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
+	w.rememberDeleteOwned(owner, generation, domain, logicalKey)
 	if w.record != nil {
 		w.record(rawdb.NewStateCommitmentDeleteOwned(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey)))
 	}
@@ -772,17 +793,20 @@ func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uin
 	if w == nil {
 		return
 	}
-	w.rememberPutOwned(owner, generation, domain, logicalKey, append([]byte(nil), value...))
+	w.rememberPutWithKey(accountKVLatestPendingKey(owner, generation, domain, logicalKey), append([]byte(nil), value...))
 }
 
 func (w *accountKVLatestBatch) rememberPutOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) {
 	if w == nil {
 		return
 	}
+	w.rememberPutWithKey(accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey), value)
+}
+
+func (w *accountKVLatestBatch) rememberPutWithKey(mapKey accountKVLatestPendingMapKey, value []byte) {
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
-	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
 	w.pending[mapKey] = accountKVLatestPending{
 		value:  value,
 		number: w.commitBlock,
@@ -850,12 +874,35 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 	}
 }
 
+func (w *accountKVLatestBatch) rememberDeleteOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {
+	if w == nil {
+		return
+	}
+	if w.pending == nil {
+		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
+	}
+	mapKey := accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey)
+	w.pending[mapKey] = accountKVLatestPending{
+		deleted: true,
+		number:  w.commitBlock,
+	}
+}
+
 func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
 	return accountKVLatestPendingMapKey{
 		owner:      owner.AccountID(),
 		generation: generation,
 		domain:     domain,
 		logicalKey: string(logicalKey),
+	}
+}
+
+func accountKVLatestPendingKeyOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
+	return accountKVLatestPendingMapKey{
+		owner:      owner.AccountID(),
+		generation: generation,
+		domain:     domain,
+		logicalKey: ownedBytesString(logicalKey),
 	}
 }
 

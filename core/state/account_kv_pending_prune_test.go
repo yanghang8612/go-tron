@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"testing"
+	"unsafe"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -186,6 +187,28 @@ func TestAccountKVLatestOwnedPutRetainsTransferredPendingValue(t *testing.T) {
 	pending := writer.pending[pruneKVKey(owner, kvdomains.SystemReward, key)]
 	if &pending.value[0] != &value[0] {
 		t.Fatal("owned domain put copied pending value")
+	}
+	for mapKey := range writer.pending {
+		if unsafe.StringData(mapKey.logicalKey) != unsafe.SliceData(key) {
+			t.Fatal("owned domain put copied pending logical key")
+		}
+	}
+}
+
+func TestAccountKVLatestOwnedDeleteRetainsTransferredPendingKey(t *testing.T) {
+	writer := newAccountKVLatestDomainBatch(ethrawdb.NewMemoryDatabase(), zeroGeneration, nil, nil)
+	owner := pruneTestOwner(3)
+	key := []byte("owned-delete-key")
+	if err := writer.DomainDelOwned(owner, kvdomains.SystemReward, key); err != nil {
+		t.Fatal(err)
+	}
+	for mapKey, pending := range writer.pending {
+		if !pending.deleted {
+			t.Fatal("owned delete did not record tombstone")
+		}
+		if unsafe.StringData(mapKey.logicalKey) != unsafe.SliceData(key) {
+			t.Fatal("owned domain delete copied pending logical key")
+		}
 	}
 }
 

@@ -228,13 +228,13 @@ func (d *DomainCommitmentState) RecordCommitmentMutations(ctx context.Context, m
 			if len(mutation.EncodedValue) != 0 {
 				d.recordKVLatestEncodedValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.EncodedValue)
 			} else {
-				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, true)
+				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, true, true)
 			}
 		case statedomains.MutationDel:
-			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, nil, false)
+			d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, mutation.Key, nil, false, true)
 		case statedomains.MutationDelPrefix:
 			if err := d.iterateKVLatestPrefix(mutation.Owner, generation, mutation.Domain, mutation.Key, func(key, _ []byte) (bool, error) {
-				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, key, nil, false)
+				d.recordKVLatestValue(mutation.Owner, generation, mutation.Domain, key, nil, false, false)
 				return true, nil
 			}); err != nil {
 				return err
@@ -410,7 +410,7 @@ func (d *DomainCommitmentState) recordKVLatestTouch(owner tcommon.Address, gener
 	})
 }
 
-func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key, value []byte, exists bool) {
+func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key, value []byte, exists, ownKey bool) {
 	if d == nil {
 		return
 	}
@@ -430,12 +430,18 @@ func (d *DomainCommitmentState) recordKVLatestValue(owner tcommon.Address, gener
 	if exists {
 		captured.encodedValue = rawdb.EncodeStateKVLatestValue(value)
 	}
+	var keyString string
+	if ownKey {
+		keyString = ownedBytesString(key)
+	} else {
+		keyString = string(key)
+	}
 	d.recordTouchWithValue(domainCommitmentTouch{
 		flatDomain: rawdb.StateFlatDomainKVLatest,
 		owner:      ownerID,
 		generation: generation,
 		domain:     domain,
-		key:        string(key),
+		key:        keyString,
 	}, captured)
 }
 
@@ -453,7 +459,7 @@ func (d *DomainCommitmentState) recordKVLatestEncodedValue(owner tcommon.Address
 		owner:      ownerID,
 		generation: generation,
 		domain:     domain,
-		key:        string(key),
+		key:        ownedBytesString(key),
 	}, domainCommitmentCapturedValue{encodedValue: encodedValue, exists: true, loaded: true})
 }
 

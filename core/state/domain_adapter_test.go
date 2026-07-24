@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"testing"
+	"unsafe"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -66,6 +67,28 @@ func BenchmarkDomainCommitmentRecordRepeatedTouch(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		commitment.recordKVLatestTouch(owner, 7, kvdomains.ContractStorage, key)
+	}
+}
+
+func BenchmarkDomainCommitmentRecordEncodedTouches(b *testing.B) {
+	const count = 1024
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	values := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+		values[i] = rawdb.EncodeStateKVLatestValue([]byte{byte(i)})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment := NewDomainCommitmentState(&StateDB{})
+		commitment.reserveTouches(count)
+		for i := range keys {
+			commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, keys[i], values[i])
+		}
+		benchmarkDomainCommitmentTouchCount = len(commitment.touches)
 	}
 }
 
@@ -635,6 +658,7 @@ func TestDomainCommitmentPrefersImmutableAccountBorrow(t *testing.T) {
 
 func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
 	owner := testAddr(0x7f)
+	key := []byte("encoded-key")
 	encoded := rawdb.EncodeStateKVLatestValue([]byte("encoded-kv-value"))
 	commitment := NewDomainCommitmentStateWithGenerationResolver(&StateDB{}, func(tcommon.Address) (uint64, error) {
 		return 11, nil
@@ -643,7 +667,7 @@ func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
 		Kind:         statedomains.MutationPut,
 		Owner:        owner,
 		Domain:       kvdomains.SystemReward,
-		Key:          []byte("encoded-key"),
+		Key:          key,
 		Value:        []byte("encoded-kv-value"),
 		EncodedValue: encoded,
 	}}); err != nil {
@@ -655,6 +679,11 @@ func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
 	}
 	if len(updates) != 1 || len(updates[0].Value) == 0 || &updates[0].Value[0] != &encoded[0] {
 		t.Fatal("commitment update copied transferred encoded KV value")
+	}
+	for touch := range commitment.touches {
+		if unsafe.StringData(touch.key) != unsafe.SliceData(key) {
+			t.Fatal("commitment touch copied transferred logical key")
+		}
 	}
 }
 
