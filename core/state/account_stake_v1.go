@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -90,18 +89,29 @@ func (s *StateDB) accountFrozenBandwidthRows(obj *stateObject) ([]accountFrozenB
 		return nil, nil
 	}
 	rows := make([]accountFrozenBandwidthRow, 0, 2)
-	if err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, nil, func(key, value []byte) (bool, error) {
+	// Frozen-bandwidth rows are written as a dense zero-based sequence by
+	// writeAccountFrozenBandwidth and by the account migration path. Reading the
+	// handful of expected indexes directly avoids opening a prefix iterator,
+	// whose blockbuffer overlay setup otherwise scans every write in every live
+	// layer just to find the usual zero-or-one matching row.
+	for index := uint32(0); ; index++ {
+		key := accountFrozenBandwidthKey(index)
+		value, exists, err := s.GetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return rows, nil
+		}
 		row, err := decodeAccountFrozenBandwidthRow(key, value)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		rows = append(rows, row)
-		return true, nil
-	}); err != nil {
-		return nil, err
+		if index == math.MaxUint32 {
+			return nil, fmt.Errorf("account frozen-bandwidth index overflow")
+		}
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].index < rows[j].index })
-	return rows, nil
 }
 
 func (s *StateDB) accountTronPower(obj *stateObject) (*corepb.Account_Frozen, bool, error) {
@@ -204,16 +214,15 @@ func (s *StateDB) accountFrozenBandwidthTotal(obj *stateObject) (int64, error) {
 	if obj == nil || obj.account == nil {
 		return 0, nil
 	}
+	rows, err := s.accountFrozenBandwidthRows(obj)
+	if err != nil {
+		return 0, err
+	}
 	var total int64
-	err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, nil, func(key, value []byte) (bool, error) {
-		row, err := decodeAccountFrozenBandwidthRow(key, value)
-		if err != nil {
-			return false, err
-		}
+	for _, row := range rows {
 		total += row.entry.FrozenBalance
-		return true, nil
-	})
-	return total, err
+	}
+	return total, nil
 }
 
 func (s *StateDB) accountFrozenBandwidthMaxExpire(obj *stateObject) (int64, error) {

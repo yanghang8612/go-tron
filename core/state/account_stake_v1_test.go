@@ -4,11 +4,22 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+type frozenBandwidthPointReadStore struct {
+	ethdb.Database
+	iteratorCalls int
+}
+
+func (s *frozenBandwidthPointReadStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	s.iteratorCalls++
+	return s.Database.NewIterator(prefix, start)
+}
 
 func assertFrozenBandwidth(t *testing.T, got []*corepb.Account_Frozen, want ...*corepb.Account_Frozen) {
 	t.Helper()
@@ -103,6 +114,46 @@ func TestAccountStakeV1PersistsOutsideAccountEnvelopeAndPreservesOrder(t *testin
 	}
 	copy := reopened.CopyAccount(addr)
 	assertFrozenBandwidth(t, copy.FrozenBandwidthList(), first, second, duplicate)
+}
+
+func TestAccountFrozenBandwidthRowsUseDensePointReads(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xab)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	want := []*corepb.Account_Frozen{
+		{FrozenBalance: 11, ExpireTime: 30},
+		{FrozenBalance: 22, ExpireTime: 20},
+		{FrozenBalance: 33, ExpireTime: 10},
+	}
+	if err := sdb.writeAccountFrozenBandwidth(sdb.getStateObject(addr), want); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	rows, err := reopened.accountFrozenBandwidthRows(reopened.getStateObject(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("frozen-bandwidth point read opened %d iterators", store.iteratorCalls)
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("frozen-bandwidth rows = %d, want %d", len(rows), len(want))
+	}
+	for i := range rows {
+		if rows[i].index != uint32(i) || !proto.Equal(rows[i].entry, want[i]) {
+			t.Fatalf("frozen-bandwidth row %d = index %d %+v, want %+v", i, rows[i].index, rows[i].entry, want[i])
+		}
+	}
 }
 
 func TestAccountStakeV1PreservesPresentEmptyMessages(t *testing.T) {
