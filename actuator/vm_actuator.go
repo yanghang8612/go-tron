@@ -446,7 +446,7 @@ func accountEnergyLimit(ctx *Context, account common.Address, feeLimit, callValu
 }
 
 func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLimit, callValue int64, result *Result) int64 {
-	acct := ctx.State.GetAccount(account)
+	acct, frozen := accountEnergyResourceView(ctx.State, account)
 	if acct == nil {
 		return 0
 	}
@@ -467,7 +467,7 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 		// last_consume_time are the recovery inputs; total_energy_{weight,
 		// current_limit} are the global limit factors. caller_frozen_for_energy
 		// is already owner_frozen_for_energy (field 17).
-		result.CallerEnergyLimit = calcAccountEnergyLimit(acct, ctx.DynProps)
+		result.CallerEnergyLimit = calcAccountEnergyLimitFromFrozen(frozen, ctx.DynProps)
 		result.CallerEnergyUsagePre = ctx.State.GetEnergyUsage(account)
 		result.CallerEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(account)
 		result.TotalEnergyWeight = ctx.DynProps.TotalEnergyWeight()
@@ -489,7 +489,7 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 }
 
 func accountEnergyLimitWithFloatRatio(ctx *Context, account common.Address, feeLimit, callValue int64) int64 {
-	acct := ctx.State.GetAccount(account)
+	acct, totalFrozen := accountEnergyResourceView(ctx.State, account)
 	if acct == nil {
 		return 0
 	}
@@ -500,12 +500,11 @@ func accountEnergyLimitWithFloatRatio(ctx *Context, account common.Address, feeL
 	}
 	energyFromBalance := maxInt64(ctx.State.GetBalance(account)-callValue, 0) / sunPerEnergy
 
-	totalFrozen := allFrozenBalanceForEnergy(acct)
 	var energyFromFeeLimit int64
 	if totalFrozen == 0 {
 		energyFromFeeLimit = feeLimit / sunPerEnergy
 	} else {
-		totalEnergyFromFreeze := calcAccountEnergyLimit(acct, ctx.DynProps)
+		totalEnergyFromFreeze := calcAccountEnergyLimitFromFrozen(totalFrozen, ctx.DynProps)
 		leftBalanceForEnergyFreeze := energyFeeForFrozenBalance(totalFrozen, leftFrozenEnergy, totalEnergyFromFreeze)
 		if leftBalanceForEnergyFreeze >= feeLimit {
 			energyFromFeeLimit = bigMulDivInt64(totalEnergyFromFreeze, feeLimit, totalFrozen)
@@ -585,10 +584,10 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 		// origin frozen-for-energy (limit numerator), and the recovery inputs.
 		result.OriginEnergyUsagePre = ctx.State.GetEnergyUsage(origin)
 		result.OriginEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(origin)
-		if originAcct := ctx.State.GetAccount(origin); originAcct != nil {
+		if originAcct, originFrozen := accountEnergyResourceView(ctx.State, origin); originAcct != nil {
 			result.OriginEnergyWindow = originAcct.EnergyWindowSize()
-			result.OriginEnergyLimit = calcAccountEnergyLimit(originAcct, ctx.DynProps)
-			result.OriginFrozenForEnergy = allFrozenBalanceForEnergy(originAcct)
+			result.OriginEnergyLimit = calcAccountEnergyLimitFromFrozen(originFrozen, ctx.DynProps)
+			result.OriginFrozenForEnergy = originFrozen
 		}
 	}
 

@@ -154,6 +154,57 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	}
 }
 
+func TestGetAccountFrozenEnergyLoadsOnlyEnergyRows(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xa5)
+	delegator := testAddr(0xa6)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.CreateAccount(delegator, corepb.AccountType_Normal)
+	sdb.FreezeV1Bandwidth(addr, 11, 100)
+	sdb.FreezeV1Energy(addr, 12, 100)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, 22)
+	sdb.FreezeV1DelegatedEnergy(delegator, addr, 32)
+	sdb.AddAcquiredDelegatedFrozenV2(addr, corepb.ResourceCode_ENERGY, 42)
+	sdb.AddUnfreezeV2(addr, corepb.ResourceCode_ENERGY, 51, 200)
+	sdb.SetTRC10Balance(addr, 1_000_001, 77)
+	sdb.SetVotes(addr, []*corepb.Vote{{VoteAddress: testAddr(0xb1).Bytes(), VoteCount: 7}})
+	sdb.SetPermissions(addr, types.MakeDefaultOwnerPermission(addr), nil, nil)
+
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	energy, err := reopened.GetAccountFrozenEnergy(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if energy != 108 {
+		t.Fatalf("frozen energy total = %d, want 108", energy)
+	}
+	obj := reopened.stateObjects[addr]
+	if obj == nil || !obj.accountResourceLoaded {
+		t.Fatal("energy read did not load envelope and AccountResource")
+	}
+	if obj.accountFrozenBandwidthLoaded || obj.accountMapsLoaded || obj.accountPermissionsLoaded ||
+		obj.accountVotesLoaded || obj.accountStakeV2Loaded || obj.accountFrozenSupplyLoaded ||
+		obj.accountTronPowerLoaded {
+		t.Fatalf("energy read materialized unrelated domains: bandwidth=%t maps=%t permissions=%t votes=%t stakeV2=%t frozenSupply=%t tronPower=%t",
+			obj.accountFrozenBandwidthLoaded, obj.accountMapsLoaded, obj.accountPermissionsLoaded,
+			obj.accountVotesLoaded, obj.accountStakeV2Loaded, obj.accountFrozenSupplyLoaded,
+			obj.accountTronPowerLoaded)
+	}
+	pb := obj.account.Proto()
+	if len(pb.AssetV2) != 0 || pb.OwnerPermission != nil || len(pb.Votes) != 0 ||
+		len(pb.Frozen) != 0 || len(pb.FrozenV2) != 0 || len(pb.UnfrozenV2) != 0 {
+		t.Fatalf("energy read leaked unrelated split fields into account proto: %+v", pb)
+	}
+}
+
 func TestAccountResourcePreservesPresentEmptyMessage(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xa1)

@@ -361,11 +361,11 @@ func extractOwnerAddress(ctx *Context) common.Address {
 // Returns 0 if the caller has no frozen-for-energy stake or if recovered
 // usage already meets the entitled limit.
 func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties, addr common.Address, now int64) int64 {
-	acct := s.GetAccount(addr)
+	acct, frozen := accountEnergyResourceView(s, addr)
 	if acct == nil {
 		return 0
 	}
-	limit := calcAccountEnergyLimit(acct, dp)
+	limit := calcAccountEnergyLimitFromFrozen(frozen, dp)
 	if limit <= 0 {
 		return 0
 	}
@@ -374,6 +374,18 @@ func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties
 		return 0
 	}
 	return limit - recovered
+}
+
+// accountEnergyResourceView loads only the resource-bearing account fields
+// needed by VM limit/billing code. The returned account is the live envelope
+// with AccountResource materialized; frozen includes the point-read V2 ENERGY
+// amount that is intentionally not expanded into the full FrozenV2 slice.
+func accountEnergyResourceView(s *state.StateDB, addr common.Address) (*types.Account, int64) {
+	frozen, err := s.GetAccountFrozenEnergy(addr)
+	if err != nil {
+		return nil, 0
+	}
+	return s.AccountReference(addr), frozen
 }
 
 // recoveredEnergyUsage returns the caller's energy_usage decayed to `now`.
@@ -406,10 +418,10 @@ func recoveredEnergyUsage(s *state.StateDB, dp *state.DynamicProperties, acct *t
 // duplication is intentional and the formulas must match
 // core/resource.go::availableAccountEnergy line-for-line.
 func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) int64 {
-	frozen := acct.FrozenEnergyAmount()
-	frozen += acct.AcquiredDelegatedFrozenEnergy()
-	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
-	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+	return calcAccountEnergyLimitFromFrozen(allFrozenBalanceForEnergy(acct), dp)
+}
+
+func calcAccountEnergyLimitFromFrozen(frozen int64, dp *state.DynamicProperties) int64 {
 
 	// The IN-VM energy-limit duplicate in java-tron is
 	// RepositoryImpl.calculateGlobalEnergyLimit (actuator module). It is V1

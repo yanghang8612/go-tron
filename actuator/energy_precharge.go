@@ -53,7 +53,7 @@ func preChargeEnergyUsage(ctx *Context, addr common.Address, charge int64, resul
 	if !ctx.DynProps.SupportUnfreezeDelay() {
 		return
 	}
-	acct := ctx.State.GetAccount(addr)
+	acct, _ := accountEnergyResourceView(ctx.State, addr)
 	if acct == nil {
 		return
 	}
@@ -122,7 +122,7 @@ func restoreEnergyPreCharges(ctx *Context, result *Result) {
 			ctx.State.SetLatestConsumeTimeForEnergy(pc.addr, pc.oldTime)
 			continue
 		}
-		acct := ctx.State.GetAccount(pc.addr)
+		acct, _ := accountEnergyResourceView(ctx.State, pc.addr)
 		if acct == nil {
 			continue
 		}
