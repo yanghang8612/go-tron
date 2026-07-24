@@ -11,9 +11,13 @@ const stackLimit = 1024
 // Stack is the TVM operand stack.
 type Stack struct {
 	data []uint256.Int
+	pc   uint64
 }
 
-// executionStackPool reuses call-frame operand stacks. A contract call can
+// executionStackPool reuses call-frame operand stacks and their program
+// counters. Keeping pc on this already-heap-resident frame lets indirect opcode
+// handlers receive *pc without forcing a fresh uint64 allocation per Run, while
+// nested calls naturally acquire independent frame state. A contract call can
 // allocate several nested frames and every frame previously allocated both a
 // Stack and its initial 16-word backing slice. Stacks contain no pointers and
 // never exceed stackLimit, so retaining their high-water capacity is bounded.
@@ -24,6 +28,7 @@ var executionStackPool = sync.Pool{
 func acquireExecutionStack() *Stack {
 	stack := executionStackPool.Get().(*Stack)
 	stack.data = stack.data[:0]
+	stack.pc = 0
 	return stack
 }
 

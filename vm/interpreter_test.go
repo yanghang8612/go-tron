@@ -248,17 +248,6 @@ func TestInterpreterFramePoolsResetState(t *testing.T) {
 		t.Fatalf("pooled memory leaked prior frame bytes: %x", result)
 	}
 
-	// Run stores PC on the Interpreter to avoid a per-frame escaping local, but
-	// nested callers still require their outer PC to be restored exactly.
-	evm.interpreter.pc = 77
-	empty := NewContract(caller, address, 0, 100_000)
-	empty.SetCode(address, []byte{byte(STOP)})
-	if _, err := evm.interpreter.Run(empty); err != nil {
-		t.Fatal(err)
-	}
-	if evm.interpreter.pc != 77 {
-		t.Fatalf("program counter after Run = %d, want parent 77", evm.interpreter.pc)
-	}
 }
 
 func TestInterpreterOutOfEnergy(t *testing.T) {

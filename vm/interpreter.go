@@ -17,7 +17,6 @@ type Interpreter struct {
 	tvmConfig  TVMConfig
 	currentOp  OpCode
 	energyErr  error
-	pc         uint64 // per-frame program counter; saved/restored across nested Run calls
 
 	// Dynamic-energy state — reset at the top of each Run call.
 	// factor is the effective multiplier (DynamicEnergyFactorDecimal == 1.0×).
@@ -47,15 +46,11 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 // Run executes the contract's bytecode. Returns the result data and any error.
 func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	tracer := in.tvmConfig.Tracer
-	var (
-		pc    = &in.pc
-		mem   = acquireExecutionMemory()
-		stack = acquireExecutionStack()
-	)
+	mem := acquireExecutionMemory()
+	stack := acquireExecutionStack()
+	pc := &stack.pc
 	defer releaseExecutionMemory(mem)
 	defer releaseExecutionStack(stack)
-	parentPC := *pc
-	*pc = 0
 	parentFactor, parentRawEnergyUsed := in.factor, in.rawEnergyUsed
 	// The return-data buffer is per-frame state: java-tron gives every
 	// Program its own returnDataBuffer, so RETURNDATASIZE is 0 at frame
@@ -68,7 +63,6 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	parentReturnData := in.returnData
 	in.returnData = nil
 	defer func() {
-		*pc = parentPC
 		in.factor = parentFactor
 		in.rawEnergyUsed = parentRawEnergyUsed
 		in.returnData = parentReturnData
