@@ -3495,7 +3495,9 @@ type CapturedCommit struct {
 
 // Fold runs the captured commitment fold against index and returns the root.
 func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, error) {
-	return FoldLatestCommitment(index, c.updates, c.repair)
+	store := statedomains.NewStagedCommitmentStoreForAsyncFold(index)
+	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.updates, c.repair)
+	return tcommon.Hash(root), err
 }
 
 // SetDeferFold toggles deferred-fold mode (async commit). When set, the next

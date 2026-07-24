@@ -14,6 +14,10 @@ type cachedNoCopyKeyPartsViewer interface {
 	ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
 }
 
+type commitmentParentKeyPartsViewer interface {
+	ViewCommitmentParentKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
+}
+
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
 // path directly into their owned key instead of allocating an intermediate
@@ -171,6 +175,18 @@ func ViewCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(
 		return ok, err
 	}
 	return true, fn(encoded, true)
+}
+
+// ViewCommitmentParentBranchNoCopy is the async-fold counterpart of
+// ViewCommitmentBranchNoCopy. A capable layer-bound reader skips the committing
+// block's own layer, whose commitment branch namespace is empty at fold start,
+// and resolves the parent state directly. Generic readers retain the ordinary
+// lookup semantics.
+func ViewCommitmentParentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	if viewer, ok := db.(commitmentParentKeyPartsViewer); ok {
+		return viewer.ViewCommitmentParentKeyParts(stateCommitmentBranchPrefix, prefix, fn)
+	}
+	return ViewCommitmentBranchNoCopy(db, prefix, fn)
 }
 
 // DeleteCommitmentBranch removes the branch row for prefix.

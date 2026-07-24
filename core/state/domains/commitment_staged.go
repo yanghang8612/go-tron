@@ -13,8 +13,9 @@ import (
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
-	db         CommitmentDB
-	ownedValue bool
+	db                 CommitmentDB
+	ownedValue         bool
+	readParentBranches bool
 }
 
 var branchEncodingSlicesPool = sync.Pool{
@@ -107,7 +108,11 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
 // the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
-	return rawdb.ViewCommitmentBranchNoCopy(s.db, prefix, func(encoded []byte, stable bool) error {
+	view := rawdb.ViewCommitmentBranchNoCopy
+	if s.readParentBranches {
+		view = rawdb.ViewCommitmentParentBranchNoCopy
+	}
+	return view(s.db, prefix, func(encoded []byte, stable bool) error {
 		if stable {
 			// Immutable overlay/cache values (and generic owned Get results) live
 			// for the full fold descent, so leaf keys may alias them directly.
@@ -207,6 +212,13 @@ type stagedCommitmentStore struct {
 	store *rawdbBranchStore
 	trie  *commitmentTrie
 
+	// asyncParentBranches enables the commit worker's one-shot parent-state
+	// branch reader. branchStateWritten disables it after a rebuild/snapshot
+	// restore or first update, preserving read-your-own-writes if a store is
+	// reused while keeping the normal constructors fully unchanged.
+	asyncParentBranches bool
+	branchStateWritten  bool
+
 	// bootstrapCount counts Rebuild invocations (full latest-domain scans). It
 	// lets tests prove that normal incremental commits do not trigger a bootstrap
 	// scan once branch state is persisted.
@@ -216,6 +228,16 @@ type stagedCommitmentStore struct {
 // NewStagedCommitmentStore builds a staged LatestCommitmentStore over db.
 func NewStagedCommitmentStore(db CommitmentDB) LatestCommitmentStore {
 	return newStagedCommitmentStore(db)
+}
+
+// NewStagedCommitmentStoreForAsyncFold builds the one-shot store used by the
+// serial async commit worker. Its first incremental Update may read commitment
+// child branches from the parent state without probing the committing layer;
+// rebuild and snapshot-repair paths automatically retain ordinary visibility.
+func NewStagedCommitmentStoreForAsyncFold(db CommitmentDB) LatestCommitmentStore {
+	store := newStagedCommitmentStore(db)
+	store.asyncParentBranches = true
+	return store
 }
 
 func newStagedCommitmentStore(db CommitmentDB) *stagedCommitmentStore {
@@ -321,6 +343,7 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 	if restored == 0 {
 		return false, nil
 	}
+	s.branchStateWritten = true
 	rederived, err := s.trie.Fold(nil)
 	if err != nil {
 		return false, err
@@ -356,6 +379,7 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 	if err := s.store.clear(); err != nil {
 		return common.Hash{}, err
 	}
+	s.branchStateWritten = true
 	var updates []Update
 	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
 		updates = append(updates, Update{
@@ -383,10 +407,13 @@ func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (c
 	for _, u := range updates {
 		foldUpdates = append(foldUpdates, Update{Key: u.Key, Value: u.Value, Delete: u.Delete})
 	}
+	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
 	root, err := s.trie.Fold(foldUpdates)
+	s.store.readParentBranches = false
 	if err != nil {
 		return common.Hash{}, err
 	}
+	s.branchStateWritten = true
 	if err := s.WriteRoot(root); err != nil {
 		return common.Hash{}, err
 	}

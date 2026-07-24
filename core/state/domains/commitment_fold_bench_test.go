@@ -119,6 +119,67 @@ func BenchmarkFoldParBlockbufferParallelFlushCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(true) })
 }
 
+// BenchmarkAsyncFoldParentBranchReads measures the complete production-shaped
+// one-block fold: a deep immutable base, a fresh in-flight block layer, and 64
+// incremental updates. The async constructor skips guaranteed misses in that
+// fresh layer while the normal constructor preserves ordinary read-your-own-
+// writes semantics. A fresh buffer per iteration keeps both arms on identical
+// parent state and excludes setup from the timed region.
+func BenchmarkAsyncFoldParentBranchReads(b *testing.B) {
+	const baseSize = 100_000
+	rng := rand.New(rand.NewSource(441))
+	seedRaw := buildRandomPuts(rng, baseSize)
+	seed := make([]rawdb.StateCommitmentUpdate, len(seedRaw))
+	for i := range seedRaw {
+		seed[i] = rawdb.NewStateCommitmentPut(seedRaw[i].Key, seedRaw[i].Value)
+	}
+	base := rawdb.NewMemoryDatabase()
+	if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(base), seed); err != nil {
+		b.Fatal(err)
+	}
+
+	updates := make([]rawdb.StateCommitmentUpdate, 64)
+	for i := range updates {
+		value := make([]byte, 8)
+		binary.BigEndian.PutUint64(value, uint64(i+1))
+		updates[i] = rawdb.NewStateCommitmentPut(seedRaw[i*997].Key, value)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		store func(CommitmentDB) LatestCommitmentStore
+	}{
+		{name: "ordinary", store: NewStagedCommitmentStore},
+		{name: "async_parent", store: NewStagedCommitmentStoreForAsyncFold},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var expected common.Hash
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				buf := blockbuffer.New(base)
+				buf.BeginBlock(common.Hash{byte(i + 1)}, uint64(i+1))
+				h, ok := buf.NewestInflight()
+				if !ok {
+					b.Fatal("missing benchmark in-flight layer")
+				}
+				store := tc.store(buf.ViewLayer(h))
+				b.StartTimer()
+				root, err := ApplyLatestCommitmentWithStore(store, updates)
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if expected == (common.Hash{}) {
+					expected = root
+				} else if root != expected {
+					b.Fatalf("root = %x, want %x", root, expected)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkBuildOps isolates the production coalesced+raw-key-sorted fast path
 // from the arbitrary-order fallback that must retain last-writer-wins semantics.
 func BenchmarkBuildOps(b *testing.B) {

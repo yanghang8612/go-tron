@@ -56,6 +56,75 @@ func TestRawdbBranchStoreBatchRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAsyncFoldParentBranchReadsMatchOrdinaryStore(t *testing.T) {
+	seed := func(t *testing.T) CommitmentDB {
+		t.Helper()
+		db := rawdb.NewMemoryDatabase()
+		updates := make([]rawdb.StateCommitmentUpdate, 256)
+		for i := range updates {
+			owner := common.Address{0x41, byte(i), byte(i >> 8)}
+			updates[i] = rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(owner), []byte{byte(i), byte(i >> 8)})
+		}
+		if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), updates); err != nil {
+			t.Fatalf("seed commitment: %v", err)
+		}
+		return db
+	}
+
+	updates := []rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(common.Address{0x41, 0xaa}), []byte("updated")),
+		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(common.Address{0x41, 0xbb}), []byte("inserted")),
+	}
+	wantDB := seed(t)
+	want, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(wantDB), updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := seed(t)
+	buffer := blockbuffer.New(base)
+	buffer.BeginBlock(common.Hash{2}, 2)
+	handle, _ := buffer.NewestInflight()
+	got, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStoreForAsyncFold(buffer.ViewLayer(handle)), updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("async parent-read root = %x, want %x", got, want)
+	}
+}
+
+func TestAsyncFoldRebuildReadsBranchesWrittenIntoOwnLayer(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	buffer := blockbuffer.New(base)
+	buffer.BeginBlock(common.Hash{3}, 3)
+	handle, _ := buffer.NewestInflight()
+	view := buffer.ViewLayer(handle)
+	owner := common.Address{0x41, 0xcc}
+	if err := rawdb.WriteStateAccountLatest(view, owner, []byte("account")); err != nil {
+		t.Fatal(err)
+	}
+	updates := []rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(owner), []byte("account")),
+	}
+	got, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStoreForAsyncFold(view), updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantDB := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateAccountLatest(wantDB, owner, []byte("account")); err != nil {
+		t.Fatal(err)
+	}
+	want, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(wantDB), updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("async rebuild root = %x, want %x", got, want)
+	}
+}
+
 // TestRawdbBranchStoreRoundTrip pins the rawdb-backed branchStore adapter:
 // PutBranch persists an encoded BranchData row, GetBranch decodes it back, and
 // DelBranch removes it. Absent prefixes report (_, false, nil).

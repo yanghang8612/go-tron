@@ -496,6 +496,61 @@ func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value
 	return v.viewNoCopyCachedKey(key, fn)
 }
 
+// ViewCommitmentParentKeyParts is the async commitment fold's parent-state
+// reader. It deliberately skips this view's own in-flight layer and resolves
+// only committed layers plus the durable base. The committing block's layer
+// contains its flat-state writes but no pre-block commitment branches; branch
+// mutations produced by the fold are private to its buffered sibling stores
+// until their disjoint subtries finish. Probing the own layer for every deep
+// branch is therefore a guaranteed locked map miss on the production path.
+//
+// This narrow method is discovered structurally by rawdb and must not replace
+// ordinary LayerView reads: callers that need read-your-own-writes continue to
+// use ViewNoCopyCachedKeyParts.
+func (v *LayerView) ViewCommitmentParentKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return v.viewCommitmentParentKey(key, fn)
+	}
+
+	keyBuf := borrowSplitReadKey()
+	defer returnSplitReadKey(keyBuf)
+	key := keyBuf[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return v.viewCommitmentParentKey(key, fn)
+}
+
+func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	b := v.b
+	view := b.loadReadView()
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		value, found, tomb := view.layers[i].lookup(key)
+		if tomb {
+			return false, nil
+		}
+		if found {
+			return true, fn(value, true)
+		}
+	}
+	if b.base == nil {
+		return false, nil
+	}
+	cache := view.baseReadCache
+	var cacheEpoch baseReadCacheEpoch
+	if cache != nil {
+		if cached, ok, epoch := cache.getWithEpoch(key); ok {
+			return true, fn(cached, true)
+		} else {
+			cacheEpoch = epoch
+		}
+	}
+	return viewBaseIntoCache(b.base, cache, key, cacheEpoch, fn)
+}
+
 func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	b := v.b
 	view := b.loadReadView()
