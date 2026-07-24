@@ -195,8 +195,8 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 		// energy low and burning energy java covers (the Nile 9,220,578 stall, where a
 		// 10M-TRX energy stake collapsed the limit far below stored usage).
 		if dp != nil && !dp.AllowTvmFreeze() {
-			if acct := ctx.State.GetAccount(addr); acct != nil &&
-				usage > calcAccountEnergyLimit(acct, dp)-recovered {
+			if acct, frozen := accountEnergyResourceView(ctx.State, addr); acct != nil &&
+				usage > calcAccountEnergyLimitFromFrozen(frozen, dp)-recovered {
 				return
 			}
 		}
@@ -212,7 +212,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 
 	var rawWindow int64
 	var optimized bool
-	if acct := ctx.State.GetAccount(addr); acct != nil {
+	if acct, _ := accountEnergyResourceView(ctx.State, addr); acct != nil {
 		rawWindow, optimized = acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized()
 	}
 
