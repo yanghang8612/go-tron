@@ -138,9 +138,11 @@ func BenchmarkBuildOps(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				if _, err := buildOps(tc.updates); err != nil {
+				opsP, err := buildOps(tc.updates)
+				if err != nil {
 					b.Fatal(err)
 				}
+				returnOpsBuf(opsP)
 			}
 		})
 	}

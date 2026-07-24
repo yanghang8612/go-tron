@@ -128,11 +128,15 @@ func returnBranch(b *BranchData) {
 	branchPool.Put(b)
 }
 
-// opsBufPool reuses op slices for apply's bucket-sort scratch space. apply
+// opsBufPool reuses op slices for Fold's resolved updates and apply's
+// bucket-sort scratch space. apply
 // formerly used `var buckets [16][]op` + append per op, which heap-allocated up
 // to 16 backing arrays per recursive call (the fold is recursive to depth 64).
 // The replacement counting-sort writes into a single pooled scratch buffer per
-// apply invocation, cutting per-descent slice churn.
+// apply invocation, cutting per-descent slice churn. Capping pooled capacity
+// prevents an exceptional block from pinning an oversized backing array.
+const maxPooledOps = 4096
+
 var opsBufPool = sync.Pool{
 	New: func() any { b := make([]op, 0, 64); return &b },
 }
@@ -148,7 +152,15 @@ func borrowOpsBuf(size int) *[]op {
 }
 
 func returnOpsBuf(bp *[]op) {
-	*bp = (*bp)[:0]
+	ops := *bp
+	// op.key borrows the Fold input. Clear every used entry before pooling so
+	// the buffer cannot extend the lifetime of update key/value arenas.
+	clear(ops)
+	if cap(ops) > maxPooledOps {
+		*bp = nil
+		return
+	}
+	*bp = ops[:0]
 	opsBufPool.Put(bp)
 }
 
@@ -560,9 +572,16 @@ type op struct {
 // Calling Fold with no updates re-derives and returns the current root without
 // modifying the store.
 func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
-	ops, err := buildOps(updates)
+	opsP, err := buildOps(updates)
 	if err != nil {
 		return common.Hash{}, err
+	}
+	if opsP != nil {
+		defer returnOpsBuf(opsP)
+	}
+	var ops []op
+	if opsP != nil {
+		ops = *opsP
 	}
 
 	// Load the root branch (empty prefix), if any.
@@ -628,7 +647,7 @@ func rootHash(root *BranchData) common.Hash {
 // 64-nibble path and leaf value hash, and returns them sorted by path. Sorting
 // makes the in-tree walk order deterministic but does not affect the final
 // structure (which is path-keyed).
-func buildOps(updates []Update) ([]op, error) {
+func buildOps(updates []Update) (*[]op, error) {
 	if len(updates) == 0 {
 		return nil, nil
 	}
@@ -647,24 +666,28 @@ func buildOps(updates []Update) ([]op, error) {
 		}
 	}
 	if strictlySorted {
-		ops := make([]op, 0, len(updates))
-		for _, u := range updates {
-			ops = append(ops, resolveOp(u))
+		opsP := borrowOpsBuf(len(updates))
+		ops := *opsP
+		for i, u := range updates {
+			ops[i] = resolveOp(u)
 		}
 		sortOps(ops)
-		return ops, nil
+		return opsP, nil
 	}
 
 	byKey := make(map[string]Update, len(updates))
 	for _, u := range updates {
 		byKey[string(u.Key)] = u
 	}
-	ops := make([]op, 0, len(byKey))
+	opsP := borrowOpsBuf(len(byKey))
+	ops := *opsP
+	i := 0
 	for _, u := range byKey {
-		ops = append(ops, resolveOp(u))
+		ops[i] = resolveOp(u)
+		i++
 	}
 	sortOps(ops)
-	return ops, nil
+	return opsP, nil
 }
 
 func resolveOp(u Update) op {

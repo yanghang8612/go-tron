@@ -200,6 +200,41 @@ func TestBranchDataDeterministicAndProperty(t *testing.T) {
 	}
 }
 
+func TestReturnOpsBufClearsBorrowedKeys(t *testing.T) {
+	buf := make([]op, 1, 4)
+	buf[0] = op{
+		path:    common.Hash{1},
+		key:     []byte("borrowed-update-key"),
+		valHash: common.Hash{2},
+		delete:  true,
+	}
+	backing := buf
+	returnOpsBuf(&buf)
+
+	if len(buf) != 0 {
+		t.Fatalf("returned buffer len = %d, want 0", len(buf))
+	}
+	if backing[0].path != (common.Hash{}) || backing[0].key != nil ||
+		backing[0].valHash != (common.Hash{}) || backing[0].delete {
+		t.Fatalf("returned buffer retained op references: %+v", backing[0])
+	}
+}
+
+func TestReturnOpsBufDropsOversizedBuffer(t *testing.T) {
+	buf := make([]op, 1, maxPooledOps+1)
+	buf[0].key = []byte("borrowed-update-key")
+	backing := buf
+	returnOpsBuf(&buf)
+
+	if buf != nil {
+		t.Fatalf("oversized returned buffer cap = %d, want nil", cap(buf))
+	}
+	if backing[0].path != (common.Hash{}) || backing[0].key != nil ||
+		backing[0].valHash != (common.Hash{}) || backing[0].delete {
+		t.Fatalf("oversized buffer retained op references: %+v", backing[0])
+	}
+}
+
 func TestBranchDataDecodeSafety(t *testing.T) {
 	var b BranchData
 	b.SetHashChild(0x1, common.Hash{0x11})
