@@ -1,6 +1,7 @@
 package net
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -1317,6 +1318,31 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 // method consumes a block, ownership of non-empty raw transfers to the sync
 // buffer and the caller must not mutate it afterward.
 func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byte) bool {
+	return ss.handleBlock(peer, block, raw, block.Hash(), block.Number())
+}
+
+// HandleRawBlock is the wire receive fast path. It scans only the canonical
+// BlockID fields from raw and defers full protobuf decoding until the block is
+// contiguous and ready to apply. Returning false means sync did not consume
+// the message and the caller must decode it for normal broadcast handling.
+func (ss *SyncService) HandleRawBlock(peer *p2p.Peer, raw []byte) bool {
+	hash, err := types.BlockHashFromRaw(raw)
+	if err != nil {
+		// Preserve the old malformed-message behaviour: consume it while syncing
+		// (where it can never satisfy a request), otherwise let the broadcast
+		// decoder reject it on its ordinary path.
+		if ss.stopping.Load() {
+			return true
+		}
+		ss.mu.Lock()
+		syncing := ss.syncing
+		ss.mu.Unlock()
+		return syncing
+	}
+	return ss.handleBlock(peer, nil, raw, hash, binary.BigEndian.Uint64(hash[:8]))
+}
+
+func (ss *SyncService) handleBlock(peer *p2p.Peer, block *types.Block, raw []byte, blockHash tcommon.Hash, blockNum uint64) bool {
 	if ss.stopping.Load() {
 		return true
 	}
@@ -1333,8 +1359,6 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return false
 	}
-	blockHash := block.Hash()
-	blockNum := block.Number()
 	expectedNum, ok := ps.pending[blockHash]
 	if !ok || expectedNum != blockNum {
 		ss.mu.Unlock()
@@ -1381,7 +1405,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 				num:  blockNum,
 				peer: peer,
 			}
-			if ss.retainDecodedBlockLocked(block, blockNum, effectiveTipNum, len(entry.raw)) {
+			if block != nil && ss.retainDecodedBlockLocked(block, blockNum, effectiveTipNum, len(entry.raw)) {
 				entry.decoded = block
 			}
 			ss.blockBuffer[blockNum] = entry

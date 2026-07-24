@@ -508,18 +508,20 @@ func (h *TronHandler) handleFetchInvData(peer *p2p.Peer, payload []byte) {
 }
 
 func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
+	// Sync admission needs only the BlockID, which can be scanned directly from
+	// the raw protobuf header. Let sync take ownership before materialising the
+	// pointer-rich transaction tree; the drain worker performs the one full
+	// decode when the block becomes contiguous. If sync does not consume it,
+	// decode below for the advertised-block path exactly as before.
+	if h.syncService != nil && h.syncService.HandleRawBlock(peer, payload) {
+		return
+	}
+
 	var pbBlock corepb.Block
 	if err := proto.Unmarshal(payload, &pbBlock); err != nil {
 		return
 	}
 	block := types.NewBlockFromPB(&pbBlock)
-
-	// If sync service handles it (sequential sync), defer to it. Pass the raw
-	// wire payload so the sync buffer can retain the undecoded bytes instead of
-	// the pointer-rich decoded block.
-	if h.syncService != nil && h.syncService.HandleBlock(peer, block, payload) {
-		return
-	}
 
 	// During initial sync, drop adv-broadcast blocks. Inserting them moves
 	// KhaosDB's head far ahead of our actual canonical tip; the next eviction

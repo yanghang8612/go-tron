@@ -162,6 +162,73 @@ func TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath(t *testing.T) {
 	}
 }
 
+func TestHandleRawBlockDefersDecodedGraphUntilDrain(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "raw-first")
+	defer closePeer()
+
+	blk := blockWithTxs(2, tcommon.Hash{0xcd}, 200)
+	raw := rawOf(t, blk)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	markPendingLocked(ss, ps, blk.ID())
+	ss.mu.Unlock()
+
+	if !ss.HandleRawBlock(peer, raw) {
+		t.Fatal("HandleRawBlock should consume the requested sync block")
+	}
+	ss.mu.Lock()
+	buffered, ok := ss.blockBuffer[2]
+	ss.mu.Unlock()
+	if !ok {
+		t.Fatal("raw block was not buffered")
+	}
+	if buffered.decoded != nil {
+		t.Fatal("raw receive path retained an eagerly decoded protobuf graph")
+	}
+	if len(buffered.raw) == 0 || &buffered.raw[0] != &raw[0] {
+		t.Fatal("raw receive path copied or lost the transferred payload")
+	}
+
+	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{buffered}}
+	ss.decodeBatchBlocks(&batch)
+	if len(batch.blocks) != 1 || batch.blocks[0].Number() != 2 || len(batch.blocks[0].Transactions()) != 200 {
+		t.Fatal("deferred decode did not reconstruct the requested block")
+	}
+	encoded, err := batch.blocks[0].MarshalReusable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) == 0 || &encoded[0] != &raw[0] {
+		t.Fatal("deferred block did not reuse raw capacity for durable marshal")
+	}
+}
+
+func TestHandleRawBlockBroadcastFallbackAndMalformedSyncDrop(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	blk := blockWithTxs(1, bc.CurrentBlock().Hash(), 1)
+	if ss.HandleRawBlock(nil, rawOf(t, blk)) {
+		t.Fatal("non-syncing service consumed a block that belongs to broadcast handling")
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	if !ss.HandleRawBlock(nil, []byte{0x12, 0x80}) {
+		t.Fatal("syncing service did not consume malformed raw block")
+	}
+	ss.mu.Lock()
+	buffered := len(ss.blockBuffer)
+	requested := len(ss.requested)
+	ss.mu.Unlock()
+	if buffered != 0 || requested != 0 {
+		t.Fatalf("malformed raw block changed sync state: buffered=%d requested=%d", buffered, requested)
+	}
+}
+
 func TestDecodedFastPathIsBoundedReusedAndReleased(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
