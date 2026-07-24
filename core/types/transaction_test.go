@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -155,6 +156,47 @@ func TestTransactionDecodedContractMemoizesError(t *testing.T) {
 }
 
 var decodedContractBenchmarkSink proto.Message
+
+var transactionHashBenchmarkSink common.Hash
+
+func benchmarkTransactionPB(b testing.TB) *corepb.Transaction {
+	b.Helper()
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ToAddress:    bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Amount:       1_000_000,
+	}
+	parameter, err := anypb.New(transfer)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: parameter,
+			}},
+			RefBlockBytes: []byte{0x12, 0x34},
+			RefBlockHash:  bytes.Repeat([]byte{0x56}, 8),
+			Expiration:    1_800_000_000_000,
+			Timestamp:     1_799_999_940_000,
+		},
+		Signature: [][]byte{bytes.Repeat([]byte{0x78}, 65)},
+		Ret: []*corepb.Transaction_Result{{
+			Fee:         100_000,
+			ContractRet: corepb.Transaction_Result_SUCCESS,
+		}},
+	}
+}
+
+func BenchmarkTransactionHashCold(b *testing.B) {
+	pb := benchmarkTransactionPB(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		tx := NewTransactionFromPB(pb)
+		transactionHashBenchmarkSink = tx.Hash()
+	}
+}
 
 func BenchmarkTransactionDecodedContract(b *testing.B) {
 	transfer := &contractpb.TransferContract{

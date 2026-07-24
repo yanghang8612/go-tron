@@ -1,7 +1,6 @@
 package types
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -53,11 +52,11 @@ func (tx *Transaction) Hash() common.Hash {
 		if tx.pb.RawData == nil {
 			return
 		}
-		data, err := proto.Marshal(tx.pb.RawData)
+		hash, err := hashProtoMessage(tx.pb.RawData)
 		if err != nil {
 			panic(fmt.Sprintf("transaction raw marshal failed: %v", err))
 		}
-		tx.hash = sha256.Sum256(data)
+		tx.hash = hash
 	})
 	return tx.hash
 }

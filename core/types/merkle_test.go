@@ -2,12 +2,31 @@ package types
 
 import (
 	"crypto/sha256"
+	"math/rand"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+var transactionMerkleBenchmarkSink common.Hash
+
+func BenchmarkTransactionMerkleRoot64(b *testing.B) {
+	tx := benchmarkTransactionPB(b)
+	transactions := make([]*corepb.Transaction, 64)
+	for i := range transactions {
+		transactions[i] = tx
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		root, err := TransactionMerkleRoot(transactions)
+		if err != nil {
+			b.Fatal(err)
+		}
+		transactionMerkleBenchmarkSink = root
+	}
+}
 
 func leafHash(b byte) common.Hash {
 	var h common.Hash
@@ -144,4 +163,59 @@ func TestMerkleRoot_Four_FullPaired(t *testing.T) {
 	if got := MerkleRoot([]common.Hash{a, b, c, d}); got != want {
 		t.Fatalf("four: want %x, got %x", want, got)
 	}
+}
+
+func TestMerkleRootDoesNotMutateInput(t *testing.T) {
+	leaves := []common.Hash{leafHash(1), leafHash(2), leafHash(3), leafHash(4), leafHash(5)}
+	want := append([]common.Hash(nil), leaves...)
+	_ = MerkleRoot(leaves)
+	for i := range leaves {
+		if leaves[i] != want[i] {
+			t.Fatalf("leaf %d mutated: got %x, want %x", i, leaves[i], want[i])
+		}
+	}
+}
+
+func TestMerkleRootMatchesReferenceAcrossWidths(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for count := 0; count <= 257; count++ {
+		leaves := make([]common.Hash, count)
+		for i := range leaves {
+			if _, err := rng.Read(leaves[i][:]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		original := append([]common.Hash(nil), leaves...)
+		want := referenceMerkleRoot(leaves)
+		if got := MerkleRoot(leaves); got != want {
+			t.Fatalf("count %d: got %x, want %x", count, got, want)
+		}
+		for i := range leaves {
+			if leaves[i] != original[i] {
+				t.Fatalf("count %d leaf %d mutated", count, i)
+			}
+		}
+	}
+}
+
+func referenceMerkleRoot(leaves []common.Hash) common.Hash {
+	if len(leaves) == 0 {
+		return common.Hash{}
+	}
+	level := append([]common.Hash(nil), leaves...)
+	for len(level) > 1 {
+		next := make([]common.Hash, 0, (len(level)+1)/2)
+		for i := 0; i < len(level); i += 2 {
+			if i+1 == len(level) {
+				next = append(next, level[i])
+				continue
+			}
+			var pair [2 * sha256.Size]byte
+			copy(pair[:sha256.Size], level[i][:])
+			copy(pair[sha256.Size:], level[i+1][:])
+			next = append(next, sha256.Sum256(pair[:]))
+		}
+		level = next
+	}
+	return level[0]
 }

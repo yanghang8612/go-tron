@@ -6,7 +6,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // MerkleRoot returns the root of a binary Merkle tree built over the given
@@ -27,23 +26,35 @@ func MerkleRoot(leaves []common.Hash) common.Hash {
 	if len(leaves) == 0 {
 		return common.Hash{}
 	}
+	if len(leaves) == 1 {
+		return leaves[0]
+	}
 	level := make([]common.Hash, len(leaves))
 	copy(level, leaves)
-	for len(level) > 1 {
-		next := make([]common.Hash, 0, (len(level)+1)/2)
-		for i := 0; i < len(level); i += 2 {
-			if i+1 == len(level) {
-				next = append(next, level[i])
-				continue
+	return merkleRootOwned(level)
+}
+
+// merkleRootOwned folds a caller-owned leaf slice in place. Each output level
+// is shorter than its input, so writing parents into the front cannot overwrite
+// unread children. Pairing and odd-leaf carry semantics match MerkleRoot.
+func merkleRootOwned(level []common.Hash) common.Hash {
+	for count := len(level); count > 1; {
+		parents := 0
+		for child := 0; child < count; child += 2 {
+			if child+1 == count {
+				level[parents] = level[child]
+			} else {
+				var pair [2 * sha256.Size]byte
+				copy(pair[:sha256.Size], level[child][:])
+				copy(pair[sha256.Size:], level[child+1][:])
+				level[parents] = sha256.Sum256(pair[:])
 			}
-			h := sha256.New()
-			h.Write(level[i][:])
-			h.Write(level[i+1][:])
-			var sum common.Hash
-			copy(sum[:], h.Sum(nil))
-			next = append(next, sum)
+			parents++
 		}
-		level = next
+		count = parents
+	}
+	if len(level) == 0 {
+		return common.Hash{}
 	}
 	return level[0]
 }
@@ -54,11 +65,11 @@ func MerkleRoot(leaves []common.Hash) common.Hash {
 func TransactionMerkleRoot(transactions []*corepb.Transaction) (common.Hash, error) {
 	leaves := make([]common.Hash, len(transactions))
 	for i, tx := range transactions {
-		data, err := proto.Marshal(tx)
+		hash, err := hashProtoMessage(tx)
 		if err != nil {
 			return common.Hash{}, fmt.Errorf("marshal transaction %d: %w", i, err)
 		}
-		leaves[i] = sha256.Sum256(data)
+		leaves[i] = hash
 	}
-	return MerkleRoot(leaves), nil
+	return merkleRootOwned(leaves), nil
 }
