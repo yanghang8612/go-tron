@@ -290,10 +290,25 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 // in one allocation. Each slot owns its ID and repeated-contract-result cell,
 // preserving per-TransactionInfo mutation isolation.
 type transactionInfoSlot struct {
-	info           corepb.TransactionInfo
-	receipt        corepb.ResourceReceipt
-	id             tcommon.Hash
-	contractResult [1][]byte
+	info                 corepb.TransactionInfo
+	receipt              corepb.ResourceReceipt
+	id                   tcommon.Hash
+	contractResult       [1][]byte
+	logs                 []*transactionInfoLogSlot
+	logPointers          []*corepb.TransactionInfo_Log
+	internalTransactions []*corepb.InternalTransaction
+}
+
+// transactionInfoLogSlot owns the stable-address protobuf shell and slice
+// headers for one receipt log. transactionInfoSlot is recycled only after
+// async metadata serialization completes, so these can be reused without
+// crossing ownership boundaries while the VM-owned topic/data bytes remain
+// borrowed as before. The parent stores pointers so slice growth never copies
+// a protobuf message after its internal message state has been used.
+type transactionInfoLogSlot struct {
+	log     corepb.TransactionInfo_Log
+	address [tcommon.AddressLength]byte
+	topics  [][]byte
 }
 
 // transactionInfoBatch owns the contiguous receipt storage for one block.
@@ -490,18 +505,23 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 		info.OrderDetails = result.OrderDetails
 	}
 
-	for _, l := range result.Logs {
-		pbLog := &corepb.TransactionInfo_Log{
-			Address: transactionInfoLogAddress(l.Address),
+	slot.prepareLogs(len(result.Logs))
+	for i, l := range result.Logs {
+		logSlot := slot.logs[i]
+		pbLog := &logSlot.log
+		*pbLog = corepb.TransactionInfo_Log{
+			Address: logSlot.setAddress(l.Address),
 			Data:    l.Data,
 		}
-		for _, topic := range l.Topics {
-			pbLog.Topics = append(pbLog.Topics, topic)
-		}
-		info.Log = append(info.Log, pbLog)
+		pbLog.Topics = logSlot.setTopics(l.Topics)
+		slot.logPointers[i] = pbLog
 	}
-	if len(result.InternalTransactions) > 0 {
-		info.InternalTransactions = append(info.InternalTransactions, result.InternalTransactions...)
+	if len(slot.logPointers) > 0 {
+		info.Log = slot.logPointers[:len(slot.logPointers):len(slot.logPointers)]
+	}
+	slot.setInternalTransactions(result.InternalTransactions)
+	if len(slot.internalTransactions) > 0 {
+		info.InternalTransactions = slot.internalTransactions[:len(slot.internalTransactions):len(slot.internalTransactions)]
 	}
 
 	if result.ContractRet > 1 {
@@ -563,11 +583,73 @@ func isVMContractType(contractType corepb.Transaction_Contract_ContractType) boo
 		contractType == corepb.Transaction_Contract_TriggerSmartContract
 }
 
-func transactionInfoLogAddress(addr tcommon.Address) []byte {
+func (slot *transactionInfoLogSlot) setAddress(addr tcommon.Address) []byte {
 	if addr[0] == tcommon.AddressPrefixMainnet {
-		return append([]byte(nil), addr[1:]...)
+		copy(slot.address[:tcommon.AccountIDLength], addr[1:])
+		return slot.address[:tcommon.AccountIDLength:tcommon.AccountIDLength]
 	}
-	return addr.Bytes()
+	copy(slot.address[:], addr[:])
+	return slot.address[:tcommon.AddressLength:tcommon.AddressLength]
+}
+
+func (slot *transactionInfoLogSlot) setTopics(topics [][]byte) [][]byte {
+	oldLen := len(slot.topics)
+	if cap(slot.topics) < len(topics) {
+		slot.topics = make([][]byte, len(topics))
+	} else {
+		if len(topics) < oldLen {
+			clear(slot.topics[len(topics):oldLen])
+		}
+		slot.topics = slot.topics[:len(topics)]
+	}
+	copy(slot.topics, topics)
+	if len(slot.topics) > 0 {
+		return slot.topics[:len(slot.topics):len(slot.topics)]
+	}
+	return nil
+}
+
+func (slot *transactionInfoSlot) prepareLogs(n int) {
+	oldLogs := len(slot.logs)
+	for i := n; i < oldLogs; i++ {
+		slot.logs[i].log = corepb.TransactionInfo_Log{}
+		clear(slot.logs[i].topics)
+		slot.logs[i].topics = slot.logs[i].topics[:0]
+	}
+	if cap(slot.logs) < n {
+		old := slot.logs[:cap(slot.logs)]
+		slot.logs = make([]*transactionInfoLogSlot, n)
+		copy(slot.logs, old)
+	} else {
+		slot.logs = slot.logs[:n]
+	}
+	for i := oldLogs; i < n; i++ {
+		if slot.logs[i] == nil {
+			slot.logs[i] = new(transactionInfoLogSlot)
+		}
+	}
+	oldPointers := len(slot.logPointers)
+	if cap(slot.logPointers) < n {
+		slot.logPointers = make([]*corepb.TransactionInfo_Log, n)
+	} else {
+		if n < oldPointers {
+			clear(slot.logPointers[n:oldPointers])
+		}
+		slot.logPointers = slot.logPointers[:n]
+	}
+}
+
+func (slot *transactionInfoSlot) setInternalTransactions(txs []*corepb.InternalTransaction) {
+	oldLen := len(slot.internalTransactions)
+	if cap(slot.internalTransactions) < len(txs) {
+		slot.internalTransactions = make([]*corepb.InternalTransaction, len(txs))
+	} else {
+		if len(txs) < oldLen {
+			clear(slot.internalTransactions[len(txs):oldLen])
+		}
+		slot.internalTransactions = slot.internalTransactions[:len(txs)]
+	}
+	copy(slot.internalTransactions, txs)
 }
 
 // ProcessBlock executes all transactions in a block and pays the block reward.
