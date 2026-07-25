@@ -479,6 +479,24 @@ func (v *LayerView) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error
 	return v.getNoCopyCachedStackKey(key)
 }
 
+// GetNoCopyCachedStateAccountLatest is the layer-bound typed account-latest
+// read path. See Buffer.GetNoCopyCachedStateAccountLatest.
+func (v *LayerView) GetNoCopyCachedStateAccountLatest(prefix []byte, accountID common.AccountID) ([]byte, error) {
+	total := len(prefix) + common.AccountIDLength
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, prefix...)
+		key = append(key, accountID[:]...)
+		return v.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, prefix)
+	copy(key[n:], accountID[:])
+	return v.getNoCopyCachedStackKey(key)
+}
+
 // ViewNoCopyCachedKeyParts is the layer-bound callback counterpart of
 // GetNoCopyCachedKeyParts. See Buffer.ViewNoCopyCachedKeyParts for the stable
 // lifetime contract.

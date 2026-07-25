@@ -474,6 +474,61 @@ func TestStateKVLatestStructuredLifecycle(t *testing.T) {
 	}
 }
 
+func TestStateAccountLatestStructuredReadLifecycle(t *testing.T) {
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x42}, common.AddressLength))
+
+	for _, mode := range []string{"buffer", "layer-view"} {
+		t.Run(mode, func(t *testing.T) {
+			disk := rawdb.NewMemoryDatabase()
+			if err := rawdb.WriteStateAccountLatest(disk, owner, []byte("durable")); err != nil {
+				t.Fatal(err)
+			}
+			base := &countingKeyValueReader{KeyValueReader: disk}
+			buf := New(base)
+			buf.SetBaseReadCacheSize(1 << 20)
+			buf.BeginBlock(bufHash(1), 1)
+			h, _ := buf.NewestInflight()
+
+			var reader ethdb.KeyValueReader = buf
+			var writer ethdb.KeyValueWriter = buf
+			if mode == "layer-view" {
+				view := buf.ViewLayer(h)
+				reader, writer = view, view
+			}
+
+			read := func(want string, wantFound bool) {
+				t.Helper()
+				got, found, err := rawdb.ReadStateAccountLatestNoCopy(reader, owner)
+				if err != nil || found != wantFound || string(got) != want {
+					t.Fatalf("ReadStateAccountLatestNoCopy = (%q,%v,%v), want (%q,%v,nil)", got, found, err, want, wantFound)
+				}
+			}
+
+			// The second durable read admits the row; the third must rebuild the
+			// same physical key and resolve it from the bounded base cache.
+			read("durable", true)
+			read("durable", true)
+			read("durable", true)
+			if base.gets != 2 {
+				t.Fatalf("base reads after typed cache hit = %d, want 2", base.gets)
+			}
+
+			if err := rawdb.WriteStateAccountLatest(writer, owner, []byte("overlay")); err != nil {
+				t.Fatal(err)
+			}
+			read("overlay", true)
+			if base.gets != 2 {
+				t.Fatalf("base reads after overlay hit = %d, want 2", base.gets)
+			}
+
+			if err := rawdb.DeleteStateAccountLatest(writer, owner); err != nil {
+				t.Fatal(err)
+			}
+			read("", false)
+		})
+	}
+}
+
 func (r *blockingSnapshotReader) Get(key []byte) ([]byte, error) {
 	r.gets++
 	value, err := r.KeyValueReader.Get(key)
@@ -618,6 +673,29 @@ func BenchmarkBufferGetNoCopy(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		v, _ := buf.GetNoCopy(key)
 		_ = v
+	}
+}
+
+func BenchmarkBufferGetNoCopyCachedStateAccountLatestHit(b *testing.B) {
+	prefix := []byte("state-account-latest/")
+	var accountID common.AccountID
+	for i := range accountID {
+		accountID[i] = byte(i + 1)
+	}
+	key := append(append([]byte(nil), prefix...), accountID[:]...)
+	value := []byte("account-envelope")
+	buf := New(nil)
+	buf.BeginBlock(common.Hash{0x91}, 1)
+	if err := buf.Put(key, value); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := buf.GetNoCopyCachedStateAccountLatest(prefix, accountID)
+		if err != nil || len(got) != len(value) {
+			b.Fatalf("typed account latest read = %d bytes, %v", len(got), err)
+		}
 	}
 }
 

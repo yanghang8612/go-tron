@@ -105,10 +105,22 @@ func TestStateAccountLatestReadWriteDelete(t *testing.T) {
 
 type accountLatestAliasingReadProbe struct {
 	ethdb.KeyValueReader
-	value []byte
+	value             []byte
+	structuredReads   int
+	legacyCachedReads int
+	structuredAccount common.AccountID
 }
 
+var stateAccountLatestReadSink []byte
+
 func (p *accountLatestAliasingReadProbe) GetNoCopyCached([]byte) ([]byte, error) {
+	p.legacyCachedReads++
+	return p.value, nil
+}
+
+func (p *accountLatestAliasingReadProbe) GetNoCopyCachedStateAccountLatest(_ []byte, accountID common.AccountID) ([]byte, error) {
+	p.structuredReads++
+	p.structuredAccount = accountID
 	return p.value, nil
 }
 
@@ -123,12 +135,24 @@ func TestReadStateAccountLatestNoCopyAliasesReaderValue(t *testing.T) {
 	if &borrowed[0] != &backing[0] {
 		t.Fatal("no-copy account read copied the reader value")
 	}
+	if probe.structuredReads != 1 || probe.legacyCachedReads != 0 || probe.structuredAccount != owner.AccountID() {
+		t.Fatalf("structured/legacy reads = %d/%d account=%x", probe.structuredReads, probe.legacyCachedReads, probe.structuredAccount)
+	}
 	owned, ok, err := ReadStateAccountLatest(probe, owner)
 	if err != nil || !ok || !bytes.Equal(owned, backing) {
 		t.Fatalf("owned read = (%q,%v,%v)", owned, ok, err)
 	}
 	if &owned[0] == &backing[0] {
 		t.Fatal("ordinary account read exposed the reader value")
+	}
+}
+
+func BenchmarkReadStateAccountLatestNoCopyCachedHit(b *testing.B) {
+	owner := stateKVTestAddress(0x41, 0x56)
+	probe := &accountLatestAliasingReadProbe{value: []byte("account-envelope")}
+	b.ReportAllocs()
+	for b.Loop() {
+		stateAccountLatestReadSink, _, _ = ReadStateAccountLatestNoCopy(probe, owner)
 	}
 }
 

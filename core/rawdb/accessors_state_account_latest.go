@@ -13,6 +13,14 @@ type StateAccountLatestRow struct {
 	Value []byte
 }
 
+// cachedNoCopyStateAccountLatestReader keeps the fixed schema prefix and
+// AccountID separate until they reach a layered store. The store can assemble
+// the physical key in stack storage and avoid the accessor-level allocation on
+// overlay/cache hits.
+type cachedNoCopyStateAccountLatestReader interface {
+	GetNoCopyCachedStateAccountLatest(prefix []byte, accountID common.AccountID) ([]byte, error)
+}
+
 func WriteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address, value []byte) error {
 	// KeyValueWriter implementations own/copy Put inputs (Pebble batches,
 	// memorydb and blockbuffer all do). Avoid a redundant accessor-level value
@@ -66,7 +74,15 @@ func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]by
 // hydration path decodes the RLP envelope immediately and retains only the
 // decoder-owned fields.
 func ReadStateAccountLatestNoCopy(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
-	value, err := readStateNoCopyCached(db, stateAccountLatestKey(owner))
+	var (
+		value []byte
+		err   error
+	)
+	if reader, ok := db.(cachedNoCopyStateAccountLatestReader); ok {
+		value, err = reader.GetNoCopyCachedStateAccountLatest(stateAccountLatestPrefix, owner.AccountID())
+	} else {
+		value, err = readStateNoCopyCached(db, stateAccountLatestKey(owner))
+	}
 	if err != nil {
 		return nil, false, nil
 	}

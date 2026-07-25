@@ -1052,6 +1052,25 @@ func (b *Buffer) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
 	return b.getNoCopyCachedStackKey(key)
 }
 
+// GetNoCopyCachedStateAccountLatest is the typed account-latest counterpart of
+// GetNoCopyCachedKeyParts. Passing AccountID by value keeps the caller's
+// address scratch off the heap on overlay/cache hits.
+func (b *Buffer) GetNoCopyCachedStateAccountLatest(prefix []byte, accountID common.AccountID) ([]byte, error) {
+	total := len(prefix) + common.AccountIDLength
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, prefix...)
+		key = append(key, accountID[:]...)
+		return b.getNoCopy(key, true)
+	}
+
+	var stack [splitReadKeyStackSize]byte
+	key := stack[:total]
+	n := copy(key, prefix)
+	copy(key[n:], accountID[:])
+	return b.getNoCopyCachedStackKey(key)
+}
+
 // ViewNoCopyCachedKeyParts resolves a split physical key and invokes fn while
 // the value is valid. stable is true for immutable overlay/cache values and
 // owned fallback Get results; false means the value is a callback-scoped Pebble
