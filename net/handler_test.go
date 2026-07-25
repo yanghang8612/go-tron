@@ -245,6 +245,21 @@ func TestHandleHelloDefersCacheUntilMutualTraffic(t *testing.T) {
 	}
 }
 
+func TestCacheRejectReasonsIncludeMissingHistoricalBlocks(t *testing.T) {
+	for _, reason := range []corepb.ReasonCode{
+		corepb.ReasonCode_FORKED,
+		corepb.ReasonCode_FETCH_FAIL,
+		corepb.ReasonCode_LIGHT_NODE_SYNC_FAIL,
+	} {
+		if !isCacheRejectReason(reason) {
+			t.Fatalf("reason %s should evict a cached sync peer", reason)
+		}
+	}
+	if isCacheRejectReason(corepb.ReasonCode_REQUESTED) {
+		t.Fatal("routine disconnect reason must not evict a cached peer")
+	}
+}
+
 func TestPbftMsgDispatch(t *testing.T) {
 	bc := makeTestChain(t)
 	pool := txpool.New()

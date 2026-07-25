@@ -466,6 +466,7 @@ func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 func isCacheRejectReason(reason corepb.ReasonCode) bool {
 	switch reason {
 	case corepb.ReasonCode_FORKED,
+		corepb.ReasonCode_FETCH_FAIL,
 		corepb.ReasonCode_LIGHT_NODE_SYNC_FAIL,
 		corepb.ReasonCode_INCOMPATIBLE_CHAIN,
 		corepb.ReasonCode_INCOMPATIBLE_PROTOCOL,
