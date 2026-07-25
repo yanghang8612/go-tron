@@ -15,9 +15,10 @@ type StateCodeRow struct {
 }
 
 type stateCodeReadViewContext struct {
-	hash     common.Hash
-	owned    []byte
-	callback func([]byte, bool) error
+	hash        common.Hash
+	owned       []byte
+	shareStable bool
+	callback    func([]byte, bool) error
 }
 
 var stateCodeReadViewContextPool = sync.Pool{
@@ -28,7 +29,11 @@ var stateCodeReadViewContextPool = sync.Pool{
 	},
 }
 
-func (ctx *stateCodeReadViewContext) consume(code []byte, _ bool) error {
+func (ctx *stateCodeReadViewContext) consume(code []byte, stable bool) error {
+	if ctx.shareStable && stable {
+		ctx.owned = code
+		return nil
+	}
 	ctx.owned = append([]byte(nil), code...)
 	return nil
 }
@@ -46,19 +51,38 @@ func WriteStateCode(db ethdb.KeyValueWriter, hash common.Hash, code []byte) erro
 
 // ReadStateCode loads immutable contract bytecode by content hash.
 func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	return readStateCode(db, hash, false)
+}
+
+// ReadStateCodeImmutable loads immutable contract bytecode by content hash for
+// trusted internal consumers. A stable layered/cache value may be returned
+// directly; a callback-scoped durable value is still copied before its view is
+// released. The caller may retain the result but must not mutate it.
+//
+// ReadStateCode deliberately keeps its stronger caller-owned contract. This
+// variant exists for StateDB, whose state objects already treat bytecode as
+// immutable, so every new block does not copy the same cache-resident contract
+// code again.
+func ReadStateCodeImmutable(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	return readStateCode(db, hash, true)
+}
+
+func readStateCode(db ethdb.KeyValueReader, hash common.Hash, shareStable bool) []byte {
 	if hash == (common.Hash{}) {
 		return nil
 	}
 	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
 		ctx := stateCodeReadViewContextPool.Get().(*stateCodeReadViewContext)
 		// The viewer may lend a Pebble block slice or a cache/layer slice.
-		// State objects retain bytecode across calls, so the bound callback takes
-		// exactly one caller-owned copy while the scoped view is valid.
+		// State objects retain bytecode across calls. Public reads take one owned
+		// copy; trusted immutable reads may retain values marked stable by viewer.
 		ctx.hash = hash
+		ctx.shareStable = shareStable
 		found, err := viewer.ViewNoCopyCachedKeyParts(stateCodePrefix, ctx.hash[:], ctx.callback)
 		owned := ctx.owned
 		ctx.hash = common.Hash{}
 		ctx.owned = nil
+		ctx.shareStable = false
 		stateCodeReadViewContextPool.Put(ctx)
 		if err != nil || !found {
 			return nil

@@ -9,8 +9,8 @@ import (
 )
 
 type stateCodeReader interface {
-	// ReadStateCode returns caller-owned immutable bytecode. The caller may
-	// retain the slice; changing it must not mutate the backing store.
+	// ReadStateCode returns immutable bytecode that remains valid after return.
+	// The caller may retain the slice but must not mutate it.
 	ReadStateCode(hash tcommon.Hash) []byte
 }
 
@@ -43,7 +43,7 @@ func (s rawDBStateCodeStore) ReadStateCode(hash tcommon.Hash) []byte {
 	if s.reader == nil {
 		return nil
 	}
-	return rawdb.ReadStateCode(s.reader, hash)
+	return rawdb.ReadStateCodeImmutable(s.reader, hash)
 }
 
 func (s rawDBStateCodeStore) WriteStateCode(hash tcommon.Hash, code []byte) error {
@@ -70,7 +70,7 @@ func (s *StateDB) getStateCodeStore() stateCodeStore {
 // reader while preserving the durable code writer. Block application supplies
 // its generation-safe blockbuffer here so repeated contract calls can use the
 // same bounded two-hit base-read cache as flat latest state. Code bytes remain
-// caller-owned at the stateCodeReader boundary.
+// immutable and lifetime-stable at the stateCodeReader boundary.
 func (s *StateDB) SetStateCodeReader(reader ethdb.KeyValueReader) {
 	if s == nil || reader == nil {
 		return

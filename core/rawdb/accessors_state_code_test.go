@@ -16,7 +16,8 @@ type stateCodeCountingReader struct {
 }
 
 type stateCodeScopedViewProbe struct {
-	value []byte
+	value  []byte
+	stable bool
 }
 
 func (p *stateCodeScopedViewProbe) Get([]byte) ([]byte, error) {
@@ -26,7 +27,7 @@ func (p *stateCodeScopedViewProbe) Get([]byte) ([]byte, error) {
 func (*stateCodeScopedViewProbe) Has([]byte) (bool, error) { return false, nil }
 
 func (p *stateCodeScopedViewProbe) ViewNoCopyCachedKeyParts(_, _ []byte, fn func([]byte, bool) error) (bool, error) {
-	return true, fn(p.value, true)
+	return true, fn(p.value, p.stable)
 }
 
 var stateCodeReadSink []byte
@@ -105,10 +106,43 @@ func TestStateCodeReadUsesBoundedBaseCacheAndReturnsOwnedBytes(t *testing.T) {
 func BenchmarkReadStateCodeScopedView(b *testing.B) {
 	code := bytes.Repeat([]byte{0x5a}, 4096)
 	hash := common.Keccak256(code)
-	probe := &stateCodeScopedViewProbe{value: code}
+	probe := &stateCodeScopedViewProbe{value: code, stable: true}
 	b.SetBytes(int64(len(code)))
 	b.ReportAllocs()
 	for b.Loop() {
 		stateCodeReadSink = ReadStateCode(probe, hash)
+	}
+}
+
+func TestReadStateCodeImmutableSharesOnlyStableViews(t *testing.T) {
+	code := []byte{0x60, 0x00, 0xf3}
+	hash := common.Keccak256(code)
+
+	stable := &stateCodeScopedViewProbe{value: code, stable: true}
+	got := ReadStateCodeImmutable(stable, hash)
+	if !bytes.Equal(got, code) || &got[0] != &code[0] {
+		t.Fatal("immutable read did not share stable bytecode")
+	}
+
+	transientCode := append([]byte(nil), code...)
+	transient := &stateCodeScopedViewProbe{value: transientCode, stable: false}
+	got = ReadStateCodeImmutable(transient, hash)
+	if !bytes.Equal(got, transientCode) || &got[0] == &transientCode[0] {
+		t.Fatal("immutable read retained a callback-scoped bytecode view")
+	}
+	transientCode[0] ^= 0xff
+	if !bytes.Equal(got, code) {
+		t.Fatal("immutable read changed after callback-scoped storage was reused")
+	}
+}
+
+func BenchmarkReadStateCodeImmutableScopedView(b *testing.B) {
+	code := bytes.Repeat([]byte{0x5a}, 4096)
+	hash := common.Keccak256(code)
+	probe := &stateCodeScopedViewProbe{value: code, stable: true}
+	b.SetBytes(int64(len(code)))
+	b.ReportAllocs()
+	for b.Loop() {
+		stateCodeReadSink = ReadStateCodeImmutable(probe, hash)
 	}
 }
