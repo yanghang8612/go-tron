@@ -191,6 +191,11 @@ var (
 		Usage: "Pebble memtable size in MiB",
 		Value: 256,
 	}
+	dbTargetFileSizeFlag = &cli.Uint64Flag{
+		Name:  "db.target-file-size",
+		Usage: "Pebble L0 target SST size in MiB (doubles per level)",
+		Value: 8,
+	}
 	dbL0CompactionFlag = &cli.IntFlag{
 		Name:  "db.l0.compact",
 		Usage: "Pebble L0 compaction threshold",
@@ -268,6 +273,7 @@ var app = &cli.App{
 		dbCacheFlag,
 		dbHandlesFlag,
 		dbMemtableFlag,
+		dbTargetFileSizeFlag,
 		dbL0CompactionFlag,
 		dbL0StopFlag,
 		freezerDisableFlag,
@@ -297,6 +303,7 @@ var app = &cli.App{
 				dbCacheFlag,
 				dbHandlesFlag,
 				dbMemtableFlag,
+				dbTargetFileSizeFlag,
 				dbL0CompactionFlag,
 				dbL0StopFlag,
 			},

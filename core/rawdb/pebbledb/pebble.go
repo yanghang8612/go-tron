@@ -20,6 +20,9 @@
 //   - MemTableSize is bumped from cache/(2*memTableNumber) (~32 MiB at cache=256 MiB)
 //     to a configurable value (default 256 MiB) so the WAL/memtable absorbs more
 //     write traffic before flushing to L0.
+//   - TargetFileSize starts at 8 MiB instead of 2 MiB. Full-sync measurements
+//     showed roughly 450 tiny SST outputs per 30 seconds with the inherited
+//     target ramp, creating avoidable file-rotation and metadata work.
 //   - L0CompactionThreshold is relaxed above Pebble's upstream default of 4 (go-eth
 //     hard-codes 2 to keep compaction debt low at the cost of more frequent L0
 //     compactions). Under sync write load that choice pegs background compaction
@@ -88,6 +91,7 @@ const (
 	minPooledBatchSize    = 64 << 10
 	maxPooledBatchSize    = 8 << 20
 	batchBuffersPerClass  = 2
+	maxTargetFileSizeBase = int64(^uint64(0)>>1) >> 6
 
 	// Keep the first compaction worker active as needed, but reserve the second
 	// slot for substantial pressure. Values of 1 sublevel / 256 MiB made the
@@ -172,6 +176,10 @@ type Options struct {
 	// trades write-burst smoothing for higher per-flush cost. Default: 256 MiB.
 	MemTableSizeBytes uint64
 
+	// TargetFileSizeBytes is the target size of L0 SSTables. Each subsequent
+	// level doubles the target. Default: 8 MiB.
+	TargetFileSizeBytes int64
+
 	// L0CompactionThreshold is the number of L0 sub-levels that triggers an L0
 	// compaction. Default: 8. go-ethereum overrides this to 2 in order to cap
 	// compaction debt; we trade that for fewer background compactions.
@@ -187,9 +195,21 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		MemTableSizeBytes:     256 * 1024 * 1024,
+		TargetFileSizeBytes:   8 * 1024 * 1024,
 		L0CompactionThreshold: 8,
 		L0StopWritesThreshold: 64,
 	}
+}
+
+func levelOptions(baseTarget int64) []pebble.LevelOptions {
+	levels := make([]pebble.LevelOptions, 7)
+	for i := range levels {
+		levels[i].TargetFileSize = baseTarget << i
+		if i < len(levels)-1 {
+			levels[i].FilterPolicy = bloom.FilterPolicy(10)
+		}
+	}
+	return levels
 }
 
 // compactionConcurrency reserves roughly half of the Go execution budget for
@@ -486,6 +506,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	if tune.MemTableSizeBytes == 0 {
 		tune.MemTableSizeBytes = defaults.MemTableSizeBytes
 	}
+	if tune.TargetFileSizeBytes == 0 {
+		tune.TargetFileSizeBytes = defaults.TargetFileSizeBytes
+	}
+	if tune.TargetFileSizeBytes < 0 || tune.TargetFileSizeBytes > maxTargetFileSizeBase {
+		return nil, fmt.Errorf("invalid target file size %d", tune.TargetFileSizeBytes)
+	}
 	if tune.L0CompactionThreshold == 0 {
 		tune.L0CompactionThreshold = defaults.L0CompactionThreshold
 	}
@@ -497,6 +523,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		"cache", common.StorageSize(cache*1024*1024),
 		"handles", handles,
 		"memtable", common.StorageSize(tune.MemTableSizeBytes),
+		"target_file", common.StorageSize(tune.TargetFileSizeBytes),
 		"l0_compact", tune.L0CompactionThreshold,
 		"l0_stop", tune.L0StopWritesThreshold,
 	)
@@ -575,17 +602,10 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
-		Levels: []pebble.LevelOptions{
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 4 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 8 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 16 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 32 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-
-			// Pebble doesn't use the Bloom filter at level6 for read efficiency.
-			{TargetFileSize: 128 * 1024 * 1024},
-		},
+		// Full-sync state writes benefit from fewer, larger SSTables. Bloom
+		// filters remain enabled through L5; as before, L6 omits one because
+		// Pebble does not use it for read efficiency there.
+		Levels:   levelOptions(tune.TargetFileSizeBytes),
 		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{
 			CompactionBegin: db.onCompactionBegin,

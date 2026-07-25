@@ -20,6 +20,8 @@ type PebbleOptions = pebbledb.Options
 //   - MemTableSize is sized independently from the cache (256 MiB by default,
 //     up from go-eth's cache/8 ≈ 32 MiB at cache=256 MiB) so the WAL/memtable
 //     absorbs more sync write traffic before flushing to L0.
+//   - The target SST size starts at 8 MiB and doubles per level, reducing the
+//     hundreds of small table outputs observed in each full-sync profile.
 //   - L0CompactionThreshold is relaxed to 8 (go-eth uses 2 to cap compaction
 //     debt; that pegged background-compaction CPU under our sync workload).
 //   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient
