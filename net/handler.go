@@ -478,6 +478,7 @@ func isCacheRejectReason(reason corepb.ReasonCode) bool {
 }
 
 func (h *TronHandler) disconnectPeer(peer *p2p.Peer, reason corepb.ReasonCode) {
+	peer.RecordDisconnectCause("local disconnect: " + reason.String())
 	msg := &corepb.DisconnectMessage{Reason: reason}
 	data, _ := proto.Marshal(msg)
 	peer.Send(p2p.MsgDisconnect, data)

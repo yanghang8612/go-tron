@@ -260,6 +260,18 @@ func TestCacheRejectReasonsIncludeMissingHistoricalBlocks(t *testing.T) {
 	}
 }
 
+func TestDisconnectPeerRecordsLocalReason(t *testing.T) {
+	bc := makeTestChain(t)
+	handler := NewTronHandler(bc, txpool.New(), nil)
+	peer, closePeer := testPeer(t, "local-reject")
+	defer closePeer()
+
+	handler.disconnectPeer(peer, corepb.ReasonCode_BAD_BLOCK)
+	if got := peer.DisconnectCause(); got != "local disconnect: BAD_BLOCK" {
+		t.Fatalf("disconnect cause = %q", got)
+	}
+}
+
 func TestPbftMsgDispatch(t *testing.T) {
 	bc := makeTestChain(t)
 	pool := txpool.New()
