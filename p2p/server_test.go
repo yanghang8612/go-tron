@@ -431,6 +431,9 @@ func TestForgetApplicationPeerRemovesDurableEndpoint(t *testing.T) {
 	peer := NewPeer(nil, "198.51.100.9:18888", false, nil)
 	srv.RememberApplicationPeer(peer, nil)
 	srv.ForgetApplicationPeer(peer, nil)
+	if err := srv.AddPeer(peer.ID()); !errors.Is(err, errApplicationPeerRejected) {
+		t.Fatalf("dial after application rejection = %v", err)
+	}
 
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
@@ -441,6 +444,11 @@ func TestForgetApplicationPeerRemovesDurableEndpoint(t *testing.T) {
 	}
 	if got := srv.cachedPeerSnapshot(); len(got) != 0 {
 		t.Fatalf("cached peers after eviction = %v", got)
+	}
+
+	srv.rejectApplicationPeer(peer.ID(), time.Now().Add(-time.Second))
+	if srv.applicationPeerRejected(peer.ID(), time.Now()) {
+		t.Fatal("expired application rejection remained active")
 	}
 }
 

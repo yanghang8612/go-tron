@@ -51,10 +51,19 @@ var errPeerCapacity = errors.New("peer capacity reached")
 // callback) should silently swallow it instead of logging.
 var errDialThrottled = errors.New("dial throttled")
 
+// errApplicationPeerRejected is returned while an endpoint that explicitly
+// failed TRON application compatibility is quarantined.
+var errApplicationPeerRejected = errors.New("application peer quarantined")
+
 // defaultDialThrottleInterval is the minimum gap between outbound dial
 // attempts to the same address. Picked to dampen the maintainCh thundering
 // herd without making transient drops take minutes to recover.
 const defaultDialThrottleInterval = 30 * time.Second
+
+// applicationPeerRejectCooldown prevents discovery from reconnecting every
+// few seconds to a peer that explicitly reported FORKED/FETCH_FAIL for our
+// current historical range. Ordinary EOF/timeouts do not enter this cooldown.
+const applicationPeerRejectCooldown = 30 * time.Minute
 
 // maxPersistedPeers keeps enough recently successful endpoints to repopulate a
 // restarted node without letting stale history crowd the built-in bootstrap
@@ -104,21 +113,22 @@ type ServerConfig struct {
 
 // Server manages TCP connections to peers.
 type Server struct {
-	config      ServerConfig
-	handler     Handler
-	listener    net.Listener
-	peers       map[string]*Peer
-	peerNodeIDs map[string]string // remote libp2p node ID hex -> peer ID
-	mu          sync.RWMutex
-	quit        chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	maintainCh  chan struct{} // signals the maintain loop to reconnect now
-	maintainMu  sync.Mutex    // serializes reconnect rounds and candidate rotation
-	maintainPos int           // next peerCandidates index considered by maintainPeers
-	dialLimiter *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
-	peerCacheMu sync.Mutex
-	cachedPeers []string // most recently successful first; bounded by maxPersistedPeers
+	config        ServerConfig
+	handler       Handler
+	listener      net.Listener
+	peers         map[string]*Peer
+	peerNodeIDs   map[string]string // remote libp2p node ID hex -> peer ID
+	mu            sync.RWMutex
+	quit          chan struct{}
+	stopOnce      sync.Once
+	wg            sync.WaitGroup
+	maintainCh    chan struct{} // signals the maintain loop to reconnect now
+	maintainMu    sync.Mutex    // serializes reconnect rounds and candidate rotation
+	maintainPos   int           // next peerCandidates index considered by maintainPeers
+	dialLimiter   *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
+	peerCacheMu   sync.Mutex
+	cachedPeers   []string // most recently successful first; bounded by maxPersistedPeers
+	rejectedPeers map[string]time.Time
 }
 
 // NewServer creates a new P2P server.
@@ -156,14 +166,15 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 	}
 
 	return &Server{
-		config:      config,
-		handler:     handler,
-		peers:       make(map[string]*Peer),
-		peerNodeIDs: make(map[string]string),
-		quit:        make(chan struct{}),
-		maintainCh:  make(chan struct{}, 1),
-		dialLimiter: limiter,
-		cachedPeers: cachedPeers,
+		config:        config,
+		handler:       handler,
+		peers:         make(map[string]*Peer),
+		peerNodeIDs:   make(map[string]string),
+		quit:          make(chan struct{}),
+		maintainCh:    make(chan struct{}, 1),
+		dialLimiter:   limiter,
+		cachedPeers:   cachedPeers,
+		rejectedPeers: make(map[string]time.Time),
 	}
 }
 
@@ -204,6 +215,7 @@ func (s *Server) Start() error {
 			if err := s.AddPeer(addr); err != nil &&
 				!errors.Is(err, errDialThrottled) &&
 				!errors.Is(err, errAlreadyConnected) &&
+				!errors.Is(err, errApplicationPeerRejected) &&
 				!errors.Is(err, errPeerCapacity) {
 				log.Debug("Cached peer reconnect failed", "addr", addr, "err", err)
 			}
@@ -316,6 +328,9 @@ func (s *Server) AddPeer(addr string) error {
 	if connected {
 		return errAlreadyConnected
 	}
+	if s.applicationPeerRejected(addr, time.Now()) {
+		return errApplicationPeerRejected
+	}
 	if s.dialLimiter != nil && !s.dialLimiter.Allow(addr) {
 		return errDialThrottled
 	}
@@ -338,6 +353,7 @@ func (s *Server) AddDiscoveredPeer(addr string) {
 	if err := s.AddPeer(addr); err != nil &&
 		!errors.Is(err, errDialThrottled) &&
 		!errors.Is(err, errAlreadyConnected) &&
+		!errors.Is(err, errApplicationPeerRejected) &&
 		!errors.Is(err, errPeerCapacity) {
 		log.Debug("Discovery peer dial failed", "addr", addr, "err", err)
 	}
@@ -508,8 +524,29 @@ func (s *Server) RememberApplicationPeer(peer *Peer, from *corepb.Endpoint) {
 // compatibility after it had previously reached the durable cache.
 func (s *Server) ForgetApplicationPeer(peer *Peer, from *corepb.Endpoint) {
 	if addr := applicationPeerAddress(peer, from); addr != "" {
+		s.rejectApplicationPeer(addr, time.Now().Add(applicationPeerRejectCooldown))
 		s.forgetPeer(addr)
 	}
+}
+
+func (s *Server) rejectApplicationPeer(addr string, until time.Time) {
+	s.peerCacheMu.Lock()
+	s.rejectedPeers[addr] = until
+	s.peerCacheMu.Unlock()
+}
+
+func (s *Server) applicationPeerRejected(addr string, now time.Time) bool {
+	s.peerCacheMu.Lock()
+	defer s.peerCacheMu.Unlock()
+	until, ok := s.rejectedPeers[addr]
+	if !ok {
+		return false
+	}
+	if !now.Before(until) {
+		delete(s.rejectedPeers, addr)
+		return false
+	}
+	return true
 }
 
 func applicationPeerAddress(peer *Peer, from *corepb.Endpoint) string {
@@ -651,6 +688,7 @@ func (s *Server) maintainPeers() {
 			if err := s.AddPeer(a); err != nil &&
 				!errors.Is(err, errDialThrottled) &&
 				!errors.Is(err, errAlreadyConnected) &&
+				!errors.Is(err, errApplicationPeerRejected) &&
 				!errors.Is(err, errPeerCapacity) {
 				log.Debug("Configured peer reconnect failed", "addr", a, "err", err)
 			}
