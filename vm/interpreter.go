@@ -95,13 +95,20 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	if dynamicEnergy {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
 	}
+	// Code and the fork-resolved jump table are immutable for this execution
+	// frame. Keep both locally so the per-op dispatch path does not reload them
+	// through Contract/Interpreter or repeat Contract.GetOp's bounds check after
+	// the loop has already established pc < len(code).
+	code := contract.Code
+	codeLen := uint64(len(code))
+	table := in.table
 	for {
-		if *pc >= uint64(len(contract.Code)) {
+		if *pc >= codeLen {
 			break
 		}
 
-		op := contract.GetOp(*pc)
-		operation := in.table[op]
+		op := OpCode(code[*pc])
+		operation := table[op]
 		if operation == nil {
 			// A known-but-disabled opcode is nil only in the config-resolved
 			// table. Preserve the former runtime-gate bookkeeping/tracer order on
