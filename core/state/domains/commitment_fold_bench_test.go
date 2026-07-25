@@ -215,10 +215,11 @@ func BenchmarkAsyncFoldParentBranchReads(b *testing.B) {
 	}
 }
 
-// BenchmarkAsyncFoldPebbleParentView measures only the lifecycle-lock reuse
-// change against a compacted Pebble parent trie. Both arms retain DB.Get point
-// lookups and identical blockbuffer/cache semantics; the baseline hides the
-// optional fold-scoped view so every cold parent read takes quitLock.RLock.
+// BenchmarkAsyncFoldPebbleParentView measures fold-scoped parent-read
+// acceleration against a compacted Pebble trie. The baseline hides the optional
+// capabilities and performs independent DB.Get calls; the optimized arm uses a
+// stable snapshot plus one Bloom-filtered cursor per first-nibble worker. Both
+// retain identical blockbuffer/cache semantics and must produce the same root.
 func BenchmarkAsyncFoldPebbleParentView(b *testing.B) {
 	const baseSize = 50_000
 	rng := rand.New(rand.NewSource(9441))

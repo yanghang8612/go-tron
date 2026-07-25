@@ -18,6 +18,7 @@ type rawdbBranchStore struct {
 	ownedValue         bool
 	readParentBranches bool
 	parentView         pointread.CommitmentParentView
+	parentSession      pointread.CommitmentParentSession
 }
 
 // branchDecodeView owns the callback passed through rawdb/blockbuffer's
@@ -142,6 +143,16 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
 	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 	decodeView.dst = dst
+	if s.parentSession != nil {
+		reader := maxFoldNibbles // root branch has no first-nibble owner
+		if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
+			reader = int(prefix[0])
+		}
+		found, err := rawdb.ViewCommitmentParentBranchInSession(s.parentSession, reader, prefix, decodeView.consume)
+		decodeView.dst = nil
+		branchDecodeViewPool.Put(decodeView)
+		return found, err
+	}
 	if s.parentView != nil {
 		found, err := rawdb.ViewCommitmentParentBranchInView(s.parentView, prefix, decodeView.consume)
 		decodeView.dst = nil
@@ -156,6 +167,30 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	decodeView.dst = nil
 	branchDecodeViewPool.Put(decodeView)
 	return found, err
+}
+
+func (s *rawdbBranchStore) beginParentRead() error {
+	session, err := rawdb.NewCommitmentParentReadSession(s.db, maxFoldNibbles+1)
+	if err != nil {
+		if session != nil {
+			_ = session.Close()
+		}
+		return err
+	}
+	if session != nil {
+		s.parentSession = session
+		return nil
+	}
+	return s.beginParentView()
+}
+
+func (s *rawdbBranchStore) closeParentRead() error {
+	if s.parentSession != nil {
+		err := s.parentSession.Close()
+		s.parentSession = nil
+		return err
+	}
+	return s.closeParentView()
 }
 
 func (s *rawdbBranchStore) beginParentView() error {
@@ -463,13 +498,13 @@ func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (c
 	}
 	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
 	if s.store.readParentBranches {
-		if err := s.store.beginParentView(); err != nil {
+		if err := s.store.beginParentRead(); err != nil {
 			s.store.readParentBranches = false
 			return common.Hash{}, err
 		}
 	}
 	root, err := s.trie.Fold(foldUpdates)
-	closeErr := s.store.closeParentView()
+	closeErr := s.store.closeParentRead()
 	s.store.readParentBranches = false
 	if err != nil {
 		return common.Hash{}, err

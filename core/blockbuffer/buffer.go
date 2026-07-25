@@ -1624,6 +1624,9 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 			}
 			return err
 		}
+		if b.baseReadCache != nil {
+			b.baseReadCache.advanceVersion()
+		}
 		b.promoteBaseReadCacheLayer(l)
 	}
 	for i := range b.layers {
@@ -1709,6 +1712,9 @@ func (b *Buffer) FlushUpTo(
 	}
 	if flushed == 0 {
 		return nil
+	}
+	if b.baseReadCache != nil {
+		b.baseReadCache.advanceVersion()
 	}
 	b.promoteBaseReadCacheLayers(snapshot[:flushed])
 

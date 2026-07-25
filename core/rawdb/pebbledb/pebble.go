@@ -43,6 +43,7 @@
 package pebbledb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -97,6 +98,17 @@ var batchBufferPools = [...]chan []byte{
 	make(chan []byte, batchBuffersPerClass), // 4 MiB
 	make(chan []byte, batchBuffersPerClass), // 8 MiB
 }
+
+// exactPointComparer keeps Pebble's bytewise ordering and on-disk comparer
+// identity while declaring the entire physical key as its prefix. Existing
+// tables were already filtered by full keys when DefaultComparer.Split was
+// nil; returning len(key) preserves that filter encoding and additionally
+// enables reusable iterators to call SeekPrefixGE for exact lookups.
+var exactPointComparer = func() *pebble.Comparer {
+	comparer := *pebble.DefaultComparer
+	comparer.Split = func(key []byte) int { return len(key) }
+	return &comparer
+}()
 
 func batchBufferClass(size int) (int, int, bool) {
 	if size < minPooledBatchSize || size > maxPooledBatchSize {
@@ -251,8 +263,23 @@ type pointReadView struct {
 	db *Database
 }
 
+// pointReadSnapshot pins one Pebble sequence number for a short sorted-read
+// session. Holding quitLock's read side for its lifetime prevents Database.Close
+// from invalidating the snapshot while a commitment fold is in progress.
+type pointReadSnapshot struct {
+	db       *Database
+	snapshot *pebble.Snapshot
+}
+
+type pointReadCursor struct {
+	iter *pebble.Iterator
+}
+
 var _ pointread.Viewer = (*Database)(nil)
 var _ pointread.View = (*pointReadView)(nil)
+var _ pointread.Snapshotter = (*Database)(nil)
+var _ pointread.Snapshot = (*pointReadSnapshot)(nil)
+var _ pointread.Cursor = (*pointReadCursor)(nil)
 
 // NewPointReadView acquires one read-side lifecycle lease. Close must be called
 // before Database.Close can complete; normal reads, writes, flushes and
@@ -289,6 +316,71 @@ func (v *pointReadView) Close() error {
 	v.db.quitLock.RUnlock()
 	v.db = nil
 	return nil
+}
+
+// NewPointReadSnapshot exposes Pebble's MVCC snapshot through the narrow
+// optional pointread interface. One cursor is created per independently sorted
+// commitment stream, avoiding DB.Get's search setup and closer allocation for
+// every cold branch.
+func (d *Database) NewPointReadSnapshot() (pointread.Snapshot, error) {
+	d.quitLock.RLock()
+	if d.closed {
+		d.quitLock.RUnlock()
+		return nil, pebble.ErrClosed
+	}
+	return &pointReadSnapshot{db: d, snapshot: d.db.NewSnapshot()}, nil
+}
+
+func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
+	if s == nil || s.snapshot == nil {
+		return nil, pebble.ErrClosed
+	}
+	lower := append([]byte(nil), prefix...)
+	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upperBound(lower),
+		KeyTypes:   pebble.IterKeyTypePointsOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &pointReadCursor{iter: iter}, nil
+}
+
+func (s *pointReadSnapshot) Close() error {
+	if s == nil || s.snapshot == nil {
+		return nil
+	}
+	err := s.snapshot.Close()
+	s.snapshot = nil
+	s.db.quitLock.RUnlock()
+	s.db = nil
+	return err
+}
+
+func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, error) {
+	if c == nil || c.iter == nil {
+		return false, pebble.ErrClosed
+	}
+	// Unlike the earlier SeekGE experiment, SeekPrefixGE applies the table's
+	// full-key Bloom filters. The comparer Split function returns len(key), so a
+	// successful seek can only yield this exact physical key.
+	if !c.iter.SeekPrefixGE(key) {
+		return false, c.iter.Error()
+	}
+	if !bytes.Equal(c.iter.Key(), key) {
+		return false, nil
+	}
+	return true, fn(c.iter.Value())
+}
+
+func (c *pointReadCursor) Close() error {
+	if c == nil || c.iter == nil {
+		return nil
+	}
+	err := c.iter.Close()
+	c.iter = nil
+	return err
 }
 
 func (d *Database) onCompactionBegin(info pebble.CompactionInfo) {
@@ -436,6 +528,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		writeOptions: pebble.NoSync,
 	}
 	opt := &pebble.Options{
+		Comparer: exactPointComparer,
 		// Pebble has a single combined cache area; this fork dedicates the
 		// caller-provided cache budget to reads and sizes memtables
 		// independently from `tune.MemTableSizeBytes`.

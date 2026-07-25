@@ -38,6 +38,25 @@ func ViewCommitmentParentBranchInView(view pointread.CommitmentParentView, prefi
 	return view.GetKeyParts(stateCommitmentBranchPrefix, prefix, fn)
 }
 
+// NewCommitmentParentReadSession asks a capable layered reader for a stable,
+// cursor-backed parent-state view. nil means the backend does not support the
+// optimization and callers should retain the ordinary point-read view.
+func NewCommitmentParentReadSession(db ethdb.KeyValueReader, readers int) (pointread.CommitmentParentSession, error) {
+	if sessioner, ok := db.(pointread.CommitmentParentSessioner); ok {
+		return sessioner.NewCommitmentParentReadSession(readers)
+	}
+	return nil, nil
+}
+
+// ViewCommitmentParentBranchInSession reads one logical branch prefix through
+// a previously captured parent-state session.
+func ViewCommitmentParentBranchInSession(session pointread.CommitmentParentSession, reader int, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	if session == nil {
+		return false, errors.New("rawdb: nil commitment parent session")
+	}
+	return session.ViewKeyParts(reader, stateCommitmentBranchPrefix, prefix, fn)
+}
+
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
 // path directly into their owned key instead of allocating an intermediate

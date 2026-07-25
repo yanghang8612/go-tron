@@ -64,6 +64,24 @@ func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_SnapshotVersionRejectsFutureReplacement(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("commitment-hot-branch")
+	testBaseReadCacheSet(c, key, []byte("old"))
+	captured := c.version.Load()
+	if got, ok, _, _ := c.getAtVersion(key, captured); !ok || string(got) != "old" {
+		t.Fatalf("captured cache = (%q,%v), want old/true", got, ok)
+	}
+	c.advanceVersion()
+	c.setFlushed(string(key), []byte("new"))
+	if got, ok, _, cacheable := c.getAtVersion(key, captured); ok || got != nil || cacheable {
+		t.Fatalf("future replacement = (%q,%v), want nil/false", got, ok)
+	}
+	if got, ok, _, _ := c.getAtVersion(key, c.version.Load()); !ok || string(got) != "new" {
+		t.Fatalf("current cache = (%q,%v), want new/true", got, ok)
+	}
+}
+
 func TestBaseReadCache_MissingAdmissionAndFlushRefresh(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("missing-permission-row")

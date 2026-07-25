@@ -1,11 +1,81 @@
 package pebbledb
 
 import (
+	"bytes"
 	"encoding/binary"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble"
 )
+
+func TestExactPointComparerReopensDefaultDatabase(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "reopen")
+	old, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Set([]byte("existing-key"), []byte("existing-value"), pebble.NoSync); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := New(dir, 16, 16, "test/reopen/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	value, err := db.Get([]byte("existing-key"))
+	if err != nil || !bytes.Equal(value, []byte("existing-value")) {
+		t.Fatalf("reopened value = (%q,%v)", value, err)
+	}
+}
+
+func TestPointReadSnapshotCursorIsStableAndExact(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "test/snapshot/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	key := []byte("branch/a")
+	if err := db.Put(key, []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := db.NewPointReadSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(key, []byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := snapshot.NewCursor([]byte("branch/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	found, err := cursor.View(key, func(value []byte) error {
+		got = append(got, value...)
+		return nil
+	})
+	if err != nil || !found || !bytes.Equal(got, []byte("before")) {
+		t.Fatalf("snapshot value = (%q,%v,%v)", got, found, err)
+	}
+	if found, err := cursor.View([]byte("branch/missing"), func([]byte) error {
+		t.Fatal("callback invoked for missing exact key")
+		return nil
+	}); err != nil || found {
+		t.Fatalf("missing exact key = (%v,%v)", found, err)
+	}
+	if err := cursor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPointReadViewLifecycle(t *testing.T) {
 	db, err := New(t.TempDir(), 16, 16, "test/", false, Options{})
