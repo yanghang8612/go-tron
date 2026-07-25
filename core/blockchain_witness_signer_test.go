@@ -1,13 +1,25 @@
 package core
 
 import (
+	"sync/atomic"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+type witnessSignerIteratorCountingDB struct {
+	ethdb.Database
+	iteratorCalls atomic.Int64
+}
+
+func (db *witnessSignerIteratorCountingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	db.iteratorCalls.Add(1)
+	return db.Database.NewIterator(prefix, start)
+}
 
 // TestHeaderParentChainReader_WitnessPermissionSigner pins the state-read wiring
 // that block signature validation uses under AllowMultiSign: the parent-state
@@ -51,5 +63,25 @@ func TestHeaderParentChainReader_WitnessPermissionSigner(t *testing.T) {
 	}, nil)
 	if got := r.WitnessPermissionSigner(wAddr); got != deleg {
 		t.Fatalf("delegated witness permission: want %x, got %x", deleg, got)
+	}
+
+	// The hot block-verification path needs one permission row, not every
+	// split account domain. A full GetAccount here opens prefix iterators for
+	// permissions, assets, votes, stakes, frozen supply, and resources once per
+	// block; the point lookup must open none.
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatalf("commit state: %v", err)
+	}
+	countingDB := &witnessSignerIteratorCountingDB{Database: db}
+	reopened, err := state.New(root, state.NewDatabase(countingDB))
+	if err != nil {
+		t.Fatalf("reopen state: %v", err)
+	}
+	if got := (headerParentChainReader{state: reopened}).WitnessPermissionSigner(wAddr); got != deleg {
+		t.Fatalf("persisted delegated witness permission: want %x, got %x", deleg, got)
+	}
+	if got := countingDB.iteratorCalls.Load(); got != 0 {
+		t.Fatalf("witness permission point lookup opened %d prefix iterators, want 0", got)
 	}
 }

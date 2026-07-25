@@ -857,11 +857,11 @@ func (r headerParentChainReader) WitnessPermissionSigner(witnessAddr tcommon.Add
 	if r.state == nil {
 		return witnessAddr
 	}
-	acc := r.state.GetAccount(witnessAddr)
-	if acc == nil {
+	permission, err := r.state.AccountPermissionByID(witnessAddr, 1)
+	if err != nil || permission == nil || len(permission.GetKeys()) == 0 {
 		return witnessAddr
 	}
-	return acc.WitnessPermissionAddress()
+	return tcommon.BytesToAddress(permission.GetKeys()[0].GetAddress())
 }
 
 // applyBlockWithPlan executes, commits, and persists one linear-extension
