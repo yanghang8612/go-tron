@@ -47,7 +47,7 @@ func ValidateTAPOS(tx *types.Transaction, db ethdb.KeyValueReader) error {
 	if len(refBytes) != 2 || len(refHash) != 8 {
 		return ErrTaposBadLength
 	}
-	recent := rawdb.ReadTaposRef(db, refBytes)
+	recent := rawdb.ReadTaposRefNoCopy(db, refBytes)
 	if recent == nil {
 		return ErrTaposUnknownRef
 	}

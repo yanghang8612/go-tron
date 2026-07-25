@@ -42,3 +42,27 @@ func ReadTaposRef(db ethdb.KeyValueReader, refBlockBytes []byte) []byte {
 	}
 	return v
 }
+
+// ReadTaposRefNoCopy is the synchronous-validation counterpart of
+// ReadTaposRef. Layered readers can assemble the fixed prefix and 2-byte slot
+// in stack storage and return their immutable overlay/cache value directly.
+// The returned bytes must not be mutated or retained across another database
+// operation.
+func ReadTaposRefNoCopy(db ethdb.KeyValueReader, refBlockBytes []byte) []byte {
+	if len(refBlockBytes) != 2 {
+		return nil
+	}
+	var (
+		v   []byte
+		err error
+	)
+	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
+		v, err = reader.GetNoCopyCachedKeyParts(taposPrefix, refBlockBytes)
+	} else {
+		v, err = db.Get(taposKey(refBlockBytes))
+	}
+	if err != nil || len(v) != 8 {
+		return nil
+	}
+	return v
+}

@@ -699,6 +699,32 @@ func BenchmarkBufferGetNoCopyCachedStateAccountLatestHit(b *testing.B) {
 	}
 }
 
+func BenchmarkBufferReadTaposRefOverlayHit(b *testing.B) {
+	buf := New(nil)
+	buf.BeginBlock(common.Hash{0x91}, 0x1234)
+	blockHash := common.Hash{8: 0x41, 9: 0x42, 10: 0x43, 11: 0x44, 12: 0x45, 13: 0x46, 14: 0x47, 15: 0x48}
+	if err := rawdb.WriteTaposRef(buf, 0x1234, blockHash); err != nil {
+		b.Fatal(err)
+	}
+	ref := []byte{0x12, 0x34}
+	b.Run("owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if got := rawdb.ReadTaposRef(buf, ref); len(got) != 8 {
+				b.Fatalf("owned TAPOS read = %x", got)
+			}
+		}
+	})
+	b.Run("no-copy", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if got := rawdb.ReadTaposRefNoCopy(buf, ref); len(got) != 8 {
+				b.Fatalf("no-copy TAPOS read = %x", got)
+			}
+		}
+	})
+}
+
 // TestLayerViewGetNoCopy_MatchesScopedGet is the async-commit counterpart of
 // TestGetNoCopy_MatchesGet. It pins both byte identity and LayerView's scoped
 // visibility: own in-flight layer > committed layers > base, while a newer
