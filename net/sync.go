@@ -1764,7 +1764,11 @@ func (ss *SyncService) recoverMalformedBatch(batch *bufferedSyncBatch) (badPeer 
 		ss.removePeerStateLocked(badPeer.ID(), true)
 	}
 	if len(ss.peers) == 0 {
-		ss.doReset()
+		if len(ss.retryList) == 0 && len(ss.blockBuffer) == 0 {
+			ss.doReset()
+		} else {
+			ss.mirrorLegacyLocked()
+		}
 		restart = true
 	} else {
 		out = ss.fillFetchSlotsLocked(time.Now())
@@ -1927,6 +1931,12 @@ func (ss *SyncService) shouldFinishLocked() bool {
 
 func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
 	if !ss.syncing || ss.pause.Paused() || len(ss.retryList) == 0 {
+		return false
+	}
+	// A zero-peer session is dormant, not irrecoverably stalled. Keep its
+	// downloaded future blocks and retry gap until a new handshaked peer joins;
+	// resetting here turns every transient disconnect into a full re-download.
+	if len(ss.peers) == 0 {
 		return false
 	}
 	// Buffered blocks beyond a retry gap cannot make progress by themselves.
@@ -2229,7 +2239,14 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	var out []outboundSyncRequest
 	restart := false
 	if len(ss.peers) == 0 {
-		ss.doReset()
+		if len(ss.retryList) == 0 && len(ss.blockBuffer) == 0 {
+			ss.doReset()
+		} else {
+			// Preserve a dormant recovery session. StartSync can attach the next
+			// compatible peer and fill the missing prefix without downloading the
+			// already buffered suffix again.
+			ss.mirrorLegacyLocked()
+		}
 		restart = true
 	} else {
 		out = ss.fillFetchSlotsLocked(time.Now())
@@ -2278,7 +2295,11 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 	restart := false
 	empty := len(ss.peers) == 0
 	if empty {
-		ss.doReset()
+		if len(ss.retryList) == 0 && len(ss.blockBuffer) == 0 {
+			ss.doReset()
+		} else {
+			ss.mirrorLegacyLocked()
+		}
 		restart = true
 	} else {
 		out = ss.fillFetchSlotsLocked(time.Now())

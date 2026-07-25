@@ -44,6 +44,48 @@ func TestPeerDisconnectedAbortsSyncState(t *testing.T) {
 	}
 }
 
+func TestLastPeerDisconnectPreservesBufferedRecoveryWork(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "transient-archive-peer")
+	defer closePeer()
+
+	missing := types.BlockID{Hash: tcommon.Hash{0x01}, Num: 1}
+	futureHash := tcommon.Hash{0x02}
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	markPendingLocked(ss, ps, missing)
+	ss.blockBuffer[2] = bufferedSyncBlock{hash: futureHash, num: 2, raw: []byte{0xaa}}
+	ss.bufferedHash[futureHash] = struct{}{}
+	ss.bufferedBytes = 1
+	ss.targetHeadNum = 100
+	ss.mu.Unlock()
+
+	ss.PeerDisconnected(peer)
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if !ss.syncing {
+		t.Fatal("recoverable zero-peer session was reset")
+	}
+	if len(ss.peers) != 0 {
+		t.Fatalf("peers=%d, want 0", len(ss.peers))
+	}
+	if len(ss.retryList) != 1 || ss.retryList[0] != missing {
+		t.Fatalf("retryList=%v, want missing block", ss.retryList)
+	}
+	if buffered, ok := ss.blockBuffer[2]; !ok || buffered.hash != futureHash {
+		t.Fatalf("future buffer was discarded: %+v, present=%t", buffered, ok)
+	}
+	if ss.targetHeadNum != 100 {
+		t.Fatalf("targetHead=%d, want 100", ss.targetHeadNum)
+	}
+	if ss.shouldRestartForStalledRetriesLocked() {
+		t.Fatal("dormant zero-peer session should wait for replacement")
+	}
+}
+
 // TestPeerDisconnectedIgnoresNonSyncPeer checks that disconnecting an
 // unrelated peer has no effect on an active sync.
 func TestPeerDisconnectedIgnoresNonSyncPeer(t *testing.T) {

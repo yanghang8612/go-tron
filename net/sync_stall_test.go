@@ -43,7 +43,7 @@ func stubBlock(num int64, parent tcommon.Hash) *types.Block {
 // inflight>0-but-timer-stopped stall: when a peer delivers part of a
 // batch and then goes silent, the fetch timer must re-arm so
 // onFetchTimeout eventually fires and the sync state machine recovers
-// via tryFindSyncPeer. Before the fix HandleBlock unconditionally
+// via a dormant retry session / tryFindSyncPeer. Before the fix HandleBlock unconditionally
 // stopped the timer without re-arming, leaving inflight>0 forever.
 func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	bc := makeTestChain(t)
@@ -93,10 +93,17 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 		t.Fatal("partial batch left fetchTimer nil — peer-silent stall would never recover")
 	}
 
-	// Wait past the timeout. onFetchTimeout should fire and clear syncing.
+	// Wait past the timeout. onFetchTimeout should evict the silent peer while
+	// preserving the missing request for a replacement instead of discarding the
+	// successfully received prefix.
 	time.Sleep(200 * time.Millisecond)
-	if ss.IsSyncing() {
-		t.Fatal("sync should have aborted after fetch timeout on partial batch")
+	status := ss.Status()
+	if !status.Active {
+		t.Fatal("recoverable partial batch was reset after fetch timeout")
+	}
+	if status.SyncPeerCount != 0 || status.RetryBlocks != 1 {
+		t.Fatalf("dormant recovery status: peers=%d retries=%d, want 0/1",
+			status.SyncPeerCount, status.RetryBlocks)
 	}
 }
 
