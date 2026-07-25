@@ -210,16 +210,18 @@ func (s *StateDB) materializeAccountAux(obj *stateObject) error {
 	return nil
 }
 
-func (s *StateDB) trc10Balance(addr tcommon.Address, domain kvdomains.KVDomain, key string) int64 {
-	value, _, err := s.accountAuxValue(addr, domain, []byte(key))
+func (s *StateDB) trc10Balance(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) int64 {
+	value, _, err := s.accountAuxValue(addr, domain, key)
 	if err != nil {
 		return 0
 	}
 	return value
 }
 
-func (s *StateDB) setTRC10BalanceKey(addr tcommon.Address, domain kvdomains.KVDomain, key string, amount int64) {
-	_ = s.setAccountAuxValue(addr, domain, []byte(key), amount)
+func (s *StateDB) setTRC10BalanceKey(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, amount int64) {
+	_ = s.setAccountAuxValue(addr, domain, key, amount)
 }
 
-func trc10TokenKey(tokenID int64) string { return strconv.FormatInt(tokenID, 10) }
+func (s *StateDB) trc10TokenKey(tokenID int64) []byte {
+	return strconv.AppendInt(s.trc10TokenKeyScratch[:0], tokenID, 10)
+}

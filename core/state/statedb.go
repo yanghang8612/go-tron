@@ -52,6 +52,13 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// Small encoded logical keys are borrowed only for the duration of a
+	// synchronous account-KV lookup/write. Keeping their backing arrays on the
+	// execution-confined StateDB avoids one tiny heap object per TRC10 or asset
+	// ID access. Downstream writers own composite keys before returning.
+	trc10TokenKeyScratch [20]byte
+	assetIDKeyScratch    [9]byte
+
 	// lastStateObject is a single-entry lookup cache for the account map. TVM
 	// execution commonly performs long runs of SLOAD/SSTORE and account queries
 	// against the current contract, all of which otherwise hash the same address
@@ -990,31 +997,31 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 
 // GetTRC10Balance returns the split Account.assetV2 value for tokenID.
 func (s *StateDB) GetTRC10Balance(addr tcommon.Address, tokenID int64) int64 {
-	return s.trc10Balance(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID))
+	return s.trc10Balance(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID))
 }
 
 // GetTRC10BalanceByName returns the legacy pre-AllowSameTokenName TRC10
 // balance stored in Account.asset keyed by token name.
 func (s *StateDB) GetTRC10BalanceByName(addr tcommon.Address, name []byte) int64 {
-	return s.trc10Balance(addr, kvdomains.AccountAsset, string(name))
+	return s.trc10Balance(addr, kvdomains.AccountAsset, name)
 }
 
 // SetTRC10Balance writes one split Account.assetV2 row.
 func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
-	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID), amount)
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
 }
 
 // SetTRC10BalanceByName sets the legacy Account.asset balance keyed by token name.
 func (s *StateDB) SetTRC10BalanceByName(addr tcommon.Address, name []byte, amount int64) {
-	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, string(name), amount)
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, name, amount)
 }
 
 // SetTRC10BalanceLegacyAndV2 mirrors java-tron AccountCapsule.addAssetAmountV2
 // before AllowSameTokenName: the legacy Account.asset value is authoritative,
 // and Account.assetV2 is kept in lockstep under the token ID.
 func (s *StateDB) SetTRC10BalanceLegacyAndV2(addr tcommon.Address, name []byte, tokenID int64, amount int64) {
-	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, string(name), amount)
-	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, trc10TokenKey(tokenID), amount)
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, name, amount)
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
 }
 
 func (s *StateDB) GetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) int64 {
@@ -1116,9 +1123,10 @@ func (s *StateDB) TransferAllTRC10Balance(from, to tcommon.Address) {
 		return
 	}
 	for tokenID, amount := range balances {
-		toAmount := s.trc10Balance(to, kvdomains.AccountAssetV2, tokenID)
-		s.setTRC10BalanceKey(to, kvdomains.AccountAssetV2, tokenID, toAmount+amount)
-		s.setTRC10BalanceKey(from, kvdomains.AccountAssetV2, tokenID, 0)
+		key := ownedStringBytes(tokenID)
+		toAmount := s.trc10Balance(to, kvdomains.AccountAssetV2, key)
+		s.setTRC10BalanceKey(to, kvdomains.AccountAssetV2, key, toAmount+amount)
+		s.setTRC10BalanceKey(from, kvdomains.AccountAssetV2, key, 0)
 	}
 }
 
@@ -2309,7 +2317,7 @@ func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
 }
 
 func (s *StateDB) GetFreeAssetNetUsage(addr tcommon.Address, key string) int64 {
-	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsage, key)
+	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsage, ownedStringBytes(key))
 }
 
 func (s *StateDB) SetFreeAssetNetUsage(addr tcommon.Address, key string, usage int64) {
@@ -2317,7 +2325,7 @@ func (s *StateDB) SetFreeAssetNetUsage(addr tcommon.Address, key string, usage i
 	if obj == nil {
 		return
 	}
-	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsage, []byte(key), usage)
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsage, ownedStringBytes(key), usage)
 }
 
 func (s *StateDB) GetFreeAssetNetUsageV2(addr tcommon.Address, key string) int64 {
@@ -2325,7 +2333,7 @@ func (s *StateDB) GetFreeAssetNetUsageV2(addr tcommon.Address, key string) int64
 	if obj == nil {
 		return 0
 	}
-	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsageV2, key)
+	return s.trc10Balance(addr, kvdomains.AccountFreeAssetNetUsageV2, ownedStringBytes(key))
 }
 
 func (s *StateDB) SetFreeAssetNetUsageV2(addr tcommon.Address, key string, usage int64) {
@@ -2333,7 +2341,7 @@ func (s *StateDB) SetFreeAssetNetUsageV2(addr tcommon.Address, key string, usage
 	if obj == nil {
 		return
 	}
-	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsageV2, []byte(key), usage)
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountFreeAssetNetUsageV2, ownedStringBytes(key), usage)
 }
 
 func (s *StateDB) GetLatestAssetOperationTime(addr tcommon.Address, key string) int64 {
@@ -2341,7 +2349,7 @@ func (s *StateDB) GetLatestAssetOperationTime(addr tcommon.Address, key string) 
 	if obj == nil {
 		return 0
 	}
-	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTime, key)
+	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTime, ownedStringBytes(key))
 }
 
 func (s *StateDB) SetLatestAssetOperationTime(addr tcommon.Address, key string, t int64) {
@@ -2349,7 +2357,7 @@ func (s *StateDB) SetLatestAssetOperationTime(addr tcommon.Address, key string, 
 	if obj == nil {
 		return
 	}
-	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTime, []byte(key), t)
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTime, ownedStringBytes(key), t)
 }
 
 func (s *StateDB) GetLatestAssetOperationTimeV2(addr tcommon.Address, key string) int64 {
@@ -2357,7 +2365,7 @@ func (s *StateDB) GetLatestAssetOperationTimeV2(addr tcommon.Address, key string
 	if obj == nil {
 		return 0
 	}
-	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTimeV2, key)
+	return s.trc10Balance(addr, kvdomains.AccountAssetOperationTimeV2, ownedStringBytes(key))
 }
 
 func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string, t int64) {
@@ -2365,7 +2373,7 @@ func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string
 	if obj == nil {
 		return
 	}
-	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTimeV2, []byte(key), t)
+	_ = s.setAccountAuxValue(addr, kvdomains.AccountAssetOperationTimeV2, ownedStringBytes(key), t)
 }
 
 // GetEnergyUsage returns the energy usage for an account.

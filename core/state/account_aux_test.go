@@ -9,6 +9,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+var trc10BalanceBenchmarkSink int64
+
+func BenchmarkStateDBGetTRC10BalanceDirty(b *testing.B) {
+	sdb := newTestStateDB(b)
+	addr := testAddr(0x90)
+	sdb.SetTRC10Balance(addr, 1_000_001, 77)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		trc10BalanceBenchmarkSink = sdb.GetTRC10Balance(addr, 1_000_001)
+	}
+}
+
 func TestTRC10MapsPersistOutsideAccountEnvelope(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x91)

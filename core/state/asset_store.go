@@ -48,9 +48,11 @@ const (
 	assetIssueTimeTag  byte = 0x05
 )
 
-// assetIDKey builds a tag||u64-BE(id) logical key (V2 metadata, issue time).
-func assetIDKey(tag byte, tokenID int64) []byte {
-	k := make([]byte, 1+8)
+// assetIDKey builds a transient tag||u64-BE(id) logical key (V2 metadata,
+// issue time). Account-KV reads consume the key synchronously and writes copy
+// it into their owned composite key before returning.
+func (s *StateDB) assetIDKey(tag byte, tokenID int64) []byte {
+	k := s.assetIDKeyScratch[:]
 	k[0] = tag
 	binary.BigEndian.PutUint64(k[1:], uint64(tokenID))
 	return k
@@ -94,12 +96,12 @@ func (s *StateDB) writeAssetMeta(key []byte, c *contractpb.AssetIssueContract) e
 // ReadAssetIssue returns the rooted V2 (ID-keyed) AssetIssueContract for
 // tokenID, or nil if absent. Mirrors java-tron AssetIssueV2Store.
 func (s *StateDB) ReadAssetIssue(tokenID int64) *contractpb.AssetIssueContract {
-	return s.readAssetMeta(assetIDKey(assetV2Tag, tokenID))
+	return s.readAssetMeta(s.assetIDKey(assetV2Tag, tokenID))
 }
 
 // WriteAssetIssue stages the V2 (ID-keyed) AssetIssueContract for tokenID.
 func (s *StateDB) WriteAssetIssue(tokenID int64, c *contractpb.AssetIssueContract) error {
-	return s.writeAssetMeta(assetIDKey(assetV2Tag, tokenID), c)
+	return s.writeAssetMeta(s.assetIDKey(assetV2Tag, tokenID), c)
 }
 
 // ReadAssetIssueByName returns the rooted legacy (name-keyed) AssetIssueContract,
@@ -152,7 +154,7 @@ func (s *StateDB) WriteAssetOwnerIndex(ownerAddr []byte, tokenID int64) error {
 // ReadAssetIssueTime returns the issuance block timestamp (ms) for tokenID, or 0
 // if absent.
 func (s *StateDB) ReadAssetIssueTime(tokenID int64) int64 {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetIDKey(assetIssueTimeTag, tokenID))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, s.assetIDKey(assetIssueTimeTag, tokenID))
 	if err != nil || !ok || len(raw) < 8 {
 		return 0
 	}
@@ -163,7 +165,7 @@ func (s *StateDB) ReadAssetIssueTime(tokenID int64) int64 {
 func (s *StateDB) WriteAssetIssueTime(tokenID int64, issueTimeMs int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(issueTimeMs))
-	return s.SystemKVPut(kvdomains.SystemAsset, assetIDKey(assetIssueTimeTag, tokenID), buf)
+	return s.SystemKVPut(kvdomains.SystemAsset, s.assetIDKey(assetIssueTimeTag, tokenID), buf)
 }
 
 // ListAssetsV2 enumerates the V2 (ID-keyed) bucket over ids
