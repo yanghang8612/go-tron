@@ -115,6 +115,24 @@ func BenchmarkFoldParBlockbufferSerialFlushCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(false) })
 }
 
+func BenchmarkSortOps(b *testing.B) {
+	for _, n := range []int{16, 256} {
+		updates := buildRandomPuts(rand.New(rand.NewSource(int64(2000+n))), n)
+		template := make([]op, n)
+		for i, update := range updates {
+			template[i] = resolveOp(update)
+		}
+		ops := make([]op, n)
+		b.Run(fmt.Sprintf("ops=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				copy(ops, template)
+				sortOps(ops)
+			}
+		})
+	}
+}
+
 func BenchmarkFoldParBlockbufferParallelFlushCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(true) })
 }

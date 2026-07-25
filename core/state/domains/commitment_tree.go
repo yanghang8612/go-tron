@@ -1000,13 +1000,31 @@ func livePutsInPlace(group []op) []op {
 	return out
 }
 
+type opSorter struct {
+	ops []op
+}
+
+func (s *opSorter) Len() int { return len(s.ops) }
+
+func (s *opSorter) Less(i, j int) bool {
+	if cmp := bytes.Compare(s.ops[i].path[:], s.ops[j].path[:]); cmp != 0 {
+		return cmp < 0
+	}
+	return bytes.Compare(s.ops[i].key, s.ops[j].key) < 0
+}
+
+func (s *opSorter) Swap(i, j int) { s.ops[i], s.ops[j] = s.ops[j], s.ops[i] }
+
+var opSorterPool = sync.Pool{
+	New: func() any { return new(opSorter) },
+}
+
 func sortOps(ops []op) {
-	sort.Slice(ops, func(i, j int) bool {
-		if cmp := bytes.Compare(ops[i].path[:], ops[j].path[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return string(ops[i].key) < string(ops[j].key)
-	})
+	sorter := opSorterPool.Get().(*opSorter)
+	sorter.ops = ops
+	sort.Sort(sorter)
+	sorter.ops = nil
+	opSorterPool.Put(sorter)
 }
 
 func pathNibble(path common.Hash, depth int) uint8 {
