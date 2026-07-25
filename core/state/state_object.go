@@ -117,14 +117,20 @@ type stateObject struct {
 	accountDirty bool
 	// Split account fields are materialized only for full Account responses or
 	// the typed mutators that need them.
-	accountMapsLoaded            bool
-	accountPermissionsLoaded     bool
-	accountVotesLoaded           bool
-	accountStakeV2Loaded         bool
-	accountFrozenSupplyLoaded    bool
-	accountResourceLoaded        bool
-	accountFrozenBandwidthLoaded bool
-	accountTronPowerLoaded       bool
+	accountMapsLoaded        bool
+	accountPermissionsLoaded bool
+	// witnessPermissionSigner caches the point-read block-signing address.
+	// Only 27 active SR accounts normally serve thousands of consecutive
+	// header checks, so retaining this scalar avoids reopening the flat latest
+	// row through blockbuffer/Pebble for every block.
+	witnessPermissionSigner       tcommon.Address
+	witnessPermissionSignerLoaded bool
+	accountVotesLoaded            bool
+	accountStakeV2Loaded          bool
+	accountFrozenSupplyLoaded     bool
+	accountResourceLoaded         bool
+	accountFrozenBandwidthLoaded  bool
+	accountTronPowerLoaded        bool
 	// accountFrozenBandwidthCanonicalPooled marks Account.Frozen as backed by a
 	// one-element array borrowed from the canonical V1 bandwidth cache pool.
 	accountFrozenBandwidthCanonicalPooled bool

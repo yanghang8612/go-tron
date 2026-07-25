@@ -69,6 +69,7 @@ func invalidateAccountKVMaterialization(obj *stateObject, domain kvdomains.KVDom
 	}
 	if domain == kvdomains.AccountPermissionAux {
 		obj.accountPermissionsLoaded = false
+		clearWitnessPermissionSignerCache(obj)
 		return
 	}
 	if domain == kvdomains.AccountVotesAux {

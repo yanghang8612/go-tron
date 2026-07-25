@@ -122,6 +122,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		obj.accountProtoLoaded = e.prevProtoLoaded
 		obj.accountMapsLoaded = false
 		obj.accountPermissionsLoaded = false
+		clearWitnessPermissionSignerCache(obj)
 		obj.accountVotesLoaded = false
 		obj.accountStakeV2Loaded = false
 		clearAccountFrozenV2PointCache(obj)
@@ -327,6 +328,7 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.kvDirtyHighWater = len(e.prevDirty)
 	obj.accountMapsLoaded = false
 	obj.accountPermissionsLoaded = false
+	clearWitnessPermissionSignerCache(obj)
 	obj.accountVotesLoaded = false
 	obj.accountStakeV2Loaded = false
 	clearAccountFrozenV2PointCache(obj)

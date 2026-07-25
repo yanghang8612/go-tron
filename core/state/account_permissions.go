@@ -44,6 +44,43 @@ func clearAccountPermissionProto(pb *corepb.Account) {
 	pb.ActivePermission = nil
 }
 
+func clearWitnessPermissionSignerCache(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	obj.witnessPermissionSigner = common.Address{}
+	obj.witnessPermissionSignerLoaded = false
+}
+
+// WitnessPermissionAddress returns the address authorized to sign blocks for
+// addr. It mirrors java-tron AccountCapsule.getWitnessPermissionAddress while
+// point-reading only permission id 1 instead of materializing every split
+// account domain. The result is cached on the state object until a permission
+// write, reset, or journal revert invalidates it.
+func (s *StateDB) WitnessPermissionAddress(addr common.Address) common.Address {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return addr
+	}
+	if obj.accountPermissionsLoaded {
+		return obj.account.WitnessPermissionAddress()
+	}
+	if obj.witnessPermissionSignerLoaded {
+		return obj.witnessPermissionSigner
+	}
+	permission, err := s.AccountPermissionByID(addr, 1)
+	if err != nil {
+		return addr
+	}
+	signer := addr
+	if permission != nil && len(permission.GetKeys()) != 0 {
+		signer = common.BytesToAddress(permission.GetKeys()[0].GetAddress())
+	}
+	obj.witnessPermissionSigner = signer
+	obj.witnessPermissionSignerLoaded = true
+	return signer
+}
+
 // AccountPermissionByID returns one permission row without materializing the
 // account's other split fields. Transaction envelope validation calls this for
 // every transaction, so routing it through GetAccount would also load every
@@ -172,5 +209,6 @@ func (s *StateDB) writeAccountPermissions(obj *stateObject, owner, witness *core
 	}
 	clearAccountPermissionProto(obj.account.Proto())
 	obj.accountPermissionsLoaded = false
+	clearWitnessPermissionSignerCache(obj)
 	return nil
 }

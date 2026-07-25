@@ -141,6 +141,65 @@ func TestAccountPermissionByIDDoesNotMaterializeSplitAccount(t *testing.T) {
 	}
 }
 
+func TestWitnessPermissionAddressCachesPointReadAndInvalidates(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x98)
+	delegated1 := testAddr(0xa1)
+	delegated2 := testAddr(0xa2)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	witness1 := splitTestPermission(corepb.Permission_Witness, 1, "witness-1", 0xa1)
+	witness1.Keys[0].Address = delegated1.Bytes()
+	sdb.SetPermissions(addr, nil, witness1, nil)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+
+	for i := 0; i < 2; i++ {
+		if got := reopened.WitnessPermissionAddress(addr); got != delegated1 {
+			t.Fatalf("cached signer lookup %d = %x, want %x", i, got, delegated1)
+		}
+	}
+	if got := index.getsByDomain[kvdomains.AccountPermissionAux]; got != 1 {
+		t.Fatalf("two signer lookups read permission row %d times, want 1", got)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj == nil || !obj.witnessPermissionSignerLoaded || obj.accountPermissionsLoaded {
+		t.Fatalf("point cache state = obj:%v signerLoaded:%v permissionsLoaded:%v", obj != nil, obj != nil && obj.witnessPermissionSignerLoaded, obj != nil && obj.accountPermissionsLoaded)
+	}
+
+	snapshot := reopened.Snapshot()
+	witness2 := splitTestPermission(corepb.Permission_Witness, 1, "witness-2", 0xa2)
+	witness2.Keys[0].Address = delegated2.Bytes()
+	reopened.SetPermissions(addr, nil, witness2, nil)
+	if got := reopened.WitnessPermissionAddress(addr); got != delegated2 {
+		t.Fatalf("signer after permission write = %x, want %x", got, delegated2)
+	}
+	reopened.RevertToSnapshot(snapshot)
+	if got := reopened.WitnessPermissionAddress(addr); got != delegated1 {
+		t.Fatalf("signer after permission revert = %x, want %x", got, delegated1)
+	}
+
+	resetSnapshot := reopened.Snapshot()
+	if err := reopened.ResetAccountKV(addr); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.WitnessPermissionAddress(addr); got != addr {
+		t.Fatalf("signer after KV generation reset = %x, want fallback %x", got, addr)
+	}
+	reopened.RevertToSnapshot(resetSnapshot)
+	if got := reopened.WitnessPermissionAddress(addr); got != delegated1 {
+		t.Fatalf("signer after generation revert = %x, want %x", got, delegated1)
+	}
+}
+
 func TestAccountPermissionsSnapshotRevertInvalidatesMaterializedCache(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x93)
@@ -220,7 +279,8 @@ func BenchmarkAccountPermissionLookup(b *testing.B) {
 	addr := testAddr(0x97)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
 	owner := splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x51)
-	sdb.SetPermissions(addr, owner, nil, nil)
+	witness := splitTestPermission(corepb.Permission_Witness, 1, "witness", 0x52)
+	sdb.SetPermissions(addr, owner, witness, nil)
 	for i := 0; i < 128; i++ {
 		key := []byte(strconv.Itoa(1_000_000 + i))
 		if err := sdb.SetAccountKV(addr, kvdomains.AccountAssetV2, key, encodeAccountAuxInt64(int64(i+1))); err != nil {
@@ -254,6 +314,23 @@ func BenchmarkAccountPermissionLookup(b *testing.B) {
 			}
 			if account := view.GetAccount(addr); account == nil || account.OwnerPermission() == nil {
 				b.Fatal("account permission missing")
+			}
+		}
+	})
+	b.Run("cached-witness-signer", func(b *testing.B) {
+		view, err := New(root, db)
+		if err != nil {
+			b.Fatal(err)
+		}
+		want := tcommon.BytesToAddress(witness.Keys[0].Address)
+		if got := view.WitnessPermissionAddress(addr); got != want {
+			b.Fatalf("warm signer lookup = %x, want %x", got, want)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if got := view.WitnessPermissionAddress(addr); got != want {
+				b.Fatalf("cached signer lookup = %x, want %x", got, want)
 			}
 		}
 	})
