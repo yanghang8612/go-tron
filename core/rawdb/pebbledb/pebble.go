@@ -73,7 +73,64 @@ const (
 	// degradationWarnInterval specifies how often warning should be printed if the
 	// leveldb database cannot keep up with requested writes.
 	degradationWarnInterval = time.Minute
+
+	// Pebble retains batch buffers only up to 1 MiB. Blockbuffer flushes often
+	// need a little more than that, so constructing an exact-sized Pebble batch
+	// would allocate and discard a multi-megabyte backing array on every flush.
+	// Keep a small, strictly bounded set of those common larger buffers here.
+	pebbleBatchHeaderSize      = 12
+	pebbleMaxRetainedBatchSize = 1 << 20
+	maxPooledLargeBatchSize    = 8 << 20
+	largeBatchBuffersPerClass  = 2
 )
+
+var largeBatchBufferPools = [...]chan []byte{
+	make(chan []byte, largeBatchBuffersPerClass), // 2 MiB
+	make(chan []byte, largeBatchBuffersPerClass), // 4 MiB
+	make(chan []byte, largeBatchBuffersPerClass), // 8 MiB
+}
+
+func largeBatchBufferClass(size int) (int, int, bool) {
+	if size <= pebbleMaxRetainedBatchSize || size > maxPooledLargeBatchSize {
+		return 0, 0, false
+	}
+	capacity := 2 << 20
+	class := 0
+	for capacity < size {
+		capacity <<= 1
+		class++
+	}
+	return class, capacity, true
+}
+
+func borrowLargeBatchBuffer(size int) ([]byte, int, bool) {
+	class, capacity, ok := largeBatchBufferClass(size)
+	if !ok {
+		return nil, 0, false
+	}
+	select {
+	case data := <-largeBatchBufferPools[class]:
+		data = data[:pebbleBatchHeaderSize]
+		clear(data)
+		return data, class, true
+	default:
+		return make([]byte, pebbleBatchHeaderSize, capacity), class, true
+	}
+}
+
+func returnLargeBatchBuffer(data []byte, class int) {
+	if data == nil || class < 0 || class >= len(largeBatchBufferPools) {
+		return
+	}
+	select {
+	case largeBatchBufferPools[class] <- data[:pebbleBatchHeaderSize]:
+	default:
+	}
+}
+
+func sameBatchBacking(data, pooled []byte) bool {
+	return len(data) != 0 && len(pooled) != 0 && &data[0] == &pooled[0]
+}
 
 // Options bundles the tunables that this fork exposes beyond go-ethereum's
 // (cache, handles) surface. Callers can leave fields at their zero value to
@@ -567,6 +624,20 @@ func (d *Database) NewBatch() ethdb.Batch {
 
 // NewBatchWithSize creates a write-only database batch with pre-allocated buffer.
 func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
+	if data, class, ok := borrowLargeBatchBuffer(size); ok {
+		pb := d.db.NewBatch()
+		if err := pb.SetRepr(data); err != nil {
+			pb.Close()
+			returnLargeBatchBuffer(data, class)
+			panic(fmt.Sprintf("pebbledb: initialize pooled batch: %v", err))
+		}
+		return &batch{
+			b:               pb,
+			db:              d,
+			pooledData:      data,
+			pooledDataClass: class,
+		}
+	}
 	return &batch{
 		b:  d.db.NewBatchWithSize(size),
 		db: d,
@@ -744,9 +815,11 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 // batch is a write-only batch that commits changes to its host database
 // when Write is called. A batch cannot be used concurrently.
 type batch struct {
-	b    *pebble.Batch
-	db   *Database
-	size int
+	b               *pebble.Batch
+	db              *Database
+	size            int
+	pooledData      []byte
+	pooledDataClass int
 }
 
 // Put inserts the given value into the batch for later committing.
@@ -839,12 +912,36 @@ func (b *batch) Write() error {
 	if b.db.closed {
 		return pebble.ErrClosed
 	}
-	return b.b.Commit(b.db.writeOptions)
+	// If the batch grew beyond the borrowed array before Commit, that array is
+	// already detached and remains safe to recycle. Otherwise verify after a
+	// successful commit that Pebble did not clear the representation because it
+	// retained the data as a large flushable batch.
+	pooledAttached := b.pooledData != nil && sameBatchBacking(b.b.Repr(), b.pooledData)
+	if err := b.b.Commit(b.db.writeOptions); err != nil {
+		if pooledAttached {
+			// Commit errors have deliberately conservative ownership semantics.
+			// Let GC recover this buffer instead of risking reuse while Pebble may
+			// still reference it.
+			b.pooledData = nil
+		}
+		return err
+	}
+	if pooledAttached && !sameBatchBacking(b.b.Repr(), b.pooledData) {
+		b.pooledData = nil
+	}
+	return nil
 }
 
 // Reset resets the batch for reuse.
 func (b *batch) Reset() {
 	b.b.Reset()
+	if b.pooledData != nil {
+		data := b.pooledData[:pebbleBatchHeaderSize]
+		clear(data)
+		if err := b.b.SetRepr(data); err != nil {
+			panic(fmt.Sprintf("pebbledb: reset pooled batch: %v", err))
+		}
+	}
 	b.size = 0
 }
 
@@ -884,7 +981,10 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 // Close closes the batch and releases all associated resources. After it is
 // closed, any subsequent operations on this batch are undefined.
 func (b *batch) Close() {
+	data, class := b.pooledData, b.pooledDataClass
+	b.pooledData = nil
 	b.b.Close()
+	returnLargeBatchBuffer(data, class)
 }
 
 // pebbleIterator is a wrapper of underlying iterator in storage engine.

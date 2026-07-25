@@ -78,3 +78,104 @@ func TestBatchPutValueFuncEncodesIntoBatch(t *testing.T) {
 		t.Fatalf("deferred put = (%q,%v), want (%q,nil)", got, err, want)
 	}
 }
+
+func TestLargeBatchBufferWritesAndResets(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "large-batch-test", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	batch := db.NewBatchWithSize(2 << 20).(*batch)
+	if batch.pooledData == nil {
+		t.Fatal("large batch did not borrow a pooled buffer")
+	}
+	if err := batch.Put([]byte("discarded"), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	batch.Reset()
+	if batch.ValueSize() != 0 {
+		t.Fatalf("reset batch value size = %d, want 0", batch.ValueSize())
+	}
+	want := bytes.Repeat([]byte{0x5a}, 1<<20)
+	if err := batch.Put([]byte("kept"), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	batch.Close()
+
+	if ok, err := db.Has([]byte("discarded")); err != nil || ok {
+		t.Fatalf("reset key = (exists:%v, err:%v), want false/nil", ok, err)
+	}
+	got, err := db.Get([]byte("kept"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("large-batch value = (len:%d, err:%v), want (len:%d, nil)", len(got), err, len(want))
+	}
+}
+
+func TestLargeBatchBufferIsReusedAfterClose(t *testing.T) {
+	// Empty the target class so this test observes the buffer it returns rather
+	// than one left behind by another test.
+	for {
+		select {
+		case <-largeBatchBufferPools[0]:
+		default:
+			goto drained
+		}
+	}
+
+drained:
+	db, err := New(t.TempDir(), 16, 16, "large-batch-reuse-test", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	first := db.NewBatchWithSize(2 << 20).(*batch)
+	firstBacking := &first.pooledData[0]
+	first.Close()
+	second := db.NewBatchWithSize(2 << 20).(*batch)
+	defer second.Close()
+	if &second.pooledData[0] != firstBacking {
+		t.Fatal("large batch did not reuse the buffer returned by Close")
+	}
+}
+
+func TestLargeBatchBufferIsNotReusedWhenPebbleRetainsIt(t *testing.T) {
+	tune := DefaultOptions()
+	tune.MemTableSizeBytes = 2 << 20
+	db, err := New(t.TempDir(), 16, 16, "retained-large-batch-test", false, tune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	batch := db.NewBatchWithSize(2 << 20).(*batch)
+	if err := batch.Put([]byte("large"), bytes.Repeat([]byte{0x7b}, 1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if batch.pooledData != nil {
+		t.Fatal("buffer retained by Pebble remained eligible for reuse")
+	}
+	batch.Close()
+}
+
+func BenchmarkBatchWithLargeSizeLifecycle(b *testing.B) {
+	db, err := New(b.TempDir(), 16, 16, "large-batch-benchmark", false, Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := db.NewBatchWithSize(2 << 20)
+		batch.Close()
+	}
+}
