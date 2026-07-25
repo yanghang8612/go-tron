@@ -303,6 +303,20 @@ func TestKVCompositeKeyStringOwnsInputAndPreservesLayout(t *testing.T) {
 	}
 }
 
+func TestStateDBKVCompositeKeyStringSurvivesArenaRolloverAndReset(t *testing.T) {
+	sdb := new(StateDB)
+	key := []byte("arena-logical-key")
+	mapKey := sdb.kvCompositeKeyString(kvdomains.ContractStorage, key)
+	key[0] = 'X'
+	_ = sdb.newKVEntry(bytes.Repeat([]byte{0x7a}, kvEntryArenaChunkSize), false)
+	sdb.kvEntryArena.reset()
+	_ = sdb.newKVEntry([]byte("next-block"), false)
+	composite := ownedStringBytes(mapKey)
+	if len(composite) != 2+len("arena-logical-key") || binary.BigEndian.Uint16(composite[:2]) != uint16(kvdomains.ContractStorage) || string(composite[2:]) != "arena-logical-key" {
+		t.Fatalf("arena composite map key = %x", composite)
+	}
+}
+
 func TestAccountKVSetGet(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x11)

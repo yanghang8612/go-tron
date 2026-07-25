@@ -1139,6 +1139,18 @@ func kvCompositeKeyString(domain kvdomains.KVDomain, key []byte) string {
 	return ownedBytesString(out)
 }
 
+// kvCompositeKeyString owns an immutable composite map key in the same
+// per-block arena as dirty values and pre-images. Journal entries, kvDirty and
+// commit plans all share the string backing; successful commit may drop the
+// arena reference because any key transferred to blockbuffer keeps its chunk
+// alive independently.
+func (s *StateDB) kvCompositeKeyString(domain kvdomains.KVDomain, key []byte) string {
+	out := s.kvEntryArena.alloc(2 + len(key))
+	binary.BigEndian.PutUint16(out, uint16(domain))
+	copy(out[2:], key)
+	return ownedBytesString(out)
+}
+
 func kvCompositeHashKeyString(domain kvdomains.KVDomain, key tcommon.Hash) string {
 	out := make([]byte, 2+len(key))
 	binary.BigEndian.PutUint16(out, uint16(domain))
@@ -1646,7 +1658,7 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 	} else if prevLoaded && prevExists && bytes.Equal(prevValue, value) {
 		return nil
 	}
-	mk := kvCompositeKeyString(domain, key)
+	mk := s.kvCompositeKeyString(domain, key)
 	if journal {
 		s.journal.append(kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
@@ -1719,7 +1731,7 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 	if obj == nil {
 		return false, nil
 	}
-	mk := kvCompositeKeyString(domain, key)
+	mk := s.kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	entry := s.newKVEntry(value, deleted)
 	if dirty {
@@ -1752,7 +1764,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	if obj == nil {
 		return nil
 	}
-	mk := kvCompositeKeyString(domain, key)
+	mk := s.kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	var (
 		prevValue  []byte
