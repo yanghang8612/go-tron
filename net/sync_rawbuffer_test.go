@@ -206,6 +206,61 @@ func TestHandleRawBlockDefersDecodedGraphUntilDrain(t *testing.T) {
 	}
 }
 
+func TestMalformedRawBatchRollsBackCursorAndFailsOver(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	bad, closeBad := testPeer(t, "malformed-raw")
+	defer closeBad()
+	good, closeGood := testPeer(t, "replacement")
+	defer closeGood()
+
+	b1 := blockWithTxs(1, bc.CurrentBlock().Hash(), 1)
+	b2 := blockWithTxs(2, b1.Hash(), 1)
+	b3 := blockWithTxs(3, b2.Hash(), 1)
+	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{
+		{raw: rawOf(t, b1), hash: b1.Hash(), num: 1, peer: bad},
+		// A header-only scanner can identify a requested BlockID while a
+		// malformed nested transaction later makes full protobuf decoding fail.
+		{raw: []byte{0x12, 0x80}, hash: b2.Hash(), num: 2, peer: bad},
+		{raw: rawOf(t, b3), hash: b3.Hash(), num: 3, peer: bad},
+	}}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.addPeerStateLocked(bad)
+	goodState, _ := ss.addPeerStateLocked(good)
+	goodState.minFetchNum = 1
+	goodState.lastInventoryNum = 3
+	ss.syncedTipNum = 3
+	ss.bufferPrunedTipNum = 3
+	ss.mu.Unlock()
+
+	if err := ss.decodeBatchBlocks(&batch); err == nil {
+		t.Fatal("malformed nested block decoded successfully")
+	}
+	if len(batch.blocks) != 1 {
+		t.Fatalf("decoded prefix=%d, want 1", len(batch.blocks))
+	}
+	failedPeer, out, restart := ss.recoverMalformedBatch(&batch)
+	if restart {
+		t.Fatal("replacement peer should keep the session active")
+	}
+	if failedPeer != bad {
+		t.Fatalf("failed peer=%v, want %v", failedPeer, bad)
+	}
+	if len(out) != 1 || len(out[0].blocks) != 3 || out[0].peer != good {
+		t.Fatalf("retry requests=%+v, want all three blocks on replacement", out)
+	}
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.syncedTipNum != 0 || ss.bufferPrunedTipNum != 0 {
+		t.Fatalf("cursor not rolled back: synced=%d pruned=%d", ss.syncedTipNum, ss.bufferPrunedTipNum)
+	}
+	if _, ok := ss.peers[bad.ID()]; ok {
+		t.Fatal("malformed peer remained in sync session")
+	}
+}
+
 func TestHandleRawBlockBroadcastFallbackAndMalformedSyncDrop(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)

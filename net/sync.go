@@ -1491,6 +1491,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		sess = ss.chain.BeginInsertSession()
 	}
 	var lastPeer *p2p.Peer
+	var restartAfterDrain *p2p.Peer
 	paused := false
 	for {
 		now := time.Now()
@@ -1532,11 +1533,30 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		ss.mu.Unlock()
 		// Decode off-lock — see decodeBatchBlocks. Keeps the heavy proto work
 		// off the central sync mutex so receiving peers aren't stalled.
-		ss.decodeBatchBlocks(&batch)
+		decodeErr := ss.decodeBatchBlocks(&batch)
+		if decodeErr != nil {
+			badPeer, retryOut, restart := ss.recoverMalformedBatch(&batch)
+			ss.releaseDecodedBatch(&batch)
+			badPeerID := "<nil>"
+			if badPeer != nil {
+				badPeerID = badPeer.ID()
+			}
+			syncLog.Warn("Malformed sync block, failing over",
+				"peer", badPeerID,
+				"err", decodeErr)
+			if ss.handler != nil && badPeer != nil {
+				ss.handler.disconnectPeer(badPeer, corepb.ReasonCode_BAD_BLOCK)
+			}
+			ss.sendOutboundRequests(retryOut)
+			if restart {
+				restartAfterDrain = badPeer
+				break
+			}
+			continue
+		}
 		if len(batch.blocks) == 0 {
-			// Every popped block failed to decode (can't happen for validated
-			// wire bytes). The entries were already removed at pop, so loop to
-			// re-pop the next run or hit the gap.
+			// Defensive empty-batch guard. A decode failure returns above after
+			// rolling back and requeueing the popped range.
 			ss.releaseDecodedBatch(&batch)
 			continue
 		}
@@ -1615,6 +1635,9 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 	}
 	ss.sendOutboundRequests(out)
+	if restartAfterDrain != nil {
+		ss.tryFindSyncPeer(restartAfterDrain)
+	}
 }
 
 func (ss *SyncService) waitForDrain() {
@@ -1664,9 +1687,10 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 // decodeBatchBlocks materializes the popped blocks. A bounded near-tip subset
 // reuses the object already decoded by the peer receive path; raw-only entries
 // are protobuf-decoded here. It runs OFF ss.mu because a full decode per block
-// is far too heavy for the central sync lock. A decode error (can't happen for
-// bytes that already decoded at receive) truncates the batch.
-func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
+// is far too heavy for the central sync lock. The receive-side BlockID scanner
+// intentionally skips nested transactions, so a malicious payload can pass the
+// cheap scan yet fail here; the caller must roll back the optimistic cursor.
+func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) error {
 	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
 	for i := range batch.buffered {
 		if batch.buffered[i].decoded != nil {
@@ -1676,12 +1700,64 @@ func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 		}
 		blk, err := types.UnmarshalBlockOwned(batch.buffered[i].raw)
 		if err != nil {
-			syncLog.Error("Dropping undecodable buffered sync block",
-				"number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
-			return
+			return fmt.Errorf("decode block %d (%s): %w", batch.buffered[i].num, batch.buffered[i].hash, err)
 		}
 		batch.blocks = append(batch.blocks, blk)
 	}
+	return nil
+}
+
+// recoverMalformedBatch rolls the optimistic drain cursor back to the block
+// preceding batch, requeues every popped ID, and removes the peer that supplied
+// the first undecodable payload. popBufferedSyncBatchLocked advances the cursor
+// before the expensive off-lock decode; without this rollback a partial decode
+// silently skipped the undecoded suffix and the next batch failed later with a
+// misleading ErrUnlinkedBlock.
+//
+// The caller must release batch's decoded/raw ownership after this returns. A
+// true restart result means the malformed peer was the session's last peer;
+// finish the active InsertSession before trying another candidate so its view
+// starts from the fully published chain head.
+func (ss *SyncService) recoverMalformedBatch(batch *bufferedSyncBatch) (badPeer *p2p.Peer, out []outboundSyncRequest, restart bool) {
+	if batch == nil || len(batch.buffered) == 0 {
+		return nil, nil, false
+	}
+	badIndex := len(batch.blocks)
+	if badIndex >= len(batch.buffered) {
+		badIndex = len(batch.buffered) - 1
+	}
+	badPeer = batch.buffered[badIndex].peer
+	rollbackTip := uint64(0)
+	if first := batch.buffered[0].num; first > 0 {
+		rollbackTip = first - 1
+	}
+
+	ss.mu.Lock()
+	if ss.syncedTipNum > rollbackTip {
+		ss.syncedTipNum = rollbackTip
+	}
+	if ss.bufferPrunedTipNum > rollbackTip {
+		ss.bufferPrunedTipNum = rollbackTip
+	}
+	for i := range batch.buffered {
+		buffered := &batch.buffered[i]
+		bid := types.BlockID{Hash: buffered.hash, Num: buffered.num}
+		if !ss.hasBlockOrRequestLocked(bid) {
+			ss.retryList = append(ss.retryList, bid)
+		}
+	}
+	if badPeer != nil {
+		ss.removePeerStateLocked(badPeer.ID(), true)
+	}
+	if len(ss.peers) == 0 {
+		ss.doReset()
+		restart = true
+	} else {
+		out = ss.fillFetchSlotsLocked(time.Now())
+		ss.mirrorLegacyLocked()
+	}
+	ss.mu.Unlock()
+	return badPeer, out, restart
 }
 
 // releaseDecodedBatch drops retained receive-path objects after their insert
