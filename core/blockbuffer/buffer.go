@@ -1749,7 +1749,7 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 		_, encodedSize := layerWriteStats(l)
 		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize + pebbleBatchRecordSlack)
 		defer closeBatch(batch)
-		if err := writeLayer(l, batch); err != nil {
+		if err := writeLayerSorted(l, batch); err != nil {
 			return err
 		}
 		return batch.Write()
@@ -1821,9 +1821,9 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		batch := batcher.NewBatchWithSize(queuedEncodedSize + pebbleBatchRecordSlack)
 		var writeErr error
 		if merged == nil {
-			writeErr = writeLayer(layers[start], batch)
+			writeErr = writeLayerSorted(layers[start], batch)
 		} else {
-			writeErr = writeMergedLayerOps(merged.ops, batch)
+			writeErr = writeMergedLayerOpsSorted(merged.ops, batch)
 		}
 		if writeErr != nil {
 			closeBatch(batch)
@@ -1873,6 +1873,93 @@ func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 			}
 		}
 		s.mu.RUnlock()
+	}
+	return nil
+}
+
+// Sorting unique final user keys lets Pebble's memtable Inserter reuse the
+// preceding skiplist splice instead of searching from the top for every entry
+// in map-random order. Values remain in the immutable source layer/map; keeping
+// only strings here makes sorting cheaper and bounds retained scratch to 4 MiB.
+const maxPooledFlushWriteKeys = 262144
+
+var flushWriteKeysPool = sync.Pool{
+	New: func() any {
+		keys := make([]string, 0, 4096)
+		return &keys
+	},
+}
+
+func borrowFlushWriteKeys(size int) *[]string {
+	keys := flushWriteKeysPool.Get().(*[]string)
+	if cap(*keys) < size {
+		*keys = make([]string, 0, size)
+	} else {
+		*keys = (*keys)[:0]
+	}
+	return keys
+}
+
+func returnFlushWriteKeys(keys *[]string) {
+	if keys == nil {
+		return
+	}
+	clear(*keys)
+	if cap(*keys) > maxPooledFlushWriteKeys {
+		return
+	}
+	*keys = (*keys)[:0]
+	flushWriteKeysPool.Put(keys)
+}
+
+func writeLayerSorted(l *layer, w ethdb.KeyValueWriter) error {
+	// Keep every source map read-locked through gathering, sorting and batch
+	// construction. FlushUpTo's flushMu already excludes the only committed-
+	// layer writer, but the locks preserve layer's standalone concurrency
+	// contract and make this helper safe for direct callers too.
+	for i := range l.shards {
+		l.shards[i].mu.RLock()
+	}
+	defer func() {
+		for i := len(l.shards) - 1; i >= 0; i-- {
+			l.shards[i].mu.RUnlock()
+		}
+	}()
+	count := 0
+	for i := range l.shards {
+		s := &l.shards[i]
+		count += len(s.writes) + len(s.deletes)
+	}
+	keysPtr := borrowFlushWriteKeys(count)
+	defer returnFlushWriteKeys(keysPtr)
+	for i := range l.shards {
+		s := &l.shards[i]
+		for key := range s.writes {
+			*keysPtr = append(*keysPtr, key)
+		}
+		for key := range s.deletes {
+			*keysPtr = append(*keysPtr, key)
+		}
+	}
+	sort.Strings(*keysPtr)
+	stringWriter, writesString := w.(stringKeyWriter)
+	for _, key := range *keysPtr {
+		s := &l.shards[layerShardIndexString(key)]
+		value, put := s.writes[key]
+		var err error
+		switch {
+		case put && writesString:
+			err = stringWriter.PutString(key, value)
+		case put:
+			err = w.Put([]byte(key), value)
+		case writesString:
+			err = stringWriter.DeleteString(key)
+		default:
+			err = w.Delete([]byte(key))
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1996,6 +2083,34 @@ func writeMergedLayerOps(ops map[string]mergedLayerOp, w ethdb.KeyValueWriter) e
 			err = stringWriter.PutString(k, op.value)
 		default:
 			err = w.Put([]byte(k), op.value)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeMergedLayerOpsSorted(ops map[string]mergedLayerOp, w ethdb.KeyValueWriter) error {
+	keysPtr := borrowFlushWriteKeys(len(ops))
+	defer returnFlushWriteKeys(keysPtr)
+	for key := range ops {
+		*keysPtr = append(*keysPtr, key)
+	}
+	sort.Strings(*keysPtr)
+	stringWriter, writesString := w.(stringKeyWriter)
+	for _, key := range *keysPtr {
+		op := ops[key]
+		var err error
+		switch {
+		case op.delete && writesString:
+			err = stringWriter.DeleteString(key)
+		case op.delete:
+			err = w.Delete([]byte(key))
+		case writesString:
+			err = stringWriter.PutString(key, op.value)
+		default:
+			err = w.Put([]byte(key), op.value)
 		}
 		if err != nil {
 			return err
