@@ -155,6 +155,40 @@ func TestStateDBCodeUsesTypedStoreBoundary(t *testing.T) {
 	}
 }
 
+func TestSetStateCodeReaderPreservesDurableWriterAndTypedOverride(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(disk)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := ethrawdb.NewMemoryDatabase()
+	code := []byte{0x60, 0x2a, 0x60, 0x00, 0xf3}
+	hash := tcommon.Keccak256(code)
+	if err := rawdb.WriteStateCode(reader, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetStateCodeReader(reader)
+	if got := sdb.readStateCode(hash); !bytes.Equal(got, code) {
+		t.Fatalf("routed code read = %x, want %x", got, code)
+	}
+	other := []byte{0x60, 0x01}
+	otherHash := tcommon.Keccak256(other)
+	if err := sdb.writeStateCode(otherHash, other); err != nil {
+		t.Fatal(err)
+	}
+	if got := rawdb.ReadStateCode(disk, otherHash); !bytes.Equal(got, other) {
+		t.Fatalf("durable code write = %x, want %x", got, other)
+	}
+
+	typed := newRecordingStateCodeStore()
+	sdb.codeStore = typed
+	sdb.SetStateCodeReader(reader)
+	if sdb.codeStore != typed {
+		t.Fatal("SetStateCodeReader replaced explicit typed-store override")
+	}
+}
+
 func TestStateDBCodeHashForExistingEmptyAccount(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x01}

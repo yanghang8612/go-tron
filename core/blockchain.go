@@ -2101,6 +2101,10 @@ func (bc *BlockChain) prepareOpenState(statedb *state.StateDB) error {
 	if err := bc.configureStateCodeColdHistory(statedb); err != nil {
 		return err
 	}
+	// Code rows are immutable and content-addressed. Read them through the
+	// blockbuffer so repeated calls share its bounded durable-base cache; keep
+	// writes on StateDB's existing durable writer.
+	statedb.SetStateCodeReader(bc.buffer)
 	statedb.SetAccountKVIndexStore(bc.buffer)
 	statedb.SetAccountKVIndexReads(true)
 	return nil

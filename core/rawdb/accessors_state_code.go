@@ -29,6 +29,20 @@ func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	if hash == (common.Hash{}) {
 		return nil
 	}
+	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
+		var owned []byte
+		found, err := viewer.ViewNoCopyCachedKeyParts(stateCodePrefix, hash[:], func(code []byte, _ bool) error {
+			// The viewer may lend a Pebble block slice or a cache/layer slice.
+			// State objects retain bytecode across calls, so take exactly one
+			// caller-owned copy while the scoped view is valid.
+			owned = append([]byte(nil), code...)
+			return nil
+		})
+		if err != nil || !found {
+			return nil
+		}
+		return owned
+	}
 	data, err := db.Get(stateCodeKey(hash))
 	if err != nil {
 		return nil

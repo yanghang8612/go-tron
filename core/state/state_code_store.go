@@ -66,6 +66,24 @@ func (s *StateDB) getStateCodeStore() stateCodeStore {
 	return newRawDBStateCodeStore(s.db.DiskDB())
 }
 
+// SetStateCodeReader routes immutable content-addressed bytecode reads through
+// reader while preserving the durable code writer. Block application supplies
+// its generation-safe blockbuffer here so repeated contract calls can use the
+// same bounded two-hit base-read cache as flat latest state. Code bytes remain
+// caller-owned at the stateCodeReader boundary.
+func (s *StateDB) SetStateCodeReader(reader ethdb.KeyValueReader) {
+	if s == nil || reader == nil {
+		return
+	}
+	current, ok := s.getStateCodeStore().(rawDBStateCodeStore)
+	if !ok {
+		// Explicit typed-store overrides own both sides of their contract.
+		return
+	}
+	current.reader = reader
+	s.codeStore = current
+}
+
 func (s *StateDB) readStateCode(hash tcommon.Hash) []byte {
 	store := s.getStateCodeStore()
 	if store == nil {
