@@ -344,7 +344,39 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 // first). Used by GetBranchInto on the bulk-sync hot path to avoid the
 // return-by-value copy of the ~1 KiB BranchData struct.
 func DecodeBranchDataInto(data []byte, dst *BranchData) error {
-	return decodeBranchDataInto(data, dst, true)
+	if err := decodeBranchDataInto(data, dst); err != nil {
+		// The no-copy parser may have installed views into data before detecting
+		// a later malformed child. Public callers must never observe those
+		// transient partial results.
+		*dst = BranchData{}
+		return err
+	}
+	// A cold Pebble view is valid only until its callback returns. Copy every
+	// leaf key into one exact-size immutable arena. BranchData copies may share
+	// those slices safely because the arena is never mutated. This replaces up
+	// to 16 tiny allocations per decoded branch without retaining the
+	// hash-dominated encoded Pebble value.
+	totalLeafKeyBytes := 0
+	for i := range dst.children {
+		if dst.children[i].present && dst.children[i].kind == kindLeaf {
+			totalLeafKeyBytes += len(dst.children[i].leafKey)
+		}
+	}
+	if totalLeafKeyBytes == 0 {
+		return nil
+	}
+	arena := make([]byte, totalLeafKeyBytes)
+	offset := 0
+	for i := range dst.children {
+		child := &dst.children[i]
+		if !child.present || child.kind != kindLeaf || len(child.leafKey) == 0 {
+			continue
+		}
+		end := offset + copy(arena[offset:], child.leafKey)
+		child.leafKey = arena[offset:end:end]
+		offset = end
+	}
+	return nil
 }
 
 // decodeBranchDataIntoNoCopy is the fold reader's allocation-free variant.
@@ -352,17 +384,16 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 // no longer used. rawdbBranchStore satisfies this with owned Get results or
 // immutable-by-replacement blockbuffer/cache values.
 func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
-	return decodeBranchDataInto(data, dst, false)
+	return decodeBranchDataInto(data, dst)
 }
 
-func decodeBranchDataInto(data []byte, dst *BranchData, copyLeafKeys bool) error {
+func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	*dst = BranchData{}
 	if len(data) < 2 {
 		return errors.New("commitment_tree: input too short for childMask")
 	}
 	mask := uint16(data[0])<<8 | uint16(data[1])
 	rest := data[2:]
-
 	for i := uint8(0); i < 16; i++ {
 		if mask&(1<<i) == 0 {
 			continue
@@ -395,9 +426,6 @@ func decodeBranchDataInto(data []byte, dst *BranchData, copyLeafKeys bool) error
 				return errors.New("commitment_tree: keyLen exceeds remaining input")
 			}
 			key := rest[:keyLen]
-			if copyLeafKeys {
-				key = append([]byte(nil), key...)
-			}
 			rest = rest[keyLen:]
 			if len(rest) < common.HashLength {
 				return errors.New("commitment_tree: truncated at leaf valHash")

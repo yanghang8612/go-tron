@@ -120,6 +120,7 @@ func TestBranchDataEncodeAllocatesExactCapacity(t *testing.T) {
 func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	var source BranchData
 	source.SetLeafChild(4, []byte("borrow-me"), common.Hash{0xaa})
+	source.SetLeafChild(9, []byte("pack-with-me"), common.Hash{0xbb})
 	encoded := source.Encode()
 
 	var copied, borrowed BranchData
@@ -142,6 +143,19 @@ func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	borrowedKey, _ := borrowed.leafChildAt(4)
 	if string(borrowedKey) != "Borrow-me" {
 		t.Fatalf("no-copy decoder did not alias input: %q", borrowedKey)
+	}
+	secondOffset := bytes.Index(encoded, []byte("pack-with-me"))
+	if secondOffset < 0 {
+		t.Fatal("second encoded leaf key not found")
+	}
+	encoded[secondOffset] = 'P'
+	secondCopiedKey, _ := copied.leafChildAt(9)
+	if string(secondCopiedKey) != "pack-with-me" {
+		t.Fatalf("packed public decoder retained input: %q", secondCopiedKey)
+	}
+	secondBorrowedKey, _ := borrowed.leafChildAt(9)
+	if string(secondBorrowedKey) != "Pack-with-me" {
+		t.Fatalf("packed no-copy decoder did not alias input: %q", secondBorrowedKey)
 	}
 }
 

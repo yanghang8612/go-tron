@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 
@@ -12,6 +13,47 @@ import (
 // commitmentDBWithoutOwnedValue preserves the normal CommitmentDB surface but
 // hides blockbuffer's optional owned-value method for a before/after benchmark.
 type commitmentDBWithoutOwnedValue struct{ CommitmentDB }
+
+var benchmarkDecodedBranch BranchData
+
+func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {
+	for _, leaves := range []int{1, 4, 16} {
+		b.Run(strconv.Itoa(leaves), func(b *testing.B) {
+			var branch BranchData
+			for nibble := 0; nibble < leaves; nibble++ {
+				key := bytes.Repeat([]byte{byte(nibble + 1)}, 64+nibble)
+				branch.SetLeafChild(uint8(nibble), key, common.Hash{byte(nibble + 1)})
+			}
+			encoded := branch.Encode()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				var decoded BranchData
+				if err := DecodeBranchDataInto(encoded, &decoded); err != nil {
+					b.Fatal(err)
+				}
+				benchmarkDecodedBranch = decoded
+			}
+		})
+	}
+}
+
+func BenchmarkDecodeBranchDataIntoNoCopy(b *testing.B) {
+	var branch BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		branch.SetLeafChild(nibble, bytes.Repeat([]byte{nibble + 1}, 64+int(nibble)), common.Hash{nibble + 1})
+	}
+	encoded := branch.Encode()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var decoded BranchData
+		if err := decodeBranchDataIntoNoCopy(encoded, &decoded); err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDecodedBranch = decoded
+	}
+}
 
 func BenchmarkRawdbBranchStorePutBranch(b *testing.B) {
 	var branch BranchData
