@@ -8,10 +8,27 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+// keyValueStoreWithoutPointView hides the optional fold-scoped point-read
+// capability while preserving the callback read used by the baseline.
+type keyValueStoreWithoutPointView struct {
+	ethdb.KeyValueStore
+}
+
+func (s keyValueStoreWithoutPointView) View(key []byte, fn func([]byte) error) error {
+	return s.KeyValueStore.(interface {
+		View([]byte, func([]byte) error) error
+	}).View(key, fn)
+}
+
+func (s keyValueStoreWithoutPointView) IsKeyNotFound(err error) bool {
+	return s.KeyValueStore.(interface{ IsKeyNotFound(error) bool }).IsKeyNotFound(err)
+}
 
 // buildRandomPuts returns n deterministic pseudo-random put updates with 32-byte
 // keys and 8-byte values drawn from rng. Distinct seeds yield disjoint key sets.
@@ -182,6 +199,73 @@ func BenchmarkAsyncFoldParentBranchReads(b *testing.B) {
 					b.Fatal("missing benchmark in-flight layer")
 				}
 				store := tc.store(buf.ViewLayer(h))
+				b.StartTimer()
+				root, err := ApplyLatestCommitmentWithStore(store, updates)
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if expected == (common.Hash{}) {
+					expected = root
+				} else if root != expected {
+					b.Fatalf("root = %x, want %x", root, expected)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkAsyncFoldPebbleParentView measures only the lifecycle-lock reuse
+// change against a compacted Pebble parent trie. Both arms retain DB.Get point
+// lookups and identical blockbuffer/cache semantics; the baseline hides the
+// optional fold-scoped view so every cold parent read takes quitLock.RLock.
+func BenchmarkAsyncFoldPebbleParentView(b *testing.B) {
+	const baseSize = 50_000
+	rng := rand.New(rand.NewSource(9441))
+	seedRaw := buildRandomPuts(rng, baseSize)
+	seed := make([]rawdb.StateCommitmentUpdate, len(seedRaw))
+	for i := range seedRaw {
+		seed[i] = rawdb.NewStateCommitmentPut(seedRaw[i].Key, seedRaw[i].Value)
+	}
+	base, err := rawdb.NewPebbleDB(b.TempDir(), 64, 128)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = base.Close() })
+	if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(base), seed); err != nil {
+		b.Fatal(err)
+	}
+	if compactor, ok := base.(interface{ Compact([]byte, []byte) error }); ok {
+		if err := compactor.Compact(nil, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	updates := make([]rawdb.StateCommitmentUpdate, 64)
+	for i := range updates {
+		value := make([]byte, 8)
+		binary.BigEndian.PutUint64(value, uint64(i+1))
+		updates[i] = rawdb.NewStateCommitmentPut(seedRaw[(i*733)%baseSize].Key, value)
+	}
+	for _, tc := range []struct {
+		name string
+		base ethdb.KeyValueStore
+	}{
+		{name: "per_read_lock", base: keyValueStoreWithoutPointView{base}},
+		{name: "shared_view", base: base},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var expected common.Hash
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				buf := blockbuffer.New(tc.base)
+				buf.BeginBlock(common.Hash{byte(i + 1)}, uint64(i+1))
+				h, ok := buf.NewestInflight()
+				if !ok {
+					b.Fatal("missing in-flight layer")
+				}
+				store := NewStagedCommitmentStoreForAsyncFold(buf.ViewLayer(h))
 				b.StartTimer()
 				root, err := ApplyLatestCommitmentWithStore(store, updates)
 				b.StopTimer()

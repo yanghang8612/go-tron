@@ -55,6 +55,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 const (
@@ -220,6 +221,54 @@ type Database struct {
 	writeDelayTime      atomic.Int64 // Total time spent in write stalls
 
 	writeOptions *pebble.WriteOptions
+}
+
+// pointReadView holds Database's lifecycle read lock across a short burst of
+// point reads. Pebble DB.Get remains the lookup primitive, preserving its Bloom
+// filter and point-lookup behaviour while avoiding one RWMutex reader-count
+// increment/decrement per key.
+type pointReadView struct {
+	db *Database
+}
+
+var _ pointread.Viewer = (*Database)(nil)
+var _ pointread.View = (*pointReadView)(nil)
+
+// NewPointReadView acquires one read-side lifecycle lease. Close must be called
+// before Database.Close can complete; normal reads, writes, flushes and
+// compactions remain concurrent because they use the same RWMutex read side.
+func (d *Database) NewPointReadView() (pointread.View, error) {
+	d.quitLock.RLock()
+	if d.closed {
+		d.quitLock.RUnlock()
+		return nil, pebble.ErrClosed
+	}
+	return &pointReadView{db: d}, nil
+}
+
+func (v *pointReadView) Get(key []byte, fn func(value []byte) error) (err error) {
+	if v == nil || v.db == nil {
+		return pebble.ErrClosed
+	}
+	dat, closer, err := v.db.db.Get(key)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := closer.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return fn(dat)
+}
+
+func (v *pointReadView) Close() error {
+	if v == nil || v.db == nil {
+		return nil
+	}
+	v.db.quitLock.RUnlock()
+	v.db = nil
+	return nil
 }
 
 func (d *Database) onCompactionBegin(info pebble.CompactionInfo) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 const splitReadKeyStackSize = 128
@@ -73,6 +74,101 @@ func returnOwnedValueBatchLinks(linksPtr *[]ownedValueBatchLink) {
 type LayerView struct {
 	b *Buffer
 	l *layer
+}
+
+type commitmentParentView struct {
+	b    *Buffer
+	base pointread.View
+}
+
+var _ pointread.CommitmentParentViewer = (*LayerView)(nil)
+var _ pointread.CommitmentParentView = (*commitmentParentView)(nil)
+
+// NewCommitmentParentView holds the durable engine's lifecycle read lease for
+// one fold. It deliberately does not pin a Pebble snapshot or reuse iterators:
+// each exact-key lookup retains DB.Get's point-read/Bloom-filter behaviour.
+func (v *LayerView) NewCommitmentParentView() (pointread.CommitmentParentView, error) {
+	if v == nil || v.b == nil || v.b.base == nil {
+		return nil, nil
+	}
+	factory, ok := v.b.base.(pointread.Viewer)
+	if !ok {
+		return nil, nil
+	}
+	base, err := factory.NewPointReadView()
+	if err != nil {
+		return nil, err
+	}
+	return &commitmentParentView{b: v.b, base: base}, nil
+}
+
+func (v *commitmentParentView) GetKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	if v == nil || v.b == nil || v.base == nil {
+		return false, errors.New("blockbuffer: closed commitment parent view")
+	}
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return v.get(key, fn)
+	}
+	keyBuf := borrowSplitReadKey()
+	defer returnSplitReadKey(keyBuf)
+	key := keyBuf[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return v.get(key, fn)
+}
+
+func (v *commitmentParentView) get(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	view := v.b.loadReadView()
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
+	}
+	cache := view.baseReadCache
+	var epoch baseReadCacheEpoch
+	if cache != nil {
+		if value, ok, observed := cache.getWithEpoch(key); ok {
+			if value == nil {
+				return false, nil
+			}
+			return true, fn(value, true)
+		} else {
+			epoch = observed
+		}
+	}
+	ctx := borrowScopedBaseViewContext(cache, key, epoch, fn)
+	err := v.base.Get(key, ctx.callback)
+	called := ctx.called
+	callbackErr := ctx.callbackErr
+	returnScopedBaseViewContext(ctx)
+	if called {
+		if callbackErr != nil {
+			return true, callbackErr
+		}
+		return true, err
+	}
+	if isKeyNotFound(v.b.base, err) {
+		if cache != nil {
+			cache.setMissingIfEpoch(key, epoch)
+		}
+		return false, nil
+	}
+	return false, err
+}
+
+func (v *commitmentParentView) Close() error {
+	if v == nil || v.base == nil {
+		return nil
+	}
+	err := v.base.Close()
+	v.base = nil
+	v.b = nil
+	return err
 }
 
 // ConcurrentReadWriteSafe is the LayerView counterpart of Buffer's structural

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -16,6 +17,7 @@ type rawdbBranchStore struct {
 	db                 CommitmentDB
 	ownedValue         bool
 	readParentBranches bool
+	parentView         pointread.CommitmentParentView
 }
 
 // branchDecodeView owns the callback passed through rawdb/blockbuffer's
@@ -138,16 +140,43 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
 // the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
+	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
+	decodeView.dst = dst
+	if s.parentView != nil {
+		found, err := rawdb.ViewCommitmentParentBranchInView(s.parentView, prefix, decodeView.consume)
+		decodeView.dst = nil
+		branchDecodeViewPool.Put(decodeView)
+		return found, err
+	}
 	view := rawdb.ViewCommitmentBranchNoCopy
 	if s.readParentBranches {
 		view = rawdb.ViewCommitmentParentBranchNoCopy
 	}
-	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
-	decodeView.dst = dst
 	found, err := view(s.db, prefix, decodeView.consume)
 	decodeView.dst = nil
 	branchDecodeViewPool.Put(decodeView)
 	return found, err
+}
+
+func (s *rawdbBranchStore) beginParentView() error {
+	view, err := rawdb.NewCommitmentParentView(s.db)
+	if err != nil {
+		if view != nil {
+			_ = view.Close()
+		}
+		return err
+	}
+	s.parentView = view
+	return nil
+}
+
+func (s *rawdbBranchStore) closeParentView() error {
+	if s.parentView == nil {
+		return nil
+	}
+	err := s.parentView.Close()
+	s.parentView = nil
+	return err
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
@@ -433,10 +462,20 @@ func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (c
 		foldUpdates = append(foldUpdates, Update{Key: u.Key, Value: u.Value, Delete: u.Delete})
 	}
 	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
+	if s.store.readParentBranches {
+		if err := s.store.beginParentView(); err != nil {
+			s.store.readParentBranches = false
+			return common.Hash{}, err
+		}
+	}
 	root, err := s.trie.Fold(foldUpdates)
+	closeErr := s.store.closeParentView()
 	s.store.readParentBranches = false
 	if err != nil {
 		return common.Hash{}, err
+	}
+	if closeErr != nil {
+		return common.Hash{}, closeErr
 	}
 	s.branchStateWritten = true
 	if err := s.WriteRoot(root); err != nil {

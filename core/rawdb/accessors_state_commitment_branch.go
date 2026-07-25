@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 type cachedNoCopyKeyPartsReader interface {
@@ -16,6 +17,25 @@ type cachedNoCopyKeyPartsViewer interface {
 
 type commitmentParentKeyPartsViewer interface {
 	ViewCommitmentParentKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
+}
+
+// NewCommitmentParentView returns an optional fold-scoped parent reader. Stores
+// that do not expose the capability keep the ordinary per-key path.
+func NewCommitmentParentView(db ethdb.KeyValueReader) (pointread.CommitmentParentView, error) {
+	viewer, ok := db.(pointread.CommitmentParentViewer)
+	if !ok {
+		return nil, nil
+	}
+	return viewer.NewCommitmentParentView()
+}
+
+// ViewCommitmentParentBranchInView is the fold-scoped counterpart of
+// ViewCommitmentParentBranchNoCopy.
+func ViewCommitmentParentBranchInView(view pointread.CommitmentParentView, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	if view == nil {
+		return false, errors.New("rawdb: nil commitment parent view")
+	}
+	return view.GetKeyParts(stateCommitmentBranchPrefix, prefix, fn)
 }
 
 // keyPartsWriter is an optional writer fast path for layered stores whose
