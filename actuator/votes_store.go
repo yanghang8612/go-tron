@@ -17,26 +17,13 @@ func recordPendingVotes(ctx *Context, owner common.Address, oldVotes, newVotes [
 	if votes == nil {
 		votes = &corepb.Votes{
 			Address:  owner.Bytes(),
-			OldVotes: cloneVotes(oldVotes),
+			OldVotes: oldVotes,
 		}
 	}
-	votes.NewVotes = cloneVotes(newVotes)
+	// WriteVotes synchronously marshals the complete record into StateDB-owned
+	// bytes before returning. The temporary protobuf does not retain either
+	// input slice, so cloning every vote and address here only duplicated the
+	// serialization ownership boundary.
+	votes.NewVotes = newVotes
 	return ctx.State.WriteVotes(owner, votes)
-}
-
-func cloneVotes(votes []*corepb.Vote) []*corepb.Vote {
-	if len(votes) == 0 {
-		return nil
-	}
-	out := make([]*corepb.Vote, 0, len(votes))
-	for _, vote := range votes {
-		if vote == nil {
-			continue
-		}
-		out = append(out, &corepb.Vote{
-			VoteAddress: append([]byte(nil), vote.VoteAddress...),
-			VoteCount:   vote.VoteCount,
-		})
-	}
-	return out
 }

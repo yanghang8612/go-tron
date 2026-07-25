@@ -132,6 +132,34 @@ func TestVoteWitnessExecute(t *testing.T) {
 	}
 }
 
+func TestRecordPendingVotesSnapshotsInputs(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(0x31)
+	oldTarget := makeTestAddr(0x32)
+	newTarget := makeTestAddr(0x33)
+	oldVotes := []*corepb.Vote{{VoteAddress: oldTarget.Bytes(), VoteCount: 11}}
+	newVotes := []*corepb.Vote{{VoteAddress: newTarget.Bytes(), VoteCount: 22}}
+	ctx := &Context{State: statedb}
+
+	if err := recordPendingVotes(ctx, owner, oldVotes, newVotes); err != nil {
+		t.Fatal(err)
+	}
+	oldVotes[0].VoteAddress[0] ^= 0xff
+	oldVotes[0].VoteCount = 111
+	newVotes[0].VoteAddress[0] ^= 0xff
+	newVotes[0].VoteCount = 222
+
+	pending := statedb.ReadVotes(owner)
+	if pending == nil || len(pending.OldVotes) != 1 || len(pending.NewVotes) != 1 {
+		t.Fatalf("pending vote snapshot missing: %+v", pending)
+	}
+	if pending.OldVotes[0].VoteCount != 11 || pending.NewVotes[0].VoteCount != 22 ||
+		pending.OldVotes[0].VoteAddress[0] != oldTarget[0] ||
+		pending.NewVotes[0].VoteAddress[0] != newTarget[0] {
+		t.Fatalf("source mutation changed pending vote snapshot: %+v", pending)
+	}
+}
+
 func TestVoteWitnessDuplicateTargetsAllowed(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(10)
