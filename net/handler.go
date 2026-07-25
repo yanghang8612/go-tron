@@ -31,6 +31,8 @@ type peerState struct {
 	peer           *p2p.Peer
 	connState      peerConnState
 	rl             *p2p.RateLimiter
+	advertisedFrom *corepb.Endpoint
+	cacheConfirmed bool
 	headBlockID    tcommon.Hash
 	headNum        uint64
 	solidNum       uint64
@@ -258,8 +260,10 @@ func (h *TronHandler) OnMessage(peer *p2p.Peer, code byte, payload []byte) {
 	case p2p.MsgDisconnect:
 		h.handleDisconnect(peer, payload)
 	case p2p.MsgPing:
+		h.confirmApplicationPeer(peer)
 		peer.Send(p2p.MsgPong, nil)
 	case p2p.MsgPong:
+		h.confirmApplicationPeer(peer)
 		// keep-alive acknowledged
 	default:
 		// Protocol messages — only process if handshaked
@@ -269,6 +273,7 @@ func (h *TronHandler) OnMessage(peer *p2p.Peer, code byte, payload []byte) {
 		if ps == nil || ps.connState != peerStateHandshaked {
 			return
 		}
+		h.confirmApplicationPeer(peer)
 		h.handleProtocolMessage(peer, code, payload)
 	}
 }
@@ -393,6 +398,9 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	if hello.LowestBlockNum > 0 {
 		ps.lowestBlockNum = uint64(hello.LowestBlockNum)
 	}
+	if hello.From != nil {
+		ps.advertisedFrom = proto.Clone(hello.From).(*corepb.Endpoint)
+	}
 	h.mu.Unlock()
 
 	localHead := h.chain.CurrentBlock().Number()
@@ -404,25 +412,47 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 		"localHead", localHead,
 		"lag", int64(ps.headNum)-int64(localHead))
 
-	// Keep only application-compatible peers whose retained range covers our
-	// next block. A libp2p-compatible but heavily pruned peer is healthy for a
-	// caught-up node yet useless while this node is replaying early history;
-	// persisting it would make deployment restarts repeatedly reconnect to a
-	// peer that can never join the current sync session.
-	if h.server != nil && ps.headNum >= localHead && ps.canServeSyncFrom(localHead+1) {
-		h.server.RememberApplicationPeer(peer, hello.From)
-	}
-
 	// Trigger sync if peer has more blocks
 	if h.syncService != nil && ps.headNum > localHead {
 		h.syncService.StartSync(peer)
 	}
 }
 
+// confirmApplicationPeer persists a peer only after it sends traffic beyond
+// its Hello. Receipt of the remote Hello alone is not mutual acceptance: a
+// pruned java-tron peer can advertise lowestBlockNum=0, then reject our valid
+// solid block as FORKED because its local database no longer contains it.
+func (h *TronHandler) confirmApplicationPeer(peer *p2p.Peer) {
+	if h.server == nil || peer == nil {
+		return
+	}
+	localHead := h.chain.CurrentBlock().Number()
+	h.mu.Lock()
+	ps := h.peers[peer.ID()]
+	if ps == nil || ps.cacheConfirmed || ps.headNum < localHead || !ps.canServeSyncFrom(localHead+1) {
+		h.mu.Unlock()
+		return
+	}
+	ps.cacheConfirmed = true
+	from := ps.advertisedFrom
+	h.mu.Unlock()
+	h.server.RememberApplicationPeer(peer, from)
+}
+
 func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	var msg corepb.DisconnectMessage
 	if err := proto.Unmarshal(payload, &msg); err == nil {
 		peer.RecordDisconnectCause("application disconnect: " + msg.Reason.String())
+		if h.server != nil && isCacheRejectReason(msg.Reason) {
+			h.mu.RLock()
+			ps := h.peers[peer.ID()]
+			var from *corepb.Endpoint
+			if ps != nil {
+				from = ps.advertisedFrom
+			}
+			h.mu.RUnlock()
+			h.server.ForgetApplicationPeer(peer, from)
+		}
 		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
 	} else {
 		peer.RecordDisconnectCause("invalid application disconnect: " + err.Error())
@@ -431,6 +461,19 @@ func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	// Close the connection — readLoop will exit and call disconnect().
 	// Don't call peer.Stop() here: we're inside readLoop, Stop() would deadlock.
 	peer.Close()
+}
+
+func isCacheRejectReason(reason corepb.ReasonCode) bool {
+	switch reason {
+	case corepb.ReasonCode_FORKED,
+		corepb.ReasonCode_LIGHT_NODE_SYNC_FAIL,
+		corepb.ReasonCode_INCOMPATIBLE_CHAIN,
+		corepb.ReasonCode_INCOMPATIBLE_PROTOCOL,
+		corepb.ReasonCode_INCOMPATIBLE_VERSION:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *TronHandler) disconnectPeer(peer *p2p.Peer, reason corepb.ReasonCode) {

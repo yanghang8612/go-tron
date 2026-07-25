@@ -425,6 +425,25 @@ func TestRememberApplicationPeerUsesObservedHostForInboundPeer(t *testing.T) {
 	}
 }
 
+func TestForgetApplicationPeerRemovesDurableEndpoint(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
+	srv := NewServer(ServerConfig{PeerCachePath: cachePath}, &testHandler{})
+	peer := NewPeer(nil, "198.51.100.9:18888", false, nil)
+	srv.RememberApplicationPeer(peer, nil)
+	srv.ForgetApplicationPeer(peer, nil)
+
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("cache after eviction = %q, want empty", data)
+	}
+	if got := srv.cachedPeerSnapshot(); len(got) != 0 {
+		t.Fatalf("cached peers after eviction = %v", got)
+	}
+}
+
 // TestServer_BootstrapNodesFedToDiscovery covers the M3.5 follow-up: built-in
 // bootstrap addresses (params.MainnetBootstrapNodes / NileBootstrapNodes) must
 // reach the Discovery routing table, not just the explicit --seednode flags.

@@ -197,7 +197,7 @@ func TestBuildHelloUsesSolidifiedBlockInsteadOfHead(t *testing.T) {
 	}
 }
 
-func TestHandleHelloCachesOnlyPeerCoveringNextBlock(t *testing.T) {
+func TestHandleHelloDefersCacheUntilMutualTraffic(t *testing.T) {
 	bc := makeTestChain(t)
 	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
 	handler := NewTronHandler(bc, txpool.New(), nil)
@@ -221,6 +221,7 @@ func TestHandleHelloCachesOnlyPeerCoveringNextBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler.handleHello(peer, payload)
+	handler.confirmApplicationPeer(peer)
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Fatalf("unusable peer must not populate cache: %v", err)
 	}
@@ -231,6 +232,10 @@ func TestHandleHelloCachesOnlyPeerCoveringNextBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler.handleHello(peer, payload)
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("hello alone must not populate cache: %v", err)
+	}
+	handler.confirmApplicationPeer(peer)
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		t.Fatal(err)

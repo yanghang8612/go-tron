@@ -499,24 +499,38 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 // inbound peer, the TCP source port is ephemeral, so combine the observed
 // source IP with the listening port advertised in its application Hello.
 func (s *Server) RememberApplicationPeer(peer *Peer, from *corepb.Endpoint) {
+	if addr := applicationPeerAddress(peer, from); addr != "" {
+		s.rememberPeer(addr)
+	}
+}
+
+// ForgetApplicationPeer evicts an endpoint that failed mutual application
+// compatibility after it had previously reached the durable cache.
+func (s *Server) ForgetApplicationPeer(peer *Peer, from *corepb.Endpoint) {
+	if addr := applicationPeerAddress(peer, from); addr != "" {
+		s.forgetPeer(addr)
+	}
+}
+
+func applicationPeerAddress(peer *Peer, from *corepb.Endpoint) string {
 	if peer == nil {
-		return
+		return ""
 	}
 	if !peer.Inbound() && validCachedPeerAddress(peer.ID()) {
-		s.rememberPeer(peer.ID())
-		return
+		return peer.ID()
 	}
 	if from == nil || from.Port <= 0 || from.Port > 65535 {
-		return
+		return ""
 	}
 	host, _, err := net.SplitHostPort(peer.ID())
 	if err != nil || host == "" {
-		return
+		return ""
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(int(from.Port)))
 	if validCachedPeerAddress(addr) {
-		s.rememberPeer(addr)
+		return addr
 	}
+	return ""
 }
 
 // removePeer removes a peer from the map (called on disconnect) and nudges
@@ -748,6 +762,46 @@ func (s *Server) rememberPeer(addr string) {
 
 	if err != nil {
 		log.Warn("Failed to persist P2P peer cache", "path", path, "err", err)
+	}
+}
+
+func (s *Server) forgetPeer(addr string) {
+	path := s.config.PeerCachePath
+	if path == "" || !validCachedPeerAddress(addr) {
+		return
+	}
+
+	s.peerCacheMu.Lock()
+	peers := make([]string, 0, len(s.cachedPeers))
+	removed := false
+	for _, existing := range s.cachedPeers {
+		if existing == addr {
+			removed = true
+			continue
+		}
+		peers = append(peers, existing)
+	}
+	if !removed {
+		s.peerCacheMu.Unlock()
+		return
+	}
+	s.cachedPeers = peers
+	data := []byte(strings.Join(peers, "\n"))
+	if len(data) > 0 {
+		data = append(data, '\n')
+	}
+	tmp := path + ".tmp"
+	err := os.WriteFile(tmp, data, 0o600)
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	s.peerCacheMu.Unlock()
+
+	if err != nil {
+		log.Warn("Failed to persist P2P peer cache eviction", "path", path, "err", err)
 	}
 }
 
