@@ -1005,8 +1005,10 @@ func (l *layer) lookupMap(key []byte) (v []byte, found, tomb bool) {
 	if val, ok := s.writes[string(key)]; ok {
 		return val, true, false
 	}
-	if _, t := s.deletes[string(key)]; t {
-		return nil, false, true
+	if len(s.deletes) != 0 {
+		if _, t := s.deletes[string(key)]; t {
+			return nil, false, true
+		}
 	}
 	return nil, false, false
 }

@@ -41,6 +41,21 @@ func BenchmarkLayerLookupParallelMiss(b *testing.B) { benchmarkLayerLookup(b, tr
 func BenchmarkLayerLookupSerialHit(b *testing.B)    { benchmarkLayerLookup(b, false, true) }
 func BenchmarkLayerLookupParallelHit(b *testing.B)  { benchmarkLayerLookup(b, true, true) }
 
+func BenchmarkLayerLookupSerialPopulatedMiss(b *testing.B) {
+	l := newLayer([32]byte{}, 1)
+	writer := &Buffer{}
+	keys := make([][]byte, 256)
+	for i := range keys {
+		writer.putInto(l, []byte(fmt.Sprintf("state-commitment-present-%064x", i)), []byte("encoded-branch"))
+		keys[i] = []byte(fmt.Sprintf("state-commitment-missing-%064x", i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		l.lookup(keys[i&(len(keys)-1)])
+	}
+}
+
 func benchmarkLayerLookupTombstone(b *testing.B, parallel bool) {
 	l := newLayer([32]byte{}, 1)
 	writer := &Buffer{}
