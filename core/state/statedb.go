@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -24,6 +25,15 @@ import (
 var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 )
+
+// storageReadKeyPool keeps the computed 32-byte StorageRow key alive across
+// interface-based latest-domain reads. Passing a slice of a stack-local hash
+// through those reader interfaces makes it escape once per cold SLOAD; readers
+// consume request keys synchronously and never retain them, so the buffer can
+// be reused immediately after the call.
+var storageReadKeyPool = sync.Pool{
+	New: func() any { return new(tcommon.Hash) },
+}
 
 // maxStateObjectCachedStorageSlots bounds the cross-block SLOAD cache of one
 // repeatedly used contract. Large token contracts touch an effectively
@@ -2546,7 +2556,10 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
-	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
+	rowKey := storageReadKeyPool.Get().(*tcommon.Hash)
+	*rowKey = s.storageRowKey(addr, key)
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, rowKey[:])
+	storageReadKeyPool.Put(rowKey)
 	if err != nil {
 		return tcommon.Hash{}, false
 	}
