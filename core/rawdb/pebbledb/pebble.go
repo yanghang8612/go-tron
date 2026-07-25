@@ -74,27 +74,32 @@ const (
 	// leveldb database cannot keep up with requested writes.
 	degradationWarnInterval = time.Minute
 
-	// Pebble retains batch buffers only up to 1 MiB. Blockbuffer flushes often
-	// need a little more than that, so constructing an exact-sized Pebble batch
-	// would allocate and discard a multi-megabyte backing array on every flush.
-	// Keep a small, strictly bounded set of those common larger buffers here.
-	pebbleBatchHeaderSize      = 12
-	pebbleMaxRetainedBatchSize = 1 << 20
-	maxPooledLargeBatchSize    = 8 << 20
-	largeBatchBuffersPerClass  = 2
+	// Pebble retains batch buffers only up to 1 MiB, and its one generic pool can
+	// still alternate between insufficient capacities below that threshold.
+	// Blockbuffer flushes span both sides of 1 MiB, so keep a small, strictly
+	// bounded set of power-of-two buffers for the meaningful size range here.
+	pebbleBatchHeaderSize = 12
+	minPooledBatchSize    = 64 << 10
+	maxPooledBatchSize    = 8 << 20
+	batchBuffersPerClass  = 2
 )
 
-var largeBatchBufferPools = [...]chan []byte{
-	make(chan []byte, largeBatchBuffersPerClass), // 2 MiB
-	make(chan []byte, largeBatchBuffersPerClass), // 4 MiB
-	make(chan []byte, largeBatchBuffersPerClass), // 8 MiB
+var batchBufferPools = [...]chan []byte{
+	make(chan []byte, batchBuffersPerClass), // 64 KiB
+	make(chan []byte, batchBuffersPerClass), // 128 KiB
+	make(chan []byte, batchBuffersPerClass), // 256 KiB
+	make(chan []byte, batchBuffersPerClass), // 512 KiB
+	make(chan []byte, batchBuffersPerClass), // 1 MiB
+	make(chan []byte, batchBuffersPerClass), // 2 MiB
+	make(chan []byte, batchBuffersPerClass), // 4 MiB
+	make(chan []byte, batchBuffersPerClass), // 8 MiB
 }
 
-func largeBatchBufferClass(size int) (int, int, bool) {
-	if size <= pebbleMaxRetainedBatchSize || size > maxPooledLargeBatchSize {
+func batchBufferClass(size int) (int, int, bool) {
+	if size < minPooledBatchSize || size > maxPooledBatchSize {
 		return 0, 0, false
 	}
-	capacity := 2 << 20
+	capacity := minPooledBatchSize
 	class := 0
 	for capacity < size {
 		capacity <<= 1
@@ -103,13 +108,13 @@ func largeBatchBufferClass(size int) (int, int, bool) {
 	return class, capacity, true
 }
 
-func borrowLargeBatchBuffer(size int) ([]byte, int, bool) {
-	class, capacity, ok := largeBatchBufferClass(size)
+func borrowBatchBuffer(size int) ([]byte, int, bool) {
+	class, capacity, ok := batchBufferClass(size)
 	if !ok {
 		return nil, 0, false
 	}
 	select {
-	case data := <-largeBatchBufferPools[class]:
+	case data := <-batchBufferPools[class]:
 		data = data[:pebbleBatchHeaderSize]
 		clear(data)
 		return data, class, true
@@ -118,12 +123,12 @@ func borrowLargeBatchBuffer(size int) ([]byte, int, bool) {
 	}
 }
 
-func returnLargeBatchBuffer(data []byte, class int) {
-	if data == nil || class < 0 || class >= len(largeBatchBufferPools) {
+func returnBatchBuffer(data []byte, class int) {
+	if data == nil || class < 0 || class >= len(batchBufferPools) {
 		return
 	}
 	select {
-	case largeBatchBufferPools[class] <- data[:pebbleBatchHeaderSize]:
+	case batchBufferPools[class] <- data[:pebbleBatchHeaderSize]:
 	default:
 	}
 }
@@ -624,7 +629,7 @@ func (d *Database) NewBatch() ethdb.Batch {
 
 // NewBatchWithSize creates a write-only database batch with pre-allocated buffer.
 func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
-	if data, class, ok := borrowLargeBatchBuffer(size); ok {
+	if data, class, ok := borrowBatchBuffer(size); ok {
 		pb := d.db.NewBatch()
 		// Save Pebble's own <=1 MiB retained buffer before SetRepr replaces it.
 		// Restoring it before Close keeps Pebble's batch pool warm for the much
@@ -637,7 +642,7 @@ func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
 				panic(fmt.Sprintf("pebbledb: restore native batch after initialization error: %v", restoreErr))
 			}
 			pb.Close()
-			returnLargeBatchBuffer(data, class)
+			returnBatchBuffer(data, class)
 			panic(fmt.Sprintf("pebbledb: initialize pooled batch: %v", err))
 		}
 		return &batch{
@@ -1008,7 +1013,7 @@ func (b *batch) Close() {
 		b.pebbleData = nil
 	}
 	b.b.Close()
-	returnLargeBatchBuffer(data, class)
+	returnBatchBuffer(data, class)
 }
 
 // pebbleIterator is a wrapper of underlying iterator in storage engine.

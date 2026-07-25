@@ -118,9 +118,13 @@ func TestLargeBatchBufferWritesAndResets(t *testing.T) {
 func TestLargeBatchBufferIsReusedAfterClose(t *testing.T) {
 	// Empty the target class so this test observes the buffer it returns rather
 	// than one left behind by another test.
+	class, _, ok := batchBufferClass(2 << 20)
+	if !ok {
+		t.Fatal("2 MiB batch is not pool eligible")
+	}
 	for {
 		select {
-		case <-largeBatchBufferPools[0]:
+		case <-batchBufferPools[class]:
 		default:
 			goto drained
 		}
@@ -163,6 +167,29 @@ func TestLargeBatchBufferIsNotReusedWhenPebbleRetainsIt(t *testing.T) {
 		t.Fatal("buffer retained by Pebble remained eligible for reuse")
 	}
 	batch.Close()
+}
+
+func TestBatchBufferClasses(t *testing.T) {
+	tests := []struct {
+		size     int
+		capacity int
+		pooled   bool
+	}{
+		{size: minPooledBatchSize - 1},
+		{size: minPooledBatchSize, capacity: 64 << 10, pooled: true},
+		{size: (64 << 10) + 1, capacity: 128 << 10, pooled: true},
+		{size: 1 << 20, capacity: 1 << 20, pooled: true},
+		{size: (1 << 20) + 1, capacity: 2 << 20, pooled: true},
+		{size: maxPooledBatchSize, capacity: 8 << 20, pooled: true},
+		{size: maxPooledBatchSize + 1},
+	}
+	for _, test := range tests {
+		_, capacity, pooled := batchBufferClass(test.size)
+		if capacity != test.capacity || pooled != test.pooled {
+			t.Errorf("batchBufferClass(%d) = (capacity:%d, pooled:%v), want (%d,%v)",
+				test.size, capacity, pooled, test.capacity, test.pooled)
+		}
+	}
 }
 
 func BenchmarkBatchWithLargeSizeLifecycle(b *testing.B) {
