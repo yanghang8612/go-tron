@@ -34,6 +34,16 @@ func TestCompactionPressureThresholdsReserveRoutineCapacity(t *testing.T) {
 	}
 }
 
+func TestDefaultLBaseMatchesBulkSyncMemtable(t *testing.T) {
+	opts := DefaultOptions()
+	if opts.LBaseMaxBytes != int64(opts.MemTableSizeBytes) {
+		t.Fatalf("lbase max=%d memtable=%d", opts.LBaseMaxBytes, opts.MemTableSizeBytes)
+	}
+	if opts.LBaseMaxBytes != 256<<20 {
+		t.Fatalf("lbase max=%d, want 256 MiB", opts.LBaseMaxBytes)
+	}
+}
+
 func TestLevelOptionsScaleTargetAndPreserveFilters(t *testing.T) {
 	const base = int64(8 << 20)
 	levels := levelOptions(base)

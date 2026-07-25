@@ -34,6 +34,10 @@ func makePebbleConfig(ctx *cli.Context) (int, int, rawdb.PebbleOptions, error) {
 	if targetFileMiB == 0 || targetFileMiB > uint64(^uint64(0)>>1)/(1024*1024*64) {
 		return 0, 0, rawdb.PebbleOptions{}, fmt.Errorf("--db.target-file-size must be a positive int64 MiB value")
 	}
+	lbaseMaxMiB := uint64FlagOrDefault(ctx, "db.lbase-max-size", dbLBaseMaxSizeFlag.Value)
+	if lbaseMaxMiB == 0 || lbaseMaxMiB > uint64(^uint64(0)>>1)/(1024*1024) {
+		return 0, 0, rawdb.PebbleOptions{}, fmt.Errorf("--db.lbase-max-size must be a positive int64 MiB value")
+	}
 	l0Compact := intFlagOrDefault(ctx, "db.l0.compact", dbL0CompactionFlag.Value)
 	if l0Compact <= 0 {
 		return 0, 0, rawdb.PebbleOptions{}, fmt.Errorf("--db.l0.compact must be positive")
@@ -45,6 +49,7 @@ func makePebbleConfig(ctx *cli.Context) (int, int, rawdb.PebbleOptions, error) {
 	tune := rawdb.DefaultPebbleOptions()
 	tune.MemTableSizeBytes = memtableMiB * 1024 * 1024
 	tune.TargetFileSizeBytes = int64(targetFileMiB * 1024 * 1024)
+	tune.LBaseMaxBytes = int64(lbaseMaxMiB * 1024 * 1024)
 	tune.L0CompactionThreshold = l0Compact
 	tune.L0StopWritesThreshold = l0Stop
 	return cache, handles, tune, nil

@@ -22,6 +22,8 @@ type PebbleOptions = pebbledb.Options
 //     absorbs more sync write traffic before flushing to L0.
 //   - The target SST size starts at 8 MiB and doubles per level, reducing the
 //     hundreds of small table outputs observed in each full-sync profile.
+//   - LBaseMaxBytes is 256 MiB, matching the memtable and reducing the
+//     full-sync write amplification caused by Pebble's 64 MiB default base.
 //   - L0CompactionThreshold is relaxed to 8 (go-eth uses 2 to cap compaction
 //     debt; that pegged background-compaction CPU under our sync workload).
 //   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient

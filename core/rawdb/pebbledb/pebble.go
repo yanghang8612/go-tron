@@ -23,6 +23,9 @@
 //   - TargetFileSize starts at 8 MiB instead of 2 MiB. Full-sync measurements
 //     showed roughly 450 tiny SST outputs per 30 seconds with the inherited
 //     target ramp, creating avoidable file-rotation and metadata work.
+//   - LBaseMaxBytes is raised from Pebble's 64 MiB default to 256 MiB. On the
+//     production LSM shape the smaller base kept every intermediate level at
+//     its compaction limit and amplified sustained sync writes.
 //   - L0CompactionThreshold is relaxed above Pebble's upstream default of 4 (go-eth
 //     hard-codes 2 to keep compaction debt low at the cost of more frequent L0
 //     compactions). Under sync write load that choice pegs background compaction
@@ -35,8 +38,8 @@
 //     thresholds instead of activating the entire budget during routine debt.
 //
 // Everything else — async writes (pebble.NoSync),
-// MemTableStopWritesThreshold=memTableNumber*2, the per-level TargetFileSize ramp,
-// the bloom filters, the metrics gatherer, and the public *Database surface — is
+// MemTableStopWritesThreshold=memTableNumber*2, the bloom filters, the metrics
+// gatherer, and the public *Database surface — is
 // copied verbatim from the upstream file. Diffing this file against
 // $(go env GOPATH)/pkg/mod/github.com/ethereum/go-ethereum@<ver>/ethdb/pebble/pebble.go
 // should produce a small, localized delta in New().
@@ -180,6 +183,13 @@ type Options struct {
 	// level doubles the target. Default: 8 MiB.
 	TargetFileSizeBytes int64
 
+	// LBaseMaxBytes is the maximum size of Pebble's dynamically selected base
+	// level. A larger base spreads the same bottom-level dataset across fuller
+	// intermediate levels with a smaller effective level multiplier, reducing
+	// leveled-compaction write amplification during sustained sync. Default:
+	// 256 MiB, matching the default memtable size.
+	LBaseMaxBytes int64
+
 	// L0CompactionThreshold is the number of L0 sub-levels that triggers an L0
 	// compaction. Default: 8. go-ethereum overrides this to 2 in order to cap
 	// compaction debt; we trade that for fewer background compactions.
@@ -196,6 +206,7 @@ func DefaultOptions() Options {
 	return Options{
 		MemTableSizeBytes:     256 * 1024 * 1024,
 		TargetFileSizeBytes:   8 * 1024 * 1024,
+		LBaseMaxBytes:         256 * 1024 * 1024,
 		L0CompactionThreshold: 8,
 		L0StopWritesThreshold: 64,
 	}
@@ -512,6 +523,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	if tune.TargetFileSizeBytes < 0 || tune.TargetFileSizeBytes > maxTargetFileSizeBase {
 		return nil, fmt.Errorf("invalid target file size %d", tune.TargetFileSizeBytes)
 	}
+	if tune.LBaseMaxBytes == 0 {
+		tune.LBaseMaxBytes = defaults.LBaseMaxBytes
+	}
+	if tune.LBaseMaxBytes < 0 {
+		return nil, fmt.Errorf("invalid lbase max size %d", tune.LBaseMaxBytes)
+	}
 	if tune.L0CompactionThreshold == 0 {
 		tune.L0CompactionThreshold = defaults.L0CompactionThreshold
 	}
@@ -524,6 +541,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		"handles", handles,
 		"memtable", common.StorageSize(tune.MemTableSizeBytes),
 		"target_file", common.StorageSize(tune.TargetFileSizeBytes),
+		"lbase_max", common.StorageSize(tune.LBaseMaxBytes),
 		"l0_compact", tune.L0CompactionThreshold,
 		"l0_stop", tune.L0StopWritesThreshold,
 	)
@@ -594,6 +612,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		// MemTableStopWritesThreshold is set to twice the maximum number of
 		// allowed memtables to accommodate temporary spikes.
 		MemTableStopWritesThreshold: memTableNumber * 2,
+		LBaseMaxBytes:               tune.LBaseMaxBytes,
 
 		// Scale against the scheduler's quota-aware CPU budget while reserving
 		// capacity for foreground sync. Flush jobs may temporarily add one more

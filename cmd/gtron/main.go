@@ -196,6 +196,11 @@ var (
 		Usage: "Pebble L0 target SST size in MiB (doubles per level)",
 		Value: 8,
 	}
+	dbLBaseMaxSizeFlag = &cli.Uint64Flag{
+		Name:  "db.lbase-max-size",
+		Usage: "Pebble dynamic base-level maximum size in MiB",
+		Value: 256,
+	}
 	dbL0CompactionFlag = &cli.IntFlag{
 		Name:  "db.l0.compact",
 		Usage: "Pebble L0 compaction threshold",
@@ -274,6 +279,7 @@ var app = &cli.App{
 		dbHandlesFlag,
 		dbMemtableFlag,
 		dbTargetFileSizeFlag,
+		dbLBaseMaxSizeFlag,
 		dbL0CompactionFlag,
 		dbL0StopFlag,
 		freezerDisableFlag,
@@ -304,6 +310,7 @@ var app = &cli.App{
 				dbHandlesFlag,
 				dbMemtableFlag,
 				dbTargetFileSizeFlag,
+				dbLBaseMaxSizeFlag,
 				dbL0CompactionFlag,
 				dbL0StopFlag,
 			},

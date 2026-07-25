@@ -10,7 +10,7 @@ import (
 func makeDBFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbTargetFileSizeFlag, dbL0CompactionFlag, dbL0StopFlag, stateTrieCacheFlag}
+	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbTargetFileSizeFlag, dbLBaseMaxSizeFlag, dbL0CompactionFlag, dbL0StopFlag, stateTrieCacheFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -39,6 +39,9 @@ func TestMakePebbleConfigDefaults(t *testing.T) {
 	if tune.TargetFileSizeBytes != 8*1024*1024 {
 		t.Fatalf("target file size=%d", tune.TargetFileSizeBytes)
 	}
+	if tune.LBaseMaxBytes != 256*1024*1024 {
+		t.Fatalf("lbase max size=%d", tune.LBaseMaxBytes)
+	}
 	if tune.L0CompactionThreshold != 8 || tune.L0StopWritesThreshold != 64 {
 		t.Fatalf("l0 compact=%d stop=%d", tune.L0CompactionThreshold, tune.L0StopWritesThreshold)
 	}
@@ -50,6 +53,7 @@ func TestMakePebbleConfigOverrides(t *testing.T) {
 		"--db.handles", "4096",
 		"--db.memtable", "192",
 		"--db.target-file-size", "16",
+		"--db.lbase-max-size", "512",
 		"--db.l0.compact", "6",
 		"--db.l0.stop", "48",
 	})
@@ -66,6 +70,9 @@ func TestMakePebbleConfigOverrides(t *testing.T) {
 	}
 	if tune.TargetFileSizeBytes != 16*1024*1024 {
 		t.Fatalf("target file size=%d", tune.TargetFileSizeBytes)
+	}
+	if tune.LBaseMaxBytes != 512*1024*1024 {
+		t.Fatalf("lbase max size=%d", tune.LBaseMaxBytes)
 	}
 	if tune.L0CompactionThreshold != 6 || tune.L0StopWritesThreshold != 48 {
 		t.Fatalf("l0 compact=%d stop=%d", tune.L0CompactionThreshold, tune.L0StopWritesThreshold)
@@ -90,6 +97,11 @@ func TestMakePebbleConfigRejectsExplicitZero(t *testing.T) {
 	ctx = makeDBFlagSet(t, []string{"--db.target-file-size", "0"})
 	if _, _, _, err := makePebbleConfig(ctx); err == nil {
 		t.Fatal("expected explicit zero target file size to fail")
+	}
+
+	ctx = makeDBFlagSet(t, []string{"--db.lbase-max-size", "0"})
+	if _, _, _, err := makePebbleConfig(ctx); err == nil {
+		t.Fatal("expected explicit zero lbase max size to fail")
 	}
 }
 
