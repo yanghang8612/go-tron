@@ -17,9 +17,117 @@ import (
 
 var (
 	benchmarkAccountKVCommitPlan *accountKVCommitPlan
+	benchmarkKVEntries           []kvEntry
 	benchmarkKVLookupEntry       kvEntry
 	benchmarkKVLookupFound       bool
 )
+
+func TestKVEntryArenaKeepsValuesStableAcrossChunksAndReset(t *testing.T) {
+	sdb := new(StateDB)
+	firstInput := bytes.Repeat([]byte{0x31}, kvEntryArenaChunkSize-2)
+	first := sdb.newKVEntry(firstInput, false)
+	firstWant := append([]byte(nil), first.val...)
+	firstInput[0] = 0xff
+	if !bytes.Equal(first.val, firstWant) {
+		t.Fatal("first entry aliases caller input")
+	}
+	if cap(first.val) != len(first.val) || cap(first.wrapped) != len(first.wrapped) {
+		t.Fatalf("first entry capacity val=%d/%d wrapped=%d/%d, want cap-limited views", len(first.val), cap(first.val), len(first.wrapped), cap(first.wrapped))
+	}
+
+	// This entry cannot fit in the first chunk and forces a rollover. The first
+	// entry must retain its former backing array unchanged.
+	secondHash := mutationTestHash(0x72)
+	second := sdb.newKVHashEntry(secondHash, false)
+	if !bytes.Equal(first.val, firstWant) || !bytes.Equal(second.val, secondHash[:]) {
+		t.Fatal("arena rollover changed an existing entry")
+	}
+
+	prevInput := []byte("durable-pre-image")
+	sdb.setKVEntryPrev(&second, prevInput, true)
+	prevInput[0] = 'x'
+	if string(second.prev) != "durable-pre-image" || cap(second.prev) != len(second.prev) {
+		t.Fatalf("arena pre-image = %q cap=%d/%d", second.prev, len(second.prev), cap(second.prev))
+	}
+	replacement := kvEntry{}
+	replacement.inheritPrev(second)
+	if len(replacement.prev) == 0 || &replacement.prev[0] != &second.prev[0] {
+		t.Fatal("replacement did not share immutable pre-image")
+	}
+
+	sdb.kvEntryArena.reset()
+	_ = sdb.newKVEntry([]byte("next block"), false)
+	if !bytes.Equal(first.val, firstWant) || string(replacement.prev) != "durable-pre-image" {
+		t.Fatal("arena reset invalidated slices retained by entries")
+	}
+}
+
+func TestKVEntryArenaResetsAfterSuccessfulCommit(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		name := "synchronous"
+		if deferred {
+			name = "deferred"
+		}
+		t.Run(name, func(t *testing.T) {
+			sdb := newTestStateDB(t)
+			owner := testAddr(0x6f)
+			sdb.CreateAccount(owner, corepb.AccountType_Normal)
+			if err := sdb.SetAccountKV(owner, kvdomains.SystemDelegation, []byte("arena-key"), []byte("arena-value")); err != nil {
+				t.Fatal(err)
+			}
+			if len(sdb.kvEntryArena.chunk) == 0 {
+				t.Fatal("dirty KV write did not allocate from arena")
+			}
+			sdb.SetDeferFold(deferred)
+			if _, _, err := sdb.CommitWithStats(); err != nil {
+				t.Fatal(err)
+			}
+			if sdb.kvEntryArena.chunk != nil {
+				t.Fatal("successful commit retained current arena chunk")
+			}
+			if deferred {
+				captured := sdb.TakeCapturedFold()
+				if captured == nil {
+					t.Fatal("deferred commit did not capture fold")
+				}
+				if _, err := captured.Fold(sdb.accountKVIndex()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, ok, err := sdb.GetAccountKV(owner, kvdomains.SystemDelegation, []byte("arena-key"))
+			if err != nil || !ok || string(got) != "arena-value" {
+				t.Fatalf("committed value = %q ok=%v err=%v", got, ok, err)
+			}
+		})
+	}
+}
+
+func BenchmarkKVEntryBatch(b *testing.B) {
+	const count = 256
+	value := mutationTestHash(0x5a)
+	b.Run("heap", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			entries := make([]kvEntry, count)
+			for i := range entries {
+				entries[i] = newKVHashEntry(value, false)
+			}
+			benchmarkKVEntries = entries
+		}
+	})
+	b.Run("arena", func(b *testing.B) {
+		sdb := new(StateDB)
+		b.ReportAllocs()
+		for b.Loop() {
+			entries := make([]kvEntry, count)
+			for i := range entries {
+				entries[i] = sdb.newKVHashEntry(value, false)
+			}
+			benchmarkKVEntries = entries
+			sdb.kvEntryArena.reset()
+		}
+	})
+}
 
 func TestStageStorageCommitWithPrevPreservesGenericSemantics(t *testing.T) {
 	sdb := new(StateDB)

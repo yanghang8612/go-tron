@@ -140,6 +140,12 @@ type StateDB struct {
 	// never touches stateObjects/dirtyObjects), so there is no exec/worker race.
 	dirtyObjects map[tcommon.Address]struct{}
 
+	// kvEntryArena owns immutable value/pre-image chunks for the current block's
+	// account-KV dirty overlay. Successful commit drops only the arena's current
+	// reference: slices transferred to blockbuffer retain their backing arrays.
+	// Failed commits deliberately keep the arena intact with the dirty entries.
+	kvEntryArena kvEntryArena
+
 	journal   *journal
 	snapshots []int // journal length at each snapshot
 	// accountJournalPos remembers the most recent full or scalar Account journal
@@ -3544,6 +3550,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.resetJournal()
 		s.releaseUnusedLoadedAccountProtos()
 		s.rotateStateObjectWorkingSet()
+		s.kvEntryArena.reset()
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -3558,6 +3565,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	s.resetJournal()
 	s.releaseUnusedLoadedAccountProtos()
 	s.rotateStateObjectWorkingSet()
+	s.kvEntryArena.reset()
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil

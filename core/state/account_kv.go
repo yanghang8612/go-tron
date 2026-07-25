@@ -31,6 +31,48 @@ type kvEntry struct {
 	prevLoaded bool
 }
 
+// kvEntryArena amortizes the immutable value and pre-image storage owned by
+// the per-block dirty KV overlay. Entries may outlive StateDB finalization when
+// an OwnedWriter transfers their slices into blockbuffer, so chunks are never
+// pooled or reused. Successful commit merely drops the current-chunk reference;
+// every transferred slice keeps its own backing array alive for as long as the
+// downstream pipeline needs it.
+const kvEntryArenaChunkSize = 8 << 10
+
+type kvEntryArena struct {
+	chunk []byte
+}
+
+func (a *kvEntryArena) alloc(size int) []byte {
+	if size == 0 {
+		return nil
+	}
+	if cap(a.chunk)-len(a.chunk) < size {
+		capacity := kvEntryArenaChunkSize
+		if size > capacity {
+			capacity = size
+		}
+		a.chunk = make([]byte, 0, capacity)
+	}
+	start := len(a.chunk)
+	a.chunk = a.chunk[:start+size]
+	// Limit capacity so an accidental append cannot overwrite the next entry.
+	return a.chunk[start : start+size : start+size]
+}
+
+func (a *kvEntryArena) clone(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	owned := a.alloc(len(value))
+	copy(owned, value)
+	return owned
+}
+
+func (a *kvEntryArena) reset() {
+	a.chunk = nil
+}
+
 type kvCommitItem struct {
 	logicalKey []byte
 	entry      kvEntry
@@ -1140,6 +1182,28 @@ func newKVHashEntry(value tcommon.Hash, deleted bool) kvEntry {
 	return e
 }
 
+func (s *StateDB) newKVEntry(value []byte, deleted bool) kvEntry {
+	e := kvEntry{deleted: deleted}
+	if !deleted {
+		e.wrapped = s.kvEntryArena.alloc(1 + len(value))
+		e.wrapped[0] = kvPresencePrefix
+		copy(e.wrapped[1:], value)
+		e.val = e.wrapped[1:]
+	}
+	return e
+}
+
+func (s *StateDB) newKVHashEntry(value tcommon.Hash, deleted bool) kvEntry {
+	e := kvEntry{deleted: deleted}
+	if !deleted {
+		e.wrapped = s.kvEntryArena.alloc(1 + len(value))
+		e.wrapped[0] = kvPresencePrefix
+		copy(e.wrapped[1:], value[:])
+		e.val = e.wrapped[1:]
+	}
+	return e
+}
+
 func (e kvEntry) encodedValue() []byte {
 	if len(e.wrapped) > 0 {
 		return e.wrapped
@@ -1157,11 +1221,11 @@ func wrapKVValue(value []byte) []byte {
 	return wrapped
 }
 
-func (e *kvEntry) setPrev(value []byte, exists bool) {
+func (s *StateDB) setKVEntryPrev(e *kvEntry, value []byte, exists bool) {
 	e.prevLoaded = true
 	e.prevExists = exists
 	if exists {
-		e.prev = append(e.prev[:0], value...)
+		e.prev = s.kvEntryArena.clone(value)
 		return
 	}
 	e.prev = nil
@@ -1174,7 +1238,10 @@ func (e *kvEntry) inheritPrev(prev kvEntry) {
 	e.prevLoaded = true
 	e.prevExists = prev.prevExists
 	if prev.prevExists {
-		e.prev = append([]byte(nil), prev.prev...)
+		// prev is immutable once installed in kvDirty. Journal entries and reset
+		// snapshots keep its backing alive, so replacements can share the durable
+		// pre-image instead of copying it for every same-block overwrite.
+		e.prev = prev.prev
 	}
 }
 
@@ -1571,11 +1638,11 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
 		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
-	entry := newKVEntry(value, false)
+	entry := s.newKVEntry(value, false)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
-		entry.setPrev(prevValue, prevExists)
+		s.setKVEntryPrev(&entry, prevValue, prevExists)
 	}
 	obj.setKVDirty(mk, entry)
 	invalidateAccountKVMaterialization(obj, domain)
@@ -1617,16 +1684,11 @@ func (s *StateDB) stageStorageCommitWithPrevArena(obj *stateObject, rowKey, valu
 	} else {
 		mk = appendKVCompositeHashKeyString(arena, kvdomains.ContractStorage, rowKey)
 	}
-	entry := newKVHashEntry(value, deleted)
+	entry := s.newKVHashEntry(value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else {
-		entry.prevLoaded = true
-		entry.prevExists = origin.exists
-		if origin.exists {
-			entry.prev = make([]byte, len(origin.value))
-			copy(entry.prev, origin.value[:])
-		}
+		s.setKVEntryPrev(&entry, origin.value[:], origin.exists)
 	}
 	obj.setKVDirty(mk, entry)
 	return true
@@ -1645,11 +1707,11 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 	}
 	mk := kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
-	entry := newKVEntry(value, deleted)
+	entry := s.newKVEntry(value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
-		entry.setPrev(prevValue, prevExists)
+		s.setKVEntryPrev(&entry, prevValue, prevExists)
 		if noop, known := entry.latestNoop(); known && noop {
 			return false, nil
 		}
@@ -1658,7 +1720,7 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 		if err != nil {
 			return false, err
 		}
-		entry.setPrev(current, exists)
+		s.setKVEntryPrev(&entry, current, exists)
 		if noop, known := entry.latestNoop(); known && noop {
 			return false, nil
 		}
@@ -1696,11 +1758,11 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		prevLoaded = true
 	}
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
-	entry := newKVEntry(nil, true)
+	entry := s.newKVEntry(nil, true)
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
-		entry.setPrev(prevValue, prevExists)
+		s.setKVEntryPrev(&entry, prevValue, prevExists)
 	}
 	obj.setKVDirty(mk, entry)
 	invalidateAccountKVMaterialization(obj, domain)
