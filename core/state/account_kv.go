@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -141,6 +142,16 @@ func releaseAccountKVCommitPlans(plans []*accountCommitPlan) {
 			releaseAccountKVCommitPlan(plan.kvPlan)
 		}
 	}
+}
+
+func compareKVCommitItem(a, b kvCommitItem) int {
+	if a.domain < b.domain {
+		return -1
+	}
+	if a.domain > b.domain {
+		return 1
+	}
+	return bytes.Compare(a.logicalKey, b.logicalKey)
 }
 
 type accountKVLatestBatch struct {
@@ -1857,12 +1868,7 @@ func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommit
 			domain:     domain,
 		})
 	}
-	sort.Slice(plan.items, func(i, j int) bool {
-		if plan.items[i].domain != plan.items[j].domain {
-			return plan.items[i].domain < plan.items[j].domain
-		}
-		return bytes.Compare(plan.items[i].logicalKey, plan.items[j].logicalKey) < 0
-	})
+	slices.SortFunc(plan.items, compareKVCommitItem)
 	return plan, nil
 }
 
