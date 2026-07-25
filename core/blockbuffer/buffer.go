@@ -74,10 +74,8 @@ type layerShard struct {
 	mu                 sync.RWMutex
 	writes             map[string][]byte
 	deletes            map[string]struct{}
-	writesCapacity     int
-	deletesCapacity    int
 	commitmentReserved bool
-	_                  [7]byte
+	_                  [23]byte
 }
 
 // bufferReadView is an immutable snapshot of the layer topology used by the
@@ -232,108 +230,6 @@ type bufferBatch struct {
 	ops    []bufferBatchOp
 	size   int
 	closed bool
-}
-
-type batchShardReservation struct {
-	puts    int
-	deletes int
-}
-
-type batchLayerReservation struct {
-	target *layer
-	shards [layerShardCount]batchShardReservation
-}
-
-// batchWriteReservations groups a filtered batch by target layer and shard so
-// each destination map can grow once to its final size before any operation is
-// applied. The account-KV latest batch is chronological, so lastTarget avoids a
-// map lookup for almost every operation while indexes handles interleaving
-// defensively.
-type batchWriteReservations struct {
-	indexes    map[*layer]int
-	layers     []batchLayerReservation
-	lastTarget *layer
-	lastIndex  int
-}
-
-var batchWriteReservationsPool = sync.Pool{
-	New: func() any {
-		return &batchWriteReservations{
-			indexes: make(map[*layer]int, 16),
-			layers:  make([]batchLayerReservation, 0, 16),
-		}
-	},
-}
-
-func borrowBatchWriteReservations() *batchWriteReservations {
-	r := batchWriteReservationsPool.Get().(*batchWriteReservations)
-	r.lastTarget = nil
-	r.lastIndex = 0
-	return r
-}
-
-func (r *batchWriteReservations) add(target *layer, op bufferBatchOp) {
-	idx := r.lastIndex
-	if target != r.lastTarget {
-		var ok bool
-		idx, ok = r.indexes[target]
-		if !ok {
-			idx = len(r.layers)
-			r.indexes[target] = idx
-			r.layers = append(r.layers, batchLayerReservation{target: target})
-		}
-		r.lastTarget = target
-		r.lastIndex = idx
-	}
-	shard := layerShardIndexString(op.key)
-	if op.delete {
-		r.layers[idx].shards[shard].deletes++
-	} else {
-		r.layers[idx].shards[shard].puts++
-	}
-}
-
-func (r *batchWriteReservations) reserve() {
-	for i := range r.layers {
-		reservation := &r.layers[i]
-		for shard, counts := range reservation.shards {
-			if counts.puts == 0 && counts.deletes == 0 {
-				continue
-			}
-			s := &reservation.target.shards[shard]
-			s.mu.Lock()
-			if needed := len(s.writes) + counts.puts; needed > s.writesCapacity {
-				writes := make(map[string][]byte, needed)
-				for key, value := range s.writes {
-					writes[key] = value
-				}
-				s.writes = writes
-				s.writesCapacity = needed
-			}
-			if needed := len(s.deletes) + counts.deletes; needed > s.deletesCapacity {
-				deletes := make(map[string]struct{}, needed)
-				for key := range s.deletes {
-					deletes[key] = struct{}{}
-				}
-				s.deletes = deletes
-				s.deletesCapacity = needed
-			}
-			s.mu.Unlock()
-		}
-	}
-}
-
-func returnBatchWriteReservations(r *batchWriteReservations) {
-	for target := range r.indexes {
-		delete(r.indexes, target)
-	}
-	clear(r.layers)
-	r.lastTarget = nil
-	r.lastIndex = 0
-	if cap(r.layers) <= 4096 {
-		r.layers = r.layers[:0]
-		batchWriteReservationsPool.Put(r)
-	}
 }
 
 // valueViewReader exposes a value only for the duration of fn. Pebble can use
@@ -659,33 +555,6 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 	// layer so committed-layer applies don't block disjoint-layer writers.
 	b.parent.mu.RLock()
 	defer b.parent.mu.RUnlock()
-
-	// Count every operation that this call can apply before mutating a layer.
-	// Rebuilding each destination map once at its final size avoids the repeated
-	// bucket growth that otherwise occurs while thousands of account-KV latest
-	// entries are published one at a time. Stop at the first non-droppable stale
-	// target so the second pass preserves the historical partial-error ordering.
-	reservations := borrowBatchWriteReservations()
-	defer returnBatchWriteReservations(reservations)
-	for _, op := range b.ops {
-		target := op.target
-		if target == nil {
-			target = b.parent.newestInflightLocked()
-		}
-		if target == nil {
-			continue
-		}
-		if !b.parent.layerPendingLocked(target) {
-			if !dropStale {
-				break
-			}
-			continue
-		}
-		if b.parent.layerCommittedLocked(target) && matchCommitted(target) {
-			reservations.add(target, op)
-		}
-	}
-	reservations.reserve()
 
 	kept := b.ops[:0]
 	keptSize := 0

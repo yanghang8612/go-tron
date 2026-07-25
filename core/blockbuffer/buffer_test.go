@@ -33,12 +33,6 @@ type stringKeyWriterProbe struct {
 	genericWrites int
 }
 
-func TestLayerShardFitsOneCacheLine(t *testing.T) {
-	if size := unsafe.Sizeof(layerShard{}); size != 64 {
-		t.Fatalf("layerShard size = %d, want 64", size)
-	}
-}
-
 func (w *stringKeyWriterProbe) Put([]byte, []byte) error {
 	w.genericWrites++
 	return nil
@@ -693,59 +687,6 @@ func TestBufferBatchWriteUpToAppliesOnlyEligibleCommittedLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustGet(t, b, []byte("k2"), []byte("v2"))
-}
-
-func TestBufferBatchWriteUpToReservesShardMaps(t *testing.T) {
-	base := rawdb.NewMemoryDatabase()
-	for i := 0; i < 128; i++ {
-		key := []byte(fmt.Sprintf("delete-%04d", i))
-		if err := base.Put(key, []byte("base")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	b := New(base)
-	b.BeginBlock(bufHash(1), 1)
-	if err := b.Put([]byte("direct"), []byte("preserved")); err != nil {
-		t.Fatal(err)
-	}
-	batch := b.NewBatchWithSize(1024 * 64)
-	layerBatch := batch.(interface {
-		WriteUpTo(uint64) (int, error)
-	})
-	for i := 0; i < 1024; i++ {
-		key := []byte(fmt.Sprintf("put-%04d", i))
-		if err := batch.Put(key, []byte{byte(i), byte(i >> 8)}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for i := 0; i < 128; i++ {
-		key := []byte(fmt.Sprintf("delete-%04d", i))
-		if err := batch.Delete(key); err != nil {
-			t.Fatal(err)
-		}
-	}
-	b.CommitBlock()
-	remaining, err := layerBatch.WriteUpTo(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if remaining != 0 {
-		t.Fatalf("remaining ops = %d, want 0", remaining)
-	}
-
-	l := b.layers[0]
-	for i := range l.shards {
-		s := &l.shards[i]
-		if s.writesCapacity < len(s.writes) {
-			t.Errorf("shard %d write capacity = %d, entries = %d", i, s.writesCapacity, len(s.writes))
-		}
-		if s.deletesCapacity < len(s.deletes) {
-			t.Errorf("shard %d delete capacity = %d, entries = %d", i, s.deletesCapacity, len(s.deletes))
-		}
-	}
-	mustGet(t, b, []byte("direct"), []byte("preserved"))
-	mustGet(t, b, []byte("put-1023"), []byte{0xff, 0x03})
-	mustNotFound(t, b, []byte("delete-0127"))
 }
 
 func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
@@ -1590,35 +1531,5 @@ func TestBuffer_FlushUpToPreservesConcurrentCommit(t *testing.T) {
 	mustGet(t, b, []byte("dp-new"), []byte("v2"))
 	if pending := b.PendingBlocks(); len(pending) != 1 || pending[0] != bufHash(2) {
 		t.Fatalf("after flush: pending = %v, want [hash2]", pending)
-	}
-}
-
-var benchmarkBatchLayerSink *layer
-
-func BenchmarkBufferBatchWriteUpToMapGrowth(b *testing.B) {
-	const opCount = 4096
-	keys := make([]string, opCount)
-	values := make([][]byte, opCount)
-	for i := range keys {
-		keys[i] = fmt.Sprintf("account-kv-latest-%06d", i)
-		values[i] = []byte{byte(i), byte(i >> 8)}
-	}
-	ops := make([]bufferBatchOp, opCount)
-	parent := &Buffer{layers: make([]*layer, 1)}
-	batch := &bufferBatch{parent: parent}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		l := newLayer(common.Hash{}, 1)
-		parent.layers[0] = l
-		for i := range ops {
-			ops[i] = bufferBatchOp{key: keys[i], value: values[i], target: l}
-		}
-		batch.ops = ops
-		if _, err := batch.writeFiltered(func(*layer) bool { return true }, false); err != nil {
-			b.Fatal(err)
-		}
-		benchmarkBatchLayerSink = l
 	}
 }

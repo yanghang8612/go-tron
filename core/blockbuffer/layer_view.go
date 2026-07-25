@@ -213,7 +213,6 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 				reserved[key] = value
 			}
 			s.writes = reserved
-			s.writesCapacity = capacity
 			s.commitmentReserved = true
 		}
 		for entry := head; entry != 0; entry = links[entry-1].next {
