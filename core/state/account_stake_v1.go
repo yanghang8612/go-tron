@@ -75,6 +75,19 @@ func cacheAccountFrozenBandwidth(obj *stateObject, entries []*corepb.Account_Fro
 	obj.accountFrozenBandwidthLoaded = true
 }
 
+// cacheAccountFrozenBandwidthOwned installs entries decoded exclusively for
+// this state object without cloning them a second time. The caller transfers
+// ownership of the slice and every non-nil message; neither may be mutated or
+// retained independently after this call. Mutation paths that receive
+// caller-owned protobufs keep using cacheAccountFrozenBandwidth.
+func cacheAccountFrozenBandwidthOwned(obj *stateObject, entries []*corepb.Account_Frozen) {
+	if obj == nil || obj.account == nil {
+		return
+	}
+	obj.account.Proto().Frozen = entries
+	obj.accountFrozenBandwidthLoaded = true
+}
+
 func cacheAccountTronPower(obj *stateObject, entry *corepb.Account_Frozen) {
 	if obj == nil || obj.account == nil {
 		return
@@ -83,6 +96,16 @@ func cacheAccountTronPower(obj *stateObject, entry *corepb.Account_Frozen) {
 	if entry != nil {
 		obj.account.Proto().TronPower = proto.Clone(entry).(*corepb.Account_Frozen)
 	}
+	obj.accountTronPowerLoaded = true
+}
+
+// cacheAccountTronPowerOwned is the decoded-value ownership counterpart of
+// cacheAccountTronPower. See cacheAccountFrozenBandwidthOwned.
+func cacheAccountTronPowerOwned(obj *stateObject, entry *corepb.Account_Frozen) {
+	if obj == nil || obj.account == nil {
+		return
+	}
+	obj.account.Proto().TronPower = entry
 	obj.accountTronPowerLoaded = true
 }
 
@@ -175,7 +198,7 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
 	for _, row := range rows {
 		entries = append(entries, row.entry)
 	}
-	cacheAccountFrozenBandwidth(obj, entries)
+	cacheAccountFrozenBandwidthOwned(obj, entries)
 	return nil
 }
 
@@ -197,7 +220,7 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error 
 	for _, row := range rows {
 		entries = append(entries, row.entry)
 	}
-	cacheAccountFrozenBandwidth(obj, entries)
+	cacheAccountFrozenBandwidthOwned(obj, entries)
 	return nil
 }
 
@@ -216,10 +239,10 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) e
 		return err
 	}
 	if !exists {
-		cacheAccountFrozenBandwidth(obj, nil)
+		cacheAccountFrozenBandwidthOwned(obj, nil)
 		return nil
 	}
-	cacheAccountFrozenBandwidth(obj, []*corepb.Account_Frozen{row.entry})
+	cacheAccountFrozenBandwidthOwned(obj, []*corepb.Account_Frozen{row.entry})
 	return nil
 }
 
@@ -235,7 +258,7 @@ func (s *StateDB) materializeAccountTronPower(obj *stateObject) error {
 	if !exists {
 		tronPower = nil
 	}
-	cacheAccountTronPower(obj, tronPower)
+	cacheAccountTronPowerOwned(obj, tronPower)
 	return nil
 }
 

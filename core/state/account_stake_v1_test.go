@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,6 +32,61 @@ func assertFrozenBandwidth(t *testing.T, got []*corepb.Account_Frozen, want ...*
 			t.Fatalf("frozen-bandwidth[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
+}
+
+func TestAccountStakeV1CacheOwnershipBoundaries(t *testing.T) {
+	newObject := func() *stateObject {
+		return &stateObject{account: types.NewAccountFromPB(&corepb.Account{})}
+	}
+
+	callerEntry := &corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 22}
+	cloning := newObject()
+	cacheAccountFrozenBandwidth(cloning, []*corepb.Account_Frozen{callerEntry})
+	if cloning.account.Proto().Frozen[0] == callerEntry {
+		t.Fatal("caller-owned cache retained external message")
+	}
+	callerEntry.FrozenBalance = 99
+	if got := cloning.account.Proto().Frozen[0].FrozenBalance; got != 11 {
+		t.Fatalf("caller mutation changed cloned cache: %d", got)
+	}
+
+	decodedEntry := &corepb.Account_Frozen{FrozenBalance: 33, ExpireTime: 44}
+	decodedEntries := []*corepb.Account_Frozen{decodedEntry}
+	owned := newObject()
+	cacheAccountFrozenBandwidthOwned(owned, decodedEntries)
+	if owned.account.Proto().Frozen[0] != decodedEntry || &owned.account.Proto().Frozen[0] != &decodedEntries[0] {
+		t.Fatal("decoded cache did not take ownership of slice and message")
+	}
+
+	callerPower := &corepb.Account_Frozen{FrozenBalance: 55}
+	cacheAccountTronPower(cloning, callerPower)
+	if cloning.account.Proto().TronPower == callerPower {
+		t.Fatal("caller-owned tron-power cache retained external message")
+	}
+	decodedPower := &corepb.Account_Frozen{FrozenBalance: 66}
+	cacheAccountTronPowerOwned(owned, decodedPower)
+	if owned.account.Proto().TronPower != decodedPower {
+		t.Fatal("decoded tron-power cache did not take ownership")
+	}
+}
+
+func BenchmarkCacheAccountFrozenBandwidthDecoded(b *testing.B) {
+	entry := &corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 22}
+	entries := []*corepb.Account_Frozen{entry}
+	obj := &stateObject{account: types.NewAccountFromPB(&corepb.Account{})}
+
+	b.Run("clone", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			cacheAccountFrozenBandwidth(obj, entries)
+		}
+	})
+	b.Run("owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			cacheAccountFrozenBandwidthOwned(obj, entries)
+		}
+	})
 }
 
 func TestAccountStakeV1PersistsOutsideAccountEnvelopeAndPreservesOrder(t *testing.T) {
