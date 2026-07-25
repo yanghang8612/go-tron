@@ -25,10 +25,12 @@ type PebbleOptions = pebbledb.Options
 //   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall foreground writers when MaxConcurrentCompactions
 //     can drain them.
+//   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
+//     so compaction does not consume every CPU available to foreground sync.
 //
-// Everything else — async writes (pebble.NoSync), MaxConcurrentCompactions=NumCPU,
-// MemTableStopWritesThreshold=8, the per-level TargetFileSize ramp, bloom
-// filters, and the metrics surface — matches the upstream go-ethereum wrapper.
+// Everything else — async writes (pebble.NoSync), MemTableStopWritesThreshold=8,
+// the per-level TargetFileSize ramp, bloom filters, and the metrics surface —
+// matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", false, pebbledb.DefaultOptions())
 }

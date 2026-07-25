@@ -26,8 +26,10 @@
 //     CPU; relaxing it trades a little read amp for fewer compactions.
 //   - L0StopWritesThreshold is explicitly set to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall the producer / sync writers.
+//   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
+//     instead of the host-wide NumCPU count so sync retains foreground CPU.
 //
-// Everything else — async writes (pebble.NoSync), MaxConcurrentCompactions=NumCPU,
+// Everything else — async writes (pebble.NoSync),
 // MemTableStopWritesThreshold=memTableNumber*2, the per-level TargetFileSize ramp,
 // the bloom filters, the metrics gatherer, and the public *Database surface — is
 // copied verbatim from the upstream file. Diffing this file against
@@ -165,6 +167,24 @@ func DefaultOptions() Options {
 		L0CompactionThreshold: 8,
 		L0StopWritesThreshold: 64,
 	}
+}
+
+// compactionConcurrency reserves roughly half of the Go execution budget for
+// foreground block execution. runtime.NumCPU reports the host's visible CPU
+// count and may substantially exceed a service/container quota; GOMAXPROCS is
+// the quota-aware budget the scheduler can actually use. Letting Pebble start a
+// compaction per host CPU oversubscribed the sync node (five concurrent jobs
+// were observed on the deployment target) while commitment folding and
+// signature recovery were already using the available cores.
+func compactionConcurrency(procs int) int {
+	if procs <= 1 {
+		return 1
+	}
+	return (procs + 1) / 2
+}
+
+func maxConcurrentCompactions() int {
+	return compactionConcurrency(runtime.GOMAXPROCS(0))
 }
 
 // Database is a persistent key-value store based on the pebble storage engine.
@@ -437,9 +457,10 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		// allowed memtables to accommodate temporary spikes.
 		MemTableStopWritesThreshold: memTableNumber * 2,
 
-		// The default compaction concurrency(1 thread),
-		// Here use all available CPUs for faster compaction.
-		MaxConcurrentCompactions: runtime.NumCPU,
+		// Scale against the scheduler's quota-aware CPU budget while reserving
+		// capacity for foreground sync. Flush jobs may temporarily add one more
+		// background task; automatic compactions remain bounded here.
+		MaxConcurrentCompactions: maxConcurrentCompactions,
 
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
