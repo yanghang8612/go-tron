@@ -186,24 +186,41 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	// trailing bytes past v. A naive string(sigs[i]) key would silently accept
 	// duplicates that java rejects.
 	var totalWeight int64
-	seenAddr := make(map[tcommon.Address]struct{}, len(addrs))
-	seenSig := make(map[string]struct{}, len(sigs))
+	// A single ECDSA signature cannot duplicate itself. Avoid both dedup maps
+	// and canonical v||r||s ownership for the overwhelmingly common case. The
+	// address set is still required when PQ signatures follow so cross-scheme
+	// duplicates remain rejected.
+	var seenAddr map[tcommon.Address]struct{}
+	if (multiSigByAddress && len(addrs) > 1) || len(pqSigs) > 0 {
+		seenAddr = make(map[tcommon.Address]struct{}, len(addrs)+len(pqSigs))
+	}
+	var seenSig map[string]struct{}
+	if !multiSigByAddress && len(sigs) > 1 {
+		seenSig = make(map[string]struct{}, len(sigs))
+	}
 	for i, addr := range addrs {
-		sigKey, err := types.CanonicalSignatureKey(sigs[i])
-		if err != nil {
-			return ErrInvalidTxSignature
-		}
-		var dup bool
 		if multiSigByAddress {
-			_, dup = seenAddr[addr]
-		} else {
-			_, dup = seenSig[sigKey]
+			if seenAddr != nil {
+				if _, dup := seenAddr[addr]; dup {
+					return ErrDuplicateSignature
+				}
+			}
+		} else if seenSig != nil {
+			sigKey, err := types.CanonicalSignatureKey(sigs[i])
+			if err != nil {
+				return ErrInvalidTxSignature
+			}
+			if _, dup := seenSig[sigKey]; dup {
+				return ErrDuplicateSignature
+			}
+			seenSig[sigKey] = struct{}{}
 		}
-		if dup {
-			return ErrDuplicateSignature
+		if seenAddr != nil {
+			// In pre-4.7.1 mode two distinct signatures from the same ECDSA
+			// address remain legal. Assignment (rather than a duplicate check)
+			// records that address only for a following PQ cross-scheme check.
+			seenAddr[addr] = struct{}{}
 		}
-		seenAddr[addr] = struct{}{}
-		seenSig[sigKey] = struct{}{}
 
 		w := types.KeyWeight(perm, addr)
 		if w == 0 {

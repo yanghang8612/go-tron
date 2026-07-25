@@ -39,6 +39,11 @@ type Transaction struct {
 	signersOnce sync.Once
 	signers     []common.Address
 	signersErr  error
+	// signerInline owns the overwhelmingly common single-signature result.
+	// RecoverSigners caches the returned slice for the wrapper's lifetime, so
+	// placing its one element here removes one tiny heap object per ordinary
+	// transaction without changing the public []Address result.
+	signerInline [1]common.Address
 }
 
 func NewTransactionFromPB(pb *corepb.Transaction) *Transaction {
@@ -208,8 +213,16 @@ func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
 func (tx *Transaction) recoverSigners() ([]common.Address, error) {
 	hash := tx.Hash()
 	sigs := tx.Signatures()
-	addrs := make([]common.Address, 0, len(sigs))
-	for _, sig := range sigs {
+	var addrs []common.Address
+	switch len(sigs) {
+	case 0:
+		return nil, nil
+	case 1:
+		addrs = tx.signerInline[:]
+	default:
+		addrs = make([]common.Address, len(sigs))
+	}
+	for i, sig := range sigs {
 		recoverySig, err := signatureForRecovery(sig)
 		if err != nil {
 			return nil, err
@@ -222,7 +235,7 @@ func (tx *Transaction) recoverSigners() ([]common.Address, error) {
 		if err != nil {
 			return nil, fmt.Errorf("transaction: recover signer: %w", err)
 		}
-		addrs = append(addrs, addr)
+		addrs[i] = addr
 	}
 	return addrs, nil
 }
