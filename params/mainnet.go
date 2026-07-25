@@ -8,14 +8,17 @@ import (
 
 // MainnetNetworkID is the HelloMessage.networkId value for TRON mainnet.
 // Source: java-tron framework/src/main/resources/config.conf:
-//     p2p { version = 11111 # Mainnet:11111; Nile:201910292; Shasta:1 }
+//
+//	p2p { version = 11111 # Mainnet:11111; Nile:201910292; Shasta:1 }
+//
 // Mapped to libp2p's networkId in TronNetService.java (setNetworkId).
 const MainnetNetworkID int32 = 11111
 
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
-// Keep this synchronized with java-tron's framework/src/main/resources/config.conf
-// seed.node list. These are the upstream-designated stable full nodes; stale
-// seeds materially slow cold-start discovery after a deployment restart.
+// The first 30 entries track java-tron's framework/src/main/resources/config.conf
+// seed.node list. The trailing entries are legacy seeds / peers previously
+// verified by gtron to complete TRON-Hello; retaining them broadens discovery
+// across java-tron versions when the newest seeds reject an older handshake.
 var MainnetBootstrapNodes = []string{
 	"3.225.171.164:18888",
 	"52.8.46.215:18888",
@@ -47,6 +50,18 @@ var MainnetBootstrapNodes = []string{
 	"54.179.207.68:18888",
 	"18.142.82.44:18888",
 	"18.163.230.203:18888",
+	"47.90.247.237:18888",
+	"47.90.214.128:18888",
+	"52.53.189.99:18888",
+	"18.196.99.16:18888",
+	"34.253.187.192:18888",
+	"35.180.51.163:18888",
+	"54.252.224.209:18888",
+	"18.228.15.36:18888",
+	"52.15.93.92:18888",
+	"34.220.77.106:18888",
+	"3.218.137.187:18888",
+	"34.237.210.82:18888",
 }
 
 func hexToAddress(h string) common.Address {
