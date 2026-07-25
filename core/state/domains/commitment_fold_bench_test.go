@@ -8,7 +8,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -26,23 +25,6 @@ func buildRandomPuts(rng *rand.Rand, n int) []Update {
 		ups[i] = Update{Key: key, Value: val}
 	}
 	return ups
-}
-
-// keyValueStoreWithoutPointSnapshot intentionally hides Pebble's optional
-// pointread.Snapshotter method while retaining the complete ethdb surface. It
-// gives the Pebble fold benchmark an exact fallback baseline.
-type keyValueStoreWithoutPointSnapshot struct {
-	ethdb.KeyValueStore
-}
-
-func (s keyValueStoreWithoutPointSnapshot) View(key []byte, fn func([]byte) error) error {
-	return s.KeyValueStore.(interface {
-		View([]byte, func([]byte) error) error
-	}).View(key, fn)
-}
-
-func (s keyValueStoreWithoutPointSnapshot) IsKeyNotFound(err error) bool {
-	return s.KeyValueStore.(interface{ IsKeyNotFound(error) bool }).IsKeyNotFound(err)
 }
 
 // mapBase / rawdbBase are the two benchmark base stores. mapBase re-encodes on
@@ -211,85 +193,6 @@ func BenchmarkAsyncFoldParentBranchReads(b *testing.B) {
 				} else if root != expected {
 					b.Fatalf("root = %x, want %x", root, expected)
 				}
-			}
-		})
-	}
-}
-
-// BenchmarkAsyncFoldPebbleParentReadSession compares the old per-branch
-// DB.Get path with the production cursor-backed parent session over an actual
-// compacted Pebble database. Setup builds and flushes the parent trie once;
-// each measured iteration writes only to a throwaway in-flight layer.
-func BenchmarkAsyncFoldPebbleParentReadSession(b *testing.B) {
-	const baseSize = 50_000
-	rng := rand.New(rand.NewSource(9441))
-	seedRaw := buildRandomPuts(rng, baseSize)
-	seed := make([]rawdb.StateCommitmentUpdate, len(seedRaw))
-	for i := range seedRaw {
-		seed[i] = rawdb.NewStateCommitmentPut(seedRaw[i].Key, seedRaw[i].Value)
-	}
-	base, err := rawdb.NewPebbleDB(b.TempDir(), 64, 128)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(func() { _ = base.Close() })
-	seedBuffer := blockbuffer.New(base)
-	seedBuffer.BeginBlock(common.Hash{1}, 1)
-	h, _ := seedBuffer.NewestInflight()
-	if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(seedBuffer.ViewLayer(h)), seed); err != nil {
-		b.Fatal(err)
-	}
-	if err := seedBuffer.CommitInflight(h); err != nil {
-		b.Fatal(err)
-	}
-	if err := seedBuffer.FlushUpTo(1, base); err != nil {
-		b.Fatal(err)
-	}
-	if err := base.Compact(nil, nil); err != nil {
-		b.Fatal(err)
-	}
-
-	const batchCount = 256
-	batches := make([][]rawdb.StateCommitmentUpdate, batchCount)
-	for batch := range batches {
-		batches[batch] = make([]rawdb.StateCommitmentUpdate, 64)
-		for i := range batches[batch] {
-			value := make([]byte, 8)
-			binary.BigEndian.PutUint64(value, uint64(batch*64+i+1))
-			index := ((batch*64 + i) * 733) % baseSize
-			batches[batch][i] = rawdb.NewStateCommitmentPut(seedRaw[index].Key, value)
-		}
-	}
-	for _, tc := range []struct {
-		name string
-		base ethdb.KeyValueStore
-	}{
-		{name: "db_get", base: keyValueStoreWithoutPointSnapshot{base}},
-		{name: "snapshot_cursor", base: base},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			expected := make([]common.Hash, len(batches))
-			buf := blockbuffer.New(tc.base)
-			buf.SetBaseReadCacheSize(16 << 20)
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				buf.BeginBlock(common.Hash{byte(i + 1)}, uint64(i+1))
-				h, _ := buf.NewestInflight()
-				store := NewStagedCommitmentStoreForAsyncFold(buf.ViewLayer(h))
-				batch := i % len(batches)
-				b.StartTimer()
-				root, err := ApplyLatestCommitmentWithStore(store, batches[batch])
-				b.StopTimer()
-				if err != nil {
-					b.Fatal(err)
-				}
-				if expected[batch] == (common.Hash{}) {
-					expected[batch] = root
-				} else if root != expected[batch] {
-					b.Fatalf("root = %x, want %x", root, expected[batch])
-				}
-				buf.DiscardInflight(h)
 			}
 		})
 	}

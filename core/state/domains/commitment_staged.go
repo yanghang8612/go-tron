@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -17,7 +16,6 @@ type rawdbBranchStore struct {
 	db                 CommitmentDB
 	ownedValue         bool
 	readParentBranches bool
-	parentSession      pointread.CommitmentParentSession
 }
 
 // branchDecodeView owns the callback passed through rawdb/blockbuffer's
@@ -140,47 +138,16 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
 // the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
+	view := rawdb.ViewCommitmentBranchNoCopy
+	if s.readParentBranches {
+		view = rawdb.ViewCommitmentParentBranchNoCopy
+	}
 	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 	decodeView.dst = dst
-	var found bool
-	var err error
-	if s.parentSession != nil {
-		reader := maxFoldNibbles // root branch has no first-nibble owner
-		if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
-			reader = int(prefix[0])
-		}
-		found, err = rawdb.ViewCommitmentParentBranchInSession(s.parentSession, reader, prefix, decodeView.consume)
-	} else {
-		view := rawdb.ViewCommitmentBranchNoCopy
-		if s.readParentBranches {
-			view = rawdb.ViewCommitmentParentBranchNoCopy
-		}
-		found, err = view(s.db, prefix, decodeView.consume)
-	}
+	found, err := view(s.db, prefix, decodeView.consume)
 	decodeView.dst = nil
 	branchDecodeViewPool.Put(decodeView)
 	return found, err
-}
-
-func (s *rawdbBranchStore) beginParentReadSession() error {
-	session, err := rawdb.NewCommitmentParentReadSession(s.db, maxFoldNibbles+1)
-	if err != nil {
-		if session != nil {
-			_ = session.Close()
-		}
-		return err
-	}
-	s.parentSession = session
-	return nil
-}
-
-func (s *rawdbBranchStore) closeParentReadSession() error {
-	if s.parentSession == nil {
-		return nil
-	}
-	err := s.parentSession.Close()
-	s.parentSession = nil
-	return err
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
@@ -466,20 +433,10 @@ func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (c
 		foldUpdates = append(foldUpdates, Update{Key: u.Key, Value: u.Value, Delete: u.Delete})
 	}
 	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
-	if s.store.readParentBranches {
-		if err := s.store.beginParentReadSession(); err != nil {
-			s.store.readParentBranches = false
-			return common.Hash{}, err
-		}
-	}
 	root, err := s.trie.Fold(foldUpdates)
-	closeErr := s.store.closeParentReadSession()
 	s.store.readParentBranches = false
 	if err != nil {
 		return common.Hash{}, err
-	}
-	if closeErr != nil {
-		return common.Hash{}, closeErr
 	}
 	s.branchStateWritten = true
 	if err := s.WriteRoot(root); err != nil {

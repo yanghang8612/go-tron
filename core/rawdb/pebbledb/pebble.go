@@ -41,7 +41,6 @@
 package pebbledb
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -56,7 +55,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
-	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 const (
@@ -222,86 +220,6 @@ type Database struct {
 	writeDelayTime      atomic.Int64 // Total time spent in write stalls
 
 	writeOptions *pebble.WriteOptions
-}
-
-// pointReadSnapshot pins one Pebble sequence number for a short sorted-read
-// session. Holding quitLock's read side for its lifetime prevents Database.Close
-// from invalidating the snapshot while a commitment fold is in progress;
-// ordinary database reads and writes continue because they also take RLock.
-type pointReadSnapshot struct {
-	db       *Database
-	snapshot *pebble.Snapshot
-}
-
-type pointReadCursor struct {
-	iter *pebble.Iterator
-}
-
-var (
-	_ pointread.Snapshotter = (*Database)(nil)
-	_ pointread.Snapshot    = (*pointReadSnapshot)(nil)
-	_ pointread.Cursor      = (*pointReadCursor)(nil)
-)
-
-// NewPointReadSnapshot exposes Pebble's MVCC snapshot through the narrow
-// optional pointread interface. Callers use one cursor per independently sorted
-// stream instead of paying DB.Get's search setup and closer allocation for each
-// key.
-func (d *Database) NewPointReadSnapshot() (pointread.Snapshot, error) {
-	d.quitLock.RLock()
-	if d.closed {
-		d.quitLock.RUnlock()
-		return nil, pebble.ErrClosed
-	}
-	return &pointReadSnapshot{db: d, snapshot: d.db.NewSnapshot()}, nil
-}
-
-func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
-	if s.snapshot == nil {
-		return nil, pebble.ErrClosed
-	}
-	lower := append([]byte(nil), prefix...)
-	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
-		LowerBound: lower,
-		UpperBound: upperBound(lower),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &pointReadCursor{iter: iter}, nil
-}
-
-func (s *pointReadSnapshot) Close() error {
-	if s.snapshot == nil {
-		return nil
-	}
-	err := s.snapshot.Close()
-	s.snapshot = nil
-	s.db.quitLock.RUnlock()
-	s.db = nil
-	return err
-}
-
-func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, error) {
-	if c.iter == nil {
-		return false, pebble.ErrClosed
-	}
-	if !c.iter.SeekGE(key) {
-		return false, c.iter.Error()
-	}
-	if !bytes.Equal(c.iter.Key(), key) {
-		return false, nil
-	}
-	return true, fn(c.iter.Value())
-}
-
-func (c *pointReadCursor) Close() error {
-	if c.iter == nil {
-		return nil
-	}
-	err := c.iter.Close()
-	c.iter = nil
-	return err
 }
 
 func (d *Database) onCompactionBegin(info pebble.CompactionInfo) {

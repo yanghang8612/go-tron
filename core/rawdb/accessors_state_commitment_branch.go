@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 type cachedNoCopyKeyPartsReader interface {
@@ -17,22 +16,6 @@ type cachedNoCopyKeyPartsViewer interface {
 
 type commitmentParentKeyPartsViewer interface {
 	ViewCommitmentParentKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
-}
-
-// NewCommitmentParentReadSession asks a capable layered reader for a stable,
-// cursor-backed parent-state view. nil means the backend does not support the
-// optimization and callers should retain ordinary point reads.
-func NewCommitmentParentReadSession(db ethdb.KeyValueReader, readers int) (pointread.CommitmentParentSession, error) {
-	if sessioner, ok := db.(pointread.CommitmentParentSessioner); ok {
-		return sessioner.NewCommitmentParentReadSession(readers)
-	}
-	return nil, nil
-}
-
-// ViewCommitmentParentBranchInSession reads one logical branch prefix through
-// a previously captured parent-state session.
-func ViewCommitmentParentBranchInSession(session pointread.CommitmentParentSession, reader int, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
-	return session.ViewKeyParts(reader, stateCommitmentBranchPrefix, prefix, fn)
 }
 
 // keyPartsWriter is an optional writer fast path for layered stores whose

@@ -50,11 +50,6 @@ const baseReadCacheMaxInvalidationSlots = 1 << 16
 type baseReadCache struct {
 	shards        [baseReadCacheShardCount]baseReadCacheShard
 	invalidations []atomic.Uint64
-	// version advances once for every durable-base flush/cache reset. Entries
-	// retain the version at which they became valid, allowing a point-in-time
-	// commitment session to reuse old hot entries while rejecting replacements
-	// published after its Pebble snapshot.
-	version atomic.Uint64
 }
 
 type baseReadCacheShard struct {
@@ -85,10 +80,9 @@ type baseReadCacheEntry struct {
 	// A nil value is the durable-miss sentinel. Present empty values are stored
 	// as a non-nil zero-length slice by cloneBaseReadCacheKeyValue, so callers
 	// can distinguish the two without growing every entry with another field.
-	value   []byte
-	charge  int
-	gen     uint64
-	version uint64
+	value  []byte
+	charge int
+	gen    uint64
 }
 
 type baseReadCacheToken struct {
@@ -133,37 +127,6 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 	// path therefore keeps its existing O(1) shard lookup cost.
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
 	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}
-}
-
-// getAtVersion is the snapshot-session read path. Entries older than or equal
-// to maxVersion agree with that session's durable snapshot; an entry refreshed
-// by a later flush is deliberately bypassed in favor of the snapshot cursor.
-func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byte, found bool, epoch baseReadCacheEpoch, cacheable bool) {
-	if c == nil {
-		return nil, false, baseReadCacheEpoch{}, false
-	}
-	s := &c.shards[baseReadCacheShardIndex(key)]
-	s.mu.RLock()
-	e, ok := s.entries[string(key)]
-	s.mu.RUnlock()
-	if ok {
-		if e.version <= maxVersion {
-			return e.value, true, baseReadCacheEpoch{}, false
-		}
-		// A newer flush refreshed this key after the session snapshot. The
-		// session must use its snapshot value and must not overwrite the newer
-		// resident entry with that older value.
-		return nil, false, baseReadCacheEpoch{}, false
-	}
-	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
-	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
-}
-
-func (c *baseReadCache) advanceVersion() uint64 {
-	if c == nil {
-		return 0
-	}
-	return c.version.Add(1)
 }
 
 // setIfEpoch copies key/value into cache-owned immutable storage only if no
@@ -219,7 +182,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 	}
 	s.nextGen++
 	gen := s.nextGen
-	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen, version: c.version.Load()}
+	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen}
 	s.queue = append(s.queue, baseReadCacheToken{key: k, gen: gen})
 	s.used += charge
 	s.evict()
@@ -260,7 +223,7 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 			unsafe.Slice(unsafe.StringData(key), len(key)), value,
 		)
 		delete(s.entries, key)
-		s.entries[ownedKey] = baseReadCacheEntry{value: ownedValue, charge: charge, gen: old.gen, version: c.version.Load()}
+		s.entries[ownedKey] = baseReadCacheEntry{value: ownedValue, charge: charge, gen: old.gen}
 		s.used += charge - old.charge
 		s.evict()
 	} else {
@@ -320,7 +283,6 @@ func (c *baseReadCache) clear() {
 	if c == nil {
 		return
 	}
-	c.advanceVersion()
 	// Bracket the clear with generation advances. A read that began before or
 	// during the clear cannot publish after it; reads beginning after the second
 	// pass observe the new stable generation. Clear/discard is rare, so touching
