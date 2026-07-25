@@ -20,3 +20,12 @@ func TestCompactionConcurrencyReservesForegroundCPU(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactionPressureThresholdsReserveRoutineCapacity(t *testing.T) {
+	if l0CompactionConcurrency != 10 {
+		t.Fatalf("L0 concurrency threshold = %d, want 10", l0CompactionConcurrency)
+	}
+	if compactionDebtConcurrency != 1<<30 {
+		t.Fatalf("debt concurrency threshold = %d, want 1 GiB", compactionDebtConcurrency)
+	}
+}

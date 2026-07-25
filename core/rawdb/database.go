@@ -27,6 +27,8 @@ type PebbleOptions = pebbledb.Options
 //     can drain them.
 //   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
 //     so compaction does not consume every CPU available to foreground sync.
+//   - Extra compaction slots retain Pebble's conservative L0-depth / debt
+//     triggers so routine debt does not immediately consume that entire budget.
 //
 // Everything else — async writes (pebble.NoSync), MemTableStopWritesThreshold=8,
 // the per-level TargetFileSize ramp, bloom filters, and the metrics surface —

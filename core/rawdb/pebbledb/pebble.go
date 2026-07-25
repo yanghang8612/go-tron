@@ -28,6 +28,8 @@
 //     L0 bursts don't stall the producer / sync writers.
 //   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
 //     instead of the host-wide NumCPU count so sync retains foreground CPU.
+//   - Additional compaction slots use Pebble's conservative L0-depth and debt
+//     thresholds instead of activating the entire budget during routine debt.
 //
 // Everything else — async writes (pebble.NoSync),
 // MemTableStopWritesThreshold=memTableNumber*2, the per-level TargetFileSize ramp,
@@ -86,6 +88,15 @@ const (
 	minPooledBatchSize    = 64 << 10
 	maxPooledBatchSize    = 8 << 20
 	batchBuffersPerClass  = 2
+
+	// Keep the first compaction worker active as needed, but reserve the second
+	// slot for substantial pressure. Values of 1 sublevel / 256 MiB made the
+	// second worker effectively permanent on the sync node: profiles attributed
+	// 13-25 CPU-seconds per 30-second window to compaction even though there were
+	// no write stalls. These are Pebble's defaults and still let a 4-vCPU node
+	// use both configured compaction slots once L0 depth or debt is material.
+	l0CompactionConcurrency   = 10
+	compactionDebtConcurrency = 1 << 30 // 1 GiB
 )
 
 var batchBufferPools = [...]chan []byte{
@@ -607,15 +618,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	// for more details.
 	opt.Experimental.ReadSamplingMultiplier = -1
 
-	// These two settings define the conditions under which compaction concurrency
-	// is increased. Specifically, one additional compaction job will be enabled when:
-	// - there is one more overlapping sub-level0;
-	// - there is an additional 256 MB of compaction debt;
-	//
-	// The maximum concurrency is still capped by MaxConcurrentCompactions, but with
-	// these settings compactions can scale up more readily.
-	opt.Experimental.L0CompactionConcurrency = 1
-	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // 256MB
+	// The maximum concurrency is still capped by MaxConcurrentCompactions. Keep
+	// routine debt on one worker so foreground commitment reads and block
+	// execution retain CPU and disk bandwidth; scale to the second worker when
+	// either L0 read amplification or total debt becomes substantial.
+	opt.Experimental.L0CompactionConcurrency = l0CompactionConcurrency
+	opt.Experimental.CompactionDebtConcurrency = compactionDebtConcurrency
 
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)
