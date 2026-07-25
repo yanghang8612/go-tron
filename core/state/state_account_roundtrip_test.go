@@ -70,6 +70,10 @@ func TestGetStateObjectBorrowsEnvelopeOnlyForImmediateHydration(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("read encoded account: ok=%v err=%v", ok, err)
 	}
+	expectedEnvelope, err := DecodeStateAccountV3(encoded)
+	if err != nil {
+		t.Fatalf("decode expected envelope: %v", err)
+	}
 
 	target := newTestStateDB(t)
 	probe := &accountHydrationBorrowProbe{value: encoded}
@@ -84,6 +88,9 @@ func TestGetStateObjectBorrowsEnvelopeOnlyForImmediateHydration(t *testing.T) {
 	clear(encoded)
 	if obj.account.Balance() != 4321 {
 		t.Fatal("hydrated account retained the borrowed envelope")
+	}
+	if !bytes.Equal(obj.accountProto, expectedEnvelope.AccountProto) {
+		t.Fatal("hydrated account proto retained the borrowed envelope")
 	}
 }
 

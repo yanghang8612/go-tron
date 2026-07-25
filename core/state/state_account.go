@@ -123,54 +123,69 @@ func encodedSizeLen(size int) int {
 // DecodeStateAccountV3 parses a flat account-latest envelope and enforces the
 // v3-only disk schema.
 func DecodeStateAccountV3(data []byte) (*StateAccountV3, error) {
+	v := new(StateAccountV3)
+	if err := decodeStateAccountV3Into(data, v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// decodeStateAccountV3Into is the caller-owned counterpart used by hot account
+// hydration. AccountProto still receives its own durable copy: data may alias a
+// pending blockbuffer layer or its bounded base-read cache and is guaranteed to
+// remain valid only for this synchronous decode. Keeping the envelope itself in
+// caller storage avoids a second heap object without weakening that ownership
+// boundary.
+func decodeStateAccountV3Into(data []byte, dst *StateAccountV3) error {
 	content, trailing, err := rlp.SplitList(data)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3: %w", err)
+		return fmt.Errorf("decode StateAccountV3: %w", err)
 	}
 	if len(trailing) != 0 {
-		return nil, fmt.Errorf("decode StateAccountV3: trailing bytes")
+		return fmt.Errorf("decode StateAccountV3: trailing bytes")
 	}
 	version, content, err := rlp.SplitUint64(content)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3 version: %w", err)
+		return fmt.Errorf("decode StateAccountV3 version: %w", err)
 	}
 	accountProto, content, err := rlp.SplitString(content)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3 account: %w", err)
+		return fmt.Errorf("decode StateAccountV3 account: %w", err)
 	}
 	accountKVRoot, content, err := rlp.SplitString(content)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3 account root: %w", err)
+		return fmt.Errorf("decode StateAccountV3 account root: %w", err)
 	}
 	if len(accountKVRoot) != tcommon.HashLength {
-		return nil, fmt.Errorf("decode StateAccountV3 account root: got %d bytes, want %d", len(accountKVRoot), tcommon.HashLength)
+		return fmt.Errorf("decode StateAccountV3 account root: got %d bytes, want %d", len(accountKVRoot), tcommon.HashLength)
 	}
 	accountKVGeneration, content, err := rlp.SplitUint64(content)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3 generation: %w", err)
+		return fmt.Errorf("decode StateAccountV3 generation: %w", err)
 	}
 	codeHash, content, err := rlp.SplitString(content)
 	if err != nil {
-		return nil, fmt.Errorf("decode StateAccountV3 code hash: %w", err)
+		return fmt.Errorf("decode StateAccountV3 code hash: %w", err)
 	}
 	if len(codeHash) != tcommon.HashLength {
-		return nil, fmt.Errorf("decode StateAccountV3 code hash: got %d bytes, want %d", len(codeHash), tcommon.HashLength)
+		return fmt.Errorf("decode StateAccountV3 code hash: got %d bytes, want %d", len(codeHash), tcommon.HashLength)
 	}
 	if len(content) != 0 {
-		return nil, fmt.Errorf("decode StateAccountV3: too many list elements")
+		return fmt.Errorf("decode StateAccountV3: too many list elements")
 	}
 	if version != StateAccountVersion {
-		return nil, fmt.Errorf("unsupported StateAccountV3 version %d (want %d)", version, StateAccountVersion)
+		return fmt.Errorf("unsupported StateAccountV3 version %d (want %d)", version, StateAccountVersion)
 	}
-	v := &StateAccountV3{
+	ownedAccountProto := make([]byte, len(accountProto))
+	copy(ownedAccountProto, accountProto)
+	*dst = StateAccountV3{
 		Version:             version,
-		AccountProto:        make([]byte, len(accountProto)),
+		AccountProto:        ownedAccountProto,
 		AccountKVGeneration: accountKVGeneration,
 	}
-	copy(v.AccountProto, accountProto)
-	copy(v.AccountKVRoot[:], accountKVRoot)
-	copy(v.CodeHash[:], codeHash)
-	return v, nil
+	copy(dst.AccountKVRoot[:], accountKVRoot)
+	copy(dst.CodeHash[:], codeHash)
+	return nil
 }
 
 // DecodeStateAccountV2 is the source-compatible name for the strict v3 reader.

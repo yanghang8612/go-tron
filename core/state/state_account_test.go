@@ -15,6 +15,7 @@ import (
 type stateAccountV2Reference StateAccountV2
 
 var stateAccountV2DecodeSink *StateAccountV2
+var stateAccountV2DecodeIntoSink StateAccountV2
 
 func decodeStateAccountV2Reference(data []byte) (*StateAccountV2, error) {
 	v := new(stateAccountV2Reference)
@@ -232,6 +233,15 @@ func BenchmarkStateAccountV2Decode(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			stateAccountV2DecodeSink, err = DecodeStateAccountV2(encoded)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("caller-owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			err = decodeStateAccountV3Into(encoded, &stateAccountV2DecodeIntoSink)
 			if err != nil {
 				b.Fatal(err)
 			}

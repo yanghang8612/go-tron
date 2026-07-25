@@ -3872,8 +3872,8 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if err != nil || !ok {
 		return nil
 	}
-	envelope, err := DecodeStateAccountV2(data)
-	if err != nil {
+	var envelope StateAccountV3
+	if err := decodeStateAccountV3Into(data, &envelope); err != nil {
 		return nil
 	}
 	acc, err := types.UnmarshalAccount(envelope.AccountProto)
