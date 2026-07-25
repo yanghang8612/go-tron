@@ -391,6 +391,8 @@ type SyncStatus struct {
 	SyncPeerCount         int
 	TargetHead            uint64
 	AppliedTip            uint64
+	SessionBlocks         int
+	SessionTransactions   int
 	Remaining             int64
 	Inflight              int
 	BufferedBlocks        int
@@ -412,12 +414,15 @@ func (ss *SyncService) Status() SyncStatus {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	paused, pauseBlock, pauseTime, pauseErr := ss.pause.Status()
+	stats := ss.stats.CurrentSnapshot()
 	return SyncStatus{
 		Active:                ss.syncing,
 		Paused:                paused,
 		SyncPeerCount:         len(ss.peers),
 		TargetHead:            ss.targetHeadNum,
 		AppliedTip:            ss.syncedTipNum,
+		SessionBlocks:         stats.TotalBlocks,
+		SessionTransactions:   stats.TotalTxs,
 		Remaining:             ss.estimatedRemainLocked(),
 		Inflight:              ss.inflight,
 		BufferedBlocks:        len(ss.blockBuffer),

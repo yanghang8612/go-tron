@@ -30,6 +30,8 @@ type SyncInfo struct {
 	SyncPeerCount         int    `json:"syncPeerCount"`
 	TargetHead            uint64 `json:"targetHead"`
 	AppliedTip            uint64 `json:"appliedTip"`
+	SessionBlocks         int    `json:"sessionBlocks"`
+	SessionTransactions   int    `json:"sessionTransactions"`
 	Remaining             int64  `json:"remaining"`
 	Inflight              int    `json:"inflight"`
 	BufferedBlocks        int    `json:"bufferedBlocks"`

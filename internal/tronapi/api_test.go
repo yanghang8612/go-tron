@@ -543,6 +543,8 @@ func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
 			SyncPeerCount:         0,
 			TargetHead:            789,
 			AppliedTip:            124,
+			SessionBlocks:         100,
+			SessionTransactions:   200,
 			Remaining:             665,
 			Inflight:              3,
 			BufferedBlocks:        4,
@@ -574,6 +576,9 @@ func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
 	}
 	if syncInfo["bufferedBlocks"] != float64(4) || syncInfo["retainedDecodedBytes"] != float64(9000) {
 		t.Fatalf("syncInfo backlog fields = %v", syncInfo)
+	}
+	if syncInfo["sessionBlocks"] != float64(100) || syncInfo["sessionTransactions"] != float64(200) {
+		t.Fatalf("syncInfo session counters = %v", syncInfo)
 	}
 	if syncInfo["lastPeerFailure"] != "archive-peer: application disconnect: FETCH_FAIL" || syncInfo["lastPeerFailureTime"] != "2026-07-24T00:01:00Z" {
 		t.Fatalf("syncInfo peer failure fields = %v", syncInfo)

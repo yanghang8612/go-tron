@@ -645,6 +645,8 @@ func gtron(ctx *cli.Context) error {
 			SyncPeerCount:         status.SyncPeerCount,
 			TargetHead:            status.TargetHead,
 			AppliedTip:            status.AppliedTip,
+			SessionBlocks:         status.SessionBlocks,
+			SessionTransactions:   status.SessionTransactions,
 			Remaining:             status.Remaining,
 			Inflight:              status.Inflight,
 			BufferedBlocks:        status.BufferedBlocks,

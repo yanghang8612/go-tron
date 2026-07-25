@@ -28,6 +28,7 @@ func TestSyncServiceStatusSnapshot(t *testing.T) {
 	ss.retainedDecodedBytes = 2048
 	ss.peers["peer-a"] = &syncPeerState{}
 	ss.mu.Unlock()
+	ss.stats.AddBlocks(2, 9, 0)
 	ss.pause.Enter(6, pauseErr)
 
 	status := ss.Status()
@@ -36,6 +37,9 @@ func TestSyncServiceStatusSnapshot(t *testing.T) {
 	}
 	if status.TargetHead != 100 || status.AppliedTip != 5 || status.Remaining != 100 {
 		t.Fatalf("progress status = %+v", status)
+	}
+	if status.SessionBlocks != 2 || status.SessionTransactions != 9 {
+		t.Fatalf("session counters = %+v", status)
 	}
 	if status.SyncPeerCount != 1 || status.Inflight != 3 || status.BufferedBlocks != 1 || status.BufferedBytes != 4096 || status.RequestedBlocks != 1 || status.RetryBlocks != 2 {
 		t.Fatalf("queue status = %+v", status)

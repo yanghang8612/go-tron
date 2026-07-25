@@ -23,6 +23,7 @@ type Snapshot struct {
 	BufferWaitElapsed time.Duration // accumulated time waiting for the next contiguous buffered block
 	TotalStart        time.Time     // session start (for "Sync complete" line)
 	TotalBlocks       int           // session-wide block count
+	TotalTxs          int           // session-wide transaction count
 
 	// ApplyStats is the per-phase wall-clock breakdown reported by
 	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
@@ -100,6 +101,7 @@ func (s *Stats) AddBlocks(blocks, txs int, exec time.Duration) {
 	s.cur.Blocks += blocks
 	s.cur.TotalBlocks += blocks
 	s.cur.Txs += txs
+	s.cur.TotalTxs += txs
 	s.cur.ExecElapsed += exec
 }
 
@@ -180,8 +182,8 @@ func (s *Stats) WindowElapsed(now time.Time) time.Duration {
 
 // SnapshotAndReset returns a copy of the current window's accumulator and
 // resets the per-window fields (Blocks/Txs/ExecElapsed/BufferWaitElapsed/
-// ApplyStats and StartTime). Session-wide counters (TotalBlocks, TotalStart)
-// are preserved. Caller passes `now` so test fixtures can pin the new
+// ApplyStats and StartTime). Session-wide counters (TotalBlocks, TotalTxs,
+// TotalStart) are preserved. Caller passes `now` so test fixtures can pin the new
 // StartTime instead of taking a fresh wall-clock read inside the lock.
 func (s *Stats) SnapshotAndReset(now time.Time) Snapshot {
 	s.mu.Lock()
@@ -225,6 +227,7 @@ func (s *Stats) RecordBlocks(blocks, txs int, exec time.Duration, now time.Time,
 	s.cur.Blocks += blocks
 	s.cur.TotalBlocks += blocks
 	s.cur.Txs += txs
+	s.cur.TotalTxs += txs
 	s.cur.ExecElapsed += exec
 	if s.cur.StartTime.IsZero() || now.Sub(s.cur.StartTime) < interval {
 		return Snapshot{}, false
@@ -246,6 +249,13 @@ func (s *Stats) TotalBlocks() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cur.TotalBlocks
+}
+
+// TotalTransactions returns the session-wide transaction count.
+func (s *Stats) TotalTransactions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur.TotalTxs
 }
 
 // TotalStart returns the session start time recorded by InitSession.

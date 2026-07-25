@@ -12,7 +12,7 @@ import (
 func TestStats_DefaultSnapshotIsZero(t *testing.T) {
 	s := NewStats()
 	snap := s.CurrentSnapshot()
-	if snap.Blocks != 0 || snap.Txs != 0 || snap.TotalBlocks != 0 ||
+	if snap.Blocks != 0 || snap.Txs != 0 || snap.TotalBlocks != 0 || snap.TotalTxs != 0 ||
 		snap.ExecElapsed != 0 || snap.BufferWaitElapsed != 0 ||
 		!snap.StartTime.IsZero() || !snap.TotalStart.IsZero() ||
 		snap.ApplyStats.Total() != 0 {
@@ -50,6 +50,9 @@ func TestStats_AddBlockAccumulates(t *testing.T) {
 	}
 	if snap.Txs != 10 {
 		t.Fatalf("Txs=%d, want 10", snap.Txs)
+	}
+	if snap.TotalTxs != 10 {
+		t.Fatalf("TotalTxs=%d, want 10", snap.TotalTxs)
 	}
 	if snap.ExecElapsed != 37*time.Millisecond {
 		t.Fatalf("ExecElapsed=%v, want 37ms", snap.ExecElapsed)
@@ -244,6 +247,9 @@ func TestStats_SnapshotAndResetReturnsThenClears(t *testing.T) {
 	if now.TotalBlocks != 1 {
 		t.Fatalf("TotalBlocks lost across reset: got %d, want 1", now.TotalBlocks)
 	}
+	if now.TotalTxs != 3 {
+		t.Fatalf("TotalTxs lost across reset: got %d, want 3", now.TotalTxs)
+	}
 	if !now.TotalStart.Equal(start) {
 		t.Fatalf("TotalStart lost across reset: got %v, want %v", now.TotalStart, start)
 	}
@@ -279,10 +285,10 @@ func TestStats_RecordBlocksSnapshotsWholeRange(t *testing.T) {
 	if !emit {
 		t.Fatal("RecordBlocks did not emit after interval")
 	}
-	if snap.Blocks != 3 || snap.TotalBlocks != 3 || snap.Txs != 7 || snap.ExecElapsed != 30*time.Millisecond {
+	if snap.Blocks != 3 || snap.TotalBlocks != 3 || snap.Txs != 7 || snap.TotalTxs != 7 || snap.ExecElapsed != 30*time.Millisecond {
 		t.Fatalf("snapshot = %+v, want 3 blocks/7 txs/30ms", snap)
 	}
-	if got := s.CurrentSnapshot(); got.Blocks != 0 || got.TotalBlocks != 3 || got.Txs != 0 || got.ExecElapsed != 0 {
+	if got := s.CurrentSnapshot(); got.Blocks != 0 || got.TotalBlocks != 3 || got.Txs != 0 || got.TotalTxs != 7 || got.ExecElapsed != 0 {
 		t.Fatalf("post-reset snapshot = %+v, want cleared window with total blocks preserved", got)
 	}
 }
@@ -292,15 +298,21 @@ func TestStats_TotalAccessors(t *testing.T) {
 	if s.TotalBlocks() != 0 {
 		t.Fatal("zero stats: TotalBlocks should be 0")
 	}
+	if s.TotalTransactions() != 0 {
+		t.Fatal("zero stats: TotalTransactions should be 0")
+	}
 	if !s.TotalStart().IsZero() {
 		t.Fatal("zero stats: TotalStart should be zero")
 	}
 	start := time.Unix(42, 0)
 	s.InitSession(start)
-	s.AddBlock(0, 0)
-	s.AddBlock(0, 0)
+	s.AddBlock(3, 0)
+	s.AddBlock(4, 0)
 	if s.TotalBlocks() != 2 {
 		t.Fatalf("TotalBlocks=%d, want 2", s.TotalBlocks())
+	}
+	if s.TotalTransactions() != 7 {
+		t.Fatalf("TotalTransactions=%d, want 7", s.TotalTransactions())
 	}
 	if !s.TotalStart().Equal(start) {
 		t.Fatalf("TotalStart=%v, want %v", s.TotalStart(), start)
