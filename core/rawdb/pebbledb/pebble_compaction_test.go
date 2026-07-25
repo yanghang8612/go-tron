@@ -58,12 +58,12 @@ func TestLevelOptionsScaleTargetAndPreserveFilters(t *testing.T) {
 	if levels[len(levels)-1].FilterPolicy != nil {
 		t.Fatal("last level unexpectedly has a Bloom filter")
 	}
-	for i := 0; i <= 2; i++ {
+	for i := 0; i <= 3; i++ {
 		if levels[i].Compression != pebble.NoCompression {
 			t.Fatalf("level %d compression = %v, want none", i, levels[i].Compression)
 		}
 	}
-	for i := 3; i < len(levels); i++ {
+	for i := 4; i < len(levels); i++ {
 		if levels[i].Compression != pebble.DefaultCompression {
 			t.Fatalf("level %d compression = %v, want Pebble default", i, levels[i].Compression)
 		}
