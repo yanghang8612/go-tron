@@ -18,6 +18,31 @@ type frozenBandwidthPointReadStore struct {
 	iteratorCalls int
 }
 
+var frozenBandwidthPointReadBenchmarkSink *corepb.Account_Frozen
+
+func BenchmarkAccountFrozenBandwidthRowAtDirty(b *testing.B) {
+	sdb := newTestStateDB(b)
+	addr := testAddr(0xa3)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	value, err := proto.Marshal(&corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 22})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(addr, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0), value); err != nil {
+		b.Fatal(err)
+	}
+	obj := sdb.getStateObject(addr)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		row, exists, err := sdb.accountFrozenBandwidthRowAt(obj, 0)
+		if err != nil || !exists {
+			b.Fatalf("point read: exists=%t err=%v", exists, err)
+		}
+		frozenBandwidthPointReadBenchmarkSink = row.entry
+	}
+}
+
 func (s *frozenBandwidthPointReadStore) NewIterator(prefix, start []byte) ethdb.Iterator {
 	s.iteratorCalls++
 	return s.Database.NewIterator(prefix, start)

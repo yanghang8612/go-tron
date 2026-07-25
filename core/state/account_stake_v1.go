@@ -41,18 +41,26 @@ func accountFrozenBandwidthKey(index uint32) []byte {
 }
 
 func decodeAccountFrozenBandwidthRow(key, value []byte) (accountFrozenBandwidthRow, error) {
-	if len(key) != 4 {
-		return accountFrozenBandwidthRow{}, fmt.Errorf("account frozen-bandwidth key length %d, want 4", len(key))
-	}
-	var entry corepb.Account_Frozen
-	if err := proto.Unmarshal(value, &entry); err != nil {
-		return accountFrozenBandwidthRow{}, fmt.Errorf("decode account frozen-bandwidth %x: %w", key, err)
+	entry, err := decodeAccountFrozenBandwidthEntry(key, value)
+	if err != nil {
+		return accountFrozenBandwidthRow{}, err
 	}
 	return accountFrozenBandwidthRow{
 		key:   append([]byte(nil), key...),
 		index: binary.BigEndian.Uint32(key),
-		entry: &entry,
+		entry: entry,
 	}, nil
+}
+
+func decodeAccountFrozenBandwidthEntry(key, value []byte) (*corepb.Account_Frozen, error) {
+	if len(key) != 4 {
+		return nil, fmt.Errorf("account frozen-bandwidth key length %d, want 4", len(key))
+	}
+	entry := new(corepb.Account_Frozen)
+	if err := proto.Unmarshal(value, entry); err != nil {
+		return nil, fmt.Errorf("decode account frozen-bandwidth %x: %w", key, err)
+	}
+	return entry, nil
 }
 
 func decodeAccountTronPower(key, value []byte) (*corepb.Account_Frozen, error) {
@@ -185,16 +193,19 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (a
 	if obj == nil || obj.account == nil {
 		return accountFrozenBandwidthRow{}, false, nil
 	}
-	key := accountFrozenBandwidthKey(index)
+	key := s.frozenV1KeyScratch[:]
+	binary.BigEndian.PutUint32(key, index)
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
 		return accountFrozenBandwidthRow{}, exists, err
 	}
-	row, err := decodeAccountFrozenBandwidthRow(key, value)
+	entry, err := decodeAccountFrozenBandwidthEntry(key, value)
 	if err != nil {
 		return accountFrozenBandwidthRow{}, false, err
 	}
-	return row, true, nil
+	// Point readers need only the ordinal and decoded value. Iterator readers
+	// retain an owned physical key for later delete/replace operations.
+	return accountFrozenBandwidthRow{index: index, entry: entry}, true, nil
 }
 
 // accountFrozenBandwidthFastRows point-reads java-tron's valid V1 shape
