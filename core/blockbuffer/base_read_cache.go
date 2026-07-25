@@ -278,10 +278,18 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 	if c == nil {
 		return
 	}
-	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	c.advanceInvalidationString(key)
 	s := &c.shards[shard]
 	s.mu.Lock()
+	c.setFlushedLocked(s, key, value)
+	s.compactIfSparse()
+	s.mu.Unlock()
+}
+
+// setFlushedLocked refreshes one resident value after its invalidation epoch
+// has advanced. The caller owns s.mu.
+func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, value []byte) {
+	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	old, cached := s.entries[key]
 	if cached && charge <= s.limit {
 		// Preserve the stable entry and its CLOCK queue pointer. This is a value
@@ -304,6 +312,26 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 			old.key = ""
 			old.value = nil
 		}
+	}
+}
+
+// promoteFlushedShard applies one immutable layer shard to its matching cache
+// shard under a single lock. Overlay reads continue to resolve the source layer
+// until promotion completes, so batching these resident-cache refreshes cannot
+// expose an old cached value between the durable batch commit and layer drop.
+func (c *baseReadCache) promoteFlushedShard(writes map[string][]byte, deletes map[string]struct{}, shard uint32) {
+	if c == nil || (len(writes) == 0 && len(deletes) == 0) {
+		return
+	}
+	s := &c.shards[shard]
+	s.mu.Lock()
+	for key, value := range writes {
+		c.advanceInvalidationString(key)
+		c.setFlushedLocked(s, key, value)
+	}
+	for key := range deletes {
+		c.advanceInvalidationString(key)
+		c.delStringLocked(s, key)
 	}
 	s.compactIfSparse()
 	s.mu.Unlock()
@@ -342,6 +370,14 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 	c.advanceInvalidationString(key)
 	s := &c.shards[shard]
 	s.mu.Lock()
+	c.delStringLocked(s, key)
+	s.compactIfSparse()
+	s.mu.Unlock()
+}
+
+// delStringLocked removes one resident value and its admission history. The
+// caller owns s.mu and has already advanced the key's invalidation epoch.
+func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 	if old, ok := s.entries[key]; ok {
 		delete(s.entries, key)
 		s.used -= old.charge
@@ -350,8 +386,6 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 		old.value = nil
 	}
 	s.forgetAdmissionString(key)
-	s.compactIfSparse()
-	s.mu.Unlock()
 }
 
 func (c *baseReadCache) clear() {
@@ -602,12 +636,7 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
-		for k, v := range s.writes {
-			b.baseReadCache.setFlushedAt(k, v, uint32(i))
-		}
-		for k := range s.deletes {
-			b.baseReadCache.delStringAt(k, uint32(i))
-		}
+		b.baseReadCache.promoteFlushedShard(s.writes, s.deletes, uint32(i))
 		s.mu.RUnlock()
 	}
 }

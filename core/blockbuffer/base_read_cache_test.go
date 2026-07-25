@@ -463,6 +463,42 @@ func TestBaseReadCache_RacingSameEpochFillsPublishOnce(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_PromoteFlushedShard(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	keys := make([]string, 0, 3)
+	for i := 0; len(keys) < cap(keys); i++ {
+		key := fmt.Sprintf("promote-shard-%08x", i)
+		if baseReadCacheShardIndexString(key) == 0 {
+			keys = append(keys, key)
+		}
+	}
+	refreshKey, deleteKey, uncachedKey := keys[0], keys[1], keys[2]
+	testBaseReadCacheSet(c, []byte(refreshKey), []byte("old-refresh"))
+	testBaseReadCacheSet(c, []byte(deleteKey), []byte("old-delete"))
+	_, _, staleEpoch := c.getWithEpoch([]byte(uncachedKey))
+
+	c.promoteFlushedShard(
+		map[string][]byte{
+			refreshKey:  []byte("new-refresh"),
+			uncachedKey: []byte("uncached-write"),
+		},
+		map[string]struct{}{deleteKey: {}},
+		0,
+	)
+	if got, ok, _ := c.getWithEpoch([]byte(refreshKey)); !ok || string(got) != "new-refresh" {
+		t.Fatalf("refreshed value = (%q,%v), want new-refresh", got, ok)
+	}
+	if _, ok, _ := c.getWithEpoch([]byte(deleteKey)); ok {
+		t.Fatal("deleted key remained resident")
+	}
+	if _, ok, _ := c.getWithEpoch([]byte(uncachedKey)); ok {
+		t.Fatal("uncached flushed write was admitted")
+	}
+	if _, stored := c.setIfEpoch([]byte(uncachedKey), []byte("stale"), staleEpoch); stored {
+		t.Fatal("pre-promotion epoch published after shard promotion")
+	}
+}
+
 func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 	key := []byte("state-commitment-branch-v1-hot-prefix")
 	keyString := string(key)
@@ -505,6 +541,43 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 			c.setFlushedAt(keyString, value, shard)
 		}
 	})
+}
+
+func BenchmarkBaseReadCachePromoteShard(b *testing.B) {
+	const keyCount = 1024
+	value := bytes.Repeat([]byte{0xab}, 128)
+	writes := make(map[string][]byte, keyCount)
+	for i := 0; len(writes) < keyCount; i++ {
+		key := fmt.Sprintf("commitment-branch-%08x-%08x", i*2654435761, i)
+		if baseReadCacheShardIndexString(key) == 0 {
+			writes[key] = value
+		}
+	}
+
+	for _, bulk := range []bool{false, true} {
+		name := "per-key-lock"
+		if bulk {
+			name = "shard-lock"
+		}
+		b.Run(name, func(b *testing.B) {
+			c := newBaseReadCache(64 << 20)
+			for key := range writes {
+				testBaseReadCacheSet(c, []byte(key), value)
+			}
+			b.ReportAllocs()
+			b.ReportMetric(keyCount, "keys/op")
+			b.ResetTimer()
+			for range b.N {
+				if bulk {
+					c.promoteFlushedShard(writes, nil, 0)
+					continue
+				}
+				for key, value := range writes {
+					c.setFlushedAt(key, value, 0)
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkBaseReadCacheHit(b *testing.B) {
