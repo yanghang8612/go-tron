@@ -42,8 +42,8 @@ const baseReadCacheMaxAdmissionSlots = 8192
 // remain conservative false rejections; they can never publish a stale value.
 const baseReadCacheMaxInvalidationSlots = 1 << 16
 
-// baseReadCache is a bounded, sharded FIFO cache for values read from Buffer's
-// durable base. It is intentionally below the overlay layers: in-flight and
+// baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
+// Buffer's durable base. It is intentionally below the overlay layers: in-flight and
 // committed writes/tombstones are always resolved first, so a fork discard only
 // removes overlays and never needs to roll this cache back.
 //
@@ -96,6 +96,10 @@ type baseReadCacheEntry struct {
 	charge  int
 	gen     uint64
 	version uint64
+	// referenced is set only by a resident cache hit (not admission or flush).
+	// Eviction gives such entries one CLOCK-style second chance, preserving hot
+	// upper commitment branches without promoting two-hit scan noise forever.
+	referenced atomic.Bool
 }
 
 type baseReadCacheToken struct {
@@ -132,10 +136,15 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
-	s.mu.RUnlock()
 	if ok {
-		return e.value, true, baseReadCacheEpoch{}
+		if !e.referenced.Load() {
+			e.referenced.Store(true)
+		}
+		value := e.value
+		s.mu.RUnlock()
+		return value, true, baseReadCacheEpoch{}
 	}
+	s.mu.RUnlock()
 	// Compute/load the invalidation slot only on a miss. The dominant cache-hit
 	// path therefore keeps its existing O(1) shard lookup cost.
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
@@ -152,16 +161,22 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
-	s.mu.RUnlock()
 	if ok {
 		if e.version <= maxVersion {
-			return e.value, true, baseReadCacheEpoch{}, false
+			if !e.referenced.Load() {
+				e.referenced.Store(true)
+			}
+			value := e.value
+			s.mu.RUnlock()
+			return value, true, baseReadCacheEpoch{}, false
 		}
+		s.mu.RUnlock()
 		// A newer flush refreshed this key after the session snapshot. The
 		// session must use its snapshot value and must not overwrite the newer
 		// resident entry with that older value.
 		return nil, false, baseReadCacheEpoch{}, false
 	}
+	s.mu.RUnlock()
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
 	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
 }
@@ -213,8 +228,10 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 	// instead of copying the same key/value again, appending a stale FIFO token,
 	// and replacing an entry from the identical durable generation.
 	if current, ok := s.entries[string(key)]; ok {
+		current.referenced.Store(true)
+		value := current.value
 		s.mu.Unlock()
-		return current.value, true
+		return value, true
 	}
 	if !s.admit(key) {
 		s.mu.Unlock()
@@ -516,6 +533,13 @@ func (s *baseReadCacheShard) evict() {
 		s.queue[s.head] = baseReadCacheToken{}
 		s.head++
 		if current, ok := s.entries[tok.key]; ok && current.gen == tok.gen {
+			if current.referenced.Swap(false) {
+				// Keep the same admission generation and move its sole live token
+				// to the tail. Newly admitted entries start unreferenced, so a
+				// one-time two-hit scan is evicted before a genuinely reused row.
+				s.queue = append(s.queue, tok)
+				continue
+			}
 			delete(s.entries, tok.key)
 			s.used -= current.charge
 		}

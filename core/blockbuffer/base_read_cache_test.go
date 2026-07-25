@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"unsafe"
 )
@@ -144,6 +145,73 @@ func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {
 	if live := len(shard.queue) - shard.head; live >= 2048 {
 		t.Fatalf("invalidation queue retained %d stale tokens, want <2048", live)
 	}
+}
+
+func TestBaseReadCache_SecondChancePreservesReferencedOldestEntry(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	keys := make([][]byte, 0, 3)
+	for candidate := 0; len(keys) < 3; candidate++ {
+		key := []byte(fmt.Sprintf("clock-key-%08d", candidate))
+		if len(keys) == 0 || baseReadCacheShardIndex(key) == baseReadCacheShardIndex(keys[0]) {
+			keys = append(keys, key)
+		}
+	}
+	value := []byte("v")
+	charge := len(keys[0]) + len(value) + baseReadCacheEntryOverhead
+	s := &c.shards[baseReadCacheShardIndex(keys[0])]
+	s.limit = 2 * charge
+
+	testBaseReadCacheSet(c, keys[0], value)
+	testBaseReadCacheSet(c, keys[1], value)
+	if _, ok, _ := c.getWithEpoch(keys[0]); !ok {
+		t.Fatal("oldest entry missed before marking it referenced")
+	}
+	testBaseReadCacheSet(c, keys[2], value)
+
+	if _, ok, _ := c.getWithEpoch(keys[0]); !ok {
+		t.Fatal("referenced oldest entry did not receive a second chance")
+	}
+	if _, ok, _ := c.getWithEpoch(keys[1]); ok {
+		t.Fatal("unreferenced entry survived ahead of the referenced oldest entry")
+	}
+	if _, ok, _ := c.getWithEpoch(keys[2]); !ok {
+		t.Fatal("newly admitted entry was not retained")
+	}
+	if s.used > s.limit {
+		t.Fatalf("used bytes=%d exceed limit=%d", s.used, s.limit)
+	}
+}
+
+func TestBaseReadCache_ConcurrentHitAndFlushRefresh(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("concurrent-cache-hit-and-flush")
+	valueA := bytes.Repeat([]byte{'a'}, 128)
+	valueB := bytes.Repeat([]byte{'b'}, 128)
+	testBaseReadCacheSet(c, key, valueA)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10_000; i++ {
+			got, ok, _ := c.getWithEpoch(key)
+			if !ok || (!bytes.Equal(got, valueA) && !bytes.Equal(got, valueB)) {
+				t.Errorf("concurrent hit = (%x,%v)", got, ok)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10_000; i++ {
+			if i&1 == 0 {
+				c.setFlushed(string(key), valueB)
+			} else {
+				c.setFlushed(string(key), valueA)
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
