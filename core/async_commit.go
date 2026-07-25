@@ -172,6 +172,12 @@ func (bc *BlockChain) commitAsync(
 	if captured == nil {
 		return fmt.Errorf("async commit: deferred commit produced no captured fold")
 	}
+	capturedHandedOff := false
+	defer func() {
+		if !capturedHandedOff {
+			captured.Release()
+		}
+	}()
 	stats.StateCommitDetail = commitStats
 	stats.mark(&stats.StateCommit)
 
@@ -218,6 +224,7 @@ func (bc *BlockChain) commitAsync(
 	//    bounds the pipeline to depth 2). After this returns the foreground may
 	//    begin the next block's layer.
 	plan.txInfoBatchHandedOff = true
+	capturedHandedOff = true
 	bc.enqueueCommit(job)
 
 	// 6. Flush the scope's latest-domain rows + drop solidified buffer layers,
@@ -294,6 +301,7 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 func (bc *BlockChain) runCommitJob(job *commitJob) {
 	defer bc.commitPending.done()
 	defer job.txInfoBatchPool.release(job.txInfoBatch)
+	defer job.captured.Release()
 	if errPtr := bc.commitErr.Load(); errPtr != nil {
 		// A prior commit already failed; do not apply further state. Drop the
 		// layer so it is not left dangling.

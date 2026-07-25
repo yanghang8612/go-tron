@@ -837,6 +837,63 @@ func (v *commitmentLatestView) checkDomain(domain kvdomains.KVDomain) {
 	}
 }
 
+func TestCommitmentUpdateBatchReleaseClearsReferences(t *testing.T) {
+	batch := borrowCommitmentUpdateBatch(2, 64)
+	batch.keyArena = batch.keyArena[:64]
+	batch.updates[0] = rawdb.NewStateCommitmentPutOwned(batch.keyArena[:32:32], []byte("value"))
+	batch.updates[1] = rawdb.NewStateCommitmentDeleteOwned(batch.keyArena[32:64:64])
+	batch.release()
+
+	reused := borrowCommitmentUpdateBatch(2, 64)
+	defer reused.release()
+	for i, update := range reused.updates {
+		if update.Key != nil || update.Value != nil {
+			t.Fatalf("reused update %d retained key/value references", i)
+		}
+	}
+}
+
+var (
+	benchmarkCommitmentUpdateBatchBytes   int
+	benchmarkCommitmentUpdateBatchUpdates []rawdb.StateCommitmentUpdate
+	benchmarkCommitmentUpdateBatchKeys    []byte
+)
+
+func BenchmarkCommitmentUpdateBatchLifecycle(b *testing.B) {
+	const (
+		updateCount = 256
+		keySize     = 64
+	)
+	value := []byte("stable-value")
+	b.Run("heap", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			updates := make([]rawdb.StateCommitmentUpdate, updateCount)
+			keys := make([]byte, updateCount*keySize)
+			for i := range updates {
+				start := i * keySize
+				updates[i] = rawdb.NewStateCommitmentPutOwned(keys[start:start+keySize:start+keySize], value)
+			}
+			benchmarkCommitmentUpdateBatchUpdates = updates
+			benchmarkCommitmentUpdateBatchKeys = keys
+			benchmarkCommitmentUpdateBatchBytes = len(updates) + len(keys)
+		}
+	})
+	b.Run("pooled", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			batch := borrowCommitmentUpdateBatch(updateCount, updateCount*keySize)
+			batch.keyArena = batch.keyArena[:updateCount*keySize]
+			for i := range batch.updates {
+				start := i * keySize
+				batch.updates[i] = rawdb.NewStateCommitmentPutOwned(batch.keyArena[start:start+keySize:start+keySize], value)
+			}
+			benchmarkCommitmentUpdateBatchBytes = len(batch.updates) + len(batch.keyArena)
+			batch.release()
+		}
+	})
+}
+
 func stateCommitmentUpdatesByKey(updates []rawdb.StateCommitmentUpdate) map[string]rawdb.StateCommitmentUpdate {
 	out := make(map[string]rawdb.StateCommitmentUpdate, len(updates))
 	for _, update := range updates {

@@ -440,6 +440,12 @@ func TestDirtyObjects_DeferFoldMatchesSyncRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if captured.batch != nil {
+		t.Fatal("captured fold retained its update batch after success")
+	}
+	if _, err := captured.Fold(asyncSDB.accountKVIndex()); err == nil {
+		t.Fatal("captured fold was reusable after consumption")
+	}
 	if syncRoot != asyncRoot {
 		t.Fatalf("async/sync root mismatch: sync=%x async=%x", syncRoot, asyncRoot)
 	}

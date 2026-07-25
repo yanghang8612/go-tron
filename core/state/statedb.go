@@ -3530,7 +3530,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	clear(s.dirtyObjects)
 	mark(&stats.Finalize)
 
-	touchUpdates, err := commitmentState.latestUpdatesFromTouches()
+	touchBatch, err := commitmentState.latestUpdateBatchFromTouches()
 	if err != nil {
 		if scope != nil {
 			scope.discard()
@@ -3554,7 +3554,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		// deferFold would otherwise make it return a zero root instead of
 		// folding. Re-arming per block keeps the async path correct while making
 		// any accidental sync commit fold normally.
-		s.capturedFold = &CapturedCommit{updates: touchUpdates, repair: s.commitmentRepair()}
+		s.capturedFold = &CapturedCommit{batch: touchBatch, repair: s.commitmentRepair()}
 		s.deferFold = false
 		s.resetJournal()
 		s.releaseUnusedLoadedAccountProtos()
@@ -3563,7 +3563,12 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
+	var touchUpdates []rawdb.StateCommitmentUpdate
+	if touchBatch != nil {
+		touchUpdates = touchBatch.updates
+	}
 	root, err := s.applyLatestDomainCommitment(touchUpdates)
+	touchBatch.release()
 	if err != nil {
 		if scope != nil {
 			scope.discard()
@@ -3581,21 +3586,38 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 }
 
 // CapturedCommit holds the self-contained inputs to a deferred commitment fold:
-// the latest-domain updates produced by a block's commit (deep-copied key/value
-// byte slices) and the cold-history repair inputs. It is severable from the
+// the latest-domain updates produced by a block's commit (packed owned keys and
+// immutable borrowed values) and the cold-history repair inputs. It is severable from the
 // StateDB — FoldLatestCommitment(index, c.updates, c.repair) reproduces the
 // exact root the synchronous path would have computed — so the async commit
 // worker can fold it against a buffer LayerView while the foreground proceeds.
 type CapturedCommit struct {
-	updates []rawdb.StateCommitmentUpdate
-	repair  statedomains.CommitmentSnapshotRepair
+	batch  *commitmentUpdateBatch
+	repair statedomains.CommitmentSnapshotRepair
 }
 
 // Fold runs the captured commitment fold against index and returns the root.
+// A CapturedCommit is single-use; Fold releases its transient update/key
+// storage on both success and failure.
 func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, error) {
+	if c == nil || c.batch == nil {
+		return tcommon.Hash{}, errors.New("state: captured commitment already consumed")
+	}
+	defer c.Release()
 	store := statedomains.NewStagedCommitmentStoreForAsyncFold(index)
-	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.updates, c.repair)
+	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.batch.updates, c.repair)
 	return tcommon.Hash(root), err
+}
+
+// Release drops a captured fold without running it. It is idempotent so the
+// worker can defer it across early-failure paths while Fold also releases its
+// storage immediately after consumption.
+func (c *CapturedCommit) Release() {
+	if c == nil || c.batch == nil {
+		return
+	}
+	c.batch.release()
+	c.batch = nil
 }
 
 // SetDeferFold toggles deferred-fold mode (async commit). When set, the next

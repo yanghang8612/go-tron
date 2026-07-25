@@ -5,6 +5,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -12,6 +13,56 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
+
+const (
+	maxPooledCommitmentUpdates  = 4096
+	maxPooledCommitmentKeyArena = 1 << 20
+)
+
+// commitmentUpdateBatch owns the transient update descriptors and their
+// packed physical keys until the commitment fold returns. Values continue to
+// borrow immutable latest-state storage exactly as before. Keeping both
+// allocations behind one explicit lifetime lets the synchronous fold and the
+// async CapturedCommit return them safely without changing any layer value's
+// ownership.
+type commitmentUpdateBatch struct {
+	updates  []rawdb.StateCommitmentUpdate
+	keyArena []byte
+}
+
+var commitmentUpdateBatchPool = sync.Pool{
+	New: func() any { return new(commitmentUpdateBatch) },
+}
+
+func borrowCommitmentUpdateBatch(updateCount, keyArenaSize int) *commitmentUpdateBatch {
+	batch := commitmentUpdateBatchPool.Get().(*commitmentUpdateBatch)
+	if cap(batch.updates) < updateCount {
+		batch.updates = make([]rawdb.StateCommitmentUpdate, updateCount)
+	} else {
+		batch.updates = batch.updates[:updateCount]
+	}
+	if cap(batch.keyArena) < keyArenaSize {
+		batch.keyArena = make([]byte, 0, keyArenaSize)
+	} else {
+		batch.keyArena = batch.keyArena[:0]
+	}
+	return batch
+}
+
+func (b *commitmentUpdateBatch) release() {
+	if b == nil {
+		return
+	}
+	clear(b.updates)
+	if cap(b.updates) > maxPooledCommitmentUpdates || cap(b.keyArena) > maxPooledCommitmentKeyArena {
+		b.updates = nil
+		b.keyArena = nil
+		return
+	}
+	b.updates = b.updates[:0]
+	b.keyArena = b.keyArena[:0]
+	commitmentUpdateBatchPool.Put(b)
+}
 
 var (
 	_ statedomains.LatestReader               = (*DomainState)(nil)
@@ -355,11 +406,28 @@ func (d *DomainCommitmentState) recordKVGenerationTouch(owner tcommon.Address) {
 }
 
 func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitmentUpdate, error) {
-	if d == nil || d.state == nil || len(d.touches) == 0 {
+	batch, err := d.latestUpdateBatchFromTouches()
+	if err != nil || batch == nil {
+		return nil, err
+	}
+	if len(batch.updates) == 0 {
+		batch.release()
 		return nil, nil
 	}
+	// Compatibility helper for tests and the domain interface: callers receive
+	// the same independently-live update slice as before. Production commit
+	// paths use latestUpdateBatchFromTouches directly and release it after Fold.
+	return batch.updates, nil
+}
+
+func (d *DomainCommitmentState) latestUpdateBatchFromTouches() (*commitmentUpdateBatch, error) {
+	if d == nil || d.state == nil {
+		return nil, nil
+	}
+	if len(d.touches) == 0 {
+		return borrowCommitmentUpdateBatch(0, 0), nil
+	}
 	reader := d.latestReaderOrDefault()
-	updates := make([]rawdb.StateCommitmentUpdate, 0, len(d.touches))
 	keyArenaSize := 0
 	for touch := range d.touches {
 		switch touch.flatDomain {
@@ -371,29 +439,33 @@ func (d *DomainCommitmentState) latestUpdatesFromTouches() ([]rawdb.StateCommitm
 			keyArenaSize += rawdb.StateKVLatestCommitmentKeySize(len(touch.key))
 		}
 	}
-	keyArena := make([]byte, 0, keyArenaSize)
+	batch := borrowCommitmentUpdateBatch(len(d.touches), keyArenaSize)
+	updatePos := 0
 	for touch, index := range d.touches {
-		start := len(keyArena)
+		start := len(batch.keyArena)
 		owner := touch.owner.Address(tcommon.AddressPrefixMainnet)
 		switch touch.flatDomain {
 		case rawdb.StateFlatDomainAccountLatest:
-			keyArena = rawdb.AppendStateAccountLatestCommitmentKey(keyArena, owner)
+			batch.keyArena = rawdb.AppendStateAccountLatestCommitmentKey(batch.keyArena, owner)
 		case rawdb.StateFlatDomainKVGeneration:
-			keyArena = rawdb.AppendStateKVGenerationCommitmentKey(keyArena, owner)
+			batch.keyArena = rawdb.AppendStateKVGenerationCommitmentKey(batch.keyArena, owner)
 		case rawdb.StateFlatDomainKVLatest:
-			keyArena = rawdb.AppendStateKVLatestCommitmentKeyString(keyArena, owner, touch.generation, touch.domain, touch.key)
+			batch.keyArena = rawdb.AppendStateKVLatestCommitmentKeyString(batch.keyArena, owner, touch.generation, touch.domain, touch.key)
 		}
-		commitmentKey := keyArena[start:len(keyArena):len(keyArena)]
+		commitmentKey := batch.keyArena[start:len(batch.keyArena):len(batch.keyArena)]
 		update, err := d.latestUpdateFromTouch(reader, touch, d.touchValues[index], commitmentKey)
 		if err != nil {
+			batch.release()
 			return nil, err
 		}
-		updates = append(updates, update)
+		batch.updates[updatePos] = update
+		updatePos++
 	}
-	slices.SortFunc(updates, func(a, b rawdb.StateCommitmentUpdate) int {
+	batch.updates = batch.updates[:updatePos]
+	slices.SortFunc(batch.updates, func(a, b rawdb.StateCommitmentUpdate) int {
 		return bytes.Compare(a.Key, b.Key)
 	})
-	return updates, nil
+	return batch, nil
 }
 
 func (d *DomainCommitmentState) latestUpdateFromTouch(reader domainCommitmentLatestReader, touch domainCommitmentTouch, captured domainCommitmentCapturedValue, commitmentKey []byte) (rawdb.StateCommitmentUpdate, error) {
@@ -613,9 +685,14 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 		return tcommon.Hash{}, nil
 	}
 	index := d.state.accountKVIndex()
-	updates, err := d.latestUpdatesFromTouches()
+	batch, err := d.latestUpdateBatchFromTouches()
 	if err != nil {
 		return tcommon.Hash{}, err
+	}
+	var updates []rawdb.StateCommitmentUpdate
+	if batch != nil {
+		defer batch.release()
+		updates = batch.updates
 	}
 	store := d.state.latestCommitmentStore(index)
 	root, err := statedomains.ApplyLatestCommitmentWithStore(store, updates)
