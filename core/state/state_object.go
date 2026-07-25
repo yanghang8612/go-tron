@@ -46,6 +46,19 @@ const maxPooledStorageEntries = 512
 
 var storageMapPool sync.Pool
 
+// stateObjectPool reuses the private account wrapper after StateDB evicts it
+// from the previous block's working set. The wrapper is comparatively large
+// (it carries all lazy-load and dirty-tracking state), while historical sync
+// creates hundreds of thousands of short-lived wrappers per sampling window.
+//
+// Only wrappers that have never escaped through GetOrCreateAccount enter the
+// pool. AccountReference/GetAccount expose *types.Account rather than the
+// wrapper, so clearing the wrapper does not mutate those externally retained
+// account values.
+var stateObjectPool = sync.Pool{
+	New: func() any { return new(stateObject) },
+}
+
 // storageOrigin is the durable value observed before a slot's first write in
 // the current commit interval. SetState already has to load that value for
 // SSTORE semantics, so retaining it lets commit planning avoid reading the
@@ -71,6 +84,11 @@ type storageSlot struct {
 type stateObject struct {
 	address tcommon.Address
 	account *types.Account
+	// wrapperEscaped is set when GetOrCreateAccount returns this private wrapper
+	// to a caller. Preserve such a stale wrapper after cache eviction rather than
+	// reusing its identity for an unrelated address that the caller could then
+	// observe through its exported Account method.
+	wrapperEscaped bool
 	// cacheTouched records membership in StateDB.touchedStateObjects for the
 	// current block. StateDB keeps only the previous block's account working set
 	// across a successful commit; the bit makes repeated hot-path lookups a
@@ -182,15 +200,18 @@ func (s *stateObject) invalidateAccountProto() {
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
-	return &stateObject{
+	obj := acquireStateObject()
+	*obj = stateObject{
 		address:       addr,
 		account:       acc,
 		accountKVRoot: EmptyKVRoot,
 	}
+	return obj
 }
 
 func newEmptyStateObject(addr tcommon.Address) *stateObject {
-	return &stateObject{
+	obj := acquireStateObject()
+	*obj = stateObject{
 		address:       addr,
 		account:       types.NewAccount(addr, corepb.AccountType_Normal),
 		dirty:         true,
@@ -198,6 +219,30 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		created:       true,
 		accountKVRoot: EmptyKVRoot,
 	}
+	return obj
+}
+
+func acquireStateObject() *stateObject {
+	// New entries start zeroed and releaseStateObject clears every reused entry
+	// before Put. Constructors overwrite the full struct immediately afterward.
+	return stateObjectPool.Get().(*stateObject)
+}
+
+// releaseStateObject detaches private reusable maps and, when the wrapper has
+// not escaped, returns the cleared wrapper to the pool. Callers must first
+// remove obj from stateObjects and clear every StateDB pointer to it.
+func releaseStateObject(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	obj.releaseStorage()
+	obj.releaseDirtyStorage()
+	obj.releaseKVDirty()
+	if obj.wrapperEscaped {
+		return
+	}
+	*obj = stateObject{}
+	stateObjectPool.Put(obj)
 }
 
 func (s *stateObject) markDirty() {

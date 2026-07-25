@@ -911,6 +911,7 @@ func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapsho
 func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	obj := s.getStateObject(addr)
 	if obj != nil && !obj.deleted {
+		obj.wrapperEscaped = true
 		return obj
 	}
 	// Journal the pre-create shape so revert can restore either a truly
@@ -961,6 +962,7 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
 	s.touchStateObject(obj)
+	obj.wrapperEscaped = true
 	return obj
 }
 
@@ -2905,7 +2907,8 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		if len(obj.dirtyStorage) != 0 {
 			dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
 		}
-		newObj := &stateObject{
+		newObj := acquireStateObject()
+		*newObj = stateObject{
 			address:                  addr,
 			dirty:                    obj.dirty,
 			accountDirty:             obj.accountDirty,
@@ -3962,11 +3965,11 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			continue
 		}
 		clearAccountFrozenBandwidthCache(obj)
-		obj.releaseStorage()
 		delete(s.stateObjects, addr)
 		if s.lastStateObject == obj {
 			s.lastStateObject = nil
 		}
+		releaseStateObject(obj)
 	}
 	for _, addr := range current {
 		if obj := s.stateObjects[addr]; obj != nil {

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"reflect"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -110,6 +111,70 @@ func TestStateObjectReleaseStorageClearsLifecycleState(t *testing.T) {
 		t.Fatal("reused storage retained an entry from its previous lifecycle")
 	}
 	obj.releaseStorage()
+}
+
+func TestStateObjectPoolClearsLifecycleState(t *testing.T) {
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x7a})
+	obj := newStateObject(addr, types.NewAccount(addr, corepb.AccountType_Contract))
+	obj.cacheTouched = true
+	obj.dirty = true
+	obj.accountDirty = true
+	obj.created = true
+	obj.code = []byte{1, 2, 3}
+	obj.codeDirty = true
+	obj.cacheStorageSlot(tcommon.Hash{1}, storageSlot{exists: true})
+	obj.recordDirtyStorageOrigin(tcommon.Hash{2}, storageOrigin{loaded: true})
+	obj.stageKV(kvdomains.ContractMetadata, []byte("key"), []byte("value"))
+
+	releaseStateObject(obj)
+	if !reflect.DeepEqual(*obj, stateObject{}) {
+		t.Fatal("pooled state object retained lifecycle state")
+	}
+
+	reused := acquireStateObject()
+	if !reflect.DeepEqual(*reused, stateObject{}) {
+		t.Fatal("acquired state object was not zeroed")
+	}
+	releaseStateObject(reused)
+}
+
+func TestStateObjectPoolPreservesEscapedWrapper(t *testing.T) {
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x7b})
+	account := types.NewAccount(addr, corepb.AccountType_Normal)
+	obj := newStateObject(addr, account)
+	obj.wrapperEscaped = true
+	obj.cacheStorageSlot(tcommon.Hash{1}, storageSlot{exists: true})
+
+	releaseStateObject(obj)
+	if obj.address != addr || obj.account != account || !obj.wrapperEscaped {
+		t.Fatal("release changed a wrapper previously returned to a caller")
+	}
+	if obj.storage != nil || obj.storageHighWater != 0 {
+		t.Fatal("escaped wrapper retained its private storage cache")
+	}
+}
+
+var stateObjectBenchmarkSink *stateObject
+
+func BenchmarkStateObjectWrapperLifecycle(b *testing.B) {
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x7c})
+	account := types.NewAccount(addr, corepb.AccountType_Normal)
+	b.Run("fresh", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			obj := &stateObject{address: addr, account: account, accountKVRoot: EmptyKVRoot}
+			stateObjectBenchmarkSink = obj
+		}
+	})
+	b.Run("pooled", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			obj := newStateObject(addr, account)
+			stateObjectBenchmarkSink = obj
+			releaseStateObject(obj)
+		}
+	})
+	stateObjectBenchmarkSink = nil
 }
 
 func BenchmarkStateObjectStorageLifecycle(b *testing.B) {
