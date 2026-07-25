@@ -226,6 +226,7 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 			if end > start {
 				key = unsafe.String(unsafe.SliceData(keyArena[start:end]), end-start)
 			}
+			l.addBloomString(key)
 			delete(s.deletes, key)
 			s.writes[key] = values[i]
 		}
@@ -252,6 +253,7 @@ func (b *Buffer) putIntoString(l *layer, key string, value []byte) {
 func (b *Buffer) putIntoStringOwnedValue(l *layer, key string, value []byte) {
 	s := l.shardForString(key)
 	s.mu.Lock()
+	l.addBloomString(key)
 	delete(s.deletes, key)
 	if s.writes == nil {
 		s.writes = make(map[string][]byte)
@@ -276,6 +278,7 @@ func (b *Buffer) deleteIntoStateKVLatest(l *layer, prefix []byte, accountID comm
 func (b *Buffer) deleteIntoString(l *layer, key string) {
 	s := l.shardForString(key)
 	s.mu.Lock()
+	l.addBloomString(key)
 	delete(s.writes, key)
 	if s.deletes == nil {
 		s.deletes = make(map[string]struct{})
@@ -374,7 +377,8 @@ func (v *LayerView) DeleteStateKVLatest(prefix []byte, accountID common.AccountI
 func (v *LayerView) Get(key []byte) ([]byte, error) {
 	b := v.b
 	view := b.loadReadView()
-	val, found, tomb := v.l.lookup(key)
+	keyHash := layerBloomHashBytes(key)
+	val, found, tomb := v.l.lookupHash(key, keyHash)
 	if tomb {
 		return nil, ErrNotFound
 	}
@@ -382,15 +386,10 @@ func (v *LayerView) Get(key []byte) ([]byte, error) {
 		out := append([]byte(nil), val...)
 		return out, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		val, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			out := append([]byte(nil), val...)
-			return out, nil
-		}
+	if val, found, tomb = lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return append([]byte(nil), val...), nil
 	}
 	if b.base == nil {
 		return nil, ErrNotFound
@@ -424,21 +423,18 @@ func (v *LayerView) GetNoCopyCached(key []byte) ([]byte, error) {
 func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	b := v.b
 	view := b.loadReadView()
-	val, found, tomb := v.l.lookup(key)
+	keyHash := layerBloomHashBytes(key)
+	val, found, tomb := v.l.lookupHash(key, keyHash)
 	if tomb {
 		return nil, ErrNotFound
 	}
 	if found {
 		return val, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		val, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return val, nil
-		}
+	if val, found, tomb = lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return val, nil
 	}
 	cache := view.baseReadCache
 	if b.base == nil {
@@ -548,14 +544,11 @@ func (v *LayerView) ViewCommitmentParentKeyParts(first, second []byte, fn func(v
 func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	b := v.b
 	view := b.loadReadView()
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		value, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, fn(value, true)
-		}
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
 	}
 	if b.base == nil {
 		return false, nil
@@ -578,21 +571,18 @@ func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, st
 func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	b := v.b
 	view := b.loadReadView()
-	value, found, tomb := v.l.lookup(key)
+	keyHash := layerBloomHashBytes(key)
+	value, found, tomb := v.l.lookupHash(key, keyHash)
 	if tomb {
 		return false, nil
 	}
 	if found {
 		return true, fn(value, true)
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		value, found, tomb = view.layers[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, fn(value, true)
-		}
+	if value, found, tomb = lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
 	}
 	if b.base == nil {
 		return false, nil
@@ -634,21 +624,18 @@ func (v *LayerView) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common
 func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	b := v.b
 	view := b.loadReadView()
-	value, found, tomb := v.l.lookup(key)
+	keyHash := layerBloomHashBytes(key)
+	value, found, tomb := v.l.lookupHash(key, keyHash)
 	if tomb {
 		return nil, ErrNotFound
 	}
 	if found {
 		return value, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		value, found, tomb = view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return value, nil
-		}
+	if value, found, tomb = lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return value, nil
 	}
 	if b.base == nil {
 		return nil, ErrNotFound
@@ -676,19 +663,16 @@ func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 func (v *LayerView) Has(key []byte) (bool, error) {
 	b := v.b
 	view := b.loadReadView()
-	if _, found, tomb := v.l.lookup(key); tomb {
+	keyHash := layerBloomHashBytes(key)
+	if _, found, tomb := v.l.lookupHash(key, keyHash); tomb {
 		return false, nil
 	} else if found {
 		return true, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		_, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, nil
-		}
+	if _, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, nil
 	}
 	if b.base == nil {
 		return false, nil

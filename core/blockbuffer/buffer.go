@@ -60,6 +60,7 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 type layer struct {
 	blockHash common.Hash
 	number    uint64
+	bloom     atomic.Pointer[layerBloom]
 	shards    [layerShardCount]layerShard
 }
 
@@ -508,6 +509,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 		s.pendingOwnedPuts--
 		op.reservedOwnedPut = false
 	}
+	target.addBloomString(k)
 	if op.delete {
 		delete(s.writes, k)
 		if s.deletes == nil {
@@ -826,6 +828,7 @@ func (b *Buffer) CommitBlock() {
 // begun in block order and committed FIFO. Caller holds b.mu.
 func (b *Buffer) promoteOldestInflightLocked() {
 	l := b.inflight[0]
+	l.buildBloom()
 	copy(b.inflight, b.inflight[1:])
 	b.inflight[len(b.inflight)-1] = nil
 	b.inflight = b.inflight[:len(b.inflight)-1]
@@ -975,6 +978,22 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 // allocation-free (the compiler elides the conversion), so GetNoCopy stays
 // alloc-free on a buffer hit.
 func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
+	if l.bloom.Load() == nil {
+		return l.lookupMap(key)
+	}
+	return l.lookupHash(key, layerBloomHashBytes(key))
+}
+
+// lookupHash is lookup with a caller-precomputed filter hash. Stack walks
+// compute it once and reuse it across every committed layer.
+func (l *layer) lookupHash(key []byte, keyHash uint64) (v []byte, found, tomb bool) {
+	if bloom := l.bloom.Load(); bloom != nil && !bloom.mayContainHash(keyHash) {
+		return nil, false, false
+	}
+	return l.lookupMap(key)
+}
+
+func (l *layer) lookupMap(key []byte) (v []byte, found, tomb bool) {
 	s := l.shardForBytes(key)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -990,6 +1009,15 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 	return nil, false, false
 }
 
+func lookupLayersNewest(layers []*layer, key []byte, keyHash uint64) (v []byte, found, tomb bool) {
+	for i := len(layers) - 1; i >= 0; i-- {
+		if v, found, tomb = layers[i].lookupHash(key, keyHash); found || tomb {
+			return v, found, tomb
+		}
+	}
+	return nil, false, false
+}
+
 // Get returns the value for key, searching active layer first, then
 // layered stack newest-first, then the base reader. Tombstones short-
 // circuit and return ErrNotFound. Safe to call concurrently with mutators.
@@ -999,27 +1027,18 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 // (potentially slow) base read therefore runs without holding Buffer.mu.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
 	view := b.loadReadView()
+	keyHash := layerBloomHashBytes(key)
 	// In-flight layers first, newest-first (the foreground's active layer wins
 	// over an older worker-owned layer), then committed layers newest-first.
-	for i := len(view.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := view.inflight[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			out := append([]byte(nil), v...)
-			return out, nil
-		}
+	if v, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return append([]byte(nil), v...), nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		v, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			out := append([]byte(nil), v...)
-			return out, nil
-		}
+	if v, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return append([]byte(nil), v...), nil
 	}
 	if b.base == nil {
 		return nil, ErrNotFound
@@ -1053,23 +1072,16 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 	// read view keeps topology stable for the walk; lookup locks only the key's
 	// matching map shard.
 	view := b.loadReadView()
-	for i := len(view.inflight) - 1; i >= 0; i-- {
-		v, found, tomb := view.inflight[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return v, nil
-		}
+	keyHash := layerBloomHashBytes(key)
+	if v, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return v, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		v, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return v, nil
-		}
+	if v, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return v, nil
 	}
 	cache := view.baseReadCache
 	if b.base == nil {
@@ -1155,23 +1167,16 @@ func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []
 
 func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	view := b.loadReadView()
-	for i := len(view.inflight) - 1; i >= 0; i-- {
-		value, found, tomb := view.inflight[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, fn(value, true)
-		}
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		value, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, fn(value, true)
-		}
+	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
 	}
 	if b.base == nil {
 		return false, nil
@@ -1212,23 +1217,16 @@ func (b *Buffer) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.Ac
 // fill, avoiding escape of the entire fixed scratch array.
 func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	view := b.loadReadView()
-	for i := len(view.inflight) - 1; i >= 0; i-- {
-		value, found, tomb := view.inflight[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return value, nil
-		}
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return value, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		value, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return nil, ErrNotFound
-		}
-		if found {
-			return value, nil
-		}
+	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return value, nil
 	}
 	if b.base == nil {
 		return nil, ErrNotFound
@@ -1422,23 +1420,16 @@ func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // concurrently with mutators.
 func (b *Buffer) Has(key []byte) (bool, error) {
 	view := b.loadReadView()
-	for i := len(view.inflight) - 1; i >= 0; i-- {
-		_, found, tomb := view.inflight[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, nil
-		}
+	keyHash := layerBloomHashBytes(key)
+	if _, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, nil
 	}
-	for i := len(view.layers) - 1; i >= 0; i-- {
-		_, found, tomb := view.layers[i].lookup(key)
-		if tomb {
-			return false, nil
-		}
-		if found {
-			return true, nil
-		}
+	if _, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, nil
 	}
 	if b.base == nil {
 		return false, nil
