@@ -135,7 +135,7 @@ func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {
 	}
 
 	// Repeated populate→flush-invalidate cycles must not accumulate one stale
-	// FIFO token per block for the lifetime of a long sync session.
+	// CLOCK queue entry per block for the lifetime of a long sync session.
 	key := []byte("repeated-hot-branch")
 	shard := &c.shards[baseReadCacheShardIndex(key)]
 	for i := 0; i < 10_000; i++ {
@@ -143,7 +143,7 @@ func TestBaseReadCache_BoundedPayloadAndInvalidationQueue(t *testing.T) {
 		c.del(key)
 	}
 	if live := len(shard.queue) - shard.head; live >= 2048 {
-		t.Fatalf("invalidation queue retained %d stale tokens, want <2048", live)
+		t.Fatalf("invalidation queue retained %d stale entries, want <2048", live)
 	}
 }
 
@@ -262,7 +262,7 @@ func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
 		c.setFlushed(string(cachedKey), newValue)
 	}
 	if live := len(shard.queue) - shard.head; live != 1 {
-		t.Fatalf("flush refresh queue retained %d tokens, want the original 1", live)
+		t.Fatalf("flush refresh queue retained %d entries, want the original 1", live)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing
 		keyPtr = unsafe.StringData(residentKey)
 	}
 	if keyPtr == nil || unsafe.StringData(s.queue[0].key) != keyPtr {
-		t.Fatal("entry and FIFO token do not share the canonical key")
+		t.Fatal("map entry and CLOCK queue entry do not share the canonical key")
 	}
 	oldValuePtr := unsafe.SliceData(before.value)
 	beforeUsed := s.used
@@ -420,6 +420,26 @@ func TestBaseReadCache_SetFlushedDropsOversizedReplacement(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_InvalidationReleasesQueuedEntryPayload(t *testing.T) {
+	c := newBaseReadCache(8 << 20)
+	key := []byte("queued-entry-with-large-owned-payload")
+	value := bytes.Repeat([]byte{0x5a}, 64<<10)
+	testBaseReadCacheSet(c, key, value)
+
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	entry := s.entries[string(key)]
+	if entry == nil || len(s.queue) != 1 || s.queue[0] != entry {
+		t.Fatal("test setup did not retain one stable queued entry")
+	}
+	c.del(key)
+	if entry.live || entry.key != "" || entry.value != nil {
+		t.Fatalf("invalidated queued entry retained live=%v key=%q valueBytes=%d", entry.live, entry.key, len(entry.value))
+	}
+	if len(s.queue) != 1 || s.queue[0] != entry {
+		t.Fatal("test requires the cleared entry to remain as a stale queue pointer")
+	}
+}
+
 func TestBaseReadCache_RacingSameEpochFillsPublishOnce(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("same-generation-branch")
@@ -438,8 +458,8 @@ func TestBaseReadCache_RacingSameEpochFillsPublishOnce(t *testing.T) {
 	}
 	_ = first
 	s := &c.shards[baseReadCacheShardIndex(key)]
-	if len(s.entries) != 1 || len(s.queue)-s.head != 1 || s.nextGen != 1 {
-		t.Fatalf("racing fills published entries=%d tokens=%d generation=%d, want 1/1/1", len(s.entries), len(s.queue)-s.head, s.nextGen)
+	if len(s.entries) != 1 || len(s.queue)-s.head != 1 {
+		t.Fatalf("racing fills published map=%d queue=%d, want 1/1", len(s.entries), len(s.queue)-s.head)
 	}
 }
 

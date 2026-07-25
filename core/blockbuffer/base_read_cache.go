@@ -67,7 +67,7 @@ type baseReadCache struct {
 type baseReadCacheShard struct {
 	mu      sync.RWMutex
 	entries map[string]*baseReadCacheEntry
-	queue   []baseReadCacheToken
+	queue   []*baseReadCacheEntry
 	// admission is a direct-mapped fingerprint table. A durable miss is
 	// admitted only when the same fingerprint is observed twice without being
 	// displaced. Commitment sync walks a large number of cold branches once,
@@ -77,7 +77,6 @@ type baseReadCacheShard struct {
 	head      int
 	used      int
 	limit     int
-	nextGen   uint64
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -89,22 +88,21 @@ type baseReadCacheEpoch struct {
 }
 
 type baseReadCacheEntry struct {
+	// key is the same immutable string used by entries. Keeping it on the
+	// stable entry lets the CLOCK queue retain only one pointer instead of a
+	// second string header plus generation for every resident row.
+	key string
 	// A nil value is the durable-miss sentinel. Present empty values are stored
 	// as a non-nil zero-length slice by cloneBaseReadCacheValue, so callers
 	// can distinguish the two without growing every entry with another field.
 	value   []byte
 	charge  int
-	gen     uint64
 	version uint64
+	live    bool
 	// referenced is set only by a resident cache hit (not admission or flush).
 	// Eviction gives such entries one CLOCK-style second chance, preserving hot
 	// upper commitment branches without promoting two-hit scan noise forever.
 	referenced atomic.Bool
-}
-
-type baseReadCacheToken struct {
-	key string
-	gen uint64
 }
 
 func newBaseReadCache(sizeBytes int) *baseReadCache {
@@ -225,7 +223,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 	}
 	// Another reader may have observed the same miss/epoch and completed its
 	// durable read while this caller was in Pebble. Reuse that immutable value
-	// instead of copying the same key/value again, appending a stale FIFO token,
+	// instead of copying the same key/value again, appending a stale queue entry,
 	// and replacing an entry from the identical durable generation.
 	if current, ok := s.entries[string(key)]; ok {
 		current.referenced.Store(true)
@@ -242,10 +240,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 	if !missing {
 		v = cloneBaseReadCacheValue(value)
 	}
-	s.nextGen++
-	gen := s.nextGen
-	s.entries[k] = &baseReadCacheEntry{value: v, charge: charge, gen: gen, version: c.version.Load()}
-	s.queue = append(s.queue, baseReadCacheToken{key: k, gen: gen})
+	entry := &baseReadCacheEntry{key: k, value: v, charge: charge, version: c.version.Load(), live: true}
+	s.entries[k] = entry
+	s.queue = append(s.queue, entry)
 	s.used += charge
 	s.evict()
 	s.compactIfSparse()
@@ -287,12 +284,12 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 	s.mu.Lock()
 	old, cached := s.entries[key]
 	if cached && charge <= s.limit {
-		// Preserve the existing generation and its FIFO token. This is a value
-		// refresh, not a new admission; appending one token per block would grow
+		// Preserve the stable entry and its CLOCK queue pointer. This is a value
+		// refresh, not a new admission; appending one pointer per block would grow
 		// stale queue metadata for the lifetime of a hot commitment branch.
 		// Copy only the replacement value and update the stable entry in place.
-		// The map and FIFO token retain a separately allocated key. Previously key
-		// and value shared one allocation, so that token pinned the first value for
+		// The map and stable entry retain a separately allocated key. Previously key
+		// and value shared one allocation, so that entry pinned the first value for
 		// the entry's entire lifetime even after the map installed a newer clone.
 		old.value = cloneBaseReadCacheValue(value)
 		s.used += charge - old.charge
@@ -303,6 +300,9 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 		if cached {
 			delete(s.entries, key)
 			s.used -= old.charge
+			old.live = false
+			old.key = ""
+			old.value = nil
 		}
 	}
 	s.compactIfSparse()
@@ -310,9 +310,10 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 }
 
 // cloneBaseReadCacheKey and cloneBaseReadCacheValue intentionally use separate
-// exact-sized allocations. Map keys and FIFO tokens live for the entry's whole
-// residency, while a successful flush may replace its value many times. Sharing
-// their backing storage would make the long-lived key pin the first stale value.
+// exact-sized allocations. Map keys and queue entries live for the entry's
+// whole residency, while a successful flush may replace its value many times.
+// Sharing their backing storage would make the long-lived key pin the first
+// stale value.
 func cloneBaseReadCacheKey(key []byte) string {
 	return string(key)
 }
@@ -344,6 +345,9 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 	if old, ok := s.entries[key]; ok {
 		delete(s.entries, key)
 		s.used -= old.charge
+		old.live = false
+		old.key = ""
+		old.value = nil
 	}
 	s.forgetAdmissionString(key)
 	s.compactIfSparse()
@@ -537,22 +541,25 @@ func baseReadCacheAdmissionFingerprintString(key string) uint64 {
 
 func (s *baseReadCacheShard) evict() {
 	for s.used > s.limit && s.head < len(s.queue) {
-		tok := s.queue[s.head]
-		s.queue[s.head] = baseReadCacheToken{}
+		entry := s.queue[s.head]
+		s.queue[s.head] = nil
 		s.head++
-		if current, ok := s.entries[tok.key]; ok && current.gen == tok.gen {
-			if current.referenced.Swap(false) {
-				// Keep the same admission generation and move its sole live token
-				// to the tail. Newly admitted entries start unreferenced, so a
+		if entry != nil && entry.live {
+			if entry.referenced.Swap(false) {
+				// Move the same stable entry to the tail. Newly admitted entries
+				// start unreferenced, so a
 				// one-time two-hit scan is evicted before a genuinely reused row.
-				s.queue = append(s.queue, tok)
+				s.queue = append(s.queue, entry)
 				continue
 			}
-			delete(s.entries, tok.key)
-			s.used -= current.charge
+			delete(s.entries, entry.key)
+			s.used -= entry.charge
+			entry.live = false
+			entry.key = ""
+			entry.value = nil
 		}
 	}
-	// Avoid retaining an ever-growing stale-token prefix when invalidated keys
+	// Avoid retaining an ever-growing stale-entry prefix when invalidated keys
 	// are later inserted again. Copy only occasionally so steady-state hits stay
 	// allocation-free.
 	if s.head >= 1024 && s.head*2 >= len(s.queue) {
@@ -562,7 +569,7 @@ func (s *baseReadCacheShard) evict() {
 	}
 }
 
-// compactIfSparse bounds stale queue tokens left by explicit invalidation. A
+// compactIfSparse bounds stale queue entries left by explicit invalidation. A
 // sync node may cache a branch, flush and invalidate it, then repeat that cycle
 // for millions of blocks without ever exceeding the payload byte limit; without
 // this ratio gate the FIFO metadata alone would grow for the whole session.
@@ -571,9 +578,9 @@ func (s *baseReadCacheShard) compactIfSparse() {
 	if liveTokens < 2048 || liveTokens <= len(s.entries)*2+1024 {
 		return
 	}
-	queue := make([]baseReadCacheToken, 0, len(s.entries))
-	for k, e := range s.entries {
-		queue = append(queue, baseReadCacheToken{key: k, gen: e.gen})
+	queue := make([]*baseReadCacheEntry, 0, len(s.entries))
+	for _, entry := range s.entries {
+		queue = append(queue, entry)
 	}
 	clear(s.queue)
 	s.queue = queue
