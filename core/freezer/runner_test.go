@@ -42,6 +42,27 @@ type viewingFakeChain struct {
 	txReads    int
 }
 
+type compactionCountingDB struct {
+	ethdb.KeyValueStore
+	count int
+	start []byte
+	limit []byte
+}
+
+func (db *compactionCountingDB) Compact(start, limit []byte) error {
+	db.count++
+	db.start = append(db.start[:0], start...)
+	db.limit = append(db.limit[:0], limit...)
+	return nil
+}
+
+type compactionCountingChain struct {
+	*fakeChain
+	dbView *compactionCountingDB
+}
+
+func (c *compactionCountingChain) DB() ethdb.KeyValueStore { return c.dbView }
+
 func (f *viewingFakeChain) ReadBlockRaw(n uint64) []byte {
 	f.blockReads++
 	return f.fakeChain.ReadBlockRaw(n)
@@ -388,6 +409,66 @@ func TestOnePass_BatchBound(t *testing.T) {
 	got, _ := r.freezer.AncientCount(rawdbAncientBlocks)
 	if got != 1000 {
 		t.Fatalf("ancient count after capped pass: %d", got)
+	}
+}
+
+func TestOnePass_SkipsEagerCompactionWhileGated(t *testing.T) {
+	fc := newFakeChain()
+	for n := uint64(0); n < 10; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(8)
+	countingDB := &compactionCountingDB{KeyValueStore: fc.db}
+	chain := &compactionCountingChain{fakeChain: fc, dbView: countingDB}
+	allowed := false
+	r := New(chain, wrapFreezer(newFreezer(t)), Config{
+		Enabled:           true,
+		MarginBlocks:      1,
+		BatchBlocks:       100,
+		CompactionAllowed: func() bool { return allowed },
+	})
+
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen != 8 {
+		t.Fatalf("frozen = %d, want 8", frozen)
+	}
+	if countingDB.count != 0 {
+		t.Fatalf("compactions while gated = %d, want 0", countingDB.count)
+	}
+	if _, err := fc.db.Get(blockKVKey(7)); err == nil {
+		t.Fatal("gated compaction also skipped the logical range deletion")
+	}
+	// fakeChain keeps its source blobs outside the KV store, so the production
+	// startup-reconciliation probe cannot infer deletion from this fixture.
+	// This test targets the normal Phase-4 gate; reconciliation has dedicated
+	// coverage below.
+	r.reconciled.Store(true)
+
+	// Reopening the gate does not force a previously skipped range through a
+	// later no-op pass; Pebble owns background reclamation for that tombstone.
+	allowed = true
+	if frozen, err := r.OnePass(); err != nil || frozen != 0 {
+		t.Fatalf("no-op pass: frozen=%d err=%v", frozen, err)
+	}
+	if countingDB.count != 0 {
+		t.Fatalf("no-op pass compacted a skipped range: %d", countingDB.count)
+	}
+
+	// Newly eligible blocks retain the normal explicit-compaction behaviour
+	// once foreground sync is idle.
+	fc.setSolidified(9)
+	if frozen, err := r.OnePass(); err != nil || frozen != 1 {
+		t.Fatalf("new eligible block: frozen=%d err=%v", frozen, err)
+	}
+	if countingDB.count != 1 {
+		t.Fatalf("compactions after gate reopened = %d, want 1", countingDB.count)
+	}
+	wantStart, wantLimit := rawdb.BlockRangeBounds(8, 8)
+	if !bytes.Equal(countingDB.start, wantStart) || !bytes.Equal(countingDB.limit, wantLimit) {
+		t.Fatalf("compact bounds = %x..%x, want %x..%x", countingDB.start, countingDB.limit, wantStart, wantLimit)
 	}
 }
 

@@ -94,6 +94,15 @@ type Config struct {
 	// burst of Pebble DeleteRange tombstones; the default is calibrated
 	// so one pass fits comfortably under the Interval ceiling.
 	BatchBlocks uint64
+
+	// CompactionAllowed is an optional runtime gate for the explicit Pebble
+	// range compaction that follows a successful freeze. Returning false does
+	// not skip ancient persistence or the crash-safe DeleteRange; it only
+	// leaves physical space reclamation to Pebble's ordinary background work so
+	// latency-sensitive foreground work (notably bulk sync) does not compete
+	// with a manual compaction. Nil preserves the historical always-compact
+	// behaviour.
+	CompactionAllowed func() bool
 }
 
 // Default returns the production defaults. Used by cmd/gtron when no
@@ -380,6 +389,17 @@ func (r *Runner) Snapshot() Stats {
 	return stats
 }
 
+// compactRange performs eager physical reclamation only when the runtime gate
+// permits it. DeleteRange has already made the rows logically absent, so a
+// skipped manual compaction affects temporary disk usage only; Pebble's normal
+// background compactions may reclaim the tombstoned range independently.
+func (r *Runner) compactRange(start, limit []byte) (attempted bool, err error) {
+	if r.cfg.CompactionAllowed != nil && !r.cfg.CompactionAllowed() {
+		return false, nil
+	}
+	return true, r.chain.DB().Compact(start, limit)
+}
+
 // OnePass runs a single freezing pass synchronously and returns the
 // number of blocks moved into ancient. Exported so tests can drive the
 // pass deterministically without spinning up the loop.
@@ -445,9 +465,13 @@ func (r *Runner) OnePass() (uint64, error) {
 				return 0, err
 			}
 			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
-			if err := r.chain.DB().Compact(start, limit); err != nil {
+			attempted, compactErr := r.compactRange(start, limit)
+			if compactErr != nil {
 				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
-					"to", leftoverHi, "err", err)
+					"to", leftoverHi, "err", compactErr)
+			} else if !attempted {
+				log.Debug("Freezer: deferred crash-leftover compact",
+					"to", leftoverHi)
 			}
 			log.Info("Freezer: swept crash-leftover hot rows", "upTo", leftoverHi)
 		}
@@ -538,20 +562,24 @@ func (r *Runner) OnePass() (uint64, error) {
 		return 0, err
 	}
 
-	// Phase 4: compact the freed range. Pebble turns DeleteRange into
+	// Phase 4: optionally compact the freed range. Pebble turns DeleteRange into
 	// range tombstones, which are O(1) on the write path but only reclaim
-	// space when their containing SSTables get compacted. Explicit
-	// Compact triggers a synchronous compaction so the operator sees the
-	// datadir shrink without waiting for background compaction to roll
-	// through (which can take hours on a healthy LSM).
+	// space when their containing SSTables get compacted. When the runtime gate
+	// permits it, explicit Compact reclaims the range promptly; otherwise
+	// ordinary Pebble background compaction handles it without making foreground
+	// bulk sync wait on a synchronous I/O burst.
 	start1, limit1 := rawdb.BlockRangeBounds(freezeFromN, frozenHi)
-	if err := r.chain.DB().Compact(start1, limit1); err != nil {
+	attempted, compactErr := r.compactRange(start1, limit1)
+	if compactErr != nil {
 		// Compaction failure is non-fatal: the rows are deleted from a
 		// correctness standpoint (range tombstones above them), the only
 		// loss is that the operator's datadir won't shrink as quickly.
 		// Log and proceed.
 		log.Warn("Freezer: compact failed (rows still deleted)",
-			"from", freezeFromN, "to", frozenHi, "err", err)
+			"from", freezeFromN, "to", frozenHi, "err", compactErr)
+	} else if !attempted {
+		log.Debug("Freezer: deferred Pebble compaction",
+			"from", freezeFromN, "to", frozenHi)
 	}
 
 	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator

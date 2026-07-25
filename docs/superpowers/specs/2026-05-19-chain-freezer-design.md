@@ -183,7 +183,10 @@ loop every freezeInterval (default 30 s):
 
   ancient.Sync()       # fsync all .cdat / .cidx files
   rawdb.DeleteBlockRange(db, freezeFrom, freezeTo)   # batch delete from Pebble
-  bc.db.Compact(blockPrefix||freezeFrom, blockPrefix||freezeTo)
+  if foreground sync is idle:
+    bc.db.Compact(blockPrefix||freezeFrom, blockPrefix||freezeTo)
+  else:
+    skip eager compaction; Pebble reclaims the tombstones in the background
 ```
 
 **Crash safety**: every batch first appends to ancient (with fsync), then
@@ -201,11 +204,22 @@ freeze past the solidified-block - reorg-window line. Configurable.
 holding `chainmu` (it doesn't — freezing uses snapshot reads) but caps
 single-pass IO so we never starve other Pebble traffic.
 
+**Bulk-sync compaction gate**: ancient append, fsync, and Pebble DeleteRange
+always run, preserving the same durability and read semantics. The eager
+manual Compact is physical space reclamation only, so production defers it
+while the downloader is active (and for one freezer interval after startup,
+giving P2P time to establish that state). Pebble's ordinary background
+compaction reclaims skipped ranges, while new freezer passes resume eager range
+compaction after sync becomes idle. Not accumulating one enormous deferred
+manual range also avoids moving the I/O cliff to the instant sync completes.
+This prevents a restart-time freezer pass from monopolizing disk I/O while the
+node is many millions of blocks behind.
+
 ## Pebble pressure modelling
 
 Reads on the hot path go to Pebble; freezing removes rows; Pebble
-compaction frees the freed range. Steady-state: Pebble keeps `freezeMargin`
-+ `freezeBatch` worth of recent blocks (~30K + 128 = ~30K blocks
+compaction eventually frees the deleted range. Steady-state: Pebble keeps
+`freezeMargin` + `freezeBatch` worth of recent blocks (~30K + 128 = ~30K blocks
 ≈ a few hundred MB). Compaction operates on a small, hot working set.
 
 The freezer's own IO is sequential append-only writes, which is the

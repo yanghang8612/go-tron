@@ -718,6 +718,14 @@ func gtron(ctx *cli.Context) error {
 	}
 
 	if ancientStore != nil && freezerCfg.Enabled {
+		// Let P2P establish the initial sync session before permitting an eager
+		// manual compaction. During bulk sync the freezer still persists ancient
+		// rows and deletes hot keys; Pebble reclaims skipped ranges through its
+		// ordinary background compactions.
+		compactionReadyAt := time.Now().Add(freezerCfg.Interval)
+		freezerCfg.CompactionAllowed = func() bool {
+			return !time.Now().Before(compactionReadyAt) && !syncService.IsSyncing()
+		}
 		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			stack.RegisterLifecycle(freezerRunner)
