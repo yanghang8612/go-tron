@@ -37,7 +37,10 @@ type kvEntry struct {
 // pooled or reused. Successful commit merely drops the current-chunk reference;
 // every transferred slice keeps its own backing array alive for as long as the
 // downstream pipeline needs it.
-const kvEntryArenaChunkSize = 8 << 10
+// Four KiB keeps the live-sync workload close to its logical byte volume while
+// still collapsing hundreds of tiny per-entry allocations into only a few
+// chunks per block. Larger values receive an exact-size standalone chunk.
+const kvEntryArenaChunkSize = 4 << 10
 
 type kvEntryArena struct {
 	chunk []byte
