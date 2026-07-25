@@ -50,6 +50,44 @@ func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_ProductionAdmissionWorkingSet(t *testing.T) {
+	const keyCount = 4096
+	c := newBaseReadCache(128 << 20)
+	keys := make([][]byte, 0, keyCount)
+	for i := 0; len(keys) < keyCount; i++ {
+		key := []byte(fmt.Sprintf("state-commitment-branch-v1-%08x", i))
+		if baseReadCacheShardIndex(key) == 0 {
+			keys = append(keys, key)
+		}
+	}
+	for _, key := range keys {
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, []byte("value"), epoch); stored {
+			t.Fatal("first sighting bypassed probation")
+		}
+	}
+	admitted := 0
+	for _, key := range keys {
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, []byte("value"), epoch); stored {
+			admitted++
+		}
+	}
+	if slots := len(c.shards[0].admission); slots != baseReadCacheMaxAdmissionSlots {
+		t.Fatalf("production admission slots = %d, want %d", slots, baseReadCacheMaxAdmissionSlots)
+	}
+	if admitted < keyCount/2 {
+		t.Fatalf("admitted %d/%d repeated keys, want at least half", admitted, keyCount)
+	}
+	totalHistoryBytes := 0
+	for i := range c.shards {
+		totalHistoryBytes += len(c.shards[i].admission) * 8
+	}
+	if totalHistoryBytes != 1<<20 {
+		t.Fatalf("production admission history = %d bytes, want 1 MiB", totalHistoryBytes)
+	}
+}
+
 func TestBaseReadCache_MissingAdmissionAndFlushRefresh(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("missing-permission-row")
