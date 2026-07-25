@@ -2559,6 +2559,24 @@ type vmKVStore struct {
 	chaindb *rawdb.ChainDB
 }
 
+type cachedNoCopyKeyPartsReader interface {
+	GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error)
+}
+
+// GetNoCopyCachedKeyParts preserves optional split-read capabilities across
+// the VM block-hash wrapper. Block replay passes vmKVStore to transaction
+// validation, so without this forwarding method TAPOS reads fall back to
+// materialising their physical key and copying the buffered value per tx.
+func (s vmKVStore) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
+	if reader, ok := s.BufferedKVStore.(cachedNoCopyKeyPartsReader); ok {
+		return reader.GetNoCopyCachedKeyParts(first, second)
+	}
+	key := make([]byte, 0, len(first)+len(second))
+	key = append(key, first...)
+	key = append(key, second...)
+	return s.BufferedKVStore.Get(key)
+}
+
 func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	// Hot path: the wrapped view (buffer layers fall through to Pebble),
 	// covering everything the freezer has not pruned, including blocks of
