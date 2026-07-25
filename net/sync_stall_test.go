@@ -70,6 +70,7 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 		second.Hash(): second.Number(),
 	}
 	ss.armFetchTimer()
+	initialDeadline := ss.peers[peer.ID()].fetchDeadline
 	ss.mu.Unlock()
 
 	// Peer delivers only block 1 of the batch and then goes silent. The
@@ -85,12 +86,19 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	ss.mu.Lock()
 	infl := ss.inflight
 	timer := ss.fetchTimer
+	deadline := ss.peers[peer.ID()].fetchDeadline
 	ss.mu.Unlock()
 	if infl != 1 {
 		t.Fatalf("inflight after 1/2 blocks: got %d, want 1", infl)
 	}
 	if timer == nil {
 		t.Fatal("partial batch left fetchTimer nil — peer-silent stall would never recover")
+	}
+	if deadline.IsZero() {
+		t.Fatal("partial batch lost its absolute fetch deadline")
+	}
+	if !deadline.Equal(initialDeadline) {
+		t.Fatalf("partial batch reset absolute deadline: got %v want %v", deadline, initialDeadline)
 	}
 
 	// Wait past the timeout. onFetchTimeout should evict the silent peer while
@@ -104,6 +112,24 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	if status.SyncPeerCount != 0 || status.RetryBlocks != 1 {
 		t.Fatalf("dormant recovery status: peers=%d retries=%d, want 0/1",
 			status.SyncPeerCount, status.RetryBlocks)
+	}
+}
+
+func TestPeerFetchTimerDelayCapsTrickleBatch(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	inactivity := 30 * time.Second
+	deadline := now.Add(60 * time.Second)
+
+	if got := peerFetchTimerDelay(now, inactivity, deadline); got != inactivity {
+		t.Fatalf("initial delay=%v, want %v", got, inactivity)
+	}
+	// A block arriving 45 seconds into the batch may reset the inactivity
+	// clock, but only the 15 seconds remaining on the absolute deadline apply.
+	if got := peerFetchTimerDelay(now.Add(45*time.Second), inactivity, deadline); got != 15*time.Second {
+		t.Fatalf("trickle delay=%v, want 15s", got)
+	}
+	if got := peerFetchTimerDelay(deadline, inactivity, deadline); got != time.Nanosecond {
+		t.Fatalf("expired delay=%v, want asynchronous floor", got)
 	}
 }
 

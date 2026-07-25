@@ -34,6 +34,9 @@ const (
 	maxBufferedRunaheadBytes  = tsync.MaxBufferedRunaheadBytes
 	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
 	peerJoinAttemptInterval   = 2 * time.Second
+	// Bound a whole batch to twice the inactivity timeout. Receiving one block
+	// still refreshes the shorter deadline, but cannot extend the batch forever.
+	fetchBatchTimeoutMultiplier = 2
 
 	// Retain up to one complete near-tip fetch batch already decoded by the peer
 	// receive path so the drain does not immediately protobuf-decode it again.
@@ -80,8 +83,13 @@ type syncPeerState struct {
 	lastInventoryNum uint64
 	minFetchNum      uint64
 
-	fetchSeq        uint64
-	fetchTimer      *time.Timer
+	fetchSeq   uint64
+	fetchTimer *time.Timer
+	// fetchDeadline is the absolute lifetime of the current FETCH_INV_DATA
+	// batch. The ordinary fetchTimeout below is an inactivity timeout and is
+	// re-armed after every block; without this second bound a peer can drip one
+	// block just under that timeout forever while monopolising a near-head gap.
+	fetchDeadline   time.Time
 	fetchDelayTimer *time.Timer
 	nextFetchAt     time.Time
 	chainRequested  bool
@@ -1107,6 +1115,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			ss.requested[bid.Hash] = ps.peer.ID()
 		}
 		ps.nextFetchAt = now.Add(minFetchRequestInterval)
+		ps.fetchDeadline = now.Add(fetchBatchTimeoutMultiplier * ss.fetchTimeout)
 		ss.armPeerFetchTimerLocked(ps)
 		out = append(out, outboundSyncRequest{peer: ps.peer, blocks: batch})
 	}
@@ -1387,6 +1396,9 @@ func (ss *SyncService) handleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ps.inflight--
 	}
 	batchDone := ps.inflight == 0
+	if batchDone {
+		ps.fetchDeadline = time.Time{}
+	}
 	if ps.fetchTimer != nil {
 		ps.fetchTimer.Stop()
 		ps.fetchTimer = nil
@@ -2230,12 +2242,34 @@ func (ss *SyncService) armPeerFetchTimerLocked(ps *syncPeerState) {
 	if ps.fetchTimer != nil {
 		ps.fetchTimer.Stop()
 	}
+	now := time.Now()
+	if ps.fetchDeadline.IsZero() {
+		ps.fetchDeadline = now.Add(fetchBatchTimeoutMultiplier * ss.fetchTimeout)
+	}
 	ps.fetchSeq++
 	seq := ps.fetchSeq
 	peerID := ps.peer.ID()
-	ps.fetchTimer = time.AfterFunc(ss.fetchTimeout, func() {
+	delay := peerFetchTimerDelay(now, ss.fetchTimeout, ps.fetchDeadline)
+	ps.fetchTimer = time.AfterFunc(delay, func() {
 		ss.onFetchTimeout(seq, peerID)
 	})
+}
+
+// peerFetchTimerDelay preserves the per-block inactivity deadline while also
+// bounding the whole request batch. A one-nanosecond floor schedules already-
+// expired batches asynchronously, so callers never re-enter timeout handling
+// while holding ss.mu.
+func peerFetchTimerDelay(now time.Time, inactivity time.Duration, deadline time.Time) time.Duration {
+	delay := inactivity
+	if !deadline.IsZero() {
+		if remaining := deadline.Sub(now); remaining < delay {
+			delay = remaining
+		}
+	}
+	if delay <= 0 {
+		return time.Nanosecond
+	}
+	return delay
 }
 
 func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
