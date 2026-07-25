@@ -100,10 +100,13 @@ const (
 	// slot for substantial pressure. Values of 1 sublevel / 256 MiB made the
 	// second worker effectively permanent on the sync node: profiles attributed
 	// 13-25 CPU-seconds per 30-second window to compaction even though there were
-	// no write stalls. These are Pebble's defaults and still let a 4-vCPU node
-	// use both configured compaction slots once L0 depth or debt is material.
+	// no write stalls. A 1 GiB debt trigger still consumed 18% of CPU in observed
+	// windows while debt oscillated around only 1-1.5 GiB. Keep L0's conservative
+	// depth trigger, but let routine leveled debt reach 2 GiB before borrowing the
+	// second worker from foreground sync. A 4-vCPU node can still use both slots
+	// well before Pebble's write-stall conditions become relevant.
 	l0CompactionConcurrency   = 10
-	compactionDebtConcurrency = 1 << 30 // 1 GiB
+	compactionDebtConcurrency = 2 << 30 // 2 GiB
 )
 
 var batchBufferPools = [...]chan []byte{
