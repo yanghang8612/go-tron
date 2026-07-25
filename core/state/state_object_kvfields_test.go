@@ -19,7 +19,7 @@ func TestNewStateObjectDefaultsKVFields(t *testing.T) {
 	if obj.accountKVGeneration != 0 {
 		t.Fatalf("accountKVGeneration = %d, want 0", obj.accountKVGeneration)
 	}
-	if obj.storage != nil || obj.kvDirty != nil {
+	if obj.storage != nil || obj.dirtyStorage != nil || obj.kvDirty != nil {
 		t.Fatal("new state object eagerly allocated storage maps")
 	}
 	obj.stageKV(kvdomains.ContractMetadata, []byte("key"), []byte("value"))
@@ -38,7 +38,7 @@ func TestNewEmptyStateObjectDefaultsKVFields(t *testing.T) {
 	if obj.accountKVGeneration != 0 {
 		t.Fatalf("accountKVGeneration = %d, want 0", obj.accountKVGeneration)
 	}
-	if obj.storage != nil || obj.kvDirty != nil {
+	if obj.storage != nil || obj.dirtyStorage != nil || obj.kvDirty != nil {
 		t.Fatal("new empty state object eagerly allocated storage maps")
 	}
 }
@@ -62,6 +62,60 @@ func TestStateObjectReleaseKVDirtyClearsLifecycleState(t *testing.T) {
 		t.Fatal("reused dirty map retained an entry from its previous lifecycle")
 	}
 	obj.releaseKVDirty()
+}
+
+func TestStateObjectReleaseDirtyStorageClearsLifecycleState(t *testing.T) {
+	obj := new(stateObject)
+	var oldKey, newKey tcommon.Hash
+	oldKey[31] = 1
+	newKey[31] = 2
+	obj.recordDirtyStorageOrigin(oldKey, storageOrigin{exists: true, loaded: true})
+	if obj.dirtyStorageHighWater != 1 {
+		t.Fatalf("high water = %d, want 1", obj.dirtyStorageHighWater)
+	}
+	obj.releaseDirtyStorage()
+	if obj.dirtyStorage != nil || obj.dirtyStorageHighWater != 0 {
+		t.Fatalf("released dirty storage = (%v,%d), want (nil,0)", obj.dirtyStorage, obj.dirtyStorageHighWater)
+	}
+
+	obj.recordDirtyStorageOrigin(newKey, storageOrigin{loaded: true})
+	if len(obj.dirtyStorage) != 1 {
+		t.Fatalf("reused dirty storage length = %d, want 1", len(obj.dirtyStorage))
+	}
+	if _, stale := obj.dirtyStorage[oldKey]; stale {
+		t.Fatal("reused dirty storage retained an entry from its previous lifecycle")
+	}
+	obj.releaseDirtyStorage()
+}
+
+func BenchmarkStateObjectDirtyStorageLifecycle(b *testing.B) {
+	const slots = 64
+	var keys [slots]tcommon.Hash
+	for i := range keys {
+		keys[i][30] = byte(i >> 8)
+		keys[i][31] = byte(i)
+	}
+	b.Run("fresh", func(b *testing.B) {
+		obj := new(stateObject)
+		b.ReportAllocs()
+		for b.Loop() {
+			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+			for _, key := range keys {
+				obj.dirtyStorage[key] = storageOrigin{loaded: true}
+			}
+			obj.dirtyStorage = nil
+		}
+	})
+	b.Run("pooled", func(b *testing.B) {
+		obj := new(stateObject)
+		b.ReportAllocs()
+		for b.Loop() {
+			for _, key := range keys {
+				obj.recordDirtyStorageOrigin(key, storageOrigin{loaded: true})
+			}
+			obj.releaseDirtyStorage()
+		}
+	})
 }
 
 func TestStateDBCopyPreservesLazyStateMaps(t *testing.T) {

@@ -23,6 +23,17 @@ const maxPooledKVDirtyEntries = 1024
 
 var kvDirtyMapPool sync.Pool
 
+// dirtyStorageMapPool reuses the per-account first-write origin table across
+// commit intervals. Keys and values contain no pointers, and commit planning
+// consumes every origin before finalize releases the cleared buckets.
+//
+// Track the high-water mark because a reverted transaction may shrink the map
+// before commit. Dropping unusually large maps prevents a single storage-heavy
+// contract from becoming the pool's retained steady-state footprint.
+const maxPooledDirtyStorageEntries = 1024
+
+var dirtyStorageMapPool sync.Pool
+
 // storageOrigin is the durable value observed before a slot's first write in
 // the current commit interval. SetState already has to load that value for
 // SSTORE semantics, so retaining it lets commit planning avoid reading the
@@ -113,6 +124,7 @@ type stateObject struct {
 	storageKeyHashSlot     bool
 	storage                map[tcommon.Hash]storageSlot   // cached current contract storage and StorageRow existence
 	dirtyStorage           map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
+	dirtyStorageHighWater  int
 	selfDestructed         bool
 
 	// Generic-KV generation is the Erigon-style incarnation number. AccountKVRoot
@@ -185,6 +197,45 @@ func (s *stateObject) markDirty() {
 func (s *stateObject) ensureStorage() {
 	if s.storage == nil {
 		s.storage = make(map[tcommon.Hash]storageSlot)
+	}
+}
+
+func (s *stateObject) ensureDirtyStorage() {
+	if s.dirtyStorage != nil {
+		return
+	}
+	if pooled := dirtyStorageMapPool.Get(); pooled != nil {
+		s.dirtyStorage = pooled.(map[tcommon.Hash]storageOrigin)
+	} else {
+		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
+	}
+}
+
+func (s *stateObject) recordDirtyStorageOrigin(key tcommon.Hash, origin storageOrigin) {
+	s.ensureDirtyStorage()
+	s.dirtyStorage[key] = origin
+	if len(s.dirtyStorage) > s.dirtyStorageHighWater {
+		s.dirtyStorageHighWater = len(s.dirtyStorage)
+	}
+}
+
+// releaseDirtyStorage detaches the origin table after commit planning has
+// consumed it. The stateObject remains observably clean (nil map), while a
+// later contract/account can reuse the cleared bucket array.
+func (s *stateObject) releaseDirtyStorage() {
+	dirty := s.dirtyStorage
+	highWater := s.dirtyStorageHighWater
+	s.dirtyStorage = nil
+	s.dirtyStorageHighWater = 0
+	if dirty == nil {
+		return
+	}
+	if len(dirty) > highWater {
+		highWater = len(dirty)
+	}
+	clear(dirty)
+	if highWater <= maxPooledDirtyStorageEntries {
+		dirtyStorageMapPool.Put(dirty)
 	}
 }
 
@@ -261,14 +312,11 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 }
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
-	if s.dirtyStorage == nil {
-		s.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
-	}
 	if _, dirty := s.dirtyStorage[key]; !dirty {
 		// Production writes install a loaded origin in SetState before calling
 		// here. Keep direct helper calls correct by leaving an explicit fallback
 		// entry that makes commit planning use the durable reader.
-		s.dirtyStorage[key] = storageOrigin{}
+		s.recordDirtyStorageOrigin(key, storageOrigin{})
 	}
 	s.setStorageValue(key, value, exists)
 }

@@ -2611,13 +2611,10 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 	}
 	_, prevDirty := obj.dirtyStorage[key]
 	if !prevDirty {
-		if obj.dirtyStorage == nil {
-			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
-		}
 		// SetState has already paid for the durable read needed by SSTORE. Keep
 		// that pre-image with the dirty slot so commit planning does not issue the
 		// same account-KV/Pebble lookup a second time.
-		obj.dirtyStorage[key] = storageOrigin{value: prev, exists: prevExists, loaded: true}
+		obj.recordDirtyStorageOrigin(key, storageOrigin{value: prev, exists: prevExists, loaded: true})
 	}
 	s.journal.append(acquireStorageChange(addr, key, prev, prevExists, prevDirty))
 	obj.setStorageValue(key, value, true)
@@ -2925,6 +2922,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			contractMetaDirty:        obj.contractMetaDirty,
 			storage:                  storageCopy,
 			dirtyStorage:             dirtyStorageCopy,
+			dirtyStorageHighWater:    len(dirtyStorageCopy),
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
@@ -3336,7 +3334,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
 		obj.storage = nil
-		obj.dirtyStorage = nil
+		obj.releaseDirtyStorage()
 		obj.dirty = false
 		return
 	}
@@ -3350,10 +3348,10 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.contractMetaDirty = false
 	}
 	obj.accountDirty = false
-	// Origins are only needed between the first SSTORE and this commit. Leave
-	// the map nil afterward; every storage write/revert path already creates it
-	// lazily, avoiding an empty map allocation for non-contract accounts.
-	obj.dirtyStorage = nil
+	// Origins are only needed between the first SSTORE and this commit. Detach
+	// the map afterward so non-contract accounts stay allocation-free; bounded
+	// cleared buckets are available to a later storage-writing account.
+	obj.releaseDirtyStorage()
 	obj.created = false
 	obj.dirty = false
 }

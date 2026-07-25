@@ -192,14 +192,11 @@ func (e *storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ 
 			obj.ensureStorage()
 			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
 		}
-		if obj.dirtyStorage == nil {
-			obj.dirtyStorage = make(map[tcommon.Hash]storageOrigin)
-		}
 		if e.prevDirty {
 			if _, ok := obj.dirtyStorage[e.key]; !ok {
 				// A valid production path always retains the first-write origin.
 				// Preserve fallback behavior if a synthetic stateObject omitted it.
-				obj.dirtyStorage[e.key] = storageOrigin{}
+				obj.recordDirtyStorageOrigin(e.key, storageOrigin{})
 			}
 		} else {
 			delete(obj.dirtyStorage, e.key)
