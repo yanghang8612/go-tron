@@ -45,9 +45,12 @@ const (
 // keeping the buffer's heap footprint bounded on every workload.
 const MaxBufferedRunaheadBytes = 512 << 20
 
-// MinFetchRequestInterval stays just below java-tron's 3/s FETCH_INV_DATA
-// limiter while preserving a one-request-at-a-time contract per peer.
-const MinFetchRequestInterval = 350 * time.Millisecond
+// MinFetchRequestInterval stays below java-tron's 3/s FETCH_INV_DATA limiter
+// with enough margin for cross-network jitter not to bunch nominally spaced
+// requests at the remote token bucket. A 350 ms interval left only ~5% margin
+// and public peers repeatedly disconnected long-running historical syncs with
+// BAD_PROTOCOL after accepting several batches; 400 ms keeps 2.5 requests/s.
+const MinFetchRequestInterval = 400 * time.Millisecond
 
 // SyncFetchTimeout is how long to wait for a block response before failing
 // over to another peer. It seeds SyncService.fetchTimeout at construction;
