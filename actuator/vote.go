@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/params"
@@ -10,6 +11,44 @@ import (
 )
 
 type VoteWitnessActuator struct{}
+
+type voteConversionBuffer struct {
+	refs   [params.MaxVoteNumber]*corepb.Vote
+	values [params.MaxVoteNumber]corepb.Vote
+}
+
+var voteConversionBufferPool = sync.Pool{
+	New: func() any { return new(voteConversionBuffer) },
+}
+
+func coreVotesFromContract(votes []*contractpb.VoteWitnessContract_Vote) (*voteConversionBuffer, []*corepb.Vote) {
+	if len(votes) > params.MaxVoteNumber {
+		converted := make([]*corepb.Vote, len(votes))
+		for i, vote := range votes {
+			converted[i] = &corepb.Vote{VoteAddress: vote.VoteAddress, VoteCount: vote.VoteCount}
+		}
+		return nil, converted
+	}
+	buffer := voteConversionBufferPool.Get().(*voteConversionBuffer)
+	for i, vote := range votes {
+		entry := &buffer.values[i]
+		entry.VoteAddress = vote.VoteAddress
+		entry.VoteCount = vote.VoteCount
+		buffer.refs[i] = entry
+	}
+	return buffer, buffer.refs[:len(votes)]
+}
+
+func (b *voteConversionBuffer) release(n int) {
+	if b == nil {
+		return
+	}
+	for i := 0; i < n; i++ {
+		b.refs[i] = nil
+		b.values[i] = corepb.Vote{}
+	}
+	voteConversionBufferPool.Put(b)
+}
 
 func (a *VoteWitnessActuator) getContract(ctx *Context) (*contractpb.VoteWitnessContract, error) {
 	return decodedContract[*contractpb.VoteWitnessContract](ctx, "VoteWitnessContract")
@@ -100,13 +139,8 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 	oldVotes := ctx.State.GetVotes(ownerAddr)
 
 	// Set new votes on account
-	newVotes := make([]*corepb.Vote, len(vc.Votes))
-	for i, v := range vc.Votes {
-		newVotes[i] = &corepb.Vote{
-			VoteAddress: v.VoteAddress,
-			VoteCount:   v.VoteCount,
-		}
-	}
+	voteBuffer, newVotes := coreVotesFromContract(vc.Votes)
+	defer voteBuffer.release(len(newVotes))
 	if err := recordPendingVotes(ctx, ownerAddr, oldVotes, newVotes); err != nil {
 		return nil, err
 	}

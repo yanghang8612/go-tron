@@ -11,6 +11,25 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+var voteConversionBenchmarkSink int64
+
+func BenchmarkCoreVotesFromContract(b *testing.B) {
+	votes := make([]*contractpb.VoteWitnessContract_Vote, params.MaxVoteNumber)
+	for i := range votes {
+		votes[i] = &contractpb.VoteWitnessContract_Vote{
+			VoteAddress: makeTestAddr(byte(i + 1)).Bytes(),
+			VoteCount:   int64(i + 1),
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		buffer, converted := coreVotesFromContract(votes)
+		voteConversionBenchmarkSink = converted[len(converted)-1].VoteCount
+		buffer.release(len(converted))
+	}
+}
+
 func setAllowNewResourceModel(ctx *Context, on bool) {
 	ctx.DynProps.SetAllowNewResourceModel(on)
 }
