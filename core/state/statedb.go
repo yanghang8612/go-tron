@@ -44,6 +44,12 @@ var storageReadKeyPool = sync.Pool{
 // reads reload through the bounded blockbuffer base-read cache.
 const maxStateObjectCachedStorageSlots = 4096
 
+// maxStateObjectFreeList bounds wrappers retained by one range-reused StateDB.
+// Four thousand wrappers cover large adjacent-block working sets while keeping
+// the retained wrapper storage below two MiB. Excess entries fall back to the
+// GC-sensitive cross-StateDB pool.
+const maxStateObjectFreeList = 4096
+
 // StateDB manages in-memory account state with Erigon-style flat latest-domain
 // commits backed by a CommitmentDomain root.
 type StateDB struct {
@@ -76,6 +82,10 @@ type StateDB struct {
 	// not allocate when adjacent blocks have similar working-set sizes.
 	touchedStateObjects  []tcommon.Address
 	retainedStateObjects []tcommon.Address
+	// stateObjectFreeList survives garbage collections between the eviction of
+	// one block's cold wrappers and their reuse by a later block. The StateDB is
+	// execution-goroutine confined, so this bounded LIFO needs no synchronization.
+	stateObjectFreeList []*stateObject
 
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.
@@ -813,7 +823,7 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 		obj.account = acc.Copy()
 		return
 	}
-	obj := newStateObject(addr, acc.Copy())
+	obj := s.newStateObject(addr, acc.Copy())
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
@@ -836,7 +846,7 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 		obj.account = acc
 		return
 	}
-	obj := newStateObject(addr, acc)
+	obj := s.newStateObject(addr, acc)
 	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
@@ -855,7 +865,7 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 		s.touchStateObject(obj)
 		return
 	}
-	obj := newStateObject(addr, snapshot.Account)
+	obj := s.newStateObject(addr, snapshot.Account)
 	obj.accountProto = snapshot.AccountProto
 	obj.accountKVRoot = snapshot.AccountKVRoot
 	obj.accountKVGeneration = snapshot.AccountKVGeneration
@@ -919,7 +929,7 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	// same block.
 	s.journalAccount(addr, obj)
 	nextGeneration := s.nextAccountKVGeneration(addr, obj)
-	obj = newEmptyStateObject(addr)
+	obj = s.newEmptyStateObject(addr)
 	obj.accountKVGeneration = nextGeneration
 	// A non-zero generation means this is a recreate after SELFDESTRUCT: the
 	// counter was bumped past the destroyed incarnation, which is semantically a
@@ -3917,7 +3927,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if err != nil {
 		return nil
 	}
-	obj := newStateObject(addr, acc)
+	obj := s.newStateObject(addr, acc)
 	// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
 	// a potential journal pre-image instead of immediately re-marshaling the
 	// account on its first mutation. A successful block commit releases this
@@ -3969,7 +3979,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 		if s.lastStateObject == obj {
 			s.lastStateObject = nil
 		}
-		releaseStateObject(obj)
+		s.releaseStateObject(obj)
 	}
 	for _, addr := range current {
 		if obj := s.stateObjects[addr]; obj != nil {

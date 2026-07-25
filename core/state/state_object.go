@@ -46,10 +46,11 @@ const maxPooledStorageEntries = 512
 
 var storageMapPool sync.Pool
 
-// stateObjectPool reuses the private account wrapper after StateDB evicts it
-// from the previous block's working set. The wrapper is comparatively large
-// (it carries all lazy-load and dirty-tracking state), while historical sync
-// creates hundreds of thousands of short-lived wrappers per sampling window.
+// stateObjectPool is the cross-StateDB fallback for private account wrappers.
+// The hot historical-sync path uses StateDB.stateObjectFreeList because its
+// two-block reuse distance spans frequent garbage collections, which are free
+// to discard sync.Pool contents. The global pool still avoids needless cold
+// allocations for journal recreation, StateDB copies, and freelist overflow.
 //
 // Only wrappers that have never escaped through GetOrCreateAccount enter the
 // pool. AccountReference/GetAccount expose *types.Account rather than the
@@ -228,20 +229,72 @@ func acquireStateObject() *stateObject {
 	return stateObjectPool.Get().(*stateObject)
 }
 
-// releaseStateObject detaches private reusable maps and, when the wrapper has
-// not escaped, returns the cleared wrapper to the pool. Callers must first
-// remove obj from stateObjects and clear every StateDB pointer to it.
-func releaseStateObject(obj *stateObject) {
+// clearStateObjectForReuse detaches private reusable maps and clears a wrapper
+// that has not escaped. Callers must first remove obj from stateObjects and
+// clear every StateDB pointer to it.
+func clearStateObjectForReuse(obj *stateObject) bool {
 	if obj == nil {
-		return
+		return false
 	}
 	obj.releaseStorage()
 	obj.releaseDirtyStorage()
 	obj.releaseKVDirty()
 	if obj.wrapperEscaped {
-		return
+		return false
 	}
 	*obj = stateObject{}
+	return true
+}
+
+func releaseStateObject(obj *stateObject) {
+	if !clearStateObjectForReuse(obj) {
+		return
+	}
+	stateObjectPool.Put(obj)
+}
+
+func (db *StateDB) acquireStateObject() *stateObject {
+	n := len(db.stateObjectFreeList)
+	if n == 0 {
+		return acquireStateObject()
+	}
+	obj := db.stateObjectFreeList[n-1]
+	db.stateObjectFreeList[n-1] = nil
+	db.stateObjectFreeList = db.stateObjectFreeList[:n-1]
+	return obj
+}
+
+func (db *StateDB) newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
+	obj := db.acquireStateObject()
+	*obj = stateObject{
+		address:       addr,
+		account:       acc,
+		accountKVRoot: EmptyKVRoot,
+	}
+	return obj
+}
+
+func (db *StateDB) newEmptyStateObject(addr tcommon.Address) *stateObject {
+	obj := db.acquireStateObject()
+	*obj = stateObject{
+		address:       addr,
+		account:       types.NewAccount(addr, corepb.AccountType_Normal),
+		dirty:         true,
+		accountDirty:  true,
+		created:       true,
+		accountKVRoot: EmptyKVRoot,
+	}
+	return obj
+}
+
+func (db *StateDB) releaseStateObject(obj *stateObject) {
+	if !clearStateObjectForReuse(obj) {
+		return
+	}
+	if len(db.stateObjectFreeList) < maxStateObjectFreeList {
+		db.stateObjectFreeList = append(db.stateObjectFreeList, obj)
+		return
+	}
 	stateObjectPool.Put(obj)
 }
 

@@ -2,6 +2,7 @@ package state
 
 import (
 	"reflect"
+	"runtime"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -154,6 +155,36 @@ func TestStateObjectPoolPreservesEscapedWrapper(t *testing.T) {
 	}
 }
 
+func TestStateDBStateObjectFreeListSurvivesGC(t *testing.T) {
+	db := new(StateDB)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x7d})
+	obj := db.newStateObject(addr, types.NewAccount(addr, corepb.AccountType_Normal))
+	db.releaseStateObject(obj)
+	if len(db.stateObjectFreeList) != 1 {
+		t.Fatalf("freelist length = %d, want 1", len(db.stateObjectFreeList))
+	}
+
+	runtime.GC()
+	reused := db.newStateObject(tcommon.BytesToAddress([]byte{0x41, 0x7e}), nil)
+	if reused != obj {
+		t.Fatal("StateDB freelist lost its wrapper across GC")
+	}
+	if reused.address == addr || reused.account != nil || reused.accountKVRoot != EmptyKVRoot {
+		t.Fatal("StateDB freelist leaked fields from the previous address")
+	}
+	db.releaseStateObject(reused)
+}
+
+func TestStateDBStateObjectFreeListIsBounded(t *testing.T) {
+	db := new(StateDB)
+	for range maxStateObjectFreeList + 1 {
+		db.releaseStateObject(new(stateObject))
+	}
+	if len(db.stateObjectFreeList) != maxStateObjectFreeList {
+		t.Fatalf("freelist length = %d, want %d", len(db.stateObjectFreeList), maxStateObjectFreeList)
+	}
+}
+
 var stateObjectBenchmarkSink *stateObject
 
 func BenchmarkStateObjectWrapperLifecycle(b *testing.B) {
@@ -172,6 +203,15 @@ func BenchmarkStateObjectWrapperLifecycle(b *testing.B) {
 			obj := newStateObject(addr, account)
 			stateObjectBenchmarkSink = obj
 			releaseStateObject(obj)
+		}
+	})
+	b.Run("state_db_freelist", func(b *testing.B) {
+		db := new(StateDB)
+		b.ReportAllocs()
+		for b.Loop() {
+			obj := db.newStateObject(addr, account)
+			stateObjectBenchmarkSink = obj
+			db.releaseStateObject(obj)
 		}
 	})
 	stateObjectBenchmarkSink = nil
