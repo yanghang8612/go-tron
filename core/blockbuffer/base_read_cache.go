@@ -20,11 +20,9 @@ const baseReadCacheEntryOverhead = 64
 
 // baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
 // history per shard. The history stores fingerprints only (no key/value
-// objects), so a 128 MiB or larger cache spends at most 1 MiB across all 16
-// shards to keep one-hit historical-sync scans out of the resident cache. The
-// previous 2,048-slot cap was inherited from the old 64-shard layout and left
-// only 256 KiB of history after layer/cache sharding was reduced to 16.
-const baseReadCacheMaxAdmissionSlots = 8192
+// objects), so a 128 MiB or larger cache spends at most 256 KiB across all 16
+// shards to keep one-hit historical-sync scans out of the resident cache.
+const baseReadCacheMaxAdmissionSlots = 2048
 
 // baseReadCacheMaxInvalidationSlots bounds the generation table used to reject
 // a durable read that races a flush of the SAME key. Cache payload is split into
