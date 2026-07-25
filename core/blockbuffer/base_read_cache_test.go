@@ -50,6 +50,20 @@ func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
+	c := newBaseReadCache(128 << 20)
+	var totalSlots int
+	for i := range c.shards {
+		if got := len(c.shards[i].admission); got != baseReadCacheMaxAdmissionSlots {
+			t.Fatalf("shard %d admission slots = %d, want %d", i, got, baseReadCacheMaxAdmissionSlots)
+		}
+		totalSlots += len(c.shards[i].admission)
+	}
+	if got, want := totalSlots*8, 1<<20; got != want {
+		t.Fatalf("admission history bytes = %d, want %d", got, want)
+	}
+}
+
 func TestBaseReadCache_MissingAdmissionAndFlushRefresh(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("missing-permission-row")
