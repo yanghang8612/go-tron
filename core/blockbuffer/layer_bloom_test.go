@@ -107,7 +107,7 @@ func TestCommittedLayerBloomSegmentRejectsBrokenGroup(t *testing.T) {
 	// Remove an interior member of the second segment. Its last-layer marker
 	// remains, but the first pointer no longer sits exactly segment.size entries
 	// behind it, so lookup must not skip the preceding layer.
-	b.DiscardBlock(common.Hash{byte(layerBloomSegmentSize + 8)})
+	b.DiscardBlock(common.Hash{byte(layerBloomSegmentSize + layerBloomSegmentSize/2)})
 	if got, err := b.GetNoCopy([]byte("before-broken-segment")); err != nil || string(got) != "kept" {
 		t.Fatalf("value before broken segment = %q err=%v", got, err)
 	}

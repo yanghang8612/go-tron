@@ -5,10 +5,11 @@ import "sync/atomic"
 const (
 	layerBloomBitsPerKey = 12
 	layerBloomMinBits    = 64
-	// Segments turn a long committed-stack miss from one atomic Bloom probe per
-	// layer into one probe per complete group. Thirty-two keeps the tail scan
-	// short while amortising the aggregate filter and its pointer checks.
-	layerBloomSegmentSize = 32
+	// Segments turn a committed-stack miss from one atomic Bloom probe per layer
+	// into one probe per complete group. Mainnet's solidification line normally
+	// trails the head by about 19 blocks, so eight yields two useful groups plus
+	// a short tail; a 32-layer group never formed in production.
+	layerBloomSegmentSize = 8
 )
 
 // layerBloom is an immutable-size, atomically additive filter for one
