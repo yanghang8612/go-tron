@@ -26,6 +26,10 @@
 //   - LBaseMaxBytes is raised from Pebble's 64 MiB default to 512 MiB. On the
 //     production LSM shape the smaller base kept every intermediate level at
 //     its compaction limit and amplified sustained sync writes.
+//   - L0 uses no block compression. Flush outputs are short-lived inputs to the
+//     next compaction, so compressing them and immediately decoding them spent
+//     0.6-0.7 CPU-seconds per 30-second sync profile without reducing long-term
+//     storage. L2 and deeper outputs remain Snappy-compressed.
 //   - L0CompactionThreshold is relaxed above Pebble's upstream default of 4 (go-eth
 //     hard-codes 2 to keep compaction debt low at the cost of more frequent L0
 //     compactions). Under sync write load that choice pegs background compaction
@@ -221,6 +225,9 @@ func levelOptions(baseTarget int64) []pebble.LevelOptions {
 	levels := make([]pebble.LevelOptions, 7)
 	for i := range levels {
 		levels[i].TargetFileSize = baseTarget << i
+		if i == 0 {
+			levels[i].Compression = pebble.NoCompression
+		}
 		if i < len(levels)-1 {
 			levels[i].FilterPolicy = bloom.FilterPolicy(10)
 		}
