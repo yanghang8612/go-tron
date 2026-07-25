@@ -179,3 +179,20 @@ func BenchmarkBatchWithLargeSizeLifecycle(b *testing.B) {
 		batch.Close()
 	}
 }
+
+func BenchmarkLargeAndSmallBatchLifecycle(b *testing.B) {
+	db, err := New(b.TempDir(), 16, 16, "mixed-batch-benchmark", false, Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		large := db.NewBatchWithSize(2 << 20)
+		large.Close()
+		small := db.NewBatchWithSize(512 << 10)
+		small.Close()
+	}
+}

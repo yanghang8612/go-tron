@@ -626,7 +626,16 @@ func (d *Database) NewBatch() ethdb.Batch {
 func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
 	if data, class, ok := borrowLargeBatchBuffer(size); ok {
 		pb := d.db.NewBatch()
+		// Save Pebble's own <=1 MiB retained buffer before SetRepr replaces it.
+		// Restoring it before Close keeps Pebble's batch pool warm for the much
+		// more frequent small metadata batches.
+		pebbleData := pb.Repr()
 		if err := pb.SetRepr(data); err != nil {
+			pb.Reset()
+			clear(pebbleData[:pebbleBatchHeaderSize])
+			if restoreErr := pb.SetRepr(pebbleData[:pebbleBatchHeaderSize]); restoreErr != nil {
+				panic(fmt.Sprintf("pebbledb: restore native batch after initialization error: %v", restoreErr))
+			}
 			pb.Close()
 			returnLargeBatchBuffer(data, class)
 			panic(fmt.Sprintf("pebbledb: initialize pooled batch: %v", err))
@@ -636,6 +645,7 @@ func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
 			db:              d,
 			pooledData:      data,
 			pooledDataClass: class,
+			pebbleData:      pebbleData,
 		}
 	}
 	return &batch{
@@ -820,6 +830,7 @@ type batch struct {
 	size            int
 	pooledData      []byte
 	pooledDataClass int
+	pebbleData      []byte
 }
 
 // Put inserts the given value into the batch for later committing.
@@ -924,6 +935,10 @@ func (b *batch) Write() error {
 			// still reference it.
 			b.pooledData = nil
 		}
+		// Don't manipulate a Pebble batch after an ambiguous commit error. The
+		// saved native buffer was detached before Commit, so GC can safely recover
+		// it without involving Pebble's batch pool.
+		b.pebbleData = nil
 		return err
 	}
 	if pooledAttached && !sameBatchBacking(b.b.Repr(), b.pooledData) {
@@ -983,6 +998,15 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 func (b *batch) Close() {
 	data, class := b.pooledData, b.pooledDataClass
 	b.pooledData = nil
+	if b.pebbleData != nil {
+		b.b.Reset()
+		pebbleData := b.pebbleData[:pebbleBatchHeaderSize]
+		clear(pebbleData)
+		if err := b.b.SetRepr(pebbleData); err != nil {
+			panic(fmt.Sprintf("pebbledb: restore native batch before close: %v", err))
+		}
+		b.pebbleData = nil
+	}
 	b.b.Close()
 	returnLargeBatchBuffer(data, class)
 }
