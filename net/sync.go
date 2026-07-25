@@ -1564,6 +1564,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 				"peer", badPeerID,
 				"err", decodeErr)
 			if ss.handler != nil && badPeer != nil {
+				badPeer.RecordDisconnectCause("local malformed sync block: " + decodeErr.Error())
 				ss.handler.disconnectPeer(badPeer, corepb.ReasonCode_BAD_BLOCK)
 			}
 			ss.sendOutboundRequests(retryOut)
