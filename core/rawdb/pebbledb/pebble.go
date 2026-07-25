@@ -244,6 +244,13 @@ type Database struct {
 	liveCompSizeGauge      *metrics.Gauge   // Gauge for tracking the size of in-progress compactions
 	liveIterGauge          *metrics.Gauge   // Gauge for tracking the number of live database iterators
 	levelsGauge            []*metrics.Gauge // Gauge for tracking the number of tables in levels
+	levelSizeGauge         []*metrics.Gauge // Gauges for tracking physical bytes in each level
+	levelSublevelsGauge    []*metrics.Gauge // Gauges for tracking read amplification in each level
+	levelCompReadGauge     []*metrics.Gauge // Gauges for cumulative compaction bytes read per level
+	levelCompWriteGauge    []*metrics.Gauge // Gauges for cumulative compaction bytes written per level
+	levelCompTablesGauge   []*metrics.Gauge // Gauges for cumulative compaction tables written per level
+	levelFlushBytesGauge   []*metrics.Gauge // Gauges for cumulative flush bytes written per level
+	levelFlushTablesGauge  []*metrics.Gauge // Gauges for cumulative flush tables written per level
 
 	quitLock sync.RWMutex    // Mutex protecting the quit channel and the closed flag
 	quitChan chan chan error // Quit channel to stop the metrics collection before closing the database
@@ -979,11 +986,27 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.filterMissGauge.Update(stats.Filter.Misses)
 
 		for i, level := range stats.Levels {
-			// Append metrics for additional layers
+			// Append metrics lazily because Pebble may expose additional levels
+			// after open. Per-level compaction counters make target-file-size and
+			// write-amplification tuning observable without parsing server logs.
 			if i >= len(d.levelsGauge) {
 				d.levelsGauge = append(d.levelsGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("tables/level%v", i), nil))
+				d.levelSizeGauge = append(d.levelSizeGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/size", i), nil))
+				d.levelSublevelsGauge = append(d.levelSublevelsGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/sublevels", i), nil))
+				d.levelCompReadGauge = append(d.levelCompReadGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/compact/read", i), nil))
+				d.levelCompWriteGauge = append(d.levelCompWriteGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/compact/write", i), nil))
+				d.levelCompTablesGauge = append(d.levelCompTablesGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/compact/tables", i), nil))
+				d.levelFlushBytesGauge = append(d.levelFlushBytesGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/flush/write", i), nil))
+				d.levelFlushTablesGauge = append(d.levelFlushTablesGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/flush/tables", i), nil))
 			}
 			d.levelsGauge[i].Update(level.NumFiles)
+			d.levelSizeGauge[i].Update(level.Size)
+			d.levelSublevelsGauge[i].Update(int64(level.Sublevels))
+			d.levelCompReadGauge[i].Update(int64(level.BytesRead))
+			d.levelCompWriteGauge[i].Update(int64(level.BytesCompacted))
+			d.levelCompTablesGauge[i].Update(int64(level.TablesCompacted))
+			d.levelFlushBytesGauge[i].Update(int64(level.BytesFlushed))
+			d.levelFlushTablesGauge[i].Update(int64(level.TablesFlushed))
 		}
 
 		// Sleep a bit, then repeat the stats collection
