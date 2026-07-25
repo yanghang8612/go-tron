@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 const splitReadKeyStackSize = 128
@@ -73,6 +74,140 @@ func returnOwnedValueBatchLinks(linksPtr *[]ownedValueBatchLink) {
 type LayerView struct {
 	b *Buffer
 	l *layer
+}
+
+type commitmentParentReadSession struct {
+	layers       []*layer
+	cache        *baseReadCache
+	cacheVersion uint64
+	snapshot     pointread.Snapshot
+	cursors      []pointread.Cursor
+}
+
+var (
+	_ pointread.CommitmentParentSessioner = (*LayerView)(nil)
+	_ pointread.CommitmentParentSession   = (*commitmentParentReadSession)(nil)
+)
+
+// NewCommitmentParentReadSession captures the committed overlay topology and a
+// durable Pebble snapshot as one parent-state cut. flushMu closes the otherwise
+// possible gap where a layer is flushed and removed between those two captures;
+// it is released immediately, so the fold never holds up background flush I/O.
+//
+// The returned session deliberately excludes this LayerView's bound in-flight
+// layer, matching ViewCommitmentParentKeyParts. Unsupported durable stores
+// return (nil, nil), and rawdb falls back to the ordinary callback reader.
+func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.CommitmentParentSession, error) {
+	if readers <= 0 || v == nil || v.b == nil {
+		return nil, nil
+	}
+	b := v.b
+	factory, ok := b.base.(pointread.Snapshotter)
+	if !ok {
+		return nil, nil
+	}
+	b.flushMu.Lock()
+	// Pair the durable snapshot with the exact committed topology at the same
+	// linearization point. flushMu excludes layer flush/drop and b.mu excludes a
+	// concurrent CommitInflight append while the Pebble sequence is captured.
+	b.mu.RLock()
+	layers := append([]*layer(nil), b.layers...)
+	cache := b.baseReadCache
+	var cacheVersion uint64
+	if cache != nil {
+		cacheVersion = cache.version.Load()
+	}
+	snapshot, err := factory.NewPointReadSnapshot()
+	b.mu.RUnlock()
+	b.flushMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &commitmentParentReadSession{
+		layers:       layers,
+		cache:        cache,
+		cacheVersion: cacheVersion,
+		snapshot:     snapshot,
+		cursors:      make([]pointread.Cursor, readers),
+	}, nil
+}
+
+func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	if s == nil || s.snapshot == nil || reader < 0 || reader >= len(s.cursors) {
+		return false, errors.New("blockbuffer: invalid commitment parent reader")
+	}
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return s.view(reader, first, key, fn)
+	}
+	keyBuf := borrowSplitReadKey()
+	defer returnSplitReadKey(keyBuf)
+	key := keyBuf[:total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return s.view(reader, first, key, fn)
+}
+
+func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(s.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
+	}
+	value, cached, cacheEpoch, cacheable := s.cache.getAtVersion(key, s.cacheVersion)
+	if cached {
+		if value == nil {
+			return false, nil
+		}
+		return true, fn(value, true)
+	}
+	cursor := s.cursors[reader]
+	if cursor == nil {
+		var err error
+		cursor, err = s.snapshot.NewCursor(keyPrefix)
+		if err != nil {
+			return false, err
+		}
+		s.cursors[reader] = cursor
+	}
+	found, err := cursor.View(key, func(value []byte) error {
+		if cacheable && s.cache.version.Load() == s.cacheVersion {
+			if stored, admitted := s.cache.setIfEpoch(key, value, cacheEpoch); admitted {
+				return fn(stored, true)
+			}
+		}
+		return fn(value, false)
+	})
+	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
+		s.cache.setMissingIfEpoch(key, cacheEpoch)
+	}
+	return found, err
+}
+
+func (s *commitmentParentReadSession) Close() error {
+	if s == nil || s.snapshot == nil {
+		return nil
+	}
+	var firstErr error
+	for i, cursor := range s.cursors {
+		if cursor != nil {
+			if err := cursor.Close(); firstErr == nil && err != nil {
+				firstErr = err
+			}
+			s.cursors[i] = nil
+		}
+	}
+	if err := s.snapshot.Close(); firstErr == nil && err != nil {
+		firstErr = err
+	}
+	s.snapshot = nil
+	s.layers = nil
+	s.cache = nil
+	return firstErr
 }
 
 // ConcurrentReadWriteSafe is the LayerView counterpart of Buffer's structural
