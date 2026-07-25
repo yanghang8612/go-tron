@@ -1,6 +1,9 @@
 package blockbuffer
 
-import "sync/atomic"
+import (
+	"hash/maphash"
+	"sync/atomic"
+)
 
 const (
 	layerBloomBitsPerKey = 12
@@ -48,31 +51,15 @@ func newLayerBloom(keys int) *layerBloom {
 	}
 }
 
-func layerBloomHashBytes(key []byte) uint64 {
-	const (
-		offset = uint64(14695981039346656037)
-		prime  = uint64(1099511628211)
-	)
-	h := offset
-	for _, c := range key {
-		h ^= uint64(c)
-		h *= prime
-	}
-	return h
-}
+// The Bloom is process-local and rebuilt from authoritative layer maps, so its
+// hash does not need a stable cross-process encoding. maphash uses the runtime's
+// hardware-accelerated string/byte hash while one shared seed preserves exact
+// byte/string parity for build, late-write and lookup paths.
+var layerBloomHashSeed = maphash.MakeSeed()
 
-func layerBloomHashString(key string) uint64 {
-	const (
-		offset = uint64(14695981039346656037)
-		prime  = uint64(1099511628211)
-	)
-	h := offset
-	for i := 0; i < len(key); i++ {
-		h ^= uint64(key[i])
-		h *= prime
-	}
-	return h
-}
+func layerBloomHashBytes(key []byte) uint64 { return maphash.Bytes(layerBloomHashSeed, key) }
+
+func layerBloomHashString(key string) uint64 { return maphash.String(layerBloomHashSeed, key) }
 
 func layerBloomLocation(hash, wordMask uint64) (uint64, uint64) {
 	// A blocked Bloom keeps both probes in one 64-bit word. One atomic load can

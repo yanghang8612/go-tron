@@ -1,6 +1,7 @@
 package blockbuffer
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -12,6 +13,25 @@ func TestLayerBloomHashByteStringParity(t *testing.T) {
 		if got, want := layerBloomHashBytes([]byte(key)), layerBloomHashString(key); got != want {
 			t.Fatalf("hash parity for %q: bytes=%x string=%x", key, got, want)
 		}
+	}
+}
+
+func BenchmarkLayerBloomHash(b *testing.B) {
+	key := bytes.Repeat([]byte{0xa5}, 96)
+	keyString := string(key)
+	for _, test := range []struct {
+		name string
+		fn   func() uint64
+	}{
+		{name: "bytes", fn: func() uint64 { return layerBloomHashBytes(key) }},
+		{name: "string", fn: func() uint64 { return layerBloomHashString(keyString) }},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = test.fn()
+			}
+		})
 	}
 }
 
