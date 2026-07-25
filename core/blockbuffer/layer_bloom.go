@@ -5,6 +5,10 @@ import "sync/atomic"
 const (
 	layerBloomBitsPerKey = 12
 	layerBloomMinBits    = 64
+	// Segments turn a long committed-stack miss from one atomic Bloom probe per
+	// layer into one probe per complete group. Thirty-two keeps the tail scan
+	// short while amortising the aggregate filter and its pointer checks.
+	layerBloomSegmentSize = 32
 )
 
 // layerBloom is an immutable-size, atomically additive filter for one
@@ -13,6 +17,19 @@ const (
 type layerBloom struct {
 	words    []atomic.Uint64
 	wordMask uint64
+}
+
+// layerBloomSegment is shared by one consecutive, complete group of committed
+// layers. first/last validate that every member is still present in a read
+// view before lookupLayersNewest skips the group. A reorg or prefix flush that
+// removes any member therefore degrades to ordinary per-layer probes instead
+// of risking a false negative.
+type layerBloomSegment struct {
+	first *layer
+	last  *layer
+	size  int
+	bloom *layerBloom
+	ready atomic.Bool
 }
 
 func newLayerBloom(keys int) *layerBloom {
@@ -131,7 +148,77 @@ func (l *layer) addBloomString(key string) {
 	if l == nil {
 		return
 	}
-	if bloom := l.bloom.Load(); bloom != nil {
-		bloom.addHash(layerBloomHashString(key))
+	bloom := l.bloom.Load()
+	segment := l.segment.Load()
+	if bloom == nil && segment == nil {
+		return
 	}
+	hash := layerBloomHashString(key)
+	if bloom != nil {
+		bloom.addHash(hash)
+	}
+	if segment != nil {
+		segment.bloom.addHash(hash)
+	}
+}
+
+// buildNewestLayerBloomSegmentLocked seals the newest full run of unsegmented
+// committed layers. Caller holds Buffer.mu, so the topology cannot change while
+// the group is selected; buildLayerBloomSegment separately locks every member's
+// maps against delayed batch writes.
+func (b *Buffer) buildNewestLayerBloomSegmentLocked() {
+	end := len(b.layers)
+	start := end
+	for start > 0 && end-start < layerBloomSegmentSize && b.layers[start-1].segment.Load() == nil {
+		start--
+	}
+	if end-start == layerBloomSegmentSize {
+		buildLayerBloomSegment(b.layers[start:end])
+	}
+}
+
+func buildLayerBloomSegment(layers []*layer) {
+	if len(layers) != layerBloomSegmentSize {
+		return
+	}
+	// Count under one shard read lock at a time. The estimate may be slightly
+	// stale by allocation time, but late additions only increase saturation;
+	// they cannot create a false negative.
+	keys := 0
+	for _, l := range layers {
+		for shard := range l.shards {
+			s := &l.shards[shard]
+			s.mu.RLock()
+			keys += len(s.writes) + len(s.deletes)
+			s.mu.RUnlock()
+		}
+	}
+	bloom := newLayerBloom(keys)
+	segment := &layerBloomSegment{
+		first: layers[0],
+		last:  layers[len(layers)-1],
+		size:  len(layers),
+		bloom: bloom,
+	}
+	// Publish membership before scanning, but leave ready=false. A delayed
+	// writer mutates its layer under the same shard lock used below: if it wins
+	// before publication/scan, the scan sees the key; if it wins afterwards,
+	// addBloomString updates this segment. Readers cannot skip until ready=true.
+	for _, l := range layers {
+		l.segment.Store(segment)
+	}
+	for _, l := range layers {
+		for shard := range l.shards {
+			s := &l.shards[shard]
+			s.mu.RLock()
+			for key := range s.writes {
+				bloom.addHash(layerBloomHashString(key))
+			}
+			for key := range s.deletes {
+				bloom.addHash(layerBloomHashString(key))
+			}
+			s.mu.RUnlock()
+		}
+	}
+	segment.ready.Store(true)
 }

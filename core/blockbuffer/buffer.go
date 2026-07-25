@@ -61,6 +61,7 @@ type layer struct {
 	blockHash common.Hash
 	number    uint64
 	bloom     atomic.Pointer[layerBloom]
+	segment   atomic.Pointer[layerBloomSegment]
 	shards    [layerShardCount]layerShard
 }
 
@@ -833,6 +834,7 @@ func (b *Buffer) promoteOldestInflightLocked() {
 	b.inflight[len(b.inflight)-1] = nil
 	b.inflight = b.inflight[:len(b.inflight)-1]
 	b.layers = append(b.layers, l)
+	b.buildNewestLayerBloomSegmentLocked()
 	b.publishReadViewLocked()
 }
 
@@ -1010,10 +1012,19 @@ func (l *layer) lookupMap(key []byte) (v []byte, found, tomb bool) {
 }
 
 func lookupLayersNewest(layers []*layer, key []byte, keyHash uint64) (v []byte, found, tomb bool) {
-	for i := len(layers) - 1; i >= 0; i-- {
-		if v, found, tomb = layers[i].lookupHash(key, keyHash); found || tomb {
+	for i := len(layers) - 1; i >= 0; {
+		l := layers[i]
+		if segment := l.segment.Load(); segment != nil &&
+			segment.ready.Load() && segment.last == l && segment.size <= i+1 &&
+			layers[i-segment.size+1] == segment.first &&
+			!segment.bloom.mayContainHash(keyHash) {
+			i -= segment.size
+			continue
+		}
+		if v, found, tomb = l.lookupHash(key, keyHash); found || tomb {
 			return v, found, tomb
 		}
+		i--
 	}
 	return nil, false, false
 }
