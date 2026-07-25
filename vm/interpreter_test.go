@@ -52,6 +52,30 @@ func BenchmarkInterpreterArithmetic(b *testing.B) {
 	}
 }
 
+func BenchmarkInterpreterDup(b *testing.B) {
+	tvm := newTestEVM(b)
+	const rounds = 1000
+	code := make([]byte, 0, rounds*2+3)
+	code = append(code, byte(PUSH1), 1)
+	for range rounds {
+		code = append(code, byte(DUP1), byte(POP))
+	}
+	code = append(code, byte(STOP))
+	contract := NewContract(tcommon.Address{0x41, 1}, tcommon.Address{0x41, 2}, 0, 1_000_000_000)
+	contract.SetCode(contract.Address, code)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(rounds*2+1), "opcodes/run")
+	b.ResetTimer()
+	for b.Loop() {
+		contract.Energy = 1_000_000_000
+		contract.EnergyUsed = 0
+		if _, err := tvm.interpreter.Run(contract); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestSharedPushHandlerUsesOpcodeWidth(t *testing.T) {
 	for size := 1; size <= 32; size++ {
 		code := make([]byte, size+1)
@@ -74,6 +98,27 @@ func TestSharedPushHandlerUsesOpcodeWidth(t *testing.T) {
 		}
 		if pc != uint64(size) {
 			t.Fatalf("PUSH%d pc = %d, want %d", size, pc, size)
+		}
+	}
+}
+
+func TestSharedDupHandlerUsesOpcodeDepth(t *testing.T) {
+	for depth := 1; depth <= 16; depth++ {
+		stack := newStack()
+		for value := 1; value <= depth; value++ {
+			stack.push(uint256.NewInt(uint64(value)))
+		}
+		interpreter := &Interpreter{currentOp: DUP1 + OpCode(depth-1)}
+		pc := uint64(7)
+
+		if _, err := opDup(&pc, interpreter, nil, nil, stack); err != nil {
+			t.Fatalf("DUP%d: %v", depth, err)
+		}
+		if got := stack.peek().Uint64(); got != 1 {
+			t.Fatalf("DUP%d result = %d, want 1", depth, got)
+		}
+		if pc != 7 {
+			t.Fatalf("DUP%d changed pc to %d", depth, pc)
 		}
 	}
 }

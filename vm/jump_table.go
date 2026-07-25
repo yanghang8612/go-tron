@@ -216,7 +216,7 @@ func newJumpTable() JumpTable {
 	for i := 1; i <= 16; i++ {
 		n := i
 		tbl[DUP1+OpCode(i-1)] = &operation{
-			execute:    makeDup(n),
+			execute:    opDup,
 			energyCost: EnergyVeryLow,
 			minStack:   n,
 			maxStack:   1025 - n,

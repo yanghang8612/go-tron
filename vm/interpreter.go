@@ -199,8 +199,17 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			preStack = &Stack{data: append([]uint256.Int(nil), stack.data...)}
 		}
 
-		// Execute
-		ret, err := operation.execute(pc, in, contract, mem, stack)
+		// Execute. PUSH1..PUSH32 dominate deployed bytecode and all share the
+		// same handler. Call that handler directly so the compiler can inline the
+		// small immediate-decode path instead of paying an indirect function call
+		// through operation.execute for every literal.
+		var ret []byte
+		var err error
+		if op >= PUSH1 && op <= PUSH32 {
+			ret, err = opPush(pc, in, contract, mem, stack)
+		} else {
+			ret, err = operation.execute(pc, in, contract, mem, stack)
+		}
 
 		if tracer != nil {
 			in.traceState(tracer, pcStart, op, energyBefore, energyBefore-contract.Energy, mem, preStack, contract, err)
@@ -334,12 +343,10 @@ func opPush(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	return nil, nil
 }
 
-// makeDup creates a DUP instruction handler.
-func makeDup(n int) executionFunc {
-	return func(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-		stack.dup(n)
-		return nil, nil
-	}
+// opDup handles DUP1..DUP16 using the width encoded in the current opcode.
+func opDup(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	stack.dup(int(interpreter.currentOp-DUP1) + 1)
+	return nil, nil
 }
 
 // makeSwap creates a SWAP instruction handler.
