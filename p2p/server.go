@@ -114,6 +114,8 @@ type Server struct {
 	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	maintainCh  chan struct{} // signals the maintain loop to reconnect now
+	maintainMu  sync.Mutex    // serializes reconnect rounds and candidate rotation
+	maintainPos int           // next peerCandidates index considered by maintainPeers
 	dialLimiter *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
 	peerCacheMu sync.Mutex
 	cachedPeers []string // most recently successful first; bounded by maxPersistedPeers
@@ -601,6 +603,9 @@ func (s *Server) maintainLoop() {
 // restarted node at zero peers indefinitely when UDP is filtered, even though
 // the same bootstrap endpoints accept the TRON TCP handshake.
 func (s *Server) maintainPeers() {
+	s.maintainMu.Lock()
+	defer s.maintainMu.Unlock()
+
 	candidates := s.peerCandidates()
 	if len(candidates) == 0 {
 		return
@@ -618,10 +623,12 @@ func (s *Server) maintainPeers() {
 	}
 
 	remaining := s.config.MaxPeers - current
-	for _, addr := range candidates {
-		if remaining == 0 {
-			break
-		}
+	start := s.maintainPos % len(candidates)
+	considered := 0
+	for considered < len(candidates) && remaining > 0 {
+		idx := (start + considered) % len(candidates)
+		addr := candidates[idx]
+		considered++
 		if connected[addr] {
 			continue
 		}
@@ -635,6 +642,10 @@ func (s *Server) maintainPeers() {
 			}
 		}(addr)
 	}
+	// A failed asynchronous dial still consumed this round's tentative slot.
+	// Move the starting point past every candidate considered so a permanently
+	// incompatible prefix cannot starve later bootstrap or cache fallbacks.
+	s.maintainPos = (start + considered) % len(candidates)
 }
 
 func (s *Server) cachedPeerSnapshot() []string {

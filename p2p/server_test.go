@@ -314,6 +314,40 @@ func TestServerMaintainConnectsBootstrapWithoutDiscoveryReply(t *testing.T) {
 	}
 }
 
+func TestServerMaintainRotatesPastFailedCandidateWindow(t *testing.T) {
+	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := seed.Start(); err != nil {
+		t.Fatalf("start bootstrap: %v", err)
+	}
+	defer seed.Stop()
+
+	client := NewServer(ServerConfig{
+		ListenAddr:           "127.0.0.1:0",
+		MaxPeers:             1,
+		BootstrapNodes:       []string{"127.0.0.1:1", seed.ListenAddr()},
+		Discovery:            &fakeDiscovery{},
+		DialTimeout:          100 * time.Millisecond,
+		DialThrottleInterval: -1,
+	}, &testHandler{})
+	if err := client.Start(); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	defer client.Stop()
+
+	// Round one spends the single tentative slot on the dead prefix. Round two
+	// must start at the next candidate instead of retrying index zero forever.
+	client.maintainPeers()
+	time.Sleep(20 * time.Millisecond)
+	client.maintainPeers()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && client.PeerCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := client.PeerCount(); got != 1 {
+		t.Fatalf("rotated bootstrap peer count = %d, want 1", got)
+	}
+}
+
 func TestServerPersistsApplicationPeerAndReconnectsItOnRestart(t *testing.T) {
 	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
 	if err := seed.Start(); err != nil {
