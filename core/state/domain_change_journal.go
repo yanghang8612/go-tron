@@ -39,6 +39,42 @@ type generationDomainJournalTouch struct {
 	prevExist bool
 }
 
+func (s *StateDB) collectKVJournalTouch(kvs map[string]kvDomainJournalTouch, e *kvChange) {
+	if e == nil {
+		return
+	}
+	obj := s.stateObjects[e.address]
+	if obj == nil {
+		return
+	}
+	domain, key, ok := splitKVCompositeKeyView([]byte(e.mapKey))
+	if !ok {
+		return
+	}
+	id := string(e.address.Bytes()) + e.mapKey
+	if _, ok := kvs[id]; ok {
+		return
+	}
+	touch := kvDomainJournalTouch{
+		addr:   e.address,
+		mapKey: e.mapKey,
+		domain: domain,
+		key:    append([]byte(nil), key...),
+	}
+	if e.hadEntry {
+		touch.prevLoaded = true
+		if !e.prevEntry.deleted {
+			touch.prevExist = true
+			touch.prev = append([]byte(nil), e.prevEntry.val...)
+		}
+	} else if cur, ok := obj.kvDirty[e.mapKey]; ok && cur.prevLoaded {
+		touch.prevLoaded = true
+		touch.prevExist = cur.prevExists
+		touch.prev = append([]byte(nil), cur.prev...)
+	}
+	kvs[id] = touch
+}
+
 func (s *StateDB) FlushDomainChangesSince(mark int, txNum uint64) error {
 	if s == nil || !s.changeSet.enabled || s.changeSet.captureAtCommit {
 		return nil
@@ -126,36 +162,9 @@ func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb
 				prevExist: len(e.prevLatest) > 0,
 			}
 		case kvChange:
-			obj := s.stateObjects[e.address]
-			if obj == nil {
-				continue
-			}
-			domain, key, ok := splitKVCompositeKeyView([]byte(e.mapKey))
-			if !ok {
-				continue
-			}
-			id := string(e.address.Bytes()) + e.mapKey
-			if _, ok := kvs[id]; ok {
-				continue
-			}
-			touch := kvDomainJournalTouch{
-				addr:   e.address,
-				mapKey: e.mapKey,
-				domain: domain,
-				key:    append([]byte(nil), key...),
-			}
-			if e.hadEntry {
-				touch.prevLoaded = true
-				if !e.prevEntry.deleted {
-					touch.prevExist = true
-					touch.prev = append([]byte(nil), e.prevEntry.val...)
-				}
-			} else if cur, ok := obj.kvDirty[e.mapKey]; ok && cur.prevLoaded {
-				touch.prevLoaded = true
-				touch.prevExist = cur.prevExists
-				touch.prev = append([]byte(nil), cur.prev...)
-			}
-			kvs[id] = touch
+			s.collectKVJournalTouch(kvs, &e)
+		case *kvChange:
+			s.collectKVJournalTouch(kvs, e)
 		case *storageChange:
 			id := string(e.address.Bytes()) + string(e.key.Bytes())
 			if _, ok := storages[id]; ok {

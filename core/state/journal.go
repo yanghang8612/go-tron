@@ -270,6 +270,26 @@ type kvChange struct {
 	prevEntry kvEntry
 }
 
+var kvChangePool = sync.Pool{
+	New: func() any { return new(kvChange) },
+}
+
+func acquireKVChange(address tcommon.Address, mapKey string, hadEntry bool, prevEntry kvEntry) *kvChange {
+	e := kvChangePool.Get().(*kvChange)
+	*e = kvChange{
+		address:   address,
+		mapKey:    mapKey,
+		hadEntry:  hadEntry,
+		prevEntry: prevEntry,
+	}
+	return e
+}
+
+func (e *kvChange) release() {
+	*e = kvChange{}
+	kvChangePool.Put(e)
+}
+
 func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj == nil {

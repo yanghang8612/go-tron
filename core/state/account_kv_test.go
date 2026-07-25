@@ -293,6 +293,52 @@ func BenchmarkAccountKVSetDirty(b *testing.B) {
 	})
 }
 
+func BenchmarkAccountKVJournalChanged(b *testing.B) {
+	sdb := newTestStateDB(b)
+	owner := testAddr(0x1b)
+	key := bytes.Repeat([]byte{0x6a}, 32)
+	if err := sdb.SetAccountKV(owner, kvdomains.ContractStorage, key, []byte{0}); err != nil {
+		b.Fatal(err)
+	}
+	sdb.resetJournal()
+	var value [1]byte
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		value[0] = byte(i&1) + 1
+		if err := sdb.SetAccountKV(owner, kvdomains.ContractStorage, key, value[:]); err != nil {
+			b.Fatal(err)
+		}
+		sdb.resetJournal()
+	}
+}
+
+func TestKVChangePoolClearsReleasedJournalReferences(t *testing.T) {
+	sdb := newTestStateDB(t)
+	owner := testAddr(0x1c)
+	key := []byte("pooled-journal-key")
+	sdb.CreateAccount(owner, corepb.AccountType_Normal)
+	sdb.resetJournal()
+	if err := sdb.SetAccountKV(owner, kvdomains.ContractStorage, key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if len(sdb.journal.entries) != 1 {
+		t.Fatalf("journal entries = %d, want 1", len(sdb.journal.entries))
+	}
+	change, ok := sdb.journal.entries[0].(*kvChange)
+	if !ok {
+		t.Fatalf("journal entry type = %T, want *kvChange", sdb.journal.entries[0])
+	}
+	sdb.resetJournal()
+	if change.mapKey != "" || change.prevEntry.val != nil || change.prevEntry.wrapped != nil || change.prevEntry.prev != nil {
+		t.Fatal("released kvChange retained key or entry slices")
+	}
+	got, exists, err := sdb.GetAccountKV(owner, kvdomains.ContractStorage, key)
+	if err != nil || !exists || string(got) != "value" {
+		t.Fatalf("dirty value after journal recycle = %q exists=%v err=%v", got, exists, err)
+	}
+}
+
 func TestKVCompositeKeyStringOwnsInputAndPreservesLayout(t *testing.T) {
 	key := []byte("logical-key")
 	mapKey := kvCompositeKeyString(kvdomains.ContractStorage, key)

@@ -1660,7 +1660,7 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 	}
 	mk := s.kvCompositeKeyString(domain, key)
 	if journal {
-		s.journal.append(kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
+		s.journal.append(acquireKVChange(obj.address, mk, dirty, prevDirty))
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
 		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
@@ -1783,7 +1783,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		prevExists = true
 		prevLoaded = true
 	}
-	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
+	s.journal.append(acquireKVChange(owner, mk, dirty, prevDirty))
 	entry := s.newKVEntry(nil, true)
 	if dirty {
 		entry.inheritPrev(prevDirty)

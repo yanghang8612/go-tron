@@ -316,7 +316,7 @@ func TestAccountScalarJournalNestedSnapshotRevert(t *testing.T) {
 		t.Fatalf("outer journal type = %T, want accountScalarChange", sdb.journal.entries[0])
 	}
 	for i := 1; i < 4; i++ {
-		if _, ok := sdb.journal.entries[i].(kvChange); !ok {
+		if _, ok := sdb.journal.entries[i].(*kvChange); !ok {
 			t.Fatalf("outer journal entry %d type = %T, want kvChange", i, sdb.journal.entries[i])
 		}
 	}
@@ -387,7 +387,7 @@ func TestAccountScalarJournalTransactionBoundaries(t *testing.T) {
 			if _, ok := entry.(*accountScalarChange); !ok {
 				t.Fatalf("journal entry %d type = %T, want accountScalarChange", i, entry)
 			}
-		} else if _, ok := entry.(kvChange); !ok {
+		} else if _, ok := entry.(*kvChange); !ok {
 			t.Fatalf("journal entry %d type = %T, want resource kvChange", i, entry)
 		}
 	}
@@ -434,7 +434,7 @@ func TestAccountScalarJournalHistoryEnabledKeepsFullPreimage(t *testing.T) {
 	if !bytes.Equal(envelope.AccountProto, original) {
 		t.Fatal("history-enabled latest pre-image did not retain exact Account bytes")
 	}
-	if _, ok := sdb.journal.entries[1].(kvChange); !ok {
+	if _, ok := sdb.journal.entries[1].(*kvChange); !ok {
 		t.Fatalf("history resource journal type = %T, want kvChange", sdb.journal.entries[1])
 	}
 }
