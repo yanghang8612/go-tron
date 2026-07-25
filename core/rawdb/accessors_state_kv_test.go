@@ -95,6 +95,21 @@ func TestAppendStateKVLatestValueReusesDestination(t *testing.T) {
 	}
 }
 
+func TestWriteStateKVLatestEncodedOwnedByKeyPrefersOwnedWriter(t *testing.T) {
+	probe := new(accountLatestOwnedKeyValueProbe)
+	key := []byte("physical-kv-key")
+	value := []byte("encoded-value")
+	if err := WriteStateKVLatestEncodedOwnedByKey(probe, key, value); err != nil {
+		t.Fatal(err)
+	}
+	if probe.ownedKeyValueCalls != 1 || probe.ownedCalls != 0 || probe.putCalls != 0 {
+		t.Fatalf("writer calls key-value/value/Put = %d/%d/%d, want 1/0/0", probe.ownedKeyValueCalls, probe.ownedCalls, probe.putCalls)
+	}
+	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
+		t.Fatal("owned physical KV write copied transferred storage")
+	}
+}
+
 func TestReadStateKVLatestNoCopyAliasesReaderValue(t *testing.T) {
 	owner := stateKVTestAddress(0x41, 0x57)
 	backing := EncodeStateKVLatestValue([]byte("state-value"))

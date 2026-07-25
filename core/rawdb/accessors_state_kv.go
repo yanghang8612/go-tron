@@ -101,6 +101,19 @@ func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Addres
 	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, wrapped)
 }
 
+// WriteStateKVLatestEncodedOwnedByKey transfers a prebuilt physical key and
+// encoded value to ownership-aware writers. Batched state commit uses it with
+// key slices packed into one immutable arena.
+func WriteStateKVLatestEncodedOwnedByKey(db ethdb.KeyValueWriter, physicalKey, wrapped []byte) error {
+	if writer, ok := db.(ownedKeyValueWriter); ok {
+		return writer.PutOwnedKeyValue(physicalKey, wrapped)
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(physicalKey, wrapped)
+	}
+	return db.Put(physicalKey, wrapped)
+}
+
 func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	value, ok, err := ReadStateKVLatestNoCopy(db, owner, generation, domain, logicalKey)
 	if err != nil || !ok {

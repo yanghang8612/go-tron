@@ -204,6 +204,10 @@ type accountKVOwnedPhysicalLatestStore interface {
 	WriteKVLatestEncodedOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, encodedValue []byte) error
 }
 
+type accountKVOwnedPhysicalLatestKeyStore interface {
+	WriteKVLatestEncodedOwnedByKey(physicalKey, encodedValue []byte) error
+}
+
 type accountLatestNoCopyPhysicalStore interface {
 	ReadAccountLatestNoCopy(owner tcommon.Address) ([]byte, bool, error)
 }
@@ -246,6 +250,74 @@ func newAccountKVLatestDomainBatch(index accountKVIndexStore, generation func(tc
 var _ statedomains.Writer = (*accountKVLatestBatch)(nil)
 var _ statedomains.OwnedWriter = (*accountKVLatestBatch)(nil)
 var _ statedomains.EncodedOwnedWriter = (*accountKVLatestBatch)(nil)
+var _ statedomains.EncodedOwnedMutationBatchWriter = (*accountKVLatestBatch)(nil)
+
+// DomainApplyEncodedOwnedMutations preserves overlay order while packing every
+// put's final physical key into one exact-size immutable arena. The blockbuffer
+// batch converts each slice to an unsafe string and owns it through layer
+// retirement, so one block allocation replaces one strings.Builder allocation
+// per persisted KV row. Deletes keep their existing structured path because
+// they are rare and do not yet advertise an owned-key contract.
+func (w *accountKVLatestBatch) DomainApplyEncodedOwnedMutations(mutations []statedomains.Mutation) error {
+	keyStore, canOwnPhysicalKeys := w.latestStore.(accountKVOwnedPhysicalLatestKeyStore)
+	totalKeyBytes := 0
+	if canOwnPhysicalKeys {
+		for _, mutation := range mutations {
+			if mutation.Kind == statedomains.MutationPut && len(mutation.EncodedValue) != 0 {
+				totalKeyBytes += rawdb.StateKVLatestCommitmentKeySize(len(mutation.Key))
+			}
+		}
+	}
+	keyArena := make([]byte, 0, totalKeyBytes)
+	for _, mutation := range mutations {
+		switch mutation.Kind {
+		case statedomains.MutationPut:
+			generation, err := w.resolveGeneration(mutation.Owner)
+			if err != nil {
+				return err
+			}
+			if err := w.writeDomainChange(mutation.Owner, generation, mutation.Domain, mutation.Key, true, mutation.Value); err != nil {
+				return err
+			}
+			if canOwnPhysicalKeys && len(mutation.EncodedValue) != 0 {
+				start := len(keyArena)
+				keyArena = rawdb.AppendStateKVLatestCommitmentKey(keyArena, mutation.Owner, generation, mutation.Domain, mutation.Key)
+				physicalKey := keyArena[start:len(keyArena):len(keyArena)]
+				if err := keyStore.WriteKVLatestEncodedOwnedByKey(physicalKey, mutation.EncodedValue); err != nil {
+					return err
+				}
+				w.rememberPutOwned(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value)
+				if w.record != nil {
+					w.record(rawdb.NewStateCommitmentPutOwned(physicalKey, mutation.EncodedValue))
+				}
+				if err := w.maybeFlush(); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(mutation.EncodedValue) != 0 {
+				if err := w.putOwned(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, mutation.EncodedValue); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := w.putOwned(mutation.Owner, generation, mutation.Domain, mutation.Key, mutation.Value, rawdb.EncodeStateKVLatestValue(mutation.Value)); err != nil {
+				return err
+			}
+		case statedomains.MutationDel:
+			if err := w.DomainDelOwned(mutation.Owner, mutation.Domain, mutation.Key); err != nil {
+				return err
+			}
+		case statedomains.MutationDelPrefix:
+			if err := w.DomainDelPrefix(mutation.Owner, mutation.Domain, mutation.Key); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("account kv latest domain writer: unknown mutation kind %d", mutation.Kind)
+		}
+	}
+	return nil
+}
 
 func (w *accountKVLatestBatch) DomainPut(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey, value []byte) error {
 	generation, err := w.resolveGeneration(owner)

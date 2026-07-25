@@ -158,6 +158,16 @@ type ownedFlushWriter struct {
 	value []byte
 }
 
+type ownedMutationBatchWriter struct {
+	ownedFlushWriter
+	mutations []Mutation
+}
+
+func (w *ownedMutationBatchWriter) DomainApplyEncodedOwnedMutations(mutations []Mutation) error {
+	w.mutations = append([]Mutation(nil), mutations...)
+	return nil
+}
+
 func (*ownedFlushWriter) DomainPut(common.Address, kvdomains.KVDomain, []byte, []byte) error {
 	return errors.New("unexpected defensive put")
 }
@@ -187,6 +197,25 @@ func TestOverlayFlushTransfersOwnedMutationStorage(t *testing.T) {
 	}
 	if &writer.key[0] != &view.Key[0] || &writer.value[0] != &view.Value[0] {
 		t.Fatal("FlushTo cloned storage before owned writer")
+	}
+}
+
+func TestOverlayFlushPrefersOwnedMutationBatch(t *testing.T) {
+	overlay := NewOverlay(nil)
+	owner := testAddress(0x2b)
+	if err := overlay.DomainPut(owner, kvdomains.ContractStorage, []byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	view := overlay.mutationsView()[0]
+	writer := new(ownedMutationBatchWriter)
+	if err := overlay.FlushTo(writer); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.mutations) != 1 || &writer.mutations[0].Key[0] != &view.Key[0] {
+		t.Fatal("FlushTo did not transfer the original ordered mutation batch")
+	}
+	if len(overlay.mutationsView()) != 0 {
+		t.Fatal("successful batch flush did not discard overlay mutations")
 	}
 }
 

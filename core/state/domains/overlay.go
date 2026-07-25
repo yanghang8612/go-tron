@@ -41,6 +41,14 @@ type EncodedOwnedWriter interface {
 	DomainPutEncodedOwned(owner common.Address, domain kvdomains.KVDomain, key, value, encodedValue []byte) error
 }
 
+// EncodedOwnedMutationBatchWriter consumes one overlay's ordered mutation set
+// synchronously. Writers use this optional boundary when ownership decisions
+// benefit from seeing the whole batch, such as packing immutable physical keys
+// into one arena. The writer may retain mutation storage after success.
+type EncodedOwnedMutationBatchWriter interface {
+	DomainApplyEncodedOwnedMutations(mutations []Mutation) error
+}
+
 type IterateFunc func(key, value []byte) (bool, error)
 
 type Iterator interface {
@@ -225,6 +233,13 @@ func (o *Overlay) DomainDelPrefix(owner common.Address, domain kvdomains.KVDomai
 func (o *Overlay) FlushTo(w Writer) error {
 	if w == nil {
 		return ErrNilWriter
+	}
+	if batch, ok := w.(EncodedOwnedMutationBatchWriter); ok {
+		if err := batch.DomainApplyEncodedOwnedMutations(o.ops); err != nil {
+			return err
+		}
+		o.Discard()
+		return nil
 	}
 	owned, canTransfer := w.(OwnedWriter)
 	encoded, canTransferEncoded := w.(EncodedOwnedWriter)

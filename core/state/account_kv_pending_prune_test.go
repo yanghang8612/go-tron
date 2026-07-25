@@ -118,6 +118,36 @@ func BenchmarkAccountKVLatestTemporalMutationBatch(b *testing.B) {
 	}
 }
 
+func TestAccountKVLatestTemporalMutationBatchPacksPhysicalKeys(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	buf := blockbuffer.New(base)
+	buf.BeginBlock(pruneBlockHash(1), 1)
+	writer := newAccountKVLatestDomainBatch(buf, zeroGeneration, nil, nil)
+	tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{Writer: writer})
+	defer tx.Close()
+	owner := pruneTestOwner(7)
+	for i := 0; i < 8; i++ {
+		key := bytes.Repeat([]byte{byte(i + 1)}, 32)
+		value := []byte{byte(0xa0 + i)}
+		if err := tx.DomainPutEncodedOwned(owner, kvdomains.ContractStorage, key, value, rawdb.EncodeStateKVLatestValue(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.flush(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		key := bytes.Repeat([]byte{byte(i + 1)}, 32)
+		got, ok, err := rawdb.ReadStateKVLatest(buf, owner, 0, kvdomains.ContractStorage, key)
+		if err != nil || !ok || !bytes.Equal(got, []byte{byte(0xa0 + i)}) {
+			t.Fatalf("key %d read = %x ok=%v err=%v", i, got, ok, err)
+		}
+	}
+}
+
 func TestAccountKVLatestPendingStructuredKeysPreserveIdentity(t *testing.T) {
 	writer := &accountKVLatestBatch{}
 	owner := pruneTestOwner(1)

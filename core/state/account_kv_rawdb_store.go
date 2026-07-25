@@ -102,6 +102,13 @@ func (s rawdbAccountKVPhysicalLatestStore) WriteKVLatestEncodedOwned(owner tcomm
 	return rawdb.WriteStateKVLatestEncodedOwned(s.writer, owner, generation, domain, logicalKey, encodedValue)
 }
 
+func (s rawdbAccountKVPhysicalLatestStore) WriteKVLatestEncodedOwnedByKey(physicalKey, encodedValue []byte) error {
+	if s.writer == nil {
+		return fmt.Errorf("account kv latest store: nil writer")
+	}
+	return rawdb.WriteStateKVLatestEncodedOwnedByKey(s.writer, physicalKey, encodedValue)
+}
+
 func (s rawdbAccountKVPhysicalLatestStore) DeleteKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
 	if s.writer == nil {
 		return fmt.Errorf("account kv latest store: nil writer")
