@@ -108,8 +108,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		}
 
 		op := OpCode(code[*pc])
-		operation := table[op]
-		if operation == nil {
+		operation := &table[op]
+		if operation.execute == nil {
 			// A known-but-disabled opcode is nil only in the config-resolved
 			// table. Preserve the former runtime-gate bookkeeping/tracer order on
 			// this cold error path; genuinely unknown opcodes retain the original

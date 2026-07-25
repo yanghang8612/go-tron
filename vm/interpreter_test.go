@@ -172,20 +172,20 @@ func TestInterpretersShareResolvedImmutableJumpTables(t *testing.T) {
 	if first.table == second.table {
 		t.Fatal("different fork flags unexpectedly shared a resolved table")
 	}
-	if first.table[SHL] != nil || first.table[CHAINID] != nil {
+	if first.table[SHL].execute != nil || first.table[CHAINID].execute != nil {
 		t.Fatal("pre-fork table retained gated opcodes")
 	}
-	if second.table[SHL] == nil || second.table[CHAINID] == nil {
+	if second.table[SHL].execute == nil || second.table[CHAINID].execute == nil {
 		t.Fatal("post-fork table removed enabled opcodes")
 	}
-	if sharedJumpTable[SHL] == nil || sharedJumpTable[SHL].enabledFn == nil {
+	if sharedJumpTable[SHL].execute == nil || sharedJumpTable[SHL].enabledFn == nil {
 		t.Fatal("source table lost fork-gate metadata")
 	}
 }
 
 func TestForkGatedOpcodeListMatchesJumpTableMetadata(t *testing.T) {
 	for opcode, operation := range sharedJumpTable {
-		want := operation != nil && operation.enabledFn != nil
+		want := operation.execute != nil && operation.enabledFn != nil
 		if got := isForkGatedOpcode(OpCode(opcode)); got != want {
 			t.Fatalf("opcode 0x%02x gated=%v, metadata=%v", opcode, got, want)
 		}
@@ -219,10 +219,10 @@ func TestJumpTableForkKeyCoversEveryGate(t *testing.T) {
 				t.Fatalf("fork key=%#x, want %#x", got, tt.bit)
 			}
 			resolved := jumpTableForConfig(tt.cfg)
-			if base[tt.op] != nil {
+			if base[tt.op].execute != nil {
 				t.Fatalf("opcode %s unexpectedly enabled in base table", tt.op)
 			}
-			if resolved[tt.op] == nil {
+			if resolved[tt.op].execute == nil {
 				t.Fatalf("opcode %s not enabled by its fork bit", tt.op)
 			}
 		})
