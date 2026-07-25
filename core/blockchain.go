@@ -347,6 +347,13 @@ func (b *flushBarrier) wait() {
 // guarantees a flush is never lost.
 const flushQueueCap = 8
 
+// flushCoalesceWait gives a caught-up worker one short opportunity to collect
+// the next solidified cutoff. Mainnet bulk sync applies a block roughly every
+// 10-15ms; without this window the worker sees an empty queue, writes one layer,
+// and misses blockbuffer's cross-layer overwrite coalescing. The delay is fully
+// asynchronous, bounded, and interrupted immediately by queue close.
+const flushCoalesceWait = 15 * time.Millisecond
+
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
 	return NewBlockChainWithAncient(db, stateDB, config, rawdb.NoopAncient{})
@@ -1574,7 +1581,15 @@ func (bc *BlockChain) startFlushWorker() {
 	bc.flushWorkerWg.Add(1)
 	go func() {
 		defer bc.flushWorkerWg.Done()
-		for cutoff := range bc.flushQueue {
+		timer := time.NewTimer(flushCoalesceWait)
+		if !timer.Stop() {
+			<-timer.C
+		}
+		for {
+			cutoff, ok := <-bc.flushQueue
+			if !ok {
+				return
+			}
 			// A sync range can publish several monotonically cumulative
 			// solidified cutoffs before this worker is scheduled. Snapshot the
 			// queue depth and collapse only those already-waiting requests into
@@ -1583,20 +1598,59 @@ func (bc *BlockChain) startFlushWorker() {
 			// newly-solidified layers, and avoids one large Pebble batch per
 			// block. Bounding the drain to the initial depth prevents a steady
 			// producer from starving the actual disk flush.
-			pending := 1
-			for queued := len(bc.flushQueue); queued > 0; queued-- {
-				next, ok := <-bc.flushQueue
-				if !ok {
-					break
-				}
-				pending++
-				if next > cutoff {
-					cutoff = next
+			// When already caught up, wait briefly for the next producer post.
+			// A closed queue wakes the select immediately and is reported back so
+			// the collected cutoff is flushed before the worker exits.
+			var wait <-chan time.Time
+			if len(bc.flushQueue) == 0 {
+				timer.Reset(flushCoalesceWait)
+				wait = timer.C
+			}
+			cutoff, pending, closed := collectFlushCutoffs(bc.flushQueue, cutoff, wait)
+			if wait != nil && !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
 				}
 			}
 			bc.runFlushCutoffs(cutoff, pending)
+			if closed {
+				return
+			}
 		}
 	}()
+}
+
+// collectFlushCutoffs folds one optional just-after-receive cutoff plus the
+// queue depth observed afterwards into the highest cumulative cutoff. wait is
+// nil when work was already queued; tests pass a controllable channel to pin
+// the delayed-arrival behaviour without sleeping.
+func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Time) (uint64, int, bool) {
+	pending := 1
+	if wait != nil {
+		select {
+		case next, ok := <-queue:
+			if !ok {
+				return cutoff, pending, true
+			}
+			pending++
+			if next > cutoff {
+				cutoff = next
+			}
+		case <-wait:
+		}
+	}
+	for queued := len(queue); queued > 0; queued-- {
+		next, ok := <-queue
+		if !ok {
+			return cutoff, pending, true
+		}
+		pending++
+		if next > cutoff {
+			cutoff = next
+		}
+	}
+	return cutoff, pending, false
 }
 
 // runFlushCutoff is the body of one flush iteration shared by the worker

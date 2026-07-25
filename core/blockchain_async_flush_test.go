@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -130,6 +131,36 @@ func TestAsyncFlush_WorkerCoalescesQueuedCutoffs(t *testing.T) {
 	}
 	if got := len(buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("pending layers = %d, want 0", got)
+	}
+}
+
+func TestCollectFlushCutoffsWaitsForNextArrival(t *testing.T) {
+	queue := make(chan uint64, flushQueueCap)
+	wait := make(chan time.Time)
+	type result struct {
+		cutoff  uint64
+		pending int
+		closed  bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		cutoff, pending, closed := collectFlushCutoffs(queue, 10, wait)
+		done <- result{cutoff: cutoff, pending: pending, closed: closed}
+	}()
+	queue <- 11
+	got := <-done
+	if got.cutoff != 11 || got.pending != 2 || got.closed {
+		t.Fatalf("collect result = %+v, want cutoff=11 pending=2 closed=false", got)
+	}
+}
+
+func TestCollectFlushCutoffsCloseInterruptsWait(t *testing.T) {
+	queue := make(chan uint64, flushQueueCap)
+	wait := make(chan time.Time)
+	close(queue)
+	cutoff, pending, closed := collectFlushCutoffs(queue, 10, wait)
+	if cutoff != 10 || pending != 1 || !closed {
+		t.Fatalf("collect result = cutoff=%d pending=%d closed=%v", cutoff, pending, closed)
 	}
 }
 
