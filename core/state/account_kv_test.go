@@ -64,6 +64,29 @@ func TestStageStorageCommitWithPrevPreservesGenericSemantics(t *testing.T) {
 	}
 }
 
+func TestStageStorageCommitArenaKeepsEveryCompositeKeyStable(t *testing.T) {
+	sdb := new(StateDB)
+	obj := new(stateObject)
+	arena := make([]byte, 0, 1)
+	const count = 128
+
+	for i := 0; i < count; i++ {
+		rowKey := mutationTestHash(byte(i + 1))
+		value := mutationTestHash(byte(i + 129))
+		if staged := sdb.stageStorageCommitWithPrevArena(obj, rowKey, value, false, storageOrigin{loaded: true}, &arena); !staged {
+			t.Fatalf("key %d was not staged", i)
+		}
+	}
+	for i := 0; i < count; i++ {
+		rowKey := mutationTestHash(byte(i + 1))
+		value := mutationTestHash(byte(i + 129))
+		entry, ok := obj.kvDirty[kvCompositeHashKeyString(kvdomains.ContractStorage, rowKey)]
+		if !ok || !bytes.Equal(entry.val, value[:]) {
+			t.Fatalf("key %d lost after arena growth: ok=%t value=%x", i, ok, entry.val)
+		}
+	}
+}
+
 func BenchmarkAccountKVStageAndPrepareBatch(b *testing.B) {
 	const count = 256
 	keys := make([][]byte, count)

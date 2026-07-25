@@ -2964,11 +2964,16 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 	// Downstream phases keep pointer-based plans, but every plan lives only for
 	// this commit. Allocate their stable addresses from one commit-sized arena
 	// instead of creating one heap object per dirty account.
+	storageCompositeBytes := 0
+	for _, addr := range addrs {
+		storageCompositeBytes += len(s.stateObjects[addr].dirtyStorage) * (2 + tcommon.HashLength)
+	}
+	storageKeyArena := make([]byte, 0, storageCompositeBytes)
 	planStorage := make([]accountCommitPlan, len(addrs))
 	plans := make([]*accountCommitPlan, len(addrs))
 	for i, addr := range addrs {
 		plan := &planStorage[i]
-		if err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr], plan); err != nil {
+		if err := s.prepareAccountCommitPlanWithArena(addr, s.stateObjects[addr], plan, &storageKeyArena); err != nil {
 			return nil, err
 		}
 		plans[i] = plan
@@ -2977,6 +2982,11 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 }
 
 func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject, plan *accountCommitPlan) error {
+	storageKeyArena := make([]byte, 0, len(obj.dirtyStorage)*(2+tcommon.HashLength))
+	return s.prepareAccountCommitPlanWithArena(addr, obj, plan, &storageKeyArena)
+}
+
+func (s *StateDB) prepareAccountCommitPlanWithArena(addr tcommon.Address, obj *stateObject, plan *accountCommitPlan, storageKeyArena *[]byte) error {
 	*plan = accountCommitPlan{
 		addr:               addr,
 		obj:                obj,
@@ -3018,7 +3028,7 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			origin := obj.dirtyStorage[key]
 			rowKey := s.storageRowKey(addr, key)
 			if origin.loaded {
-				staged := s.stageStorageCommitWithPrev(obj, rowKey, value, value == (tcommon.Hash{}), origin)
+				staged := s.stageStorageCommitWithPrevArena(obj, rowKey, value, value == (tcommon.Hash{}), origin, storageKeyArena)
 				if staged {
 					if value == (tcommon.Hash{}) {
 						plan.storageDeletes++

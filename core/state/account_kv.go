@@ -1018,6 +1018,18 @@ func kvCompositeHashKeyString(domain kvdomains.KVDomain, key tcommon.Hash) strin
 	return ownedBytesString(out)
 }
 
+// appendKVCompositeHashKeyString appends the fixed-width composite key to a
+// commit-owned arena and returns an immutable view of the appended bytes. The
+// destination map keeps that backing allocation reachable after this helper
+// returns. Callers must not mutate arena contents; appending is safe even if it
+// grows because strings already returned keep their former backing arrays live.
+func appendKVCompositeHashKeyString(arena *[]byte, domain kvdomains.KVDomain, key tcommon.Hash) string {
+	start := len(*arena)
+	*arena = binary.BigEndian.AppendUint16(*arena, uint16(domain))
+	*arena = append(*arena, key[:]...)
+	return ownedBytesString((*arena)[start:])
+}
+
 // lookupKVEntry builds the common <=64-byte logical key in stack storage. The
 // transient []byte-to-string conversion is allocation-free for map lookup.
 func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []byte) (kvEntry, bool) {
@@ -1505,9 +1517,16 @@ func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDoma
 
 // stageStorageCommitWithPrev is the fixed-width counterpart of
 // stageAccountKVCommitWithPrev. Passing hashes by value keeps the transient
-// row key and slot value on the caller's stack; only the final composite key,
-// value, and optional pre-image owned by kvDirty are allocated.
+// row key and slot value on the caller's stack; the standalone path allocates
+// only the final composite key, value, and optional pre-image owned by kvDirty.
 func (s *StateDB) stageStorageCommitWithPrev(obj *stateObject, rowKey, value tcommon.Hash, deleted bool, origin storageOrigin) bool {
+	return s.stageStorageCommitWithPrevArena(obj, rowKey, value, deleted, origin, nil)
+}
+
+// stageStorageCommitWithPrevArena uses arena for the final composite map key
+// when supplied. Commit planning sizes one shared arena for all dirty storage
+// slots, replacing one tiny allocation per slot with one allocation per block.
+func (s *StateDB) stageStorageCommitWithPrevArena(obj *stateObject, rowKey, value tcommon.Hash, deleted bool, origin storageOrigin, arena *[]byte) bool {
 	var lookup [2 + tcommon.HashLength]byte
 	binary.BigEndian.PutUint16(lookup[:2], uint16(kvdomains.ContractStorage))
 	copy(lookup[2:], rowKey[:])
@@ -1520,7 +1539,12 @@ func (s *StateDB) stageStorageCommitWithPrev(obj *stateObject, rowKey, value tco
 		return false
 	}
 
-	mk := kvCompositeHashKeyString(kvdomains.ContractStorage, rowKey)
+	var mk string
+	if arena == nil {
+		mk = kvCompositeHashKeyString(kvdomains.ContractStorage, rowKey)
+	} else {
+		mk = appendKVCompositeHashKeyString(arena, kvdomains.ContractStorage, rowKey)
+	}
 	entry := newKVHashEntry(value, deleted)
 	if dirty {
 		entry.inheritPrev(prevDirty)
