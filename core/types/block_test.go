@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -173,6 +174,132 @@ func TestBlockHashFromRawRejectsMalformedOrMissingHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnmarshalBlockPreservesPrePQLegacyFieldCollision(t *testing.T) {
+	// Exact transaction wire from mainnet block 10,476,461, transaction 33.
+	// Its field 6 contains a legacy 32-byte value which is not a valid
+	// PQAuthSig submessage. java-tron's pre-PQ schema retains it as unknown.
+	txWire, err := hex.DecodeString(
+		"0a95010a02db92220835f4db4ae8bd08d940a0b898c2b92d5a71081f126d" +
+			"0a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c" +
+			"2e54726967676572536d617274436f6e747261637412380a1541bf2e397b" +
+			"1c8ac1d0893e217eb9daeed5fe01b0ee121541b3a9835ce8d9a67a44dea9" +
+			"a9078ada92154a889e18c0843d2204d0e30db0709af794c2b92d788094eb" +
+			"dc031241cc1e75aba66a874cd19477b9cb3eb4e862fa1a9712b0e3b6e801" +
+			"fa2cdcd7127d25f46b9902f79d3309215de9d013bb06140071e5047066f5" +
+			"c59b628e860dcfdc012a02180a3220c938c250417b4ed60e484176026717" +
+			"9a163436290db817973146aae87bc8af283a95010a02db92220835f4db4ae8" +
+			"bd08d940a0b898c2b92d5a71081f126d0a31747970652e676f6f676c6561" +
+			"7069732e636f6d2f70726f746f636f6c2e54726967676572536d61727443" +
+			"6f6e747261637412380a1541bf2e397b1c8ac1d0893e217eb9daeed5fe01" +
+			"b0ee121541b3a9835ce8d9a67a44dea9a9078ada92154a889e18c0843d22" +
+			"04d0e30db0709af794c2b92d788094ebdc03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := rawBlockWithTransaction(t, txWire, 10_476_461, 8)
+	var strict corepb.Block
+	if err := proto.Unmarshal(raw, &strict); err == nil {
+		t.Fatal("PQ-aware protobuf unexpectedly accepted legacy field collision")
+	}
+
+	block, err := UnmarshalBlock(raw)
+	if err != nil {
+		t.Fatalf("compat unmarshal: %v", err)
+	}
+	if got := block.Number(); got != 10_476_461 {
+		t.Fatalf("block number = %d", got)
+	}
+	tx := block.Proto().GetTransactions()[0]
+	if got := len(tx.GetPqAuthSig()); got != 0 {
+		t.Fatalf("legacy field decoded as %d PQ signatures", got)
+	}
+	legacyOffset := bytes.Index(txWire, []byte{0x32, 0x20, 0xc9, 0x38})
+	if legacyOffset < 0 {
+		t.Fatal("legacy fields missing from fixture")
+	}
+	legacyFields := txWire[legacyOffset:]
+	if got := tx.ProtoReflect().GetUnknown(); !bytes.Equal(got, legacyFields) {
+		t.Fatalf("unknown fields = %x, want %x", got, legacyFields)
+	}
+	roundTrip, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(roundTrip, raw) {
+		t.Fatal("compat decode did not preserve historical block wire bytes")
+	}
+	if _, err := UnmarshalBlock(roundTrip); err != nil {
+		t.Fatalf("compat round-trip no longer decodes: %v", err)
+	}
+	owned, err := UnmarshalBlockOwned(bytes.Clone(raw))
+	if err != nil {
+		t.Fatalf("owned compat unmarshal: %v", err)
+	}
+	reused, err := owned.MarshalReusable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reused, raw) {
+		t.Fatal("owned scratch round trip changed historical block wire bytes")
+	}
+}
+
+func TestUnmarshalBlockRejectsMalformedPQAtPQVersion(t *testing.T) {
+	tx := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1}}
+	txWire, err := proto.Marshal(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txWire = protowire.AppendTag(txWire, 6, protowire.BytesType)
+	txWire = protowire.AppendBytes(txWire, []byte{0xff})
+	raw := rawBlockWithTransaction(t, txWire, 1, int32(firstPQBlockVersion))
+	if _, err := UnmarshalBlock(raw); err == nil {
+		t.Fatal("PQ-version block accepted malformed PQAuthSig")
+	}
+}
+
+func TestUnmarshalBlockPreservesPrePQHeaderFieldCollision(t *testing.T) {
+	header := &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 2, Version: 36}}
+	headerWire, err := proto.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyField := protowire.AppendTag(nil, 3, protowire.BytesType)
+	legacyField = protowire.AppendBytes(legacyField, []byte{0xff})
+	headerWire = append(headerWire, legacyField...)
+	raw := protowire.AppendTag(nil, 2, protowire.BytesType)
+	raw = protowire.AppendBytes(raw, headerWire)
+
+	block, err := UnmarshalBlock(raw)
+	if err != nil {
+		t.Fatalf("compat unmarshal: %v", err)
+	}
+	if got := block.Proto().GetBlockHeader().ProtoReflect().GetUnknown(); !bytes.Equal(got, legacyField) {
+		t.Fatalf("header unknown = %x, want %x", got, legacyField)
+	}
+	roundTrip, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(roundTrip, raw) {
+		t.Fatal("header collision wire changed after round trip")
+	}
+}
+
+func rawBlockWithTransaction(t *testing.T, txWire []byte, number int64, version int32) []byte {
+	t.Helper()
+	headerWire, err := proto.Marshal(&corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: number, Version: version,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := protowire.AppendTag(nil, 1, protowire.BytesType)
+	raw = protowire.AppendBytes(raw, txWire)
+	raw = protowire.AppendTag(raw, 2, protowire.BytesType)
+	return protowire.AppendBytes(raw, headerWire)
 }
 
 func TestBlockSerialize(t *testing.T) {

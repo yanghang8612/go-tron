@@ -11,6 +11,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var ErrInvalidTransactionMerkleRoot = errors.New("block transaction merkle root mismatch")
@@ -276,9 +277,168 @@ func (b *Block) AdoptMarshalScratch(data []byte) {
 func UnmarshalBlock(data []byte) (*Block, error) {
 	pb := &corepb.Block{}
 	if err := proto.Unmarshal(data, pb); err != nil {
-		return nil, err
+		// VERSION_4_8_2_PQ1 assigned protobuf fields that older nodes had
+		// treated as unknown. Historical mainnet blocks can therefore contain
+		// arbitrary length-delimited data at Transaction field 6 (block
+		// 10,476,461 is one example). The PQ-aware decoder tries to interpret
+		// that legacy value as a nested PQAuthSig and rejects the whole block.
+		// Preserve such values in protobuf's unknown-field set for pre-PQ block
+		// versions, exactly matching the schema that produced those blocks.
+		legacyPB, ok := unmarshalPrePQBlock(data)
+		if !ok {
+			return nil, err
+		}
+		pb = legacyPB
 	}
 	return NewBlockFromPB(pb), nil
+}
+
+// firstPQBlockVersion is VERSION_4_8_2_PQ1. Blocks below this version were
+// produced with a schema where Transaction field 6 and BlockHeader field 3
+// were unknown, so their contents must not be recursively decoded as PQAuthSig.
+const firstPQBlockVersion int64 = 37
+
+// unmarshalPrePQBlock retries a block after moving malformed values that
+// collide with later PQAuthSig field assignments into protobuf unknown-field
+// storage. It returns ok=false unless the block is pre-PQ, contains at least
+// one such collision, and is otherwise a valid core.Block protobuf.
+func unmarshalPrePQBlock(data []byte) (*corepb.Block, bool) {
+	header, ok, err := protobufBytesField(data, 2)
+	if err != nil || !ok {
+		return nil, false
+	}
+	rawHeader, ok, err := protobufBytesField(header, 1)
+	if err != nil || !ok {
+		return nil, false
+	}
+	version, err := protobufInt64Field(rawHeader, 10)
+	if err != nil || version >= firstPQBlockVersion {
+		return nil, false
+	}
+
+	cleanBlock := make([]byte, 0, len(data))
+	var txUnknown [][]byte
+	var headerUnknown []byte
+	changed := false
+	for len(data) > 0 {
+		field, wireType, n := protowire.ConsumeField(data)
+		if n < 0 {
+			return nil, false
+		}
+		rawField := data[:n]
+		data = data[n:]
+		if (field != 1 && field != 2) || wireType != protowire.BytesType {
+			cleanBlock = append(cleanBlock, rawField...)
+			continue
+		}
+		_, _, tagLen := protowire.ConsumeTag(rawField)
+		if tagLen < 0 {
+			return nil, false
+		}
+		value, valueLen := protowire.ConsumeBytes(rawField[tagLen:])
+		if valueLen < 0 {
+			return nil, false
+		}
+
+		pqField := protowire.Number(6)
+		if field == 2 {
+			pqField = 3
+		}
+		var message proto.Message = &corepb.Transaction{}
+		if field == 2 {
+			message = &corepb.BlockHeader{}
+		}
+		cleanValue, unknown, fieldChanged, err := stripMalformedPQFields(value, pqField, message)
+		if err != nil {
+			return nil, false
+		}
+		if field == 1 {
+			txUnknown = append(txUnknown, unknown)
+		} else {
+			headerUnknown = unknown
+		}
+		if !fieldChanged {
+			cleanBlock = append(cleanBlock, rawField...)
+			continue
+		}
+		changed = true
+		cleanBlock = protowire.AppendTag(cleanBlock, field, protowire.BytesType)
+		cleanBlock = protowire.AppendBytes(cleanBlock, cleanValue)
+	}
+	if !changed {
+		return nil, false
+	}
+
+	pb := &corepb.Block{}
+	if err := proto.Unmarshal(cleanBlock, pb); err != nil || len(pb.Transactions) != len(txUnknown) {
+		return nil, false
+	}
+	for i, unknown := range txUnknown {
+		appendProtoUnknown(pb.Transactions[i], unknown)
+	}
+	if len(headerUnknown) != 0 {
+		if pb.BlockHeader == nil {
+			return nil, false
+		}
+		appendProtoUnknown(pb.BlockHeader, headerUnknown)
+	}
+	return pb, true
+}
+
+// stripMalformedPQFields removes only values that cannot be decoded as the
+// newer nested PQAuthSig message. The returned unknown bytes include their
+// original field tags and lengths so proto.Marshal preserves block size and
+// legacy wire contents.
+func stripMalformedPQFields(data []byte, pqField protowire.Number, message proto.Message) (clean, unknown []byte, changed bool, err error) {
+	clean = make([]byte, 0, len(data))
+	fields := message.ProtoReflect().Descriptor().Fields()
+	for len(data) > 0 {
+		field, wireType, n := protowire.ConsumeField(data)
+		if n < 0 {
+			return nil, nil, false, protowire.ParseError(n)
+		}
+		rawField := data[:n]
+		data = data[n:]
+		malformedPQ := false
+		if field == pqField {
+			if wireType != protowire.BytesType {
+				malformedPQ = true
+			} else {
+				_, _, tagLen := protowire.ConsumeTag(rawField)
+				if tagLen < 0 {
+					return nil, nil, false, errors.New("malformed PQ field envelope")
+				}
+				value, valueLen := protowire.ConsumeBytes(rawField[tagLen:])
+				if valueLen < 0 {
+					return nil, nil, false, errors.New("malformed PQ field envelope")
+				}
+				malformedPQ = proto.Unmarshal(value, &corepb.PQAuthSig{}) != nil
+			}
+		}
+		// Once a malformed PQ collision requires rebuilding this message, keep
+		// every unknown field out of the intermediate decode. They are restored
+		// together below in their original order; otherwise protobuf would place
+		// the removed PQ field after unknown fields that originally followed it.
+		if malformedPQ || fields.ByNumber(protoreflect.FieldNumber(field)) == nil {
+			unknown = append(unknown, rawField...)
+			changed = changed || malformedPQ
+			continue
+		}
+		clean = append(clean, rawField...)
+	}
+	return clean, unknown, changed, nil
+}
+
+func appendProtoUnknown(message proto.Message, unknown []byte) {
+	if len(unknown) == 0 {
+		return
+	}
+	reflection := message.ProtoReflect()
+	existing := reflection.GetUnknown()
+	combined := make([]byte, 0, len(existing)+len(unknown))
+	combined = append(combined, existing...)
+	combined = append(combined, unknown...)
+	reflection.SetUnknown(combined)
 }
 
 // UnmarshalBlockOwned is UnmarshalBlock plus ownership transfer of data's
