@@ -189,8 +189,7 @@ func (e *storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ 
 		if e.prev == (tcommon.Hash{}) && !e.prevExists && !e.prevDirty {
 			delete(obj.storage, e.key)
 		} else {
-			obj.ensureStorage()
-			obj.storage[e.key] = storageSlot{value: e.prev, exists: e.prevExists}
+			obj.cacheStorageSlot(e.key, storageSlot{value: e.prev, exists: e.prevExists})
 		}
 		if e.prevDirty {
 			if _, ok := obj.dirtyStorage[e.key]; !ok {

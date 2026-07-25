@@ -88,6 +88,60 @@ func TestStateObjectReleaseDirtyStorageClearsLifecycleState(t *testing.T) {
 	obj.releaseDirtyStorage()
 }
 
+func TestStateObjectReleaseStorageClearsLifecycleState(t *testing.T) {
+	obj := new(stateObject)
+	var oldKey, newKey tcommon.Hash
+	oldKey[31] = 3
+	newKey[31] = 4
+	obj.cacheStorageSlot(oldKey, storageSlot{exists: true})
+	if obj.storageHighWater != 1 {
+		t.Fatalf("high water = %d, want 1", obj.storageHighWater)
+	}
+	obj.releaseStorage()
+	if obj.storage != nil || obj.storageHighWater != 0 {
+		t.Fatalf("released storage = (%v,%d), want (nil,0)", obj.storage, obj.storageHighWater)
+	}
+
+	obj.cacheStorageSlot(newKey, storageSlot{value: tcommon.Hash{1}, exists: true})
+	if len(obj.storage) != 1 {
+		t.Fatalf("reused storage length = %d, want 1", len(obj.storage))
+	}
+	if _, stale := obj.storage[oldKey]; stale {
+		t.Fatal("reused storage retained an entry from its previous lifecycle")
+	}
+	obj.releaseStorage()
+}
+
+func BenchmarkStateObjectStorageLifecycle(b *testing.B) {
+	const slots = 64
+	var keys [slots]tcommon.Hash
+	for i := range keys {
+		keys[i][30] = byte(i >> 8)
+		keys[i][31] = byte(i)
+	}
+	b.Run("fresh", func(b *testing.B) {
+		obj := new(stateObject)
+		b.ReportAllocs()
+		for b.Loop() {
+			obj.storage = make(map[tcommon.Hash]storageSlot)
+			for _, key := range keys {
+				obj.storage[key] = storageSlot{exists: true}
+			}
+			obj.storage = nil
+		}
+	})
+	b.Run("pooled", func(b *testing.B) {
+		obj := new(stateObject)
+		b.ReportAllocs()
+		for b.Loop() {
+			for _, key := range keys {
+				obj.cacheStorageSlot(key, storageSlot{exists: true})
+			}
+			obj.releaseStorage()
+		}
+	})
+}
+
 func BenchmarkStateObjectDirtyStorageLifecycle(b *testing.B) {
 	const slots = 64
 	var keys [slots]tcommon.Hash

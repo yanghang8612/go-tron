@@ -1636,8 +1636,7 @@ func (s *StateDB) FinalizeTransaction() {
 		for k := range obj.dirtyStorage {
 			if slot := obj.storage[k]; slot.value == (tcommon.Hash{}) {
 				slot.exists = false
-				obj.ensureStorage()
-				obj.storage[k] = slot
+				obj.cacheStorageSlot(k, slot)
 			}
 		}
 		if obj.selfDestructed && !obj.deleted {
@@ -2583,19 +2582,16 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	// every SLOAD crosses the blockbuffer and reaches Pebble again. Keep errors
 	// uncached above because a transient read failure must remain retryable.
 	if !ok || len(raw) == 0 {
-		obj.ensureStorage()
-		obj.storage[key] = storageSlot{}
+		obj.cacheStorageSlot(key, storageSlot{})
 		return tcommon.Hash{}, false
 	}
 	var h tcommon.Hash
 	copy(h[len(h)-len(raw):], raw)
 	if h == (tcommon.Hash{}) {
-		obj.ensureStorage()
-		obj.storage[key] = storageSlot{}
+		obj.cacheStorageSlot(key, storageSlot{})
 		return tcommon.Hash{}, false
 	}
-	obj.ensureStorage()
-	obj.storage[key] = storageSlot{value: h, exists: true}
+	obj.cacheStorageSlot(key, storageSlot{value: h, exists: true})
 	return h, true
 }
 
@@ -2921,14 +2917,15 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			contractMeta:             metaCopy,
 			contractMetaDirty:        obj.contractMetaDirty,
 			storage:                  storageCopy,
+			storageHighWater:         len(obj.storage),
 			dirtyStorage:             dirtyStorageCopy,
-			dirtyStorageHighWater:    len(dirtyStorageCopy),
+			dirtyStorageHighWater:    len(obj.dirtyStorage),
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
 			accountKVGenerationDirty: obj.accountKVGenerationDirty,
 			kvDirty:                  kvDirtyCopy,
-			kvDirtyHighWater:         len(kvDirtyCopy),
+			kvDirtyHighWater:         len(obj.kvDirty),
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -3333,7 +3330,7 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 		obj.accountDirty = false
 		obj.contractMeta = nil
 		obj.contractMetaDirty = false
-		obj.storage = nil
+		obj.releaseStorage()
 		obj.releaseDirtyStorage()
 		obj.dirty = false
 		return
@@ -3965,6 +3962,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			continue
 		}
 		clearAccountFrozenBandwidthCache(obj)
+		obj.releaseStorage()
 		delete(s.stateObjects, addr)
 		if s.lastStateObject == obj {
 			s.lastStateObject = nil
@@ -3973,7 +3971,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 	for _, addr := range current {
 		if obj := s.stateObjects[addr]; obj != nil {
 			if !obj.dirty && len(obj.storage) > maxStateObjectCachedStorageSlots {
-				obj.storage = nil
+				obj.releaseStorage()
 			}
 			obj.cacheTouched = false
 		}

@@ -34,6 +34,18 @@ const maxPooledDirtyStorageEntries = 1024
 
 var dirtyStorageMapPool sync.Pool
 
+// storageMapPool reuses the private per-stateObject SLOAD cache after the
+// object is evicted, deleted, or its oversized cache is discarded. Account
+// references exposed outside StateDB do not expose this map, so detaching it
+// from the stateObject before clearing makes reuse ownership-safe.
+//
+// Storage-heavy contracts can touch thousands of unique mapping slots. Retain
+// only modest cache maps so the pool reduces ordinary account churn without
+// pinning large hash tables after an exceptional block.
+const maxPooledStorageEntries = 512
+
+var storageMapPool sync.Pool
+
 // storageOrigin is the durable value observed before a slot's first write in
 // the current commit interval. SetState already has to load that value for
 // SSTORE semantics, so retaining it lets commit planning avoid reading the
@@ -122,7 +134,8 @@ type stateObject struct {
 	storageKeyPrefix       [storageKeyPrefixBytes]byte
 	storageKeyLayoutCached bool
 	storageKeyHashSlot     bool
-	storage                map[tcommon.Hash]storageSlot   // cached current contract storage and StorageRow existence
+	storage                map[tcommon.Hash]storageSlot // cached current contract storage and StorageRow existence
+	storageHighWater       int
 	dirtyStorage           map[tcommon.Hash]storageOrigin // slots written this block and their pre-write values
 	dirtyStorageHighWater  int
 	selfDestructed         bool
@@ -195,8 +208,38 @@ func (s *stateObject) markDirty() {
 }
 
 func (s *stateObject) ensureStorage() {
-	if s.storage == nil {
+	if s.storage != nil {
+		return
+	}
+	if pooled := storageMapPool.Get(); pooled != nil {
+		s.storage = pooled.(map[tcommon.Hash]storageSlot)
+	} else {
 		s.storage = make(map[tcommon.Hash]storageSlot)
+	}
+}
+
+func (s *stateObject) cacheStorageSlot(key tcommon.Hash, slot storageSlot) {
+	s.ensureStorage()
+	s.storage[key] = slot
+	if len(s.storage) > s.storageHighWater {
+		s.storageHighWater = len(s.storage)
+	}
+}
+
+func (s *stateObject) releaseStorage() {
+	storage := s.storage
+	highWater := s.storageHighWater
+	s.storage = nil
+	s.storageHighWater = 0
+	if storage == nil {
+		return
+	}
+	if len(storage) > highWater {
+		highWater = len(storage)
+	}
+	clear(storage)
+	if highWater <= maxPooledStorageEntries {
+		storageMapPool.Put(storage)
 	}
 }
 
@@ -326,8 +369,7 @@ func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 // second dirtyStorage lookup on every SSTORE; setStorage retains the defensive
 // origin setup used by direct stateObject helpers and tests.
 func (s *stateObject) setStorageValue(key, value tcommon.Hash, exists bool) {
-	s.ensureStorage()
-	s.storage[key] = storageSlot{value: value, exists: exists}
+	s.cacheStorageSlot(key, storageSlot{value: value, exists: exists})
 	s.markDirty()
 }
 
