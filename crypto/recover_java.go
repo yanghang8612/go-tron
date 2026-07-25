@@ -2,9 +2,12 @@ package crypto
 
 import (
 	"errors"
+	"hash"
+	"sync"
 
 	decdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"golang.org/x/crypto/sha3"
 
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -19,6 +22,32 @@ var emptyKeccakAddr20 = ethcrypto.Keccak256(nil)[12:]
 // ErrPointAtInfinity is returned (decred's sentinel text) when recovery lands
 // on the point at infinity; we match on it to mirror java's behavior.
 var errInfinity = errors.New("recovered pubkey is the point at infinity")
+
+// signerKeccakPool reuses the legacy Keccak state used after public-key
+// recovery. Signature prewarming runs concurrently across transactions, so a
+// sync.Pool gives each caller exclusive scratch without serializing the crypto
+// work. Reset occurs before every use and the digest is copied into a value
+// before the state is returned.
+type signerKeccakScratch struct {
+	h      hash.Hash
+	digest common.Hash
+}
+
+var signerKeccakPool = sync.Pool{
+	New: func() any {
+		return &signerKeccakScratch{h: sha3.NewLegacyKeccak256()}
+	},
+}
+
+func signerAddressHash(pubkey []byte) common.Hash {
+	scratch := signerKeccakPool.Get().(*signerKeccakScratch)
+	scratch.h.Reset()
+	_, _ = scratch.h.Write(pubkey)
+	scratch.h.Sum(scratch.digest[:0])
+	digest := scratch.digest
+	signerKeccakPool.Put(scratch)
+	return digest
+}
 
 // SigToAddressJavaCompat recovers the TRON signer address from a transaction
 // signature, reproducing java-tron's ECKey.signatureToAddress EXACTLY —
@@ -43,7 +72,7 @@ func SigToAddressJavaCompat(hash, recoverySig []byte) (common.Address, error) {
 	// cgo and the decred implementation on pure-Go builds.
 	pubBytes, err := ethcrypto.Ecrecover(hash, recoverySig)
 	if err == nil {
-		digest := ethcrypto.Keccak256Hash(pubBytes[1:])
+		digest := signerAddressHash(pubBytes[1:])
 		var addr common.Address
 		addr[0] = common.AddressPrefixMainnet
 		copy(addr[1:], digest[12:])
