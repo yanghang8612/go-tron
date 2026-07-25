@@ -1491,7 +1491,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		sess = ss.chain.BeginInsertSession()
 	}
 	var lastPeer *p2p.Peer
-	var restartAfterDrain *p2p.Peer
+	var restartAfterDrain bool
+	var restartExclude *p2p.Peer
 	paused := false
 	for {
 		now := time.Now()
@@ -1518,10 +1519,22 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
-			complete := ss.shouldFinishLocked()
-			joinPeers := !complete && ss.shouldJoinAvailablePeersLocked(now)
-			ss.mirrorLegacyLocked()
+			restart := len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
+			complete := false
+			joinPeers := false
+			if restart {
+				ss.doReset()
+			} else {
+				complete = ss.shouldFinishLocked()
+				joinPeers = !complete && ss.shouldJoinAvailablePeersLocked(now)
+				ss.mirrorLegacyLocked()
+			}
 			ss.mu.Unlock()
+			if restart {
+				restartAfterDrain = true
+				restartExclude = lastPeer
+				break
+			}
 			if joinPeers {
 				ss.joinAvailablePeers()
 			}
@@ -1549,7 +1562,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			}
 			ss.sendOutboundRequests(retryOut)
 			if restart {
-				restartAfterDrain = badPeer
+				restartAfterDrain = true
+				restartExclude = badPeer
 				break
 			}
 			continue
@@ -1635,8 +1649,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 	}
 	ss.sendOutboundRequests(out)
-	if restartAfterDrain != nil {
-		ss.tryFindSyncPeer(restartAfterDrain)
+	if restartAfterDrain {
+		ss.tryFindSyncPeer(restartExclude)
 	}
 }
 
@@ -1912,7 +1926,16 @@ func (ss *SyncService) shouldFinishLocked() bool {
 }
 
 func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
-	if !ss.syncing || ss.pause.Paused() || len(ss.retryList) == 0 || len(ss.blockBuffer) != 0 {
+	if !ss.syncing || ss.pause.Paused() || len(ss.retryList) == 0 {
+		return false
+	}
+	// Buffered blocks beyond a retry gap cannot make progress by themselves.
+	// Only a contiguous next block is a reason to keep the current session;
+	// treating any far-future entry as progress leaves the downloader parked
+	// forever with retries, no in-flight fetch, and thousands of unusable
+	// children whose missing parent no current peer can serve.
+	next := ss.effectiveSyncTipLocked() + 1
+	if _, contiguous := ss.blockBuffer[next]; contiguous {
 		return false
 	}
 	for _, ps := range ss.peers {

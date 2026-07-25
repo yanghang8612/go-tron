@@ -134,6 +134,30 @@ func TestFetchTimeoutWithStalledRetriesRestartsSession(t *testing.T) {
 	}
 }
 
+func TestStalledRetryGapRestartsDespiteFutureBuffer(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer, closePeer := testPeer(t, "future-buffer")
+	defer closePeer()
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ps.done = true
+	ss.retryList = []types.BlockID{{Hash: tcommon.Hash{0x01}, Num: 1}}
+	ss.blockBuffer[2] = bufferedSyncBlock{hash: tcommon.Hash{0x02}, num: 2}
+	if !ss.shouldRestartForStalledRetriesLocked() {
+		ss.mu.Unlock()
+		t.Fatal("future buffered child hid an unfetchable retry gap")
+	}
+	ss.blockBuffer[1] = bufferedSyncBlock{hash: tcommon.Hash{0x01}, num: 1}
+	if ss.shouldRestartForStalledRetriesLocked() {
+		ss.mu.Unlock()
+		t.Fatal("contiguous buffered block should drain before restarting")
+	}
+	ss.mu.Unlock()
+}
+
 // TestPeerRemovalDoesNotRetryAppliedRequest covers an in-flight response that
 // becomes obsolete while CurrentBlock still lags. Failover must neither retry
 // it nor retain its path reservation; later peers start strictly after the
