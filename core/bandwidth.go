@@ -210,12 +210,14 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 			// scheme-specific maximum embedded PQAuthSig wire size.
 			pb := tx.Proto()
 			createSize := int64(transactionSizeWithoutRet(tx) - 65*len(pb.GetSignature()))
-			for _, auth := range pb.GetPqAuthSig() {
-				wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())
-				if !ok {
-					return BandwidthResult{}, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
+			if dynProps.AllowPQSignatures() {
+				for _, auth := range pb.GetPqAuthSig() {
+					wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())
+					if !ok {
+						return BandwidthResult{}, fmt.Errorf("unknown pq signature scheme %s", auth.GetScheme())
+					}
+					createSize -= int64(wireSize)
 				}
-				createSize -= int64(wireSize)
 			}
 			if createSize > dynProps.MaxCreateAccountTxSize() {
 				return BandwidthResult{}, fmt.Errorf("create account transaction size %d exceeds maximum %d", createSize, dynProps.MaxCreateAccountTxSize())

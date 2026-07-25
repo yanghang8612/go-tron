@@ -70,7 +70,11 @@ func ownerOfContract(c *corepb.Transaction_Contract, decoded proto.Message) comm
 // (MULTI_SIGN_FEE is 1_000_000 from genesis). The gate is latent (a >1-sig tx cannot
 // validate before AllowMultiSign activates) but go-tron must not add it for parity.
 func ConsumeMultiSignFee(ctx *Context) (int64, error) {
-	if len(ctx.Tx.Signatures())+len(ctx.Tx.Proto().GetPqAuthSig()) <= 1 {
+	pqSigCount := 0
+	if ctx.DynProps.AllowPQSignatures() {
+		pqSigCount = len(ctx.Tx.Proto().GetPqAuthSig())
+	}
+	if len(ctx.Tx.Signatures())+pqSigCount <= 1 {
 		return 0, nil
 	}
 	fee := ctx.DynProps.MultiSignFee()

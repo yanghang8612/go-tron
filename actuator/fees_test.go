@@ -219,6 +219,7 @@ func TestConsumeMultiSignFeeCountsPQSignatures(t *testing.T) {
 		{Scheme: corepb.PQScheme_FN_DSA_512},
 		{Scheme: corepb.PQScheme_FN_DSA_512},
 	}
+	ctx.DynProps.SetAllowFnDsa512(true)
 	ctx.DynProps.SetMultiSignFee(1_000_000)
 	charged, err := ConsumeMultiSignFee(ctx)
 	if err != nil {
@@ -226,6 +227,23 @@ func TestConsumeMultiSignFeeCountsPQSignatures(t *testing.T) {
 	}
 	if charged != 1_000_000 || ctx.State.GetBalance(owner) != 9_000_000 {
 		t.Fatalf("PQ multi-sign charge=%d balance=%d", charged, ctx.State.GetBalance(owner))
+	}
+}
+
+func TestConsumeMultiSignFeeIgnoresPrePQEmptyField(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	seedAccount(statedb, owner, 10_000_000)
+	ctx := setupContext(t, statedb, makeTransferTxWithSigs(1, 2, 1_000, 1))
+	ctx.Tx.Proto().PqAuthSig = []*corepb.PQAuthSig{{}}
+	ctx.DynProps.SetMultiSignFee(1_000_000)
+
+	charged, err := ConsumeMultiSignFee(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charged != 0 || ctx.State.GetBalance(owner) != 10_000_000 {
+		t.Fatalf("pre-PQ empty field charge=%d balance=%d", charged, ctx.State.GetBalance(owner))
 	}
 }
 

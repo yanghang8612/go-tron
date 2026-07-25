@@ -88,6 +88,14 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	if len(dynProps) != 0 {
 		dp = dynProps[0]
 	}
+	pqSigs := pb.GetPqAuthSig()
+	if !dp.AllowPQSignatures() {
+		// Field 6 was unknown to pre-PQ java-tron. Historical mainnet includes
+		// transactions carrying an empty length-delimited value at that tag
+		// (for example block 10,476,216 tx 11). The PQ-aware protobuf decodes it
+		// as one empty PQAuthSig, but legacy consensus ignored it entirely.
+		pqSigs = nil
+	}
 
 	ownerBytes, isShielded, err := extractContractOwner(tx)
 	if err != nil {
@@ -99,7 +107,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		// still REJECTS a shielded-source tx that carries transparent signatures
 		// ("there should be no signatures ... when transfer from shielded address");
 		// gtron previously skipped envelope validation entirely, accepting it.
-		if len(tx.Proto().GetSignature()) > 0 || len(tx.Proto().GetPqAuthSig()) > 0 {
+		if len(tx.Proto().GetSignature()) > 0 || len(pqSigs) > 0 {
 			return ErrShieldedUnexpectedSignature
 		}
 		return nil
@@ -110,7 +118,6 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	ownerAddr := tcommon.BytesToAddress(ownerBytes)
 
 	sigs := tx.Signatures()
-	pqSigs := pb.GetPqAuthSig()
 	if len(sigs)+len(pqSigs) == 0 {
 		return ErrNoSignature
 	}

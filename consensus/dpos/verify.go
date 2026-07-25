@@ -133,7 +133,10 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 	// SHA256(BlockHeader.raw) digest used by legacy ECDSA.
 	header := block.Proto().GetBlockHeader()
 	hasLegacy := len(header.GetWitnessSignature()) != 0
-	hasPQ := header.GetPqAuthSig() != nil
+	// Before either PQ proposal activates, the new protobuf field number is
+	// still an unknown field under legacy java-tron semantics. Ignore it so an
+	// empty historical tag cannot turn a valid ECDSA header into a hybrid one.
+	hasPQ := dp.AllowPQSignatures() && header.GetPqAuthSig() != nil
 	if hasLegacy == hasPQ {
 		return ErrInvalidSignature
 	}

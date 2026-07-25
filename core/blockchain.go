@@ -1093,12 +1093,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// PQ1 bounds expensive post-quantum transactions independently of block
 	// byte size. java-tron rejects any received block containing more than
 	// 1000 transactions with at least one pq_auth_sig entry.
-	pqTxCount := 0
-	for _, tx := range block.Proto().GetTransactions() {
-		if len(tx.GetPqAuthSig()) != 0 {
-			pqTxCount++
-			if pqTxCount > 1000 {
-				return fmt.Errorf("post-quantum transaction count exceeds 1000")
+	if dynProps.AllowPQSignatures() {
+		pqTxCount := 0
+		for _, tx := range block.Proto().GetTransactions() {
+			if len(tx.GetPqAuthSig()) != 0 {
+				pqTxCount++
+				if pqTxCount > 1000 {
+					return fmt.Errorf("post-quantum transaction count exceeds 1000")
+				}
 			}
 		}
 	}

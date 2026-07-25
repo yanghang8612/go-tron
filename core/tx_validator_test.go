@@ -154,8 +154,35 @@ func TestValidateTxEnvelope_MlDsa44Permission(t *testing.T) {
 	}
 
 	dp.SetAllowMlDsa44(false)
+	dp.SetAllowFnDsa512(true)
 	if err := ValidateTxEnvelope(tx, statedb, true, dp); !errors.Is(err, ErrInvalidTxSignature) {
 		t.Fatalf("disabled ML-DSA scheme: got %v", err)
+	}
+}
+
+// Historical mainnet transactions can contain an empty length-delimited value
+// at outer Transaction field 6. Old java-tron treated that tag as unknown; the
+// PQ-aware protobuf decodes the exact bytes (0x32, 0x00) as one empty
+// PQAuthSig. Before either PQ proposal activates it must not count as a second
+// signature or change otherwise-valid legacy ECDSA authorization.
+func TestValidateTxEnvelope_IgnoresPrePQEmptyFieldSix(t *testing.T) {
+	statedb, dp := newValidatorState(t)
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	tx.Proto().PqAuthSig = []*corepb.PQAuthSig{{}}
+	tx.Proto().ProtoReflect().SetUnknown([]byte{0x3a, 0x00})
+
+	if err := ValidateTxEnvelope(tx, statedb, true, dp); err != nil {
+		t.Fatalf("pre-PQ legacy transaction rejected: %v", err)
+	}
+
+	// Once PQ semantics are active, the same decoded field is no longer
+	// inert; the hybrid envelope is invalid and must still be rejected.
+	dp.SetAllowFnDsa512(true)
+	if err := ValidateTxEnvelope(tx, statedb, true, dp); !errors.Is(err, ErrTooManySignatures) {
+		t.Fatalf("active PQ field: got %v, want %v", err, ErrTooManySignatures)
 	}
 }
 

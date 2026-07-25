@@ -75,6 +75,29 @@ func TestVerifyHeader_MlDsa44WitnessPermission(t *testing.T) {
 	}
 }
 
+func TestVerifyHeader_IgnoresPrePQEmptyField(t *testing.T) {
+	witnessKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	parent := genesisAt(0)
+	block := signedHeaderBlock(t, 1, 3000, parent.Hash(), witness, witnessKey)
+	block.Proto().BlockHeader.PqAuthSig = &corepb.PQAuthSig{}
+	dp := state.NewDynamicProperties()
+	chain := &mockChainReader{
+		currentBlock: parent, genesisTime: 0, witnesses: []common.Address{witness}, dp: dp,
+	}
+
+	if err := VerifyHeaderWithDynProps(chain, block, dp); err != nil {
+		t.Fatalf("pre-PQ legacy header rejected: %v", err)
+	}
+	dp.SetAllowFnDsa512(true)
+	if err := VerifyHeaderWithDynProps(chain, block, dp); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("active PQ field: got %v, want %v", err, ErrInvalidSignature)
+	}
+}
+
 // buildBlock constructs a minimal types.Block with the given header fields
 // and a deliberately invalid 65-byte signature so recoverWitness returns
 // ErrInvalidSignature when reached. Tests use this to distinguish "rejected

@@ -1630,6 +1630,14 @@ func (dp *DynamicProperties) SetAllowMlDsa44(v bool) {
 	boolSet(dp, "allow_ml_dsa_44", v)
 }
 
+// AllowPQSignatures reports whether the chain interprets PQAuthSig protobuf
+// fields as signatures. Before either PQ proposal activates, those field
+// numbers are unknown to legacy java-tron and must remain semantically inert:
+// historical transactions may carry empty unknown fields at those tags.
+func (dp *DynamicProperties) AllowPQSignatures() bool {
+	return dp != nil && (dp.AllowFnDsa512() || dp.AllowMlDsa44())
+}
+
 // RemoveThePowerOfTheGr mirrors java-tron's getRemoveThePowerOfTheGr,
 // which stores 0 (initial) or -1 (executed) — it is not a classic bool.
 func (dp *DynamicProperties) RemoveThePowerOfTheGr() int64 {

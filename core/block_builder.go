@@ -106,7 +106,8 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	accountStateMark := statedb.JournalMark()
 
 	for _, tx := range pendingTxs {
-		if len(tx.Proto().GetPqAuthSig()) != 0 && pqTxCount >= 1000 {
+		hasPQSignature := dynProps.AllowPQSignatures() && len(tx.Proto().GetPqAuthSig()) != 0
+		if hasPQSignature && pqTxCount >= 1000 {
 			continue
 		}
 		// Producer pulls from txpool whose Add gate already validates the
@@ -122,7 +123,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
-		if len(txPB.GetPqAuthSig()) != 0 {
+		if hasPQSignature {
 			pqTxCount++
 		}
 		statedb.FinalizeTransaction()
