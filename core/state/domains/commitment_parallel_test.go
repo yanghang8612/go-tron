@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,6 +39,29 @@ func BenchmarkBufferedBranchStorePutBranchOverwrite(b *testing.B) {
 		if err := store.PutBranch(prefix, branch); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkBufferedBranchStorePutBranchDistinct(b *testing.B) {
+	const prefixCount = 512
+	prefixes := make([][]byte, prefixCount)
+	for i := range prefixes {
+		prefix := bytes.Repeat([]byte{byte(i & 0x0f)}, 32)
+		prefix[len(prefix)-3] = byte(i >> 8)
+		prefix[len(prefix)-2] = byte(i >> 4 & 0x0f)
+		prefix[len(prefix)-1] = byte(i & 0x0f)
+		prefixes[i] = prefix
+	}
+	branch := BranchData{}
+	b.ReportAllocs()
+	for b.Loop() {
+		store := borrowBufferedBranchStore(nil)
+		for _, prefix := range prefixes {
+			if err := store.PutBranch(prefix, branch); err != nil {
+				b.Fatal(err)
+			}
+		}
+		returnBufferedBranchStore(store)
 	}
 }
 
@@ -326,6 +350,42 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 	if rows := base.rowSet(); len(rows) != 2 {
 		t.Fatalf("flush emitted %d rows, want 2 (one per distinct prefix)", len(rows))
 	}
+}
+
+func TestBufferedBranchStoreOwnsPrefixAcrossMutationAndArenaGrowth(t *testing.T) {
+	base := newMapBranchStore()
+	buf := newBufferedBranchStore(base)
+	first := bytes.Repeat([]byte{0x01}, 32)
+	wantFirst := append([]byte(nil), first...)
+	var branch BranchData
+	branch.SetHashChild(1, common.Hash{0xaa})
+	if err := buf.PutBranch(first, branch); err != nil {
+		t.Fatal(err)
+	}
+	first[0] = 0x0f
+
+	// Force several arena growths after the first key's string view has been
+	// published. Older backing arrays must stay alive through their map keys.
+	for i := 0; i < 1024; i++ {
+		prefix := bytes.Repeat([]byte{byte(i & 0x0f)}, 48)
+		value := i + 1
+		for j := 1; j <= 4; j++ {
+			prefix[len(prefix)-j] = byte(value & 0x0f)
+			value >>= 4
+		}
+		if err := buf.PutBranch(prefix, branch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.GC()
+	got, ok, err := buf.GetBranch(wantFirst)
+	if err != nil || !ok || !bytes.Equal(got.Encode(), branch.Encode()) {
+		t.Fatalf("owned prefix lookup after growth: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := buf.GetBranch(first); err != nil || ok {
+		t.Fatalf("mutated caller prefix addressed stored branch: ok=%v err=%v", ok, err)
+	}
+	returnBufferedBranchStore(buf)
 }
 
 func TestBufferedBranchStorePoolResetsState(t *testing.T) {

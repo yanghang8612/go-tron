@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"unsafe"
 )
 
 // ParallelFoldMinOps gates the parallel root fold: a Fold whose resolved-op count
@@ -62,6 +63,12 @@ const maxFoldNibbles = 16
 //     after every worker has joined.
 type bufferedBranchStore struct {
 	base branchStore
+	// keyArena owns immutable prefix bytes for puts. Map lookups from caller
+	// []byte values remain allocation-free; only a first insertion appends the
+	// prefix here and publishes a read-only string view. The arena is reset only
+	// after every map entry has been removed, so later appends and pool reuse
+	// cannot mutate a live key.
+	keyArena []byte
 	// puts holds the latest buffered branch per prefix (one byte per nibble). A
 	// re-PUT of a prefix OVERWRITES, so the map is bounded by the number of
 	// DISTINCT prefixes the subtrie touches — not by how many times each is
@@ -87,8 +94,17 @@ type bufferedBranchStore struct {
 	dels map[string]struct{} // prefix -> tombstone
 }
 
+const (
+	initialBufferedBranchKeyArena   = 4 << 10
+	maxPooledBufferedBranchKeyArena = 64 << 10
+)
+
 var bufferedBranchStorePool = sync.Pool{
-	New: func() any { return new(bufferedBranchStore) },
+	New: func() any {
+		return &bufferedBranchStore{
+			keyArena: make([]byte, 0, initialBufferedBranchKeyArena),
+		}
+	},
 }
 
 // concurrentSiblingFlushStore is an opt-in marker for a branchStore whose
@@ -170,11 +186,18 @@ func (s *bufferedBranchStore) PutBranch(prefix []byte, b BranchData) error {
 		s.puts = make(map[string]*BranchData)
 	}
 	dst := borrowBranch()
-	// This conversion escapes into the map and owns the immutable prefix. It is
-	// reached exactly once per distinct prefix in this buffered sibling fold.
-	s.puts[string(prefix)] = dst
+	s.puts[s.ownPrefix(prefix)] = dst
 	*dst = b
 	return nil
+}
+
+func (s *bufferedBranchStore) ownPrefix(prefix []byte) string {
+	if len(prefix) == 0 {
+		return ""
+	}
+	start := len(s.keyArena)
+	s.keyArena = append(s.keyArena, prefix...)
+	return unsafe.String(unsafe.SliceData(s.keyArena[start:]), len(prefix))
 }
 
 func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
@@ -236,6 +259,11 @@ func (s *bufferedBranchStore) releasePuts() {
 	for k, b := range s.puts {
 		returnBranch(b)
 		delete(s.puts, k)
+	}
+	if cap(s.keyArena) <= maxPooledBufferedBranchKeyArena {
+		s.keyArena = s.keyArena[:0]
+	} else {
+		s.keyArena = nil
 	}
 }
 
