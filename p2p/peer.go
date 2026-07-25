@@ -19,12 +19,13 @@ type Peer struct {
 	// It is used by Server to reject duplicate connections to the same node,
 	// including cases where the same endpoint is discovered under different
 	// address strings.
-	remoteNodeID string
-	handler      Handler
-	writeCh      chan msgFrame
-	quit         chan struct{}
-	closed       atomic.Bool
-	wg           sync.WaitGroup
+	remoteNodeID    string
+	handler         Handler
+	writeCh         chan msgFrame
+	quit            chan struct{}
+	closed          atomic.Bool
+	disconnectCause atomic.Pointer[string]
+	wg              sync.WaitGroup
 
 	// lastSeenNanos holds the UnixNano timestamp of the most recent valid
 	// inbound post-handshake frame (or the handshake completion time if no
@@ -61,6 +62,26 @@ func (p *Peer) ID() string { return p.id }
 
 // Inbound returns true if the peer connected to us (vs us dialing them).
 func (p *Peer) Inbound() bool { return p.inbound }
+
+// RecordDisconnectCause stores the first concrete reason observed while the
+// connection is closing. A later EOF must not overwrite an application or
+// libp2p DISCONNECT that was already decoded.
+func (p *Peer) RecordDisconnectCause(cause string) {
+	if cause == "" {
+		return
+	}
+	value := new(string)
+	*value = cause
+	p.disconnectCause.CompareAndSwap(nil, value)
+}
+
+// DisconnectCause returns the first recorded connection-close reason.
+func (p *Peer) DisconnectCause() string {
+	if value := p.disconnectCause.Load(); value != nil {
+		return *value
+	}
+	return ""
+}
 
 // Start launches the read, write, and keepalive goroutines.
 func (p *Peer) Start() {
@@ -124,10 +145,12 @@ func (p *Peer) readLoop() {
 		// Post-handshake: every frame is a CompressMessage wrapping [code][payload].
 		body, err := ReadFrameBody(p.conn)
 		if err != nil {
+			p.RecordDisconnectCause("read: " + err.Error())
 			return
 		}
 		code, payload, err := UnwrapPostHandshake(body)
 		if err != nil {
+			p.RecordDisconnectCause("unwrap: " + err.Error())
 			peerLog.Debug("Peer frame unwrap failed", "peer", p.id, "err", err)
 			return
 		}
@@ -143,8 +166,10 @@ func (p *Peer) readLoop() {
 		case MsgLibp2pDisconnect:
 			// Peer told us to go away; close gracefully.
 			if msg, err := ParseDisconnect(payload); err == nil {
+				p.RecordDisconnectCause("libp2p disconnect: " + msg.Reason.String())
 				peerLog.Info("Peer libp2p disconnect", "peer", p.id, "reason", msg.Reason.String())
 			} else {
+				p.RecordDisconnectCause("invalid libp2p disconnect: " + err.Error())
 				peerLog.Info("Peer libp2p disconnect", "peer", p.id, "err", err)
 			}
 			return

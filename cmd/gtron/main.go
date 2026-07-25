@@ -654,12 +654,16 @@ func gtron(ctx *cli.Context) error {
 			RetainedDecodedBlocks: status.RetainedDecodedBlocks,
 			RetainedDecodedBytes:  status.RetainedDecodedBytes,
 			PauseBlock:            status.PauseBlock,
+			LastPeerFailure:       status.LastPeerFailure,
 		}
 		if !status.PauseTime.IsZero() {
 			info.PauseTime = status.PauseTime.UTC().Format(time.RFC3339Nano)
 		}
 		if status.PauseError != nil {
 			info.PauseError = status.PauseError.Error()
+		}
+		if !status.LastPeerFailureTime.IsZero() {
+			info.LastPeerFailureTime = status.LastPeerFailureTime.UTC().Format(time.RFC3339Nano)
 		}
 		return info
 	})

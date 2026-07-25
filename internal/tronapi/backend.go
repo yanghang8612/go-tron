@@ -41,6 +41,8 @@ type SyncInfo struct {
 	PauseBlock            uint64 `json:"pauseBlock,omitempty"`
 	PauseTime             string `json:"pauseTime,omitempty"`
 	PauseError            string `json:"pauseError,omitempty"`
+	LastPeerFailure       string `json:"lastPeerFailure,omitempty"`
+	LastPeerFailureTime   string `json:"lastPeerFailureTime,omitempty"`
 }
 
 type TriggerResult struct {

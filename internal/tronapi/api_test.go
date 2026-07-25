@@ -554,6 +554,8 @@ func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
 			PauseBlock:            125,
 			PauseTime:             "2026-07-24T00:00:00Z",
 			PauseError:            "state root mismatch",
+			LastPeerFailure:       "archive-peer: application disconnect: FETCH_FAIL",
+			LastPeerFailureTime:   "2026-07-24T00:01:00Z",
 		},
 	}}
 	srv := newTestServer(t, stub)
@@ -572,6 +574,9 @@ func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
 	}
 	if syncInfo["bufferedBlocks"] != float64(4) || syncInfo["retainedDecodedBytes"] != float64(9000) {
 		t.Fatalf("syncInfo backlog fields = %v", syncInfo)
+	}
+	if syncInfo["lastPeerFailure"] != "archive-peer: application disconnect: FETCH_FAIL" || syncInfo["lastPeerFailureTime"] != "2026-07-24T00:01:00Z" {
+		t.Fatalf("syncInfo peer failure fields = %v", syncInfo)
 	}
 }
 

@@ -422,8 +422,10 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	var msg corepb.DisconnectMessage
 	if err := proto.Unmarshal(payload, &msg); err == nil {
+		peer.RecordDisconnectCause("application disconnect: " + msg.Reason.String())
 		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
 	} else {
+		peer.RecordDisconnectCause("invalid application disconnect: " + err.Error())
 		log.Info("Peer disconnected", "peer", peer.ID(), "err", err)
 	}
 	// Close the connection — readLoop will exit and call disconnect().

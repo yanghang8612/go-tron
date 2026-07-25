@@ -180,6 +180,8 @@ type SyncService struct {
 	retainedDecodedBlocks int
 	retainedDecodedBytes  int64
 	targetHeadNum         uint64
+	lastPeerFailure       string
+	lastPeerFailureTime   time.Time
 	// syncedTipNum is the drain cursor: the highest block this session has
 	// popped for import. Under async-commit depth>2 the committed CurrentBlock
 	// lags the applied tip by up to the pipeline depth, so popping from
@@ -400,6 +402,8 @@ type SyncStatus struct {
 	PauseBlock            uint64
 	PauseTime             time.Time
 	PauseError            error
+	LastPeerFailure       string
+	LastPeerFailureTime   time.Time
 }
 
 // Status returns one lock-consistent downloader snapshot. The lock order is
@@ -425,6 +429,8 @@ func (ss *SyncService) Status() SyncStatus {
 		PauseBlock:            pauseBlock,
 		PauseTime:             pauseTime,
 		PauseError:            pauseErr,
+		LastPeerFailure:       ss.lastPeerFailure,
+		LastPeerFailureTime:   ss.lastPeerFailureTime,
 	}
 }
 
@@ -2235,6 +2241,8 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	}
 	stalePeer := ps.peer
 	inflight := ps.inflight
+	ss.lastPeerFailure = fmt.Sprintf("%s: fetch timeout with %d blocks in flight", peerID, inflight)
+	ss.lastPeerFailureTime = time.Now()
 	ss.removePeerStateLocked(peerID, true)
 	var out []outboundSyncRequest
 	restart := false
@@ -2290,6 +2298,12 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 		ss.mu.Unlock()
 		return
 	}
+	cause := peer.DisconnectCause()
+	if cause == "" {
+		cause = "connection closed without a protocol reason"
+	}
+	ss.lastPeerFailure = peer.ID() + ": " + cause
+	ss.lastPeerFailureTime = time.Now()
 	ss.removePeerStateLocked(peer.ID(), true)
 	var out []outboundSyncRequest
 	restart := false

@@ -146,3 +146,12 @@ func TestPeerRefreshesLastSeenOnInboundFrame(t *testing.T) {
 	}
 	t.Fatal("lastSeenNanos was not refreshed by inbound keepalive ping")
 }
+
+func TestPeerDisconnectCauseKeepsFirstReason(t *testing.T) {
+	p := NewPeer(nil, "diagnostic-peer", false, nil)
+	p.RecordDisconnectCause("application disconnect: BAD_PROTOCOL")
+	p.RecordDisconnectCause("read: EOF")
+	if got := p.DisconnectCause(); got != "application disconnect: BAD_PROTOCOL" {
+		t.Fatalf("disconnect cause = %q", got)
+	}
+}
