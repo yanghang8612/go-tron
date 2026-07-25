@@ -1905,6 +1905,10 @@ type layerBatchSize struct {
 type mergedLayerOp struct {
 	value  []byte
 	delete bool
+	// shard is stable because layer maps and the durable-base cache share the
+	// same selector. Cache promotion reuses it after the Pebble write instead
+	// of hashing every merged key again.
+	shard uint8
 }
 
 // flushMergedOpsPool reuses the hash table needed to collapse consecutive
@@ -1953,10 +1957,10 @@ func mergeLayers(layers []*layer, merged *flushMergedOps) {
 			s := &l.shards[i]
 			s.mu.RLock()
 			for k, v := range s.writes {
-				merged.ops[k] = mergedLayerOp{value: v}
+				merged.ops[k] = mergedLayerOp{value: v, shard: uint8(i)}
 			}
 			for k := range s.deletes {
-				merged.ops[k] = mergedLayerOp{delete: true}
+				merged.ops[k] = mergedLayerOp{delete: true, shard: uint8(i)}
 			}
 			s.mu.RUnlock()
 		}

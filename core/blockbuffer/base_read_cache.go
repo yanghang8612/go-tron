@@ -270,12 +270,20 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 // value is too large for its shard, the old entry is still invalidated and no
 // replacement is retained.
 func (c *baseReadCache) setFlushed(key string, value []byte) {
+	c.setFlushedAt(key, value, baseReadCacheShardIndexString(key))
+}
+
+// setFlushedAt is setFlushed for callers that already know key's cache shard.
+// Layer maps and the base cache intentionally share the same selector, so
+// flush promotion can carry that index forward instead of sampling the key a
+// second time for every durable write.
+func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 	if c == nil {
 		return
 	}
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	c.advanceInvalidationString(key)
-	s := &c.shards[baseReadCacheShardIndexString(key)]
+	s := &c.shards[shard]
 	s.mu.Lock()
 	old, cached := s.entries[key]
 	if cached && charge <= s.limit {
@@ -588,10 +596,10 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 		s := &l.shards[i]
 		s.mu.RLock()
 		for k, v := range s.writes {
-			b.baseReadCache.setFlushed(k, v)
+			b.baseReadCache.setFlushedAt(k, v, uint32(i))
 		}
 		for k := range s.deletes {
-			b.baseReadCache.delString(k)
+			b.baseReadCache.delStringAt(k, uint32(i))
 		}
 		s.mu.RUnlock()
 	}
@@ -627,9 +635,9 @@ func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
 		mergeLayers(layers[start:end], merged)
 		for k, op := range merged.ops {
 			if op.delete {
-				b.baseReadCache.delString(k)
+				b.baseReadCache.delStringAt(k, uint32(op.shard))
 			} else {
-				b.baseReadCache.setFlushed(k, op.value)
+				b.baseReadCache.setFlushedAt(k, op.value, uint32(op.shard))
 			}
 		}
 		returnFlushMergedOps(merged)

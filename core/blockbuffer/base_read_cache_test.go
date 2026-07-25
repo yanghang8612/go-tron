@@ -474,6 +474,17 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 			c.setFlushed(keyString, value)
 		}
 	})
+
+	b.Run("refresh_from_known_layer_shard", func(b *testing.B) {
+		c := newBaseReadCache(1 << 20)
+		testBaseReadCacheSet(c, key, value)
+		shard := baseReadCacheShardIndexString(keyString)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			c.setFlushedAt(keyString, value, shard)
+		}
+	})
 }
 
 func BenchmarkBaseReadCacheHit(b *testing.B) {
