@@ -16,9 +16,11 @@ const MainnetNetworkID int32 = 11111
 
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
 // The first 30 entries track java-tron's framework/src/main/resources/config.conf
-// seed.node list. The trailing entries are legacy seeds / peers previously
-// verified by gtron to complete TRON-Hello; retaining them broadens discovery
-// across java-tron versions when the newest seeds reject an older handshake.
+// seed.node list. They are followed by additional stable Fullnodes from the
+// official TRON Networks documentation, then legacy seeds / peers previously
+// verified by gtron to complete TRON-Hello. The broader set matters for archive
+// replay because many otherwise healthy public peers are lite nodes that cannot
+// serve old block bodies.
 var MainnetBootstrapNodes = []string{
 	"3.225.171.164:18888",
 	"52.8.46.215:18888",
@@ -50,6 +52,12 @@ var MainnetBootstrapNodes = []string{
 	"54.179.207.68:18888",
 	"18.142.82.44:18888",
 	"18.163.230.203:18888",
+	"15.222.19.181:18888",
+	"18.209.42.127:18888",
+	"13.228.119.63:18888",
+	"18.139.193.235:18888",
+	"18.141.79.38:18888",
+	"18.139.248.26:18888",
 	"47.90.247.237:18888",
 	"47.90.214.128:18888",
 	"52.53.189.99:18888",
