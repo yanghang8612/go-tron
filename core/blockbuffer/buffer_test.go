@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,7 +30,6 @@ type blockingWriter struct {
 type stringKeyWriterProbe struct {
 	putKeys       []string
 	deleteKeys    []string
-	ops           []string
 	genericWrites int
 }
 
@@ -64,46 +62,12 @@ func (w *stringKeyWriterProbe) Delete([]byte) error {
 
 func (w *stringKeyWriterProbe) PutString(key string, _ []byte) error {
 	w.putKeys = append(w.putKeys, key)
-	w.ops = append(w.ops, "put:"+key)
 	return nil
 }
 
 func (w *stringKeyWriterProbe) DeleteString(key string) error {
 	w.deleteKeys = append(w.deleteKeys, key)
-	w.ops = append(w.ops, "del:"+key)
 	return nil
-}
-
-func TestWriteLayerSortedOrdersPhysicalKeys(t *testing.T) {
-	buf := New(nil)
-	layer := newLayer(bufHash(1), 1)
-	buf.putIntoString(layer, "z-key", []byte("z"))
-	buf.deleteIntoString(layer, "m-key")
-	buf.putIntoString(layer, "a-key", []byte("a"))
-	probe := new(stringKeyWriterProbe)
-	if err := writeLayerSorted(layer, probe); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"put:a-key", "del:m-key", "put:z-key"}
-	if !slices.Equal(probe.ops, want) {
-		t.Fatalf("ordered operations = %q, want %q", probe.ops, want)
-	}
-}
-
-func TestWriteMergedLayerOpsSortedOrdersPhysicalKeys(t *testing.T) {
-	ops := map[string]mergedLayerOp{
-		"z-key": {value: []byte("z")},
-		"m-key": {delete: true},
-		"a-key": {value: []byte("a")},
-	}
-	probe := new(stringKeyWriterProbe)
-	if err := writeMergedLayerOpsSorted(ops, probe); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"put:a-key", "del:m-key", "put:z-key"}
-	if !slices.Equal(probe.ops, want) {
-		t.Fatalf("ordered operations = %q, want %q", probe.ops, want)
-	}
 }
 
 func newBlockingWriter() *blockingWriter {
@@ -609,48 +573,6 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 						closeBatch(batch)
 					}
 				})
-			}
-		})
-	}
-}
-
-func BenchmarkPebbleFlushKeyOrder(b *testing.B) {
-	const keyCount = 60000
-	layer := newLayer(bufHash(1), 1)
-	owner := new(Buffer)
-	value := bytes.Repeat([]byte{0xcd}, 32)
-	for i := 0; i < keyCount; i++ {
-		owner.putIntoString(layer, fmt.Sprintf("state-%08x-%08x", i*2654435761, i), value)
-	}
-	_, encodedSize := layerWriteStats(layer)
-
-	for _, ordered := range []bool{false, true} {
-		name := "map-order"
-		if ordered {
-			name = "sorted"
-		}
-		b.Run(name, func(b *testing.B) {
-			db, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.Cleanup(func() { db.Close() })
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				batch := db.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize + pebbleBatchRecordSlack)
-				if !ordered {
-					err = writeLayer(layer, batch)
-				} else {
-					err = writeLayerSorted(layer, batch)
-				}
-				if err == nil {
-					err = batch.Write()
-				}
-				closeBatch(batch)
-				if err != nil {
-					b.Fatal(err)
-				}
 			}
 		})
 	}
