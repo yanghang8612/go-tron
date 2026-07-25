@@ -166,6 +166,34 @@ func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_FlushPreservesReadBeforeWriteProbation(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("frequently-mutated-commitment-branch")
+
+	// The first durable parent read records frequency evidence without
+	// retaining its value.
+	_, _, epoch := c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, []byte("parent-v1"), epoch); stored {
+		t.Fatal("first parent read bypassed probation")
+	}
+
+	// Committing the block must invalidate the old durable generation without
+	// erasing that frequency evidence or directly admitting the written value.
+	c.setFlushed(string(key), []byte("child-v2"))
+	if _, ok, _ := c.getWithEpoch(key); ok {
+		t.Fatal("flush directly admitted a probationary key")
+	}
+
+	// The next durable-parent read is the second observation and should enter
+	// the resident cache. Before this regression fix every flush cleared the
+	// fingerprint, so a branch modified every block could remain permanently
+	// probationary and hit Pebble forever.
+	_, _, epoch = c.getWithEpoch(key)
+	if got, stored := c.setIfEpoch(key, []byte("parent-v2"), epoch); !stored || string(got) != "parent-v2" {
+		t.Fatalf("second parent read = (%q,%v), want admitted parent-v2", got, stored)
+	}
+}
+
 func TestBaseReadCache_SetFlushedRejectsLateOldGenerationFill(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("racing-commitment-branch")

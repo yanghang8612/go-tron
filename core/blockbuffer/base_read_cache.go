@@ -194,10 +194,14 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 // setFlushed refreshes an already-cached key from a successfully flushed
 // committed layer. A key absent from the cache is invalidated but not admitted;
 // otherwise unrelated buffered metadata would churn through the cache on every
-// canonical flush. Cached replacements are copied into exact cache-owned
-// storage: commitment sibling writes arena-pack hundreds of branch values, so
-// retaining one small layer slice directly could pin the whole arena while the
-// byte budget charged only the slice length.
+// canonical flush. Its probation fingerprint is deliberately retained: a key
+// read from the durable parent and then modified in the same block is exactly
+// the hot read-before-write pattern the two-hit admission stage should learn.
+// Keys never read through the cache have no fingerprint and remain unadmitted.
+// Cached replacements are copied into exact cache-owned storage: commitment
+// sibling writes arena-pack hundreds of branch values, so retaining one small
+// layer slice directly could pin the whole arena while the byte budget charged
+// only the slice length.
 //
 // Advancing the key's invalidation slot before replacement rejects any late
 // cache fill that started against the pre-flush durable generation. If the
@@ -231,7 +235,6 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 			delete(s.entries, key)
 			s.used -= old.charge
 		}
-		s.forgetAdmissionString(key)
 	}
 	s.compactIfSparse()
 	s.mu.Unlock()
