@@ -1133,6 +1133,36 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	}
 }
 
+func TestBuffer_FlushUpToCoalescesAcrossMegabyteBoundary(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	for i := 0; i < 2; i++ {
+		b.BeginBlock(bufHash(byte(i+1)), uint64(i+1))
+		value := bytes.Repeat([]byte{byte('A' + i)}, 600<<10)
+		if err := b.Put([]byte("hot-commitment-branch"), value); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(2, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.batches.Load(); got != 1 {
+		t.Fatalf("batches = %d, want one merged batch", got)
+	}
+	if got := dst.ops.Load(); got != 1 {
+		t.Fatalf("batch operations = %d, want one final operation", got)
+	}
+	got, err := dst.Get([]byte("hot-commitment-branch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 600<<10 || got[0] != 'B' || got[len(got)-1] != 'B' {
+		t.Fatal("merged batch did not retain the newest large value")
+	}
+}
+
 func TestBuffer_FlushUpToCoalescesFinalOperation(t *testing.T) {
 	tests := []struct {
 		name      string
