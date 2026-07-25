@@ -54,11 +54,11 @@ type StateDB struct {
 
 	// Small encoded logical keys are borrowed only for the duration of a
 	// synchronous account-KV lookup/write. Keeping their backing arrays on the
-	// execution-confined StateDB avoids one tiny heap object per TRC10 or asset
-	// ID access. Downstream writers own composite keys before returning.
-	trc10TokenKeyScratch [20]byte
-	assetIDKeyScratch    [9]byte
-	frozenV1KeyScratch   [4]byte
+	// execution-confined StateDB avoids one tiny heap object per TRC10, asset ID,
+	// vote index, or frozen-row access. Writers own composite keys before return.
+	trc10TokenKeyScratch    [20]byte
+	assetIDKeyScratch       [9]byte
+	accountUint32KeyScratch [4]byte
 
 	// lastStateObject is a single-entry lookup cache for the account map. TVM
 	// execution commonly performs long runs of SLOAD/SSTORE and account queries

@@ -9,6 +9,33 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+var materializedVotesBenchmarkSink []*corepb.Vote
+
+func BenchmarkMaterializeAccountVotesDirty(b *testing.B) {
+	sdb := newTestStateDB(b)
+	addr := testAddr(0x92)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	vote := &corepb.Vote{VoteAddress: testAddr(0x93).Bytes(), VoteCount: 11}
+	value, err := proto.Marshal(vote)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(addr, kvdomains.AccountVotesAux, accountVoteKey(0), value); err != nil {
+		b.Fatal(err)
+	}
+	obj := sdb.getStateObject(addr)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		obj.accountVotesLoaded = false
+		clearAccountVotesProto(obj.account.Proto())
+		if err := sdb.materializeAccountVotes(obj); err != nil {
+			b.Fatal(err)
+		}
+		materializedVotesBenchmarkSink = obj.account.Proto().Votes
+	}
+}
+
 func splitTestVote(marker byte, count int64) *corepb.Vote {
 	return &corepb.Vote{VoteAddress: testAddr(marker).Bytes(), VoteCount: count}
 }

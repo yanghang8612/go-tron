@@ -1187,6 +1187,15 @@ func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []
 	return entry, ok
 }
 
+// accountUint32Key returns a transient big-endian split-domain row key. StateDB
+// is execution-goroutine confined; every account-KV reader consumes the slice
+// synchronously and every writer owns its composite key before returning.
+func (s *StateDB) accountUint32Key(index uint32) []byte {
+	key := s.accountUint32KeyScratch[:]
+	binary.BigEndian.PutUint32(key, index)
+	return key
+}
+
 func newKVEntry(value []byte, deleted bool) kvEntry {
 	e := kvEntry{deleted: deleted}
 	if !deleted {

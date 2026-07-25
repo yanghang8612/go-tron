@@ -193,8 +193,7 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (a
 	if obj == nil || obj.account == nil {
 		return accountFrozenBandwidthRow{}, false, nil
 	}
-	key := s.frozenV1KeyScratch[:]
-	binary.BigEndian.PutUint32(key, index)
+	key := s.accountUint32Key(index)
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
 		return accountFrozenBandwidthRow{}, exists, err
@@ -370,7 +369,7 @@ func (s *StateDB) writeAccountFrozenBandwidthReplacing(obj *stateObject, existin
 		if err != nil {
 			return err
 		}
-		if err := s.SetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(index), value); err != nil {
+		if err := s.SetAccountKV(obj.address, kvdomains.AccountFrozenBandwidthAux, s.accountUint32Key(index), value); err != nil {
 			return err
 		}
 		index++

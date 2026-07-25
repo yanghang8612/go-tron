@@ -45,7 +45,7 @@ func (s *StateDB) materializeAccountVotes(obj *stateObject) error {
 	// relevant rows. Check every slot rather than stopping at the first miss so
 	// older sparse rows remain readable.
 	for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
-		key := accountVoteKey(index)
+		key := s.accountUint32Key(index)
 		value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountVotesAux, key)
 		if err != nil {
 			clearAccountVotesProto(obj.account.Proto())
@@ -75,7 +75,7 @@ func (s *StateDB) writeAccountVotes(obj *stateObject, votes []*corepb.Vote) erro
 	// The protocol admits at most MaxVoteNumber rows. Delete those bounded slots
 	// directly instead of opening a prefix iterator over the whole block overlay.
 	for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
-		if err := s.DeleteAccountKV(obj.address, kvdomains.AccountVotesAux, accountVoteKey(index)); err != nil {
+		if err := s.DeleteAccountKV(obj.address, kvdomains.AccountVotesAux, s.accountUint32Key(index)); err != nil {
 			return err
 		}
 	}
@@ -87,7 +87,7 @@ func (s *StateDB) writeAccountVotes(obj *stateObject, votes []*corepb.Vote) erro
 		if err != nil {
 			return err
 		}
-		if err := s.SetAccountKV(obj.address, kvdomains.AccountVotesAux, accountVoteKey(uint32(index)), value); err != nil {
+		if err := s.SetAccountKV(obj.address, kvdomains.AccountVotesAux, s.accountUint32Key(uint32(index)), value); err != nil {
 			return err
 		}
 	}
