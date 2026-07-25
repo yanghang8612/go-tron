@@ -15,6 +15,22 @@ type stateCodeCountingReader struct {
 	gets int
 }
 
+type stateCodeScopedViewProbe struct {
+	value []byte
+}
+
+func (p *stateCodeScopedViewProbe) Get([]byte) ([]byte, error) {
+	panic("unexpected Get fallback")
+}
+
+func (*stateCodeScopedViewProbe) Has([]byte) (bool, error) { return false, nil }
+
+func (p *stateCodeScopedViewProbe) ViewNoCopyCachedKeyParts(_, _ []byte, fn func([]byte, bool) error) (bool, error) {
+	return true, fn(p.value, true)
+}
+
+var stateCodeReadSink []byte
+
 func (r *stateCodeCountingReader) Get(key []byte) ([]byte, error) {
 	r.gets++
 	return r.KeyValueReader.Get(key)
@@ -83,5 +99,16 @@ func TestStateCodeReadUsesBoundedBaseCacheAndReturnsOwnedBytes(t *testing.T) {
 	}
 	if counting.gets != 2 {
 		t.Fatalf("durable code reads = %d, want 2 (probation + admission, then cache hit)", counting.gets)
+	}
+}
+
+func BenchmarkReadStateCodeScopedView(b *testing.B) {
+	code := bytes.Repeat([]byte{0x5a}, 4096)
+	hash := common.Keccak256(code)
+	probe := &stateCodeScopedViewProbe{value: code}
+	b.SetBytes(int64(len(code)))
+	b.ReportAllocs()
+	for b.Loop() {
+		stateCodeReadSink = ReadStateCode(probe, hash)
 	}
 }

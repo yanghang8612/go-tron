@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -11,6 +12,25 @@ import (
 type StateCodeRow struct {
 	Hash common.Hash
 	Code []byte
+}
+
+type stateCodeReadViewContext struct {
+	hash     common.Hash
+	owned    []byte
+	callback func([]byte, bool) error
+}
+
+var stateCodeReadViewContextPool = sync.Pool{
+	New: func() any {
+		ctx := new(stateCodeReadViewContext)
+		ctx.callback = ctx.consume
+		return ctx
+	},
+}
+
+func (ctx *stateCodeReadViewContext) consume(code []byte, _ bool) error {
+	ctx.owned = append([]byte(nil), code...)
+	return nil
 }
 
 // WriteStateCode persists immutable contract bytecode by content hash.
@@ -30,14 +50,16 @@ func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
 		return nil
 	}
 	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
-		var owned []byte
-		found, err := viewer.ViewNoCopyCachedKeyParts(stateCodePrefix, hash[:], func(code []byte, _ bool) error {
-			// The viewer may lend a Pebble block slice or a cache/layer slice.
-			// State objects retain bytecode across calls, so take exactly one
-			// caller-owned copy while the scoped view is valid.
-			owned = append([]byte(nil), code...)
-			return nil
-		})
+		ctx := stateCodeReadViewContextPool.Get().(*stateCodeReadViewContext)
+		// The viewer may lend a Pebble block slice or a cache/layer slice.
+		// State objects retain bytecode across calls, so the bound callback takes
+		// exactly one caller-owned copy while the scoped view is valid.
+		ctx.hash = hash
+		found, err := viewer.ViewNoCopyCachedKeyParts(stateCodePrefix, ctx.hash[:], ctx.callback)
+		owned := ctx.owned
+		ctx.hash = common.Hash{}
+		ctx.owned = nil
+		stateCodeReadViewContextPool.Put(ctx)
 		if err != nil || !found {
 			return nil
 		}
