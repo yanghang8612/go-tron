@@ -13,25 +13,40 @@ import (
 const MainnetNetworkID int32 = 11111
 
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
-// The first 12 are java-tron's default seeds from config.conf. The trailing
-// entries are mainnet peers verified by gtron's M3.5 sanity (2026-05-09) to
-// complete TRON-Hello reliably; they're not in java-tron's default list but
-// are observed advertising themselves through java-tron's NEIGHBOURS replies.
+// Keep this synchronized with java-tron's framework/src/main/resources/config.conf
+// seed.node list. These are the upstream-designated stable full nodes; stale
+// seeds materially slow cold-start discovery after a deployment restart.
 var MainnetBootstrapNodes = []string{
-	"47.90.247.237:18888",
-	"47.90.214.128:18888",
-	"52.53.189.99:18888",
-	"18.196.99.16:18888",
-	"34.253.187.192:18888",
+	"3.225.171.164:18888",
+	"52.8.46.215:18888",
+	"3.79.71.167:18888",
+	"108.128.110.16:18888",
 	"18.133.82.227:18888",
-	"35.180.51.163:18888",
-	"54.252.224.209:18888",
-	"18.228.15.36:18888",
-	"52.15.93.92:18888",
-	"34.220.77.106:18888",
+	"35.180.81.133:18888",
+	"13.210.151.5:18888",
+	"18.231.27.82:18888",
+	"3.12.212.122:18888",
+	"52.24.128.7:18888",
 	"15.207.144.3:18888",
-	"3.218.137.187:18888",
-	"34.237.210.82:18888",
+	"3.39.38.55:18888",
+	"54.151.226.240:18888",
+	"35.174.93.198:18888",
+	"18.210.241.149:18888",
+	"54.177.115.127:18888",
+	"54.254.131.82:18888",
+	"18.167.171.167:18888",
+	"54.167.11.177:18888",
+	"35.74.7.196:18888",
+	"52.196.244.176:18888",
+	"54.248.129.19:18888",
+	"43.198.142.160:18888",
+	"3.0.214.7:18888",
+	"54.153.59.116:18888",
+	"54.153.94.160:18888",
+	"54.82.161.39:18888",
+	"54.179.207.68:18888",
+	"18.142.82.44:18888",
+	"18.163.230.203:18888",
 }
 
 func hexToAddress(h string) common.Address {
