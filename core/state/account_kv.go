@@ -720,10 +720,11 @@ func (w *accountKVLatestBatch) kvPendingDurable(key accountKVLatestPendingMapKey
 	var val []byte
 	var exists bool
 	var err error
+	logicalKey := ownedStringBytes(key.logicalKey)
 	if reader, ok := w.latestStore.(accountKVLatestNoCopyPhysicalStore); ok {
-		val, exists, err = reader.ReadKVLatestNoCopy(owner, key.generation, key.domain, []byte(key.logicalKey))
+		val, exists, err = reader.ReadKVLatestNoCopy(owner, key.generation, key.domain, logicalKey)
 	} else {
-		val, exists, err = w.latestStore.ReadKVLatest(owner, key.generation, key.domain, []byte(key.logicalKey))
+		val, exists, err = w.latestStore.ReadKVLatest(owner, key.generation, key.domain, logicalKey)
 	}
 	if err != nil {
 		return false

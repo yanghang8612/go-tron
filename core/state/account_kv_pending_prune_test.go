@@ -47,6 +47,27 @@ func zeroGeneration(tcommon.Address) (uint64, error) { return 0, nil }
 
 var benchmarkAccountKVLatestPending accountKVLatestPending
 
+func BenchmarkAccountKVPendingDurable(b *testing.B) {
+	base := ethrawdb.NewMemoryDatabase()
+	owner := pruneTestOwner(2)
+	domain := kvdomains.ContractStorage
+	logicalKey := bytes.Repeat([]byte{0x6d}, 32)
+	value := bytes.Repeat([]byte{0x4e}, 32)
+	if err := rawdb.WriteStateKVLatest(base, owner, 7, domain, logicalKey, value); err != nil {
+		b.Fatal(err)
+	}
+	writer := newAccountKVLatestDomainBatch(base, zeroGeneration, nil, nil)
+	key := accountKVLatestPendingKeyOwned(owner, 7, domain, logicalKey)
+	entry := accountKVLatestPending{value: value}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if !writer.kvPendingDurable(key, entry) {
+			b.Fatal("durable entry not recognized")
+		}
+	}
+}
+
 func BenchmarkAccountKVLatestPendingOverlay(b *testing.B) {
 	owner := pruneTestOwner(1)
 	domain := kvdomains.ContractStorage
