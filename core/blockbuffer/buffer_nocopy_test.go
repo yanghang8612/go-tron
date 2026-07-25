@@ -2,6 +2,7 @@ package blockbuffer
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -1270,6 +1271,45 @@ func BenchmarkCommitmentBranchLayerSparseReservation(b *testing.B) {
 				benchmarkCommitmentLayerSink = l
 			}
 		})
+	}
+}
+
+func BenchmarkCommitmentThenOwnedBatchWrite(b *testing.B) {
+	const (
+		branchCount = 512
+		ownedCount  = 4096
+	)
+	prefix := []byte("state-commitment-branch-v1-")
+	seconds := make([]string, branchCount)
+	branchValues := make([][]byte, branchCount)
+	for i := range seconds {
+		seconds[i] = fmt.Sprintf("branch-%04d", i)
+		branchValues[i] = []byte{byte(i), byte(i >> 8)}
+	}
+	ownedKeys := make([][]byte, ownedCount)
+	ownedValues := make([][]byte, ownedCount)
+	for i := range ownedKeys {
+		ownedKeys[i] = []byte(fmt.Sprintf("account-kv-latest-%06d", i))
+		ownedValues[i] = []byte{byte(i), byte(i >> 8)}
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		l := newLayer(common.Hash{}, 1)
+		parent := &Buffer{inflight: []*layer{l}}
+		batch := &bufferBatch{parent: parent, ops: make([]bufferBatchOp, 0, ownedCount)}
+		for i := range ownedKeys {
+			if err := batch.PutOwnedKeyValue(ownedKeys[i], ownedValues[i]); err != nil {
+				b.Fatal(err)
+			}
+		}
+		parent.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds, branchValues, 1)
+		parent.inflight = nil
+		parent.layers = []*layer{l}
+		if _, err := batch.writeFiltered(func(*layer) bool { return true }, false); err != nil {
+			b.Fatal(err)
+		}
+		benchmarkCommitmentLayerSink = l
 	}
 }
 

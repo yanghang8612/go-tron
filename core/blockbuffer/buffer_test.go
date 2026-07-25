@@ -33,6 +33,23 @@ type stringKeyWriterProbe struct {
 	genericWrites int
 }
 
+func TestLayerShardFitsOneCacheLine(t *testing.T) {
+	if size := unsafe.Sizeof(layerShard{}); size != 64 {
+		t.Fatalf("layerShard size = %d, want 64", size)
+	}
+}
+
+func pendingOwnedPuts(l *layer) int {
+	total := 0
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		total += s.pendingOwnedPuts
+		s.mu.RUnlock()
+	}
+	return total
+}
+
 func (w *stringKeyWriterProbe) Put([]byte, []byte) error {
 	w.genericWrites++
 	return nil
@@ -329,6 +346,9 @@ func TestBufferBatchPutOwnedKeyValueRetainsBothInputs(t *testing.T) {
 	if unsafe.StringData(batch.ops[0].key) != unsafe.SliceData(key) {
 		t.Fatal("PutOwnedKeyValue copied the transferred key")
 	}
+	if got := pendingOwnedPuts(b.inflight[0]); got != 1 {
+		t.Fatalf("pending owned puts = %d, want 1", got)
+	}
 	// The string alias, rather than a live caller slice, must keep the arena
 	// reachable until the batch publishes the operation.
 	keyArena = nil
@@ -337,6 +357,12 @@ func TestBufferBatchPutOwnedKeyValueRetainsBothInputs(t *testing.T) {
 	if err := batch.Write(); err != nil {
 		t.Fatal(err)
 	}
+	if got := pendingOwnedPuts(b.inflight[0]); got != 0 {
+		t.Fatalf("pending owned puts after Write = %d, want 0", got)
+	}
+	// Write leaves operations available until Reset, but their reservation was
+	// already consumed and must not be decremented twice.
+	batch.Reset()
 	got, err := b.GetNoCopy([]byte("owned-key"))
 	if err != nil || !bytes.Equal(got, value) {
 		t.Fatalf("owned key/value read = (%q,%v)", got, err)
@@ -353,7 +379,13 @@ func TestBufferBatchResetReleasesOwnedInputs(t *testing.T) {
 	if err := batch.PutOwnedKeyValue([]byte("owned-key"), []byte("owned-value")); err != nil {
 		t.Fatal(err)
 	}
+	if got := pendingOwnedPuts(b.inflight[0]); got != 1 {
+		t.Fatalf("pending owned puts = %d, want 1", got)
+	}
 	batch.Reset()
+	if got := pendingOwnedPuts(b.inflight[0]); got != 0 {
+		t.Fatalf("pending owned puts after Reset = %d, want 0", got)
+	}
 	if len(batch.ops) != 0 || batch.size != 0 {
 		t.Fatalf("Reset left len/size = %d/%d", len(batch.ops), batch.size)
 	}
@@ -707,8 +739,15 @@ func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
 	b.CommitBlock()
 
 	b.BeginBlock(bufHash(2), 2)
+	discardedLayer := b.inflight[len(b.inflight)-1]
 	if err := batch.Put([]byte("discarded"), []byte("v2")); err != nil {
 		t.Fatal(err)
+	}
+	if err := batch.(*bufferBatch).PutOwnedKeyValue([]byte("discarded-owned"), []byte("v3")); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingOwnedPuts(discardedLayer); got != 1 {
+		t.Fatalf("pending owned puts before discard = %d, want 1", got)
 	}
 	b.DiscardActive()
 
@@ -718,6 +757,9 @@ func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Fatalf("remaining ops = %d, want 0", remaining)
+	}
+	if got := pendingOwnedPuts(discardedLayer); got != 0 {
+		t.Fatalf("pending owned puts after stale drop = %d, want 0", got)
 	}
 	mustGet(t, b, []byte("committed"), []byte("v1"))
 	mustNotFound(t, b, []byte("discarded"))

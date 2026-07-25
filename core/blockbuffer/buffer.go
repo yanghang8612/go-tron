@@ -74,8 +74,9 @@ type layerShard struct {
 	mu                 sync.RWMutex
 	writes             map[string][]byte
 	deletes            map[string]struct{}
+	pendingOwnedPuts   int
 	commitmentReserved bool
-	_                  [23]byte
+	_                  [15]byte
 }
 
 // bufferReadView is an immutable snapshot of the layer topology used by the
@@ -219,10 +220,11 @@ type Buffer struct {
 }
 
 type bufferBatchOp struct {
-	delete bool
-	key    string
-	value  []byte
-	target *layer
+	delete           bool
+	reservedOwnedPut bool
+	key              string
+	value            []byte
+	target           *layer
 }
 
 type bufferBatch struct {
@@ -419,7 +421,16 @@ func (b *bufferBatch) PutOwnedKeyValue(key, value []byte) error {
 	if len(key) != 0 {
 		k = unsafe.String(unsafe.SliceData(key), len(key))
 	}
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	op := bufferBatchOp{key: k, value: value, target: target}
+	if target != nil {
+		s := target.shardForString(k)
+		s.mu.Lock()
+		s.pendingOwnedPuts++
+		s.mu.Unlock()
+		op.reservedOwnedPut = true
+	}
+	b.ops = append(b.ops, op)
 	b.size += len(k) + len(value)
 	return nil
 }
@@ -464,7 +475,8 @@ func (b *bufferBatch) Write() error {
 	// different layers (foreground/worker) proceed concurrently.
 	b.parent.mu.RLock()
 	defer b.parent.mu.RUnlock()
-	for _, op := range b.ops {
+	for i := range b.ops {
+		op := &b.ops[i]
 		target := op.target
 		if target == nil {
 			target = b.parent.newestInflightLocked()
@@ -480,11 +492,18 @@ func (b *bufferBatch) Write() error {
 	return nil
 }
 
-func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
+func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 	k := op.key
 	s := target.shardForString(k)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if op.reservedOwnedPut {
+		if s.pendingOwnedPuts <= 0 {
+			panic("blockbuffer: owned batch reservation underflow")
+		}
+		s.pendingOwnedPuts--
+		op.reservedOwnedPut = false
+	}
 	if op.delete {
 		delete(s.writes, k)
 		if s.deletes == nil {
@@ -501,6 +520,21 @@ func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
 		s.writes = make(map[string][]byte)
 	}
 	s.writes[k] = op.value
+}
+
+func releaseBatchOpReservation(op *bufferBatchOp) {
+	if !op.reservedOwnedPut {
+		return
+	}
+	s := op.target.shardForString(op.key)
+	s.mu.Lock()
+	if s.pendingOwnedPuts <= 0 {
+		s.mu.Unlock()
+		panic("blockbuffer: owned batch reservation underflow")
+	}
+	s.pendingOwnedPuts--
+	s.mu.Unlock()
+	op.reservedOwnedPut = false
 }
 
 func bufferBatchOpSize(op bufferBatchOp) int {
@@ -555,31 +589,46 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 	// layer so committed-layer applies don't block disjoint-layer writers.
 	b.parent.mu.RLock()
 	defer b.parent.mu.RUnlock()
+	if !dropStale {
+		// Validate captured targets before compacting b.ops in place. Besides
+		// keeping the operation slice intact on error, this guarantees an owned
+		// reservation has exactly one live op that will eventually consume or
+		// release it.
+		for i := range b.ops {
+			target := b.ops[i].target
+			if target != nil && !b.parent.layerPendingLocked(target) {
+				return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
+			}
+		}
+	}
 
 	kept := b.ops[:0]
 	keptSize := 0
-	for _, op := range b.ops {
+	for i := range b.ops {
+		op := &b.ops[i]
 		target := op.target
 		if target == nil {
 			target = b.parent.newestInflightLocked()
 		}
 		if target == nil {
 			if dropStale {
+				releaseBatchOpReservation(op)
 				continue
 			}
-			kept = append(kept, op)
-			keptSize += bufferBatchOpSize(op)
+			kept = append(kept, *op)
+			keptSize += bufferBatchOpSize(*op)
 			continue
 		}
 		if !b.parent.layerPendingLocked(target) {
 			if dropStale {
+				releaseBatchOpReservation(op)
 				continue
 			}
 			return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
 		}
 		if !b.parent.layerCommittedLocked(target) || !matchCommitted(target) {
-			kept = append(kept, op)
-			keptSize += bufferBatchOpSize(op)
+			kept = append(kept, *op)
+			keptSize += bufferBatchOpSize(*op)
 			continue
 		}
 		applyBatchOpToLayer(target, op)
@@ -593,6 +642,9 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 func (b *bufferBatch) Reset() {
 	// Operations may retain caller-transferred key arenas and values. Clear the
 	// reusable backing slice so Reset releases them immediately.
+	for i := range b.ops {
+		releaseBatchOpReservation(&b.ops[i])
+	}
 	clear(b.ops)
 	b.ops = b.ops[:0]
 	b.size = 0
@@ -618,6 +670,9 @@ func (b *bufferBatch) Replay(w ethdb.KeyValueWriter) error {
 }
 
 func (b *bufferBatch) Close() {
+	for i := range b.ops {
+		releaseBatchOpReservation(&b.ops[i])
+	}
 	b.closed = true
 	b.parent = nil
 	b.ops = nil
