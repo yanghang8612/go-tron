@@ -1,6 +1,8 @@
 package state
 
 import (
+	"sync"
+
 	"github.com/VictoriaMetrics/fastcache"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -23,6 +25,12 @@ type Database struct {
 	trieDisk      ethdb.Database
 	trieDB        *triedb.Database
 	trieNodeCache *fastcache.Cache
+
+	// stateObjectPool spans the short-lived StateDB instances created when a
+	// sync drain ends at a temporary buffer gap. It is guarded because Database
+	// is also shared by RPC/read-only StateDBs while canonical execution runs.
+	stateObjectPoolMu sync.Mutex
+	stateObjectPool   []*stateObject
 }
 
 // NewDatabase creates a state database.
@@ -78,7 +86,14 @@ func (db *Database) DiskDB() ethdb.Database {
 // Close releases in-process trie caches. The underlying disk database remains
 // owned by the caller.
 func (db *Database) Close() error {
-	if db == nil || db.trieDB == nil {
+	if db == nil {
+		return nil
+	}
+	db.stateObjectPoolMu.Lock()
+	clear(db.stateObjectPool)
+	db.stateObjectPool = nil
+	db.stateObjectPoolMu.Unlock()
+	if db.trieDB == nil {
 		return nil
 	}
 	err := db.trieDB.Close()

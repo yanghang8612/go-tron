@@ -46,11 +46,8 @@ const maxPooledStorageEntries = 512
 
 var storageMapPool sync.Pool
 
-// stateObjectPool is the cross-StateDB fallback for private account wrappers.
-// The hot historical-sync path uses StateDB.stateObjectFreeList because its
-// two-block reuse distance spans frequent garbage collections, which are free
-// to discard sync.Pool contents. The global pool still avoids needless cold
-// allocations for journal recreation, StateDB copies, and freelist overflow.
+// stateObjectPool is the GC-sensitive fallback for detached stateObjects that
+// do not belong to a shared Database, plus Database-pool overflow.
 //
 // Only wrappers that have never escaped through GetOrCreateAccount enter the
 // pool. AccountReference/GetAccount expose *types.Account rather than the
@@ -59,6 +56,11 @@ var storageMapPool sync.Pool
 var stateObjectPool = sync.Pool{
 	New: func() any { return new(stateObject) },
 }
+
+// maxDatabaseStateObjectPool bounds wrappers retained across StateDB/range
+// lifetimes. Four thousand wrappers cover large adjacent-block working sets
+// while keeping the retained wrapper storage below two MiB.
+const maxDatabaseStateObjectPool = 4096
 
 // storageOrigin is the durable value observed before a slot's first write in
 // the current commit interval. SetState already has to load that value for
@@ -254,14 +256,10 @@ func releaseStateObject(obj *stateObject) {
 }
 
 func (db *StateDB) acquireStateObject() *stateObject {
-	n := len(db.stateObjectFreeList)
-	if n == 0 {
-		return acquireStateObject()
+	if db.db != nil {
+		return db.db.acquireStateObject()
 	}
-	obj := db.stateObjectFreeList[n-1]
-	db.stateObjectFreeList[n-1] = nil
-	db.stateObjectFreeList = db.stateObjectFreeList[:n-1]
-	return obj
+	return acquireStateObject()
 }
 
 func (db *StateDB) newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
@@ -291,10 +289,35 @@ func (db *StateDB) releaseStateObject(obj *stateObject) {
 	if !clearStateObjectForReuse(obj) {
 		return
 	}
-	if len(db.stateObjectFreeList) < maxStateObjectFreeList {
-		db.stateObjectFreeList = append(db.stateObjectFreeList, obj)
+	if db.db != nil {
+		db.db.releaseStateObject(obj)
 		return
 	}
+	stateObjectPool.Put(obj)
+}
+
+func (db *Database) acquireStateObject() *stateObject {
+	db.stateObjectPoolMu.Lock()
+	n := len(db.stateObjectPool)
+	if n == 0 {
+		db.stateObjectPoolMu.Unlock()
+		return acquireStateObject()
+	}
+	obj := db.stateObjectPool[n-1]
+	db.stateObjectPool[n-1] = nil
+	db.stateObjectPool = db.stateObjectPool[:n-1]
+	db.stateObjectPoolMu.Unlock()
+	return obj
+}
+
+func (db *Database) releaseStateObject(obj *stateObject) {
+	db.stateObjectPoolMu.Lock()
+	if len(db.stateObjectPool) < maxDatabaseStateObjectPool {
+		db.stateObjectPool = append(db.stateObjectPool, obj)
+		db.stateObjectPoolMu.Unlock()
+		return
+	}
+	db.stateObjectPoolMu.Unlock()
 	stateObjectPool.Put(obj)
 }
 

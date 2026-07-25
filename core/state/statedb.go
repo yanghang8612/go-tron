@@ -44,12 +44,6 @@ var storageReadKeyPool = sync.Pool{
 // reads reload through the bounded blockbuffer base-read cache.
 const maxStateObjectCachedStorageSlots = 4096
 
-// maxStateObjectFreeList bounds wrappers retained by one range-reused StateDB.
-// Four thousand wrappers cover large adjacent-block working sets while keeping
-// the retained wrapper storage below two MiB. Excess entries fall back to the
-// GC-sensitive cross-StateDB pool.
-const maxStateObjectFreeList = 4096
-
 // StateDB manages in-memory account state with Erigon-style flat latest-domain
 // commits backed by a CommitmentDomain root.
 type StateDB struct {
@@ -82,10 +76,6 @@ type StateDB struct {
 	// not allocate when adjacent blocks have similar working-set sizes.
 	touchedStateObjects  []tcommon.Address
 	retainedStateObjects []tcommon.Address
-	// stateObjectFreeList survives garbage collections between the eviction of
-	// one block's cold wrappers and their reuse by a later block. The StateDB is
-	// execution-goroutine confined, so this bounded LIFO needs no synchronization.
-	stateObjectFreeList []*stateObject
 
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.

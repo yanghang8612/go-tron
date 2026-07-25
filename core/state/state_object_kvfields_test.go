@@ -3,6 +3,7 @@ package state
 import (
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -155,33 +156,63 @@ func TestStateObjectPoolPreservesEscapedWrapper(t *testing.T) {
 	}
 }
 
-func TestStateDBStateObjectFreeListSurvivesGC(t *testing.T) {
-	db := new(StateDB)
+func TestDatabaseStateObjectPoolSpansStateDBAndGC(t *testing.T) {
+	shared := new(Database)
+	db := &StateDB{db: shared}
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x7d})
 	obj := db.newStateObject(addr, types.NewAccount(addr, corepb.AccountType_Normal))
 	db.releaseStateObject(obj)
-	if len(db.stateObjectFreeList) != 1 {
-		t.Fatalf("freelist length = %d, want 1", len(db.stateObjectFreeList))
+	if len(shared.stateObjectPool) != 1 {
+		t.Fatalf("shared pool length = %d, want 1", len(shared.stateObjectPool))
 	}
 
 	runtime.GC()
-	reused := db.newStateObject(tcommon.BytesToAddress([]byte{0x41, 0x7e}), nil)
+	nextDB := &StateDB{db: shared}
+	reused := nextDB.newStateObject(tcommon.BytesToAddress([]byte{0x41, 0x7e}), nil)
 	if reused != obj {
-		t.Fatal("StateDB freelist lost its wrapper across GC")
+		t.Fatal("Database pool lost its wrapper across StateDB/GC boundary")
 	}
 	if reused.address == addr || reused.account != nil || reused.accountKVRoot != EmptyKVRoot {
-		t.Fatal("StateDB freelist leaked fields from the previous address")
+		t.Fatal("Database pool leaked fields from the previous address")
 	}
-	db.releaseStateObject(reused)
+	nextDB.releaseStateObject(reused)
 }
 
-func TestStateDBStateObjectFreeListIsBounded(t *testing.T) {
-	db := new(StateDB)
-	for range maxStateObjectFreeList + 1 {
+func TestDatabaseStateObjectPoolIsBounded(t *testing.T) {
+	shared := new(Database)
+	db := &StateDB{db: shared}
+	for range maxDatabaseStateObjectPool + 1 {
 		db.releaseStateObject(new(stateObject))
 	}
-	if len(db.stateObjectFreeList) != maxStateObjectFreeList {
-		t.Fatalf("freelist length = %d, want %d", len(db.stateObjectFreeList), maxStateObjectFreeList)
+	if len(shared.stateObjectPool) != maxDatabaseStateObjectPool {
+		t.Fatalf("shared pool length = %d, want %d", len(shared.stateObjectPool), maxDatabaseStateObjectPool)
+	}
+}
+
+func TestDatabaseStateObjectPoolConcurrent(t *testing.T) {
+	shared := new(Database)
+	const workers = 8
+	const cycles = 1000
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := range workers {
+		go func() {
+			defer wg.Done()
+			db := &StateDB{db: shared}
+			addr := tcommon.BytesToAddress([]byte{0x41, byte(worker)})
+			for range cycles {
+				obj := db.newStateObject(addr, nil)
+				if obj.address != addr {
+					t.Errorf("worker %d acquired address %x, want %x", worker, obj.address, addr)
+					return
+				}
+				db.releaseStateObject(obj)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(shared.stateObjectPool) > maxDatabaseStateObjectPool {
+		t.Fatalf("shared pool exceeded bound: %d", len(shared.stateObjectPool))
 	}
 }
 
@@ -205,8 +236,8 @@ func BenchmarkStateObjectWrapperLifecycle(b *testing.B) {
 			releaseStateObject(obj)
 		}
 	})
-	b.Run("state_db_freelist", func(b *testing.B) {
-		db := new(StateDB)
+	b.Run("database_pool", func(b *testing.B) {
+		db := &StateDB{db: new(Database)}
 		b.ReportAllocs()
 		for b.Loop() {
 			obj := db.newStateObject(addr, account)
