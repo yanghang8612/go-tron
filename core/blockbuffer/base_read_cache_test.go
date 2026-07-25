@@ -198,6 +198,49 @@ func TestBaseReadCache_SetFlushedRefreshesOnlyCachedKeys(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("state-commitment-branch-v1-canonical-key")
+	testBaseReadCacheSet(c, key, []byte("old-value"))
+
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	before := s.entries[string(key)]
+	if len(s.queue) != 1 {
+		t.Fatalf("queue entries=%d, want 1", len(s.queue))
+	}
+	var keyPtr *byte
+	for residentKey := range s.entries {
+		keyPtr = unsafe.StringData(residentKey)
+	}
+	if keyPtr == nil || unsafe.StringData(s.queue[0].key) != keyPtr {
+		t.Fatal("entry and FIFO token do not share the canonical key")
+	}
+	oldValuePtr := unsafe.SliceData(before.value)
+	beforeUsed := s.used
+
+	c.setFlushed(string(key), []byte("replacement-value"))
+	after := s.entries[string(key)]
+	if after != before {
+		t.Fatal("flush refresh replaced the stable cache entry")
+	}
+	var refreshedKeyPtr *byte
+	for residentKey := range s.entries {
+		refreshedKeyPtr = unsafe.StringData(residentKey)
+	}
+	if refreshedKeyPtr != keyPtr || unsafe.StringData(s.queue[0].key) != keyPtr {
+		t.Fatal("flush refresh replaced the canonical key")
+	}
+	if unsafe.SliceData(after.value) == oldValuePtr {
+		t.Fatal("flush refresh reused mutable value storage")
+	}
+	if got := string(after.value); got != "replacement-value" {
+		t.Fatalf("replacement value=%q", got)
+	}
+	if want := beforeUsed + len("replacement-value") - len("old-value"); s.used != want {
+		t.Fatalf("used bytes=%d, want %d after differently-sized refresh", s.used, want)
+	}
+}
+
 func TestBaseReadCache_FlushPreservesReadBeforeWriteProbation(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("frequently-mutated-commitment-branch")

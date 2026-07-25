@@ -3,7 +3,6 @@ package blockbuffer
 import (
 	"sync"
 	"sync/atomic"
-	"unsafe"
 )
 
 // baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
@@ -67,7 +66,7 @@ type baseReadCache struct {
 
 type baseReadCacheShard struct {
 	mu      sync.RWMutex
-	entries map[string]baseReadCacheEntry
+	entries map[string]*baseReadCacheEntry
 	queue   []baseReadCacheToken
 	// admission is a direct-mapped fingerprint table. A durable miss is
 	// admitted only when the same fingerprint is observed twice without being
@@ -91,7 +90,7 @@ type baseReadCacheEpoch struct {
 
 type baseReadCacheEntry struct {
 	// A nil value is the durable-miss sentinel. Present empty values are stored
-	// as a non-nil zero-length slice by cloneBaseReadCacheKeyValue, so callers
+	// as a non-nil zero-length slice by cloneBaseReadCacheValue, so callers
 	// can distinguish the two without growing every entry with another field.
 	value   []byte
 	charge  int
@@ -117,7 +116,7 @@ func newBaseReadCache(sizeBytes int) *baseReadCache {
 		if i < remainder {
 			c.shards[i].limit++
 		}
-		c.shards[i].entries = make(map[string]baseReadCacheEntry)
+		c.shards[i].entries = make(map[string]*baseReadCacheEntry)
 		c.shards[i].admission = make([]uint64, baseReadCacheAdmissionSlots(c.shards[i].limit))
 	}
 	return c
@@ -221,13 +220,14 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 		s.mu.Unlock()
 		return value, false
 	}
-	k, v := cloneBaseReadCacheKeyValue(key, value)
-	if missing {
-		v = nil
+	k := cloneBaseReadCacheKey(key)
+	var v []byte
+	if !missing {
+		v = cloneBaseReadCacheValue(value)
 	}
 	s.nextGen++
 	gen := s.nextGen
-	s.entries[k] = baseReadCacheEntry{value: v, charge: charge, gen: gen, version: c.version.Load()}
+	s.entries[k] = &baseReadCacheEntry{value: v, charge: charge, gen: gen, version: c.version.Load()}
 	s.queue = append(s.queue, baseReadCacheToken{key: k, gen: gen})
 	s.used += charge
 	s.evict()
@@ -265,15 +265,14 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 		// Preserve the existing generation and its FIFO token. This is a value
 		// refresh, not a new admission; appending one token per block would grow
 		// stale queue metadata for the lifetime of a hot commitment branch.
-		// Clone key and value into one exact-sized per-entry allocation before
-		// replacing: using either incoming slice/string directly would retain the
-		// block layer's shared key/value arenas well beyond the layer lifetime.
-		ownedKey, ownedValue := cloneBaseReadCacheKeyValue(
-			unsafe.Slice(unsafe.StringData(key), len(key)), value,
-		)
-		delete(s.entries, key)
-		s.entries[ownedKey] = baseReadCacheEntry{value: ownedValue, charge: charge, gen: old.gen, version: c.version.Load()}
+		// Copy only the replacement value and update the stable entry in place.
+		// The map and FIFO token retain a separately allocated key. Previously key
+		// and value shared one allocation, so that token pinned the first value for
+		// the entry's entire lifetime even after the map installed a newer clone.
+		old.value = cloneBaseReadCacheValue(value)
 		s.used += charge - old.charge
+		old.charge = charge
+		old.version = c.version.Load()
 		s.evict()
 	} else {
 		if cached {
@@ -285,19 +284,18 @@ func (c *baseReadCache) setFlushed(key string, value []byte) {
 	s.mu.Unlock()
 }
 
-// cloneBaseReadCacheKeyValue copies key and value into one exact-sized backing
-// allocation. The returned string and slice share only that per-entry storage;
-// neither can retain a larger Pebble or block-layer arena.
-func cloneBaseReadCacheKeyValue(key, value []byte) (string, []byte) {
-	storage := make([]byte, len(key)+len(value))
-	copy(storage, key)
-	copy(storage[len(key):], value)
-	var ownedKey string
-	if len(key) > 0 {
-		ownedKey = unsafe.String(unsafe.SliceData(storage), len(key))
-	}
-	ownedValue := storage[len(key):len(storage):len(storage)]
-	return ownedKey, ownedValue
+// cloneBaseReadCacheKey and cloneBaseReadCacheValue intentionally use separate
+// exact-sized allocations. Map keys and FIFO tokens live for the entry's whole
+// residency, while a successful flush may replace its value many times. Sharing
+// their backing storage would make the long-lived key pin the first stale value.
+func cloneBaseReadCacheKey(key []byte) string {
+	return string(key)
+}
+
+func cloneBaseReadCacheValue(value []byte) []byte {
+	storage := make([]byte, len(value))
+	copy(storage, value)
+	return storage
 }
 
 func (c *baseReadCache) del(key []byte) {
