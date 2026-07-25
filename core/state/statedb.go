@@ -907,11 +907,20 @@ func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapsho
 
 // GetOrCreateAccount returns the state object at addr, creating it if it doesn't exist.
 // When a new account is created, a nil-prev journal entry is recorded so that
-// snapshot revert can delete it.
+// snapshot revert can delete it. Because this exported method exposes the
+// otherwise-private wrapper identity, that wrapper is not reused after cache
+// eviction. StateDB's own mutators use getOrCreateAccount instead.
 func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
+	obj := s.getOrCreateAccount(addr)
+	if obj != nil {
+		obj.wrapperEscaped = true
+	}
+	return obj
+}
+
+func (s *StateDB) getOrCreateAccount(addr tcommon.Address) *stateObject {
 	obj := s.getStateObject(addr)
 	if obj != nil && !obj.deleted {
-		obj.wrapperEscaped = true
 		return obj
 	}
 	// Journal the pre-create shape so revert can restore either a truly
@@ -962,7 +971,6 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
 	s.touchStateObject(obj)
-	obj.wrapperEscaped = true
 	return obj
 }
 
@@ -977,7 +985,7 @@ func (s *StateDB) GetBalance(addr tcommon.Address) int64 {
 
 // AddBalance adds amount to the account's balance.
 func (s *StateDB) AddBalance(addr tcommon.Address, amount int64) {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() + amount)
 	obj.markDirty()
@@ -1061,7 +1069,7 @@ func (s *StateDB) SubTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenI
 // persisted account proto, so they must live in state — not be derived at
 // read time — or the conformance digest diverges at the issuance block.
 func (s *StateDB) SetAssetIssued(addr tcommon.Address, name []byte, id string) {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	s.journalAccount(addr, obj)
 	pb := obj.account.Proto()
 	pb.AssetIssuedName = name
@@ -1074,7 +1082,7 @@ func (s *StateDB) AddFrozenSupply(addr tcommon.Address, frozen []*corepb.Account
 	if len(frozen) == 0 {
 		return
 	}
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	_ = s.addAccountFrozenSupply(obj, frozen)
 }
 
@@ -1699,7 +1707,7 @@ func (s *StateDB) AccountExists(addr tcommon.Address) bool {
 // is retained for VM-internal call sites (slice 2c) and tests/genesis paths
 // where create_time is irrelevant.
 func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.AccountType) *types.Account {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	s.journalAccount(addr, obj)
 	obj.account.SetAccountType(accountType)
 	obj.markDirty()
@@ -1721,7 +1729,7 @@ func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.Account
 // callers must first gate on !AccountExists(addr) to preserve real stored
 // values — every actuator call site already does this.
 func (s *StateDB) CreateAccountWithTime(addr tcommon.Address, accountType corepb.AccountType, createTime int64) *types.Account {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	s.journalAccount(addr, obj)
 	obj.account.SetAccountType(accountType)
 	obj.account.SetCreateTime(createTime)
@@ -2512,7 +2520,7 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 
 // SetCode sets the contract bytecode at addr. Creates the account if needed.
 func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	prevCode := append([]byte(nil), s.GetCode(addr)...)
 	var prevLatest []byte
 	if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
@@ -2599,7 +2607,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 
 // SetState sets a storage value on a contract.
 func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	prev, prevExists, cached := obj.getStorageWithExist(key)
 	if !cached {
 		prev, prevExists = s.GetStateWithExist(addr, key)
@@ -2687,7 +2695,7 @@ func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, 
 
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
-	obj := s.GetOrCreateAccount(addr)
+	obj := s.getOrCreateAccount(addr)
 	// Clone prevMeta so the journal holds a snapshot of the pre-mutation state.
 	// Callers often mutate the pointer returned by GetContract in-place and then
 	// call SetContract with the same pointer; without cloning, prevMeta would

@@ -1618,7 +1618,7 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.GetOrCreateAccount(owner)
+	obj := s.getOrCreateAccount(owner)
 	var (
 		prevValue  []byte
 		prevExists bool
@@ -1652,7 +1652,7 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.GetOrCreateAccount(owner)
+	obj := s.getOrCreateAccount(owner)
 	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
 	return s.setAccountKVResolved(obj, domain, key, value, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }

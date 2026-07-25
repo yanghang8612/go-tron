@@ -8,6 +8,33 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+func TestGetOrCreateAccountMarksExportedWrapperEscaped(t *testing.T) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := testAddr(0xa1)
+	obj := sdb.GetOrCreateAccount(addr)
+	if obj == nil || !obj.wrapperEscaped {
+		t.Fatal("exported state object wrapper was left eligible for identity reuse")
+	}
+}
+
+func TestCreateAccountKeepsInternalWrapperPoolable(t *testing.T) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := testAddr(0xa2)
+	if account := sdb.CreateAccount(addr, corepb.AccountType_Normal); account == nil {
+		t.Fatal("CreateAccount returned nil")
+	}
+	obj := sdb.stateObjects[addr]
+	if obj == nil || obj.wrapperEscaped {
+		t.Fatal("internal account mutator unnecessarily escaped the state object wrapper")
+	}
+}
+
 func TestStateObjectWorkingSetEvictsAccountsNotReusedByNextBlock(t *testing.T) {
 	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
 	if err != nil {
