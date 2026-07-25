@@ -20,6 +20,51 @@ func nullEVM() *TVM {
 
 var zeroCaller tcommon.Address
 
+var benchmarkPrecompile PrecompiledContract
+
+func BenchmarkGetPrecompile(b *testing.B) {
+	cfg := TVMConfig{
+		Solidity059:   true,
+		ShieldedToken: true,
+		Vote:          true,
+		StakingV2:     true,
+		Compatibility: true,
+		Osaka:         true,
+		FnDsa512:      true,
+		MlDsa44:       true,
+	}
+	ordinary := tcommon.BytesToAddress([]byte{0x41, 0xde, 0xad, 0xbe, 0xef})
+
+	for _, tc := range []struct {
+		name string
+		addr tcommon.Address
+	}{
+		{name: "ordinary", addr: ordinary},
+		{name: "standard", addr: addrFromUint(0x02)},
+		{name: "tron", addr: addrFromUint(0x01000015)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				benchmarkPrecompile = getPrecompile(tc.addr, cfg, params.NileGenesisHash)
+			}
+		})
+	}
+}
+
+func TestGetPrecompileRejectsNonCanonicalAddressPrefix(t *testing.T) {
+	addr := addrFromUint(0x02)
+	addr[12] = 0x01
+	if p := getPrecompile(addr, TVMConfig{}, tcommon.Hash{}); p != nil {
+		t.Fatalf("ordinary address with precompile suffix resolved as %T", p)
+	}
+
+	addr = addrFromUint(0x02)
+	addr[0] = 0xa0
+	if p := getPrecompile(addr, TVMConfig{}, tcommon.Hash{}); p != nil {
+		t.Fatalf("non-TRON address with precompile suffix resolved as %T", p)
+	}
+}
+
 func TestPrecompileECRecover(t *testing.T) {
 	p := &ecRecover{}
 	// Empty input → recovery fails. java ECRecover returns EMPTY_BYTE_ARRAY (0

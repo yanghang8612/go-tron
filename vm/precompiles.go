@@ -45,135 +45,150 @@ func addrFromUint(n uint64) tcommon.Address {
 	return addr
 }
 
+// precompileDiscriminant recognizes the canonical address(n) layout used by
+// java-tron's precompile registry. Most CALL targets are ordinary contracts;
+// rejecting those with two fixed-width loads avoids hashing a 21-byte address
+// for every entry in the address switch below.
+func precompileDiscriminant(addr tcommon.Address) (uint64, bool) {
+	if addr[0] != 0x41 || binary.BigEndian.Uint64(addr[1:9]) != 0 || binary.BigEndian.Uint32(addr[9:13]) != 0 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(addr[13:21]), true
+}
+
 // getPrecompile returns the precompiled contract for addr given the current fork
 // configuration and chain identity, or nil if addr is not a precompile (or its
 // fork gate is inactive).
 func getPrecompile(addr tcommon.Address, cfg TVMConfig, genesisHash tcommon.Hash) PrecompiledContract {
-	switch addr {
+	discriminant, ok := precompileDiscriminant(addr)
+	if !ok {
+		return nil
+	}
+	switch discriminant {
 	// ── Standard TVM precompiles (always active) ─────────────────────────
-	case addrFromUint(0x01):
+	case 0x01:
 		return &ecRecover{}
-	case addrFromUint(0x02):
+	case 0x02:
 		return &sha256hash{}
-	case addrFromUint(0x03):
+	case 0x03:
 		return &tronRipemd160{}
-	case addrFromUint(0x04):
+	case 0x04:
 		return &dataCopy{}
-	case addrFromUint(0x05):
+	case 0x05:
 		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka, cpuTimeGuard: cfg.CpuTimeGuard}
-	case addrFromUint(0x06):
+	case 0x06:
 		return &bn128Add{istanbul: cfg.Istanbul}
-	case addrFromUint(0x07):
+	case 0x07:
 		return &bn128Mul{istanbul: cfg.Istanbul}
-	case addrFromUint(0x08):
+	case 0x08:
 		return &bn128Pairing{istanbul: cfg.Istanbul}
 
 	// ── TRON signature precompiles (AllowTvmSolidity059) ─────────────────
-	case addrFromUint(0x09):
+	case 0x09:
 		if cfg.Solidity059 {
 			return &batchValidateSign{}
 		}
-	case addrFromUint(0x0a):
+	case 0x0a:
 		if cfg.Solidity059 {
 			return &validateMultiSign{}
 		}
 
 	// ── Shielded token precompiles (AllowTvmShieldedToken) ───────────────
-	case addrFromUint(0x01000001):
+	case 0x01000001:
 		if cfg.ShieldedToken {
 			return &verifyMintProof{}
 		}
-	case addrFromUint(0x01000002):
+	case 0x01000002:
 		if cfg.ShieldedToken {
 			return &verifyTransferProof{}
 		}
-	case addrFromUint(0x01000003):
+	case 0x01000003:
 		if cfg.ShieldedToken {
 			return &verifyBurnProof{}
 		}
-	case addrFromUint(0x01000004):
+	case 0x01000004:
 		if cfg.ShieldedToken {
 			return &shieldedMerkleHash{}
 		}
 
 	// ── Voting precompiles (AllowTvmVote) ────────────────────────────────
-	case addrFromUint(0x01000005):
+	case 0x01000005:
 		if cfg.Vote {
 			return &rewardBalance{}
 		}
-	case addrFromUint(0x01000006):
+	case 0x01000006:
 		if cfg.Vote {
 			return &isSrCandidate{}
 		}
-	case addrFromUint(0x01000007):
+	case 0x01000007:
 		if cfg.Vote {
 			return &voteCount{}
 		}
-	case addrFromUint(0x01000008):
+	case 0x01000008:
 		if cfg.Vote {
 			return &usedVoteCount{}
 		}
-	case addrFromUint(0x01000009):
+	case 0x01000009:
 		if cfg.Vote {
 			return &receivedVoteCount{}
 		}
-	case addrFromUint(0x0100000a):
+	case 0x0100000a:
 		if cfg.Vote {
 			return &totalVoteCount{}
 		}
 
 	// ── StakingV2 precompiles (AllowStakingV2) ───────────────────────────
-	case addrFromUint(0x0100000b):
+	case 0x0100000b:
 		if cfg.StakingV2 {
 			return &getChainParameter{}
 		}
-	case addrFromUint(0x0100000c):
+	case 0x0100000c:
 		if cfg.StakingV2 {
 			return &availableUnfreezeV2Size{}
 		}
-	case addrFromUint(0x0100000d):
+	case 0x0100000d:
 		if cfg.StakingV2 {
 			return &unfreezableBalanceV2{}
 		}
-	case addrFromUint(0x0100000e):
+	case 0x0100000e:
 		if cfg.StakingV2 {
 			return &expireUnfreezeBalanceV2{}
 		}
-	case addrFromUint(0x0100000f):
+	case 0x0100000f:
 		if cfg.StakingV2 {
 			return &delegatableResource{}
 		}
-	case addrFromUint(0x01000010):
+	case 0x01000010:
 		if cfg.StakingV2 {
 			return &resourceV2{}
 		}
-	case addrFromUint(0x01000011):
+	case 0x01000011:
 		if cfg.StakingV2 {
 			return &checkUnDelegateResource{}
 		}
-	case addrFromUint(0x01000012):
+	case 0x01000012:
 		if cfg.StakingV2 {
 			return &resourceUsage{}
 		}
-	case addrFromUint(0x01000013):
+	case 0x01000013:
 		if cfg.StakingV2 {
 			return &totalResource{}
 		}
-	case addrFromUint(0x01000014):
+	case 0x01000014:
 		if cfg.StakingV2 {
 			return &totalDelegatedResource{}
 		}
-	case addrFromUint(0x01000015):
+	case 0x01000015:
 		if cfg.StakingV2 {
 			return &totalAcquiredResource{}
 		}
 
 	// ── TVM compatibility precompiles (AllowTvmCompatibleEvm) ────────────
-	case addrFromUint(0x020003):
+	case 0x020003:
 		if cfg.Compatibility {
 			return &ethRipemd160{}
 		}
-	case addrFromUint(0x020009):
+	case 0x020009:
 		if cfg.Compatibility {
 			return &blake2F{}
 		}
@@ -181,7 +196,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig, genesisHash tcommon.Hash
 	// ── EIP-4844 point-evaluation precompile (AllowTvmBlob) ──────────────
 	// TRON remaps Ethereum's address(0x0a) to address(0x02000a), just as the
 	// compatibility precompiles above remap 0x03/0x09 into the 0x0200xx range.
-	case addrFromUint(0x02000a):
+	case 0x02000a:
 		// This remapping was deployed only on Nile. On mainnet, 0x02000a
 		// remains an ordinary account even if allow_tvm_blob is active.
 		if cfg.Blob && genesisHash == params.NileGenesisHash {
@@ -189,29 +204,29 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig, genesisHash tcommon.Hash
 		}
 
 	// ── Osaka precompile (AllowTvmOsaka) ─────────────────────────────────
-	case addrFromUint(0x0100):
+	case 0x0100:
 		if cfg.Osaka {
 			return &p256Verify{}
 		}
 
 	// ── PQ1 precompiles ───────────────────────────────────────────────────
-	case addrFromUint(0x02000016):
+	case 0x02000016:
 		if cfg.FnDsa512 {
 			return &verifyFnDsa512{}
 		}
-	case addrFromUint(0x02000017):
+	case 0x02000017:
 		if cfg.FnDsa512 {
 			return &batchValidatePQ{scheme: corepb.PQScheme_FN_DSA_512}
 		}
-	case addrFromUint(0x02000018):
+	case 0x02000018:
 		if cfg.MlDsa44 {
 			return &verifyMlDsa44{}
 		}
-	case addrFromUint(0x02000019):
+	case 0x02000019:
 		if cfg.MlDsa44 {
 			return &batchValidatePQ{scheme: corepb.PQScheme_ML_DSA_44}
 		}
-	case addrFromUint(0x0200001a):
+	case 0x0200001a:
 		if cfg.FnDsa512 || cfg.MlDsa44 {
 			return &validateMultiPQSig{}
 		}
