@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -14,6 +15,18 @@ import (
 )
 
 var accountTronPowerKey = []byte{0x00}
+
+// The second, unexposed element identifies pool-owned backing. It lets cache
+// invalidation validate the slice before returning it even if a caller has
+// replaced Account.Frozen after obtaining the internal account object.
+type accountFrozenBandwidthCanonicalSlot [2]*corepb.Account_Frozen
+
+var (
+	accountFrozenBandwidthCanonicalMarker = new(corepb.Account_Frozen)
+	accountFrozenBandwidthCanonicalPool   = sync.Pool{
+		New: func() any { return new(accountFrozenBandwidthCanonicalSlot) },
+	}
+)
 
 type accountFrozenBandwidthRow struct {
 	key   []byte
@@ -61,12 +74,31 @@ func clearAccountStakeV1Proto(pb *corepb.Account) {
 	pb.TronPower = nil
 }
 
+func clearAccountFrozenBandwidthCache(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	if obj.account != nil {
+		pb := obj.account.Proto()
+		if obj.accountFrozenBandwidthCanonicalPooled && len(pb.Frozen) == 1 && cap(pb.Frozen) == 2 {
+			slot := (*accountFrozenBandwidthCanonicalSlot)(pb.Frozen[:2])
+			if slot[1] == accountFrozenBandwidthCanonicalMarker {
+				slot[0] = nil
+				accountFrozenBandwidthCanonicalPool.Put(slot)
+			}
+		}
+		pb.Frozen = nil
+	}
+	obj.accountFrozenBandwidthCanonicalPooled = false
+	obj.accountFrozenBandwidthLoaded = false
+}
+
 func cacheAccountFrozenBandwidth(obj *stateObject, entries []*corepb.Account_Frozen) {
 	if obj == nil || obj.account == nil {
 		return
 	}
+	clearAccountFrozenBandwidthCache(obj)
 	pb := obj.account.Proto()
-	pb.Frozen = nil
 	for _, entry := range entries {
 		if entry != nil {
 			pb.Frozen = append(pb.Frozen, proto.Clone(entry).(*corepb.Account_Frozen))
@@ -84,7 +116,24 @@ func cacheAccountFrozenBandwidthOwned(obj *stateObject, entries []*corepb.Accoun
 	if obj == nil || obj.account == nil {
 		return
 	}
+	clearAccountFrozenBandwidthCache(obj)
 	obj.account.Proto().Frozen = entries
+	obj.accountFrozenBandwidthLoaded = true
+}
+
+// cacheAccountFrozenBandwidthCanonicalOwned is the zero-allocation ownership
+// path for java-tron's single valid V1 bandwidth row. The protobuf slice owns
+// the borrowed backing array until cache invalidation or state-object eviction.
+func cacheAccountFrozenBandwidthCanonicalOwned(obj *stateObject, entry *corepb.Account_Frozen) {
+	if obj == nil || obj.account == nil {
+		return
+	}
+	clearAccountFrozenBandwidthCache(obj)
+	slot := accountFrozenBandwidthCanonicalPool.Get().(*accountFrozenBandwidthCanonicalSlot)
+	slot[0] = entry
+	slot[1] = accountFrozenBandwidthCanonicalMarker
+	obj.account.Proto().Frozen = slot[:1:2]
+	obj.accountFrozenBandwidthCanonicalPooled = true
 	obj.accountFrozenBandwidthLoaded = true
 }
 
@@ -191,7 +240,7 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
 	}
 	rows, err := s.accountFrozenBandwidthRows(obj)
 	if err != nil {
-		obj.account.Proto().Frozen = nil
+		clearAccountFrozenBandwidthCache(obj)
 		return err
 	}
 	entries := make([]*corepb.Account_Frozen, 0, len(rows))
@@ -213,7 +262,7 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error 
 	}
 	rows, err := s.accountFrozenBandwidthFastRows(obj)
 	if err != nil {
-		obj.account.Proto().Frozen = nil
+		clearAccountFrozenBandwidthCache(obj)
 		return err
 	}
 	entries := make([]*corepb.Account_Frozen, 0, len(rows))
@@ -235,14 +284,14 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) e
 	}
 	row, exists, err := s.accountFrozenBandwidthRowAt(obj, 0)
 	if err != nil {
-		obj.account.Proto().Frozen = nil
+		clearAccountFrozenBandwidthCache(obj)
 		return err
 	}
 	if !exists {
 		cacheAccountFrozenBandwidthOwned(obj, nil)
 		return nil
 	}
-	cacheAccountFrozenBandwidthOwned(obj, []*corepb.Account_Frozen{row.entry})
+	cacheAccountFrozenBandwidthCanonicalOwned(obj, row.entry)
 	return nil
 }
 

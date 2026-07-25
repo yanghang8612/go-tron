@@ -65,6 +65,8 @@ func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 		t.Fatal("middle account missing")
 	}
 	evicted := sdb.stateObjects[addrs[0]]
+	cacheAccountFrozenBandwidthCanonicalOwned(evicted, &corepb.Account_Frozen{FrozenBalance: 1})
+	canonicalSlot := (*accountFrozenBandwidthCanonicalSlot)(evicted.account.Proto().Frozen[:2])
 	sdb.lastStateObject = evicted
 	sdb.rotateStateObjectWorkingSet()
 
@@ -73,6 +75,9 @@ func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 	}
 	if sdb.lastStateObject != nil {
 		t.Fatal("lastStateObject retained an evicted account")
+	}
+	if canonicalSlot[0] != nil || evicted.accountFrozenBandwidthCanonicalPooled {
+		t.Fatal("evicted account retained canonical frozen-bandwidth storage")
 	}
 	if len(sdb.retainedStateObjects) != 1 || len(sdb.touchedStateObjects) != 0 {
 		t.Fatalf("rotated slices = retained %d touched %d, want 1/0",

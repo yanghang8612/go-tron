@@ -3943,6 +3943,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			current = append(current, addr)
 			continue
 		}
+		clearAccountFrozenBandwidthCache(obj)
 		delete(s.stateObjects, addr)
 		if s.lastStateObject == obj {
 			s.lastStateObject = nil

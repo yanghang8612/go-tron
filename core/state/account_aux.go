@@ -93,10 +93,7 @@ func invalidateAccountKVMaterialization(obj *stateObject, domain kvdomains.KVDom
 		return
 	}
 	if domain == kvdomains.AccountFrozenBandwidthAux {
-		if obj.account != nil {
-			obj.account.Proto().Frozen = nil
-		}
-		obj.accountFrozenBandwidthLoaded = false
+		clearAccountFrozenBandwidthCache(obj)
 		return
 	}
 	if domain == kvdomains.AccountTronPowerAux {

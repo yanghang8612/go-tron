@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -58,6 +59,25 @@ func TestAccountStakeV1CacheOwnershipBoundaries(t *testing.T) {
 		t.Fatal("decoded cache did not take ownership of slice and message")
 	}
 
+	canonicalEntry := &corepb.Account_Frozen{FrozenBalance: 34, ExpireTime: 45}
+	cacheAccountFrozenBandwidthCanonicalOwned(owned, canonicalEntry)
+	canonicalSlot := (*accountFrozenBandwidthCanonicalSlot)(owned.account.Proto().Frozen[:2])
+	if owned.account.Proto().Frozen[0] != canonicalEntry || !owned.accountFrozenBandwidthCanonicalPooled {
+		t.Fatal("canonical cache did not use pooled one-element storage")
+	}
+	cacheAccountFrozenBandwidthOwned(owned, decodedEntries)
+	if owned.accountFrozenBandwidthCanonicalPooled || canonicalSlot[0] != nil {
+		t.Fatal("generic owned cache retained the canonical entry")
+	}
+
+	cacheAccountFrozenBandwidthCanonicalOwned(owned, canonicalEntry)
+	canonicalSlot = (*accountFrozenBandwidthCanonicalSlot)(owned.account.Proto().Frozen[:2])
+	objects := map[tcommon.Address]*stateObject{testAddr(0xa0): owned}
+	(accountChange{address: testAddr(0xa0)}).revert(objects, nil)
+	if len(objects) != 0 || canonicalSlot[0] != nil || owned.accountFrozenBandwidthCanonicalPooled {
+		t.Fatal("account removal did not release canonical pooled storage")
+	}
+
 	callerPower := &corepb.Account_Frozen{FrozenBalance: 55}
 	cacheAccountTronPower(cloning, callerPower)
 	if cloning.account.Proto().TronPower == callerPower {
@@ -85,6 +105,18 @@ func BenchmarkCacheAccountFrozenBandwidthDecoded(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			cacheAccountFrozenBandwidthOwned(obj, entries)
+		}
+	})
+	b.Run("owned-one-element-literal", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			cacheAccountFrozenBandwidthOwned(obj, []*corepb.Account_Frozen{entry})
+		}
+	})
+	b.Run("canonical-owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			cacheAccountFrozenBandwidthCanonicalOwned(obj, entry)
 		}
 	})
 }

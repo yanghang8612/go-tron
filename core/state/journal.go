@@ -91,7 +91,7 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 	obj.accountProto = e.prevProto
 	obj.accountProtoLoaded = e.prevProtoLoaded
 	obj.accountResourceLoaded = false
-	obj.accountFrozenBandwidthLoaded = false
+	clearAccountFrozenBandwidthCache(obj)
 	obj.accountTronPowerLoaded = false
 	obj.dirty = true
 	obj.accountDirty = true
@@ -99,6 +99,7 @@ func (e *accountScalarChange) revert(stateObjects map[tcommon.Address]*stateObje
 
 func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	if e.prev == nil {
+		clearAccountFrozenBandwidthCache(stateObjects[e.address])
 		delete(stateObjects, e.address)
 	} else {
 		acc, err := types.UnmarshalAccount(e.prev)
@@ -110,6 +111,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 			obj = newStateObject(e.address, acc)
 			stateObjects[e.address] = obj
 		} else {
+			clearAccountFrozenBandwidthCache(obj)
 			obj.account = acc
 		}
 		// accountChange pre-images are produced by deterministicAccountProto,
@@ -125,7 +127,6 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		clearAccountFrozenV2PointCache(obj)
 		obj.accountFrozenSupplyLoaded = false
 		obj.accountResourceLoaded = false
-		obj.accountFrozenBandwidthLoaded = false
 		obj.accountTronPowerLoaded = false
 		obj.dirty = true
 		obj.accountDirty = true
@@ -335,7 +336,7 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	clearAccountFrozenV2PointCache(obj)
 	obj.accountFrozenSupplyLoaded = false
 	obj.accountResourceLoaded = false
-	obj.accountFrozenBandwidthLoaded = false
+	clearAccountFrozenBandwidthCache(obj)
 	obj.accountTronPowerLoaded = false
 }
 

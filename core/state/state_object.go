@@ -81,6 +81,9 @@ type stateObject struct {
 	accountResourceLoaded        bool
 	accountFrozenBandwidthLoaded bool
 	accountTronPowerLoaded       bool
+	// accountFrozenBandwidthCanonicalPooled marks Account.Frozen as backed by a
+	// one-element array borrowed from the canonical V1 bandwidth cache pool.
+	accountFrozenBandwidthCanonicalPooled bool
 	// FrozenV2 uses three point-addressable resource keys. Resource accounting
 	// reads BANDWIDTH more than once per transaction, so retain typed point-read
 	// results without materializing the unrelated V2 unfreeze queue.
