@@ -34,13 +34,10 @@ func TestCompactionPressureThresholdsReserveRoutineCapacity(t *testing.T) {
 	}
 }
 
-func TestDefaultLBaseMatchesBulkSyncMemtable(t *testing.T) {
+func TestDefaultLBaseReducesBulkSyncLevelMultiplier(t *testing.T) {
 	opts := DefaultOptions()
-	if opts.LBaseMaxBytes != int64(opts.MemTableSizeBytes) {
-		t.Fatalf("lbase max=%d memtable=%d", opts.LBaseMaxBytes, opts.MemTableSizeBytes)
-	}
-	if opts.LBaseMaxBytes != 256<<20 {
-		t.Fatalf("lbase max=%d, want 256 MiB", opts.LBaseMaxBytes)
+	if opts.LBaseMaxBytes != 512<<20 {
+		t.Fatalf("lbase max=%d, want 512 MiB", opts.LBaseMaxBytes)
 	}
 }
 

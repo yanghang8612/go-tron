@@ -199,7 +199,7 @@ var (
 	dbLBaseMaxSizeFlag = &cli.Uint64Flag{
 		Name:  "db.lbase-max-size",
 		Usage: "Pebble dynamic base-level maximum size in MiB",
-		Value: 256,
+		Value: 512,
 	}
 	dbL0CompactionFlag = &cli.IntFlag{
 		Name:  "db.l0.compact",
