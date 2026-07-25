@@ -170,7 +170,7 @@ var (
 	stateCommitmentCacheFlag = &cli.IntFlag{
 		Name:  "state.commitment.cache",
 		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
-		Value: 256,
+		Value: 384,
 	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
