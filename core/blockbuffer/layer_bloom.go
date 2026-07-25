@@ -65,15 +65,12 @@ func layerBloomLocation(hash, wordMask uint64) (uint64, uint64) {
 	// A blocked Bloom keeps both probes in one 64-bit word. One atomic load can
 	// therefore test both bits, while 12 bits/key retains the same approximate
 	// false-positive rate as two independent probes across the full bitset.
+	// maphash already returns uniformly mixed 64-bit output: use disjoint high
+	// bit fields for the two probes and low bits for the word, avoiding a second
+	// Murmur finalizer on every lookup and insertion.
 	word := hash & wordMask
-	mixed := hash
-	mixed ^= mixed >> 33
-	mixed *= 0xff51afd7ed558ccd
-	mixed ^= mixed >> 33
-	mixed *= 0xc4ceb9fe1a85ec53
-	mixed ^= mixed >> 33
-	firstBit := mixed & 63
-	secondBit := (mixed >> 6) & 63
+	firstBit := (hash >> 32) & 63
+	secondBit := (hash >> 38) & 63
 	if secondBit == firstBit {
 		secondBit = (secondBit + 1) & 63
 	}

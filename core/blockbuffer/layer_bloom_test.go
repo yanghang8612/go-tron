@@ -8,6 +8,8 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+var benchmarkLayerBloomProbeSink bool
+
 func TestLayerBloomHashByteStringParity(t *testing.T) {
 	for _, key := range []string{"", "a", "state-commitment-branch-v1-0123456789abcdef"} {
 		if got, want := layerBloomHashBytes([]byte(key)), layerBloomHashString(key); got != want {
@@ -33,6 +35,42 @@ func BenchmarkLayerBloomHash(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestLayerBloomFalsePositiveRate(t *testing.T) {
+	const keys = 4096
+	bloom := newLayerBloom(keys)
+	for i := 0; i < keys; i++ {
+		bloom.addHash(layerBloomHashString(fmt.Sprintf("present-commitment-branch-%08x", i)))
+	}
+	falsePositives := 0
+	const probes = 100000
+	for i := 0; i < probes; i++ {
+		if bloom.mayContainHash(layerBloomHashString(fmt.Sprintf("missing-commitment-branch-%08x", i))) {
+			falsePositives++
+		}
+	}
+	if rate := float64(falsePositives) / probes; rate > 0.05 {
+		t.Fatalf("false-positive rate %.4f exceeds 0.05", rate)
+	}
+}
+
+func BenchmarkLayerBloomProbe(b *testing.B) {
+	bloom := newLayerBloom(4096)
+	for i := 0; i < 4096; i++ {
+		bloom.addHash(layerBloomHashString(fmt.Sprintf("present-commitment-branch-%08x", i)))
+	}
+	hashes := make([]uint64, 256)
+	for i := range hashes {
+		hashes[i] = layerBloomHashString(fmt.Sprintf("missing-commitment-branch-%08x", i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	var found bool
+	for i := 0; i < b.N; i++ {
+		found = bloom.mayContainHash(hashes[i&(len(hashes)-1)])
+	}
+	benchmarkLayerBloomProbeSink = found
 }
 
 func TestCommittedLayerBloomPreservesWritesDeletesAndLateBatch(t *testing.T) {
