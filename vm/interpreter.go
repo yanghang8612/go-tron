@@ -318,19 +318,20 @@ func (in *Interpreter) outOfEnergyError() error {
 	return ErrOutOfEnergy
 }
 
-// makePush creates a PUSH instruction handler.
-func makePush(size int) executionFunc {
-	return func(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-		startMin := *pc + 1
-		endMin := startMin + uint64(size)
-		if endMin > uint64(len(contract.Code)) {
-			endMin = uint64(len(contract.Code))
-		}
-
-		stack.pushBytes(contract.Code[startMin:endMin])
-		*pc += uint64(size)
-		return nil, nil
+// opPush handles PUSH1..PUSH32. The current opcode already encodes the operand
+// width, so every jump-table entry can share one immutable handler instead of
+// loading a closure-captured size on TVM's most frequent opcode family.
+func opPush(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	size := uint64(interpreter.currentOp - PUSH0)
+	startMin := *pc + 1
+	endMin := startMin + size
+	if endMin > uint64(len(contract.Code)) {
+		endMin = uint64(len(contract.Code))
 	}
+
+	stack.pushBytes(contract.Code[startMin:endMin])
+	*pc += size
+	return nil, nil
 }
 
 // makeDup creates a DUP instruction handler.

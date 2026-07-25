@@ -204,9 +204,8 @@ func newJumpTable() JumpTable {
 	// Push
 	tbl[PUSH0] = &operation{execute: opPush0, energyCost: EnergyBase, minStack: 0, maxStack: 1024}
 	for i := 1; i <= 32; i++ {
-		n := i
 		tbl[PUSH1+OpCode(i-1)] = &operation{
-			execute:    makePush(n),
+			execute:    opPush,
 			energyCost: EnergyVeryLow,
 			minStack:   0,
 			maxStack:   1024,

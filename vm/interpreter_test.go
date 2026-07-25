@@ -52,6 +52,32 @@ func BenchmarkInterpreterArithmetic(b *testing.B) {
 	}
 }
 
+func TestSharedPushHandlerUsesOpcodeWidth(t *testing.T) {
+	for size := 1; size <= 32; size++ {
+		code := make([]byte, size+1)
+		code[0] = byte(PUSH0 + OpCode(size))
+		for i := 1; i < len(code); i++ {
+			code[i] = byte(i)
+		}
+		contract := &Contract{Code: code}
+		interpreter := &Interpreter{currentOp: PUSH0 + OpCode(size)}
+		stack := newStack()
+		pc := uint64(0)
+
+		if _, err := opPush(&pc, interpreter, contract, nil, stack); err != nil {
+			t.Fatalf("PUSH%d: %v", size, err)
+		}
+		var want uint256.Int
+		want.SetBytes(code[1:])
+		if stack.len() != 1 || *stack.peek() != want {
+			t.Fatalf("PUSH%d result = %x, want %x", size, stack.peek().Bytes32(), want.Bytes32())
+		}
+		if pc != uint64(size) {
+			t.Fatalf("PUSH%d pc = %d, want %d", size, pc, size)
+		}
+	}
+}
+
 func BenchmarkInterpreterRepeatedMissingSload(b *testing.B) {
 	const loads = 1000
 	diskdb := ethrawdb.NewMemoryDatabase()
