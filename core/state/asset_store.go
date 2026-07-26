@@ -2,10 +2,14 @@ package state
 
 import (
 	"encoding/binary"
+	"errors"
+	"unicode/utf8"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // TRC10 asset records are rooted into the reserved system account's SystemAsset
@@ -48,6 +52,231 @@ const (
 	assetIssueTimeTag  byte = 0x05
 )
 
+const (
+	assetIssueOwnerBytes = iota
+	assetIssueNameBytes
+	assetIssueAbbrBytes
+	assetIssueDescriptionBytes
+	assetIssueURLBytes
+	assetIssueByteFieldCount
+)
+
+// Recent mainnet records in the sync hot path use at most 110 combined bytes
+// across these fields. Unusually large historical descriptions or URLs fall
+// back to an exact dynamic arena.
+const assetIssueInlineByteArenaSize = 128
+
+type decodedAssetIssue struct {
+	contract  contractpb.AssetIssueContract
+	byteArena [assetIssueInlineByteArenaSize]byte
+}
+
+var assetIssueByteArenaLayoutOK = verifyAssetIssueByteArenaLayout()
+
+// verifyAssetIssueByteArenaLayout ties the allocation reserve below to the
+// generated AssetIssueContract schema. A future protobuf regeneration that
+// changes the relevant field shapes falls back to ordinary proto.Unmarshal.
+func verifyAssetIssueByteArenaLayout() bool {
+	fields := (&contractpb.AssetIssueContract{}).ProtoReflect().Descriptor().Fields()
+	return fields.Len() == 19 &&
+		assetIssueFieldShape(fields, 1, protoreflect.BytesKind, false) &&
+		assetIssueFieldShape(fields, 2, protoreflect.BytesKind, false) &&
+		assetIssueFieldShape(fields, 3, protoreflect.BytesKind, false) &&
+		assetIssueFieldShape(fields, 4, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 5, protoreflect.MessageKind, true) &&
+		assetIssueFieldShape(fields, 6, protoreflect.Int32Kind, false) &&
+		assetIssueFieldShape(fields, 7, protoreflect.Int32Kind, false) &&
+		assetIssueFieldShape(fields, 8, protoreflect.Int32Kind, false) &&
+		assetIssueFieldShape(fields, 9, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 10, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 11, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 16, protoreflect.Int32Kind, false) &&
+		assetIssueFieldShape(fields, 20, protoreflect.BytesKind, false) &&
+		assetIssueFieldShape(fields, 21, protoreflect.BytesKind, false) &&
+		assetIssueFieldShape(fields, 22, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 23, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 24, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 25, protoreflect.Int64Kind, false) &&
+		assetIssueFieldShape(fields, 41, protoreflect.StringKind, false)
+}
+
+func assetIssueFieldShape(fields protoreflect.FieldDescriptors, number protoreflect.FieldNumber, kind protoreflect.Kind, list bool) bool {
+	field := fields.ByNumber(number)
+	return field != nil && field.Kind() == kind && field.IsList() == list
+}
+
+func assetIssueByteFieldIndex(number protowire.Number) int {
+	switch number {
+	case 1:
+		return assetIssueOwnerBytes
+	case 2:
+		return assetIssueNameBytes
+	case 3:
+		return assetIssueAbbrBytes
+	case 20:
+		return assetIssueDescriptionBytes
+	case 21:
+		return assetIssueURLBytes
+	default:
+		return -1
+	}
+}
+
+func setAssetIssueBytes(c *contractpb.AssetIssueContract, index int, field []byte) {
+	switch index {
+	case assetIssueOwnerBytes:
+		c.OwnerAddress = field
+	case assetIssueNameBytes:
+		c.Name = field
+	case assetIssueAbbrBytes:
+		c.Abbr = field
+	case assetIssueDescriptionBytes:
+		c.Description = field
+	case assetIssueURLBytes:
+		c.Url = field
+	}
+}
+
+// decodeAssetIssueArena decodes the scalar and nested fields directly while
+// temporarily borrowing the five bytes fields from raw. Once the envelope is
+// complete, their final (last-occurrence) values are copied into one owned
+// arena. This retains protobuf ownership and duplicate-field semantics while
+// replacing five small allocations with one. Unknown fields remain owned and
+// receive the same tag canonicalization as the generated decoder. Malformed or
+// group-bearing envelopes fall back to that decoder, retaining its recursion
+// limits and exact errors on the cold path.
+func decodeAssetIssueArena(raw []byte) (*contractpb.AssetIssueContract, error) {
+	decoded := new(decodedAssetIssue)
+	c := &decoded.contract
+	var byteValues [assetIssueByteFieldCount][]byte
+	var byteSeen [assetIssueByteFieldCount]bool
+	var unknown []byte
+	for data := raw; len(data) != 0; {
+		number, wireType, tagSize := protowire.ConsumeTag(data)
+		if tagSize < 0 || !number.IsValid() || wireType == protowire.StartGroupType || wireType == protowire.EndGroupType {
+			return decodeAssetIssueGenerated(raw)
+		}
+		valueSize := protowire.ConsumeFieldValue(number, wireType, data[tagSize:])
+		if valueSize < 0 {
+			return decodeAssetIssueGenerated(raw)
+		}
+		fieldSize := tagSize + valueSize
+		fieldData := data[:fieldSize]
+		known := true
+		switch {
+		case wireType == protowire.BytesType && assetIssueByteFieldIndex(number) >= 0:
+			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
+			index := assetIssueByteFieldIndex(number)
+			byteValues[index] = value
+			byteSeen[index] = true
+		case number == 4 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.TotalSupply = int64(value)
+		case number == 5 && wireType == protowire.BytesType:
+			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
+			frozen := &contractpb.AssetIssueContract_FrozenSupply{}
+			if err := proto.Unmarshal(value, frozen); err != nil {
+				return nil, err
+			}
+			c.FrozenSupply = append(c.FrozenSupply, frozen)
+		case number == 6 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.TrxNum = int32(value)
+		case number == 7 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.Precision = int32(value)
+		case number == 8 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.Num = int32(value)
+		case number == 9 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.StartTime = int64(value)
+		case number == 10 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.EndTime = int64(value)
+		case number == 11 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.Order = int64(value)
+		case number == 16 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.VoteScore = int32(value)
+		case number == 22 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.FreeAssetNetLimit = int64(value)
+		case number == 23 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.PublicFreeAssetNetLimit = int64(value)
+		case number == 24 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.PublicFreeAssetNetUsage = int64(value)
+		case number == 25 && wireType == protowire.VarintType:
+			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
+			c.PublicLatestFreeNetTime = int64(value)
+		case number == 41 && wireType == protowire.BytesType:
+			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
+			if !utf8.Valid(value) {
+				return nil, errors.New("proto: field protocol.AssetIssueContract.id contains invalid UTF-8")
+			}
+			c.Id = string(value)
+		default:
+			known = false
+		}
+		if !known {
+			unknown = protowire.AppendTag(unknown, number, wireType)
+			unknown = append(unknown, fieldData[tagSize:]...)
+		}
+		data = data[fieldSize:]
+	}
+	if len(unknown) != 0 {
+		c.ProtoReflect().SetUnknown(unknown)
+	}
+	total := 0
+	for _, value := range byteValues {
+		// The selected last occurrences are disjoint regions of raw.
+		if len(value) > len(raw)-total {
+			return nil, errors.New("asset issue byte fields exceed wire envelope")
+		}
+		total += len(value)
+	}
+	if total != 0 {
+		var arena []byte
+		if total <= len(decoded.byteArena) {
+			arena = decoded.byteArena[:total]
+		} else {
+			arena = make([]byte, total)
+		}
+		offset := 0
+		for index, value := range byteValues {
+			start := offset
+			offset += len(value)
+			field := arena[start:offset:offset]
+			copy(field, value)
+			setAssetIssueBytes(c, index, field)
+		}
+	}
+	for index, seen := range byteSeen {
+		if seen && len(byteValues[index]) == 0 {
+			setAssetIssueBytes(c, index, []byte{})
+		}
+	}
+	return c, nil
+}
+
+func decodeAssetIssueGenerated(raw []byte) (*contractpb.AssetIssueContract, error) {
+	c := &contractpb.AssetIssueContract{}
+	if err := proto.Unmarshal(raw, c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func decodeAssetIssue(raw []byte) (*contractpb.AssetIssueContract, error) {
+	if assetIssueByteArenaLayoutOK {
+		return decodeAssetIssueArena(raw)
+	}
+	return decodeAssetIssueGenerated(raw)
+}
+
 // assetIDKey builds a transient tag||u64-BE(id) logical key (V2 metadata,
 // issue time). Account-KV reads consume the key synchronously and writes copy
 // it into their owned composite key before returning.
@@ -75,8 +304,8 @@ func (s *StateDB) readAssetMeta(key []byte) *contractpb.AssetIssueContract {
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
-	c := &contractpb.AssetIssueContract{}
-	if err := proto.Unmarshal(raw, c); err != nil {
+	c, err := decodeAssetIssue(raw)
+	if err != nil {
 		return nil
 	}
 	return c
