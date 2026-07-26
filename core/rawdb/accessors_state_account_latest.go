@@ -39,6 +39,13 @@ type ownedValueWriter interface {
 	PutOwnedValue(key, value []byte) error
 }
 
+// stringOwnedValueWriter is the fixed-key counterpart of ownedValueWriter.
+// The caller transfers an immutable string and freshly encoded immutable
+// value; layered writers may retain both backings directly.
+type stringOwnedValueWriter interface {
+	PutStringOwnedValue(key string, value []byte) error
+}
+
 // ownedKeyValueWriter is a narrowly scoped extension for commit writers that
 // can retain both inputs directly. Callers transfer ownership of both byte
 // ranges and must keep their contents immutable after the call.

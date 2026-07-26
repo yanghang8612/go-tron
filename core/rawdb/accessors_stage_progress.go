@@ -73,13 +73,6 @@ func WriteStageProgressWithHash(db ethdb.KeyValueWriter, stage StageID, blockNum
 	return writeStageProgressValue(db, stage, encodeStageProgress(blockNum, blockHash, true))
 }
 
-// stringOwnedValueWriter lets layered stores retain both an immutable stage
-// key string and a freshly encoded immutable value. Canonical stage keys have
-// process lifetime, so the layer map can reuse their string backing directly.
-type stringOwnedValueWriter interface {
-	PutStringOwnedValue(key string, value []byte) error
-}
-
 func writeStageProgressValue(db ethdb.KeyValueWriter, stage StageID, value []byte) error {
 	if writer, ok := db.(stringOwnedValueWriter); ok {
 		return writer.PutStringOwnedValue(stageProgressKeyString(stage), value)

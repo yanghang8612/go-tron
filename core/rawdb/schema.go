@@ -8,7 +8,10 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-const stageProgressPrefixString = "stage-progress-v1-"
+const (
+	dynPropPrefixString       = "dp-"
+	stageProgressPrefixString = "stage-progress-v1-"
+)
 
 // CommitmentBranchKeyPrefix is the physical schema namespace for persisted
 // latest-domain commitment branches. It is exported as an immutable string so
@@ -53,7 +56,7 @@ var (
 	codePrefix               = []byte("c-")
 	contractPrefix           = []byte("ct-")
 	storagePrefix            = []byte("s-")
-	dynPropPrefix            = []byte("dp-")
+	dynPropPrefix            = []byte(dynPropPrefixString)
 
 	// witnessScheduleKey is the head sentinel for witness-schedule state.
 	// Kept for backwards compatibility with pre-M2 data; not written today.
@@ -455,8 +458,48 @@ func witnessLatestBlockKey(addr []byte) []byte {
 	return append(append([]byte{}, witnessLatestBlockPrefix...), addr...)
 }
 
+const (
+	dynPropLatestBlockNumberKeyString    = dynPropPrefixString + "latest_block_header_number"
+	dynPropLatestBlockTimestampKeyString = dynPropPrefixString + "latest_block_header_timestamp"
+	dynPropLatestBlockHashKeyString      = dynPropPrefixString + "latest_block_header_hash"
+	dynPropLatestSolidifiedKeyString     = dynPropPrefixString + "latest_solidified_block_num"
+)
+
+var (
+	dynPropLatestBlockNumberKey    = []byte(dynPropLatestBlockNumberKeyString)
+	dynPropLatestBlockTimestampKey = []byte(dynPropLatestBlockTimestampKeyString)
+	dynPropLatestBlockHashKey      = []byte(dynPropLatestBlockHashKeyString)
+	dynPropLatestSolidifiedKey     = []byte(dynPropLatestSolidifiedKeyString)
+)
+
+func dynPropKeyString(name string) string {
+	switch name {
+	case "latest_block_header_number":
+		return dynPropLatestBlockNumberKeyString
+	case "latest_block_header_timestamp":
+		return dynPropLatestBlockTimestampKeyString
+	case "latest_block_header_hash":
+		return dynPropLatestBlockHashKeyString
+	case "latest_solidified_block_num":
+		return dynPropLatestSolidifiedKeyString
+	default:
+		return dynPropPrefixString + name
+	}
+}
+
 func dynPropKey(name string) []byte {
-	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
+	switch name {
+	case "latest_block_header_number":
+		return dynPropLatestBlockNumberKey
+	case "latest_block_header_timestamp":
+		return dynPropLatestBlockTimestampKey
+	case "latest_block_header_hash":
+		return dynPropLatestBlockHashKey
+	case "latest_solidified_block_num":
+		return dynPropLatestSolidifiedKey
+	default:
+		return []byte(dynPropKeyString(name))
+	}
 }
 
 func forkStatsKey(version int32) []byte {

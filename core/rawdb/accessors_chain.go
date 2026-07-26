@@ -36,6 +36,21 @@ func WriteDynamicProperty(db ethdb.KeyValueWriter, name string, value []byte) {
 	db.Put(dynPropKey(name), value)
 }
 
+// WriteDynamicPropertyOwned writes a freshly encoded immutable derived value.
+// Canonical-head callers use this path so layered stores can retain the four
+// fixed dp- keys and the encoded value without defensive intermediate copies.
+func WriteDynamicPropertyOwned(db ethdb.KeyValueWriter, name string, value []byte) {
+	if writer, ok := db.(stringOwnedValueWriter); ok {
+		_ = writer.PutStringOwnedValue(dynPropKeyString(name), value)
+		return
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		_ = writer.PutOwnedValue(dynPropKey(name), value)
+		return
+	}
+	_ = db.Put(dynPropKey(name), value)
+}
+
 func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 	data, err := db.Get(dynPropKey(name))
 	if err != nil {

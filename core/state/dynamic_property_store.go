@@ -51,5 +51,5 @@ func (s rawDBDerivedDynamicPropertyStore) WriteDerivedDynamicProperty(name strin
 	if s.writer == nil {
 		return
 	}
-	rawdb.WriteDynamicProperty(s.writer, name, value)
+	rawdb.WriteDynamicPropertyOwned(s.writer, name, value)
 }
