@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -13,6 +14,28 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func TestResultContractAddressUsesEmbeddedStorage(t *testing.T) {
+	addr := tcommon.Address{0x41, 0x01, 0x02}
+	result := new(Result)
+	result.setContractAddress(addr)
+
+	if !bytes.Equal(result.ContractAddress, addr[:]) {
+		t.Fatalf("contract address = %x, want %x", result.ContractAddress, addr)
+	}
+	if &result.ContractAddress[0] != &result.contractAddress[0] {
+		t.Fatal("contract address does not use Result's embedded backing storage")
+	}
+	addr[1] = 0xff
+	if result.ContractAddress[1] != 0x01 {
+		t.Fatal("contract address aliases the caller's temporary address")
+	}
+	if allocs := testing.AllocsPerRun(1_000, func() {
+		result.setContractAddress(addr)
+	}); allocs != 0 {
+		t.Fatalf("setContractAddress allocations = %v, want 0", allocs)
+	}
+}
 
 func newTestContext(t *testing.T, contractType corepb.Transaction_Contract_ContractType, param proto.Message, feeLimit int64) *Context {
 	t.Helper()

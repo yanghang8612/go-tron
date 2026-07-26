@@ -239,10 +239,16 @@ type Result struct {
 	ContractResult                []byte
 	ContractResultPresent         bool
 	ContractAddress               []byte
+	contractAddress               [common.AddressLength]byte
 	Logs                          []vm.Log
 	InternalTransactions          []*corepb.InternalTransaction
 	ContractRet                   int32
 	ResMessage                    []byte
+}
+
+func (r *Result) setContractAddress(addr common.Address) {
+	r.contractAddress = addr
+	r.ContractAddress = r.contractAddress[:]
 }
 
 // newResult returns the caller-provided block-local result after clearing all
