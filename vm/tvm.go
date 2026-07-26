@@ -878,7 +878,14 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		// java Program.createContractImpl refunds the constructor's remaining
+		// energy only after handling its result. A REVERT continues to that
+		// refundEnergyAfterVM call, but any constructor exception (including a
+		// TransferException) returns immediately after pushing zero in the
+		// parent. The CREATE opcode must therefore consume all forwarded energy
+		// for transfer failures even though CALL itself refunds message energy
+		// inside the failed constructor frame.
+		if err == ErrExecutionReverted {
 			return ret, tcommon.Address{}, contract.Energy, err
 		}
 		return nil, tcommon.Address{}, 0, err
