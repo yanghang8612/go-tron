@@ -2,6 +2,7 @@ package blockbuffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -113,6 +114,8 @@ func BenchmarkCommitmentParentReadSessionKeyScratch(b *testing.B) {
 		cursors:    make([]pointread.Cursor, readers),
 		keyScratch: keyScratch,
 	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
+	defer returnCommitmentParentReadContexts(session.readContexts)
 	first := []byte(rawdb.CommitmentBranchKeyPrefix)
 	second := bytes.Repeat([]byte{0x0a}, 64)
 	consume := func([]byte, bool) error { return nil }
@@ -125,6 +128,40 @@ func BenchmarkCommitmentParentReadSessionKeyScratch(b *testing.B) {
 	}
 }
 
+func TestCommitmentParentReadSessionReadContextDoesNotRetainCallback(t *testing.T) {
+	const readers = 1
+	keyScratch := borrowCommitmentParentKeyScratch(readers)
+	session := &commitmentParentReadSession{
+		snapshot:   benchmarkCommitmentSnapshot{},
+		cursors:    make([]pointread.Cursor, readers),
+		keyScratch: keyScratch,
+	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
+	defer session.Close()
+
+	first := []byte(rawdb.CommitmentBranchKeyPrefix)
+	second := []byte{0x0a}
+	wantErr := errors.New("stop first read")
+	firstCalls := 0
+	if found, err := session.ViewKeyParts(0, first, second, func([]byte, bool) error {
+		firstCalls++
+		return wantErr
+	}); !found || !errors.Is(err, wantErr) {
+		t.Fatalf("first read = (found=%v, err=%v), want true/%v", found, err, wantErr)
+	}
+
+	secondCalls := 0
+	if found, err := session.ViewKeyParts(0, first, second, func([]byte, bool) error {
+		secondCalls++
+		return nil
+	}); !found || err != nil {
+		t.Fatalf("second read = (found=%v, err=%v), want true/nil", found, err)
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("callback calls = (%d,%d), want (1,1)", firstCalls, secondCalls)
+	}
+}
+
 func TestCommitmentParentReadSessionReaderScratchIsolated(t *testing.T) {
 	const readers = 17
 	keyScratch := borrowCommitmentParentKeyScratch(readers)
@@ -133,6 +170,7 @@ func TestCommitmentParentReadSessionReaderScratchIsolated(t *testing.T) {
 		cursors:    make([]pointread.Cursor, readers),
 		keyScratch: keyScratch,
 	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
 	defer session.Close()
 	first := []byte(rawdb.CommitmentBranchKeyPrefix)
 	for reader := range readers {

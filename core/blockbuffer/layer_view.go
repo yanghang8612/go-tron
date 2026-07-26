@@ -119,11 +119,66 @@ type commitmentParentReadSession struct {
 	cacheVersion uint64
 	snapshot     pointread.Snapshot
 	cursors      []pointread.Cursor
+	readContexts []*commitmentParentReadContext
 	// keyScratch is split into one 128-byte region per cursor/reader. The
 	// CommitmentParentSession contract gives each reader index one exclusive
 	// worker, so split-key assembly needs neither a lock nor a sync.Pool trip on
 	// every branch lookup.
 	keyScratch *[]byte
+}
+
+// commitmentParentReadContext owns the callback state for one session reader.
+// The session contract assigns every reader index to one exclusive fold worker,
+// so the context may be reused with that reader's cursor without a lock. Keeping
+// callback pre-bound avoids allocating the capturing closure that would
+// otherwise escape on every durable branch read.
+type commitmentParentReadContext struct {
+	session   *commitmentParentReadSession
+	key       []byte
+	epoch     baseReadCacheEpoch
+	cacheable bool
+	fn        func(value []byte, stable bool) error
+	callback  func(value []byte) error
+}
+
+func newCommitmentParentReadContext() any {
+	ctx := new(commitmentParentReadContext)
+	ctx.callback = ctx.consume
+	return ctx
+}
+
+var commitmentParentReadContextPool = sync.Pool{New: newCommitmentParentReadContext}
+
+func borrowCommitmentParentReadContexts(session *commitmentParentReadSession, readers int) []*commitmentParentReadContext {
+	contexts := make([]*commitmentParentReadContext, readers)
+	for i := range contexts {
+		ctx := commitmentParentReadContextPool.Get().(*commitmentParentReadContext)
+		ctx.session = session
+		contexts[i] = ctx
+	}
+	return contexts
+}
+
+func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext) {
+	for i, ctx := range contexts {
+		ctx.session = nil
+		ctx.key = nil
+		ctx.epoch = baseReadCacheEpoch{}
+		ctx.cacheable = false
+		ctx.fn = nil
+		commitmentParentReadContextPool.Put(ctx)
+		contexts[i] = nil
+	}
+}
+
+func (ctx *commitmentParentReadContext) consume(value []byte) error {
+	s := ctx.session
+	if ctx.cacheable && s.cache.version.Load() == s.cacheVersion {
+		if stored, admitted := s.cache.setIfEpoch(ctx.key, value, ctx.epoch); admitted {
+			return ctx.fn(stored, true)
+		}
+	}
+	return ctx.fn(value, false)
 }
 
 var _ pointread.CommitmentParentViewer = (*LayerView)(nil)
@@ -252,14 +307,16 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	if err != nil {
 		return nil, err
 	}
-	return &commitmentParentReadSession{
+	session := &commitmentParentReadSession{
 		layers:       layers,
 		cache:        cache,
 		cacheVersion: cacheVersion,
 		snapshot:     snapshot,
 		cursors:      make([]pointread.Cursor, readers),
 		keyScratch:   borrowCommitmentParentKeyScratch(readers),
-	}, nil
+	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
+	return session, nil
 }
 
 func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
@@ -303,14 +360,16 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		}
 		s.cursors[reader] = cursor
 	}
-	found, err := cursor.View(key, func(value []byte) error {
-		if cacheable && s.cache.version.Load() == s.cacheVersion {
-			if stored, admitted := s.cache.setIfEpoch(key, value, cacheEpoch); admitted {
-				return fn(stored, true)
-			}
-		}
-		return fn(value, false)
-	})
+	ctx := s.readContexts[reader]
+	ctx.key = key
+	ctx.epoch = cacheEpoch
+	ctx.cacheable = cacheable
+	ctx.fn = fn
+	found, err := cursor.View(key, ctx.callback)
+	ctx.key = nil
+	ctx.epoch = baseReadCacheEpoch{}
+	ctx.cacheable = false
+	ctx.fn = nil
 	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
 		s.cache.setMissingIfEpoch(key, cacheEpoch)
 	}
@@ -336,6 +395,8 @@ func (s *commitmentParentReadSession) Close() error {
 	s.snapshot = nil
 	s.layers = nil
 	s.cache = nil
+	returnCommitmentParentReadContexts(s.readContexts)
+	s.readContexts = nil
 	returnCommitmentParentKeyScratch(s.keyScratch)
 	s.keyScratch = nil
 	return firstErr
