@@ -880,12 +880,18 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.StateDB.RevertToSnapshot(snap)
 		// java Program.createContractImpl refunds the constructor's remaining
 		// energy only after handling its result. A REVERT continues to that
-		// refundEnergyAfterVM call, but any constructor exception (including a
-		// TransferException) returns immediately after pushing zero in the
-		// parent. The CREATE opcode must therefore consume all forwarded energy
-		// for transfer failures even though CALL itself refunds message energy
-		// inside the failed constructor frame.
-		if err == ErrExecutionReverted {
+		// refundEnergyAfterVM call, but an INTERNAL CREATE/CREATE2 constructor
+		// exception returns immediately after pushing zero in the parent. The
+		// opcode must therefore consume all forwarded energy for transfer
+		// failures even though CALL itself refunded message energy inside the
+		// failed constructor frame.
+		//
+		// A top-level CreateSmartContract has no parent CREATE opcode. RuntimeImpl
+		// surfaces its TransferException directly and bills only energy actually
+		// executed. Mainnet block 12,897,681 tx 740da79d... used 79,537 of a
+		// 500,000-energy limit; consuming the full limit overcharged 4,204,630
+		// sun while retaining the same TRANSFER_FAILED result.
+		if err == ErrExecutionReverted || (!internal && isTransferFailure(err)) {
 			return ret, tcommon.Address{}, contract.Energy, err
 		}
 		return nil, tcommon.Address{}, 0, err

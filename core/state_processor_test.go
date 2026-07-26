@@ -113,6 +113,56 @@ func newTestState(t *testing.T) *state.StateDB {
 	return statedb
 }
 
+func TestRepairMainnetCreateTransferFailureOvercharge(t *testing.T) {
+	statedb := newTestState(t)
+	statedb.CreateAccount(mainnetCreateTransferFailurePayer, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetCreateTransferFailurePayer, mainnetCreateTransferFailureBadBalance)
+	snapshot := statedb.Snapshot()
+
+	if repaired := repairMainnetCreateTransferFailureOvercharge(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+	); !repaired {
+		t.Fatal("legacy bad balance was not repaired")
+	}
+	if got := statedb.GetBalance(mainnetCreateTransferFailurePayer); got != mainnetCreateTransferFailureCanonicalBalance {
+		t.Fatalf("repaired balance = %d, want %d", got, mainnetCreateTransferFailureCanonicalBalance)
+	}
+	statedb.RevertToSnapshot(snapshot)
+	if got := statedb.GetBalance(mainnetCreateTransferFailurePayer); got != mainnetCreateTransferFailureBadBalance {
+		t.Fatalf("balance after block snapshot rollback = %d, want %d", got, mainnetCreateTransferFailureBadBalance)
+	}
+	if repaired := repairMainnetCreateTransferFailureOvercharge(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+	); !repaired {
+		t.Fatal("legacy bad balance was not repaired after block retry")
+	}
+	if repaired := repairMainnetCreateTransferFailureOvercharge(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+	); repaired {
+		t.Fatal("canonical balance must not be repaired twice")
+	}
+
+	badHashState := newTestState(t)
+	badHashState.CreateAccount(mainnetCreateTransferFailurePayer, corepb.AccountType_Normal)
+	badHashState.AddBalance(mainnetCreateTransferFailurePayer, mainnetCreateTransferFailureBadBalance)
+	if repaired := repairMainnetCreateTransferFailureOvercharge(
+		badHashState,
+		mainnetCreateTransferFailureRepairBlock,
+		tcommon.Hash{0xff},
+	); repaired {
+		t.Fatal("non-canonical block hash activated the repair")
+	}
+	if got := badHashState.GetBalance(mainnetCreateTransferFailurePayer); got != mainnetCreateTransferFailureBadBalance {
+		t.Fatalf("non-canonical block changed balance to %d", got)
+	}
+}
+
 func testProcessorAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41

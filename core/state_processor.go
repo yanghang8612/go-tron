@@ -22,6 +22,45 @@ import (
 // consumers see one wire-format value across both paths.
 var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 
+const (
+	mainnetCreateTransferFailureRepairBlock      = uint64(12_978_262)
+	mainnetCreateTransferFailureBadBalance       = int64(2_115_378)
+	mainnetCreateTransferFailureCanonicalBalance = int64(6_320_008)
+)
+
+var (
+	mainnetCreateTransferFailureRepairBlockID = tcommon.HexToHash("0000000000c60856f9bd889435bb483b5c66709a508550c78c72c4c0db2aaab2")
+	mainnetCreateTransferFailurePayer         = tcommon.Address{
+		0x41, 0x1e, 0x03, 0xe4, 0x33, 0xaa, 0x39, 0xf4, 0xee, 0x45, 0xc6,
+		0x4e, 0x78, 0x94, 0xac, 0x41, 0x6f, 0x0a, 0x82, 0x05, 0xfc,
+	}
+)
+
+// repairMainnetCreateTransferFailureOvercharge heals state materialized by a
+// pre-fix gtron binary without affecting a clean replay. Mainnet block
+// 12,897,681 tx 740da79d... was a top-level CreateSmartContract whose
+// constructor returned TRANSFER_FAILED after 79,537 energy. The old create
+// wrapper charged its entire 500,000-energy limit, over-debiting the payer by
+// 4,204,630 sun while still accepting the block because contractRet matched.
+//
+// A fixed replay reaches the next observed block with the canonical 6,320,008
+// balance and takes no action. Only the exact canonical block ID plus the exact
+// legacy bad balance activates the repair. Applying it inside processBlock's
+// snapshot makes a later block failure roll it back and retry atomically.
+func repairMainnetCreateTransferFailureOvercharge(statedb *state.StateDB, blockNum uint64, blockID tcommon.Hash) bool {
+	if statedb == nil || blockNum != mainnetCreateTransferFailureRepairBlock || blockID != mainnetCreateTransferFailureRepairBlockID {
+		return false
+	}
+	if statedb.GetBalance(mainnetCreateTransferFailurePayer) != mainnetCreateTransferFailureBadBalance {
+		return false
+	}
+	statedb.AddBalance(
+		mainnetCreateTransferFailurePayer,
+		mainnetCreateTransferFailureCanonicalBalance-mainnetCreateTransferFailureBadBalance,
+	)
+	return true
+}
+
 // ApplyTransaction executes a single transaction against the given state.
 // Returns the full actuator Result including fee, energy, net, and contract details.
 //
@@ -721,6 +760,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 			dynProps.CommitSnapshot(dpSnap)
 		}
 	}()
+	repairMainnetCreateTransferFailureOvercharge(statedb, block.Number(), block.Hash())
 
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
