@@ -198,7 +198,7 @@ func TestBranchDataDeterministicAndProperty(t *testing.T) {
 		var ref2 BranchData
 		for nibble := int(15); nibble >= 0; nibble-- {
 			c := ref.children[nibble]
-			if !c.present {
+			if !ref.childPresent(uint8(nibble)) {
 				continue
 			}
 			if c.kind == 0 {

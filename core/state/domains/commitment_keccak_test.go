@@ -2,11 +2,13 @@ package domains
 
 import (
 	"bytes"
+	"fmt"
 	"hash"
 	"math/rand"
 	"testing"
 
 	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
+	"github.com/tronprotocol/go-tron/common"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -116,5 +118,27 @@ func BenchmarkCommitmentKeccakGethContiguous(b *testing.B) {
 	}
 	if bytes.Equal(out[:], make([]byte, len(out))) {
 		b.Fatal("unexpected zero digest")
+	}
+}
+
+var branchNodeHashSink common.Hash
+
+func BenchmarkBranchDataNodeHash(b *testing.B) {
+	for _, children := range []int{1, 4, 16} {
+		var branch BranchData
+		for nibble := 0; nibble < children; nibble++ {
+			h := common.Hash{byte(nibble), byte(nibble + 1)}
+			if nibble&1 == 0 {
+				branch.SetHashChild(uint8(nibble), h)
+			} else {
+				branch.SetLeafChild(uint8(nibble), []byte{byte(nibble)}, h)
+			}
+		}
+		b.Run(fmt.Sprintf("children=%d", children), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				branchNodeHashSink = branch.nodeHash()
+			}
+		})
 	}
 }

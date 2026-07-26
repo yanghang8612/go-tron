@@ -274,9 +274,10 @@ func (s *bufferedBranchStore) releasePuts() {
 // and returns the updated root branch.
 //
 // The shared root branch is safe to mutate concurrently: each subtrie touches
-// only its own children[nb] slot (an independent array element), and the slots
-// carry no shared bitmap. errs/WaitGroup establish the happens-before edge that
-// makes those slot writes visible to the caller after Wait.
+// only its own children[nb] slot (an independent array element), while
+// BranchData's shared presence mask uses atomic bit updates. errs/WaitGroup
+// establish the happens-before edge that makes those writes visible to the
+// caller after Wait.
 func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*BranchData, error) {
 	if branch == nil {
 		branch = &BranchData{}

@@ -9,6 +9,7 @@ import (
 	"math/bits"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/tronprotocol/go-tron/common"
@@ -183,7 +184,6 @@ const (
 
 // branchChild holds one present child entry of a hex-trie branch node.
 type branchChild struct {
-	present   bool
 	kind      uint8
 	valueHash common.Hash // child hash or leaf value hash, selected by kind
 	leafKey   []byte      // valid when kind == kindLeaf
@@ -196,14 +196,23 @@ type branchChild struct {
 // Children are stored in a fixed 16-slot array so insertion order never
 // affects encoding — Encode always iterates nibbles low→high.
 type BranchData struct {
-	children [16]branchChild
+	// childMask is updated atomically because applyRootParallel mutates the
+	// root's 16 disjoint child slots concurrently. Keeping the atomic word as a
+	// plain uint32 preserves BranchData's safe value-copy semantics after those
+	// workers join (unlike embedding atomic.Uint32, whose value must not copy).
+	childMask uint32
+	children  [16]branchChild
+}
+
+func (b *BranchData) presentMask() uint16 {
+	return uint16(atomic.LoadUint32(&b.childMask))
 }
 
 // SetHashChild marks nibble as a hash child with the given 32-byte hash.
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
+	atomic.OrUint32(&b.childMask, 1<<nibble)
 	b.children[nibble] = branchChild{
-		present:   true,
 		kind:      kindHash,
 		valueHash: h,
 	}
@@ -212,8 +221,8 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 // SetLeafChild marks nibble as a leaf child with the given key and value hash.
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
+	atomic.OrUint32(&b.childMask, 1<<nibble)
 	b.children[nibble] = branchChild{
-		present:   true,
 		kind:      kindLeaf,
 		leafKey:   append([]byte(nil), key...),
 		valueHash: valHash,
@@ -226,8 +235,8 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 // package obeys that contract, so a second defensive copy only adds allocation
 // without strengthening lifetime.
 func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
+	atomic.OrUint32(&b.childMask, 1<<nibble)
 	b.children[nibble] = branchChild{
-		present:   true,
 		kind:      kindLeaf,
 		leafKey:   key,
 		valueHash: valHash,
@@ -250,14 +259,11 @@ func (b *BranchData) Encode() []byte {
 }
 
 func (b *BranchData) encodingLayout() (uint16, int) {
-	var mask uint16
+	mask := b.presentMask()
 	size := 2 // childMask
-	for i := uint8(0); i < 16; i++ {
+	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
+		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
-		if !c.present {
-			continue
-		}
-		mask |= 1 << i
 		size++ // kind byte
 		if c.kind == kindHash {
 			size += common.HashLength
@@ -367,8 +373,9 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	// to 16 tiny allocations per decoded branch without retaining the
 	// hash-dominated encoded Pebble value.
 	totalLeafKeyBytes := 0
-	for i := range dst.children {
-		if dst.children[i].present && dst.children[i].kind == kindLeaf {
+	for remaining := dst.presentMask(); remaining != 0; remaining &= remaining - 1 {
+		i := bits.TrailingZeros16(remaining)
+		if dst.children[i].kind == kindLeaf {
 			totalLeafKeyBytes += len(dst.children[i].leafKey)
 		}
 	}
@@ -377,9 +384,10 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	}
 	arena := make([]byte, totalLeafKeyBytes)
 	offset := 0
-	for i := range dst.children {
+	for remaining := dst.presentMask(); remaining != 0; remaining &= remaining - 1 {
+		i := bits.TrailingZeros16(remaining)
 		child := &dst.children[i]
-		if !child.present || child.kind != kindLeaf || len(child.leafKey) == 0 {
+		if child.kind != kindLeaf || len(child.leafKey) == 0 {
 			continue
 		}
 		end := offset + copy(arena[offset:], child.leafKey)
@@ -419,7 +427,6 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at hash child")
 			}
 			child := &dst.children[i]
-			child.present = true
 			child.kind = kindHash
 			copy(child.valueHash[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
@@ -440,7 +447,6 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at leaf valHash")
 			}
 			child := &dst.children[i]
-			child.present = true
 			child.kind = kindLeaf
 			child.leafKey = key
 			copy(child.valueHash[:], rest[:common.HashLength])
@@ -454,6 +460,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	if len(rest) != 0 {
 		return errors.New("commitment_tree: trailing bytes after decode")
 	}
+	atomic.StoreUint32(&dst.childMask, uint32(mask))
 	return nil
 }
 
@@ -466,7 +473,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 
 // childPresent reports whether nibble has a present child.
 func (b *BranchData) childPresent(nibble uint8) bool {
-	return b.children[nibble].present
+	return b.presentMask()&(1<<nibble) != 0
 }
 
 // childKindAt returns the kind (kindHash / kindLeaf) of the child at nibble.
@@ -488,29 +495,19 @@ func (b *BranchData) leafChildAt(nibble uint8) (key []byte, valHash common.Hash)
 
 // clearChild removes any child at nibble.
 func (b *BranchData) clearChild(nibble uint8) {
+	atomic.AndUint32(&b.childMask, ^(uint32(1) << nibble))
 	b.children[nibble] = branchChild{}
 }
 
 // childCount returns the number of present children.
 func (b *BranchData) childCount() int {
-	n := 0
-	for i := uint8(0); i < 16; i++ {
-		if b.children[i].present {
-			n++
-		}
-	}
-	return n
+	return bits.OnesCount16(b.presentMask())
 }
 
 // onlyChildNibble returns the single present child's nibble. Callers use it only
 // when childCount() == 1.
 func (b *BranchData) onlyChildNibble() uint8 {
-	for i := uint8(0); i < 16; i++ {
-		if b.children[i].present {
-			return i
-		}
-	}
-	return 0
+	return uint8(bits.TrailingZeros16(b.presentMask()))
 }
 
 // nodeHash returns the hash of this branch node:
@@ -524,18 +521,12 @@ func (b *BranchData) nodeHash() common.Hash {
 	defer returnKeccak(h)
 	h.nodeBuf[0] = 0x01
 	off := 1
-	for i := uint8(0); i < 16; i++ {
+	for remaining := b.presentMask(); remaining != 0; remaining &= remaining - 1 {
+		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
-		if !c.present {
-			continue
-		}
 		h.nodeBuf[off] = i
 		off++
-		if c.kind == kindHash {
-			copy(h.nodeBuf[off:], c.valueHash[:])
-		} else {
-			copy(h.nodeBuf[off:], c.valueHash[:])
-		}
+		copy(h.nodeBuf[off:], c.valueHash[:])
 		off += common.HashLength
 	}
 	_, _ = h.Write(h.nodeBuf[:off])
