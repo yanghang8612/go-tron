@@ -161,9 +161,12 @@ func borrowOpsBuf(size int) *[]op {
 
 func returnOpsBuf(bp *[]op) {
 	ops := *bp
-	// op.key borrows the Fold input. Clear every used entry before pooling so
-	// the buffer cannot extend the lifetime of update key/value arenas.
-	clear(ops)
+	// Only op.key contains a reference into the Fold input. Every borrower
+	// overwrites all fields in every used element, so clear just the slice header
+	// rather than the path/value hashes too.
+	for i := range ops {
+		ops[i].key = nil
+	}
 	if cap(ops) > maxPooledOps {
 		*bp = nil
 		return

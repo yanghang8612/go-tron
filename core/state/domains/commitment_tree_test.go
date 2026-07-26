@@ -228,9 +228,8 @@ func TestReturnOpsBufClearsBorrowedKeys(t *testing.T) {
 	if len(buf) != 0 {
 		t.Fatalf("returned buffer len = %d, want 0", len(buf))
 	}
-	if backing[0].path != (common.Hash{}) || backing[0].key != nil ||
-		backing[0].valHash != (common.Hash{}) || backing[0].delete {
-		t.Fatalf("returned buffer retained op references: %+v", backing[0])
+	if backing[0].key != nil {
+		t.Fatalf("returned buffer retained borrowed key: %+v", backing[0])
 	}
 }
 

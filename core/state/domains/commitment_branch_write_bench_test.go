@@ -17,6 +17,23 @@ type commitmentDBWithoutOwnedValue struct{ CommitmentDB }
 var benchmarkDecodedBranch BranchData
 var benchmarkEncodedBranch []byte
 
+func BenchmarkOpsBufReturn(b *testing.B) {
+	key := bytes.Repeat([]byte{0xab}, 64)
+	for _, size := range []int{16, 64, 256, 1024} {
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				buf := borrowOpsBuf(size)
+				for i := range *buf {
+					(*buf)[i].key = key
+				}
+				returnOpsBuf(buf)
+			}
+		})
+	}
+}
+
 func BenchmarkBranchDataEncodeToLayout(b *testing.B) {
 	for _, children := range []int{1, 4, 16} {
 		b.Run(strconv.Itoa(children), func(b *testing.B) {
