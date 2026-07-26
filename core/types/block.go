@@ -16,6 +16,65 @@ import (
 
 var ErrInvalidTransactionMerkleRoot = errors.New("block transaction merkle root mismatch")
 
+var blockDecodeReserveLayoutOK = verifyBlockDecodeReserveLayout()
+
+// decodedWireBlock coallocates the wrapper and the two singular block-header
+// messages that every canonical block carries. decodedWireTransaction does the
+// same for Transaction.raw_data and reserves the overwhelmingly common single
+// signature/result/contract slots inline. The protobuf decoder appends into
+// these zero-length slices under Merge mode, preserving generated decode
+// semantics while avoiding several tiny heap objects per transaction.
+type decodedWireBlock struct {
+	block     Block
+	pb        corepb.Block
+	header    corepb.BlockHeader
+	headerRaw corepb.BlockHeaderRaw
+}
+
+type decodedWireTransaction struct {
+	tx            corepb.Transaction
+	raw           corepb.TransactionRaw
+	signatureSlot [1][]byte
+	resultSlot    [1]*corepb.Transaction_Result
+	contractSlot  [1]*corepb.Transaction_Contract
+}
+
+type blockTransactionReserve struct {
+	rawPresent bool
+	signatures int
+	results    int
+	pqAuthSigs int
+	auths      int
+	contracts  int
+}
+
+func verifyBlockDecodeReserveLayout() bool {
+	blockFields := (&corepb.Block{}).ProtoReflect().Descriptor().Fields()
+	if blockFields.Len() != 2 || !protoFieldShape(blockFields, 1, protoreflect.MessageKind, true) ||
+		!protoFieldShape(blockFields, 2, protoreflect.MessageKind, false) {
+		return false
+	}
+	txFields := (&corepb.Transaction{}).ProtoReflect().Descriptor().Fields()
+	if txFields.Len() != 4 || !protoFieldShape(txFields, 1, protoreflect.MessageKind, false) ||
+		!protoFieldShape(txFields, 2, protoreflect.BytesKind, true) ||
+		!protoFieldShape(txFields, 5, protoreflect.MessageKind, true) ||
+		!protoFieldShape(txFields, 6, protoreflect.MessageKind, true) {
+		return false
+	}
+	rawFields := (&corepb.TransactionRaw{}).ProtoReflect().Descriptor().Fields()
+	if rawFields.Len() != 10 || !protoFieldShape(rawFields, 9, protoreflect.MessageKind, true) ||
+		!protoFieldShape(rawFields, 11, protoreflect.MessageKind, true) {
+		return false
+	}
+	headerFields := (&corepb.BlockHeader{}).ProtoReflect().Descriptor().Fields()
+	return headerFields.Len() == 3 && protoFieldShape(headerFields, 1, protoreflect.MessageKind, false)
+}
+
+func protoFieldShape(fields protoreflect.FieldDescriptors, number protoreflect.FieldNumber, kind protoreflect.Kind, list bool) bool {
+	field := fields.ByNumber(number)
+	return field != nil && field.Kind() == kind && field.IsList() == list
+}
+
 // BlockID combines a block hash with its number. The first 8 bytes of the hash
 // are overwritten with the big-endian block number.
 type BlockID struct {
@@ -275,8 +334,17 @@ func (b *Block) AdoptMarshalScratch(data []byte) {
 }
 
 func UnmarshalBlock(data []byte) (*Block, error) {
-	pb := &corepb.Block{}
-	if err := proto.Unmarshal(data, pb); err != nil {
+	block, err := unmarshalBlockReserved(data)
+	if err != nil {
+		// Keep the generated decoder authoritative on malformed input. The fast
+		// path only changes allocation layout for valid messages; rerunning this
+		// cold path preserves its exact error and partial-decode behaviour before
+		// the historical pre-PQ compatibility retry below.
+		pb := &corepb.Block{}
+		err = proto.Unmarshal(data, pb)
+		if err == nil {
+			return NewBlockFromPB(pb), nil
+		}
 		// VERSION_4_8_2_PQ1 assigned protobuf fields that older nodes had
 		// treated as unknown. Historical mainnet blocks can therefore contain
 		// arbitrary length-delimited data at Transaction field 6 (block
@@ -288,9 +356,205 @@ func UnmarshalBlock(data []byte) (*Block, error) {
 		if !ok {
 			return nil, err
 		}
-		pb = legacyPB
+		return NewBlockFromPB(legacyPB), nil
 	}
-	return NewBlockFromPB(pb), nil
+	return block, nil
+}
+
+var blockMergeUnmarshal = proto.UnmarshalOptions{Merge: true}
+
+// unmarshalBlockReserved decodes only Block's two-field envelope directly;
+// every nested message still goes through protobuf's generated decoder. This
+// lets each transaction seed repeated-slice capacity before decode without
+// reimplementing any contract/result/PQ wire semantics. A schema guard makes
+// regenerated Block layouts fall back to the generated decoder automatically.
+func unmarshalBlockReserved(data []byte) (*Block, error) {
+	if !blockDecodeReserveLayoutOK {
+		pb := new(corepb.Block)
+		if err := proto.Unmarshal(data, pb); err != nil {
+			return nil, err
+		}
+		return NewBlockFromPB(pb), nil
+	}
+	txCount, ok := countBlockTransactionFields(data)
+	if !ok {
+		return nil, errors.New("malformed block wire envelope")
+	}
+	decoded := new(decodedWireBlock)
+	decoded.block.pb = &decoded.pb
+	if txCount != 0 {
+		decoded.pb.Transactions = make([]*corepb.Transaction, 0, txCount)
+	}
+
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			if n >= 0 {
+				return nil, errors.New("invalid block field number")
+			}
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if wireType != protowire.BytesType || (field != 1 && field != 2) {
+			_, _, tagLen := protowire.ConsumeTag(fieldData[:n])
+			unknown = protowire.AppendTag(unknown, field, wireType)
+			unknown = append(unknown, fieldData[tagLen:n]...)
+			continue
+		}
+		value, ok := bytesFieldValue(fieldData[:n])
+		if !ok {
+			return nil, errors.New("malformed block bytes field")
+		}
+		if field == 1 {
+			tx, err := unmarshalBlockTransactionReserved(value)
+			if err != nil {
+				return nil, err
+			}
+			decoded.pb.Transactions = append(decoded.pb.Transactions, tx)
+			continue
+		}
+		if decoded.pb.BlockHeader == nil {
+			decoded.pb.BlockHeader = &decoded.header
+		}
+		if decoded.header.RawData == nil && hasBytesField(value, 1) {
+			decoded.header.RawData = &decoded.headerRaw
+		}
+		if err := blockMergeUnmarshal.Unmarshal(value, &decoded.header); err != nil {
+			return nil, err
+		}
+	}
+	appendProtoUnknown(&decoded.pb, unknown)
+	return &decoded.block, nil
+}
+
+func countBlockTransactionFields(data []byte) (int, bool) {
+	count := 0
+	for len(data) != 0 {
+		field, wireType, n := protowire.ConsumeField(data)
+		if n < 0 || !field.IsValid() {
+			return 0, false
+		}
+		if field == 1 && wireType == protowire.BytesType {
+			count++
+		}
+		data = data[n:]
+	}
+	return count, true
+}
+
+func unmarshalBlockTransactionReserved(data []byte) (*corepb.Transaction, error) {
+	reserve, ok := scanBlockTransactionReserve(data)
+	if !ok {
+		return nil, errors.New("malformed transaction wire envelope")
+	}
+	decoded := new(decodedWireTransaction)
+	if reserve.rawPresent {
+		decoded.tx.RawData = &decoded.raw
+	}
+	if reserve.signatures == 1 {
+		decoded.tx.Signature = decoded.signatureSlot[:0]
+	} else if reserve.signatures > 1 {
+		decoded.tx.Signature = make([][]byte, 0, reserve.signatures)
+	}
+	if reserve.results == 1 {
+		decoded.tx.Ret = decoded.resultSlot[:0]
+	} else if reserve.results > 1 {
+		decoded.tx.Ret = make([]*corepb.Transaction_Result, 0, reserve.results)
+	}
+	if reserve.pqAuthSigs != 0 {
+		decoded.tx.PqAuthSig = make([]*corepb.PQAuthSig, 0, reserve.pqAuthSigs)
+	}
+	if reserve.auths != 0 {
+		decoded.raw.Auths = make([]*corepb.Authority, 0, reserve.auths)
+	}
+	if reserve.contracts == 1 {
+		decoded.raw.Contract = decoded.contractSlot[:0]
+	} else if reserve.contracts > 1 {
+		decoded.raw.Contract = make([]*corepb.Transaction_Contract, 0, reserve.contracts)
+	}
+	if err := blockMergeUnmarshal.Unmarshal(data, &decoded.tx); err != nil {
+		return nil, err
+	}
+	return &decoded.tx, nil
+}
+
+func scanBlockTransactionReserve(data []byte) (blockTransactionReserve, bool) {
+	var reserve blockTransactionReserve
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return blockTransactionReserve{}, false
+		}
+		data = data[n:]
+		if wireType != protowire.BytesType {
+			continue
+		}
+		switch field {
+		case 1:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return blockTransactionReserve{}, false
+			}
+			reserve.rawPresent = true
+			auths, contracts, ok := scanTransactionRawRepeated(value)
+			if !ok {
+				return blockTransactionReserve{}, false
+			}
+			reserve.auths += auths
+			reserve.contracts += contracts
+		case 2:
+			reserve.signatures++
+		case 5:
+			reserve.results++
+		case 6:
+			reserve.pqAuthSigs++
+		}
+	}
+	return reserve, true
+}
+
+func scanTransactionRawRepeated(data []byte) (auths, contracts int, ok bool) {
+	for len(data) != 0 {
+		field, wireType, n := protowire.ConsumeField(data)
+		if n < 0 || !field.IsValid() {
+			return 0, 0, false
+		}
+		if wireType == protowire.BytesType {
+			if field == 9 {
+				auths++
+			} else if field == 11 {
+				contracts++
+			}
+		}
+		data = data[n:]
+	}
+	return auths, contracts, true
+}
+
+func hasBytesField(data []byte, want protowire.Number) bool {
+	for len(data) != 0 {
+		field, wireType, n := protowire.ConsumeField(data)
+		if n < 0 || !field.IsValid() {
+			return false
+		}
+		if field == want && wireType == protowire.BytesType {
+			return true
+		}
+		data = data[n:]
+	}
+	return false
+}
+
+func bytesFieldValue(fieldData []byte) ([]byte, bool) {
+	field, _, tagLen := protowire.ConsumeTag(fieldData)
+	if tagLen < 0 || !field.IsValid() {
+		return nil, false
+	}
+	value, valueLen := protowire.ConsumeBytes(fieldData[tagLen:])
+	return value, valueLen >= 0 && tagLen+valueLen == len(fieldData)
 }
 
 // firstPQBlockVersion is VERSION_4_8_2_PQ1. Blocks below this version were

@@ -13,6 +13,8 @@ import (
 
 var benchmarkBlockHash common.Hash
 var benchmarkBlockBytes []byte
+var benchmarkDecodedBlock *Block
+var benchmarkDecodedProtoBlock *corepb.Block
 
 func blockHashRawTestBlock(txCount, dataSize int) *Block {
 	txs := make([]*corepb.Transaction, txCount)
@@ -70,6 +72,103 @@ func BenchmarkBlockHashFromRaw(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+		}
+	})
+}
+
+func blockDecodeReserveTestBlock(txCount int) *Block {
+	block := blockHashRawTestBlock(txCount, 64)
+	for i, tx := range block.Proto().Transactions {
+		tx.RawData.Contract = []*corepb.Transaction_Contract{{
+			Type:         corepb.Transaction_Contract_TransferContract,
+			PermissionId: int32(i % 3),
+		}}
+		tx.Ret = []*corepb.Transaction_Result{{
+			Fee:         int64(i + 1),
+			ContractRet: corepb.Transaction_Result_SUCCESS,
+		}}
+	}
+	return block
+}
+
+func BenchmarkUnmarshalBlockReserved(b *testing.B) {
+	data, err := blockDecodeReserveTestBlock(200).Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(data)))
+	b.Run("generated", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			decoded := new(corepb.Block)
+			if err := proto.Unmarshal(data, decoded); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkDecodedProtoBlock = decoded
+		}
+	})
+	b.Run("reserved", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkDecodedBlock, err = UnmarshalBlock(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func TestUnmarshalBlockReservedMatchesGenerated(t *testing.T) {
+	if !blockDecodeReserveLayoutOK {
+		t.Fatal("protobuf layout guard unexpectedly disabled reserved decoder")
+	}
+	want := blockDecodeReserveTestBlock(4).Proto()
+	data, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := protowire.AppendTag(nil, 100, protowire.BytesType)
+	unknown = protowire.AppendBytes(unknown, []byte("block-unknown"))
+	data = append(data, unknown...)
+
+	got, err := unmarshalBlockReserved(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generated corepb.Block
+	if err := proto.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), &generated) {
+		t.Fatalf("reserved decoder differs from generated decoder\nreserved: %v\ngenerated: %v", got.Proto(), &generated)
+	}
+	for i, tx := range got.Proto().Transactions {
+		if cap(tx.Signature) != 1 || cap(tx.Ret) != 1 || cap(tx.RawData.Contract) != 1 {
+			t.Fatalf("transaction %d did not retain inline slots: signature=%d result=%d contract=%d", i, cap(tx.Signature), cap(tx.Ret), cap(tx.RawData.Contract))
+		}
+	}
+}
+
+func FuzzUnmarshalBlockReservedEquivalent(f *testing.F) {
+	canonical, err := blockDecodeReserveTestBlock(2).Marshal()
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(nil))
+	f.Add(canonical)
+	f.Add(append(bytes.Clone(canonical), protowire.AppendTag(nil, 100, protowire.Fixed32Type)...))
+	// A field number above protowire.MaxValidNumber. ConsumeField accepts it,
+	// while protobuf's generated decoder correctly rejects it.
+	f.Add([]byte{0xe0, 0xe0, 0xe0, 0xe0, 0x30, 0x30})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, gotErr := unmarshalBlockReserved(data)
+		var want corepb.Block
+		wantErr := proto.Unmarshal(data, &want)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch: reserved=%v generated=%v, wire=%x", gotErr, wantErr, data)
+		}
+		if gotErr == nil && !proto.Equal(got.Proto(), &want) {
+			t.Fatalf("decode mismatch: reserved=%v generated=%v, wire=%x", got.Proto(), &want, data)
 		}
 	})
 }
