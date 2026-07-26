@@ -33,6 +33,9 @@ func verifyAccountDirectMapLayout() bool {
 		if isAccountMapField(field.Number()) != field.IsMap() {
 			return false
 		}
+		if field.Number() == 3 && field.Kind() != protoreflect.BytesKind {
+			return false
+		}
 		if field.IsMap() && (field.MapKey().Kind() != protoreflect.StringKind || field.MapValue().Kind() != protoreflect.Int64Kind) {
 			return false
 		}

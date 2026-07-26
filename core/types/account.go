@@ -26,6 +26,7 @@ type Account struct {
 type decodedAccount struct {
 	account Account
 	pb      corepb.Account
+	address [common.AddressLength]byte
 }
 
 func NewAccountFromPB(pb *corepb.Account) *Account {
@@ -785,7 +786,7 @@ func (a *Account) MarshalStorageCore() ([]byte, error) {
 func UnmarshalAccount(data []byte) (*Account, error) {
 	decoded := new(decodedAccount)
 	decoded.account.pb = &decoded.pb
-	err, handled := unmarshalAccountDirectMapsInto(data, &decoded.pb)
+	err, handled := unmarshalAccountDirectFieldsInto(data, &decoded.pb, decoded.address[:])
 	if !handled {
 		err = proto.Unmarshal(data, &decoded.pb)
 	}

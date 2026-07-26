@@ -98,6 +98,8 @@ func TestUnmarshalAccountDirectMapsRejectsMalformedWire(t *testing.T) {
 		{name: "invalid UTF-8 key", data: protowire.AppendBytes(protowire.AppendTag(nil, 6, protowire.BytesType), invalidUTF8Entry)},
 		{name: "wrong key wire type", data: protowire.AppendBytes(protowire.AppendTag(nil, 6, protowire.BytesType), protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), 1))},
 		{name: "wrong outer wire type fallback", data: protowire.AppendVarint(protowire.AppendTag(nil, 6, protowire.VarintType), 1)},
+		{name: "truncated address", data: append(protowire.AppendTag(nil, 3, protowire.BytesType), 5, 1)},
+		{name: "wrong address wire type fallback", data: protowire.AppendVarint(protowire.AppendTag(nil, 3, protowire.VarintType), 1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -110,14 +112,15 @@ func TestUnmarshalAccountDirectMapsRejectsMalformedWire(t *testing.T) {
 	}
 }
 
-func TestUnmarshalAccountWithoutMapsUsesGenericPath(t *testing.T) {
-	original := &corepb.Account{Address: []byte{0x41, 1, 2}, Balance: 123}
+func TestUnmarshalAccountWithoutDirectFieldsUsesGenericPath(t *testing.T) {
+	original := &corepb.Account{Balance: 123}
 	data, err := proto.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pb, err, handled := unmarshalAccountDirectMaps(data); handled || pb != nil || err != nil {
-		t.Fatalf("direct result = (%v, %v, %v), want generic fallback", pb, err, handled)
+	pb := new(corepb.Account)
+	if err, handled := unmarshalAccountDirectFieldsInto(data, pb, make([]byte, 21)); handled || err != nil {
+		t.Fatalf("direct result = (%v, %v), want generic fallback", err, handled)
 	}
 	got, err := UnmarshalAccount(data)
 	if err != nil {
@@ -126,6 +129,86 @@ func TestUnmarshalAccountWithoutMapsUsesGenericPath(t *testing.T) {
 	if !proto.Equal(got.Proto(), original) {
 		t.Fatalf("fallback differs: got %v want %v", got.Proto(), original)
 	}
+}
+
+func TestUnmarshalAccountDirectAddressWireSemantics(t *testing.T) {
+	first := bytes.Repeat([]byte{0x41}, 21)
+	last := bytes.Repeat([]byte{0x42}, 21)
+	data := protowire.AppendTag(nil, 3, protowire.BytesType)
+	data = protowire.AppendBytes(data, first)
+	data = protowire.AppendTag(data, 4, protowire.VarintType)
+	data = protowire.AppendVarint(data, 99)
+	data = protowire.AppendTag(data, 3, protowire.BytesType)
+	data = protowire.AppendBytes(data, last)
+
+	want := new(corepb.Account)
+	if err := proto.Unmarshal(data, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnmarshalAccount(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), want) {
+		t.Fatalf("direct address differs\ngot:  %v\nwant: %v", got.Proto(), want)
+	}
+	// The returned protobuf must own the address independently of the wire
+	// buffer even though the common 21-byte value uses inline storage.
+	for i := range data {
+		data[i] = 0
+	}
+	if !bytes.Equal(got.Proto().Address, last) {
+		t.Fatalf("address aliases input: got %x want %x", got.Proto().Address, last)
+	}
+}
+
+func TestUnmarshalAccountDirectAddressLengthsEquivalent(t *testing.T) {
+	for _, size := range []int{0, 1, 20, 21, 22, 64} {
+		t.Run(fmt.Sprintf("size-%d", size), func(t *testing.T) {
+			address := bytes.Repeat([]byte{byte(size + 1)}, size)
+			data := protowire.AppendTag(nil, 3, protowire.BytesType)
+			data = protowire.AppendBytes(data, address)
+			want := new(corepb.Account)
+			if err := proto.Unmarshal(data, want); err != nil {
+				t.Fatal(err)
+			}
+			got, err := UnmarshalAccount(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(got.Proto(), want) {
+				t.Fatalf("direct address differs\ngot:  %v\nwant: %v", got.Proto(), want)
+			}
+		})
+	}
+}
+
+func FuzzUnmarshalAccountDirectFieldsEquivalent(f *testing.F) {
+	for _, pb := range []*corepb.Account{
+		{},
+		{Address: bytes.Repeat([]byte{0x41}, 21), Balance: 1},
+		accountUnmarshalFixture(4),
+	} {
+		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(pb)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+	}
+	f.Add([]byte{0x1a, 0x05, 0x01})
+	f.Add([]byte{0x18, 0x01})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want := new(corepb.Account)
+		genericErr := proto.Unmarshal(data, want)
+		got, directErr := UnmarshalAccount(data)
+		if (genericErr != nil) != (directErr != nil) {
+			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
+		}
+		if genericErr == nil && !proto.Equal(got.Proto(), want) {
+			t.Fatalf("decoded message mismatch\ngot:  %v\nwant: %v\ndata: %x", got.Proto(), want, data)
+		}
+	})
 }
 
 func appendAccountMapEntryWire(dst []byte, number protowire.Number, key string, value int64) []byte {
