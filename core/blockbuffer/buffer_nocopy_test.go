@@ -159,7 +159,7 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 	}
 	base := &countingKeyValueReader{KeyValueReader: disk}
 	buf := New(base)
-	buf.SetBaseReadCacheSize(1 << 20)
+	buf.SetBaseReadCacheSize(1<<20, rawdb.CommitmentBranchKeyPrefix)
 
 	read := func(reader ethdb.KeyValueReader, want []byte, wantFound bool) {
 		t.Helper()
@@ -266,7 +266,7 @@ func TestCommitmentSplitViewReportsScopedBaseCacheAndStableOverlay(t *testing.T)
 	}
 	base := &countingKeyValueReader{KeyValueReader: disk}
 	buf := New(base)
-	buf.SetBaseReadCacheSize(1 << 20)
+	buf.SetBaseReadCacheSize(1<<20, rawdb.CommitmentBranchKeyPrefix)
 
 	view := func(reader ethdb.KeyValueReader, want []byte, wantStable bool) {
 		t.Helper()

@@ -199,11 +199,12 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
 }
 
-// viewWithEpoch is the callback-scoped counterpart of getWithEpoch. A cache
-// hit stays protected by the shard read lock until fn returns and is reported
-// as stable=false: callers may consume the bytes synchronously but must not
-// retain them. This lets a later flush reuse an unexposed value allocation in
-// place without racing a decoder or invalidating a borrowed leaf key.
+// viewWithEpoch is the callback counterpart of getWithEpoch. A hit in the
+// configured read-before-write namespace stays protected by the shard read
+// lock until fn returns and is reported as stable=false; other immutable cache
+// hits retain stable=true and become exposed. The scoped form lets a later
+// commitment flush reuse its value allocation without racing a decoder or
+// invalidating a borrowed leaf key.
 func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable bool) error) (cached, present bool, epoch baseReadCacheEpoch, err error) {
 	if c == nil {
 		return false, false, baseReadCacheEpoch{}, nil
@@ -218,6 +219,12 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 		if e.value == nil {
 			s.mu.RUnlock()
 			return true, false, baseReadCacheEpoch{}, nil
+		}
+		if !c.scopedRefreshKey(key) {
+			e.exposed.Store(true)
+			value := e.value
+			s.mu.RUnlock()
+			return true, true, baseReadCacheEpoch{}, fn(value, true)
 		}
 		defer s.mu.RUnlock()
 		return true, true, baseReadCacheEpoch{}, fn(e.value, false)
@@ -246,6 +253,12 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 				s.mu.RUnlock()
 				return true, false, baseReadCacheEpoch{}, false, nil
 			}
+			if !c.scopedRefreshKey(key) {
+				e.exposed.Store(true)
+				value := e.value
+				s.mu.RUnlock()
+				return true, true, baseReadCacheEpoch{}, false, fn(value, true)
+			}
 			defer s.mu.RUnlock()
 			return true, true, baseReadCacheEpoch{}, false, fn(e.value, false)
 		}
@@ -255,6 +268,23 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	s.mu.RUnlock()
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
 	return false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
+}
+
+// scopedRefreshKey reports whether callback consumers of key may receive a
+// cache-owned value only for the duration of the callback. Restricting this to
+// the configured read-before-write namespace keeps immutable state-code and
+// flat-latest cache hits shareable while commitment branches gain safe in-place
+// flush refreshes.
+func (c *baseReadCache) scopedRefreshKey(key []byte) bool {
+	if c == nil || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
+		return false
+	}
+	for i := range c.flushAdmissionPrefix {
+		if key[i] != c.flushAdmissionPrefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *baseReadCache) advanceVersion() uint64 {

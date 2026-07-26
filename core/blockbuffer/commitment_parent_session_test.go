@@ -71,7 +71,7 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	}
 
 	buf := New(disk)
-	buf.SetBaseReadCacheSize(1 << 20)
+	buf.SetBaseReadCacheSize(1<<20, rawdb.CommitmentBranchKeyPrefix)
 	buf.BeginBlock(bufHash(1), 1)
 	h1, _ := buf.NewestInflight()
 	if err := rawdb.WriteCommitmentBranch(buf.ViewLayer(h1), overridePrefix, []byte("override-layer")); err != nil {

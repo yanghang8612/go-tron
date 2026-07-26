@@ -136,6 +136,34 @@ func TestReadStateCodeImmutableSharesOnlyStableViews(t *testing.T) {
 	}
 }
 
+func TestReadStateCodeImmutableSharesNonCommitmentCacheHit(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	code := bytes.Repeat([]byte{0x5a}, 4096)
+	hash := common.Keccak256(code)
+	if err := WriteStateCode(base, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	counting := &stateCodeCountingReader{KeyValueReader: base}
+	buffer := blockbuffer.New(counting)
+	// Production config scopes mutable refreshes to commitment branches. State
+	// code is content-addressed and must remain a stable, shareable cache hit.
+	buffer.SetBaseReadCacheSize(1<<20, CommitmentBranchKeyPrefix)
+
+	first := ReadStateCodeImmutable(buffer, hash)
+	second := ReadStateCodeImmutable(buffer, hash)
+	third := ReadStateCodeImmutable(buffer, hash)
+	fourth := ReadStateCodeImmutable(buffer, hash)
+	if !bytes.Equal(first, code) || !bytes.Equal(second, code) || !bytes.Equal(third, code) || !bytes.Equal(fourth, code) {
+		t.Fatal("immutable cached state code mismatch")
+	}
+	if &third[0] != &fourth[0] {
+		t.Fatal("stable state-code cache hit was copied")
+	}
+	if counting.gets != 2 {
+		t.Fatalf("durable code reads = %d, want 2", counting.gets)
+	}
+}
+
 func BenchmarkReadStateCodeImmutableScopedView(b *testing.B) {
 	code := bytes.Repeat([]byte{0x5a}, 4096)
 	hash := common.Keccak256(code)

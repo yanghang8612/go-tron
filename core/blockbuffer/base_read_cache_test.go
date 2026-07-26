@@ -325,7 +325,7 @@ func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing
 }
 
 func TestBaseReadCache_ScopedViewAllowsInPlaceFlushRefresh(t *testing.T) {
-	c := newBaseReadCache(1 << 20)
+	c := newBaseReadCache(1<<20, "state-commitment-branch-v1-")
 	key := []byte("state-commitment-branch-v1-scoped-refresh")
 	oldValue := []byte("branch-value-one")
 	newValue := []byte("branch-value-two")
@@ -364,7 +364,7 @@ func TestBaseReadCache_ScopedViewAllowsInPlaceFlushRefresh(t *testing.T) {
 }
 
 func TestBaseReadCache_DirectGetPreventsInPlaceFlushRefresh(t *testing.T) {
-	c := newBaseReadCache(1 << 20)
+	c := newBaseReadCache(1<<20, "state-commitment-branch-v1-")
 	key := []byte("state-commitment-branch-v1-direct-refresh")
 	oldValue := []byte("branch-value-one")
 	newValue := []byte("branch-value-two")

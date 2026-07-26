@@ -1159,9 +1159,10 @@ func (b *Buffer) GetNoCopyCachedStateAccountLatest(prefix []byte, accountID comm
 
 // ViewNoCopyCachedKeyParts resolves a split physical key and invokes fn while
 // the value is valid. stable is true for immutable overlay and owned fallback
-// Get values. Cache and Pebble-view hits are callback-scoped (stable=false), so
-// fn must not retain slices that alias them. Commitment branch decoding uses
-// this distinction to copy only leaf keys that outlive the callback while the
+// Get values. Pebble-view hits and cache hits in the configured
+// read-before-write namespace are callback-scoped (stable=false), so fn must
+// not retain slices that alias them. Commitment branch decoding uses this
+// distinction to copy only leaf keys that outlive the callback while the
 // hash-dominated encoded branch remains allocation-free.
 func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	total := len(first) + len(second)
@@ -1329,7 +1330,14 @@ func newScopedBaseViewContext() any {
 func (ctx *scopedBaseViewContext) consume(value []byte) error {
 	ctx.called = true
 	if ctx.cache != nil {
-		ctx.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
+		if !ctx.cache.scopedRefreshKey(ctx.key) {
+			if stored, admitted := ctx.cache.setIfEpoch(ctx.key, value, ctx.epoch); admitted {
+				ctx.callbackErr = ctx.fn(stored, true)
+				return ctx.callbackErr
+			}
+		} else {
+			ctx.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
+		}
 	}
 	ctx.callbackErr = ctx.fn(value, false)
 	return ctx.callbackErr
