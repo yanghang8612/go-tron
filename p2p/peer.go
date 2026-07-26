@@ -141,9 +141,15 @@ func (p *Peer) GoodbyeAndClose(reason p2ppb.DisconnectReason) {
 func (p *Peer) readLoop() {
 	defer p.wg.Done()
 	defer p.disconnect()
+	// The outer CompressMessage frame is consumed synchronously by
+	// UnwrapPostHandshake, which gives handlers independently owned protobuf or
+	// snappy bytes. Reuse ordinary frame storage across this peer's serial reads,
+	// but do not pin an adversarial near-MaxMessageSize frame for its lifetime.
+	const maxReusableFrameBodyCapacity = 256 << 10
+	var frameBuf []byte
 	for {
 		// Post-handshake: every frame is a CompressMessage wrapping [code][payload].
-		body, err := ReadFrameBody(p.conn)
+		body, err := readFrameBodyInto(p.conn, frameBuf)
 		if err != nil {
 			p.RecordDisconnectCause("read: " + err.Error())
 			return
@@ -179,6 +185,11 @@ func (p *Peer) readLoop() {
 			// A second HELLO after the handshake is unexpected; drop silently.
 		default:
 			p.handler.OnMessage(p, code, payload)
+		}
+		if cap(body) <= maxReusableFrameBodyCapacity {
+			frameBuf = body[:0]
+		} else {
+			frameBuf = nil
 		}
 	}
 }

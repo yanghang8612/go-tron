@@ -62,3 +62,19 @@ func TestCompressRoundtripEmptyPayload(t *testing.T) {
 		t.Fatalf("payload: got %d bytes, want 0", len(got))
 	}
 }
+
+func TestUnwrapPayloadOwnsFrameBytes(t *testing.T) {
+	want := []byte("payload retained after the frame scratch is reused")
+	wrapped, err := WrapPostHandshake(0x20, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, got, err := UnwrapPostHandshake(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(wrapped)
+	if code != 0x20 || !bytes.Equal(got, want) {
+		t.Fatalf("payload changed after frame reuse: code=%#x got=%q want=%q", code, got, want)
+	}
+}

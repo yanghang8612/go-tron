@@ -18,9 +18,14 @@ func WriteVarint32(w io.Writer, v uint32) error {
 // Returns an error on overflow (>32 bits) or unterminated sequences.
 func ReadVarint32(r io.Reader) (uint32, error) {
 	var b [1]byte
+	return readVarint32Into(r, b[:])
+}
+
+// readVarint32Into is ReadVarint32 with a caller-owned one-byte scratch.
+func readVarint32Into(r io.Reader, b []byte) (uint32, error) {
 	var result uint64
 	for i := 0; i < 5; i++ {
-		if _, err := io.ReadFull(r, b[:]); err != nil {
+		if _, err := io.ReadFull(r, b[:1]); err != nil {
 			return 0, err
 		}
 		result |= uint64(b[0]&0x7F) << (7 * i)

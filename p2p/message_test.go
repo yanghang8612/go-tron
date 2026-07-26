@@ -2,11 +2,64 @@ package p2p
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+var frameBodyBenchmarkSink []byte
+
+func BenchmarkReadFrameBody(b *testing.B) {
+	for _, size := range []int{64, 16 << 10, 128 << 10} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			payload := make([]byte, size)
+			var framed bytes.Buffer
+			if err := WriteFrameBody(&framed, payload); err != nil {
+				b.Fatal(err)
+			}
+			frame := framed.Bytes()
+			var reader bytes.Reader
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				reader.Reset(frame)
+				body, err := ReadFrameBody(&reader)
+				if err != nil {
+					b.Fatal(err)
+				}
+				frameBodyBenchmarkSink = body
+			}
+		})
+	}
+}
+
+func BenchmarkReadFrameBodyReuse(b *testing.B) {
+	for _, size := range []int{64, 16 << 10, 128 << 10} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			payload := make([]byte, size)
+			var framed bytes.Buffer
+			if err := WriteFrameBody(&framed, payload); err != nil {
+				b.Fatal(err)
+			}
+			frame := framed.Bytes()
+			var reader bytes.Reader
+			bodyBuf := make([]byte, 0, size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				reader.Reset(frame)
+				body, err := readFrameBodyInto(&reader, bodyBuf)
+				if err != nil {
+					b.Fatal(err)
+				}
+				frameBodyBenchmarkSink = body
+				bodyBuf = body[:0]
+			}
+		})
+	}
+}
 
 func TestEncodeDecodeMessage(t *testing.T) {
 	inv := &corepb.Inventory{

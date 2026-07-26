@@ -44,7 +44,17 @@ func ReadMsg(r io.Reader) (byte, []byte, error) {
 // bytes (without any per-frame parsing). Used post-handshake, where the
 // body is a CompressMessage proto rather than [code][payload].
 func ReadFrameBody(r io.Reader) ([]byte, error) {
-	length, err := ReadVarint32(r)
+	return readFrameBodyInto(r, nil)
+}
+
+// readFrameBodyInto is ReadFrameBody with caller-owned scratch. The returned
+// body aliases buf when its capacity is sufficient; callers must not reuse buf
+// until they have finished consuming the body.
+func readFrameBodyInto(r io.Reader, buf []byte) ([]byte, error) {
+	if cap(buf) == 0 {
+		buf = make([]byte, 0, 1)
+	}
+	length, err := readVarint32Into(r, buf[:1])
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +64,11 @@ func ReadFrameBody(r io.Reader) ([]byte, error) {
 	if length > MaxMessageSize {
 		return nil, fmt.Errorf("frame too large: %d bytes", length)
 	}
-	buf := make([]byte, length)
+	if uint32(cap(buf)) < length {
+		buf = make([]byte, length)
+	} else {
+		buf = buf[:length]
+	}
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}
