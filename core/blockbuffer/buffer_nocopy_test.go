@@ -1379,8 +1379,11 @@ func TestCommitmentBranchLayerOwnedBatchesShareKeyArena(t *testing.T) {
 	if len(l.ownedKeyArena) != wantSize {
 		t.Fatalf("owned key arena length = %d, want %d", len(l.ownedKeyArena), wantSize)
 	}
-	if cap(l.ownedKeyArena) != layerOwnedKeyArenaMinChunk {
-		t.Fatalf("dense owned key arena capacity = %d, want %d", cap(l.ownedKeyArena), layerOwnedKeyArenaMinChunk)
+	firstBatchSize := len(prefix)*len(firstSeconds) + len(firstSeconds[0]) + len(firstSeconds[1])
+	wantCapacity := firstBatchSize * 2
+	wantCapacity += (wantCapacity + 7) / 8
+	if cap(l.ownedKeyArena) != wantCapacity {
+		t.Fatalf("dense owned key arena capacity = %d, want %d", cap(l.ownedKeyArena), wantCapacity)
 	}
 	arenaStart := uintptr(unsafe.Pointer(unsafe.SliceData(l.ownedKeyArena)))
 	arenaEnd := arenaStart + uintptr(len(l.ownedKeyArena))
@@ -1419,6 +1422,38 @@ func TestCommitmentBranchLayerSparseBatchKeepsExactKeyArena(t *testing.T) {
 	wantSize := len(prefix)*len(seconds) + len(seconds[0]) + len(seconds[1])
 	if len(l.ownedKeyArena) != wantSize || cap(l.ownedKeyArena) != wantSize {
 		t.Fatalf("sparse owned key arena = len:%d cap:%d, want exact %d", len(l.ownedKeyArena), cap(l.ownedKeyArena), wantSize)
+	}
+}
+
+func TestCommitmentBranchLayerArenaReservesOnlyRemainingBatches(t *testing.T) {
+	l := newLayer(common.Hash{}, 1)
+	const batchCount = 4
+
+	_ = l.reserveOwnedKeyBytes(8, batchCount)
+	wantFirstCapacity := 8 * batchCount
+	wantFirstCapacity += (wantFirstCapacity + 7) / 8
+	if cap(l.ownedKeyArena) != wantFirstCapacity {
+		t.Fatalf("first arena capacity = %d, want %d", cap(l.ownedKeyArena), wantFirstCapacity)
+	}
+	_ = l.reserveOwnedKeyBytes(8, batchCount)
+	_ = l.reserveOwnedKeyBytes(24, batchCount)
+	wantThirdCapacity := 24 * 2 // the third call has only two batches left
+	wantThirdCapacity += (wantThirdCapacity + 7) / 8
+	if cap(l.ownedKeyArena) != wantThirdCapacity {
+		t.Fatalf("replacement arena capacity = %d, want %d", cap(l.ownedKeyArena), wantThirdCapacity)
+	}
+	_ = l.reserveOwnedKeyBytes(24, batchCount)
+	if len(l.ownedKeyArena) != 48 || cap(l.ownedKeyArena) != wantThirdCapacity {
+		t.Fatalf("final arena = len:%d cap:%d, want len:48 cap:%d", len(l.ownedKeyArena), cap(l.ownedKeyArena), wantThirdCapacity)
+	}
+	if l.ownedKeyArenaBatches != batchCount {
+		t.Fatalf("recorded arena batches = %d, want %d", l.ownedKeyArenaBatches, batchCount)
+	}
+
+	largeLayer := newLayer(common.Hash{}, 2)
+	_ = largeLayer.reserveOwnedKeyBytes(layerOwnedKeyArenaMaxChunk+1, batchCount)
+	if cap(largeLayer.ownedKeyArena) != layerOwnedKeyArenaMaxChunk+1 {
+		t.Fatalf("large arena capacity = %d, want exact %d", cap(largeLayer.ownedKeyArena), layerOwnedKeyArenaMaxChunk+1)
 	}
 }
 

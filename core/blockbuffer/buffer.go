@@ -66,17 +66,15 @@ type layer struct {
 	// Reservations are disjoint before the caller copies bytes, so the lock is
 	// never held with a shard lock and concurrent fold workers can populate
 	// their reserved spans independently.
-	ownedKeyArenaMu sync.Mutex
-	ownedKeyArena   []byte
-	shards          [layerShardCount]layerShard
+	ownedKeyArenaMu      sync.Mutex
+	ownedKeyArena        []byte
+	ownedKeyArenaBatches int
+	shards               [layerShardCount]layerShard
 }
 
 const layerShardCount = 16
 
-const (
-	layerOwnedKeyArenaMinChunk = 32 << 10
-	layerOwnedKeyArenaMaxChunk = 64 << 10
-)
+const layerOwnedKeyArenaMaxChunk = 64 << 10
 
 // layerShard is padded to one 64-byte cache line on the deployment target
 // (amd64). Without the padding, adjacent shard RWMutex counters can still
@@ -120,25 +118,35 @@ func newLayer(hash common.Hash, number uint64) *layer {
 }
 
 // reserveOwnedKeyBytes returns a unique immutable-after-fill span owned by l.
-// A sparse single-batch fold keeps an exact allocation. Dense folds use the
-// caller's batch-count estimate, bounded to 32–64 KiB chunks, so dozens of
-// sibling publications share a few backing objects without materially
-// increasing retained key bytes.
+// A sparse single-batch fold keeps an exact allocation. For a sibling fold,
+// each reservation scales only by the batches that have not arrived yet. A
+// small headroom absorbs normal batch-size variation, and the cap prevents an
+// unusually large first sibling from retaining an oversized layer arena.
 func (l *layer) reserveOwnedKeyBytes(size, reserveBatches int) []byte {
 	if size == 0 {
 		return nil
 	}
 	l.ownedKeyArenaMu.Lock()
+	remainingBatches := 1
+	if reserveBatches > 1 {
+		remainingBatches = reserveBatches - l.ownedKeyArenaBatches
+		if remainingBatches < 1 {
+			remainingBatches = 1
+		}
+		l.ownedKeyArenaBatches++
+	}
 	if cap(l.ownedKeyArena)-len(l.ownedKeyArena) < size {
 		capacity := size
-		if reserveBatches > 1 {
-			if size <= int(^uint(0)>>1)/reserveBatches {
-				capacity = size * reserveBatches
+		if remainingBatches > 1 && size < layerOwnedKeyArenaMaxChunk {
+			if size <= layerOwnedKeyArenaMaxChunk/remainingBatches {
+				capacity = size * remainingBatches
+			} else {
+				capacity = layerOwnedKeyArenaMaxChunk
 			}
-			if capacity < layerOwnedKeyArenaMinChunk {
-				capacity = layerOwnedKeyArenaMinChunk
-			}
-			if capacity > layerOwnedKeyArenaMaxChunk && size <= layerOwnedKeyArenaMaxChunk {
+			// Allow 12.5% for sibling batches whose physical keys are slightly
+			// longer than the batch that established this arena.
+			capacity += (capacity + 7) / 8
+			if capacity > layerOwnedKeyArenaMaxChunk {
 				capacity = layerOwnedKeyArenaMaxChunk
 			}
 		}
