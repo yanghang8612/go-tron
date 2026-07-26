@@ -11,7 +11,9 @@ import (
 
 // PrecompiledContract is the interface for precompiled contracts.
 // Run is called with the TVM context, caller address, input bytes, and available energy.
-// Returns (output, energyConsumed, error). On ErrOutOfEnergy, energyConsumed == energy.
+// Input is read-only and valid only for the duration of Run; returned output must
+// not alias input. Returns (output, energyConsumed, error). On ErrOutOfEnergy,
+// energyConsumed == energy.
 type PrecompiledContract interface {
 	Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error)
 }

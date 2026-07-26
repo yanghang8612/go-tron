@@ -236,6 +236,10 @@ func TestPrecompileDataCopy(t *testing.T) {
 	if string(result) != string(input) {
 		t.Fatalf("data copy mismatch")
 	}
+	input[0] = 0xff
+	if result[0] != 0x01 {
+		t.Fatalf("data copy output aliases input: got %x", result)
+	}
 }
 
 // TestKZGPointEvaluationNile55610290 pins the first transaction whose missing

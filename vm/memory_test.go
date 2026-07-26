@@ -97,19 +97,19 @@ func TestCallFrameInputOwnership(t *testing.T) {
 	memory.resize(32)
 	memory.store[4] = 0xaa
 
-	borrowed := callFrameInput(&Interpreter{}, memory, 4, 1, false)
+	borrowed := callFrameInput(&Interpreter{}, memory, 4, 1)
 	memory.store[4] = 0xbb
 	if borrowed[0] != 0xbb {
 		t.Fatalf("ordinary frame input was copied: got %x", borrowed)
 	}
 
-	precompileInput := callFrameInput(&Interpreter{}, memory, 4, 1, true)
+	precompileInput := callFrameInput(&Interpreter{}, memory, 4, 1)
 	memory.store[4] = 0xcc
-	if precompileInput[0] != 0xbb {
-		t.Fatalf("precompile input aliases caller memory: got %x", precompileInput)
+	if precompileInput[0] != 0xcc {
+		t.Fatalf("precompile input was copied: got %x", precompileInput)
 	}
 
-	traced := callFrameInput(&Interpreter{tvmConfig: TVMConfig{Tracer: &recorderTracer{}}}, memory, 4, 1, false)
+	traced := callFrameInput(&Interpreter{tvmConfig: TVMConfig{Tracer: &recorderTracer{}}}, memory, 4, 1)
 	memory.store[4] = 0xdd
 	if traced[0] != 0xcc {
 		t.Fatalf("traced frame input aliases caller memory: got %x", traced)
@@ -158,16 +158,23 @@ func BenchmarkCallFrameInput(b *testing.B) {
 	memory.resize(1024)
 	interpreter := new(Interpreter)
 
-	b.Run("borrowed", func(b *testing.B) {
+	b.Run("ordinary", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024, false)
+			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024)
 		}
 	})
-	b.Run("retained", func(b *testing.B) {
+	b.Run("precompile", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024, true)
+			callFrameInputSink = callFrameInput(interpreter, memory, 0, 1024)
+		}
+	})
+	b.Run("traced", func(b *testing.B) {
+		b.ReportAllocs()
+		traced := &Interpreter{tvmConfig: TVMConfig{Tracer: &recorderTracer{}}}
+		for b.Loop() {
+			callFrameInputSink = callFrameInput(traced, memory, 0, 1024)
 		}
 	})
 }

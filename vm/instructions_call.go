@@ -50,13 +50,12 @@ func (in *Interpreter) writeCallReturn(memory *Memory, toPrecompile bool, callEr
 }
 
 // callFrameInput returns the caller-memory range used as a nested frame's
-// calldata/initcode. Ordinary bytecode frames consume the input synchronously
+// calldata/initcode. Nested frames and precompiles consume input synchronously
 // and treat it as read-only, so they can borrow caller memory. Keep an owned
-// copy when tracing (the Tracer interface historically receives stable input)
-// or calling a precompile: some precompiles return an input subslice directly,
-// and returnData must not alias mutable caller memory after the call returns.
-func callFrameInput(interpreter *Interpreter, memory *Memory, offset, size int64, toPrecompile bool) []byte {
-	if interpreter.tvmConfig.Tracer != nil || toPrecompile {
+// copy when tracing because the Tracer interface historically receives stable
+// input that may outlive the call.
+func callFrameInput(interpreter *Interpreter, memory *Memory, offset, size int64) []byte {
+	if interpreter.tvmConfig.Tracer != nil {
 		return memory.getCopy(offset, size)
 	}
 	return memory.getPtr(offset, size)
@@ -85,7 +84,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	}
 	resizeMemory(memory, off, sz)
 
-	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
+	code := callFrameInput(interpreter, memory, int64(off), int64(sz))
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
 		return nil, ErrLegacyEndowmentOutOfRange
@@ -164,7 +163,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		return nil, ErrOutOfEnergy
 	}
 
-	code := callFrameInput(interpreter, memory, int64(off), int64(sz), false)
+	code := callFrameInput(interpreter, memory, int64(off), int64(sz))
 	val, valueOK := uint256ToInt64Exact(&value)
 	if !valueOK {
 		return nil, ErrLegacyEndowmentOutOfRange
@@ -313,7 +312,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		return nil, rangeErr
 	}
 
-	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.Call(contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -383,7 +382,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, rangeErr
 	}
 
-	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val, val)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -436,7 +435,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	contract.UseEnergy(gas)
 
 	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
-	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value, 0)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {
@@ -489,7 +488,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	contract.UseEnergy(gas)
 
 	toPrecompile := getPrecompile(addr, interpreter.tvm.cfg, interpreter.tvm.GenesisHash) != nil
-	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz), toPrecompile)
+	input := callFrameInput(interpreter, memory, int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.StaticCall(contract.Address, addr, input, gas)
 	contract.Energy += remainingEnergy
 	if shouldPropagateCallError(err) {

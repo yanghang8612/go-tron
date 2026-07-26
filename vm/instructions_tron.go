@@ -142,7 +142,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, rangeErr
 	}
 
-	inputData := callFrameInput(in, mem, int64(inOff), int64(inSz), toPrecompile)
+	inputData := callFrameInput(in, mem, int64(inOff), int64(inSz))
 	var ret []byte
 	var remaining uint64
 	if isTokenTransfer {
