@@ -1456,6 +1456,62 @@ func TestLoadAccountSnapshotReferencePreservesEnvelope(t *testing.T) {
 	}
 }
 
+func TestAccountSnapshotReferenceIntoReusesEnvelope(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x14)
+	acc := sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	acc.SetAllowance(7)
+
+	snapshot := sdb.AccountSnapshotReference(addr)
+	if snapshot == nil {
+		t.Fatal("initial account snapshot missing")
+	}
+	obj := sdb.getStateObject(addr)
+	obj.accountProto = []byte("refreshed")
+	obj.accountKVRoot = tcommon.BytesToHash([]byte{0x22})
+	obj.accountKVGeneration = 9
+	obj.codeHash = tcommon.BytesToHash([]byte{0x33})
+	acc.SetAllowance(11)
+
+	reused := sdb.AccountSnapshotReferenceInto(addr, snapshot)
+	if reused != snapshot {
+		t.Fatal("account snapshot envelope was replaced instead of refreshed")
+	}
+	if reused.Account != acc || reused.Account.Allowance() != 11 {
+		t.Fatalf("refreshed account = %+v, want original pointer with allowance 11", reused.Account)
+	}
+	if string(reused.AccountProto) != "refreshed" || reused.AccountKVRoot != obj.accountKVRoot || reused.AccountKVGeneration != 9 || reused.CodeHash != obj.codeHash {
+		t.Fatalf("refreshed envelope = %+v, want current state object metadata", reused)
+	}
+	if got := sdb.AccountSnapshotReferenceInto(testAddr(0x15), snapshot); got != nil {
+		t.Fatalf("missing account returned stale snapshot: %+v", got)
+	}
+}
+
+var accountSnapshotBenchmarkSink *AccountSnapshot
+
+func BenchmarkAccountSnapshotReference(b *testing.B) {
+	sdb := newTestStateDB(b)
+	addr := testAddr(0x14)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	b.Run("Fresh", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			accountSnapshotBenchmarkSink = sdb.AccountSnapshotReference(addr)
+		}
+	})
+	b.Run("Reuse", func(b *testing.B) {
+		snapshot := sdb.AccountSnapshotReference(addr)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			snapshot = sdb.AccountSnapshotReferenceInto(addr, snapshot)
+		}
+		accountSnapshotBenchmarkSink = snapshot
+	})
+}
+
 func TestAccountKVDeterministicRoot(t *testing.T) {
 	build := func() tcommon.Hash {
 		sdb := newTestStateDB(t)

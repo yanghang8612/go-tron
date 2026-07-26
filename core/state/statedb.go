@@ -887,22 +887,36 @@ func (s *StateDB) AccountReference(addr tcommon.Address) *types.Account {
 	return obj.account
 }
 
-// AccountSnapshotReference returns a cacheable view of the account envelope
-// without copying the account proto. Mutating the returned Account mutates the
-// cached state object, so callers must only keep this across successful block
-// boundaries where the cache is updated immediately after Commit.
-func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapshot {
+// AccountSnapshotReferenceInto refreshes snapshot with a cacheable view of the
+// account envelope without copying the account proto. A nil snapshot allocates
+// one; callers that cache the result across successful blocks can pass it back
+// to avoid replacing the same small envelope on every block. Mutating the
+// returned Account mutates the cached state object, so callers must only keep
+// this across block boundaries where the snapshot is refreshed immediately
+// after Commit.
+func (s *StateDB) AccountSnapshotReferenceInto(addr tcommon.Address, snapshot *AccountSnapshot) *AccountSnapshot {
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return nil
 	}
-	return &AccountSnapshot{
+	if snapshot == nil {
+		snapshot = new(AccountSnapshot)
+	}
+	*snapshot = AccountSnapshot{
 		Account:             obj.account,
 		AccountProto:        obj.accountProto,
 		AccountKVRoot:       obj.accountKVRoot,
 		AccountKVGeneration: obj.accountKVGeneration,
 		CodeHash:            obj.codeHash,
 	}
+	return snapshot
+}
+
+// AccountSnapshotReference returns a newly allocated cacheable account
+// envelope. Long-lived hot-path caches should use AccountSnapshotReferenceInto
+// to refresh their existing storage.
+func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapshot {
+	return s.AccountSnapshotReferenceInto(addr, nil)
 }
 
 // GetOrCreateAccount returns the state object at addr, creating it if it doesn't exist.

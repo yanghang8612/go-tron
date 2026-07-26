@@ -2289,7 +2289,7 @@ func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []t
 		}
 	}
 	for _, addr := range addrs {
-		if snapshot := statedb.AccountSnapshotReference(addr); snapshot != nil {
+		if snapshot := statedb.AccountSnapshotReferenceInto(addr, bc.rewardAcctCache[addr]); snapshot != nil {
 			bc.rewardAcctCache[addr] = snapshot
 		} else {
 			delete(bc.rewardAcctCache, addr)
@@ -2311,7 +2311,7 @@ func (bc *BlockChain) preloadSystemAccount(statedb *state.StateDB) {
 // across successful linear block applications. Rooted reward, dynamic-property,
 // fork and schedule domains all hang off this account's KV root.
 func (bc *BlockChain) updateSystemAccountCache(statedb *state.StateDB) {
-	bc.systemAcctCache = statedb.AccountSnapshotReference(tcommon.SystemAccountAddress)
+	bc.systemAcctCache = statedb.AccountSnapshotReferenceInto(tcommon.SystemAccountAddress, bc.systemAcctCache)
 }
 
 func (bc *BlockChain) clearSystemAccountCache() {

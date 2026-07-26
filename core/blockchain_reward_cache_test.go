@@ -34,6 +34,12 @@ func TestRewardAccountCachePrunesNonCurrentAddresses(t *testing.T) {
 	if got := bc.rewardAcctCache[currentAddr]; got == nil || got.Account == nil || got.Account.Allowance() != 22 {
 		t.Fatalf("current reward account cache: got %+v, want allowance 22", got)
 	}
+	first := bc.rewardAcctCache[currentAddr]
+	currentAcc.SetAllowance(33)
+	bc.updateRewardAccountCache(statedb, addrs)
+	if got := bc.rewardAcctCache[currentAddr]; got != first || got.Account.Allowance() != 33 {
+		t.Fatalf("current reward snapshot was not refreshed in place: first=%p got=%p allowance=%d", first, got, got.Account.Allowance())
+	}
 }
 
 func TestWitnessBlockCacheReloadsAfterClear(t *testing.T) {
