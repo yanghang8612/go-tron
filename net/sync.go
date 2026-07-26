@@ -898,8 +898,8 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 // HandleChainInventory processes CHAIN_INVENTORY from the sync peer.
 // Stores the block IDs to fetch, then starts fetching.
 func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
-	var inv corepb.ChainInventory
-	if err := proto.Unmarshal(payload, &inv); err != nil {
+	ids, remainNum, ok := decodeChainInventory(payload)
+	if !ok {
 		return
 	}
 
@@ -935,12 +935,12 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	effectiveTipNum := ss.effectiveSyncTipLocked()
 	ss.pruneStaleSyncStateLocked(effectiveTipNum)
 	stopHeight, stopConfigured := ss.configuredStopHeight()
-	for _, bid := range inv.Ids {
-		num := uint64(bid.Number)
+	for _, bid := range ids {
+		num := uint64(bid.number)
 		if stopConfigured && num > stopHeight {
 			continue
 		}
-		hash := tcommon.BytesToHash(bid.Hash)
+		hash := bid.hash
 		// Preserve the existing committed-chain fork check, but never requeue a
 		// height already handed to the active async insert session. It is not
 		// necessarily visible through CurrentBlock/GetBlockByNumber yet.
@@ -971,11 +971,11 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		}
 		ps.fetchList = append(ps.fetchList, bid)
 	}
-	ps.remainNum = inv.RemainNum
-	if len(inv.Ids) > 0 {
-		last := inv.Ids[len(inv.Ids)-1]
-		if last.Number > 0 {
-			ps.lastInventoryNum = uint64(last.Number)
+	ps.remainNum = remainNum
+	if len(ids) > 0 {
+		last := ids[len(ids)-1]
+		if last.number > 0 {
+			ps.lastInventoryNum = uint64(last.number)
 			if ps.lastInventoryNum > 2*maxChainInventorySize {
 				ps.minFetchNum = ps.lastInventoryNum - 2*maxChainInventorySize
 			} else {
@@ -998,9 +998,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 					}
 				}
 			}
-			target := uint64(last.Number)
-			if inv.RemainNum > 0 {
-				target += uint64(inv.RemainNum)
+			target := uint64(last.number)
+			if remainNum > 0 {
+				target += uint64(remainNum)
 			}
 			if stopConfigured && target > stopHeight {
 				target = stopHeight
@@ -1017,12 +1017,12 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	// every inbound INV — so our outbound TRX advertisements never reach
 	// the producer's mempool. Detect "we are at head" here (response is a
 	// single id we already have) and finish; otherwise continue fetching.
-	if len(inv.Ids) == 0 || (len(ps.fetchList) == 0 && len(inv.Ids) == 1 && inv.RemainNum == 0) {
+	if len(ids) == 0 || (len(ps.fetchList) == 0 && len(ids) == 1 && remainNum == 0) {
 		ps.done = true
 	}
 
 	syncLog.Debug("Chain inventory received",
-		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
+		"blocks", len(ids), "queued", len(ps.fetchList), "remain", remainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
 	restart := len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
 	complete := false
