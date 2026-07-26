@@ -19,6 +19,11 @@ const baseReadCacheShardCount = layerShardCount
 // more memory than configured.
 const baseReadCacheEntryOverhead = 64
 
+// Recycled entry metadata is outside the payload byte budget. Keep enough per
+// shard to absorb steady eviction churn and stale-token compaction without
+// retaining an unbounded historical high-water mark after the cache empties.
+const baseReadCacheMaxFreeEntries = 2048
+
 // baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
 // history per shard. The history stores fingerprints only (no key/value
 // objects), so a 128 MiB or larger cache spends at most 1 MiB across all 16
@@ -74,6 +79,11 @@ type baseReadCacheShard struct {
 	mu      sync.RWMutex
 	entries map[string]*baseReadCacheEntry
 	queue   []*baseReadCacheEntry
+	// freeEntries reuses metadata only after its sole CLOCK token has been
+	// consumed or removed by compaction. Explicit invalidation leaves the
+	// cleared entry queued, so it is deliberately not linked here at that point.
+	freeEntries    *baseReadCacheEntry
+	freeEntryCount int
 	// admission is a direct-mapped fingerprint table. A durable miss is
 	// admitted only when the same fingerprint is observed twice without being
 	// displaced. Commitment sync walks a large number of cold branches once,
@@ -114,6 +124,10 @@ type baseReadCacheEntry struct {
 	// Eviction gives such entries one CLOCK-style second chance, preserving hot
 	// upper commitment branches without promoting two-hit scan noise forever.
 	referenced atomic.Bool
+	// nextFree is used only after the entry's CLOCK token has left the queue.
+	// It grows the 72-byte payload to 80 bytes, which is the allocator size
+	// class the entry already occupied before this field was added.
+	nextFree *baseReadCacheEntry
 }
 
 func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCache {
@@ -359,7 +373,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	if !missing {
 		v = cloneBaseReadCacheValue(value)
 	}
-	entry := &baseReadCacheEntry{key: k, value: v, charge: charge, version: c.version.Load(), live: true}
+	entry := s.acquireEntry(k, v, charge, c.version.Load())
 	if expose && v != nil {
 		entry.exposed.Store(true)
 	}
@@ -422,13 +436,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// complete admission. Clone the layer-owned key/value: sibling batches
 		// may share large arenas which are released after layer promotion.
 		stableKey := strings.Clone(key)
-		entry := &baseReadCacheEntry{
-			key:     stableKey,
-			value:   cloneBaseReadCacheValue(value),
-			charge:  charge,
-			version: c.version.Load(),
-			live:    true,
-		}
+		entry := s.acquireEntry(stableKey, cloneBaseReadCacheValue(value), charge, c.version.Load())
 		s.entries[stableKey] = entry
 		s.queue = append(s.queue, entry)
 		s.used += charge
@@ -514,6 +522,40 @@ func cloneBaseReadCacheValue(value []byte) []byte {
 	return storage
 }
 
+func (s *baseReadCacheShard) acquireEntry(key string, value []byte, charge int, version uint64) *baseReadCacheEntry {
+	entry := s.freeEntries
+	if entry == nil {
+		entry = new(baseReadCacheEntry)
+	} else {
+		s.freeEntries = entry.nextFree
+		s.freeEntryCount--
+		entry.nextFree = nil
+	}
+	entry.key = key
+	entry.value = value
+	entry.charge = charge
+	entry.version = version
+	entry.live = true
+	return entry
+}
+
+func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
+	entry.key = ""
+	entry.value = nil
+	entry.charge = 0
+	entry.version = 0
+	entry.live = false
+	entry.exposed.Store(false)
+	entry.referenced.Store(false)
+	entry.nextFree = nil
+	if s.freeEntryCount >= baseReadCacheMaxFreeEntries {
+		return
+	}
+	entry.nextFree = s.freeEntries
+	s.freeEntries = entry
+	s.freeEntryCount++
+}
+
 func (c *baseReadCache) del(key []byte) {
 	if c == nil {
 		return
@@ -570,6 +612,8 @@ func (c *baseReadCache) clear() {
 		clear(s.admission)
 		s.head = 0
 		s.used = 0
+		s.freeEntries = nil
+		s.freeEntryCount = 0
 		s.mu.Unlock()
 	}
 	c.advanceAllInvalidations()
@@ -754,7 +798,10 @@ func (s *baseReadCacheShard) evict() {
 		entry := s.queue[s.head]
 		s.queue[s.head] = nil
 		s.head++
-		if entry != nil && entry.live {
+		if entry == nil {
+			continue
+		}
+		if entry.live {
 			if entry.referenced.Swap(false) {
 				// Move the same stable entry to the tail. Newly admitted entries
 				// start unreferenced, so a
@@ -764,10 +811,8 @@ func (s *baseReadCacheShard) evict() {
 			}
 			delete(s.entries, entry.key)
 			s.used -= entry.charge
-			entry.live = false
-			entry.key = ""
-			entry.value = nil
 		}
+		s.recycleEntry(entry)
 	}
 	// Avoid retaining an ever-growing stale-entry prefix when invalidated keys
 	// are later inserted again. Copy only occasionally so steady-state hits stay
@@ -791,6 +836,11 @@ func (s *baseReadCacheShard) compactIfSparse() {
 	queue := make([]*baseReadCacheEntry, 0, len(s.entries))
 	for _, entry := range s.entries {
 		queue = append(queue, entry)
+	}
+	for _, entry := range s.queue[s.head:] {
+		if entry != nil && !entry.live {
+			s.recycleEntry(entry)
+		}
 	}
 	clear(s.queue)
 	s.queue = queue

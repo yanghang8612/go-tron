@@ -182,6 +182,40 @@ func TestBaseReadCache_SecondChancePreservesReferencedOldestEntry(t *testing.T) 
 	}
 }
 
+func TestBaseReadCache_EvictionReusesEntryMetadata(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	keys := make([][]byte, 0, 3)
+	for candidate := 0; len(keys) < cap(keys); candidate++ {
+		key := []byte(fmt.Sprintf("recycle-entry-%08d", candidate))
+		if len(keys) == 0 || baseReadCacheShardIndex(key) == baseReadCacheShardIndex(keys[0]) {
+			keys = append(keys, key)
+		}
+	}
+	value := []byte("v")
+	s := &c.shards[baseReadCacheShardIndex(keys[0])]
+	s.limit = len(keys[0]) + len(value) + baseReadCacheEntryOverhead
+
+	testBaseReadCacheSet(c, keys[0], value)
+	first := s.entries[string(keys[0])]
+	if first == nil {
+		t.Fatal("first entry was not admitted")
+	}
+	testBaseReadCacheSet(c, keys[1], value)
+	if _, ok := s.entries[string(keys[0])]; ok {
+		t.Fatal("first entry survived a one-entry cache eviction")
+	}
+	testBaseReadCacheSet(c, keys[2], value)
+	if got := s.entries[string(keys[2])]; got != first {
+		t.Fatalf("third admission entry = %p, want recycled first entry %p", got, first)
+	}
+	if first.key != string(keys[2]) || string(first.value) != string(value) || !first.live {
+		t.Fatalf("recycled entry = {key:%q value:%q live:%v}", first.key, first.value, first.live)
+	}
+	if s.freeEntryCount != 1 {
+		t.Fatalf("free entry count = %d, want the evicted second entry", s.freeEntryCount)
+	}
+}
+
 func TestBaseReadCache_ConcurrentHitAndFlushRefresh(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	key := []byte("concurrent-cache-hit-and-flush")
