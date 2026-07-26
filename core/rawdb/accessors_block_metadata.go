@@ -97,9 +97,6 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		len(taposPrefix) + len(ref) +
 		len(txInfoBlockPrefix) + len(numberValue) +
 		len(txs)*(len(txPrefix)+common.HashLength)
-	for _, info := range infos {
-		keyBytes += len(txInfoPrefix) + len(info.Id)
-	}
 	keyArena := make([]byte, keyBytes)
 	keyOffset := 0
 	metadataKey := func(prefix, suffix []byte) []byte {
@@ -111,7 +108,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		return key
 	}
 
-	rows := make([]blockMetadataRow, 0, 5+len(infos)+len(txs))
+	rows := make([]blockMetadataRow, 0, 5+len(txs))
 	rows = append(rows,
 		blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]},
 		blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData},
@@ -119,18 +116,14 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		blockMetadataRow{key: metadataKey(blockNumberHashPrefix, ringSlot[:]), value: blockHash[:]},
 		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},
 	)
-	infoRowStart := len(rows)
-	// Keep the individually indexed TransactionInfo payloads in one temporary
-	// arena. The same bytes feed both the per-transaction rows and the enclosing
-	// TransactionRet row below; every Batch.Put copies them synchronously, so the
-	// arena can return to the pool after batch.Write completes. Borrow the pool's
-	// retained capacity directly: MarshalAppend already computes each message's
-	// size, so a separate total-size traversal would only repeat that protobuf
-	// walk on every block. This replaces one heap object per transaction without
-	// changing either protobuf wire bytes or durable database layout.
+	// Marshal every TransactionInfo once into a pooled temporary arena. The
+	// payload slices feed the enclosing TransactionRet row; individual ti-* rows
+	// are intentionally no longer written because tx-* plus tib-*/ancient
+	// tx_infos provides the same lookup without duplicating the payload forever.
 	var (
 		infoArena    []byte
 		infoArenaPtr *[]byte
+		infoPayloads = make([][]byte, 0, len(infos))
 	)
 	if len(infos) > 0 {
 		infoArenaPtr = borrowMetadataInfoArena()
@@ -144,10 +137,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		if err != nil {
 			return fmt.Errorf("marshal tx info: %w", err)
 		}
-		rows = append(rows, blockMetadataRow{
-			key:   metadataKey(txInfoPrefix, info.Id),
-			value: infoArena[start:len(infoArena):len(infoArena)],
-		})
+		infoPayloads = append(infoPayloads, infoArena[start:len(infoArena):len(infoArena)])
 	}
 	if infoArenaPtr != nil {
 		// MarshalAppend may grow the borrowed slice on an unusually large block.
@@ -159,9 +149,8 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	if len(infos) > 0 {
 		blockTimestamp = infos[0].BlockTimeStamp
 	}
-	infoRows := rows[infoRowStart:]
 	retKey := metadataKey(txInfoBlockPrefix, numberValue[:])
-	retSize := transactionRetRowsSize(int64(blockNum), blockTimestamp, infoRows)
+	retSize := transactionRetRowsSize(int64(blockNum), blockTimestamp, infoPayloads)
 	for _, tx := range txs {
 		hash := tx.Hash()
 		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: numberValue[:]})
@@ -181,7 +170,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	}
 	if direct, ok := batch.(valueFuncBatch); ok {
 		if err := direct.PutValueFunc(retKey, retSize, func(dst []byte) error {
-			encoded := appendTransactionRetRows(dst[:0], int64(blockNum), blockTimestamp, infoRows)
+			encoded := appendTransactionRetRows(dst[:0], int64(blockNum), blockTimestamp, infoPayloads)
 			if len(encoded) != len(dst) {
 				return fmt.Errorf("transaction ret encoded size %d, want %d", len(encoded), len(dst))
 			}
@@ -190,7 +179,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 			return fmt.Errorf("write transaction ret row: %w", err)
 		}
 	} else {
-		retData := marshalTransactionRetRows(int64(blockNum), blockTimestamp, infoRows)
+		retData := marshalTransactionRetRows(int64(blockNum), blockTimestamp, infoPayloads)
 		if err := batch.Put(retKey, retData); err != nil {
 			return fmt.Errorf("write transaction ret row: %w", err)
 		}
@@ -203,8 +192,8 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 
 // marshalTransactionRetRows builds the TransactionRet wire payload around
 // TransactionInfo messages that WriteBlockMetadataBatch has already marshaled
-// for the per-transaction index. Calling proto.Marshal on TransactionRet would
-// traverse and marshal every nested info a second time.
+// for the canonical block-level row. Calling proto.Marshal on TransactionRet
+// would traverse and marshal every nested info a second time.
 //
 // TransactionRet's schema is three ascending fields:
 //
@@ -215,12 +204,12 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 // Mirroring proto3's zero-value omission and generated field order produces
 // the same wire bytes when given the same nested info payloads, while retaining
 // unknown fields and map ordering exactly as encoded in each info row.
-func marshalTransactionRetRows(blockNumber, blockTimestamp int64, infoRows []blockMetadataRow) []byte {
-	size := transactionRetRowsSize(blockNumber, blockTimestamp, infoRows)
-	return appendTransactionRetRows(make([]byte, 0, size), blockNumber, blockTimestamp, infoRows)
+func marshalTransactionRetRows(blockNumber, blockTimestamp int64, infoPayloads [][]byte) []byte {
+	size := transactionRetRowsSize(blockNumber, blockTimestamp, infoPayloads)
+	return appendTransactionRetRows(make([]byte, 0, size), blockNumber, blockTimestamp, infoPayloads)
 }
 
-func transactionRetRowsSize(blockNumber, blockTimestamp int64, infoRows []blockMetadataRow) int {
+func transactionRetRowsSize(blockNumber, blockTimestamp int64, infoPayloads [][]byte) int {
 	size := 0
 	if blockNumber != 0 {
 		size += protowire.SizeTag(1) + protowire.SizeVarint(uint64(blockNumber))
@@ -228,13 +217,13 @@ func transactionRetRowsSize(blockNumber, blockTimestamp int64, infoRows []blockM
 	if blockTimestamp != 0 {
 		size += protowire.SizeTag(2) + protowire.SizeVarint(uint64(blockTimestamp))
 	}
-	for _, row := range infoRows {
-		size += protowire.SizeTag(3) + protowire.SizeBytes(len(row.value))
+	for _, payload := range infoPayloads {
+		size += protowire.SizeTag(3) + protowire.SizeBytes(len(payload))
 	}
 	return size
 }
 
-func appendTransactionRetRows(data []byte, blockNumber, blockTimestamp int64, infoRows []blockMetadataRow) []byte {
+func appendTransactionRetRows(data []byte, blockNumber, blockTimestamp int64, infoPayloads [][]byte) []byte {
 	if blockNumber != 0 {
 		data = protowire.AppendTag(data, 1, protowire.VarintType)
 		data = protowire.AppendVarint(data, uint64(blockNumber))
@@ -243,9 +232,9 @@ func appendTransactionRetRows(data []byte, blockNumber, blockTimestamp int64, in
 		data = protowire.AppendTag(data, 2, protowire.VarintType)
 		data = protowire.AppendVarint(data, uint64(blockTimestamp))
 	}
-	for _, row := range infoRows {
+	for _, payload := range infoPayloads {
 		data = protowire.AppendTag(data, 3, protowire.BytesType)
-		data = protowire.AppendBytes(data, row.value)
+		data = protowire.AppendBytes(data, payload)
 	}
 	return data
 }

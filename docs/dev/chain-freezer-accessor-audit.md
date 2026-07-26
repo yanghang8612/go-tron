@@ -2,7 +2,7 @@
 
 **Spec:** [2026-05-19-chain-freezer-design.md](../superpowers/specs/2026-05-19-chain-freezer-design.md)
 **Plan:** [2026-05-19-chain-freezer.md](../superpowers/plans/2026-05-19-chain-freezer.md)
-**Date:** 2026-05-19
+**Date:** 2026-05-19; revised 2026-07-26 for transaction-info deduplication
 
 ## Spec-vs-reality reconciliation
 
@@ -19,15 +19,19 @@ the six chain accessors that actually exist:
 | `ReadBlock(num)`                      | `b-`          | yes (`bodies`)             | yes, num-keyed            |
 | `ReadBlockNumber(hash)`               | `bh-`         | no (stays hot)             | no, KV-only               |
 | `ReadTransactionInfosByBlock(num)`    | `tib-`        | yes (`tx_infos`)           | yes, num-keyed            |
-| `ReadTransactionInfo(txID)`           | `ti-`         | no (stays hot)             | no, KV-only               |
+| `ReadTransactionInfo(txID)`           | `tx-` → `tib-`| `tib-` yes (`tx_infos`)    | yes, num-keyed; legacy `ti-` fallback |
 | `ReadTransactionIndex(txHash)`        | `tx-`         | no (stays hot)             | no, KV-only               |
 | `ReadBlockStateRoot(hash)`            | `bsr-`        | yes (`state_roots`)        | conditional (hash→num via KV) |
 
-Slice 1's design table (`chain-freezer-design.md`, lines 70-76) explicitly
-keeps the small `bh-<hash>` reverse index, the per-tx `ti-<txid>` blob,
-and the `tx-<hash>` lookup hot. They get a `*ChainDB` parameter purely
-for **uniformity** — every chain accessor takes the same type so callers
-don't keep one foot in each camp — but their bodies stay KV-only.
+Slice 1 originally kept `bh-<hash>`, `tx-<hash>`, and the per-tx
+`ti-<txid>` payload hot. A height-13,761,515 mainnet inspection later showed
+745,824,140 `ti-*` rows consuming 468.59 GiB logical bytes (86.87% of live
+Pebble data), while the same TransactionInfo messages already existed in the
+ancient `tx_infos` table. The 2026-07-26 follow-up therefore retains only the
+small `tx-*` locator: `ReadTransactionInfo` resolves `txID → blockNum`, reads
+the hot `tib-*` or ancient `tx_infos` row, and wire-scans the repeated field.
+It unmarshals only the matching message. A direct `ti-*` read is a final
+upgrade-compatibility fallback until the operator runs `db prune-tx-info`.
 
 `ReadBlockStateRoot` is the special case: its key is hash-indexed, but
 the freezer table is num-indexed (geth-style). The accessor first tries
@@ -64,9 +68,9 @@ func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash
 ```
 
 `*ChainDB` already embeds `ethdb.KeyValueStore` and `AncientReader`, so
-KV-only accessors still call `db.Get(...)` exactly as before. Going
-through `*ChainDB` instead of `ethdb.KeyValueReader` means the call
-sites only need a single composite handle.
+KV-only accessors still call `db.Get(...)` exactly as before. Going through
+`*ChainDB` also lets `ReadTransactionInfo` reach the ancient table after its
+compact KV index resolves a block number.
 
 Writers (`WriteBlock`, `WriteBlockStateRoot`, `WriteTransactionInfo*`,
 `WriteTransactionIndex`) stay on `ethdb.KeyValueWriter`. Per the spec

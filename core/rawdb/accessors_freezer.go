@@ -83,10 +83,9 @@ func ViewBlockRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error)
 // Same fast-path rationale as ReadBlockRaw: avoid round-tripping the proto
 // for blocks that will be appended to ancient verbatim.
 //
-// Slice-1 of the freezer design includes tx-info-per-block in the frozen
-// kinds; the per-tx index (`ti-<txid>`) and tx-hash reverse index
-// (`tx-<hash>`) remain hot, so they intentionally do not have a *Raw
-// counterpart here.
+// The freezer owns tx-info-per-block. New writes no longer create duplicate
+// per-tx ti-* payloads; the compact tx-* reverse index remains hot and resolves
+// individual lookups through this block-level row.
 func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	data, err := db.Get(txInfoBlockKey(number))
 	if err != nil {
@@ -137,12 +136,11 @@ func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 // freezer has just copied into ancient: `b-<num>` (block proto) and
 // `tib-<num>` (tx-info-per-block) for every num in [lo, hi].
 //
-// Per the slice-1 freezer design, `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
-// and `ti-<txid>` are intentionally left in Pebble — they are small,
-// hash-keyed wallet-hot rows that the freezer does not own. The bounded
+// The hash-keyed `bh-<hash>`, `bsr-<hash>`, and compact `tx-<hash>` indexes
+// remain in Pebble. Deprecated ti-* payload rows are removed separately by the
+// offline prune command because they are not block-number ordered. The bounded
 // `bnh-<slot>` recent-hash ring also stays hot so the full 256-block TVM
-// BLOCKHASH window remains body-free after freezing. A future slice may
-// relocate the unbounded hash-keyed rows; until then this helper is narrow.
+// BLOCKHASH window remains body-free after freezing.
 //
 // Implementation: two DeleteRange calls — one per prefix — wrapping the
 // half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into

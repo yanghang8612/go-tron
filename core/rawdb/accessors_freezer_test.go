@@ -372,9 +372,9 @@ func TestReadTransactionInfosByBlock_KVPath(t *testing.T) {
 	}
 }
 
-// TestReadTransactionInfo_KVOnly proves the per-tx index accessor never
-// consults the freezer (slice 1 leaves `ti-<txid>` hot).
-func TestReadTransactionInfo_KVOnly(t *testing.T) {
+// TestReadTransactionInfo_LegacyKVFallback keeps pre-migration databases
+// readable when a ti-* row exists without its tx-* reverse index.
+func TestReadTransactionInfo_LegacyKVFallback(t *testing.T) {
 	t.Parallel()
 
 	cdb := NewMemoryChainDB()
@@ -385,6 +385,35 @@ func TestReadTransactionInfo_KVOnly(t *testing.T) {
 	got := ReadTransactionInfo(cdb, txID)
 	if got == nil || got.Fee != 77 {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestReadTransactionInfo_AncientViaIndex(t *testing.T) {
+	t.Parallel()
+
+	txID := bytes.Repeat([]byte{0xBD}, 32)
+	otherID := bytes.Repeat([]byte{0xBE}, 32)
+	ret, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 5,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: otherID, Fee: 1, BlockNumber: 5},
+			{Id: txID, Fee: 88, BlockNumber: 5},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientTxInfos, 5, ret)
+	kv := NewMemoryDatabase()
+	if err := WriteTransactionIndex(kv, txID, 5); err != nil {
+		t.Fatal(err)
+	}
+	cdb := NewChainDB(kv, anc)
+
+	got := ReadTransactionInfo(cdb, txID)
+	if got == nil || got.Fee != 88 || !bytes.Equal(got.Id, txID) {
+		t.Fatalf("ancient derived info = %#v", got)
 	}
 }
 

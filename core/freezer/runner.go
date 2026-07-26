@@ -19,8 +19,9 @@
 //     error so a partial pass leaves no orphan ancient rows.
 //  6. fsync the ancient (`freezer.Sync()`).
 //  7. DeleteRange the now-frozen `b-<num>` and `tib-<num>` rows from
-//     Pebble (hash-keyed `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
-//     `ti-<txid>` remain hot per the slice-1 design).
+//     Pebble. Hash-keyed `bh-<hash>`, `bsr-<hash>`, and compact
+//     `tx-<hash>` indexes remain hot. New block writes do not create the
+//     deprecated duplicate `ti-<txid>` payload.
 //  8. Compact the freed range so Pebble reclaims space promptly.
 //
 // Crash safety: every batch first appends to ancient (with fsync), then

@@ -6,6 +6,10 @@
 **Inspiration:** [go-ethereum/core/rawdb/chain_freezer.go](../../../../ethereum/go-ethereum/core/rawdb/chain_freezer.go), [freezer_table.go](../../../../ethereum/go-ethereum/core/rawdb/freezer_table.go)
 **Related plan:** [2026-05-19-chain-freezer.md](../plans/2026-05-19-chain-freezer.md)
 
+> **2026-07-26 follow-up:** mainnet measurements disproved this document's
+> assumption that `ti-*` was a small hot index. New writes and migration now
+> follow [TransactionInfo hot/cold deduplication](./2026-07-26-transaction-info-dedup-design.md).
+
 ## Background
 
 gtron currently stores **every block ever applied** in Pebble:

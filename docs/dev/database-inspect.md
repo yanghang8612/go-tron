@@ -63,8 +63,40 @@ The most useful rows when diagnosing mainnet growth are:
 | ancient `tx_infos` | freezer table | Frozen per-block transaction history |
 | ancient `bodies` | freezer table | Frozen block bodies |
 
-If `transaction-info` or `transaction-info-by-block` is large while ancient
-`tx_infos` also owns most of the freezer, the report demonstrates hot/cold
-history duplication. The inspection tool intentionally does not delete or
-compact anything; retention changes should be designed and validated
-separately.
+If `transaction-info` is large while ancient `tx_infos` also owns most of the
+freezer, the report demonstrates hot/cold history duplication. New binaries no
+longer write `ti-*`; individual lookups use `tx-*` to reach the canonical
+block-level receipt instead.
+
+## Prune legacy `ti-*` rows
+
+Deploy the new binary before pruning. The node must be stopped, and an older
+binary must not be used against the pruned datadir because it only understands
+the legacy direct lookup.
+
+The safe first step writes one durable range tombstone and lets normal Pebble
+compaction reclaim physical bytes over time:
+
+```bash
+sudo systemctl stop gtron
+
+/data/gtron/go-tron/build/bin/gtron db prune-tx-info \
+  --datadir /data/gtron/main/datadir \
+  --yes
+
+sudo systemctl start gtron
+```
+
+Immediate offline reclamation is available with `--compact`, but on a large
+mainnet database it may run for hours, generate heavy disk I/O, and need
+substantial temporary free space:
+
+```bash
+/data/gtron/go-tron/build/bin/gtron db prune-tx-info \
+  --datadir /data/gtron/main/datadir \
+  --yes \
+  --compact
+```
+
+The range is exactly `[ti-, ti.)`; it cannot delete adjacent `tib-*` or `tx-*`
+rows. The command verifies that no live `ti-*` row remains before returning.

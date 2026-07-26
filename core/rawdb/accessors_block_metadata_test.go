@@ -129,6 +129,9 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 		if got := ReadTransactionInfo(chainDB, hash[:]); got == nil || got.Fee != infos[i].Fee {
 			t.Fatalf("tx info %d = %+v, want fee %d", i, got, infos[i].Fee)
 		}
+		if has, err := disk.Has(txInfoKey(hash[:])); err != nil || has {
+			t.Fatalf("legacy tx info row %d exists=%v err=%v, want false/nil", i, has, err)
+		}
 		if got := ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != block.Number() {
 			t.Fatalf("tx index %d = %v, want %d", i, got, block.Number())
 		}
@@ -243,15 +246,15 @@ func TestMarshalTransactionRetRowsMatchesProto(t *testing.T) {
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rows := make([]blockMetadataRow, 0, len(test.infos))
+			payloads := make([][]byte, 0, len(test.infos))
 			for _, info := range test.infos {
 				data, err := marshal.Marshal(info)
 				if err != nil {
 					t.Fatal(err)
 				}
-				rows = append(rows, blockMetadataRow{value: data})
+				payloads = append(payloads, data)
 			}
-			got := marshalTransactionRetRows(test.number, test.timestamp, rows)
+			got := marshalTransactionRetRows(test.number, test.timestamp, payloads)
 			want, err := marshal.Marshal(&corepb.TransactionRet{
 				BlockNumber:     test.number,
 				BlockTimeStamp:  test.timestamp,
@@ -285,7 +288,7 @@ func TestMarshalTransactionRetRowsMatchesProto(t *testing.T) {
 func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 	payload := bytes.Repeat([]byte{0xab}, 512)
 	infos := make([]*corepb.TransactionInfo, 100)
-	rows := make([]blockMetadataRow, len(infos))
+	payloads := make([][]byte, len(infos))
 	for i := range infos {
 		infos[i] = &corepb.TransactionInfo{
 			Id:                   bytes.Repeat([]byte{byte(i)}, 32),
@@ -299,14 +302,14 @@ func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		rows[i].value = data
+		payloads[i] = data
 	}
 	ret := &corepb.TransactionRet{
 		BlockNumber:     21,
 		BlockTimeStamp:  63_000,
 		Transactioninfo: infos,
 	}
-	wireSize := len(marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, rows))
+	wireSize := len(marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, payloads))
 
 	b.Run("proto-remarshal", func(b *testing.B) {
 		b.ReportAllocs()
@@ -323,7 +326,7 @@ func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(wireSize))
 		for i := 0; i < b.N; i++ {
-			metadataRetBenchmarkSink = marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, rows)
+			metadataRetBenchmarkSink = marshalTransactionRetRows(ret.BlockNumber, ret.BlockTimeStamp, payloads)
 		}
 	})
 	b.Run("direct-final-buffer", func(b *testing.B) {
@@ -331,7 +334,7 @@ func BenchmarkMarshalTransactionRetRows(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(wireSize))
 		for i := 0; i < b.N; i++ {
-			encoded := appendTransactionRetRows(data[:0], ret.BlockNumber, ret.BlockTimeStamp, rows)
+			encoded := appendTransactionRetRows(data[:0], ret.BlockNumber, ret.BlockTimeStamp, payloads)
 			if len(encoded) != wireSize {
 				b.Fatalf("encoded size = %d, want %d", len(encoded), wireSize)
 			}

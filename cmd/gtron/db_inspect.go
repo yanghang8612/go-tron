@@ -59,7 +59,7 @@ type ancientTableStat struct {
 func dbCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "db",
-		Usage: "Inspect database storage",
+		Usage: "Inspect and maintain database storage",
 		Subcommands: []*cli.Command{
 			{
 				Name:        "inspect",
@@ -75,6 +75,7 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbInspectCmd,
 			},
+			dbPruneTxInfoCommand(),
 		},
 	}
 }

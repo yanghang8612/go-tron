@@ -1812,12 +1812,13 @@ func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash,
 }
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
-	// Use TransactionInfo to locate the block, then find the tx within it.
-	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
-	if info == nil {
+	// Use the compact transaction reverse index directly. TransactionInfo is
+	// stored by block and would add an unnecessary ancient TransactionRet read.
+	blockNum := rawdb.ReadTransactionIndex(b.chain.chaindb, hash[:])
+	if blockNum == nil {
 		return nil, nil, 0, nil // not found
 	}
-	block := b.chain.GetBlockByNumber(uint64(info.BlockNumber))
+	block := b.chain.GetBlockByNumber(*blockNum)
 	if block == nil {
 		return nil, nil, 0, nil
 	}
