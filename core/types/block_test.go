@@ -266,8 +266,33 @@ func TestUnmarshalBlockReservedKeepsMultipleParametersIndependent(t *testing.T) 
 	if len(contracts) != 2 || contracts[0].Parameter == contracts[1].Parameter {
 		t.Fatalf("decoded contract parameters alias: %+v", contracts)
 	}
+	if cap(contracts[0].Parameter.Value) != len(contracts[0].Parameter.Value) ||
+		cap(contracts[1].Parameter.Value) != len(contracts[1].Parameter.Value) {
+		t.Fatal("decoded Any values expose adjacent arena capacity")
+	}
 	if !proto.Equal(got.Proto(), block) {
 		t.Fatalf("reserved decoder differs for repeated contracts\nreserved: %v\ngenerated: %v", got.Proto(), block)
+	}
+}
+
+func TestUnmarshalBlockReservedOwnsAnyValues(t *testing.T) {
+	wire, err := blockDecodeReserveTestBlock(3).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarshalBlockReserved(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([][]byte, len(got.Proto().Transactions))
+	for i, transaction := range got.Proto().Transactions {
+		want[i] = bytes.Clone(transaction.RawData.Contract[0].Parameter.Value)
+	}
+	clear(wire)
+	for i, transaction := range got.Proto().Transactions {
+		if value := transaction.RawData.Contract[0].Parameter.Value; !bytes.Equal(value, want[i]) {
+			t.Fatalf("transaction %d Any value aliases wire input: got %x, want %x", i, value, want[i])
+		}
 	}
 }
 

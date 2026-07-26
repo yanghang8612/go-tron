@@ -477,6 +477,7 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 		}
 	}
 	appendProtoUnknown(&decoded.pb, unknown)
+	ownBlockAnyValues(&decoded.pb)
 	return &decoded.block, nil
 }
 
@@ -644,7 +645,7 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 			} else {
 				contract = new(corepb.Transaction_Contract)
 			}
-			if err := unmarshalTransactionContractReserved(value, contract, inlineParameter); err != nil {
+			if err := unmarshalTransactionContractReservedBorrowingValue(value, contract, inlineParameter); err != nil {
 				return err
 			}
 			decoded.raw.Contract = append(decoded.raw.Contract, contract)
@@ -659,6 +660,14 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 // unmarshalTransactionContractReserved preserves generated merge/unknown-field
 // semantics while letting the first Any object share decodedWireTransaction.
 func unmarshalTransactionContractReserved(data []byte, contract *corepb.Transaction_Contract, inlineParameter *anypb.Any) error {
+	return unmarshalTransactionContractReservedMode(data, contract, inlineParameter, false)
+}
+
+func unmarshalTransactionContractReservedBorrowingValue(data []byte, contract *corepb.Transaction_Contract, inlineParameter *anypb.Any) error {
+	return unmarshalTransactionContractReservedMode(data, contract, inlineParameter, true)
+}
+
+func unmarshalTransactionContractReservedMode(data []byte, contract *corepb.Transaction_Contract, inlineParameter *anypb.Any, borrowValue bool) error {
 	var unknown []byte
 	for len(data) != 0 {
 		fieldData := data
@@ -687,7 +696,7 @@ func unmarshalTransactionContractReserved(data []byte, contract *corepb.Transact
 					contract.Parameter = new(anypb.Any)
 				}
 			}
-			if err := unmarshalAnyReserved(value, contract.Parameter); err != nil {
+			if err := unmarshalAnyReserved(value, contract.Parameter, borrowValue); err != nil {
 				return err
 			}
 		case (field == 3 || field == 4) && wireType == protowire.BytesType:
@@ -715,10 +724,11 @@ func unmarshalTransactionContractReserved(data []byte, contract *corepb.Transact
 	return nil
 }
 
-// unmarshalAnyReserved owns arbitrary strings/bytes exactly like generated
-// protobuf decoding, except canonical registered type URLs use immutable
-// process-wide strings rather than allocating identical copies per contract.
-func unmarshalAnyReserved(data []byte, parameter *anypb.Any) error {
+// unmarshalAnyReserved preserves generated protobuf values, except canonical
+// registered type URLs use immutable process-wide strings. The block fast path
+// may temporarily borrow Value bytes; ownBlockAnyValues replaces every
+// non-empty view before the block becomes observable.
+func unmarshalAnyReserved(data []byte, parameter *anypb.Any, borrowValue bool) error {
 	var unknown []byte
 	for len(data) != 0 {
 		fieldData := data
@@ -743,13 +753,56 @@ func unmarshalAnyReserved(data []byte, parameter *anypb.Any) error {
 			if !ok {
 				return errors.New("malformed Any value")
 			}
-			parameter.Value = append([]byte(nil), value...)
+			if borrowValue {
+				parameter.Value = value[:len(value):len(value)]
+			} else {
+				parameter.Value = append([]byte(nil), value...)
+			}
 		default:
 			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
 		}
 	}
 	appendProtoUnknown(parameter, unknown)
 	return nil
+}
+
+// ownBlockAnyValues replaces the temporary input-buffer views installed by
+// the fast decoder with one exact-size allocation owned by the decoded block.
+// It runs before unmarshalBlockReserved returns, so callers never observe or
+// retain borrowed wire bytes. Capacity-clamping keeps adjacent values isolated
+// if a caller later appends to one parameter.
+func ownBlockAnyValues(block *corepb.Block) {
+	total := 0
+	for _, transaction := range block.Transactions {
+		if transaction.RawData == nil {
+			continue
+		}
+		for _, contract := range transaction.RawData.Contract {
+			if contract.Parameter != nil {
+				total += len(contract.Parameter.Value)
+			}
+		}
+	}
+	if total == 0 {
+		return
+	}
+	arena := make([]byte, total)
+	offset := 0
+	for _, transaction := range block.Transactions {
+		if transaction.RawData == nil {
+			continue
+		}
+		for _, contract := range transaction.RawData.Contract {
+			if contract.Parameter == nil || len(contract.Parameter.Value) == 0 {
+				continue
+			}
+			end := offset + len(contract.Parameter.Value)
+			owned := arena[offset:end:end]
+			copy(owned, contract.Parameter.Value)
+			contract.Parameter.Value = owned
+			offset = end
+		}
+	}
 }
 
 func scanBlockTransactionReserve(data []byte) (blockTransactionReserve, bool) {
