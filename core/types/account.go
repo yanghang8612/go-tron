@@ -783,6 +783,24 @@ func (a *Account) MarshalStorageCore() ([]byte, error) {
 	return data, nil
 }
 
+// StorageCoreSize returns the exact protobuf size of MarshalStorageCore
+// without allocating its encoded byte slice.
+func (a *Account) StorageCoreSize() int {
+	if a == nil || a.pb == nil {
+		return 0
+	}
+	return accountStorageCoreSize(a.pb)
+}
+
+// AppendStorageCore appends the deterministic v3 account-latest protobuf core
+// directly to dst. It is byte-identical to MarshalStorageCore.
+func (a *Account) AppendStorageCore(dst []byte) ([]byte, error) {
+	if a == nil || a.pb == nil {
+		return dst, nil
+	}
+	return appendAccountStorageCore(dst, a.pb)
+}
+
 func UnmarshalAccount(data []byte) (*Account, error) {
 	decoded := new(decodedAccount)
 	decoded.account.pb = &decoded.pb

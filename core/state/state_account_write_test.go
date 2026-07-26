@@ -1,11 +1,66 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+func TestAppendAccountLatestObjectPreparedOwnsProtoInFinalArena(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x10)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddBalance(addr, 987654)
+	obj := sdb.getStateObject(addr)
+	wantProto, err := obj.account.MarshalStorageCore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj.accountProto = nil
+	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj)
+	if err != nil || !exists {
+		t.Fatalf("size: exists=%v err=%v", exists, err)
+	}
+	if protoSize != len(wantProto) {
+		t.Fatalf("proto size = %d, want %d", protoSize, len(wantProto))
+	}
+	got, exists, err := appendAccountLatestObjectPrepared(make([]byte, 0, encodedSize), obj, true, protoSize)
+	if err != nil || !exists {
+		t.Fatalf("append: exists=%v err=%v", exists, err)
+	}
+	want := appendStateAccountV2Fields(nil, StateAccountVersion, wantProto, EmptyKVRoot, obj.accountKVGeneration, obj.codeHash)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("prepared envelope = %x, want %x", got, want)
+	}
+	if !bytes.Equal(obj.accountProto, wantProto) || cap(obj.accountProto) != len(obj.accountProto) {
+		t.Fatalf("cached proto = %x len/cap=%d/%d", obj.accountProto, len(obj.accountProto), cap(obj.accountProto))
+	}
+	protoOffset := bytes.Index(got, wantProto)
+	if protoOffset < 0 || len(wantProto) == 0 || &got[protoOffset] != &obj.accountProto[0] {
+		t.Fatal("cached account proto does not share the final envelope arena")
+	}
+}
+
+func TestAppendAccountLatestObjectPreparedOneByteProtoFallback(t *testing.T) {
+	account := types.NewAccountFromPB(&corepb.Account{})
+	account.Proto().ProtoReflect().SetUnknown([]byte{0x08})
+	obj := &stateObject{account: account, accountKVRoot: EmptyKVRoot}
+	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj)
+	if err != nil || !exists || protoSize != 1 || !bytes.Equal(obj.accountProto, []byte{0x08}) {
+		t.Fatalf("size fallback = encoded:%d proto:%d exists:%v cache:%x err:%v", encodedSize, protoSize, exists, obj.accountProto, err)
+	}
+	got, exists, err := appendAccountLatestObjectPrepared(make([]byte, 0, encodedSize), obj, true, protoSize)
+	if err != nil || !exists {
+		t.Fatalf("append fallback: exists=%v err=%v", exists, err)
+	}
+	want := appendStateAccountV2Fields(nil, StateAccountVersion, []byte{0x08}, EmptyKVRoot, 0, obj.codeHash)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("one-byte envelope = %x, want %x", got, want)
+	}
+}
 
 func TestCommitWritesV2Envelope(t *testing.T) {
 	sdb := newTestStateDB(t)

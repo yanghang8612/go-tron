@@ -2972,6 +2972,9 @@ type accountCommitPlan struct {
 	kvPlan             *accountKVCommitPlan
 	hadKVDirty         bool
 	accountLatestDirty bool
+	// accountProtoSize is measured without marshaling during the first commit
+	// pass, then reused to append the protobuf directly into the value arena.
+	accountProtoSize int
 }
 
 func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
@@ -3159,15 +3162,25 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 	return appendAccountLatestObject(nil, obj, flatRoot)
 }
 
-func accountLatestObjectEncodedSize(obj *stateObject) (int, bool, error) {
+func accountLatestObjectEncodedSize(obj *stateObject) (encodedSize, accountProtoSize int, exists bool, err error) {
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
-	accBytes, err := obj.deterministicAccountProto()
-	if err != nil {
-		return 0, false, err
+	if obj.accountProto != nil {
+		return stateAccountV2EncodedSize(StateAccountVersion, obj.accountProto, obj.accountKVGeneration), len(obj.accountProto), true, nil
 	}
-	return stateAccountV2EncodedSize(StateAccountVersion, accBytes, obj.accountKVGeneration), true, nil
+	accountProtoSize = obj.account.StorageCoreSize()
+	if accountProtoSize == 1 {
+		// RLP encodes a one-byte string differently when the byte is below 0x80.
+		// Structured Account protobufs do not normally reach this case; retain the
+		// authoritative byte-aware path for synthetic unknown-field values.
+		accBytes, marshalErr := obj.deterministicAccountProto()
+		if marshalErr != nil {
+			return 0, 0, false, marshalErr
+		}
+		return stateAccountV2EncodedSize(StateAccountVersion, accBytes, obj.accountKVGeneration), len(accBytes), true, nil
+	}
+	return stateAccountV2EncodedSizeFromProtoSize(StateAccountVersion, accountProtoSize, obj.accountKVGeneration), accountProtoSize, true, nil
 }
 
 func appendAccountLatestObject(dst []byte, obj *stateObject, flatRoot bool) ([]byte, bool, error) {
@@ -3195,6 +3208,42 @@ func appendAccountLatestObjectFromProto(dst []byte, obj *stateObject, accBytes [
 		accountKVRoot = EmptyKVRoot
 	}
 	return appendStateAccountV2Fields(dst, StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+}
+
+// appendAccountLatestObjectPrepared encodes an uncached storage-core protobuf
+// directly into the final commit-wide value arena. The protobuf sub-slice also
+// becomes the state object's post-image cache, avoiding a second owned copy.
+func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bool, accountProtoSize int) ([]byte, bool, error) {
+	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
+		return dst, false, nil
+	}
+	if obj.accountProto != nil {
+		return appendAccountLatestObjectFromProto(dst, obj, obj.accountProto, flatRoot), true, nil
+	}
+	if accountProtoSize == 1 {
+		// accountLatestObjectEncodedSize materializes and caches this exceptional
+		// value so the byte-aware ordinary path above handles its RLP encoding.
+		return dst, false, errors.New("one-byte account proto missing prepared cache")
+	}
+	accountKVRoot := obj.accountKVRoot
+	if flatRoot {
+		accountKVRoot = EmptyKVRoot
+	}
+	dst = appendStateAccountV2StorageCorePrefix(dst, StateAccountVersion, accountProtoSize, obj.accountKVGeneration)
+	protoStart := len(dst)
+	var err error
+	dst, err = obj.account.AppendStorageCore(dst)
+	if err != nil {
+		return dst, false, err
+	}
+	protoEnd := len(dst)
+	if protoEnd-protoStart != accountProtoSize {
+		return dst, false, fmt.Errorf("account storage core size changed during commit: encoded %d, want %d", protoEnd-protoStart, accountProtoSize)
+	}
+	dst = appendStateAccountV2StorageCoreTrailer(dst, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+	obj.accountProto = dst[protoStart:protoEnd:protoEnd]
+	obj.accountProtoLoaded = false
+	return dst, true, nil
 }
 
 func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch, physicalKey, accountLatestData []byte, accountLatestExists bool) error {
@@ -3290,17 +3339,18 @@ func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRo
 		if plan == nil || plan.deleteAccount || !plan.accountLatestDirty {
 			continue
 		}
-		size, exists, err := accountLatestObjectEncodedSize(plan.obj)
+		size, protoSize, exists, err := accountLatestObjectEncodedSize(plan.obj)
 		if err != nil {
 			return err
 		}
 		if exists {
 			accountLatestValueBytes += size
+			plan.accountProtoSize = protoSize
 		}
 	}
 	keyArena := make([]byte, 0, accountLatestWrites*rawdb.StateAccountLatestCommitmentKeySize())
-	// deterministicAccountProto caches the first pass's protobuf bytes on each
-	// object, so the append pass only frames those bytes into one owned arena.
+	// The first pass measured every uncached protobuf without materializing it;
+	// the append pass writes both envelope and protobuf into this final arena.
 	valueArena := make([]byte, 0, accountLatestValueBytes)
 	for _, plan := range orderedPlans {
 		var physicalKey []byte
@@ -3314,7 +3364,7 @@ func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRo
 		if plan != nil && !plan.deleteAccount && plan.accountLatestDirty {
 			start := len(valueArena)
 			var err error
-			valueArena, accountLatestExists, err = appendAccountLatestObject(valueArena, plan.obj, flatRoot)
+			valueArena, accountLatestExists, err = appendAccountLatestObjectPrepared(valueArena, plan.obj, flatRoot, plan.accountProtoSize)
 			if err != nil {
 				return err
 			}

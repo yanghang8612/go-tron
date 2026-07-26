@@ -228,6 +228,60 @@ func benchmarkMapRichAccount(entries int) *corepb.Account {
 	return pb
 }
 
+func TestAppendStorageCoreMatchesMarshal(t *testing.T) {
+	pb := benchmarkMapRichAccount(8)
+	pb.AccountName = []byte("storage-core")
+	pb.NetUsage = 77
+	pb.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 101, protowire.VarintType), 9))
+	account := NewAccountFromPB(pb)
+	want, err := account.MarshalStorageCore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := account.StorageCoreSize(); got != len(want) {
+		t.Fatalf("StorageCoreSize = %d, want %d", got, len(want))
+	}
+	prefix := []byte("prefix")
+	got, err := account.AppendStorageCore(bytes.Clone(prefix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got[:len(prefix)], prefix) || !bytes.Equal(got[len(prefix):], want) {
+		t.Fatalf("AppendStorageCore = %x, want prefix %x plus %x", got, prefix, want)
+	}
+}
+
+func FuzzAppendStorageCoreEquivalent(f *testing.F) {
+	canonical, err := proto.Marshal(benchmarkMapRichAccount(4))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(nil))
+	f.Add(canonical)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var pb corepb.Account
+		if err := proto.Unmarshal(data, &pb); err != nil {
+			t.Skip()
+		}
+		account := NewAccountFromPB(&pb)
+		want, err := account.MarshalStorageCore()
+		if err != nil {
+			t.Skip()
+		}
+		if got := account.StorageCoreSize(); got != len(want) {
+			t.Fatalf("StorageCoreSize = %d, want %d for %x", got, len(want), data)
+		}
+		prefix := []byte{0xaa, 0xbb}
+		got, err := account.AppendStorageCore(bytes.Clone(prefix))
+		if err != nil {
+			t.Fatalf("AppendStorageCore: %v", err)
+		}
+		if !bytes.Equal(got[:len(prefix)], prefix) || !bytes.Equal(got[len(prefix):], want) {
+			t.Fatalf("append mismatch for %x: got %x, want %x + %x", data, got, prefix, want)
+		}
+	})
+}
+
 var benchmarkAccountMarshalBytes []byte
 
 func BenchmarkAccountDeterministicMapMarshal(b *testing.B) {
@@ -258,6 +312,25 @@ func BenchmarkAccountDeterministicMapMarshal(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			benchmarkAccountMarshalBytes, _ = account.MarshalStorageCore()
+		}
+	})
+	b.Run("storage-core-final-buffer", func(b *testing.B) {
+		account := NewAccountFromPB(pb)
+		data := make([]byte, 0, account.StorageCoreSize())
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			benchmarkAccountMarshalBytes, _ = account.AppendStorageCore(data[:0])
+		}
+	})
+	b.Run("storage-core-size-and-final-buffer", func(b *testing.B) {
+		account := NewAccountFromPB(pb)
+		data := make([]byte, 0, account.StorageCoreSize())
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			size := account.StorageCoreSize()
+			benchmarkAccountMarshalBytes, _ = account.AppendStorageCore(data[:0:size])
 		}
 	})
 }

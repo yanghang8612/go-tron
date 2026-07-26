@@ -193,6 +193,10 @@ func marshalMessageDeterministicAppend(message protoreflect.Message, buf []byte,
 	} else {
 		buf = buf[:0]
 	}
+	return appendMessageDeterministic(message, buf)
+}
+
+func appendMessageDeterministic(message protoreflect.Message, buf []byte) ([]byte, error) {
 	methods := message.ProtoMethods()
 	if methods == nil || methods.Marshal == nil || methods.Flags&protoiface.SupportMarshalDeterministic == 0 {
 		return proto.MarshalOptions{Deterministic: true}.MarshalAppend(buf, message.Interface())
@@ -279,14 +283,8 @@ func marshalAccountDirectMaps(pb *corepb.Account, hint int) ([]byte, error, bool
 	return out, nil, true
 }
 
-// marshalAccountStorageCore encodes the Account fields retained in the v3
-// account-latest envelope. The six TRC10 maps, Owner/Witness/Active permissions,
-// votes, Stake V1/V2 fields, TRC10 frozen supply, and AccountResource live in
-// account-local KV domains and are materialized only for full wire/API Account
-// responses.
-func marshalAccountStorageCore(pb *corepb.Account, hint int) ([]byte, error) {
+func borrowAccountStorageCore(pb *corepb.Account) *corepb.Account {
 	core := borrowAccountWithoutMaps(pb)
-	defer releaseAccountWithoutMaps(core)
 	core.OwnerPermission = nil
 	core.WitnessPermission = nil
 	core.ActivePermission = nil
@@ -298,5 +296,31 @@ func marshalAccountStorageCore(pb *corepb.Account, hint int) ([]byte, error) {
 	core.Frozen = nil
 	core.TronPower = nil
 	core.ProtoReflect().SetUnknown(pb.ProtoReflect().GetUnknown())
-	return marshalMessageDeterministic(core.ProtoReflect(), hint)
+	return core
+}
+
+func accountStorageCoreSize(pb *corepb.Account) int {
+	core := borrowAccountStorageCore(pb)
+	size := proto.Size(core)
+	releaseAccountWithoutMaps(core)
+	return size
+}
+
+func appendAccountStorageCore(dst []byte, pb *corepb.Account) ([]byte, error) {
+	core := borrowAccountStorageCore(pb)
+	out, err := appendMessageDeterministic(core.ProtoReflect(), dst)
+	releaseAccountWithoutMaps(core)
+	return out, err
+}
+
+// marshalAccountStorageCore encodes the Account fields retained in the v3
+// account-latest envelope. The six TRC10 maps, Owner/Witness/Active permissions,
+// votes, Stake V1/V2 fields, TRC10 frozen supply, and AccountResource live in
+// account-local KV domains and are materialized only for full wire/API Account
+// responses.
+func marshalAccountStorageCore(pb *corepb.Account, hint int) ([]byte, error) {
+	if hint < 256 {
+		hint = 256
+	}
+	return appendAccountStorageCore(make([]byte, 0, hint), pb)
 }
