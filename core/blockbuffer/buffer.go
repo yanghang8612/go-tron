@@ -468,6 +468,18 @@ func (b *bufferBatch) PutOwnedValue(key, value []byte) error {
 	return nil
 }
 
+// PutStringOwnedValue retains an immutable string key and freshly encoded
+// value directly. This is used by fixed-key metadata writers; ordinary Put
+// and PutOwnedValue continue to own caller byte-slice keys defensively.
+func (b *bufferBatch) PutStringOwnedValue(key string, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	b.ops = append(b.ops, bufferBatchOp{key: key, value: value, target: b.parent.activeLayer()})
+	b.size += len(key) + len(value)
+	return nil
+}
+
 // PutOwnedKeyValue retains a freshly constructed immutable key and value.
 // The account-latest commit path builds all physical keys in one exact-size
 // arena and transfers that arena to the batch, so converting the slices to
@@ -1551,6 +1563,20 @@ func (b *Buffer) PutOwnedValue(key, value []byte) error {
 		panic("blockbuffer: PutOwnedValue called with no active layer")
 	}
 	b.putIntoStringOwnedValue(active, string(key), value)
+	return nil
+}
+
+// PutStringOwnedValue is the fixed-key counterpart of PutOwnedValue. The
+// caller supplies an immutable string whose backing may be retained by the
+// active layer together with value.
+func (b *Buffer) PutStringOwnedValue(key string, value []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutStringOwnedValue called with no active layer")
+	}
+	b.putIntoStringOwnedValue(active, key, value)
 	return nil
 }
 

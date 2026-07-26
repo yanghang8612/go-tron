@@ -625,6 +625,13 @@ func (v *LayerView) PutOwnedValue(key, value []byte) error {
 	return nil
 }
 
+// PutStringOwnedValue is the layer-bound fixed-key write path. Both key and
+// value are immutable caller-owned storage and may be retained directly.
+func (v *LayerView) PutStringOwnedValue(key string, value []byte) error {
+	v.b.putIntoStringOwnedValue(v.l, key, value)
+	return nil
+}
+
 func (v *LayerView) Delete(key []byte) error {
 	v.b.deleteInto(v.l, key)
 	return nil

@@ -60,7 +60,7 @@ func WriteStageProgress(db ethdb.KeyValueWriter, stage StageID, blockNum uint64)
 	if stage == "" {
 		return errors.New("rawdb: empty stage id")
 	}
-	return db.Put(stageProgressKey(stage), encodeStageProgress(blockNum, common.Hash{}, false))
+	return writeStageProgressValue(db, stage, encodeStageProgress(blockNum, common.Hash{}, false))
 }
 
 func WriteStageProgressWithHash(db ethdb.KeyValueWriter, stage StageID, blockNum uint64, blockHash common.Hash) error {
@@ -70,7 +70,24 @@ func WriteStageProgressWithHash(db ethdb.KeyValueWriter, stage StageID, blockNum
 	if stage == "" {
 		return errors.New("rawdb: empty stage id")
 	}
-	return db.Put(stageProgressKey(stage), encodeStageProgress(blockNum, blockHash, true))
+	return writeStageProgressValue(db, stage, encodeStageProgress(blockNum, blockHash, true))
+}
+
+// stringOwnedValueWriter lets layered stores retain both an immutable stage
+// key string and a freshly encoded immutable value. Canonical stage keys have
+// process lifetime, so the layer map can reuse their string backing directly.
+type stringOwnedValueWriter interface {
+	PutStringOwnedValue(key string, value []byte) error
+}
+
+func writeStageProgressValue(db ethdb.KeyValueWriter, stage StageID, value []byte) error {
+	if writer, ok := db.(stringOwnedValueWriter); ok {
+		return writer.PutStringOwnedValue(stageProgressKeyString(stage), value)
+	}
+	if writer, ok := db.(ownedValueWriter); ok {
+		return writer.PutOwnedValue(stageProgressKey(stage), value)
+	}
+	return db.Put(stageProgressKey(stage), value)
 }
 
 func WriteCanonicalStageProgress(db ethdb.KeyValueWriter, blockNum uint64) error {

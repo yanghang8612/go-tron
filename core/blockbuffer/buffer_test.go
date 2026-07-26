@@ -464,6 +464,52 @@ func TestBufferAndLayerViewPutOwnedValueRetainValueAndOwnKey(t *testing.T) {
 	}
 }
 
+func TestBufferLayerAndBatchPutStringOwnedValueRetainInputs(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	writers := map[string]interface {
+		PutStringOwnedValue(key string, value []byte) error
+	}{
+		"buffer":     b,
+		"layer-view": b.ViewLayer(h),
+	}
+	for name, writer := range writers {
+		key := name + "-string-owned-key"
+		value := []byte(name + "-string-owned-value")
+		if err := writer.PutStringOwnedValue(key, value); err != nil {
+			t.Fatal(err)
+		}
+		got, err := b.GetNoCopy([]byte(key))
+		if err != nil || !bytes.Equal(got, value) {
+			t.Fatalf("%s read = (%q,%v), want %q", name, got, err, value)
+		}
+		if &got[0] != &value[0] {
+			t.Fatalf("%s copied the transferred value", name)
+		}
+	}
+
+	batch := b.NewBatch().(*bufferBatch)
+	key := "batch-string-owned-key"
+	value := []byte("batch-string-owned-value")
+	if err := batch.PutStringOwnedValue(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if unsafe.StringData(batch.ops[0].key) != unsafe.StringData(key) {
+		t.Fatal("batch copied the immutable string key")
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.GetNoCopy([]byte(key))
+	if err != nil || !bytes.Equal(got, value) || &got[0] != &value[0] {
+		t.Fatalf("batch read = (%q,%v), want retained %q", got, err, value)
+	}
+}
+
 func TestStructuredStateKVLatestOwnedWritersRetainValueAndOwnKey(t *testing.T) {
 	type writer interface {
 		PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error

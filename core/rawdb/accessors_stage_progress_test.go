@@ -1,10 +1,30 @@
 package rawdb
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 )
+
+type stageProgressOwnedWriterProbe struct {
+	putCalled bool
+	key       string
+	value     []byte
+}
+
+func (p *stageProgressOwnedWriterProbe) Put([]byte, []byte) error {
+	p.putCalled = true
+	return nil
+}
+
+func (*stageProgressOwnedWriterProbe) Delete([]byte) error { return nil }
+
+func (p *stageProgressOwnedWriterProbe) PutStringOwnedValue(key string, value []byte) error {
+	p.key = key
+	p.value = value
+	return nil
+}
 
 func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -64,6 +84,44 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	for _, stage := range CanonicalExecutionStages() {
 		if row, ok, err := ReadStageProgressRow(db, stage); err != nil || !ok || row.BlockNum != 7 || !row.HasBlockHash || row.BlockHash != hash7 {
 			t.Fatalf("%s progress after rewind = %+v ok=%v err=%v, want 7 hash", stage, row, ok, err)
+		}
+	}
+}
+
+func TestWriteStageProgressTransfersCanonicalKeyAndValue(t *testing.T) {
+	probe := new(stageProgressOwnedWriterProbe)
+	hash := common.Hash{0x42}
+	if err := WriteStageProgressWithHash(probe, StageExecution, 123, hash); err != nil {
+		t.Fatal(err)
+	}
+	if probe.putCalled {
+		t.Fatal("stage progress used defensive Put instead of owned string write")
+	}
+	if probe.key != stageExecutionProgressKeyString {
+		t.Fatalf("stage key = %q, want %q", probe.key, stageExecutionProgressKeyString)
+	}
+	want := encodeStageProgress(123, hash, true)
+	if !bytes.Equal(probe.value, want) {
+		t.Fatalf("stage value = %x, want %x", probe.value, want)
+	}
+}
+
+var benchmarkStageProgressKey []byte
+
+func BenchmarkCanonicalStageProgressKey(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkStageProgressKey = stageProgressKey(StageExecution)
+	}
+}
+
+func BenchmarkWriteCanonicalStageProgressWithHash(b *testing.B) {
+	probe := new(stageProgressOwnedWriterProbe)
+	hash := common.Hash{0x42}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := WriteStageProgressWithHash(probe, StageExecution, uint64(i), hash); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

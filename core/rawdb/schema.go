@@ -8,6 +8,8 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+const stageProgressPrefixString = "stage-progress-v1-"
+
 // CommitmentBranchKeyPrefix is the physical schema namespace for persisted
 // latest-domain commitment branches. It is exported as an immutable string so
 // layered caches can target branch-specific policies without duplicating rawdb
@@ -227,7 +229,7 @@ var (
 	//
 	// Key:   stage-progress-v1- || stage name
 	// Value: block number u64
-	stageProgressPrefix = []byte("stage-progress-v1-")
+	stageProgressPrefix = []byte(stageProgressPrefixString)
 
 	// stateTxRangePrefix maps block numbers to the compact global txNum range
 	// used by flat temporal history. Each block consumes one txNum per
@@ -627,8 +629,57 @@ func stateCodeKey(hash common.Hash) []byte {
 	return append(k, hash.Bytes()...)
 }
 
+const (
+	stageHeadersProgressKeyString    = stageProgressPrefixString + string(StageHeaders)
+	stageBodiesProgressKeyString     = stageProgressPrefixString + string(StageBodies)
+	stageExecutionProgressKeyString  = stageProgressPrefixString + string(StageExecution)
+	stageCommitmentProgressKeyString = stageProgressPrefixString + string(StageCommitment)
+	stageFinishProgressKeyString     = stageProgressPrefixString + string(StageFinish)
+)
+
+var (
+	stageHeadersProgressKey    = []byte(stageHeadersProgressKeyString)
+	stageBodiesProgressKey     = []byte(stageBodiesProgressKeyString)
+	stageExecutionProgressKey  = []byte(stageExecutionProgressKeyString)
+	stageCommitmentProgressKey = []byte(stageCommitmentProgressKeyString)
+	stageFinishProgressKey     = []byte(stageFinishProgressKeyString)
+)
+
+// stageProgressKeyString returns immutable process-lifetime storage for every
+// canonical execution stage. Other stage IDs are infrequent snapshot/admin
+// rows and retain the generic construction path.
+func stageProgressKeyString(stage StageID) string {
+	switch stage {
+	case StageHeaders:
+		return stageHeadersProgressKeyString
+	case StageBodies:
+		return stageBodiesProgressKeyString
+	case StageExecution:
+		return stageExecutionProgressKeyString
+	case StageCommitment:
+		return stageCommitmentProgressKeyString
+	case StageFinish:
+		return stageFinishProgressKeyString
+	default:
+		return stageProgressPrefixString + string(stage)
+	}
+}
+
 func stageProgressKey(stage StageID) []byte {
-	return append(append([]byte{}, stageProgressPrefix...), []byte(stage)...)
+	switch stage {
+	case StageHeaders:
+		return stageHeadersProgressKey
+	case StageBodies:
+		return stageBodiesProgressKey
+	case StageExecution:
+		return stageExecutionProgressKey
+	case StageCommitment:
+		return stageCommitmentProgressKey
+	case StageFinish:
+		return stageFinishProgressKey
+	default:
+		return []byte(stageProgressKeyString(stage))
+	}
 }
 
 func stateTxRangeKey(blockNum uint64) []byte {
