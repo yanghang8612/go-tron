@@ -89,6 +89,11 @@ func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
 
 	tx := makeTestTriggerTx(1, contractAddr, nil)
 	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	// The block path releases the VM's Log structs immediately after copying
+	// their slice headers into TransactionInfo. Receipt topics must retain the
+	// shared immutable payload without depending on that backing array.
+	vm.ReleaseExecutionLogs(result.Logs)
+	result.Logs = nil
 	if len(info.Log) != 1 {
 		t.Fatalf("receipt logs = %d, want 1", len(info.Log))
 	}

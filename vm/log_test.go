@@ -18,7 +18,7 @@ func TestLogTopicAccess(t *testing.T) {
 
 	payload := make([]byte, 64)
 	payload[0], payload[32] = 0x03, 0x04
-	compact := &Log{compactTopics: &compactLogTopics{bytes: payload}}
+	compact := &Log{compactTopics: payload}
 	if compact.TopicCount() != 2 || compact.Topic(0)[0] != 0x03 || compact.Topic(1)[0] != 0x04 {
 		t.Fatalf("compact topics not preserved: %x %x", compact.Topic(0), compact.Topic(1))
 	}
@@ -43,7 +43,10 @@ func BenchmarkLogOpcode(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				tvm.Logs = nil
+				if tvm.Logs != nil {
+					ReleaseExecutionLogs(tvm.Logs)
+					tvm.Logs = nil
+				}
 				stack.data = stack.data[:0]
 				for topic := 0; topic < topicCount; topic++ {
 					stack.push(uint256.NewInt(uint64(topic + 1)))
@@ -57,6 +60,8 @@ func BenchmarkLogOpcode(b *testing.B) {
 				}
 				logBenchmarkSink = tvm.Logs[0]
 			}
+			ReleaseExecutionLogs(tvm.Logs)
+			tvm.Logs = nil
 		})
 	}
 }

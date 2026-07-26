@@ -818,9 +818,17 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
 		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
+			vm.ReleaseExecutionLogs(result.Logs)
+			result.Logs = nil
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
 		txInfos[i] = txInfoSlots[i].build(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
+		// TransactionInfo now owns copies of the log slice headers while their
+		// immutable payload bytes stay independently allocated. Recycle only the
+		// VM's []Log backing before the block-local Result sink is cleared by the
+		// next transaction.
+		vm.ReleaseExecutionLogs(result.Logs)
+		result.Logs = nil
 		statedb.FinalizeTransaction()
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
