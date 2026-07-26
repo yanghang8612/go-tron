@@ -14,8 +14,40 @@ import (
 
 const splitReadKeyStackSize = 128
 
+const (
+	defaultCommitmentParentReaders   = 32
+	maxPooledCommitmentParentReaders = 64
+)
+
 var splitReadKeyPool = sync.Pool{
 	New: func() any { return new([splitReadKeyStackSize]byte) },
+}
+
+var commitmentParentKeyScratchPool = sync.Pool{
+	New: func() any {
+		scratch := make([]byte, 0, defaultCommitmentParentReaders*splitReadKeyStackSize)
+		return &scratch
+	},
+}
+
+func borrowCommitmentParentKeyScratch(readers int) *[]byte {
+	scratch := commitmentParentKeyScratchPool.Get().(*[]byte)
+	size := readers * splitReadKeyStackSize
+	if cap(*scratch) < size {
+		*scratch = make([]byte, size)
+	} else {
+		*scratch = (*scratch)[:size]
+	}
+	return scratch
+}
+
+func returnCommitmentParentKeyScratch(scratch *[]byte) {
+	if cap(*scratch) > maxPooledCommitmentParentReaders*splitReadKeyStackSize {
+		*scratch = nil
+		return
+	}
+	*scratch = (*scratch)[:0]
+	commitmentParentKeyScratchPool.Put(scratch)
 }
 
 func borrowSplitReadKey() *[splitReadKeyStackSize]byte {
@@ -87,6 +119,11 @@ type commitmentParentReadSession struct {
 	cacheVersion uint64
 	snapshot     pointread.Snapshot
 	cursors      []pointread.Cursor
+	// keyScratch is split into one 128-byte region per cursor/reader. The
+	// CommitmentParentSession contract gives each reader index one exclusive
+	// worker, so split-key assembly needs neither a lock nor a sync.Pool trip on
+	// every branch lookup.
+	keyScratch *[]byte
 }
 
 var _ pointread.CommitmentParentViewer = (*LayerView)(nil)
@@ -221,6 +258,7 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 		cacheVersion: cacheVersion,
 		snapshot:     snapshot,
 		cursors:      make([]pointread.Cursor, readers),
+		keyScratch:   borrowCommitmentParentKeyScratch(readers),
 	}, nil
 }
 
@@ -235,9 +273,8 @@ func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []b
 		key = append(key, second...)
 		return s.view(reader, first, key, fn)
 	}
-	keyBuf := borrowSplitReadKey()
-	defer returnSplitReadKey(keyBuf)
-	key := keyBuf[:total]
+	start := reader * splitReadKeyStackSize
+	key := (*s.keyScratch)[start : start+total]
 	n := copy(key, first)
 	copy(key[n:], second)
 	return s.view(reader, first, key, fn)
@@ -299,6 +336,8 @@ func (s *commitmentParentReadSession) Close() error {
 	s.snapshot = nil
 	s.layers = nil
 	s.cache = nil
+	returnCommitmentParentKeyScratch(s.keyScratch)
+	s.keyScratch = nil
 	return firstErr
 }
 
