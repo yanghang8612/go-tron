@@ -338,25 +338,30 @@ func ValidateTxCommon(tx *types.Transaction, headBlockTime int64) error {
 }
 
 func validateTxCommon(tx *types.Transaction, headBlockTime int64, validateResultSize bool) error {
+	_, err := validateTxCommonWithSizes(tx, headBlockTime, validateResultSize)
+	return err
+}
+
+func validateTxCommonWithSizes(tx *types.Transaction, headBlockTime int64, validateResultSize bool) (transactionWireSizes, error) {
 	if err := ValidateContractCount(tx); err != nil {
-		return err
+		return transactionWireSizes{}, err
 	}
-	size, sizeWithoutRet := transactionSizes(tx)
+	sizes := measureTransactionWireSizes(tx)
 	if validateResultSize {
-		generalBytesSize := int64(sizeWithoutRet) + maxResultSizeInTx + maxResultSizeInTx
+		generalBytesSize := int64(sizes.withoutRet) + maxResultSizeInTx + maxResultSizeInTx
 		if generalBytesSize > transactionMaxByteSize {
-			return ErrTransactionTooLarge
+			return transactionWireSizes{}, ErrTransactionTooLarge
 		}
 	}
-	if int64(size) > transactionMaxByteSize {
-		return ErrTransactionTooLarge
+	if int64(sizes.full) > transactionMaxByteSize {
+		return transactionWireSizes{}, ErrTransactionTooLarge
 	}
 
 	expiration := tx.Expiration()
 	if expiration <= headBlockTime || expiration > headBlockTime+maximumTimeUntilExpiration {
-		return ErrTransactionExpiration
+		return transactionWireSizes{}, ErrTransactionExpiration
 	}
-	return nil
+	return sizes, nil
 }
 
 // extractContractOwner uses proto reflection to read the owner address from a

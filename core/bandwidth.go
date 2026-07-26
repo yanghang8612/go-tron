@@ -33,10 +33,14 @@ const maxResultSizeInTx int64 = 64
 // is 4 bytes on the wire, so stripping it (-4) and adding 64 (+64) yields
 // the +60 byte delta seen on every Nile non-shielded tx.
 func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
+	return txBandwidthSizeFromWireSizes(tx, supportVM, measureTransactionWireSizes(tx))
+}
+
+func txBandwidthSizeFromWireSizes(tx *types.Transaction, supportVM bool, sizes transactionWireSizes) int64 {
 	if !supportVM {
-		return int64(tx.Size())
+		return int64(sizes.full)
 	}
-	size := int64(transactionSizeWithoutRet(tx))
+	size := int64(sizes.withoutRet)
 	if tx.Proto().RawData != nil {
 		for _, c := range tx.Proto().RawData.Contract {
 			if c.Type != corepb.Transaction_Contract_ShieldedTransferContract {
@@ -54,27 +58,45 @@ func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
 // exactly equivalent to clearing Ret and sizing again. Unknown fields and every
 // other transaction field remain included unchanged.
 func transactionSizeWithoutRet(tx *types.Transaction) int {
-	_, sizeWithoutRet := transactionSizes(tx)
-	return sizeWithoutRet
+	return measureTransactionWireSizes(tx).withoutRet
 }
 
-// transactionSizes computes both the complete serialized size and the size
-// with every field-5 Ret entry omitted. Keeping the two results together lets
-// validation enforce both java-tron size limits with one walk of the complete
-// transaction instead of cloning and sizing one copy, then sizing the original.
-func transactionSizes(tx *types.Transaction) (size, sizeWithoutRet int) {
+// transactionWireSizes holds the protobuf size facts used by validation and
+// bandwidth accounting. It is intentionally scoped to one transaction
+// execution rather than cached on types.Transaction: callers may mutate the
+// underlying protobuf before submitting or building a block.
+type transactionWireSizes struct {
+	full       int
+	withoutRet int
+	results    int
+}
+
+// measureTransactionWireSizes computes the complete serialized size, the size
+// with every field-5 Ret entry omitted, and the serialized payload size of all
+// Ret entries. Keeping the results together lets applyTransaction share one
+// protobuf walk across common validation, the result-size guard, and bandwidth
+// accounting.
+func measureTransactionWireSizes(tx *types.Transaction) transactionWireSizes {
 	pb := tx.Proto()
 	if pb == nil {
-		return 0, 0
+		return transactionWireSizes{}
 	}
-	size = tx.Size()
-	sizeWithoutRet = size
+	sizes := transactionWireSizes{full: tx.Size()}
+	sizes.withoutRet = sizes.full
 	const retFieldNumber = protowire.Number(5)
 	for _, result := range pb.Ret {
 		resultSize := proto.Size(result)
-		sizeWithoutRet -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
+		sizes.results += resultSize
+		sizes.withoutRet -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
 	}
-	return size, sizeWithoutRet
+	return sizes
+}
+
+// transactionSizes preserves the small tuple helper used by focused tests and
+// call sites that need no result-size total.
+func transactionSizes(tx *types.Transaction) (size, sizeWithoutRet int) {
+	sizes := measureTransactionWireSizes(tx)
+	return sizes.full, sizes.withoutRet
 }
 
 // BandwidthResult captures bandwidth consumption details.
@@ -205,13 +227,19 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
 		return BandwidthResult{}, nil
 	}
+	return consumeBandwidthWithResourceTimeAndSizes(statedb, dynProps, tx, prevBlockTime, resourceTime, measureTransactionWireSizes(tx))
+}
 
+func consumeBandwidthWithResourceTimeAndSizes(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64, sizes transactionWireSizes) (BandwidthResult, error) {
+	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
+		return BandwidthResult{}, nil
+	}
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
 		return BandwidthResult{}, fmt.Errorf("cannot determine sender")
 	}
 
-	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
+	txSize := txBandwidthSizeFromWireSizes(tx, dynProps.AllowCreationOfContracts(), sizes)
 
 	if contractCreatesNewAccount(statedb, tx) {
 		if dynProps.ConsensusLogicOptimization() {
@@ -219,7 +247,7 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 			// max_create_account_tx_size: 65 bytes per ECDSA signature and the
 			// scheme-specific maximum embedded PQAuthSig wire size.
 			pb := tx.Proto()
-			createSize := int64(transactionSizeWithoutRet(tx) - 65*len(pb.GetSignature()))
+			createSize := int64(sizes.withoutRet - 65*len(pb.GetSignature()))
 			if dynProps.AllowPQSignatures() {
 				for _, auth := range pb.GetPqAuthSig() {
 					wireSize, ok := pq.AuthSigWireSizeUpperBound(auth.GetScheme())

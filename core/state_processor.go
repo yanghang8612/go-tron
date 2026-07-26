@@ -12,7 +12,6 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm"
-	"google.golang.org/protobuf/proto"
 )
 
 // ErrExchangeRejected is returned by ApplyTransaction when an
@@ -116,7 +115,8 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	// consensus_logic_optimization. Older mainnet blocks can otherwise fail
 	// replay even though their actual protobuf bytes are below 500 KiB.
 	validateResultSize := !trustTransactionRet || dynProps.ConsensusLogicOptimization()
-	if err := validateTxCommon(tx, prevBlockTime, validateResultSize); err != nil {
+	wireSizes, err := validateTxCommonWithSizes(tx, prevBlockTime, validateResultSize)
+	if err != nil {
 		return nil, err
 	}
 	// java Manager.validateCommon adds an in-block expiration LOWER bound once
@@ -147,11 +147,7 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	// rejects a crafted block carrying an oversized ret.
 	{
 		retPB := tx.Proto()
-		var retSize int64
-		for _, r := range retPB.GetRet() {
-			retSize += int64(proto.Size(r))
-		}
-		if retSize > maxResultSizeInTx*int64(len(retPB.GetRawData().GetContract())) {
+		if int64(wireSizes.results) > maxResultSizeInTx*int64(len(retPB.GetRawData().GetContract())) {
 			return nil, ErrTransactionResultTooLarge
 		}
 	}
@@ -231,7 +227,7 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	// result after Execute. Owner-less txs (e.g. shielded) snapshot to zero.
 	ownerSnap := captureOwnerResourceSnapshot(statedb, dynProps, extractSender(tx), resourceTime)
 
-	bwResult, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, resourceTime)
+	bwResult, err := consumeBandwidthWithResourceTimeAndSizes(statedb, dynProps, tx, prevBlockTime, resourceTime, wireSizes)
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("bandwidth: %w", err)

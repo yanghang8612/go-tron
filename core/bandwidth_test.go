@@ -108,12 +108,20 @@ func TestTransactionSizeWithoutRetDoesNotMutate(t *testing.T) {
 	wantPB.Ret = nil
 	wantWithoutRet := proto.Size(wantPB)
 	wantFull := proto.Size(tx.Proto())
-	gotFull, gotWithoutRet := transactionSizes(tx)
+	sizes := measureTransactionWireSizes(tx)
+	gotFull, gotWithoutRet := sizes.full, sizes.withoutRet
 	if gotFull != wantFull {
 		t.Fatalf("full size: got %d, want %d", gotFull, wantFull)
 	}
 	if gotWithoutRet != wantWithoutRet {
 		t.Fatalf("size without ret: got %d, want %d", gotWithoutRet, wantWithoutRet)
+	}
+	var wantResults int
+	for _, result := range tx.Proto().Ret {
+		wantResults += proto.Size(result)
+	}
+	if sizes.results != wantResults {
+		t.Fatalf("result payload size: got %d, want %d", sizes.results, wantResults)
 	}
 	if got := transactionSizeWithoutRet(tx); got != wantWithoutRet {
 		t.Fatalf("size-without-ret wrapper: got %d, want %d", got, wantWithoutRet)
@@ -161,6 +169,24 @@ func BenchmarkTransactionSizeWithoutRet(b *testing.B) {
 		for b.Loop() {
 			fullSize, sizeWithoutRet := transactionSizes(tx)
 			transactionSizeSink = fullSize + sizeWithoutRet
+		}
+	})
+	b.Run("validation-result-guard-bandwidth-repeated", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			fullSize, sizeWithoutRet := transactionSizes(tx)
+			resultSize := 0
+			for _, result := range tx.Proto().Ret {
+				resultSize += proto.Size(result)
+			}
+			transactionSizeSink = fullSize + sizeWithoutRet + resultSize + int(txBandwidthSize(tx, true))
+		}
+	})
+	b.Run("validation-result-guard-bandwidth-shared", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			sizes := measureTransactionWireSizes(tx)
+			transactionSizeSink = sizes.full + sizes.withoutRet + sizes.results + int(txBandwidthSizeFromWireSizes(tx, true, sizes))
 		}
 	})
 }
