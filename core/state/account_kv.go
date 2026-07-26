@@ -1607,6 +1607,17 @@ func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	return s.setAccountKV(owner, domain, key, value, true)
 }
 
+// setAccountKVWrappedOwned stages a value that is already encoded as
+// kvPresencePrefix||value in immutable caller-owned storage. It transfers that
+// storage into the dirty overlay instead of copying value into kvEntryArena a
+// second time. Callers must not mutate wrapped after this call.
+func (s *StateDB) setAccountKVWrappedOwned(owner tcommon.Address, domain kvdomains.KVDomain, key, wrapped []byte) error {
+	if len(wrapped) == 0 || wrapped[0] != kvPresencePrefix {
+		return fmt.Errorf("account kv: invalid owned value wrapper")
+	}
+	return s.setAccountKVPrepared(owner, domain, key, wrapped[1:], wrapped, true)
+}
+
 // SetAccountKVFinal stages a block-final generic-KV write without appending a
 // transaction-snapshot journal entry. Use only after transaction execution is
 // complete; ordinary actuator/VM paths must keep using SetAccountKV.
@@ -1615,6 +1626,10 @@ func (s *StateDB) SetAccountKVFinal(owner tcommon.Address, domain kvdomains.KVDo
 }
 
 func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte, journal bool) error {
+	return s.setAccountKVPrepared(owner, domain, key, value, nil, journal)
+}
+
+func (s *StateDB) setAccountKVPrepared(owner tcommon.Address, domain kvdomains.KVDomain, key, value, ownedWrapped []byte, journal bool) error {
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
@@ -1634,7 +1649,7 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		prevExists = exists
 		prevLoaded = true
 	}
-	return s.setAccountKVResolved(obj, domain, key, value, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
+	return s.setAccountKVResolved(obj, domain, key, value, ownedWrapped, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }
 
 func (s *StateDB) setAccountKVFinalWithPrev(owner tcommon.Address, domain kvdomains.KVDomain, key, prev, value []byte, prevExists bool) error {
@@ -1654,13 +1669,13 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	}
 	obj := s.getOrCreateAccount(owner)
 	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
-	return s.setAccountKVResolved(obj, domain, key, value, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
+	return s.setAccountKVResolved(obj, domain, key, value, nil, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }
 
 // setAccountKVResolved receives the allocation-free dirty lookup performed by
 // its caller. Delay owning the composite map key until after no-op detection so
 // repeated writes of an identical dirty value allocate nothing.
-func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool, prevDirty kvEntry, dirty bool) error {
+func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDomain, key, value, ownedWrapped []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool, prevDirty kvEntry, dirty bool) error {
 	if dirty {
 		if !prevDirty.deleted && bytes.Equal(prevDirty.val, value) {
 			return nil
@@ -1674,7 +1689,12 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 	} else if s.changeSet.enabled && !s.changeSet.captureAtCommit {
 		s.domainChangeNoJournal = append(s.domainChangeNoJournal, kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
-	entry := s.newKVEntry(value, false)
+	var entry kvEntry
+	if ownedWrapped == nil {
+		entry = s.newKVEntry(value, false)
+	} else {
+		entry = kvEntry{val: value, wrapped: ownedWrapped}
+	}
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {

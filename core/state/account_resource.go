@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/runtime/protoiface"
 )
 
 var accountResourceKey = []byte{0x00}
@@ -51,15 +52,44 @@ func (s *StateDB) writeAccountResource(obj *stateObject) error {
 		obj.accountResourceLoaded = true
 		return nil
 	}
-	value, err := proto.MarshalOptions{Deterministic: true}.Marshal(resource)
+	// The dirty KV overlay owns immutable values in kvEntryArena. Reserve the
+	// final presence wrapper and marshal directly behind it so the protobuf
+	// result does not allocate once only to be copied into the arena. Generated
+	// deterministic MarshalAppend remains authoritative for every known and
+	// unknown field.
+	wrapped, err := s.marshalAccountResourceWrapped(resource)
 	if err != nil {
 		return err
 	}
-	if err := s.SetAccountKV(obj.address, kvdomains.AccountResourceAux, accountResourceKey, value); err != nil {
+	if err := s.setAccountKVWrappedOwned(obj.address, kvdomains.AccountResourceAux, accountResourceKey, wrapped); err != nil {
 		return err
 	}
 	obj.accountResourceLoaded = true
 	return nil
+}
+
+func (s *StateDB) marshalAccountResourceWrapped(resource *corepb.Account_AccountResource) ([]byte, error) {
+	message := resource.ProtoReflect()
+	methods := message.ProtoMethods()
+	if methods != nil && methods.Size != nil && methods.Marshal != nil &&
+		methods.Flags&protoiface.SupportMarshalDeterministic != 0 {
+		flags := protoiface.MarshalDeterministic
+		sized := methods.Size(protoiface.SizeInput{Message: message, Flags: flags})
+		wrapped := s.kvEntryArena.alloc(1 + sized.Size)
+		wrapped[0] = kvPresencePrefix
+		out, err := methods.Marshal(protoiface.MarshalInput{
+			Message: message,
+			Buf:     wrapped[:1],
+			Flags:   flags | protoiface.MarshalUseCachedSize,
+		})
+		return out.Buf, err
+	}
+
+	// Generated protobuf messages normally take the direct method path above.
+	// Retain the public deterministic encoder as a schema/runtime fallback.
+	wrapped := s.kvEntryArena.alloc(1 + proto.Size(resource))
+	wrapped[0] = kvPresencePrefix
+	return (proto.MarshalOptions{Deterministic: true}).MarshalAppend(wrapped[:1], resource)
 }
 
 func (s *StateDB) mutateAccountResource(obj *stateObject, mutate func(*corepb.Account_AccountResource)) error {

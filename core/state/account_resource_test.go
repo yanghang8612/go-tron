@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -11,6 +12,46 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xaf)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	obj := sdb.getStateObject(addr)
+	resource := &corepb.Account_AccountResource{
+		EnergyUsage:                               1,
+		FrozenBalanceForEnergy:                    &corepb.Account_Frozen{FrozenBalance: 2, ExpireTime: 3},
+		LatestConsumeTimeForEnergy:                4,
+		AcquiredDelegatedFrozenBalanceForEnergy:   5,
+		DelegatedFrozenBalanceForEnergy:           6,
+		StorageLimit:                              7,
+		StorageUsage:                              8,
+		LatestExchangeStorageTime:                 9,
+		EnergyWindowSize:                          10,
+		DelegatedFrozenV2BalanceForEnergy:         11,
+		AcquiredDelegatedFrozenV2BalanceForEnergy: 12,
+		EnergyWindowOptimized:                     true,
+	}
+	// Preserve future fields byte-for-byte as the generated deterministic
+	// marshaler does; field 100, varint 1 is unknown to this schema.
+	resource.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
+	obj.account.Proto().AccountResource = resource
+
+	want, err := (proto.MarshalOptions{Deterministic: true}).Marshal(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.writeAccountResource(obj); err != nil {
+		t.Fatal(err)
+	}
+	got, exists, err := sdb.GetAccountKV(addr, kvdomains.AccountResourceAux, accountResourceKey)
+	if err != nil || !exists {
+		t.Fatalf("get resource row: exists=%t err=%v", exists, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("resource wire mismatch:\n got  %x\n want %x", got, want)
+	}
+}
 
 func TestAccountResourcePersistsOutsideAccountEnvelopeAndLoadsLazily(t *testing.T) {
 	sdb := newTestStateDB(t)
