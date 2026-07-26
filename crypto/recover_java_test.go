@@ -65,6 +65,32 @@ func TestSigToAddressJavaCompatGarbageStillErrors(t *testing.T) {
 	}
 }
 
+func TestSignerAddressHashMatchesEthereumKeccak(t *testing.T) {
+	pubkey := make([]byte, 64)
+	for i := range pubkey {
+		pubkey[i] = byte(i)
+	}
+	got := signerAddressHash(pubkey)
+	want := ethcrypto.Keccak256(pubkey)
+	if !bytes.Equal(got[:], want) {
+		t.Fatalf("signer address hash = %x, want %x", got, want)
+	}
+}
+
+var signerAddressHashSink common.Hash
+
+func BenchmarkSignerAddressHash(b *testing.B) {
+	pubkey := make([]byte, 64)
+	for i := range pubkey {
+		pubkey[i] = byte(i)
+	}
+	b.SetBytes(int64(len(pubkey)))
+	b.ReportAllocs()
+	for b.Loop() {
+		signerAddressHashSink = signerAddressHash(pubkey)
+	}
+}
+
 func BenchmarkSigToAddressJavaCompat(b *testing.B) {
 	key, err := ethcrypto.GenerateKey()
 	if err != nil {

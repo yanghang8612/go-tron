@@ -7,7 +7,7 @@ import (
 
 	decdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
-	"golang.org/x/crypto/sha3"
+	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -29,13 +29,21 @@ var errInfinity = errors.New("recovered pubkey is the point at infinity")
 // work. Reset occurs before every use and the digest is copied into a value
 // before the state is returned.
 type signerKeccakScratch struct {
-	h      hash.Hash
+	h      signerKeccakState
 	digest common.Hash
+}
+
+// signerKeccakState exposes the sponge's destructive Read path. Sum must copy
+// the full state before finalizing; each scratch has exclusive ownership until
+// it returns to the pool, so Read can write the address digest directly.
+type signerKeccakState interface {
+	hash.Hash
+	Read([]byte) (int, error)
 }
 
 var signerKeccakPool = sync.Pool{
 	New: func() any {
-		return &signerKeccakScratch{h: sha3.NewLegacyKeccak256()}
+		return &signerKeccakScratch{h: gethkeccak.NewLegacyKeccak256().(signerKeccakState)}
 	},
 }
 
@@ -43,7 +51,7 @@ func signerAddressHash(pubkey []byte) common.Hash {
 	scratch := signerKeccakPool.Get().(*signerKeccakScratch)
 	scratch.h.Reset()
 	_, _ = scratch.h.Write(pubkey)
-	scratch.h.Sum(scratch.digest[:0])
+	_, _ = scratch.h.Read(scratch.digest[:])
 	digest := scratch.digest
 	signerKeccakPool.Put(scratch)
 	return digest
