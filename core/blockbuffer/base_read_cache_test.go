@@ -9,6 +9,8 @@ import (
 	"unsafe"
 )
 
+var baseReadCacheEntryBenchmarkSink *baseReadCacheEntry
+
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
 	for attempt := 0; attempt < 2; attempt++ {
 		_, _, epoch := c.getWithEpoch(key)
@@ -62,6 +64,38 @@ func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	}
 	if got, want := totalSlots*8, 1<<20; got != want {
 		t.Fatalf("admission history bytes = %d, want %d", got, want)
+	}
+}
+
+func TestBaseReadCache_RecyclesPrivateKeyStorage(t *testing.T) {
+	var shard baseReadCacheShard
+	firstKey := strings.Repeat("a", 64)
+	entry := shard.acquireEntryString(firstKey, []byte("first-value"), 128, 1)
+	firstStorage := unsafe.StringData(entry.key)
+	shard.recycleEntry(entry)
+
+	secondKey := strings.Repeat("b", 48)
+	reused := shard.acquireEntryString(secondKey, []byte("second-value"), 112, 2)
+	if reused != entry {
+		t.Fatal("recycled entry metadata was not reused")
+	}
+	if got := unsafe.StringData(reused.key); got != firstStorage {
+		t.Fatalf("recycled key storage pointer = %p, want %p", got, firstStorage)
+	}
+	if reused.keyCapacity != uint32(len(firstKey)) {
+		t.Fatalf("recycled key capacity = %d, want %d", reused.keyCapacity, len(firstKey))
+	}
+	if reused.key != secondKey || string(reused.value) != "second-value" {
+		t.Fatalf("reused entry = (%q,%q), want (%q,%q)", reused.key, reused.value, secondKey, "second-value")
+	}
+	shard.recycleEntry(reused)
+	thirdKey := strings.Repeat("c", 60)
+	reused = shard.acquireEntryBytes([]byte(thirdKey), nil, 124, 3)
+	if got := unsafe.StringData(reused.key); got != firstStorage {
+		t.Fatalf("capacity lost after shorter key: pointer = %p, want %p", got, firstStorage)
+	}
+	if reused.key != thirdKey {
+		t.Fatalf("byte-source reused key = %q, want %q", reused.key, thirdKey)
 	}
 }
 
@@ -608,8 +642,8 @@ func TestBaseReadCache_InvalidationReleasesQueuedEntryPayload(t *testing.T) {
 		t.Fatal("test setup did not retain one stable queued entry")
 	}
 	c.del(key)
-	if entry.live || entry.key != "" || entry.value != nil {
-		t.Fatalf("invalidated queued entry retained live=%v key=%q valueBytes=%d", entry.live, entry.key, len(entry.value))
+	if entry.live || entry.key != "" || len(entry.value) != len(key) || entry.keyCapacity != uint32(len(key)) {
+		t.Fatalf("invalidated queued entry retained live=%v key=%q storageBytes=%d storageCap=%d", entry.live, entry.key, len(entry.value), entry.keyCapacity)
 	}
 	if len(s.queue) != 1 || s.queue[0] != entry {
 		t.Fatal("test requires the cleared entry to remain as a stale queue pointer")
@@ -791,6 +825,23 @@ func BenchmarkBaseReadCachePromoteShard(b *testing.B) {
 			c.promoteFlushedShard(writes, nil, 0)
 		}
 	})
+}
+
+func BenchmarkBaseReadCacheRecycledEntryKey(b *testing.B) {
+	keys := [...]string{
+		strings.Repeat("a", 96),
+		strings.Repeat("b", 80),
+	}
+	var shard baseReadCacheShard
+	entry := shard.acquireEntryString(keys[0], nil, len(keys[0])+baseReadCacheEntryOverhead, 1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		shard.recycleEntry(entry)
+		key := keys[i&1]
+		entry = shard.acquireEntryString(key, nil, len(key)+baseReadCacheEntryOverhead, uint64(i+2))
+	}
+	baseReadCacheEntryBenchmarkSink = entry
 }
 
 func BenchmarkBaseReadCacheHit(b *testing.B) {

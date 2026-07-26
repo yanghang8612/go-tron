@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
@@ -124,6 +125,10 @@ type baseReadCacheEntry struct {
 	// Eviction gives such entries one CLOCK-style second chance, preserving hot
 	// upper commitment branches without promoting two-hit scan noise forever.
 	referenced atomic.Bool
+	// keyCapacity records the private key allocation size across shorter-key
+	// reuse. It occupies existing alignment padding, so the entry remains in the
+	// same 80-byte allocator size class.
+	keyCapacity uint32
 	// nextFree is used only after the entry's CLOCK token has left the queue.
 	// It grows the 72-byte payload to 80 bytes, which is the allocator size
 	// class the entry already occupied before this field was added.
@@ -368,16 +373,15 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 		s.mu.Unlock()
 		return value, false
 	}
-	k := cloneBaseReadCacheKey(key)
 	var v []byte
 	if !missing {
 		v = cloneBaseReadCacheValue(value)
 	}
-	entry := s.acquireEntry(k, v, charge, c.version.Load())
+	entry := s.acquireEntryBytes(key, v, charge, c.version.Load())
 	if expose && v != nil {
 		entry.exposed.Store(true)
 	}
-	s.entries[k] = entry
+	s.entries[entry.key] = entry
 	s.queue = append(s.queue, entry)
 	s.used += charge
 	s.evict()
@@ -435,9 +439,8 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// instead of forcing the next block to read Pebble once more merely to
 		// complete admission. Clone the layer-owned key/value: sibling batches
 		// may share large arenas which are released after layer promotion.
-		stableKey := strings.Clone(key)
-		entry := s.acquireEntry(stableKey, cloneBaseReadCacheValue(value), charge, c.version.Load())
-		s.entries[stableKey] = entry
+		entry := s.acquireEntryString(key, cloneBaseReadCacheValue(value), charge, c.version.Load())
+		s.entries[entry.key] = entry
 		s.queue = append(s.queue, entry)
 		s.used += charge
 		s.evict()
@@ -479,8 +482,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			delete(s.entries, key)
 			s.used -= old.charge
 			old.live = false
-			old.key = ""
-			old.value = nil
+			retainBaseReadCacheKeyStorage(old)
 		}
 	}
 }
@@ -507,31 +509,31 @@ func (c *baseReadCache) promoteFlushedShard(writes map[string][]byte, deletes ma
 	s.mu.Unlock()
 }
 
-// cloneBaseReadCacheKey and cloneBaseReadCacheValue intentionally use separate
-// exact-sized allocations. Map keys and queue entries live for the entry's
-// whole residency, while a successful flush may replace its value many times.
-// Sharing their backing storage would make the long-lived key pin the first
-// stale value.
-func cloneBaseReadCacheKey(key []byte) string {
-	return string(key)
-}
-
+// Keys and values intentionally use separate backing. Map keys and queue
+// entries live for the entry's whole residency, while a successful flush may
+// replace its value many times. Sharing their backing would make the long-lived
+// key pin the first stale value. Recycled metadata may lend its prior private
+// key backing to the next key without coupling either key to a value payload.
 func cloneBaseReadCacheValue(value []byte) []byte {
 	storage := make([]byte, len(value))
 	copy(storage, value)
 	return storage
 }
 
-func (s *baseReadCacheShard) acquireEntry(key string, value []byte, charge int, version uint64) *baseReadCacheEntry {
+func (s *baseReadCacheShard) takeEntry() *baseReadCacheEntry {
 	entry := s.freeEntries
 	if entry == nil {
-		entry = new(baseReadCacheEntry)
-	} else {
-		s.freeEntries = entry.nextFree
-		s.freeEntryCount--
-		entry.nextFree = nil
+		return new(baseReadCacheEntry)
 	}
-	entry.key = key
+	s.freeEntries = entry.nextFree
+	s.freeEntryCount--
+	entry.nextFree = nil
+	return entry
+}
+
+func (s *baseReadCacheShard) acquireEntryBytes(key []byte, value []byte, charge int, version uint64) *baseReadCacheEntry {
+	entry := s.takeEntry()
+	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyBytes(key, entry.value)
 	entry.value = value
 	entry.charge = charge
 	entry.version = version
@@ -539,9 +541,56 @@ func (s *baseReadCacheShard) acquireEntry(key string, value []byte, charge int, 
 	return entry
 }
 
-func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
+func (s *baseReadCacheShard) acquireEntryString(key string, value []byte, charge int, version uint64) *baseReadCacheEntry {
+	entry := s.takeEntry()
+	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyString(key, entry.value)
+	entry.value = value
+	entry.charge = charge
+	entry.version = version
+	entry.live = true
+	return entry
+}
+
+func cloneBaseReadCacheKeyBytes(key, storage []byte) (string, uint32) {
+	if len(key) == 0 {
+		return "", 0
+	}
+	if len(key) <= cap(storage) {
+		capacity := cap(storage)
+		storage = storage[:len(key)]
+		copy(storage, key)
+		return unsafe.String(unsafe.SliceData(storage), len(storage)), uint32(capacity)
+	}
+	return string(key), uint32(len(key))
+}
+
+func cloneBaseReadCacheKeyString(key string, storage []byte) (string, uint32) {
+	if len(key) == 0 {
+		return "", 0
+	}
+	if len(key) <= cap(storage) {
+		capacity := cap(storage)
+		storage = storage[:len(key)]
+		copy(storage, key)
+		return unsafe.String(unsafe.SliceData(storage), len(storage)), uint32(capacity)
+	}
+	return strings.Clone(key), uint32(len(key))
+}
+
+// retainBaseReadCacheKeyStorage moves the private key backing into value while
+// an entry waits for its CLOCK token to be consumed or sits on the free list.
+// No caller can observe entry keys, and the shard lock excludes map readers
+// before removal, so a later admission may safely overwrite these bytes.
+func retainBaseReadCacheKeyStorage(entry *baseReadCacheEntry) {
+	if entry.key == "" {
+		return
+	}
+	entry.value = unsafe.Slice(unsafe.StringData(entry.key), int(entry.keyCapacity))
 	entry.key = ""
-	entry.value = nil
+}
+
+func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
+	retainBaseReadCacheKeyStorage(entry)
 	entry.charge = 0
 	entry.version = 0
 	entry.live = false
@@ -586,8 +635,7 @@ func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 		delete(s.entries, key)
 		s.used -= old.charge
 		old.live = false
-		old.key = ""
-		old.value = nil
+		retainBaseReadCacheKeyStorage(old)
 	}
 	s.forgetAdmissionString(key)
 }
