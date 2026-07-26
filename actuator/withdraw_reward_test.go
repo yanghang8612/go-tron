@@ -1,15 +1,50 @@
 package actuator
 
 import (
+	"bytes"
 	"math/big"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestMarshalAccountVoteUsesCanonicalAccountEncoding(t *testing.T) {
+	pb := &corepb.Account{
+		Address:   []byte{0x41, 0x01},
+		Allowance: 123,
+		Votes: []*corepb.Vote{{
+			VoteAddress: []byte{0x41, 0x02},
+			VoteCount:   99,
+		}},
+		Asset:                      map[string]int64{"legacy-z": 9, "legacy-a": 1},
+		AssetV2:                    map[string]int64{"1000002": 2, "1000001": 1},
+		LatestAssetOperationTime:   map[string]int64{"legacy-z": 90, "legacy-a": 10},
+		LatestAssetOperationTimeV2: map[string]int64{"1000002": 20, "1000001": 10},
+		FreeAssetNetUsage:          map[string]int64{"legacy-z": 900, "legacy-a": 100},
+		FreeAssetNetUsageV2:        map[string]int64{"1000002": 200, "1000001": 100},
+	}
+	account := types.NewAccountFromPB(pb)
+	want, err := account.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := marshalAccountVote(account)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("account-vote encoding differs from canonical Account.Marshal\n got %x\nwant %x", got, want)
+	}
+	var decoded corepb.Account
+	if err := proto.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(&decoded, pb) {
+		t.Fatalf("account-vote round trip differs\n got %v\nwant %v", &decoded, pb)
+	}
+}
 
 func TestWithdrawReward_SkipsWhenChangeDelegationOff(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()

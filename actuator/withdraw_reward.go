@@ -161,12 +161,15 @@ func readSnapshotVotes(statedb *state.StateDB, cycle int64, addr common.Address)
 
 // marshalAccountVote serializes a voter's account (votes + allowance) for
 // later recall during the beginCycle+1==endCycle edge-case settlement.
+// Account.Marshal is the canonical deterministic account encoding and uses
+// the direct-map fast path; the generic protobuf encoder reflect-copies every
+// map key/value in otherwise identical account snapshots.
 // Mirrors java-tron's setAccountVote(cycle, addr, account).
 func marshalAccountVote(acct *types.Account) []byte {
 	if acct == nil {
 		return nil
 	}
-	raw, err := proto.Marshal(acct.Proto())
+	raw, err := acct.Marshal()
 	if err != nil {
 		return nil
 	}
