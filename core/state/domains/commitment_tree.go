@@ -747,6 +747,30 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 		branch = &BranchData{}
 	}
 
+	// Once a group narrows to one next nibble, descend directly. This is the
+	// common shape below the first few levels of a deep trie; building a 16-way
+	// counting sort there would only copy the same group into scratch and scan
+	// fifteen empty buckets at every remaining branch.
+	if len(ops) > 0 {
+		nb := pathNibble(ops[0].path, depth)
+		singleBucket := true
+		for i := 1; i < len(ops); i++ {
+			if pathNibble(ops[i].path, depth) != nb {
+				singleBucket = false
+				break
+			}
+		}
+		if singleBucket {
+			if err := t.applyNibble(prefix, depth, branch, nb, ops); err != nil {
+				return nil, err
+			}
+			if branch.childCount() == 0 {
+				return nil, nil
+			}
+			return branch, nil
+		}
+	}
+
 	// Bucket ops by their nibble at this depth via counting sort into one
 	// pooled scratch buffer. Replaces the prior `var buckets [16][]op` +
 	// per-op append, which allocated up to 16 backing arrays per call frame
