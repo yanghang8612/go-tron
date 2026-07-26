@@ -324,8 +324,8 @@ func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing
 	}
 }
 
-func TestBaseReadCache_FlushPreservesReadBeforeWriteProbation(t *testing.T) {
-	c := newBaseReadCache(1 << 20)
+func TestBaseReadCache_FlushAdmitsReadBeforeWriteValue(t *testing.T) {
+	c := newBaseReadCache(1<<20, "frequently-mutated-commitment-")
 	key := []byte("frequently-mutated-commitment-branch")
 
 	// The first durable parent read records frequency evidence without
@@ -335,19 +335,59 @@ func TestBaseReadCache_FlushPreservesReadBeforeWriteProbation(t *testing.T) {
 		t.Fatal("first parent read bypassed probation")
 	}
 
-	// Committing the block must invalidate the old durable generation without
-	// erasing that frequency evidence or directly admitting the written value.
+	// Committing the block is the second observation. It must invalidate the old
+	// durable generation and directly admit the newer canonical value, avoiding
+	// one otherwise-mandatory Pebble read in the next block.
 	c.setFlushed(string(key), []byte("child-v2"))
-	if _, ok, _ := c.getWithEpoch(key); ok {
-		t.Fatal("flush directly admitted a probationary key")
+	if got, ok, _ := c.getWithEpoch(key); !ok || string(got) != "child-v2" {
+		t.Fatalf("flush-admitted value = (%q,%v), want child-v2/true", got, ok)
+	}
+	if got := len(c.shards[baseReadCacheShardIndex(key)].queue); got != 1 {
+		t.Fatalf("flush-admitted queue entries = %d, want 1", got)
+	}
+}
+
+func TestBaseReadCache_WriteOnlyFlushDoesNotDisplaceReadProbation(t *testing.T) {
+	c := newBaseReadCache(1<<20, "read-probation-")
+	hotKey := []byte("read-probation-key")
+	hotFingerprint := baseReadCacheAdmissionFingerprint(hotKey)
+	hotShard := &c.shards[baseReadCacheShardIndex(hotKey)]
+	hotIndex := hotFingerprint & uint64(len(hotShard.admission)-1)
+
+	_, _, epoch := c.getWithEpoch(hotKey)
+	if _, stored := c.setIfEpoch(hotKey, []byte("parent"), epoch); stored {
+		t.Fatal("first parent read bypassed probation")
+	}
+	if hotShard.admission[hotIndex] != hotFingerprint {
+		t.Fatal("parent read did not establish probation")
 	}
 
-	// The next durable-parent read is the second observation and should enter
-	// the resident cache. Before this regression fix every flush cleared the
-	// fingerprint, so a branch modified every block could remain permanently
-	// probationary and hit Pebble forever.
-	_, _, epoch = c.getWithEpoch(key)
-	if got, stored := c.setIfEpoch(key, []byte("parent-v2"), epoch); !stored || string(got) != "parent-v2" {
+	// Find a write-only key that maps to the same payload shard and probation
+	// slot. Its flush must neither be admitted nor replace the read evidence.
+	var writeOnly string
+	for i := 0; i < 1_000_000; i++ {
+		candidate := fmt.Sprintf("read-probation-write-only-%08d", i)
+		fingerprint := baseReadCacheAdmissionFingerprintString(candidate)
+		if baseReadCacheShardIndexString(candidate) == baseReadCacheShardIndex(hotKey) &&
+			fingerprint&uint64(len(hotShard.admission)-1) == hotIndex &&
+			fingerprint != hotFingerprint {
+			writeOnly = candidate
+			break
+		}
+	}
+	if writeOnly == "" {
+		t.Fatal("failed to find colliding write-only key")
+	}
+	c.setFlushed(writeOnly, []byte("metadata"))
+	if _, ok, _ := c.getWithEpoch([]byte(writeOnly)); ok {
+		t.Fatal("write-only flush was admitted")
+	}
+	if hotShard.admission[hotIndex] != hotFingerprint {
+		t.Fatal("write-only flush displaced read probation")
+	}
+
+	_, _, epoch = c.getWithEpoch(hotKey)
+	if got, stored := c.setIfEpoch(hotKey, []byte("parent-v2"), epoch); !stored || string(got) != "parent-v2" {
 		t.Fatalf("second parent read = (%q,%v), want admitted parent-v2", got, stored)
 	}
 }
@@ -365,6 +405,26 @@ func TestBaseReadCache_SetFlushedRejectsLateOldGenerationFill(t *testing.T) {
 	}
 	if _, ok, _ := c.getWithEpoch(key); ok {
 		t.Fatal("uncached flush should invalidate without admitting the key")
+	}
+}
+
+func TestBaseReadCache_FlushAdmissionRejectsLateOldGenerationFill(t *testing.T) {
+	c := newBaseReadCache(1<<20, "racing-read-before-write-")
+	key := []byte("racing-read-before-write-branch")
+	_, _, oldEpoch := c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, []byte("old-parent"), oldEpoch); stored {
+		t.Fatal("first parent read bypassed probation")
+	}
+
+	// A second reader started against the old generation before the canonical
+	// flush admits the replacement. Its late fill must not replace new bytes.
+	_, _, racingEpoch := c.getWithEpoch(key)
+	c.setFlushed(string(key), []byte("new-child"))
+	if _, stored := c.setIfEpoch(key, []byte("late-old-parent"), racingEpoch); stored {
+		t.Fatal("late old-generation fill replaced flush-admitted value")
+	}
+	if got, ok, _ := c.getWithEpoch(key); !ok || string(got) != "new-child" {
+		t.Fatalf("post-race cache = (%q,%v), want new-child/true", got, ok)
 	}
 }
 
@@ -610,6 +670,26 @@ func BenchmarkBaseReadCachePromoteShard(b *testing.B) {
 			}
 		})
 	}
+
+	b.Run("uncached-write-only", func(b *testing.B) {
+		c := newBaseReadCache(64 << 20)
+		b.ReportAllocs()
+		b.ReportMetric(keyCount, "keys/op")
+		b.ResetTimer()
+		for range b.N {
+			c.promoteFlushedShard(writes, nil, 0)
+		}
+	})
+
+	b.Run("uncached-priority-namespace", func(b *testing.B) {
+		c := newBaseReadCache(64<<20, "commitment-branch-")
+		b.ReportAllocs()
+		b.ReportMetric(keyCount, "keys/op")
+		b.ResetTimer()
+		for range b.N {
+			c.promoteFlushedShard(writes, nil, 0)
+		}
+	})
 }
 
 func BenchmarkBaseReadCacheHit(b *testing.B) {

@@ -210,6 +210,53 @@ func TestCommitmentSplitReadLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommitmentSplitReadThenFlushCompletesAdmission(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	prefix := bytes.Repeat([]byte{0x0d}, 48)
+	oldValue := []byte("old-branch")
+	newValue := []byte("new-branch")
+	if err := rawdb.WriteCommitmentBranch(disk, prefix, oldValue); err != nil {
+		t.Fatal(err)
+	}
+	base := &countingKeyValueReader{KeyValueReader: disk}
+	buf := New(base)
+	buf.SetBaseReadCacheSize(1<<20, rawdb.CommitmentBranchKeyPrefix)
+
+	read := func(want []byte) {
+		t.Helper()
+		got, found, err := rawdb.ReadCommitmentBranchNoCopy(buf, prefix)
+		if err != nil || !found || !bytes.Equal(got, want) {
+			t.Fatalf("ReadCommitmentBranchNoCopy = (%q,%v,%v), want (%q,true,nil)", got, found, err, want)
+		}
+	}
+
+	// One durable read establishes probation but does not retain the old value.
+	read(oldValue)
+	if base.gets != 1 {
+		t.Fatalf("first parent reads = %d, want 1", base.gets)
+	}
+
+	// The canonical write is the second observation. Promotion must retain its
+	// newer immutable bytes so the next block does not perform the old policy's
+	// second Pebble read merely to complete admission.
+	buf.BeginBlock(bufHash(1), 1)
+	h, _ := buf.NewestInflight()
+	view := buf.ViewLayer(h)
+	if err := rawdb.WriteCommitmentBranch(view, prefix, newValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.CommitInflight(h); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.FlushUpTo(1, disk); err != nil {
+		t.Fatal(err)
+	}
+	read(newValue)
+	if base.gets != 1 {
+		t.Fatalf("post-flush parent reads = %d, want 1", base.gets)
+	}
+}
+
 func TestCommitmentSplitViewReportsTransientBaseAndStableCacheOverlay(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	prefix := bytes.Repeat([]byte{0x0b}, 32)

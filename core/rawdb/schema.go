@@ -8,6 +8,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+// CommitmentBranchKeyPrefix is the physical schema namespace for persisted
+// latest-domain commitment branches. It is exported as an immutable string so
+// layered caches can target branch-specific policies without duplicating rawdb
+// schema bytes or importing a mutable []byte.
+const CommitmentBranchKeyPrefix = "state-commitment-branch-v1-"
+
 var (
 	headBlockKey             = []byte("LastBlock")
 	headSolidBlockKey        = []byte("LastSolidBlock")
@@ -267,7 +273,7 @@ var (
 	//
 	// Key:   state-commitment-branch-v1- || hex-trie prefix bytes
 	// Value: BranchData.Encode() bytes
-	stateCommitmentBranchPrefix = []byte("state-commitment-branch-v1-")
+	stateCommitmentBranchPrefix = []byte(CommitmentBranchKeyPrefix)
 
 	// stateCommitmentEngineStateKey is the singleton row that persists the
 	// rewindable staged-engine state (opaque bytes; the engine defines the

@@ -326,13 +326,15 @@ func (b *Buffer) loadReadView() *bufferReadView {
 // GetNoCopyCached. It must be called before the buffer begins concurrent use;
 // passing zero disables the cache. Flat-latest and commitment-branch accessors
 // opt into this API because both consume or defensively copy returned bytes.
-func (b *Buffer) SetBaseReadCacheSize(sizeBytes int) {
+// An optional schema prefix lets a successful flush count as the second cache
+// observation for read-before-write rows in that namespace.
+func (b *Buffer) SetBaseReadCacheSize(sizeBytes int, flushAdmissionPrefix ...string) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	old := b.baseReadCache
-	b.baseReadCache = newBaseReadCache(sizeBytes)
+	b.baseReadCache = newBaseReadCache(sizeBytes, flushAdmissionPrefix...)
 	b.publishReadViewLocked()
 	b.mu.Unlock()
 	if old != nil {

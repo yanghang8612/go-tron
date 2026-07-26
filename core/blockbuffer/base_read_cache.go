@@ -2,6 +2,7 @@ package blockbuffer
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -58,6 +59,10 @@ const baseReadCacheMaxInvalidationSlots = 1 << 16
 type baseReadCache struct {
 	shards        [baseReadCacheShardCount]baseReadCacheShard
 	invalidations []atomic.Uint64
+	// flushAdmissionPrefix narrows read-before-write admission to a schema
+	// whose successful canonical writes are expected to be read again soon.
+	// Ordinary write-only metadata never pays the full-key probation hash.
+	flushAdmissionPrefix string
 	// version advances once for every durable-base flush/cache reset. Entries
 	// retain the version at which they became valid, allowing a point-in-time
 	// commitment session to reuse old hot entries while rejecting replacements
@@ -106,11 +111,14 @@ type baseReadCacheEntry struct {
 	referenced atomic.Bool
 }
 
-func newBaseReadCache(sizeBytes int) *baseReadCache {
+func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCache {
 	if sizeBytes <= 0 {
 		return nil
 	}
 	c := &baseReadCache{}
+	if len(flushAdmissionPrefix) > 0 {
+		c.flushAdmissionPrefix = flushAdmissionPrefix[0]
+	}
 	c.invalidations = make([]atomic.Uint64, baseReadCacheInvalidationSlots(sizeBytes))
 	perShard := sizeBytes / baseReadCacheShardCount
 	remainder := sizeBytes % baseReadCacheShardCount
@@ -252,11 +260,11 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 }
 
 // setFlushed refreshes an already-cached key from a successfully flushed
-// committed layer. A key absent from the cache is invalidated but not admitted;
-// otherwise unrelated buffered metadata would churn through the cache on every
-// canonical flush. Its probation fingerprint is deliberately retained: a key
-// read from the durable parent and then modified in the same block is exactly
-// the hot read-before-write pattern the two-hit admission stage should learn.
+// committed layer. A key absent from the cache is admitted only when a prior
+// durable read left the same key's probation fingerprint. Thus read-then-write
+// counts as the two observations required by admission, while unrelated
+// buffered metadata (which has no read-side fingerprint) still cannot churn
+// through the cache on every canonical flush.
 // Keys never read through the cache have no fingerprint and remain unadmitted.
 // Cached replacements are copied into exact cache-owned storage: commitment
 // sibling writes arena-pack hundreds of branch values, so retaining one small
@@ -292,6 +300,28 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, value []byte) {
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	old, cached := s.entries[key]
+	if !cached && charge <= s.limit && c.flushAdmissionPrefix != "" &&
+		strings.HasPrefix(key, c.flushAdmissionPrefix) && s.admitObservedString(key) {
+		// The first durable read already paid for this value and established
+		// frequency evidence. The successful canonical flush supplies the
+		// second observation and a newer immutable value, so retain it now
+		// instead of forcing the next block to read Pebble once more merely to
+		// complete admission. Clone the layer-owned key/value: sibling batches
+		// may share large arenas which are released after layer promotion.
+		stableKey := strings.Clone(key)
+		entry := &baseReadCacheEntry{
+			key:     stableKey,
+			value:   cloneBaseReadCacheValue(value),
+			charge:  charge,
+			version: c.version.Load(),
+			live:    true,
+		}
+		s.entries[stableKey] = entry
+		s.queue = append(s.queue, entry)
+		s.used += charge
+		s.evict()
+		return
+	}
 	if cached && charge <= s.limit {
 		// Preserve the stable entry and its CLOCK queue pointer. This is a value
 		// refresh, not a new admission; appending one pointer per block would grow
@@ -541,6 +571,20 @@ func (s *baseReadCacheShard) admit(key []byte) bool {
 	}
 	s.admission[index] = fingerprint
 	return false
+}
+
+// admitObservedString admits key only when an earlier read already populated
+// its probation slot. Unlike admit, a miss does not install the fingerprint:
+// calling this from flush promotion must not let write-only metadata displace
+// evidence collected by durable reads.
+func (s *baseReadCacheShard) admitObservedString(key string) bool {
+	fingerprint := baseReadCacheAdmissionFingerprintString(key)
+	index := fingerprint & uint64(len(s.admission)-1)
+	if s.admission[index] != fingerprint {
+		return false
+	}
+	s.admission[index] = 0
+	return true
 }
 
 func (s *baseReadCacheShard) forgetAdmissionString(key string) {
