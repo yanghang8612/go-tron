@@ -504,14 +504,15 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 	}
 
 	slot.prepareLogs(len(result.Logs))
-	for i, l := range result.Logs {
+	for i := range result.Logs {
+		l := &result.Logs[i]
 		logSlot := slot.logs[i]
 		pbLog := &logSlot.log
 		*pbLog = corepb.TransactionInfo_Log{
 			Address: logSlot.setAddress(l.Address),
 			Data:    l.Data,
 		}
-		pbLog.Topics = logSlot.setTopics(l.Topics)
+		pbLog.Topics = logSlot.setTopics(l)
 		slot.logPointers[i] = pbLog
 	}
 	if len(slot.logPointers) > 0 {
@@ -590,17 +591,20 @@ func (slot *transactionInfoLogSlot) setAddress(addr tcommon.Address) []byte {
 	return slot.address[:tcommon.AddressLength:tcommon.AddressLength]
 }
 
-func (slot *transactionInfoLogSlot) setTopics(topics [][]byte) [][]byte {
+func (slot *transactionInfoLogSlot) setTopics(log *vm.Log) [][]byte {
+	topicCount := log.TopicCount()
 	oldLen := len(slot.topics)
-	if cap(slot.topics) < len(topics) {
-		slot.topics = make([][]byte, len(topics))
+	if cap(slot.topics) < topicCount {
+		slot.topics = make([][]byte, topicCount)
 	} else {
-		if len(topics) < oldLen {
-			clear(slot.topics[len(topics):oldLen])
+		if topicCount < oldLen {
+			clear(slot.topics[topicCount:oldLen])
 		}
-		slot.topics = slot.topics[:len(topics)]
+		slot.topics = slot.topics[:topicCount]
 	}
-	copy(slot.topics, topics)
+	for i := range topicCount {
+		slot.topics[i] = log.Topic(i)
+	}
 	if len(slot.topics) > 0 {
 		return slot.topics[:len(slot.topics):len(slot.topics)]
 	}

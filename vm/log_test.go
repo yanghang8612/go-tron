@@ -10,8 +10,25 @@ import (
 
 var logBenchmarkSink Log
 
+func TestLogTopicAccess(t *testing.T) {
+	legacy := &Log{Topics: [][]byte{{0x01}, {0x02}}}
+	if legacy.TopicCount() != 2 || legacy.Topic(1)[0] != 0x02 {
+		t.Fatalf("legacy topics not preserved: %#v", legacy.Topics)
+	}
+
+	payload := make([]byte, 64)
+	payload[0], payload[32] = 0x03, 0x04
+	compact := &Log{compactTopics: &compactLogTopics{bytes: payload}}
+	if compact.TopicCount() != 2 || compact.Topic(0)[0] != 0x03 || compact.Topic(1)[0] != 0x04 {
+		t.Fatalf("compact topics not preserved: %x %x", compact.Topic(0), compact.Topic(1))
+	}
+	if cap(compact.Topic(0)) != 32 {
+		t.Fatalf("topic capacity = %d, want 32", cap(compact.Topic(0)))
+	}
+}
+
 func BenchmarkLogOpcode(b *testing.B) {
-	for _, topicCount := range []int{0, 1, 4} {
+	for _, topicCount := range []int{0, 1, 2, 3, 4} {
 		b.Run(fmt.Sprintf("topics_%d", topicCount), func(b *testing.B) {
 			tvm := new(TVM)
 			interpreter := NewInterpreter(tvm, TVMConfig{})

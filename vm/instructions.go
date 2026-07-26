@@ -842,13 +842,15 @@ func makeLog(topicCount int) executionFunc {
 		// each view so appending to one field cannot overwrite its neighbor.
 		topicBytes := topicCount * 32
 		payload := make([]byte, topicBytes+int(sz))
-		topics := make([][]byte, topicCount)
+		var topics *compactLogTopics
+		if topicBytes > 0 {
+			topics = &compactLogTopics{bytes: payload[:topicBytes:topicBytes]}
+		}
 		for i := 0; i < topicCount; i++ {
 			t := stack.pop()
 			b := t.Bytes32()
 			start := i * 32
-			topics[i] = payload[start : start+32 : start+32]
-			copy(topics[i], b[:])
+			copy(topics.bytes[start:start+32], b[:])
 		}
 
 		var data []byte
@@ -858,9 +860,9 @@ func makeLog(topicCount int) executionFunc {
 		}
 
 		interpreter.tvm.Logs = append(interpreter.tvm.Logs, Log{
-			Address: contract.Address,
-			Topics:  topics,
-			Data:    data,
+			Address:       contract.Address,
+			Data:          data,
+			compactTopics: topics,
 		})
 
 		return nil, nil

@@ -25,7 +25,7 @@ func TestMakeLogCapturesEvents(t *testing.T) {
 	topic[1] = 0xCD
 
 	code := []byte{
-		0x64,                     // PUSH5
+		0x64,                    // PUSH5
 		'h', 'e', 'l', 'l', 'o', // "hello"
 		0x60, 0x00, // PUSH1 0
 		0x52, // MSTORE
@@ -55,11 +55,12 @@ func TestMakeLogCapturesEvents(t *testing.T) {
 	if log.Address != contractAddr {
 		t.Fatalf("log address: got %x, want %x", log.Address, contractAddr)
 	}
-	if len(log.Topics) != 1 {
-		t.Fatalf("expected 1 topic, got %d", len(log.Topics))
+	if log.TopicCount() != 1 {
+		t.Fatalf("expected 1 topic, got %d", log.TopicCount())
 	}
-	if log.Topics[0][0] != 0xAB || log.Topics[0][1] != 0xCD {
-		t.Fatalf("topic mismatch: got %x", log.Topics[0])
+	gotTopic := log.Topic(0)
+	if gotTopic[0] != 0xAB || gotTopic[1] != 0xCD {
+		t.Fatalf("topic mismatch: got %x", gotTopic)
 	}
 	if string(log.Data) != "hello" {
 		t.Fatalf("data: got %q, want %q", log.Data, "hello")

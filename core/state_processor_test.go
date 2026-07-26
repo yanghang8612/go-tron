@@ -55,6 +55,53 @@ func BenchmarkTransactionInfoLogBuild(b *testing.B) {
 	}
 }
 
+func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
+	statedb := newTestState(t)
+	caller := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x80)
+	statedb.GetOrCreateAccount(caller)
+	// Push topic 4 through topic 1, followed by zero data size and offset, so
+	// LOG4 pops the topics back in canonical topic 1 through topic 4 order.
+	statedb.SetCode(contractAddr, []byte{
+		0x60, 0x04,
+		0x60, 0x03,
+		0x60, 0x02,
+		0x60, 0x01,
+		0x60, 0x00,
+		0x60, 0x00,
+		0xa4,
+		0x00,
+	})
+
+	tvm := vm.NewTVM(statedb, nil, caller, 1, 1000, tcommon.Address{}, 1, vm.TVMConfig{})
+	_, _, err := tvm.Call(caller, contractAddr, nil, 1_000_000, 0)
+	if err != nil {
+		t.Fatalf("execute LOG4: %v", err)
+	}
+	if len(tvm.Logs) != 1 {
+		t.Fatalf("opcode logs = %d, want 1", len(tvm.Logs))
+	}
+	result := &actuator.Result{
+		ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+		Logs:        tvm.Logs,
+	}
+	vm.ReleaseTVM(tvm)
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	if len(info.Log) != 1 {
+		t.Fatalf("receipt logs = %d, want 1", len(info.Log))
+	}
+	if len(info.Log[0].Topics) != 4 {
+		t.Fatalf("receipt topics = %d, want 4", len(info.Log[0].Topics))
+	}
+	for i, topic := range info.Log[0].Topics {
+		if len(topic) != 32 || topic[31] != byte(i+1) {
+			t.Fatalf("topic %d = %x, want 32-byte value %d", i, topic, i+1)
+		}
+	}
+}
+
 func newTestState(t *testing.T) *state.StateDB {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
