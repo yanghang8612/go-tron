@@ -2,8 +2,35 @@ package p2p
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
+
+var unwrapPayloadBenchmarkSink []byte
+
+func BenchmarkUnwrapPostHandshakeSnappy(b *testing.B) {
+	for _, size := range []int{1024, 64 << 10} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			payload := make([]byte, size)
+			wrapped, err := WrapPostHandshake(MsgBlock, payload)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for b.Loop() {
+				_, got, err := UnwrapPostHandshake(wrapped)
+				if err != nil {
+					b.Fatal(err)
+				}
+				unwrapPayloadBenchmarkSink = got
+			}
+		})
+	}
+}
 
 func TestCompressRoundtripUncompressed(t *testing.T) {
 	payload := []byte("hello world")
@@ -76,5 +103,43 @@ func TestUnwrapPayloadOwnsFrameBytes(t *testing.T) {
 	clear(wrapped)
 	if code != 0x20 || !bytes.Equal(got, want) {
 		t.Fatalf("payload changed after frame reuse: code=%#x got=%q want=%q", code, got, want)
+	}
+}
+
+func TestCanonicalSnappyFrameFastPathAndFallback(t *testing.T) {
+	want := bytes.Repeat([]byte{0xab}, 10_000)
+	wrapped, err := WrapPostHandshake(MsgBlock, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed, ok := canonicalSnappyFrameData(wrapped)
+	if !ok {
+		t.Fatal("normal snappy wrapper missed the canonical fast path")
+	}
+
+	// Unknown fields are valid protobuf and must use the generated-decoder
+	// fallback rather than being silently accepted by the narrow fast path.
+	extended := protowire.AppendTag(append([]byte(nil), wrapped...), 100, protowire.VarintType)
+	extended = protowire.AppendVarint(extended, 7)
+	if _, ok := canonicalSnappyFrameData(extended); ok {
+		t.Fatal("extended wrapper incorrectly accepted as canonical")
+	}
+	code, got, err := UnwrapPostHandshake(extended)
+	if err != nil || code != MsgBlock || !bytes.Equal(got, want) {
+		t.Fatalf("fallback wrapper decode = code %#x payload %d err %v", code, len(got), err)
+	}
+
+	// A valid field-order permutation likewise falls back and retains protobuf
+	// compatibility. compressed aliases wrapped only while this test builds it.
+	reordered := protowire.AppendTag(nil, 2, protowire.BytesType)
+	reordered = protowire.AppendBytes(reordered, compressed)
+	reordered = protowire.AppendTag(reordered, 1, protowire.VarintType)
+	reordered = protowire.AppendVarint(reordered, 1)
+	if _, ok := canonicalSnappyFrameData(reordered); ok {
+		t.Fatal("reordered wrapper incorrectly accepted as canonical")
+	}
+	code, got, err = UnwrapPostHandshake(reordered)
+	if err != nil || code != MsgBlock || !bytes.Equal(got, want) {
+		t.Fatalf("reordered wrapper decode = code %#x payload %d err %v", code, len(got), err)
 	}
 }
