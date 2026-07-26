@@ -68,14 +68,20 @@ func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 }
 
 func TestBaseReadCache_RecyclesPrivateKeyStorage(t *testing.T) {
-	var shard baseReadCacheShard
+	shard := baseReadCacheShard{limit: 1 << 20}
 	firstKey := strings.Repeat("a", 64)
-	entry := shard.acquireEntryString(firstKey, []byte("first-value"), 128, 1)
+	firstValue := bytes.Repeat([]byte{0x11}, 128)
+	entry := shard.acquireEntryString(firstKey, firstValue, false, 1)
 	firstStorage := unsafe.StringData(entry.key)
+	firstValueStorage := unsafe.SliceData(entry.value)
 	shard.recycleEntry(entry)
+	if got := shard.freeValueBytes; got != cap(entry.value) {
+		t.Fatalf("free value bytes = %d, want %d", got, cap(entry.value))
+	}
 
 	secondKey := strings.Repeat("b", 48)
-	reused := shard.acquireEntryString(secondKey, []byte("second-value"), 112, 2)
+	secondValue := bytes.Repeat([]byte{0x22}, 96)
+	reused := shard.acquireEntryString(secondKey, secondValue, false, 2)
 	if reused != entry {
 		t.Fatal("recycled entry metadata was not reused")
 	}
@@ -85,17 +91,47 @@ func TestBaseReadCache_RecyclesPrivateKeyStorage(t *testing.T) {
 	if reused.keyCapacity != uint32(len(firstKey)) {
 		t.Fatalf("recycled key capacity = %d, want %d", reused.keyCapacity, len(firstKey))
 	}
-	if reused.key != secondKey || string(reused.value) != "second-value" {
-		t.Fatalf("reused entry = (%q,%q), want (%q,%q)", reused.key, reused.value, secondKey, "second-value")
+	if got := unsafe.SliceData(reused.value); got != firstValueStorage {
+		t.Fatalf("recycled value storage pointer = %p, want %p", got, firstValueStorage)
+	}
+	if reused.key != secondKey || !bytes.Equal(reused.value, secondValue) {
+		t.Fatalf("reused entry key/value mismatch: key=%q valueBytes=%d", reused.key, len(reused.value))
+	}
+	if got, want := reused.charge, int(reused.keyCapacity)+cap(reused.value)+baseReadCacheEntryOverhead; got != want {
+		t.Fatalf("reused entry charge = %d, want physical capacity charge %d", got, want)
+	}
+	if shard.freeValueBytes != 0 {
+		t.Fatalf("borrowed value storage remained charged to free pool: %d", shard.freeValueBytes)
 	}
 	shard.recycleEntry(reused)
 	thirdKey := strings.Repeat("c", 60)
-	reused = shard.acquireEntryBytes([]byte(thirdKey), nil, 124, 3)
+	reused = shard.acquireEntryBytes([]byte(thirdKey), nil, true, 3)
 	if got := unsafe.StringData(reused.key); got != firstStorage {
 		t.Fatalf("capacity lost after shorter key: pointer = %p, want %p", got, firstStorage)
 	}
 	if reused.key != thirdKey {
 		t.Fatalf("byte-source reused key = %q, want %q", reused.key, thirdKey)
+	}
+}
+
+func TestBaseReadCache_RecycledValueStorageIsBoundedAndUnexposed(t *testing.T) {
+	shard := baseReadCacheShard{limit: 8 << 10}
+	exposed := shard.acquireEntryString("exposed-key", bytes.Repeat([]byte{0x31}, 512), false, 1)
+	exposed.exposed.Store(true)
+	shard.recycleEntry(exposed)
+	if exposed.value != nil || shard.freeValueBytes != 0 {
+		t.Fatalf("exposed value entered free pool: valueBytes=%d freeBytes=%d", len(exposed.value), shard.freeValueBytes)
+	}
+
+	first := shard.acquireEntryString("first-key", bytes.Repeat([]byte{0x41}, 768), false, 2)
+	second := shard.acquireEntryString("second-key", bytes.Repeat([]byte{0x42}, 768), false, 3)
+	shard.recycleEntry(first)
+	shard.recycleEntry(second)
+	if got, want := shard.freeValueBytes, 768; got != want {
+		t.Fatalf("bounded free value bytes = %d, want %d", got, want)
+	}
+	if second.value != nil {
+		t.Fatal("value exceeding the shard free budget was retained")
 	}
 }
 
@@ -642,8 +678,8 @@ func TestBaseReadCache_InvalidationReleasesQueuedEntryPayload(t *testing.T) {
 		t.Fatal("test setup did not retain one stable queued entry")
 	}
 	c.del(key)
-	if entry.live || entry.key != "" || len(entry.value) != len(key) || entry.keyCapacity != uint32(len(key)) {
-		t.Fatalf("invalidated queued entry retained live=%v key=%q storageBytes=%d storageCap=%d", entry.live, entry.key, len(entry.value), entry.keyCapacity)
+	if entry.live || entry.key != string(key) || entry.value != nil || entry.keyCapacity != uint32(len(key)) {
+		t.Fatalf("invalidated queued entry retained live=%v key=%q valueBytes=%d keyCap=%d", entry.live, entry.key, len(entry.value), entry.keyCapacity)
 	}
 	if len(s.queue) != 1 || s.queue[0] != entry {
 		t.Fatal("test requires the cleared entry to remain as a stale queue pointer")
@@ -827,21 +863,54 @@ func BenchmarkBaseReadCachePromoteShard(b *testing.B) {
 	})
 }
 
-func BenchmarkBaseReadCacheRecycledEntryKey(b *testing.B) {
+func BenchmarkBaseReadCacheRecycledEntryStorage(b *testing.B) {
 	keys := [...]string{
 		strings.Repeat("a", 96),
 		strings.Repeat("b", 80),
 	}
-	var shard baseReadCacheShard
-	entry := shard.acquireEntryString(keys[0], nil, len(keys[0])+baseReadCacheEntryOverhead, 1)
+	values := [...][]byte{
+		bytes.Repeat([]byte{0xa1}, 1024),
+		bytes.Repeat([]byte{0xb2}, 768),
+	}
+	shard := baseReadCacheShard{limit: 1 << 20}
+	entry := shard.acquireEntryString(keys[0], values[0], false, 1)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
 		shard.recycleEntry(entry)
-		key := keys[i&1]
-		entry = shard.acquireEntryString(key, nil, len(key)+baseReadCacheEntryOverhead, uint64(i+2))
+		index := i & 1
+		entry = shard.acquireEntryString(keys[index], values[index], false, uint64(i+2))
 	}
 	baseReadCacheEntryBenchmarkSink = entry
+}
+
+func BenchmarkBaseReadCacheAdmissionChurn(b *testing.B) {
+	const keyCount = 256
+	keys := make([]string, 0, keyCount)
+	keyBytes := make([][]byte, 0, keyCount)
+	for i := 0; len(keys) < keyCount; i++ {
+		key := fmt.Sprintf("commitment-branch-%08x-%08x", i*2654435761, i)
+		if baseReadCacheShardIndexString(key) != 0 {
+			continue
+		}
+		keys = append(keys, key)
+		keyBytes = append(keyBytes, []byte(key))
+	}
+	value := bytes.Repeat([]byte{0x5c}, 512)
+	c := newBaseReadCache(layerShardCount*4096, "commitment-")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		index := i % keyCount
+		_, found, epoch := c.getWithEpoch(keyBytes[index])
+		if found {
+			b.Fatal("churn key unexpectedly remained resident for a full cycle")
+		}
+		if c.storeIfEpoch(keyBytes[index], value, epoch) {
+			b.Fatal("first churn sighting bypassed probation")
+		}
+		c.setFlushedAt(keys[index], value, 0)
+	}
 }
 
 func BenchmarkBaseReadCacheHit(b *testing.B) {

@@ -25,6 +25,15 @@ const baseReadCacheEntryOverhead = 64
 // retaining an unbounded historical high-water mark after the cache empties.
 const baseReadCacheMaxFreeEntries = 2048
 
+// Recycle only modest, commonly sized unexposed values and keep their total
+// backing below one eighth of each shard's live payload limit. This makes the
+// allocation cache useful for commitment branches without letting a historical
+// high-water mark silently double the configured base-cache budget.
+const (
+	baseReadCacheMaxFreeValueSize       = 16 << 10
+	baseReadCacheFreeValueBudgetDivisor = 8
+)
+
 // baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
 // history per shard. The history stores fingerprints only (no key/value
 // objects), so a 128 MiB or larger cache spends at most 1 MiB across all 16
@@ -85,6 +94,7 @@ type baseReadCacheShard struct {
 	// cleared entry queued, so it is deliberately not linked here at that point.
 	freeEntries    *baseReadCacheEntry
 	freeEntryCount int
+	freeValueBytes int
 	// admission is a direct-mapped fingerprint table. A durable miss is
 	// admitted only when the same fingerprint is observed twice without being
 	// displaced. Commitment sync walks a large number of cold branches once,
@@ -105,9 +115,10 @@ type baseReadCacheEpoch struct {
 }
 
 type baseReadCacheEntry struct {
-	// key is the same immutable string used by entries. Keeping it on the
-	// stable entry lets the CLOCK queue retain only one pointer instead of a
-	// second string header plus generation for every resident row.
+	// key is the same immutable string used by entries. Keeping it on the stable
+	// entry lets the CLOCK queue retain only one pointer instead of a second
+	// string header plus generation for every resident row. Once removed from
+	// the map, the private backing remains on recycled metadata for the next key.
 	key string
 	// A nil value is the durable-miss sentinel. Present empty values are stored
 	// as a non-nil zero-length slice by cloneBaseReadCacheValue, so callers
@@ -373,21 +384,18 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 		s.mu.Unlock()
 		return value, false
 	}
-	var v []byte
-	if !missing {
-		v = cloneBaseReadCacheValue(value)
-	}
-	entry := s.acquireEntryBytes(key, v, charge, c.version.Load())
-	if expose && v != nil {
+	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
+	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}
+	storedValue := entry.value
 	s.entries[entry.key] = entry
 	s.queue = append(s.queue, entry)
-	s.used += charge
+	s.used += entry.charge
 	s.evict()
 	s.compactIfSparse()
 	s.mu.Unlock()
-	return v, true
+	return storedValue, true
 }
 
 // setFlushed refreshes an already-cached key from a successfully flushed
@@ -439,10 +447,10 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// instead of forcing the next block to read Pebble once more merely to
 		// complete admission. Clone the layer-owned key/value: sibling batches
 		// may share large arenas which are released after layer promotion.
-		entry := s.acquireEntryString(key, cloneBaseReadCacheValue(value), charge, c.version.Load())
+		entry := s.acquireEntryString(key, value, false, c.version.Load())
 		s.entries[entry.key] = entry
 		s.queue = append(s.queue, entry)
-		s.used += charge
+		s.used += entry.charge
 		s.evict()
 		return
 	}
@@ -472,17 +480,17 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			}
 			old.value = cloneBaseReadCacheValue(value)
 			old.exposed.Store(false)
+			newCharge := int(old.keyCapacity) + cap(old.value) + baseReadCacheEntryOverhead
+			s.used += newCharge - old.charge
+			old.charge = newCharge
 		}
-		s.used += charge - old.charge
-		old.charge = charge
 		old.version = c.version.Load()
 		s.evict()
 	} else {
 		if cached {
 			delete(s.entries, key)
 			s.used -= old.charge
-			old.live = false
-			retainBaseReadCacheKeyStorage(old)
+			retireBaseReadCacheEntry(old)
 		}
 	}
 }
@@ -520,6 +528,18 @@ func cloneBaseReadCacheValue(value []byte) []byte {
 	return storage
 }
 
+func cloneBaseReadCacheValueInto(value, storage []byte, maxCapacity int) []byte {
+	if len(value) == 0 {
+		return []byte{}
+	}
+	if len(value) <= cap(storage) && cap(storage) <= maxCapacity {
+		storage = storage[:len(value)]
+		copy(storage, value)
+		return storage
+	}
+	return cloneBaseReadCacheValue(value)
+}
+
 func (s *baseReadCacheShard) takeEntry() *baseReadCacheEntry {
 	entry := s.freeEntries
 	if entry == nil {
@@ -527,28 +547,50 @@ func (s *baseReadCacheShard) takeEntry() *baseReadCacheEntry {
 	}
 	s.freeEntries = entry.nextFree
 	s.freeEntryCount--
+	s.freeValueBytes -= cap(entry.value)
 	entry.nextFree = nil
 	return entry
 }
 
-func (s *baseReadCacheShard) acquireEntryBytes(key []byte, value []byte, charge int, version uint64) *baseReadCacheEntry {
+func (s *baseReadCacheShard) acquireEntryBytes(key, value []byte, missing bool, version uint64) *baseReadCacheEntry {
 	entry := s.takeEntry()
-	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyBytes(key, entry.value)
-	entry.value = value
-	entry.charge = charge
+	keyStorage := baseReadCacheEntryKeyStorage(entry)
+	valueStorage := entry.value
+	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyBytes(key, keyStorage)
+	if missing {
+		entry.value = nil
+	} else {
+		maxValueCapacity := s.limit - int(entry.keyCapacity) - baseReadCacheEntryOverhead
+		entry.value = cloneBaseReadCacheValueInto(value, valueStorage, maxValueCapacity)
+	}
+	entry.charge = int(entry.keyCapacity) + cap(entry.value) + baseReadCacheEntryOverhead
 	entry.version = version
 	entry.live = true
 	return entry
 }
 
-func (s *baseReadCacheShard) acquireEntryString(key string, value []byte, charge int, version uint64) *baseReadCacheEntry {
+func (s *baseReadCacheShard) acquireEntryString(key string, value []byte, missing bool, version uint64) *baseReadCacheEntry {
 	entry := s.takeEntry()
-	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyString(key, entry.value)
-	entry.value = value
-	entry.charge = charge
+	keyStorage := baseReadCacheEntryKeyStorage(entry)
+	valueStorage := entry.value
+	entry.key, entry.keyCapacity = cloneBaseReadCacheKeyString(key, keyStorage)
+	if missing {
+		entry.value = nil
+	} else {
+		maxValueCapacity := s.limit - int(entry.keyCapacity) - baseReadCacheEntryOverhead
+		entry.value = cloneBaseReadCacheValueInto(value, valueStorage, maxValueCapacity)
+	}
+	entry.charge = int(entry.keyCapacity) + cap(entry.value) + baseReadCacheEntryOverhead
 	entry.version = version
 	entry.live = true
 	return entry
+}
+
+func baseReadCacheEntryKeyStorage(entry *baseReadCacheEntry) []byte {
+	if entry.key == "" {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(entry.key), int(entry.keyCapacity))
 }
 
 func cloneBaseReadCacheKeyBytes(key, storage []byte) (string, uint32) {
@@ -577,20 +619,23 @@ func cloneBaseReadCacheKeyString(key string, storage []byte) (string, uint32) {
 	return strings.Clone(key), uint32(len(key))
 }
 
-// retainBaseReadCacheKeyStorage moves the private key backing into value while
-// an entry waits for its CLOCK token to be consumed or sits on the free list.
-// No caller can observe entry keys, and the shard lock excludes map readers
-// before removal, so a later admission may safely overwrite these bytes.
-func retainBaseReadCacheKeyStorage(entry *baseReadCacheEntry) {
-	if entry.key == "" {
-		return
-	}
-	entry.value = unsafe.Slice(unsafe.StringData(entry.key), int(entry.keyCapacity))
-	entry.key = ""
+// retireBaseReadCacheEntry leaves the private key backing available for later
+// metadata reuse but releases the value immediately. Explicit invalidation can
+// leave a stale CLOCK token queued for a while, so it must not retain payloads.
+func retireBaseReadCacheEntry(entry *baseReadCacheEntry) {
+	entry.value = nil
+	entry.live = false
+	entry.exposed.Store(false)
+	entry.referenced.Store(false)
 }
 
 func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
-	retainBaseReadCacheKeyStorage(entry)
+	retainValue := entry.live && entry.value != nil && !entry.exposed.Load() &&
+		cap(entry.value) <= baseReadCacheMaxFreeValueSize &&
+		s.freeValueBytes+cap(entry.value) <= s.limit/baseReadCacheFreeValueBudgetDivisor
+	if !retainValue {
+		entry.value = nil
+	}
 	entry.charge = 0
 	entry.version = 0
 	entry.live = false
@@ -598,8 +643,12 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.referenced.Store(false)
 	entry.nextFree = nil
 	if s.freeEntryCount >= baseReadCacheMaxFreeEntries {
+		entry.key = ""
+		entry.keyCapacity = 0
+		entry.value = nil
 		return
 	}
+	s.freeValueBytes += cap(entry.value)
 	entry.nextFree = s.freeEntries
 	s.freeEntries = entry
 	s.freeEntryCount++
@@ -634,8 +683,7 @@ func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 	if old, ok := s.entries[key]; ok {
 		delete(s.entries, key)
 		s.used -= old.charge
-		old.live = false
-		retainBaseReadCacheKeyStorage(old)
+		retireBaseReadCacheEntry(old)
 	}
 	s.forgetAdmissionString(key)
 }
@@ -662,6 +710,7 @@ func (c *baseReadCache) clear() {
 		s.used = 0
 		s.freeEntries = nil
 		s.freeEntryCount = 0
+		s.freeValueBytes = 0
 		s.mu.Unlock()
 	}
 	c.advanceAllInvalidations()
