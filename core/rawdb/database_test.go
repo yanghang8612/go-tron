@@ -42,3 +42,34 @@ func TestNewPebbleDB_Smoke(t *testing.T) {
 		t.Fatal("key still present after Delete")
 	}
 }
+
+func TestNewPebbleDBReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	writable, err := NewPebbleDB(dir, 16, 16)
+	if err != nil {
+		t.Fatalf("NewPebbleDB: %v", err)
+	}
+	key, value := []byte("key"), []byte("value")
+	if err := writable.Put(key, value); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable: %v", err)
+	}
+
+	readonly, err := NewPebbleDBReadOnly(dir, 16, 16)
+	if err != nil {
+		t.Fatalf("NewPebbleDBReadOnly: %v", err)
+	}
+	defer readonly.Close()
+	got, err := readonly.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Get = %q, want %q", got, value)
+	}
+	if err := readonly.Put([]byte("forbidden"), []byte("write")); err == nil {
+		t.Fatal("Put on read-only database succeeded")
+	}
+}

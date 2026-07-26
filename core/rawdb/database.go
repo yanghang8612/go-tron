@@ -52,6 +52,19 @@ func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOpti
 	return pebbledb.New(path, cache, handles, "", false, tune)
 }
 
+// NewPebbleDBReadOnly opens an existing Pebble database without permitting
+// writes. Pebble still takes its database lock, so callers must stop the node
+// before opening the live chaindata directory.
+func NewPebbleDBReadOnly(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
+	return pebbledb.New(path, cache, handles, "", true, pebbledb.DefaultOptions())
+}
+
+// NewPebbleDBReadOnlyWithOptions is the explicitly tuned variant of
+// NewPebbleDBReadOnly.
+func NewPebbleDBReadOnlyWithOptions(path string, cache int, handles int, tune PebbleOptions) (ethdb.KeyValueStore, error) {
+	return pebbledb.New(path, cache, handles, "", true, tune)
+}
+
 func NewMemoryDatabase() ethdb.KeyValueStore {
 	return memorydb.New()
 }
