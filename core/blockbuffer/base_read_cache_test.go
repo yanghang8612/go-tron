@@ -307,6 +307,21 @@ func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing
 	if want := beforeUsed + len("replacement-value") - len("old-value"); s.used != want {
 		t.Fatalf("used bytes=%d, want %d after differently-sized refresh", s.used, want)
 	}
+
+	equalValue := append([]byte(nil), after.value...)
+	if unsafe.SliceData(equalValue) == unsafe.SliceData(after.value) {
+		t.Fatal("test equal value unexpectedly aliases resident storage")
+	}
+	residentKey := string(key)
+	residentValuePtr := unsafe.SliceData(after.value)
+	if allocs := testing.AllocsPerRun(100, func() {
+		c.setFlushed(residentKey, equalValue)
+	}); allocs != 0 {
+		t.Fatalf("byte-identical flush allocations=%v, want 0", allocs)
+	}
+	if unsafe.SliceData(after.value) != residentValuePtr {
+		t.Fatal("byte-identical flush replaced immutable resident storage")
+	}
 }
 
 func TestBaseReadCache_FlushPreservesReadBeforeWriteProbation(t *testing.T) {
@@ -503,6 +518,8 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 	key := []byte("state-commitment-branch-v1-hot-prefix")
 	keyString := string(key)
 	value := make([]byte, 1500)
+	changedValue := make([]byte, len(value))
+	changedValue[0] = 1
 
 	b.Run("invalidate_and_refill", func(b *testing.B) {
 		c := newBaseReadCache(1 << 20)
@@ -539,6 +556,21 @@ func BenchmarkBaseReadCacheFlushedHotKey(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			c.setFlushedAt(keyString, value, shard)
+		}
+	})
+
+	b.Run("refresh_changed_from_known_layer_shard", func(b *testing.B) {
+		c := newBaseReadCache(1 << 20)
+		testBaseReadCacheSet(c, key, value)
+		shard := baseReadCacheShardIndexString(keyString)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			next := value
+			if i&1 == 0 {
+				next = changedValue
+			}
+			c.setFlushedAt(keyString, next, shard)
 		}
 	})
 }

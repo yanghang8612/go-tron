@@ -1,6 +1,7 @@
 package blockbuffer
 
 import (
+	"bytes"
 	"sync"
 	"sync/atomic"
 )
@@ -299,7 +300,15 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// The map and stable entry retain a separately allocated key. Previously key
 		// and value shared one allocation, so that entry pinned the first value for
 		// the entry's entire lifetime even after the map installed a newer clone.
-		old.value = cloneBaseReadCacheValue(value)
+		// State setters can dirty a row whose final value is byte-identical to
+		// the durable parent. Its commitment ancestors are then encoded and
+		// flushed again even though their immutable bytes did not change. Keep
+		// the existing cache-owned value in that case instead of allocating an
+		// identical replacement. A nil old value is the cached-miss sentinel and
+		// must still be replaced by a non-nil present-empty value.
+		if old.value == nil || !bytes.Equal(old.value, value) {
+			old.value = cloneBaseReadCacheValue(value)
+		}
 		s.used += charge - old.charge
 		old.charge = charge
 		old.version = c.version.Load()
