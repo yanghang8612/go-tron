@@ -64,6 +64,11 @@ type decodedWireTransaction struct {
 	// signature owns the canonical first r||s||v value. Historical longer
 	// values and additional signatures retain separate exact-size storage.
 	signature [65]byte
+	// Canonical transactions carry a 2-byte block-number suffix and an 8-byte
+	// block-hash slice. Keep both in the already coallocated transaction wrapper;
+	// historical/non-canonical lengths fall back to independent owned copies.
+	refBlockBytes [2]byte
+	refBlockHash  [8]byte
 }
 
 type blockTransactionReserve struct {
@@ -596,16 +601,15 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 			if !ok {
 				return errors.New("malformed transaction raw bytes field")
 			}
-			value = append([]byte(nil), value...)
 			switch field {
 			case 1:
-				decoded.raw.RefBlockBytes = value
+				decoded.raw.RefBlockBytes = copyBytesInto(value, decoded.refBlockBytes[:])
 			case 4:
-				decoded.raw.RefBlockHash = value
+				decoded.raw.RefBlockHash = copyBytesInto(value, decoded.refBlockHash[:])
 			case 10:
-				decoded.raw.Data = value
+				decoded.raw.Data = append([]byte(nil), value...)
 			case 12:
-				decoded.raw.Scripts = value
+				decoded.raw.Scripts = append([]byte(nil), value...)
 			}
 		case wireType == protowire.VarintType && (field == 3 || field == 8 || field == 14 || field == 18):
 			value, ok := varintFieldValue(fieldData[:n])

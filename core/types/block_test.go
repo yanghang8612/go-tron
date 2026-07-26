@@ -296,6 +296,43 @@ func TestUnmarshalBlockReservedOwnsAnyValues(t *testing.T) {
 	}
 }
 
+func TestUnmarshalBlockReservedOwnsRawReferenceBytes(t *testing.T) {
+	block := blockDecodeReserveTestBlock(2).Proto()
+	block.Transactions[0].RawData.RefBlockBytes = []byte{0x11, 0x12}
+	block.Transactions[0].RawData.RefBlockHash = []byte{0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a}
+	// Exercise the independent-copy fallback alongside the canonical inline
+	// storage. These unusual lengths remain protobuf-valid historical input.
+	block.Transactions[1].RawData.RefBlockBytes = []byte{0x21, 0x22, 0x23}
+	block.Transactions[1].RawData.RefBlockHash = []byte{0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c}
+	wire, err := proto.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarshalBlockReserved(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), block) {
+		t.Fatalf("reserved decoder differs for raw references\nreserved: %v\ngenerated: %v", got.Proto(), block)
+	}
+	want := proto.Clone(got.Proto()).(*corepb.Block)
+	clear(wire)
+	if !proto.Equal(got.Proto(), want) {
+		t.Fatal("decoded raw reference bytes alias the input wire buffer")
+	}
+	txs := got.Proto().Transactions
+	if cap(txs[0].RawData.RefBlockBytes) != len(txs[0].RawData.RefBlockBytes) ||
+		cap(txs[0].RawData.RefBlockHash) != len(txs[0].RawData.RefBlockHash) {
+		t.Fatal("canonical raw reference fields expose spare inline capacity")
+	}
+	txs[0].RawData.RefBlockBytes[0] ^= 0xff
+	txs[0].RawData.RefBlockHash[0] ^= 0xff
+	if !bytes.Equal(txs[1].RawData.RefBlockBytes, want.Transactions[1].RawData.RefBlockBytes) ||
+		!bytes.Equal(txs[1].RawData.RefBlockHash, want.Transactions[1].RawData.RefBlockHash) {
+		t.Fatal("decoded raw reference fields alias across transactions")
+	}
+}
+
 func TestUnmarshalBlockReservedKeepsSignaturesIndependent(t *testing.T) {
 	block := blockDecodeReserveTestBlock(2).Proto()
 	block.Transactions[0].Signature = [][]byte{
