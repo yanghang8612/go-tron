@@ -155,11 +155,11 @@ func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedReso
 	if !ok || len(data) == 0 {
 		return nil
 	}
-	var rec corepb.DelegatedResourceAccountIndex
-	if err := proto.Unmarshal(data, &rec); err != nil {
+	rec, err := rawdb.DecodeDrAccountIndexLegacy(data)
+	if err != nil {
 		return nil
 	}
-	return &rec
+	return rec
 }
 
 func (s *StateDB) writeDrAccountIndexLegacy(account []byte, rec *corepb.DelegatedResourceAccountIndex) error {

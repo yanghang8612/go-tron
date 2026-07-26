@@ -21,11 +21,11 @@ func ReadDrAccountIndexLegacy(db ethdb.KeyValueReader, account []byte) *corepb.D
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	var m corepb.DelegatedResourceAccountIndex
-	if err := proto.Unmarshal(data, &m); err != nil {
+	m, err := DecodeDrAccountIndexLegacy(data)
+	if err != nil {
 		return nil
 	}
-	return &m
+	return m
 }
 
 func writeDrAccountIndexLegacy(db ethdb.KeyValueWriter, account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
