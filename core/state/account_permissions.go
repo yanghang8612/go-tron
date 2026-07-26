@@ -17,6 +17,16 @@ var (
 	accountActivePermissionRoot = []byte{0x02}
 )
 
+// decodedAccountPermission keeps the permission and the first repeated-key
+// pointer slot in one allocation. Every valid permission has at least one key,
+// and the overwhelmingly common Owner/Witness/default-Active rows have exactly
+// one. Merge-mode protobuf decoding preserves this zero-length capacity while
+// retaining normal generated wire/error semantics.
+type decodedAccountPermission struct {
+	permission corepb.Permission
+	firstKeys  [1]*corepb.Key
+}
+
 func accountActivePermissionKey(id int32) []byte {
 	var key [5]byte
 	key[0] = accountActivePermissionRoot[0]
@@ -28,11 +38,12 @@ func decodeAccountPermissionRow(key, value []byte) (*corepb.Permission, byte, er
 	if len(key) != 1 && !(len(key) == 5 && key[0] == accountActivePermissionRoot[0]) {
 		return nil, 0, fmt.Errorf("account permission key %x has invalid length/type", key)
 	}
-	var permission corepb.Permission
-	if err := proto.Unmarshal(value, &permission); err != nil {
+	decoded := new(decodedAccountPermission)
+	decoded.permission.Keys = decoded.firstKeys[:0]
+	if err := (proto.UnmarshalOptions{Merge: true}).Unmarshal(value, &decoded.permission); err != nil {
 		return nil, 0, fmt.Errorf("decode account permission %x: %w", key, err)
 	}
-	return &permission, key[0], nil
+	return &decoded.permission, key[0], nil
 }
 
 func clearAccountPermissionProto(pb *corepb.Account) {

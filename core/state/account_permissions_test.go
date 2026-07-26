@@ -417,3 +417,78 @@ func BenchmarkAccountPermissionLookup(b *testing.B) {
 		}
 	})
 }
+
+var benchmarkDecodedAccountPermission *corepb.Permission
+
+func BenchmarkDecodeAccountPermissionRow(b *testing.B) {
+	for _, fixture := range []struct {
+		name       string
+		permission *corepb.Permission
+	}{
+		{name: "owner-one-key", permission: splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x71)},
+		{name: "active-one-key", permission: func() *corepb.Permission {
+			permission := splitTestPermission(corepb.Permission_Active, 2, "active", 0x72)
+			permission.Operations = make([]byte, 32)
+			return permission
+		}()},
+		{name: "active-four-keys", permission: func() *corepb.Permission {
+			permission := splitTestPermission(corepb.Permission_Active, 2, "active", 0x73)
+			permission.Operations = make([]byte, 32)
+			for i := 1; i < 4; i++ {
+				permission.Keys = append(permission.Keys, &corepb.Key{Address: []byte{0x41, byte(0x73 + i)}, Weight: 1})
+			}
+			return permission
+		}()},
+	} {
+		b.Run(fixture.name, func(b *testing.B) {
+			value, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.permission)
+			if err != nil {
+				b.Fatal(err)
+			}
+			key := accountOwnerPermissionKey
+			if fixture.permission.Id >= 2 {
+				key = accountActivePermissionKey(fixture.permission.Id)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				permission, _, err := decodeAccountPermissionRow(key, value)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkDecodedAccountPermission = permission
+			}
+		})
+	}
+}
+
+func FuzzDecodeAccountPermissionRowEquivalent(f *testing.F) {
+	for _, permission := range []*corepb.Permission{
+		splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x81),
+		func() *corepb.Permission {
+			permission := splitTestPermission(corepb.Permission_Active, 2, "active", 0x82)
+			permission.Operations = make([]byte, 32)
+			permission.Keys = append(permission.Keys, &corepb.Key{Address: []byte{0x41, 0x83}, Weight: 2})
+			return permission
+		}(),
+	} {
+		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(permission)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+	}
+	f.Add([]byte{0x3a, 0x05, 0x0a})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want := new(corepb.Permission)
+		genericErr := proto.Unmarshal(data, want)
+		got, _, directErr := decodeAccountPermissionRow(accountOwnerPermissionKey, data)
+		if (genericErr != nil) != (directErr != nil) {
+			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
+		}
+		if genericErr == nil && !proto.Equal(got, want) {
+			t.Fatalf("decoded permission mismatch\ngot:  %v\nwant: %v\ndata: %x", got, want, data)
+		}
+	})
+}
