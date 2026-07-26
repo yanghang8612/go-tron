@@ -23,7 +23,7 @@
 //   - TargetFileSize starts at 8 MiB instead of 2 MiB. Full-sync measurements
 //     showed roughly 450 tiny SST outputs per 30 seconds with the inherited
 //     target ramp, creating avoidable file-rotation and metadata work.
-//   - LBaseMaxBytes is raised from Pebble's 64 MiB default to 2 GiB. On the
+//   - LBaseMaxBytes is raised from Pebble's 64 MiB default to 1 GiB. On the
 //     production LSM shape the smaller base kept every intermediate level at
 //     its compaction limit and amplified sustained sync writes.
 //   - L0 through L2 use no block compression. L0 flush outputs and the current
@@ -196,8 +196,8 @@ type Options struct {
 	// level. A larger base spreads the same bottom-level dataset across fuller
 	// intermediate levels with a smaller effective level multiplier, reducing
 	// leveled-compaction write amplification during sustained sync. Default:
-	// 2 GiB. The production ~220 GiB LSM uses a ~3.8x level multiplier with a
-	// 1 GiB base; doubling it lowers the multiplier to ~3.2x and reduces overlap
+	// 1 GiB. The production ~220 GiB LSM uses a ~4.5x level multiplier with a
+	// 512 MiB base; doubling it lowers the multiplier to ~3.8x and reduces overlap
 	// rewrites while preserving the same SST format.
 	LBaseMaxBytes int64
 
@@ -217,7 +217,7 @@ func DefaultOptions() Options {
 	return Options{
 		MemTableSizeBytes:     256 * 1024 * 1024,
 		TargetFileSizeBytes:   8 * 1024 * 1024,
-		LBaseMaxBytes:         2048 * 1024 * 1024,
+		LBaseMaxBytes:         1024 * 1024 * 1024,
 		L0CompactionThreshold: 8,
 		L0StopWritesThreshold: 64,
 	}
