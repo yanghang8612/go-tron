@@ -304,6 +304,8 @@ var decodedContractBenchmarkSink proto.Message
 
 var transactionHashBenchmarkSink common.Hash
 
+var recoverSignerBenchmarkSink common.Address
+
 func benchmarkTransactionPB(b testing.TB) *corepb.Transaction {
 	b.Helper()
 	transfer := &contractpb.TransferContract{
@@ -435,6 +437,28 @@ func BenchmarkTransactionDecodedTransferContractCold(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkTransactionRecoverSignerCachedHash(b *testing.B) {
+	const rawDataHex = "0a02dc902208d3638f92df8a2be94090a0eafb8a2e5a69080112650a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412340a1541b0e03d96eec5aba4037e4fca2431da6fdba85068121541b03c7de5f60a49a2f3098463691ca2e137d822d618e0d691d01270bfa9cdd28a2e"
+	const sigHex = "c37ebd8ba2abfdcd2945d3f63994165bf778fe35415dd6aed37b77446ef9783170f0742aa17d7fa56fb98c65e67db7190b927272a95e2de72dee1cb9d166c6441c"
+	rawData, _ := hex.DecodeString(rawDataHex)
+	rawPB := &corepb.TransactionRaw{}
+	if err := proto.Unmarshal(rawData, rawPB); err != nil {
+		b.Fatal(err)
+	}
+	sig, _ := hex.DecodeString(sigHex)
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: rawPB, Signature: [][]byte{sig}})
+	tx.Hash()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		addrs, err := tx.recoverSigners()
+		if err != nil {
+			b.Fatal(err)
+		}
+		recoverSignerBenchmarkSink = addrs[0]
 	}
 }
 

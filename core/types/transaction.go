@@ -382,7 +382,10 @@ func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
 // is safe to memoize (see RecoverSigners) and to compute concurrently across
 // transactions during pre-verification.
 func (tx *Transaction) recoverSigners() ([]common.Address, error) {
-	hash := tx.Hash()
+	// Warm the hash once, then lend the recovery routine the Transaction-owned
+	// bytes directly. Keeping Hash's value return in a local [32]byte makes that
+	// copy escape when passed as a slice across the crypto package boundary.
+	tx.Hash()
 	sigs := tx.Signatures()
 	var addrs []common.Address
 	switch len(sigs) {
@@ -402,7 +405,7 @@ func (tx *Transaction) recoverSigners() ([]common.Address, error) {
 		// including the point-at-infinity quirk where a recovery that lands on
 		// the infinity point resolves to keccak256("")[12:] rather than
 		// failing (Nile block 18,278,266). Genuine bad signatures still error.
-		addr, err := crypto.SigToAddressJavaCompat(hash[:], recoverySig)
+		addr, err := crypto.SigToAddressJavaCompat(tx.hash[:], recoverySig)
 		if err != nil {
 			return nil, fmt.Errorf("transaction: recover signer: %w", err)
 		}
