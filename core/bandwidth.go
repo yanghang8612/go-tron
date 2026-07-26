@@ -54,17 +54,27 @@ func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
 // exactly equivalent to clearing Ret and sizing again. Unknown fields and every
 // other transaction field remain included unchanged.
 func transactionSizeWithoutRet(tx *types.Transaction) int {
+	_, sizeWithoutRet := transactionSizes(tx)
+	return sizeWithoutRet
+}
+
+// transactionSizes computes both the complete serialized size and the size
+// with every field-5 Ret entry omitted. Keeping the two results together lets
+// validation enforce both java-tron size limits with one walk of the complete
+// transaction instead of cloning and sizing one copy, then sizing the original.
+func transactionSizes(tx *types.Transaction) (size, sizeWithoutRet int) {
 	pb := tx.Proto()
 	if pb == nil {
-		return 0
+		return 0, 0
 	}
-	size := tx.Size()
+	size = tx.Size()
+	sizeWithoutRet = size
 	const retFieldNumber = protowire.Number(5)
 	for _, result := range pb.Ret {
 		resultSize := proto.Size(result)
-		size -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
+		sizeWithoutRet -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
 	}
-	return size
+	return size, sizeWithoutRet
 }
 
 // BandwidthResult captures bandwidth consumption details.

@@ -10,7 +10,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -342,16 +341,14 @@ func validateTxCommon(tx *types.Transaction, headBlockTime int64, validateResult
 	if err := ValidateContractCount(tx); err != nil {
 		return err
 	}
-	pb := tx.Proto()
+	size, sizeWithoutRet := transactionSizes(tx)
 	if validateResultSize {
-		withoutRet := proto.Clone(pb).(*corepb.Transaction)
-		withoutRet.Ret = nil
-		generalBytesSize := int64(proto.Size(withoutRet)) + maxResultSizeInTx + maxResultSizeInTx
+		generalBytesSize := int64(sizeWithoutRet) + maxResultSizeInTx + maxResultSizeInTx
 		if generalBytesSize > transactionMaxByteSize {
 			return ErrTransactionTooLarge
 		}
 	}
-	if int64(tx.Size()) > transactionMaxByteSize {
+	if int64(size) > transactionMaxByteSize {
 		return ErrTransactionTooLarge
 	}
 

@@ -106,9 +106,17 @@ func TestTransactionSizeWithoutRetDoesNotMutate(t *testing.T) {
 
 	wantPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
 	wantPB.Ret = nil
-	want := proto.Size(wantPB)
-	if got := transactionSizeWithoutRet(tx); got != want {
-		t.Fatalf("size without ret: got %d, want %d", got, want)
+	wantWithoutRet := proto.Size(wantPB)
+	wantFull := proto.Size(tx.Proto())
+	gotFull, gotWithoutRet := transactionSizes(tx)
+	if gotFull != wantFull {
+		t.Fatalf("full size: got %d, want %d", gotFull, wantFull)
+	}
+	if gotWithoutRet != wantWithoutRet {
+		t.Fatalf("size without ret: got %d, want %d", gotWithoutRet, wantWithoutRet)
+	}
+	if got := transactionSizeWithoutRet(tx); got != wantWithoutRet {
+		t.Fatalf("size-without-ret wrapper: got %d, want %d", got, wantWithoutRet)
 	}
 	if got := len(tx.Proto().Ret); got != 3 {
 		t.Fatalf("transaction ret mutated: got %d entries, want 3", got)
@@ -138,6 +146,21 @@ func BenchmarkTransactionSizeWithoutRet(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			transactionSizeSink = transactionSizeWithoutRet(tx)
+		}
+	})
+	b.Run("validation-deep-clone-two-sizes", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
+			stripped.Ret = nil
+			transactionSizeSink = proto.Size(stripped) + tx.Size()
+		}
+	})
+	b.Run("validation-single-pass", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			fullSize, sizeWithoutRet := transactionSizes(tx)
+			transactionSizeSink = fullSize + sizeWithoutRet
 		}
 	})
 }
