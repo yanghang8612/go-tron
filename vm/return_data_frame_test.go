@@ -148,8 +148,9 @@ func TestCreate2SuccessKeepsResidualReturnData(t *testing.T) {
 		byte(PUSH1), 0x01, byte(PUSH1), 0x00, byte(MSTORE),
 		byte(PUSH1), 0x01, byte(PUSH1), 0x1f, byte(RETURN),
 	}
-	// E: CALL D (buffer=32B), place initCode, CREATE2, then RETURN the
-	// post-create RETURNDATASIZE. CREATE2 stack is [value, offset, size, salt].
+	// E: CALL D (buffer=32B), place initCode, CREATE2, then return both the
+	// post-create RETURNDATASIZE and its bytes. CREATE2 stack is
+	// [value, offset, size, salt].
 	var e []byte
 	e = append(e, callSeq(0xDD, 0x00)...)
 	e = append(e, byte(int(PUSH1)+len(initCode)-1))
@@ -163,7 +164,11 @@ func TestCreate2SuccessKeepsResidualReturnData(t *testing.T) {
 		byte(PUSH1), 0x00, // value (stack top)
 		byte(CREATE2), byte(POP),
 		byte(RETURNDATASIZE), byte(PUSH1), 0x00, byte(MSTORE),
-		byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN),
+		byte(PUSH1), 0x20, // length (stack bottom)
+		byte(PUSH1), 0x00, // return-data offset
+		byte(PUSH1), 0x20, // memory offset (stack top)
+		byte(RETURNDATACOPY),
+		byte(PUSH1), 0x40, byte(PUSH1), 0x00, byte(RETURN),
 	)
 	eAddr := deployTestCode(t, evm, 0xEE, e)
 
@@ -172,7 +177,13 @@ func TestCreate2SuccessKeepsResidualReturnData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call E: %v", err)
 	}
-	if got := retU256(ret); got.Uint64() != 32 {
+	if len(ret) != 64 {
+		t.Fatalf("result length = %d, want 64", len(ret))
+	}
+	if got := retU256(ret[:32]); got.Uint64() != 32 {
 		t.Errorf("post-CREATE2 RETURNDATASIZE = %s, want 32 (pre-Osaka keeps residual)", got)
+	}
+	if got := retU256(ret[32:]); got.Uint64() != 0xff {
+		t.Errorf("post-CREATE2 residual bytes = %s, want 255", got)
 	}
 }

@@ -92,6 +92,38 @@ func TestMemoryGetPtr(t *testing.T) {
 	}
 }
 
+func TestNestedCallReturnBufferOwnership(t *testing.T) {
+	tvm := &TVM{Depth: 2, nestedReturns: new(nestedReturnBuffers)}
+	interpreter := &Interpreter{tvm: tvm}
+	callFrame := &Contract{reuseReturnBuffer: true}
+	memory := &Memory{store: make([]byte, inlineNestedReturnCapacity)}
+	for i := range memory.store {
+		memory.store[i] = byte(i)
+	}
+
+	got := interpreter.copyFrameReturn(callFrame, memory, 0, int64(len(memory.store)))
+	if len(got) != len(memory.store) || &got[0] != &tvm.nestedReturns.inline[2][0] {
+		t.Fatalf("nested call did not use depth scratch: len=%d", len(got))
+	}
+	memory.store[0] ^= 0xff
+	if got[0] == memory.store[0] {
+		t.Fatal("nested return aliases execution memory")
+	}
+
+	// Top-level and CREATE-family results must remain independently owned. A
+	// subsequent pooled call/create is allowed to reuse the same depth scratch.
+	tvm.Depth = 1
+	top := interpreter.copyFrameReturn(callFrame, memory, 0, 1)
+	if &top[0] == &tvm.nestedReturns.inline[1][0] {
+		t.Fatal("top-level return unexpectedly uses pooled depth scratch")
+	}
+	tvm.Depth = 2
+	create := interpreter.copyFrameReturn(&Contract{}, memory, 0, 1)
+	if &create[0] == &tvm.nestedReturns.inline[2][0] {
+		t.Fatal("CREATE return unexpectedly overwrites CALL depth scratch")
+	}
+}
+
 func TestCallFrameInputOwnership(t *testing.T) {
 	memory := newMemory()
 	memory.resize(32)
@@ -118,6 +150,8 @@ func TestCallFrameInputOwnership(t *testing.T) {
 
 var callFrameInputSink []byte
 var memoryPaddedCopySink byte
+
+var frameReturnSink []byte
 
 func setPaddedLegacy(m *Memory, offset, size uint64, source []byte, sourceOffset uint64) {
 	data := make([]byte, size)
@@ -191,4 +225,24 @@ func BenchmarkMemoryIncrementalResize(b *testing.B) {
 			b.Fatal(memory.len())
 		}
 	}
+}
+
+func BenchmarkNestedFrameReturnCopy(b *testing.B) {
+	memory := &Memory{store: make([]byte, inlineNestedReturnCapacity)}
+	tvm := &TVM{Depth: 2, nestedReturns: new(nestedReturnBuffers)}
+	interpreter := &Interpreter{tvm: tvm}
+	contract := &Contract{reuseReturnBuffer: true}
+
+	b.Run("allocated", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			frameReturnSink = memory.getCopy(0, inlineNestedReturnCapacity)
+		}
+	})
+	b.Run("depth-scratch", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			frameReturnSink = interpreter.copyFrameReturn(contract, memory, 0, inlineNestedReturnCapacity)
+		}
+	})
 }

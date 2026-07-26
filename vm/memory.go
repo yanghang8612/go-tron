@@ -13,6 +13,20 @@ type Memory struct {
 
 const maxPooledMemoryCapacity = 256 << 10
 
+// ABI return values on the sync path are overwhelmingly one to six words.
+// Keep the observed common range inline and retain only modest larger values;
+// an adversarial/exceptional large RETURN keeps its historical one-shot
+// ownership instead of pinning max-sized VM memory in the TVM pool.
+const (
+	inlineNestedReturnCapacity   = 192
+	maxReusableNestedReturnBytes = 4 << 10
+)
+
+type nestedReturnBuffers struct {
+	inline   [maxCallDepth + 2][inlineNestedReturnCapacity]byte
+	overflow [maxCallDepth + 2][]byte
+}
+
 var executionMemoryPool = sync.Pool{
 	New: func() any { return newMemory() },
 }
@@ -90,6 +104,41 @@ func (m *Memory) getCopy(offset, size int64) []byte {
 	cpy := make([]byte, size)
 	copy(cpy, m.store[offset:offset+size])
 	return cpy
+}
+
+// copyFrameReturn gives ordinary nested CALL-family frames a result buffer
+// owned by their TVM and call depth. The parent is suspended while the child
+// runs and every such call replaces the parent's prior return-data buffer, so
+// the same depth can be reused by the next call. Top-level and CREATE results
+// retain independent ownership through getCopy.
+func (in *Interpreter) copyFrameReturn(contract *Contract, memory *Memory, offset, size int64) []byte {
+	if size == 0 {
+		return nil
+	}
+	tvm := in.tvm
+	if contract == nil || !contract.reuseReturnBuffer || tvm == nil ||
+		tvm.nestedReturns == nil || tvm.Depth <= 1 || tvm.Depth >= len(tvm.nestedReturns.inline) {
+		return memory.getCopy(offset, size)
+	}
+
+	n := int(size)
+	var dst []byte
+	if n <= inlineNestedReturnCapacity {
+		dst = tvm.nestedReturns.inline[tvm.Depth][:n:n]
+	} else if n <= maxReusableNestedReturnBytes {
+		dst = tvm.nestedReturns.overflow[tvm.Depth]
+		if cap(dst) < n {
+			dst = make([]byte, n)
+		} else {
+			dst = dst[:n]
+		}
+		tvm.nestedReturns.overflow[tvm.Depth] = dst
+		dst = dst[:n:n]
+	} else {
+		return memory.getCopy(offset, size)
+	}
+	copy(dst, memory.store[offset:offset+size])
+	return dst
 }
 
 // getPtr returns a direct slice into memory (no copy).

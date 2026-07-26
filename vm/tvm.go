@@ -62,6 +62,7 @@ type TVM struct {
 	newContracts        map[tcommon.Address]bool
 	internalTxHashStack []tcommon.Hash
 	internalTxArena     *InternalTransactionArena
+	nestedReturns       *nestedReturnBuffers
 	pooled              bool
 }
 
@@ -71,7 +72,10 @@ type TVM struct {
 // their private call-stack scratch can be reset once execution returns.
 var tvmPool = sync.Pool{
 	New: func() any {
-		return &TVM{interpreter: new(Interpreter)}
+		return &TVM{
+			interpreter:   new(Interpreter),
+			nestedReturns: new(nestedReturnBuffers),
+		}
 	},
 }
 
@@ -370,6 +374,7 @@ func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.
 	tvm := tvmPool.Get().(*TVM)
 	interpreter := tvm.interpreter
 	internalTxHashStack := tvm.internalTxHashStack[:0]
+	nestedReturns := tvm.nestedReturns
 	*tvm = TVM{
 		StateDB:             stateDB,
 		DynProps:            dp,
@@ -381,6 +386,7 @@ func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.
 		cfg:                 cfg,
 		interpreter:         interpreter,
 		internalTxHashStack: internalTxHashStack,
+		nestedReturns:       nestedReturns,
 		pooled:              true,
 	}
 	resetInterpreter(interpreter, tvm, cfg)
@@ -397,10 +403,12 @@ func ReleaseTVM(tvm *TVM) {
 	}
 	interpreter := tvm.interpreter
 	internalTxHashStack := tvm.internalTxHashStack[:0]
+	nestedReturns := tvm.nestedReturns
 	*interpreter = Interpreter{}
 	*tvm = TVM{
 		interpreter:         interpreter,
 		internalTxHashStack: internalTxHashStack,
+		nestedReturns:       nestedReturns,
 	}
 	tvmPool.Put(tvm)
 }
@@ -1075,6 +1083,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
+	contract.reuseReturnBuffer = tvm.Depth > 0
 
 	ret, err := tvm.runContract(contract)
 
@@ -1276,6 +1285,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	contract.SetInput(input)
 	contract.TokenID = tokenID
 	contract.TokenValue = tokenValue
+	contract.reuseReturnBuffer = tvm.Depth > 0
 
 	ret, err := tvm.runContract(contract)
 
@@ -1359,6 +1369,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
+	contract.reuseReturnBuffer = tvm.Depth > 0
 
 	prevReadOnly := tvm.interpreter.readOnly
 	tvm.interpreter.readOnly = true
@@ -1436,6 +1447,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
+	contract.reuseReturnBuffer = tvm.Depth > 0
 
 	ret, err := tvm.runContract(contract)
 

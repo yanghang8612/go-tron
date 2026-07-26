@@ -887,7 +887,7 @@ func opReturn(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		}
 	}
 	resizeMemory(memory, off, sz)
-	return memory.getCopy(int64(off), int64(sz)), nil
+	return interpreter.copyFrameReturn(contract, memory, int64(off), int64(sz)), nil
 }
 
 func opRevert(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
@@ -902,7 +902,7 @@ func opRevert(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		}
 	}
 	resizeMemory(memory, off, sz)
-	return memory.getCopy(int64(off), int64(sz)), nil
+	return interpreter.copyFrameReturn(contract, memory, int64(off), int64(sz)), nil
 }
 
 func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {

@@ -27,6 +27,13 @@ type Contract struct {
 	Version    int32  // java-tron SmartContract.version for this code frame
 
 	jumpdests bitvec // valid JUMPDEST positions, 1 bit per code offset
+
+	// reuseReturnBuffer is set only for ordinary nested CALL-family frames.
+	// Their result replaces the suspended parent's return-data buffer, so a
+	// depth-indexed TVM scratch buffer may safely own RETURN/REVERT bytes. Create
+	// frames deliberately leave this false: pre-Osaka CREATE2 can preserve the
+	// parent's previous return data, which must not be overwritten by initcode.
+	reuseReturnBuffer bool
 }
 
 // executionContractPool reuses the short-lived Contract object attached to
