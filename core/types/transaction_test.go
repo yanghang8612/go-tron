@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -184,9 +185,46 @@ func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
 	if got != &tx.triggerContract {
 		t.Fatal("trigger contract was not decoded into the wrapper's inline slot")
 	}
+	if &got.OwnerAddress[0] != &tx.triggerOwnerAddress[0] ||
+		&got.ContractAddress[0] != &tx.triggerContractAddress[0] ||
+		&got.Data[0] != &tx.triggerData[0] {
+		t.Fatal("trigger byte fields did not use the wrapper's inline backing slots")
+	}
 	if !proto.Equal(got, want) {
 		t.Fatalf("decoded trigger = %v, want %v", got, want)
 	}
+}
+
+func FuzzUnmarshalTriggerContractInlineEquivalent(f *testing.F) {
+	seed, err := proto.Marshal(&contractpb.TriggerSmartContract{
+		OwnerAddress:    bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ContractAddress: bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Data:            bytes.Repeat([]byte{0xaa}, triggerDataInlineSize),
+		CallValue:       123,
+		CallTokenValue:  456,
+		TokenId:         789,
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(nil))
+	f.Add(seed)
+	f.Add(append(bytes.Clone(seed), protowire.AppendTag(nil, 100, protowire.VarintType)...))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if !triggerDecodeReserveLayoutOK {
+			t.Fatal("protobuf layout guard unexpectedly disabled trigger decoder")
+		}
+		tx := new(Transaction)
+		gotErr := tx.unmarshalTriggerContractInline(data)
+		var want contractpb.TriggerSmartContract
+		wantErr := proto.Unmarshal(data, &want)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch: inline=%v generated=%v, wire=%x", gotErr, wantErr, data)
+		}
+		if gotErr == nil && !proto.Equal(&tx.triggerContract, &want) {
+			t.Fatalf("decode mismatch: inline=%v generated=%v, wire=%x", &tx.triggerContract, &want, data)
+		}
+	})
 }
 
 var decodedContractBenchmarkSink proto.Message

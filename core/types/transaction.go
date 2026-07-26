@@ -9,11 +9,20 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // ContractTypeNone indicates no contract is present in the transaction.
 const ContractTypeNone corepb.Transaction_Contract_ContractType = -1
+
+// triggerDataInlineSize fits the common ABI selector plus four 32-byte words.
+// A recent mainnet sample placed 76% of TriggerSmartContract data at or below
+// this size; larger calls retain the generated decoder's exact-sized heap copy.
+const triggerDataInlineSize = 132
+
+var triggerDecodeReserveLayoutOK = verifyTriggerDecodeReserveLayout()
 
 type Transaction struct {
 	pb       *corepb.Transaction
@@ -34,7 +43,10 @@ type Transaction struct {
 	// wrappers are already coallocated in one []Transaction backing object, so
 	// decoding a matching Any into this slot removes one standalone protobuf
 	// allocation without extending the lifetime of any additional object.
-	triggerContract contractpb.TriggerSmartContract
+	triggerContract        contractpb.TriggerSmartContract
+	triggerOwnerAddress    [common.AddressLength]byte
+	triggerContractAddress [common.AddressLength]byte
+	triggerData            [triggerDataInlineSize]byte
 
 	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
 	// the first recovery error) so the parallel pre-verification pass in
@@ -102,12 +114,89 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 		}
 		if contract.Parameter.MessageIs(&tx.triggerContract) {
 			tx.contractMessage = &tx.triggerContract
+			if triggerDecodeReserveLayoutOK {
+				tx.contractMessageErr = tx.unmarshalTriggerContractInline(contract.Parameter.Value)
+				if tx.contractMessageErr == nil {
+					return
+				}
+			}
+			// Preserve the generated decoder's exact error on the cold malformed
+			// path, and retain the allocation-only R99 fast path if a regenerated
+			// TriggerSmartContract schema disables the manual envelope decoder.
 			tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
 			return
 		}
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
 	})
 	return tx.contractMessage, tx.contractMessageErr
+}
+
+func verifyTriggerDecodeReserveLayout() bool {
+	fields := (&contractpb.TriggerSmartContract{}).ProtoReflect().Descriptor().Fields()
+	return fields.Len() == 6 &&
+		protoFieldShape(fields, 1, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 2, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 3, protoreflect.Int64Kind, false) &&
+		protoFieldShape(fields, 4, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 5, protoreflect.Int64Kind, false) &&
+		protoFieldShape(fields, 6, protoreflect.Int64Kind, false)
+}
+
+func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
+	tx.triggerContract = contractpb.TriggerSmartContract{}
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed trigger contract wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case wireType == protowire.BytesType && (field == 1 || field == 2 || field == 4):
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed trigger contract bytes field")
+			}
+			switch field {
+			case 1:
+				tx.triggerContract.OwnerAddress = copyBytesInto(value, tx.triggerOwnerAddress[:])
+			case 2:
+				tx.triggerContract.ContractAddress = copyBytesInto(value, tx.triggerContractAddress[:])
+			case 4:
+				tx.triggerContract.Data = copyBytesInto(value, tx.triggerData[:])
+			}
+		case wireType == protowire.VarintType && (field == 3 || field == 5 || field == 6):
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed trigger contract varint field")
+			}
+			switch field {
+			case 3:
+				tx.triggerContract.CallValue = int64(value)
+			case 5:
+				tx.triggerContract.CallTokenValue = int64(value)
+			case 6:
+				tx.triggerContract.TokenId = int64(value)
+			}
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(&tx.triggerContract, unknown)
+	return nil
+}
+
+func copyBytesInto(value, storage []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	if len(value) <= cap(storage) {
+		out := storage[:len(value)]
+		copy(out, value)
+		return out
+	}
+	return append([]byte(nil), value...)
 }
 
 func (tx *Transaction) Timestamp() int64 {
