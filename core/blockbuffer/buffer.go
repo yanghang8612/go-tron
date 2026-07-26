@@ -2340,25 +2340,31 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 // (the base store has its own concurrency control; overlay is already a private
 // copy). Shared by Buffer.NewIterator and LayerView.NewIterator.
 func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) ethdb.Iterator {
-	type kv struct{ key, value []byte }
-	var entries []kv
+	var entries []bufferIteratorEntry
 	if b.base != nil {
 		if iter, ok := b.base.(ethdb.Iteratee); ok {
 			it := iter.NewIterator(prefix, start)
 			for it.Next() {
-				k := string(it.Key())
+				key := it.Key()
+				var k string
+				if len(key) != 0 {
+					// Iterator keys remain valid until the next Next call. The map
+					// lookup and delete below are synchronous and never retain k, so
+					// avoid copying every base key merely to probe the overlay.
+					k = unsafe.String(unsafe.SliceData(key), len(key))
+				}
 				if op, masked := overlay.m[k]; masked {
 					if !op.deleted {
-						entries = append(entries, kv{
-							key:   append([]byte(nil), it.Key()...),
+						entries = append(entries, bufferIteratorEntry{
+							key:   append([]byte(nil), key...),
 							value: op.value,
 						})
 					}
 					delete(overlay.m, k)
 					continue
 				}
-				entries = append(entries, kv{
-					key:   append([]byte(nil), it.Key()...),
+				entries = append(entries, bufferIteratorEntry{
+					key:   append([]byte(nil), key...),
 					value: append([]byte(nil), it.Value()...),
 				})
 			}
@@ -2378,7 +2384,7 @@ func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) eth
 		if op.deleted {
 			continue
 		}
-		entries = append(entries, kv{key: []byte(k), value: op.value})
+		entries = append(entries, bufferIteratorEntry{key: []byte(k), value: op.value})
 	}
 
 	// Sort ascending by key. The disk leg arrives already sorted; the overlay
@@ -2387,11 +2393,7 @@ func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) eth
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].key, entries[j].key) < 0
 	})
-	out := make([]bufferIteratorEntry, len(entries))
-	for i, e := range entries {
-		out[i] = bufferIteratorEntry{key: e.key, value: e.value}
-	}
-	return &bufferIterator{entries: out, idx: -1}
+	return &bufferIterator{entries: entries, idx: -1}
 }
 
 // bufferIterator is a snapshot iterator returned by Buffer.NewIterator.
