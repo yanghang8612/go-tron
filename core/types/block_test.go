@@ -271,6 +271,31 @@ func TestUnmarshalBlockReservedKeepsMultipleParametersIndependent(t *testing.T) 
 	}
 }
 
+func TestUnmarshalBlockReservedKeepsSignaturesIndependent(t *testing.T) {
+	block := blockDecodeReserveTestBlock(2).Proto()
+	block.Transactions[0].Signature = [][]byte{
+		bytes.Repeat([]byte{0x11}, 65),
+		bytes.Repeat([]byte{0x22}, 66),
+	}
+	block.Transactions[1].Signature = [][]byte{bytes.Repeat([]byte{0x33}, 65)}
+	wire, err := proto.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarshalBlockReserved(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), block) {
+		t.Fatalf("reserved decoder differs for signatures\nreserved: %v\ngenerated: %v", got.Proto(), block)
+	}
+	signatures := got.Proto().Transactions
+	signatures[0].Signature[0][0] = 0xff
+	if signatures[0].Signature[1][0] != 0x22 || signatures[1].Signature[0][0] != 0x33 {
+		t.Fatal("decoded transaction signatures alias")
+	}
+}
+
 func FuzzUnmarshalBlockReservedEquivalent(f *testing.F) {
 	canonical, err := blockDecodeReserveTestBlock(2).Marshal()
 	if err != nil {

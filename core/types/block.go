@@ -61,6 +61,9 @@ type decodedWireTransaction struct {
 	signatureSlot [1][]byte
 	resultSlot    [1]*corepb.Transaction_Result
 	contractSlot  [1]*corepb.Transaction_Contract
+	// signature owns the canonical first r||s||v value. Historical longer
+	// values and additional signatures retain separate exact-size storage.
+	signature [65]byte
 }
 
 type blockTransactionReserve struct {
@@ -544,7 +547,14 @@ func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransact
 				return nil, err
 			}
 		case 2:
-			decoded.tx.Signature = append(decoded.tx.Signature, append([]byte{}, value...))
+			var owned []byte
+			if len(decoded.tx.Signature) == 0 && len(value) == len(decoded.signature) {
+				owned = decoded.signature[:len(value):len(value)]
+				copy(owned, value)
+			} else {
+				owned = append([]byte(nil), value...)
+			}
+			decoded.tx.Signature = append(decoded.tx.Signature, owned)
 		case 5:
 			var result *corepb.Transaction_Result
 			if len(decoded.tx.Ret) == 0 {
