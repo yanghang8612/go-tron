@@ -2,11 +2,14 @@ package log
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+var moduleTraceBenchmarkSink uint64
 
 func TestSetup_VerbosityRange(t *testing.T) {
 	for _, v := range []int{-1, 6, 99} {
@@ -102,4 +105,33 @@ func TestSetupWithModules_ModuleOverride(t *testing.T) {
 			t.Fatalf("unexpected %q in log output:\n%s", reject, out)
 		}
 	}
+}
+
+func TestModuleTraceEnabledHonorsModuleLevel(t *testing.T) {
+	defer setLevels(LevelInfo, nil)
+	module := NewModule("log/trace-gate")
+	setLevels(LevelInfo, map[string]slog.Level{"log/trace-gate": LevelInfo})
+	if module.TraceEnabled() {
+		t.Fatal("trace enabled at module info level")
+	}
+	setLevels(LevelInfo, map[string]slog.Level{"log/trace-gate": LevelTrace})
+	if !module.TraceEnabled() {
+		t.Fatal("trace disabled at module trace level")
+	}
+}
+
+func BenchmarkModuleDisabledTraceGuard(b *testing.B) {
+	defer setLevels(LevelInfo, nil)
+	module := NewModule("log/trace-benchmark")
+	setLevels(LevelInfo, map[string]slog.Level{"log/trace-benchmark": LevelInfo})
+	peerID := strings.Repeat("peer", 16)
+	var head uint64
+	b.ReportAllocs()
+	for b.Loop() {
+		head++
+		if module.TraceEnabled() {
+			module.Trace("waiting", "peer", peerID, "head", head, "tip", head+1)
+		}
+	}
+	moduleTraceBenchmarkSink = head
 }

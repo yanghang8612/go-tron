@@ -1085,11 +1085,13 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 					if ps.fetchDelayTimer == nil {
 						ss.armPeerDelayTimerLocked(ps, minFetchRequestInterval)
 					}
-					syncLog.Trace("Sync peer waiting for local head",
-						"peer", ps.peer.ID(),
-						"head", committedHeadNum,
-						"effectiveTip", effectiveTipNum,
-						"inventoryTip", ps.lastInventoryNum)
+					if syncLog.TraceEnabled() {
+						syncLog.Trace("Sync peer waiting for local head",
+							"peer", ps.peer.ID(),
+							"head", committedHeadNum,
+							"effectiveTip", effectiveTipNum,
+							"inventoryTip", ps.lastInventoryNum)
+					}
 					continue
 				}
 				// Always re-poll once a peer's local queue drains. java-tron may
@@ -1302,7 +1304,9 @@ func (ss *SyncService) sendFetchBlocks(peer *p2p.Peer, batch []types.BlockID) {
 	}
 	data, _ := proto.Marshal(fetch)
 	peer.Send(p2p.MsgFetchInvData, data)
-	syncLog.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
+	if syncLog.TraceEnabled() {
+		syncLog.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
+	}
 }
 
 func (ss *SyncService) armPeerDelayTimerLocked(ps *syncPeerState, wait time.Duration) {
