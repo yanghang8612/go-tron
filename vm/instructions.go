@@ -841,7 +841,13 @@ func makeLog(topicCount int) executionFunc {
 		// every 32-byte topic and the data range independently. Capacity-limit
 		// each view so appending to one field cannot overwrite its neighbor.
 		topicBytes := topicCount * 32
-		payload := make([]byte, topicBytes+int(sz))
+		payloadSize := topicBytes + int(sz)
+		var payload []byte
+		if arena := interpreter.tvm.executionLogArena; arena != nil {
+			payload = arena.acquire(payloadSize)
+		} else {
+			payload = make([]byte, payloadSize)
+		}
 		var topics []byte
 		if topicBytes > 0 {
 			topics = payload[:topicBytes:topicBytes]

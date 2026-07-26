@@ -73,7 +73,10 @@ func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
 		0x00,
 	})
 
+	slot := new(transactionInfoSlot)
+	slot.executionLogArena.Reset()
 	tvm := vm.NewTVM(statedb, nil, caller, 1, 1000, tcommon.Address{}, 1, vm.TVMConfig{})
+	tvm.SetExecutionLogArena(&slot.executionLogArena)
 	_, _, err := tvm.Call(caller, contractAddr, nil, 1_000_000, 0)
 	if err != nil {
 		t.Fatalf("execute LOG4: %v", err)
@@ -88,7 +91,7 @@ func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
 	vm.ReleaseTVM(tvm)
 
 	tx := makeTestTriggerTx(1, contractAddr, nil)
-	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	info := slot.build(tx, result, 1, 3000, false)
 	// The block path releases the VM's Log structs immediately after copying
 	// their slice headers into TransactionInfo. Receipt topics must retain the
 	// shared immutable payload without depending on that backing array.

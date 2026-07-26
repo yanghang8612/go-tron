@@ -232,6 +232,7 @@ func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
 	evm.SetDB(ctx.DB)
 	evm.SetRootTransactionID(ctx.Tx.Hash())
 	evm.SetInternalTransactionArena(ctx.InternalTransactionArena)
+	evm.SetExecutionLogArena(ctx.ExecutionLogArena)
 	if ctx.State != nil {
 		evm.SetBlackholeAddress(ctx.State.BlackholeAddress())
 	}

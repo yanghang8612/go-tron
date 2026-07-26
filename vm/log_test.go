@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 )
 
 var logBenchmarkSink Log
+var executionLogArenaSink []byte
 
 func TestLogTopicAccess(t *testing.T) {
 	legacy := &Log{Topics: [][]byte{{0x01}, {0x02}}}
@@ -25,6 +27,84 @@ func TestLogTopicAccess(t *testing.T) {
 	if cap(compact.Topic(0)) != 32 {
 		t.Fatalf("topic capacity = %d, want 32", cap(compact.Topic(0)))
 	}
+}
+
+func TestExecutionLogArenaReusesPayloadWithoutExposingSpareCapacity(t *testing.T) {
+	arena := new(ExecutionLogArena)
+	first := arena.acquire(96)
+	for i := range first {
+		first[i] = byte(i)
+	}
+	firstStorage := &first[0]
+	if cap(first) != len(first) {
+		t.Fatalf("payload capacity = %d, want length %d", cap(first), len(first))
+	}
+
+	arena.Reset()
+	second := arena.acquire(96)
+	if &second[0] != firstStorage {
+		t.Fatal("arena did not reuse payload backing storage")
+	}
+	if !bytes.Equal(second, first) {
+		t.Fatal("arena reset unexpectedly changed payload bytes before overwrite")
+	}
+
+	arena.Reset()
+	if allocs := testing.AllocsPerRun(1000, func() {
+		executionLogArenaSink = arena.acquire(96)
+		arena.Reset()
+	}); allocs != 0 {
+		t.Fatalf("warmed arena allocated %.2f objects, want 0", allocs)
+	}
+}
+
+func TestExecutionLogArenaDropsPathologicalHighWater(t *testing.T) {
+	arena := new(ExecutionLogArena)
+	arena.acquire(maxRetainedExecutionLogPayloadBytes + 1)
+	arena.Reset()
+	if arena.payload != nil {
+		t.Fatalf("oversized arena retained capacity %d", cap(arena.payload))
+	}
+}
+
+func TestLogOpcodeUsesExecutionLogArena(t *testing.T) {
+	tvm := new(TVM)
+	arena := new(ExecutionLogArena)
+	tvm.SetExecutionLogArena(arena)
+	interpreter := NewInterpreter(tvm, TVMConfig{})
+	contract := NewContract(tcommon.Address{0x41, 1}, tcommon.Address{0x41, 2}, 0, 1_000_000)
+	memory := newMemory()
+	memory.resize(64)
+	for i := range memory.store {
+		memory.store[i] = byte(i)
+	}
+	execute := makeLog(1)
+
+	run := func() *byte {
+		stack := newStack()
+		stack.push(uint256.NewInt(7))
+		stack.push(uint256.NewInt(64))
+		stack.push(uint256.NewInt(0))
+		contract.Energy = 1_000_000
+		var pc uint64
+		if _, err := execute(&pc, interpreter, contract, memory, stack); err != nil {
+			t.Fatal(err)
+		}
+		log := &tvm.Logs[0]
+		if log.TopicCount() != 1 || log.Topic(0)[31] != 7 || !bytes.Equal(log.Data, memory.store) {
+			t.Fatalf("arena-backed log = topic %x data %x", log.Topic(0), log.Data)
+		}
+		return &log.compactTopics[0]
+	}
+
+	firstStorage := run()
+	ReleaseExecutionLogs(tvm.Logs)
+	tvm.Logs = nil
+	arena.Reset()
+	if secondStorage := run(); secondStorage != firstStorage {
+		t.Fatal("opcode did not reuse the execution-log arena")
+	}
+	ReleaseExecutionLogs(tvm.Logs)
 }
 
 func BenchmarkLogOpcode(b *testing.B) {

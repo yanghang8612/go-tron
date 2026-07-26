@@ -94,6 +94,10 @@ type Context struct {
 	// owned by async commit until metadata serialization completes. Public and
 	// standalone actuator callers leave it nil and retain one-shot ownership.
 	InternalTransactionArena *vm.InternalTransactionArena
+	// ExecutionLogArena is optional slot-owned storage for immutable VM event
+	// topic/data payloads. It has the same async metadata lifetime as
+	// InternalTransactionArena and is nil for standalone actuator calls.
+	ExecutionLogArena *vm.ExecutionLogArena
 	// Tracer, when non-nil, is installed into the TVM config for this tx so the
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.

@@ -1,6 +1,10 @@
 package vm
 
-import tcommon "github.com/tronprotocol/go-tron/common"
+import (
+	"slices"
+
+	tcommon "github.com/tronprotocol/go-tron/common"
+)
 
 const (
 	// A mainnet transaction ordinarily emits only a handful of logs. Reusing
@@ -8,9 +12,57 @@ const (
 	// letting an exceptional contract pin an unbounded slice in the pool.
 	maxPooledExecutionLogs = 64
 	executionLogPoolDepth  = 64
+
+	// Ordinary transactions emit only a few KiB of event data. Keep that
+	// high-water mark with the transaction-info slot, but drop an exceptional
+	// payload so one historical contract call cannot permanently bloat every
+	// recycled slot it happens to occupy.
+	maxRetainedExecutionLogPayloadBytes = 16 << 10
 )
 
 var executionLogPool = make(chan []Log, executionLogPoolDepth)
+
+// ExecutionLogArena owns the immutable topic/data bytes emitted by one TVM
+// transaction until its TransactionInfo has been serialized. Canonical replay
+// binds one arena to each pooled transaction-info slot, whose async-commit
+// lifetime already extends through metadata persistence.
+//
+// Growing the arena can leave earlier logs pointing at an older backing array;
+// that is safe because those slices keep their bytes alive. Once a slot has
+// observed its usual payload high-water mark, subsequent transactions reuse a
+// single backing allocation.
+type ExecutionLogArena struct {
+	payload []byte
+}
+
+// Reset starts a new transaction after the previous TransactionInfo has left
+// the async commit pipeline.
+func (a *ExecutionLogArena) Reset() {
+	if a == nil {
+		return
+	}
+	if cap(a.payload) > maxRetainedExecutionLogPayloadBytes {
+		a.payload = nil
+		return
+	}
+	a.payload = a.payload[:0]
+}
+
+func (a *ExecutionLogArena) acquire(size int) []byte {
+	if size == 0 {
+		return nil
+	}
+	start := len(a.payload)
+	a.payload = slices.Grow(a.payload, size)
+	a.payload = a.payload[:start+size]
+	return a.payload[start : start+size : start+size]
+}
+
+// SetExecutionLogArena installs slot-owned receipt payload storage. The caller
+// must Reset the arena only after its previous metadata serialization is done.
+func (tvm *TVM) SetExecutionLogArena(arena *ExecutionLogArena) {
+	tvm.executionLogArena = arena
+}
 
 // Log represents a contract log event emitted by LOG0-LOG4.
 type Log struct {

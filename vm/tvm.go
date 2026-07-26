@@ -62,6 +62,7 @@ type TVM struct {
 	newContracts        map[tcommon.Address]bool
 	internalTxHashStack []tcommon.Hash
 	internalTxArena     *InternalTransactionArena
+	executionLogArena   *ExecutionLogArena
 	nestedReturns       *nestedReturnBuffers
 	pooled              bool
 }
