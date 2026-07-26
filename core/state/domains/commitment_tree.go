@@ -292,12 +292,11 @@ func (b *BranchData) encodeToLayout(dst []byte, mask uint16, size int) []byte {
 	// Write childMask.
 	dst = append(dst, byte(mask>>8), byte(mask))
 
-	// Write children low→high nibble.
-	for i := uint8(0); i < 16; i++ {
+	// Write present children low→high nibble. encodingLayout already produced
+	// the mask, so skip absent slots without rescanning all 16 entries.
+	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
+		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
-		if !c.present {
-			continue
-		}
 		dst = append(dst, c.kind)
 		if c.kind == kindHash {
 			dst = append(dst, c.valueHash[:]...)

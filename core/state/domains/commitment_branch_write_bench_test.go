@@ -15,6 +15,25 @@ import (
 type commitmentDBWithoutOwnedValue struct{ CommitmentDB }
 
 var benchmarkDecodedBranch BranchData
+var benchmarkEncodedBranch []byte
+
+func BenchmarkBranchDataEncodeToLayout(b *testing.B) {
+	for _, children := range []int{1, 4, 16} {
+		b.Run(strconv.Itoa(children), func(b *testing.B) {
+			var branch BranchData
+			for nibble := 0; nibble < children; nibble++ {
+				branch.SetHashChild(uint8(nibble), common.Hash{byte(nibble + 1)})
+			}
+			mask, size := branch.encodingLayout()
+			buf := make([]byte, 0, size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				benchmarkEncodedBranch = branch.encodeToLayout(buf[:0], mask, size)
+			}
+		})
+	}
+}
 
 func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {
 	for _, leaves := range []int{1, 4, 16} {
