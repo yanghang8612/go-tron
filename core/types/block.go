@@ -40,9 +40,11 @@ func buildCanonicalAnyTypeURLs() map[string]string {
 // decodedWireBlock coallocates the wrapper and the two singular block-header
 // messages that every canonical block carries. decodedWireTransaction does the
 // same for Transaction.raw_data and reserves the overwhelmingly common single
-// signature/result/contract slots inline. The protobuf decoder appends into
-// these zero-length slices under Merge mode, preserving generated decode
-// semantics while avoiding several tiny heap objects per transaction.
+// signature/result/contract slots inline. A block allocates all of its
+// decodedWireTransaction values as one contiguous slice; pointers embedded in
+// the protobuf graph keep that backing allocation alive. The protobuf decoder
+// appends into these zero-length slices under Merge mode, preserving generated
+// decode semantics while avoiding several tiny heap objects per transaction.
 type decodedWireBlock struct {
 	block     Block
 	pb        corepb.Block
@@ -426,9 +428,12 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 	}
 	decoded := new(decodedWireBlock)
 	decoded.block.pb = &decoded.pb
+	var transactions []decodedWireTransaction
 	if txCount != 0 {
 		decoded.pb.Transactions = make([]*corepb.Transaction, 0, txCount)
+		transactions = make([]decodedWireTransaction, txCount)
 	}
+	transactionIndex := 0
 
 	var unknown []byte
 	for len(data) != 0 {
@@ -450,10 +455,11 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 			return nil, errors.New("malformed block bytes field")
 		}
 		if field == 1 {
-			tx, err := unmarshalBlockTransactionReserved(value)
+			tx, err := unmarshalBlockTransactionReserved(value, &transactions[transactionIndex])
 			if err != nil {
 				return nil, err
 			}
+			transactionIndex++
 			decoded.pb.Transactions = append(decoded.pb.Transactions, tx)
 			continue
 		}
@@ -486,12 +492,11 @@ func countBlockTransactionFields(data []byte) (int, bool) {
 	return count, true
 }
 
-func unmarshalBlockTransactionReserved(data []byte) (*corepb.Transaction, error) {
+func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransaction) (*corepb.Transaction, error) {
 	reserve, ok := scanBlockTransactionReserve(data)
 	if !ok {
 		return nil, errors.New("malformed transaction wire envelope")
 	}
-	decoded := new(decodedWireTransaction)
 	if reserve.rawPresent {
 		decoded.tx.RawData = &decoded.raw
 	}
