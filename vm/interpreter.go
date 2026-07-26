@@ -338,7 +338,11 @@ func opPush(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		endMin = uint64(len(contract.Code))
 	}
 
-	stack.pushBytes(contract.Code[startMin:endMin])
+	if size == 1 && startMin < uint64(len(contract.Code)) {
+		stack.pushByte(contract.Code[startMin])
+	} else {
+		stack.pushBytes(contract.Code[startMin:endMin])
+	}
 	*pc += size
 	return nil, nil
 }

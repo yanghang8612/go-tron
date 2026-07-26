@@ -57,6 +57,10 @@ func (s *Stack) pushBytes(v []byte) {
 	s.data[len(s.data)-1].SetBytes(v)
 }
 
+func (s *Stack) pushByte(v byte) {
+	s.data = append(s.data, uint256.Int{uint64(v)})
+}
+
 func (s *Stack) pop() uint256.Int {
 	ret := s.data[len(s.data)-1]
 	s.data = s.data[:len(s.data)-1]

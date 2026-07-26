@@ -102,6 +102,23 @@ func TestSharedPushHandlerUsesOpcodeWidth(t *testing.T) {
 	}
 }
 
+func TestPush1AtEndPadsMissingImmediateWithZero(t *testing.T) {
+	contract := &Contract{Code: []byte{byte(PUSH1)}}
+	interpreter := &Interpreter{currentOp: PUSH1}
+	stack := newStack()
+	pc := uint64(0)
+
+	if _, err := opPush(&pc, interpreter, contract, nil, stack); err != nil {
+		t.Fatal(err)
+	}
+	if stack.len() != 1 || !stack.peek().IsZero() {
+		t.Fatalf("truncated PUSH1 result = %x, want zero", stack.peek().Bytes32())
+	}
+	if pc != 1 {
+		t.Fatalf("truncated PUSH1 pc = %d, want 1", pc)
+	}
+}
+
 func TestSharedDupHandlerUsesOpcodeDepth(t *testing.T) {
 	for depth := 1; depth <= 16; depth++ {
 		stack := newStack()
