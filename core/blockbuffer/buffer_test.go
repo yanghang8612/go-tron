@@ -1476,6 +1476,18 @@ func TestBuffer_NewIterator_StartParameter(t *testing.T) {
 	}
 }
 
+func TestOverlayStateWalkRangeDoesNotAllocate(t *testing.T) {
+	l := newLayer(common.Hash{}, 1)
+	overlay := newOverlayState()
+	prefix := []byte("dp-")
+	start := []byte("m")
+	if allocs := testing.AllocsPerRun(1000, func() {
+		overlay.walk(l, prefix, start)
+	}); allocs != 0 {
+		t.Fatalf("empty overlay range walk allocated %.2f objects, want 0", allocs)
+	}
+}
+
 // Regression test for the overlay-start bug: prefix-only entries that sit
 // inside the [prefix+start, prefix\xff) range must still surface (writes) or
 // mask base (tombstones), even when prefix < start in byte order. With the

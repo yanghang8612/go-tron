@@ -2289,13 +2289,26 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if l == nil {
 		return
 	}
-	pfx := string(prefix)
-	lo := string(prefix) + string(start)
+	// prefix/start remain caller-owned and are used only during this synchronous
+	// walk. Read-only string views avoid copying them once per live overlay
+	// layer. After the prefix match, comparing suffixes is equivalent to
+	// comparing k against prefix+start and avoids constructing that joined lower
+	// bound as well.
+	var pfx, relativeStart string
+	if len(prefix) != 0 {
+		pfx = unsafe.String(unsafe.SliceData(prefix), len(prefix))
+	}
+	if len(start) != 0 {
+		relativeStart = unsafe.String(unsafe.SliceData(start), len(start))
+	}
 	matches := func(k string) bool {
-		if pfx != "" && !strings.HasPrefix(k, pfx) {
-			return false
+		if pfx != "" {
+			if !strings.HasPrefix(k, pfx) {
+				return false
+			}
+			return k[len(pfx):] >= relativeStart
 		}
-		return k >= lo
+		return k >= relativeStart
 	}
 	for i := range l.shards {
 		s := &l.shards[i]
