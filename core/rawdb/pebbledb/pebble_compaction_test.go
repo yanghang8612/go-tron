@@ -36,8 +36,8 @@ func TestCompactionPressureThresholdsReserveRoutineCapacity(t *testing.T) {
 
 func TestDefaultLBaseReducesBulkSyncLevelMultiplier(t *testing.T) {
 	opts := DefaultOptions()
-	if opts.LBaseMaxBytes != 512<<20 {
-		t.Fatalf("lbase max=%d, want 512 MiB", opts.LBaseMaxBytes)
+	if opts.LBaseMaxBytes != 1024<<20 {
+		t.Fatalf("lbase max=%d, want 1 GiB", opts.LBaseMaxBytes)
 	}
 }
 
