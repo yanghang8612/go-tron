@@ -105,6 +105,11 @@ type baseReadCacheEntry struct {
 	charge  int
 	version uint64
 	live    bool
+	// exposed is set when a direct Get path returns value beyond the cache
+	// shard lock. The next changed flush must replace that backing allocation;
+	// callback-scoped reads instead hold RLock through consumption and leave it
+	// false, allowing a same-capacity refresh to reuse the bytes in place.
+	exposed atomic.Bool
 	// referenced is set only by a resident cache hit (not admission or flush).
 	// Eviction gives such entries one CLOCK-style second chance, preserving hot
 	// upper commitment branches without promoting two-hit scan noise forever.
@@ -148,6 +153,9 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 			e.referenced.Store(true)
 		}
 		value := e.value
+		if value != nil {
+			e.exposed.Store(true)
+		}
 		s.mu.RUnlock()
 		return value, true, baseReadCacheEpoch{}
 	}
@@ -174,6 +182,9 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 				e.referenced.Store(true)
 			}
 			value := e.value
+			if value != nil {
+				e.exposed.Store(true)
+			}
 			s.mu.RUnlock()
 			return value, true, baseReadCacheEpoch{}, false
 		}
@@ -186,6 +197,64 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	s.mu.RUnlock()
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
 	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
+}
+
+// viewWithEpoch is the callback-scoped counterpart of getWithEpoch. A cache
+// hit stays protected by the shard read lock until fn returns and is reported
+// as stable=false: callers may consume the bytes synchronously but must not
+// retain them. This lets a later flush reuse an unexposed value allocation in
+// place without racing a decoder or invalidating a borrowed leaf key.
+func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable bool) error) (cached, present bool, epoch baseReadCacheEpoch, err error) {
+	if c == nil {
+		return false, false, baseReadCacheEpoch{}, nil
+	}
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	s.mu.RLock()
+	e, ok := s.entries[string(key)]
+	if ok {
+		if !e.referenced.Load() {
+			e.referenced.Store(true)
+		}
+		if e.value == nil {
+			s.mu.RUnlock()
+			return true, false, baseReadCacheEpoch{}, nil
+		}
+		defer s.mu.RUnlock()
+		return true, true, baseReadCacheEpoch{}, fn(e.value, false)
+	}
+	s.mu.RUnlock()
+	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
+	return false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, nil
+}
+
+// viewAtVersion applies viewWithEpoch's scoped lifetime to a commitment
+// snapshot session. A replacement newer than maxVersion is bypassed exactly as
+// in getAtVersion and cannot be overwritten by the older snapshot value.
+func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(value []byte, stable bool) error) (cached, present bool, epoch baseReadCacheEpoch, cacheable bool, err error) {
+	if c == nil {
+		return false, false, baseReadCacheEpoch{}, false, nil
+	}
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	s.mu.RLock()
+	e, ok := s.entries[string(key)]
+	if ok {
+		if e.version <= maxVersion {
+			if !e.referenced.Load() {
+				e.referenced.Store(true)
+			}
+			if e.value == nil {
+				s.mu.RUnlock()
+				return true, false, baseReadCacheEpoch{}, false, nil
+			}
+			defer s.mu.RUnlock()
+			return true, true, baseReadCacheEpoch{}, false, fn(e.value, false)
+		}
+		s.mu.RUnlock()
+		return false, false, baseReadCacheEpoch{}, false, nil
+	}
+	s.mu.RUnlock()
+	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
+	return false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
 }
 
 func (c *baseReadCache) advanceVersion() uint64 {
@@ -202,7 +271,15 @@ func (c *baseReadCache) advanceVersion() uint64 {
 // whether the returned slice is cache-owned; a callback-backed reader must copy
 // it before returning when false.
 func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) ([]byte, bool) {
-	return c.setEntryIfEpoch(key, value, false, epoch)
+	return c.setEntryIfEpoch(key, value, false, true, epoch)
+}
+
+// storeIfEpoch admits an immutable copy without returning its backing bytes.
+// Callback-style durable readers consume their original scoped/owned value and
+// use this form so the cache entry remains eligible for in-place flush refresh.
+func (c *baseReadCache) storeIfEpoch(key, value []byte, epoch baseReadCacheEpoch) bool {
+	_, stored := c.setEntryIfEpoch(key, value, false, false, epoch)
+	return stored
 }
 
 // setMissingIfEpoch records a confirmed durable-base miss. Missing rows are
@@ -211,11 +288,11 @@ func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) 
 // storage probes stop reopening Pebble iterators. Overlay layers are consulted
 // first, and flush/discard invalidation uses the same complete physical key.
 func (c *baseReadCache) setMissingIfEpoch(key []byte, epoch baseReadCacheEpoch) bool {
-	_, stored := c.setEntryIfEpoch(key, nil, true, epoch)
+	_, stored := c.setEntryIfEpoch(key, nil, true, false, epoch)
 	return stored
 }
 
-func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch baseReadCacheEpoch) ([]byte, bool) {
+func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool, epoch baseReadCacheEpoch) ([]byte, bool) {
 	if c == nil {
 		return value, false
 	}
@@ -237,6 +314,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 	if current, ok := s.entries[string(key)]; ok {
 		current.referenced.Store(true)
 		value := current.value
+		if expose && value != nil {
+			current.exposed.Store(true)
+		}
 		s.mu.Unlock()
 		return value, true
 	}
@@ -250,6 +330,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing bool, epoch b
 		v = cloneBaseReadCacheValue(value)
 	}
 	entry := &baseReadCacheEntry{key: k, value: v, charge: charge, version: c.version.Load(), live: true}
+	if expose && v != nil {
+		entry.exposed.Store(true)
+	}
 	s.entries[k] = entry
 	s.queue = append(s.queue, entry)
 	s.used += charge
@@ -337,7 +420,17 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// identical replacement. A nil old value is the cached-miss sentinel and
 		// must still be replaced by a non-nil present-empty value.
 		if old.value == nil || !bytes.Equal(old.value, value) {
+			if old.value != nil && !old.exposed.Load() && len(value) <= cap(old.value) {
+				// No direct Get has exposed this backing and callback readers are
+				// excluded by s.mu, so reuse it without changing the conservative
+				// capacity-based charge retained from its original allocation.
+				old.value = old.value[:len(value)]
+				copy(old.value, value)
+				old.version = c.version.Load()
+				return
+			}
 			old.value = cloneBaseReadCacheValue(value)
+			old.exposed.Store(false)
 		}
 		s.used += charge - old.charge
 		old.charge = charge

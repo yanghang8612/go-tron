@@ -324,6 +324,73 @@ func TestBaseReadCache_FlushRefreshKeepsCanonicalKeySeparateFromValue(t *testing
 	}
 }
 
+func TestBaseReadCache_ScopedViewAllowsInPlaceFlushRefresh(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("state-commitment-branch-v1-scoped-refresh")
+	oldValue := []byte("branch-value-one")
+	newValue := []byte("branch-value-two")
+
+	// Complete two-hit admission without returning the cache-owned slice.
+	for attempt := 0; attempt < 2; attempt++ {
+		_, _, epoch := c.getWithEpoch(key)
+		stored := c.storeIfEpoch(key, oldValue, epoch)
+		if stored != (attempt == 1) {
+			t.Fatalf("attempt %d stored=%v", attempt, stored)
+		}
+	}
+
+	shard := &c.shards[baseReadCacheShardIndex(key)]
+	entry := shard.entries[string(key)]
+	before := unsafe.SliceData(entry.value)
+	called := 0
+	cached, present, _, err := c.viewWithEpoch(key, func(value []byte, stable bool) error {
+		called++
+		if stable || !bytes.Equal(value, oldValue) {
+			t.Fatalf("scoped cache view = (%q, stable=%v)", value, stable)
+		}
+		return nil
+	})
+	if err != nil || !cached || !present || called != 1 {
+		t.Fatalf("scoped view = cached=%v present=%v called=%d err=%v", cached, present, called, err)
+	}
+
+	c.setFlushed(string(key), newValue)
+	if got := string(entry.value); got != string(newValue) {
+		t.Fatalf("refreshed value=%q, want %q", got, newValue)
+	}
+	if unsafe.SliceData(entry.value) != before {
+		t.Fatal("callback-scoped refresh replaced reusable value storage")
+	}
+}
+
+func TestBaseReadCache_DirectGetPreventsInPlaceFlushRefresh(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("state-commitment-branch-v1-direct-refresh")
+	oldValue := []byte("branch-value-one")
+	newValue := []byte("branch-value-two")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		_, _, epoch := c.getWithEpoch(key)
+		c.storeIfEpoch(key, oldValue, epoch)
+	}
+	retained, ok, _ := c.getWithEpoch(key)
+	if !ok || !bytes.Equal(retained, oldValue) {
+		t.Fatalf("direct cache get = (%q,%v)", retained, ok)
+	}
+	retainedPtr := unsafe.SliceData(retained)
+	c.setFlushed(string(key), newValue)
+	if !bytes.Equal(retained, oldValue) {
+		t.Fatalf("directly retained value mutated to %q", retained)
+	}
+	entry := c.shards[baseReadCacheShardIndex(key)].entries[string(key)]
+	if got := string(entry.value); got != string(newValue) {
+		t.Fatalf("refreshed value=%q, want %q", got, newValue)
+	}
+	if unsafe.SliceData(entry.value) == retainedPtr {
+		t.Fatal("directly exposed backing was reused by flush")
+	}
+}
+
 func TestBaseReadCache_FlushAdmitsReadBeforeWriteValue(t *testing.T) {
 	c := newBaseReadCache(1<<20, "frequently-mutated-commitment-")
 	key := []byte("frequently-mutated-commitment-branch")

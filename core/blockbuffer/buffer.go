@@ -1158,11 +1158,11 @@ func (b *Buffer) GetNoCopyCachedStateAccountLatest(prefix []byte, accountID comm
 }
 
 // ViewNoCopyCachedKeyParts resolves a split physical key and invokes fn while
-// the value is valid. stable is true for immutable overlay/cache values and
-// owned fallback Get results; false means the value is a callback-scoped Pebble
-// view and fn must not retain slices that alias it. Commitment branch decoding
-// uses this distinction to avoid copying an entire cold branch merely to keep a
-// handful of leaf keys alive after the callback.
+// the value is valid. stable is true for immutable overlay and owned fallback
+// Get values. Cache and Pebble-view hits are callback-scoped (stable=false), so
+// fn must not retain slices that alias them. Commitment branch decoding uses
+// this distinction to copy only leaf keys that outlive the callback while the
+// hash-dominated encoded branch remains allocation-free.
 func (b *Buffer) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	total := len(first) + len(second)
 	if total > splitReadKeyStackSize {
@@ -1199,11 +1199,9 @@ func (b *Buffer) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bo
 	cache := view.baseReadCache
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
-		if value, ok, epoch := cache.getWithEpoch(key); ok {
-			if value == nil {
-				return false, nil
-			}
-			return true, fn(value, true)
+		cached, present, epoch, err := cache.viewWithEpoch(key, fn)
+		if cached {
+			return present, err
 		} else {
 			cacheEpoch = epoch
 		}
@@ -1331,10 +1329,7 @@ func newScopedBaseViewContext() any {
 func (ctx *scopedBaseViewContext) consume(value []byte) error {
 	ctx.called = true
 	if ctx.cache != nil {
-		if stored, admitted := ctx.cache.setIfEpoch(ctx.key, value, ctx.epoch); admitted {
-			ctx.callbackErr = ctx.fn(stored, true)
-			return ctx.callbackErr
-		}
+		ctx.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
 	}
 	ctx.callbackErr = ctx.fn(value, false)
 	return ctx.callbackErr
@@ -1394,8 +1389,10 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // viewBaseIntoCache is the callback counterpart of readBaseIntoCache. On a
 // Pebble cold miss the callback consumes the engine-owned value before its
 // closer is released, avoiding the owned fallback copy readBaseIntoCache must
-// create. A value admitted into the cache is stable; a rejected/probationary
-// callback view is transient. Generic Get results are caller-owned and stable.
+// create. Cache admission retains its own copy but the current callback keeps
+// consuming the engine-owned transient value; later cache hits are likewise
+// scoped under the cache shard read lock. Generic Get results remain
+// caller-owned and stable.
 func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, fn func(value []byte, stable bool) error) (bool, error) {
 	if viewer, ok := base.(valueViewReader); ok {
 		ctx := borrowScopedBaseViewContext(cache, key, epoch, fn)
@@ -1424,9 +1421,7 @@ func viewBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 		return false, nil
 	}
 	if cache != nil {
-		if stored, admitted := cache.setIfEpoch(key, value, epoch); admitted {
-			value = stored
-		}
+		cache.storeIfEpoch(key, value, epoch)
 	}
 	return true, fn(value, true)
 }

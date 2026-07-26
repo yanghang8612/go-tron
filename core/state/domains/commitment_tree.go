@@ -416,8 +416,9 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 
 // decodeBranchDataIntoNoCopy is the fold reader's allocation-free variant.
 // Leaf keys alias data; callers must keep data alive and immutable until dst is
-// no longer used. rawdbBranchStore satisfies this with owned Get results or
-// immutable-by-replacement blockbuffer/cache values.
+// no longer used. rawdbBranchStore uses it only for owned Get results and
+// immutable overlay values; callback-scoped cache/Pebble values take the
+// copying DecodeBranchDataInto path.
 func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
 	if err := decodeBranchDataInto(data, dst); err != nil {
 		// The pooled fold reader may have installed partial leaf-key views before

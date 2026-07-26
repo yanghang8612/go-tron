@@ -174,9 +174,7 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 func (ctx *commitmentParentReadContext) consume(value []byte) error {
 	s := ctx.session
 	if ctx.cacheable && s.cache.version.Load() == s.cacheVersion {
-		if stored, admitted := s.cache.setIfEpoch(ctx.key, value, ctx.epoch); admitted {
-			return ctx.fn(stored, true)
-		}
+		s.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
 	}
 	return ctx.fn(value, false)
 }
@@ -234,11 +232,9 @@ func (v *commitmentParentView) get(key []byte, fn func(value []byte, stable bool
 	cache := view.baseReadCache
 	var epoch baseReadCacheEpoch
 	if cache != nil {
-		if value, ok, observed := cache.getWithEpoch(key); ok {
-			if value == nil {
-				return false, nil
-			}
-			return true, fn(value, true)
+		cached, present, observed, err := cache.viewWithEpoch(key, fn)
+		if cached {
+			return present, err
 		} else {
 			epoch = observed
 		}
@@ -344,12 +340,9 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 	} else if found {
 		return true, fn(value, true)
 	}
-	value, cached, cacheEpoch, cacheable := s.cache.getAtVersion(key, s.cacheVersion)
+	cached, present, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
 	if cached {
-		if value == nil {
-			return false, nil
-		}
-		return true, fn(value, true)
+		return present, err
 	}
 	cursor := s.cursors[reader]
 	if cursor == nil {
@@ -883,11 +876,9 @@ func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, st
 	cache := view.baseReadCache
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
-		if cached, ok, epoch := cache.getWithEpoch(key); ok {
-			if cached == nil {
-				return false, nil
-			}
-			return true, fn(cached, true)
+		cached, present, epoch, err := cache.viewWithEpoch(key, fn)
+		if cached {
+			return present, err
 		} else {
 			cacheEpoch = epoch
 		}
@@ -917,11 +908,9 @@ func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable
 	cache := view.baseReadCache
 	var cacheEpoch baseReadCacheEpoch
 	if cache != nil {
-		if cached, ok, epoch := cache.getWithEpoch(key); ok {
-			if cached == nil {
-				return false, nil
-			}
-			return true, fn(cached, true)
+		cached, present, epoch, err := cache.viewWithEpoch(key, fn)
+		if cached {
+			return present, err
 		} else {
 			cacheEpoch = epoch
 		}

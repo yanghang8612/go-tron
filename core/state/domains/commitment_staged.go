@@ -41,8 +41,8 @@ var branchDecodeViewPool = sync.Pool{
 
 func (v *branchDecodeView) decode(encoded []byte, stable bool) error {
 	if stable {
-		// Immutable overlay/cache values (and generic owned Get results) live
-		// for the full fold descent, so leaf keys may alias them directly.
+		// Immutable overlay values and generic owned Get results live for the
+		// full fold descent, so leaf keys may alias them directly.
 		return decodeBranchDataIntoNoCopy(encoded, v.dst)
 	}
 	// A cold Pebble value is valid only inside this callback. Copy only its

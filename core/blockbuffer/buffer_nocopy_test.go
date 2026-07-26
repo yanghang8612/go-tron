@@ -257,7 +257,7 @@ func TestCommitmentSplitReadThenFlushCompletesAdmission(t *testing.T) {
 	}
 }
 
-func TestCommitmentSplitViewReportsTransientBaseAndStableCacheOverlay(t *testing.T) {
+func TestCommitmentSplitViewReportsScopedBaseCacheAndStableOverlay(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	prefix := bytes.Repeat([]byte{0x0b}, 32)
 	baseValue := []byte("durable-branch")
@@ -284,11 +284,12 @@ func TestCommitmentSplitViewReportsTransientBaseAndStableCacheOverlay(t *testing
 	}
 
 	// First sighting remains on admission probation; the second is copied into
-	// the cache and can safely outlive the base View callback. The third is a
-	// cache hit and never reaches the base.
+	// the cache but this callback still consumes the Pebble-scoped value. The
+	// third is a cache hit protected only for its callback duration, allowing a
+	// later flush to reuse unexposed cache storage safely.
 	view(buf, baseValue, false)
-	view(buf, baseValue, true)
-	view(buf, baseValue, true)
+	view(buf, baseValue, false)
+	view(buf, baseValue, false)
 	if base.views != 2 {
 		t.Fatalf("base views = %d, want 2", base.views)
 	}
