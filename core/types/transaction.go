@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -29,6 +30,11 @@ type Transaction struct {
 	contractMessageOnce sync.Once
 	contractMessage     proto.Message
 	contractMessageErr  error
+	// triggerContract owns the dominant mainnet contract type inline. Block
+	// wrappers are already coallocated in one []Transaction backing object, so
+	// decoding a matching Any into this slot removes one standalone protobuf
+	// allocation without extending the lifetime of any additional object.
+	triggerContract contractpb.TriggerSmartContract
 
 	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
 	// the first recovery error) so the parallel pre-verification pass in
@@ -92,6 +98,11 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 		}
 		if contract.Parameter == nil {
 			tx.contractMessageErr = errors.New("contract has no parameter")
+			return
+		}
+		if contract.Parameter.MessageIs(&tx.triggerContract) {
+			tx.contractMessage = &tx.triggerContract
+			tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
 			return
 		}
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()

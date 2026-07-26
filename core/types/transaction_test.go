@@ -155,6 +155,40 @@ func TestTransactionDecodedContractMemoizesError(t *testing.T) {
 	}
 }
 
+func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
+	want := &contractpb.TriggerSmartContract{
+		OwnerAddress:    []byte{0x41, 0x01},
+		ContractAddress: []byte{0x41, 0x02},
+		Data:            []byte{0xaa, 0xbb, 0xcc},
+		CallValue:       123,
+	}
+	parameter, err := anypb.New(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TriggerSmartContract,
+			Parameter: parameter,
+		}},
+	}})
+
+	gotMessage, err := tx.DecodedContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := gotMessage.(*contractpb.TriggerSmartContract)
+	if !ok {
+		t.Fatalf("decoded type = %T, want *TriggerSmartContract", gotMessage)
+	}
+	if got != &tx.triggerContract {
+		t.Fatal("trigger contract was not decoded into the wrapper's inline slot")
+	}
+	if !proto.Equal(got, want) {
+		t.Fatalf("decoded trigger = %v, want %v", got, want)
+	}
+}
+
 var decodedContractBenchmarkSink proto.Message
 
 var transactionHashBenchmarkSink common.Hash
@@ -230,6 +264,33 @@ func BenchmarkTransactionDecodedContract(b *testing.B) {
 			decodedContractBenchmarkSink, _ = tx.DecodedContract()
 		}
 	})
+}
+
+func BenchmarkTransactionDecodedTriggerContractCold(b *testing.B) {
+	trigger := &contractpb.TriggerSmartContract{
+		OwnerAddress:    make([]byte, common.AddressLength),
+		ContractAddress: make([]byte, common.AddressLength),
+		Data:            make([]byte, 128),
+		CallValue:       1_000_000,
+	}
+	parameter, err := anypb.New(trigger)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TriggerSmartContract,
+			Parameter: parameter,
+		}},
+	}}
+	b.ReportAllocs()
+	for b.Loop() {
+		tx := NewTransactionFromPB(pb)
+		decodedContractBenchmarkSink, err = tx.DecodedContract()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 // TestRecoverSigners_JavaSignatureV pins java-tron Rsv.fromSignature parity for
