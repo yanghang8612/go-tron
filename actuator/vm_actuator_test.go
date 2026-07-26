@@ -135,6 +135,10 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.ResultSink = &Result{
+		ShieldedTransactionFee: 99,
+		CancelUnfreezeV2Amount: map[string]int64{"ENERGY": 88},
+	}
 
 	act := &VMActuator{}
 	result, err := act.Execute(ctx)
@@ -145,6 +149,12 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	// EnergyFee split is filled in by PayEnergyBill in state_processor.
 	if result.EnergyUsageTotal <= 0 {
 		t.Fatal("expected non-zero EnergyUsageTotal")
+	}
+	if result != ctx.ResultSink {
+		t.Fatal("create did not return the block-local result sink")
+	}
+	if result.ShieldedTransactionFee != 0 || result.CancelUnfreezeV2Amount != nil {
+		t.Fatalf("create result sink retained stale fields: %#v", result)
 	}
 	contractAddr := generateContractAddress(ctx.Tx, owner)
 	if got := ctx.State.ReadContractABI(contractAddr); !proto.Equal(got, csc.NewContract.Abi) {
@@ -349,6 +359,10 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 		ContractAddress: contractAddr[:],
 	})
 	ctx.State.SetCode(contractAddr, code)
+	ctx.ResultSink = &Result{
+		ShieldedTransactionFee: 99,
+		CancelUnfreezeV2Amount: map[string]int64{"ENERGY": 88},
+	}
 
 	act := &VMActuator{}
 	result, err := act.Execute(ctx)
@@ -357,6 +371,12 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	}
 	if result.EnergyUsageTotal <= 0 {
 		t.Fatal("expected non-zero EnergyUsageTotal")
+	}
+	if result != ctx.ResultSink {
+		t.Fatal("trigger did not return the block-local result sink")
+	}
+	if result.ShieldedTransactionFee != 0 || result.CancelUnfreezeV2Amount != nil {
+		t.Fatalf("trigger result sink retained stale fields: %#v", result)
 	}
 	t.Logf("Trigger energy total: %d", result.EnergyUsageTotal)
 }

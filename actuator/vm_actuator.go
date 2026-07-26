@@ -256,7 +256,8 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	bytecode := csc.NewContract.Bytecode
 	contractAddr := generateContractAddress(ctx.Tx, owner)
 
-	result := &Result{ContractAddress: contractAddr[:]}
+	result := ctx.newResult()
+	result.ContractAddress = contractAddr[:]
 	energyLimit := uint64(accountEnergyLimit(ctx, owner, ctx.Tx.FeeLimit(), callValue, result))
 	// accountEnergyLimit pre-charged the creator's energy_usage into the
 	// VM-visible state; undo it after the VM on every return path (see executeTrigger).
@@ -344,7 +345,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	callValue := tsc.CallValue
 	data := tsc.Data
 
-	result := &Result{}
+	result := ctx.newResult()
 	result.ContractAddress = contractAddr[:]
 	energyLimitVal, err := triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result)
 	if err != nil {
