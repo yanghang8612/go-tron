@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -195,6 +196,78 @@ func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
 	}
 }
 
+func TestTransactionDecodedTransferContractUsesOwnedArena(t *testing.T) {
+	want := &contractpb.TransferContract{
+		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ToAddress:    bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Amount:       1_000_000,
+	}
+	parameter, err := anypb.New(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: parameter,
+		}},
+	}})
+
+	gotMessage, err := tx.DecodedContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := gotMessage.(*contractpb.TransferContract)
+	if !ok {
+		t.Fatalf("decoded type = %T, want *TransferContract", gotMessage)
+	}
+	if !proto.Equal(got, want) {
+		t.Fatalf("decoded transfer = %v, want %v", got, want)
+	}
+	// The generated decoder produces separate address objects. Adjacent spans
+	// prove both fields instead reside in the wrapper's owned address arena.
+	ownerEnd := uintptr(unsafe.Pointer(unsafe.SliceData(got.OwnerAddress))) + uintptr(len(got.OwnerAddress))
+	toStart := uintptr(unsafe.Pointer(unsafe.SliceData(got.ToAddress)))
+	if toStart != ownerEnd {
+		t.Fatal("transfer addresses do not occupy adjacent owned spans")
+	}
+	for index := range parameter.Value {
+		parameter.Value[index] ^= 0xff
+	}
+	if !proto.Equal(got, want) {
+		t.Fatal("decoded transfer aliases the Any wire buffer")
+	}
+}
+
+func FuzzUnmarshalTransferContractOwnedEquivalent(f *testing.F) {
+	seed, err := proto.Marshal(&contractpb.TransferContract{
+		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ToAddress:    bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Amount:       123,
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(nil))
+	f.Add(seed)
+	f.Add(append(bytes.Clone(seed), protowire.AppendTag(nil, 100, protowire.VarintType)...))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if !transferDecodeReserveLayoutOK {
+			t.Fatal("protobuf layout guard unexpectedly disabled transfer decoder")
+		}
+		decoded := new(decodedTransferContract)
+		gotErr := decoded.unmarshal(data)
+		var want contractpb.TransferContract
+		wantErr := proto.Unmarshal(data, &want)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch: owned=%v generated=%v, wire=%x", gotErr, wantErr, data)
+		}
+		if gotErr == nil && !proto.Equal(&decoded.contract, &want) {
+			t.Fatalf("decode mismatch: owned=%v generated=%v, wire=%x", &decoded.contract, &want, data)
+		}
+	})
+}
+
 func FuzzUnmarshalTriggerContractInlineEquivalent(f *testing.F) {
 	seed, err := proto.Marshal(&contractpb.TriggerSmartContract{
 		OwnerAddress:    bytes.Repeat([]byte{0x41}, common.AddressLength),
@@ -296,6 +369,14 @@ func BenchmarkTransactionDecodedContract(b *testing.B) {
 			decodedContractBenchmarkSink, _ = parameter.UnmarshalNew()
 		}
 	})
+	b.Run("OwnedTransfer", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decoded := new(decodedTransferContract)
+			_ = decoded.unmarshal(parameter.Value)
+			decodedContractBenchmarkSink = &decoded.contract
+		}
+	})
 	b.Run("Memoized", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
@@ -318,6 +399,32 @@ func BenchmarkTransactionDecodedTriggerContractCold(b *testing.B) {
 	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
 		Contract: []*corepb.Transaction_Contract{{
 			Type:      corepb.Transaction_Contract_TriggerSmartContract,
+			Parameter: parameter,
+		}},
+	}}
+	b.ReportAllocs()
+	for b.Loop() {
+		tx := NewTransactionFromPB(pb)
+		decodedContractBenchmarkSink, err = tx.DecodedContract()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTransactionDecodedTransferContractCold(b *testing.B) {
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: make([]byte, common.AddressLength),
+		ToAddress:    make([]byte, common.AddressLength),
+		Amount:       1_000_000,
+	}
+	parameter, err := anypb.New(transfer)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
 			Parameter: parameter,
 		}},
 	}}

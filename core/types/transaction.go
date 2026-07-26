@@ -22,7 +22,19 @@ const ContractTypeNone corepb.Transaction_Contract_ContractType = -1
 // this size; larger calls retain the generated decoder's exact-sized heap copy.
 const triggerDataInlineSize = 132
 
-var triggerDecodeReserveLayoutOK = verifyTriggerDecodeReserveLayout()
+var (
+	triggerDecodeReserveLayoutOK  = verifyTriggerDecodeReserveLayout()
+	transferDecodeReserveLayoutOK = verifyTransferDecodeReserveLayout()
+)
+
+// decodedTransferContract coalesces the message and its two canonical TRON
+// addresses into one 144-byte ownership object. A pointer to contract keeps the
+// entire wrapper reachable through Transaction.contractMessage.
+type decodedTransferContract struct {
+	contract     contractpb.TransferContract
+	ownerAddress [common.AddressLength]byte
+	toAddress    [common.AddressLength]byte
+}
 
 type Transaction struct {
 	pb       *corepb.Transaction
@@ -126,6 +138,22 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 			tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
 			return
 		}
+		if contract.Type == corepb.Transaction_Contract_TransferContract {
+			decoded := new(decodedTransferContract)
+			if contract.Parameter.MessageIs(&decoded.contract) {
+				tx.contractMessage = &decoded.contract
+				if transferDecodeReserveLayoutOK {
+					tx.contractMessageErr = decoded.unmarshal(contract.Parameter.Value)
+					if tx.contractMessageErr == nil {
+						return
+					}
+				}
+				// Preserve generated decoding errors for malformed data and act as
+				// the schema-regeneration fallback.
+				tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
+				return
+			}
+		}
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
 	})
 	return tx.contractMessage, tx.contractMessageErr
@@ -140,6 +168,49 @@ func verifyTriggerDecodeReserveLayout() bool {
 		protoFieldShape(fields, 4, protoreflect.BytesKind, false) &&
 		protoFieldShape(fields, 5, protoreflect.Int64Kind, false) &&
 		protoFieldShape(fields, 6, protoreflect.Int64Kind, false)
+}
+
+func verifyTransferDecodeReserveLayout() bool {
+	fields := (&contractpb.TransferContract{}).ProtoReflect().Descriptor().Fields()
+	return fields.Len() == 3 &&
+		protoFieldShape(fields, 1, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 2, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 3, protoreflect.Int64Kind, false)
+}
+
+func (decoded *decodedTransferContract) unmarshal(data []byte) error {
+	decoded.contract = contractpb.TransferContract{}
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed transfer contract wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case wireType == protowire.BytesType && (field == 1 || field == 2):
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transfer contract bytes field")
+			}
+			if field == 1 {
+				decoded.contract.OwnerAddress = copyBytesInto(value, decoded.ownerAddress[:])
+			} else {
+				decoded.contract.ToAddress = copyBytesInto(value, decoded.toAddress[:])
+			}
+		case wireType == protowire.VarintType && field == 3:
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transfer contract amount field")
+			}
+			decoded.contract.Amount = int64(value)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(&decoded.contract, unknown)
+	return nil
 }
 
 func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
