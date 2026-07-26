@@ -748,6 +748,23 @@ func BenchmarkBufferGetNoCopyCachedStateAccountLatestHit(b *testing.B) {
 	}
 }
 
+func BenchmarkBufferGetNoCopyCachedStateKVLatestDurableMiss(b *testing.B) {
+	base := &directValueViewReader{value: []byte("durable-state-value")}
+	buf := New(base)
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x42}, common.AddressLength)).AccountID()
+	logicalKey := bytes.Repeat([]byte{0x5a}, 32)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := buf.GetNoCopyCachedStateKVLatest(
+			[]byte("state-kv-latest/"), owner, 17, uint16(kvdomains.ContractStorage), logicalKey,
+		)
+		if err != nil || len(got) != len(base.value) {
+			b.Fatalf("structured durable read = %d bytes, %v", len(got), err)
+		}
+	}
+}
+
 func BenchmarkBufferReadTaposRefOverlayHit(b *testing.B) {
 	buf := New(nil)
 	buf.BeginBlock(common.Hash{0x91}, 0x1234)
@@ -907,6 +924,26 @@ func BenchmarkLayerViewBaseGetNoCopyCached(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		v, _ := view.GetNoCopyCached(key)
 		_ = v
+	}
+}
+
+func BenchmarkLayerViewGetNoCopyCachedStateKVLatestDurableMiss(b *testing.B) {
+	base := &directValueViewReader{value: []byte("durable-state-value")}
+	buf := New(base)
+	buf.BeginBlock(bufHash(1), 1)
+	h, _ := buf.NewestInflight()
+	view := buf.ViewLayer(h)
+	owner := common.BytesToAddress(bytes.Repeat([]byte{0x42}, common.AddressLength)).AccountID()
+	logicalKey := bytes.Repeat([]byte{0x5a}, 32)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := view.GetNoCopyCachedStateKVLatest(
+			[]byte("state-kv-latest/"), owner, 17, uint16(kvdomains.ContractStorage), logicalKey,
+		)
+		if err != nil || len(got) != len(base.value) {
+			b.Fatalf("layer structured durable read = %d bytes, %v", len(got), err)
+		}
 	}
 }
 

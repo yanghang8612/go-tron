@@ -935,8 +935,8 @@ func (v *LayerView) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common
 }
 
 // getNoCopyCachedStackKey resolves a key backed by caller stack storage. A
-// durable miss takes an exact-sized owned copy before the interface call/cache
-// fill, avoiding escape of the entire fixed scratch array.
+// durable miss uses the shared pooled scratch-key path, avoiding both escape of
+// the caller's fixed array and one temporary heap object per base read.
 func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	b := v.b
 	view := b.loadReadView()
@@ -968,11 +968,7 @@ func (v *LayerView) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 			cacheEpoch = epoch
 		}
 	}
-	owned := append([]byte(nil), key...)
-	if cache == nil {
-		return b.base.Get(owned)
-	}
-	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
+	return readBaseIntoCachePooledKey(b.base, cache, key, cacheEpoch)
 }
 
 // Has reports existence over [bound layer, committed stack, base].

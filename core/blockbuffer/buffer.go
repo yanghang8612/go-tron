@@ -1227,8 +1227,9 @@ func (b *Buffer) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.Ac
 }
 
 // getNoCopyCachedStackKey resolves a key backed by caller stack storage. A
-// durable miss takes an exact-sized owned copy before the interface call/cache
-// fill, avoiding escape of the entire fixed scratch array.
+// durable miss copies into a pooled scratch key before the interface call/cache
+// fill, avoiding both escape of the caller's fixed array and one temporary heap
+// object per Pebble read.
 func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 	view := b.loadReadView()
 	keyHash := layerBloomHashBytes(key)
@@ -1257,11 +1258,7 @@ func (b *Buffer) getNoCopyCachedStackKey(key []byte) ([]byte, error) {
 			cacheEpoch = epoch
 		}
 	}
-	owned := append([]byte(nil), key...)
-	if cache == nil {
-		return b.base.Get(owned)
-	}
-	return readBaseIntoCache(b.base, cache, owned, cacheEpoch)
+	return readBaseIntoCachePooledKey(b.base, cache, key, cacheEpoch)
 }
 
 // readBaseViewContext and scopedBaseViewContext keep the callback functions
@@ -1392,6 +1389,28 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 	}
 	stored, _ := cache.setIfEpoch(key, value, epoch)
 	return stored, nil
+}
+
+// readBaseIntoCachePooledKey makes caller stack-backed keys safe for interface
+// calls without allocating an owned slice for every durable miss. All base and
+// cache operations consume the key synchronously; cache admission clones it
+// before this scratch buffer is returned to the pool.
+func readBaseIntoCachePooledKey(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) ([]byte, error) {
+	keyBuf := borrowSplitReadKey()
+	pooledKey := keyBuf[:len(key)]
+	copy(pooledKey, key)
+
+	var (
+		value []byte
+		err   error
+	)
+	if cache == nil {
+		value, err = base.Get(pooledKey)
+	} else {
+		value, err = readBaseIntoCache(base, cache, pooledKey, epoch)
+	}
+	returnSplitReadKey(keyBuf)
+	return value, err
 }
 
 // viewBaseIntoCache is the callback counterpart of readBaseIntoCache. On a
