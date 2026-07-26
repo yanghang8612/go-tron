@@ -59,14 +59,30 @@ func (maps *accountDecodedMaps) assign(pb *corepb.Account) {
 	pb.FreeAssetNetUsageV2 = maps.freeAssetNetUsageV2
 }
 
-// unmarshalAccountDirectMaps decodes Account's six string→int64 maps without
-// protobuf reflection. All other fields, including unknown top-level fields,
-// stay on protobuf-go's generated decoder after the map records are filtered
-// from a pooled wire buffer. The schema guard is shared with the direct map
-// marshaler so a future Account field/layout change disables both fast paths.
+// unmarshalAccountDirectMaps decodes into a new protobuf for tests and callers
+// that need the raw message. UnmarshalAccount uses the Into form below so its
+// wrapper and protobuf can share one allocation.
 func unmarshalAccountDirectMaps(data []byte) (*corepb.Account, error, bool) {
-	if !accountDirectMapLayoutOK || !accountWireMayContainMap(data) {
+	pb := new(corepb.Account)
+	err, handled := unmarshalAccountDirectMapsInto(data, pb)
+	if !handled {
 		return nil, nil, false
+	}
+	if err != nil {
+		return nil, err, true
+	}
+	return pb, nil, true
+}
+
+// unmarshalAccountDirectMapsInto decodes Account's six string→int64 maps
+// without protobuf reflection. All other fields, including unknown top-level
+// fields, stay on protobuf-go's generated decoder after the map records are
+// filtered from a pooled wire buffer. The schema guard is shared with the
+// direct map marshaler so a future Account field/layout change disables both
+// fast paths.
+func unmarshalAccountDirectMapsInto(data []byte, pb *corepb.Account) (error, bool) {
+	if !accountDirectMapLayoutOK || !accountWireMayContainMap(data) {
+		return nil, false
 	}
 
 	var (
@@ -89,11 +105,11 @@ func unmarshalAccountDirectMaps(data []byte) (*corepb.Account, error, bool) {
 	for rest := data; len(rest) > 0; {
 		number, wireType, tagSize := protowire.ConsumeTag(rest)
 		if tagSize < 0 {
-			return nil, protowire.ParseError(tagSize), true
+			return protowire.ParseError(tagSize), true
 		}
 		valueSize := protowire.ConsumeFieldValue(number, wireType, rest[tagSize:])
 		if valueSize < 0 {
-			return nil, protowire.ParseError(valueSize), true
+			return protowire.ParseError(valueSize), true
 		}
 		fieldSize := tagSize + valueSize
 		if !isAccountMapField(number) {
@@ -108,7 +124,7 @@ func unmarshalAccountDirectMaps(data []byte) (*corepb.Account, error, bool) {
 		// Let protobuf-go report the canonical error for a known map field with
 		// an unexpected wire type. Valid Account encodings always use bytes.
 		if wireType != protowire.BytesType {
-			return nil, nil, false
+			return nil, false
 		}
 		if !foundMap {
 			basePtr = accountUnmarshalBasePool.Get().(*[]byte)
@@ -118,26 +134,25 @@ func unmarshalAccountDirectMaps(data []byte) (*corepb.Account, error, bool) {
 		}
 		entry, entrySize := protowire.ConsumeBytes(rest[tagSize:])
 		if entrySize < 0 {
-			return nil, protowire.ParseError(entrySize), true
+			return protowire.ParseError(entrySize), true
 		}
 		key, value, err := consumeAccountMapEntry(entry)
 		if err != nil {
-			return nil, err, true
+			return err, true
 		}
 		maps.set(number, key, value)
 		rest = rest[fieldSize:]
 		wireOffset += fieldSize
 	}
 	if !foundMap {
-		return nil, nil, false
+		return nil, false
 	}
 
-	pb := new(corepb.Account)
 	if err := proto.Unmarshal(base, pb); err != nil {
-		return nil, err, true
+		return err, true
 	}
 	maps.assign(pb)
-	return pb, nil, true
+	return nil, true
 }
 
 // accountWireMayContainMap is a cheap negative filter for map-free accounts.

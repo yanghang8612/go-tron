@@ -18,6 +18,16 @@ type Account struct {
 	marshalSizeHint atomic.Int64
 }
 
+// decodedAccount keeps the wrapper and its protobuf in one heap object. Account
+// loads are numerous during historical sync, and allocating these separately
+// costs one extra object for every durable account read. Returning the interior
+// account pointer keeps the complete allocation live while preserving Account's
+// existing pointer-backed API.
+type decodedAccount struct {
+	account Account
+	pb      corepb.Account
+}
+
 func NewAccountFromPB(pb *corepb.Account) *Account {
 	return &Account{pb: pb}
 }
@@ -773,15 +783,15 @@ func (a *Account) MarshalStorageCore() ([]byte, error) {
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {
-	pb, err, handled := unmarshalAccountDirectMaps(data)
+	decoded := new(decodedAccount)
+	decoded.account.pb = &decoded.pb
+	err, handled := unmarshalAccountDirectMapsInto(data, &decoded.pb)
 	if !handled {
-		pb = &corepb.Account{}
-		err = proto.Unmarshal(data, pb)
+		err = proto.Unmarshal(data, &decoded.pb)
 	}
 	if err != nil {
 		return nil, err
 	}
-	account := &Account{pb: pb}
-	account.marshalSizeHint.Store(int64(len(data)))
-	return account, nil
+	decoded.account.marshalSizeHint.Store(int64(len(data)))
+	return &decoded.account, nil
 }
