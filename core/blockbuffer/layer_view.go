@@ -500,7 +500,7 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 	for _, second := range seconds {
 		totalSize += len(second)
 	}
-	keyArena := make([]byte, totalSize)
+	keyArena := l.reserveOwnedKeyBytes(totalSize, reserveBatches)
 	linksPtr := borrowOwnedValueBatchLinks(len(seconds))
 	defer returnOwnedValueBatchLinks(linksPtr)
 	links := *linksPtr

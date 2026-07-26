@@ -62,10 +62,21 @@ type layer struct {
 	number    uint64
 	bloom     atomic.Pointer[layerBloom]
 	segment   atomic.Pointer[layerBloomSegment]
-	shards    [layerShardCount]layerShard
+	// ownedKeyArena packs commitment physical keys across sibling batches.
+	// Reservations are disjoint before the caller copies bytes, so the lock is
+	// never held with a shard lock and concurrent fold workers can populate
+	// their reserved spans independently.
+	ownedKeyArenaMu sync.Mutex
+	ownedKeyArena   []byte
+	shards          [layerShardCount]layerShard
 }
 
 const layerShardCount = 16
+
+const (
+	layerOwnedKeyArenaMinChunk = 32 << 10
+	layerOwnedKeyArenaMaxChunk = 64 << 10
+)
 
 // layerShard is padded to one 64-byte cache line on the deployment target
 // (amd64). Without the padding, adjacent shard RWMutex counters can still
@@ -106,6 +117,39 @@ func newLayer(hash common.Hash, number uint64) *layer {
 		blockHash: hash,
 		number:    number,
 	}
+}
+
+// reserveOwnedKeyBytes returns a unique immutable-after-fill span owned by l.
+// A sparse single-batch fold keeps an exact allocation. Dense folds use the
+// caller's batch-count estimate, bounded to 32–64 KiB chunks, so dozens of
+// sibling publications share a few backing objects without materially
+// increasing retained key bytes.
+func (l *layer) reserveOwnedKeyBytes(size, reserveBatches int) []byte {
+	if size == 0 {
+		return nil
+	}
+	l.ownedKeyArenaMu.Lock()
+	if cap(l.ownedKeyArena)-len(l.ownedKeyArena) < size {
+		capacity := size
+		if reserveBatches > 1 {
+			if size <= int(^uint(0)>>1)/reserveBatches {
+				capacity = size * reserveBatches
+			}
+			if capacity < layerOwnedKeyArenaMinChunk {
+				capacity = layerOwnedKeyArenaMinChunk
+			}
+			if capacity > layerOwnedKeyArenaMaxChunk && size <= layerOwnedKeyArenaMaxChunk {
+				capacity = layerOwnedKeyArenaMaxChunk
+			}
+		}
+		l.ownedKeyArena = make([]byte, 0, capacity)
+	}
+	start := len(l.ownedKeyArena)
+	end := start + size
+	l.ownedKeyArena = l.ownedKeyArena[:end]
+	span := l.ownedKeyArena[start:end:end]
+	l.ownedKeyArenaMu.Unlock()
+	return span
 }
 
 func (l *layer) shardForBytes(key []byte) *layerShard {

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -1356,6 +1357,115 @@ func BenchmarkCommitmentBranchLayerSparseReservation(b *testing.B) {
 				benchmarkCommitmentLayerSink = l
 			}
 		})
+	}
+}
+
+func TestCommitmentBranchLayerOwnedBatchesShareKeyArena(t *testing.T) {
+	l := newLayer(common.Hash{}, 1)
+	buf := new(Buffer)
+	prefix := []byte("state-commitment-branch-v1-")
+	firstSeconds := []string{"first-a", "first-b"}
+	secondSeconds := []string{"second-a", "second-b"}
+	values := [][]byte{[]byte("value-a"), []byte("value-b")}
+	buf.putIntoKeyPartsStringsOwnedValues(l, prefix, firstSeconds, values, 2)
+	buf.putIntoKeyPartsStringsOwnedValues(l, prefix, secondSeconds, values, 2)
+
+	wantSize := 0
+	for _, seconds := range [][]string{firstSeconds, secondSeconds} {
+		for _, second := range seconds {
+			wantSize += len(prefix) + len(second)
+		}
+	}
+	if len(l.ownedKeyArena) != wantSize {
+		t.Fatalf("owned key arena length = %d, want %d", len(l.ownedKeyArena), wantSize)
+	}
+	if cap(l.ownedKeyArena) != layerOwnedKeyArenaMinChunk {
+		t.Fatalf("dense owned key arena capacity = %d, want %d", cap(l.ownedKeyArena), layerOwnedKeyArenaMinChunk)
+	}
+	arenaStart := uintptr(unsafe.Pointer(unsafe.SliceData(l.ownedKeyArena)))
+	arenaEnd := arenaStart + uintptr(len(l.ownedKeyArena))
+	seen := 0
+	for shard := range l.shards {
+		s := &l.shards[shard]
+		for key := range s.writes {
+			start := uintptr(unsafe.Pointer(unsafe.StringData(key)))
+			if start < arenaStart || start+uintptr(len(key)) > arenaEnd {
+				t.Fatalf("key %q is outside the shared layer arena", key)
+			}
+			seen++
+		}
+	}
+	if seen != len(firstSeconds)+len(secondSeconds) {
+		t.Fatalf("shared arena key count = %d, want %d", seen, len(firstSeconds)+len(secondSeconds))
+	}
+
+	prefix[0] ^= 0xff
+	firstSeconds[0] = "mutated"
+	for _, second := range []string{"first-a", "first-b", "second-a", "second-b"} {
+		key := append([]byte("state-commitment-branch-v1-"), second...)
+		if got, found, tomb := l.lookup(key); tomb || !found || len(got) == 0 {
+			t.Fatalf("owned arena lookup %q = (%q,%v,tomb:%v)", key, got, found, tomb)
+		}
+	}
+}
+
+func TestCommitmentBranchLayerSparseBatchKeepsExactKeyArena(t *testing.T) {
+	l := newLayer(common.Hash{}, 1)
+	buf := new(Buffer)
+	prefix := []byte("state-commitment-branch-v1-")
+	seconds := []string{"only-a", "only-b"}
+	values := [][]byte{[]byte("value-a"), []byte("value-b")}
+	buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds, values, 1)
+	wantSize := len(prefix)*len(seconds) + len(seconds[0]) + len(seconds[1])
+	if len(l.ownedKeyArena) != wantSize || cap(l.ownedKeyArena) != wantSize {
+		t.Fatalf("sparse owned key arena = len:%d cap:%d, want exact %d", len(l.ownedKeyArena), cap(l.ownedKeyArena), wantSize)
+	}
+}
+
+func TestCommitmentBranchLayerConcurrentBatchesReserveDisjointKeySpans(t *testing.T) {
+	const (
+		batchCount = 16
+		batchSize  = 64
+	)
+	l := newLayer(common.Hash{}, 1)
+	buf := new(Buffer)
+	prefix := []byte("state-commitment-branch-v1-")
+	seconds := make([][]string, batchCount)
+	values := make([][][]byte, batchCount)
+	for batch := range batchCount {
+		seconds[batch] = make([]string, batchSize)
+		values[batch] = make([][]byte, batchSize)
+		for index := range batchSize {
+			seconds[batch][index] = fmt.Sprintf("%02d-%03d", batch, index)
+			values[batch][index] = []byte{byte(batch), byte(index)}
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(batchCount)
+	for batch := range batchCount {
+		go func(batch int) {
+			defer wg.Done()
+			buf.putIntoKeyPartsStringsOwnedValues(l, prefix, seconds[batch], values[batch], batchCount)
+		}(batch)
+	}
+	wg.Wait()
+
+	seen := 0
+	for shard := range l.shards {
+		seen += len(l.shards[shard].writes)
+	}
+	if seen != batchCount*batchSize {
+		t.Fatalf("concurrent owned key count = %d, want %d", seen, batchCount*batchSize)
+	}
+	for batch := range batchCount {
+		for index, second := range seconds[batch] {
+			key := append(append([]byte(nil), prefix...), second...)
+			got, found, tomb := l.lookup(key)
+			if tomb || !found || !bytes.Equal(got, values[batch][index]) {
+				t.Fatalf("concurrent lookup %q = (%x,%v,tomb:%v), want %x", key, got, found, tomb, values[batch][index])
+			}
+		}
 	}
 }
 
