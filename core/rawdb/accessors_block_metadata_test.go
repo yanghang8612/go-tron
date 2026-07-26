@@ -150,6 +150,56 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 	}
 }
 
+func TestWriteBlockMetadataBatchInfoArenaGrowthPreservesRows(t *testing.T) {
+	const txCount = 96
+	pb := newBlockProto(22, 66_000)
+	pb.Transactions = make([]*corepb.Transaction, txCount)
+	for i := range pb.Transactions {
+		pb.Transactions[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{Timestamp: int64(i + 1)},
+		}
+	}
+	block := types.NewBlockFromPB(pb)
+	txs := block.Transactions()
+	payload := bytes.Repeat([]byte{0xab}, 1024)
+	infos := make([]*corepb.TransactionInfo, txCount)
+	for i, tx := range txs {
+		hash := tx.Hash()
+		infos[i] = &corepb.TransactionInfo{
+			Id:                   append([]byte(nil), hash[:]...),
+			Fee:                  int64(i + 1),
+			BlockNumber:          int64(block.Number()),
+			BlockTimeStamp:       66_000,
+			ContractResult:       [][]byte{payload},
+			WithdrawExpireAmount: int64(i),
+		}
+	}
+	blockData, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := NewMemoryDatabase()
+	if err := WriteBlockMetadataBatchEncoded(disk, block, blockData, common.Hash{0xcc}, infos); err != nil {
+		t.Fatal(err)
+	}
+	chainDB := NewChainDB(disk, NoopAncient{})
+	for _, i := range []int{0, txCount / 2, txCount - 1} {
+		got := ReadTransactionInfo(chainDB, infos[i].Id)
+		if !proto.Equal(got, infos[i]) {
+			t.Fatalf("transaction info %d changed across arena growth", i)
+		}
+	}
+	gotRet := ReadTransactionInfosByBlock(chainDB, block.Number())
+	if len(gotRet) != len(infos) {
+		t.Fatalf("transaction ret rows = %d, want %d", len(gotRet), len(infos))
+	}
+	for i := range infos {
+		if !proto.Equal(gotRet[i], infos[i]) {
+			t.Fatalf("transaction ret info %d changed across arena growth", i)
+		}
+	}
+}
+
 func TestMarshalTransactionRetRowsMatchesProto(t *testing.T) {
 	unknown := protowire.AppendTag(nil, 100, protowire.BytesType)
 	unknown = protowire.AppendString(unknown, "unknown-info-field")
@@ -424,11 +474,7 @@ func BenchmarkMarshalTransactionInfoRows(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for b.Loop() {
-			size := 0
-			for _, info := range infos {
-				size += proto.Size(info)
-			}
-			arenaPtr := borrowMetadataInfoArena(size)
+			arenaPtr := borrowMetadataInfoArena()
 			arena := *arenaPtr
 			for _, info := range infos {
 				var err error
@@ -437,7 +483,8 @@ func BenchmarkMarshalTransactionInfoRows(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			metadataInfoArenaSizeBenchmarkSink = len(arena) + size
+			*arenaPtr = arena
+			metadataInfoArenaSizeBenchmarkSink = len(arena)
 			returnMetadataInfoArena(arenaPtr)
 		}
 	})

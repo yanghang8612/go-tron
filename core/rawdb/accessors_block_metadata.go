@@ -35,13 +35,9 @@ var metadataInfoArenaPool = sync.Pool{
 	},
 }
 
-func borrowMetadataInfoArena(size int) *[]byte {
+func borrowMetadataInfoArena() *[]byte {
 	arenaPtr := metadataInfoArenaPool.Get().(*[]byte)
-	if cap(*arenaPtr) < size {
-		*arenaPtr = make([]byte, 0, size)
-	} else {
-		*arenaPtr = (*arenaPtr)[:0]
-	}
+	*arenaPtr = (*arenaPtr)[:0]
 	return arenaPtr
 }
 
@@ -124,21 +120,22 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},
 	)
 	infoRowStart := len(rows)
-	infoBytes := 0
-	for _, info := range infos {
-		infoBytes += proto.Size(info)
-	}
 	// Keep the individually indexed TransactionInfo payloads in one temporary
 	// arena. The same bytes feed both the per-transaction rows and the enclosing
 	// TransactionRet row below; every Batch.Put copies them synchronously, so the
-	// arena can return to the pool after batch.Write completes. This replaces one
-	// heap object per transaction without changing either protobuf wire bytes or
-	// durable database layout.
-	var infoArena []byte
-	if infoBytes > 0 {
-		infoArenaPtr := borrowMetadataInfoArena(infoBytes)
-		defer returnMetadataInfoArena(infoArenaPtr)
+	// arena can return to the pool after batch.Write completes. Borrow the pool's
+	// retained capacity directly: MarshalAppend already computes each message's
+	// size, so a separate total-size traversal would only repeat that protobuf
+	// walk on every block. This replaces one heap object per transaction without
+	// changing either protobuf wire bytes or durable database layout.
+	var (
+		infoArena    []byte
+		infoArenaPtr *[]byte
+	)
+	if len(infos) > 0 {
+		infoArenaPtr = borrowMetadataInfoArena()
 		infoArena = *infoArenaPtr
+		defer returnMetadataInfoArena(infoArenaPtr)
 	}
 	for _, info := range infos {
 		start := len(infoArena)
@@ -151,6 +148,12 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 			key:   metadataKey(txInfoPrefix, info.Id),
 			value: infoArena[start:len(infoArena):len(infoArena)],
 		})
+	}
+	if infoArenaPtr != nil {
+		// MarshalAppend may grow the borrowed slice on an unusually large block.
+		// Publish that final backing array to the pool so subsequent blocks reuse
+		// the new capacity instead of repeating the growth.
+		*infoArenaPtr = infoArena
 	}
 	var blockTimestamp int64
 	if len(infos) > 0 {
