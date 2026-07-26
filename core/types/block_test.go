@@ -9,12 +9,14 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 var benchmarkBlockHash common.Hash
 var benchmarkBlockBytes []byte
 var benchmarkDecodedBlock *Block
 var benchmarkDecodedProtoBlock *corepb.Block
+var benchmarkDecodedContract *corepb.Transaction_Contract
 
 func blockHashRawTestBlock(txCount, dataSize int) *Block {
 	txs := make([]*corepb.Transaction, txCount)
@@ -80,7 +82,11 @@ func blockDecodeReserveTestBlock(txCount int) *Block {
 	block := blockHashRawTestBlock(txCount, 64)
 	for i, tx := range block.Proto().Transactions {
 		tx.RawData.Contract = []*corepb.Transaction_Contract{{
-			Type:         corepb.Transaction_Contract_TransferContract,
+			Type: corepb.Transaction_Contract_TransferContract,
+			Parameter: &anypb.Any{
+				TypeUrl: "type.googleapis.com/protocol.TransferContract",
+				Value:   bytes.Repeat([]byte{byte(i)}, 64),
+			},
 			PermissionId: int32(i % 3),
 		}}
 		tx.Ret = []*corepb.Transaction_Result{{
@@ -89,6 +95,62 @@ func blockDecodeReserveTestBlock(txCount int) *Block {
 		}}
 	}
 	return block
+}
+
+func TestCanonicalAnyTypeURLRegistry(t *testing.T) {
+	const url = "type.googleapis.com/protocol.TransferContract"
+	if got := canonicalAnyTypeURLs[url]; got != url {
+		t.Fatalf("canonical Any URL not interned: got %q", got)
+	}
+}
+
+func FuzzUnmarshalTransactionContractReservedEquivalent(f *testing.F) {
+	canonical, err := proto.Marshal(&corepb.Transaction_Contract{
+		Type: corepb.Transaction_Contract_TriggerSmartContract,
+		Parameter: &anypb.Any{
+			TypeUrl: "type.googleapis.com/protocol.TriggerSmartContract",
+			Value:   []byte{1, 2, 3, 4},
+		},
+		Provider:     []byte("provider"),
+		ContractName: []byte("contract"),
+		PermissionId: 2,
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	duplicateAny, err := proto.Marshal(&anypb.Any{
+		TypeUrl: "custom.example/protocol.TriggerSmartContract",
+		Value:   []byte{5, 6},
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	duplicate := append(bytes.Clone(canonical), protowire.AppendTag(nil, 2, protowire.BytesType)...)
+	duplicate = protowire.AppendBytes(duplicate, duplicateAny)
+	unknown := append(bytes.Clone(canonical), protowire.AppendTag(nil, 100, protowire.Fixed32Type)...)
+	unknown = protowire.AppendFixed32(unknown, 0x12345678)
+	invalidTypeURL := protowire.AppendTag(nil, 2, protowire.BytesType)
+	invalidAny := protowire.AppendTag(nil, 1, protowire.BytesType)
+	invalidAny = protowire.AppendBytes(invalidAny, []byte{0xff})
+	invalidTypeURL = protowire.AppendBytes(invalidTypeURL, invalidAny)
+	f.Add([]byte(nil))
+	f.Add(canonical)
+	f.Add(duplicate)
+	f.Add(unknown)
+	f.Add(invalidTypeURL)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var got corepb.Transaction_Contract
+		var inline anypb.Any
+		gotErr := unmarshalTransactionContractReserved(data, &got, &inline)
+		var want corepb.Transaction_Contract
+		wantErr := proto.Unmarshal(data, &want)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch: reserved=%v generated=%v, wire=%x", gotErr, wantErr, data)
+		}
+		if gotErr == nil && !proto.Equal(&got, &want) {
+			t.Fatalf("decode mismatch: reserved=%v generated=%v, wire=%x", &got, &want, data)
+		}
+	})
 }
 
 func BenchmarkUnmarshalBlockReserved(b *testing.B) {
@@ -114,6 +176,41 @@ func BenchmarkUnmarshalBlockReserved(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+		}
+	})
+}
+
+func BenchmarkUnmarshalTransactionContractReserved(b *testing.B) {
+	data, err := proto.Marshal(&corepb.Transaction_Contract{
+		Type: corepb.Transaction_Contract_TriggerSmartContract,
+		Parameter: &anypb.Any{
+			TypeUrl: "type.googleapis.com/protocol.TriggerSmartContract",
+			Value:   bytes.Repeat([]byte{0xaa}, 196),
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(data)))
+	b.Run("generated", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decoded := new(decodedWireTransaction)
+			decoded.contract.Parameter = &decoded.parameter
+			if err := blockMergeUnmarshal.Unmarshal(data, &decoded.contract); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkDecodedContract = &decoded.contract
+		}
+	})
+	b.Run("interned-type-url", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decoded := new(decodedWireTransaction)
+			if err := unmarshalTransactionContractReserved(data, &decoded.contract, &decoded.parameter); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkDecodedContract = &decoded.contract
 		}
 	})
 }
@@ -146,6 +243,31 @@ func TestUnmarshalBlockReservedMatchesGenerated(t *testing.T) {
 		if cap(tx.Signature) != 1 || cap(tx.Ret) != 1 || cap(tx.RawData.Contract) != 1 {
 			t.Fatalf("transaction %d did not retain inline slots: signature=%d result=%d contract=%d", i, cap(tx.Signature), cap(tx.Ret), cap(tx.RawData.Contract))
 		}
+	}
+}
+
+func TestUnmarshalBlockReservedKeepsMultipleParametersIndependent(t *testing.T) {
+	block := blockDecodeReserveTestBlock(1).Proto()
+	first := block.Transactions[0].RawData.Contract[0]
+	second := proto.Clone(first).(*corepb.Transaction_Contract)
+	second.Type = corepb.Transaction_Contract_TriggerSmartContract
+	second.Parameter.TypeUrl = "type.googleapis.com/protocol.TriggerSmartContract"
+	second.Parameter.Value = []byte{9, 8, 7}
+	block.Transactions[0].RawData.Contract = append(block.Transactions[0].RawData.Contract, second)
+	wire, err := proto.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarshalBlockReserved(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := got.Proto().Transactions[0].RawData.Contract
+	if len(contracts) != 2 || contracts[0].Parameter == contracts[1].Parameter {
+		t.Fatalf("decoded contract parameters alias: %+v", contracts)
+	}
+	if !proto.Equal(got.Proto(), block) {
+		t.Fatalf("reserved decoder differs for repeated contracts\nreserved: %v\ngenerated: %v", got.Proto(), block)
 	}
 }
 

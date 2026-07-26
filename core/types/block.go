@@ -6,18 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 var ErrInvalidTransactionMerkleRoot = errors.New("block transaction merkle root mismatch")
 
 var blockDecodeReserveLayoutOK = verifyBlockDecodeReserveLayout()
+
+// Canonical Any URLs are immutable schema metadata repeated by virtually every
+// transaction. Intern them once from the protobuf registry so block decoding
+// does not allocate the same 50-70 byte type_url string for every contract.
+// Non-canonical or future URLs retain ordinary owned-string semantics.
+var canonicalAnyTypeURLs = buildCanonicalAnyTypeURLs()
+
+func buildCanonicalAnyTypeURLs() map[string]string {
+	urls := make(map[string]string)
+	protoregistry.GlobalTypes.RangeMessages(func(messageType protoreflect.MessageType) bool {
+		url := "type.googleapis.com/" + string(messageType.Descriptor().FullName())
+		urls[url] = url
+		return true
+	})
+	return urls
+}
 
 // decodedWireBlock coallocates the wrapper and the two singular block-header
 // messages that every canonical block carries. decodedWireTransaction does the
@@ -79,7 +97,16 @@ func verifyBlockDecodeReserveLayout() bool {
 		return false
 	}
 	contractFields := (&corepb.Transaction_Contract{}).ProtoReflect().Descriptor().Fields()
-	if contractFields.Len() != 5 || !protoFieldShape(contractFields, 2, protoreflect.MessageKind, false) {
+	if contractFields.Len() != 5 || !protoFieldShape(contractFields, 1, protoreflect.EnumKind, false) ||
+		!protoFieldShape(contractFields, 2, protoreflect.MessageKind, false) ||
+		!protoFieldShape(contractFields, 3, protoreflect.BytesKind, false) ||
+		!protoFieldShape(contractFields, 4, protoreflect.BytesKind, false) ||
+		!protoFieldShape(contractFields, 5, protoreflect.Int32Kind, false) {
+		return false
+	}
+	anyFields := (&anypb.Any{}).ProtoReflect().Descriptor().Fields()
+	if anyFields.Len() != 2 || !protoFieldShape(anyFields, 1, protoreflect.StringKind, false) ||
+		!protoFieldShape(anyFields, 2, protoreflect.BytesKind, false) {
 		return false
 	}
 	headerFields := (&corepb.BlockHeader{}).ProtoReflect().Descriptor().Fields()
@@ -379,11 +406,12 @@ func UnmarshalBlock(data []byte) (*Block, error) {
 
 var blockMergeUnmarshal = proto.UnmarshalOptions{Merge: true}
 
-// unmarshalBlockReserved decodes only Block's two-field envelope directly;
-// every nested message still goes through protobuf's generated decoder. This
-// lets each transaction seed repeated-slice capacity before decode without
-// reimplementing any contract/result/PQ wire semantics. A schema guard makes
-// regenerated Block layouts fall back to the generated decoder automatically.
+// unmarshalBlockReserved decodes the allocation-sensitive Block, Transaction,
+// TransactionRaw, Contract and Any envelopes directly. Header, result,
+// authority and PQ payloads still use protobuf's generated decoder. This lets
+// transactions seed repeated-slice capacity and intern canonical Any URLs
+// without reimplementing domain message payloads. A schema guard makes any
+// regenerated envelope layout fall back to the generated decoder automatically.
 func unmarshalBlockReserved(data []byte) (*Block, error) {
 	if !blockDecodeReserveLayoutOK {
 		pb := new(corepb.Block)
@@ -594,15 +622,14 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 				return errors.New("malformed transaction contract field")
 			}
 			var contract *corepb.Transaction_Contract
+			var inlineParameter *anypb.Any
 			if len(decoded.raw.Contract) == 0 {
 				contract = &decoded.contract
-				if hasBytesField(value, 2) {
-					contract.Parameter = &decoded.parameter
-				}
+				inlineParameter = &decoded.parameter
 			} else {
 				contract = new(corepb.Transaction_Contract)
 			}
-			if err := blockMergeUnmarshal.Unmarshal(value, contract); err != nil {
+			if err := unmarshalTransactionContractReserved(value, contract, inlineParameter); err != nil {
 				return err
 			}
 			decoded.raw.Contract = append(decoded.raw.Contract, contract)
@@ -611,6 +638,102 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 		}
 	}
 	appendProtoUnknown(&decoded.raw, unknown)
+	return nil
+}
+
+// unmarshalTransactionContractReserved preserves generated merge/unknown-field
+// semantics while letting the first Any object share decodedWireTransaction.
+func unmarshalTransactionContractReserved(data []byte, contract *corepb.Transaction_Contract, inlineParameter *anypb.Any) error {
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed transaction contract wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case field == 1 && wireType == protowire.VarintType:
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction contract type")
+			}
+			contract.Type = corepb.Transaction_Contract_ContractType(int32(value))
+		case field == 2 && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction contract parameter")
+			}
+			if contract.Parameter == nil {
+				if inlineParameter != nil {
+					contract.Parameter = inlineParameter
+					inlineParameter = nil
+				} else {
+					contract.Parameter = new(anypb.Any)
+				}
+			}
+			if err := unmarshalAnyReserved(value, contract.Parameter); err != nil {
+				return err
+			}
+		case (field == 3 || field == 4) && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction contract bytes field")
+			}
+			owned := append([]byte(nil), value...)
+			if field == 3 {
+				contract.Provider = owned
+			} else {
+				contract.ContractName = owned
+			}
+		case field == 5 && wireType == protowire.VarintType:
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction contract permission id")
+			}
+			contract.PermissionId = int32(value)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(contract, unknown)
+	return nil
+}
+
+// unmarshalAnyReserved owns arbitrary strings/bytes exactly like generated
+// protobuf decoding, except canonical registered type URLs use immutable
+// process-wide strings rather than allocating identical copies per contract.
+func unmarshalAnyReserved(data []byte, parameter *anypb.Any) error {
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed Any wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case field == 1 && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok || !utf8.Valid(value) {
+				return errors.New("invalid Any type_url")
+			}
+			if canonical, ok := canonicalAnyTypeURLs[string(value)]; ok {
+				parameter.TypeUrl = canonical
+			} else {
+				parameter.TypeUrl = string(value)
+			}
+		case field == 2 && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed Any value")
+			}
+			parameter.Value = append([]byte(nil), value...)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(parameter, unknown)
 	return nil
 }
 
