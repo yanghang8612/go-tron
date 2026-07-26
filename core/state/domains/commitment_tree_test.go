@@ -101,6 +101,39 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBranchDataKindMaskTransitions(t *testing.T) {
+	var branch BranchData
+	branch.SetLeafChild(3, []byte("leaf"), common.Hash{0x11})
+	if got, want := branch.leafMask(), uint16(1<<3); got != want {
+		t.Fatalf("leaf mask after SetLeafChild = %#x, want %#x", got, want)
+	}
+
+	branch.SetHashChild(3, common.Hash{0x22})
+	if got := branch.leafMask(); got != 0 {
+		t.Fatalf("leaf mask after leaf-to-hash replacement = %#x, want 0", got)
+	}
+	encodedHash := branch.Encode()
+	decodedHash, err := DecodeBranchData(encodedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodedHash.leafMask(); got != 0 {
+		t.Fatalf("decoded hash leaf mask = %#x, want 0", got)
+	}
+
+	branch.SetLeafChild(3, []byte("leaf-again"), common.Hash{0x33})
+	if got, want := branch.leafMask(), uint16(1<<3); got != want {
+		t.Fatalf("leaf mask after hash-to-leaf replacement = %#x, want %#x", got, want)
+	}
+	branch.clearChild(3)
+	if got := branch.leafMask(); got != 0 {
+		t.Fatalf("leaf mask after clear = %#x, want 0", got)
+	}
+	if got := branch.presentMask(); got != 0 {
+		t.Fatalf("presence mask after clear = %#x, want 0", got)
+	}
+}
+
 func TestBranchDataEncodeAllocatesExactCapacity(t *testing.T) {
 	var b BranchData
 	for nibble := uint8(0); nibble < 16; nibble++ {

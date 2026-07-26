@@ -196,10 +196,12 @@ type branchChild struct {
 // Children are stored in a fixed 16-slot array so insertion order never
 // affects encoding — Encode always iterates nibbles low→high.
 type BranchData struct {
-	// childMask is updated atomically because applyRootParallel mutates the
-	// root's 16 disjoint child slots concurrently. Keeping the atomic word as a
-	// plain uint32 preserves BranchData's safe value-copy semantics after those
-	// workers join (unlike embedding atomic.Uint32, whose value must not copy).
+	// childMask packs the 16 presence bits in its low half and the 16 hash-kind
+	// bits in its high half. It is updated atomically because applyRootParallel
+	// mutates the root's disjoint child slots concurrently. Keeping the atomic
+	// word as a plain uint32 preserves BranchData's safe value-copy semantics
+	// after those workers join (unlike embedding atomic.Uint32, whose value must
+	// not copy). The kind bits let encoding and decode cleanup skip hash children.
 	childMask uint32
 	children  [16]branchChild
 }
@@ -208,10 +210,28 @@ func (b *BranchData) presentMask() uint16 {
 	return uint16(atomic.LoadUint32(&b.childMask))
 }
 
+func (b *BranchData) leafMask() uint16 {
+	bits := atomic.LoadUint32(&b.childMask)
+	return uint16(bits) &^ uint16(bits>>16)
+}
+
+func (b *BranchData) markLeafChild(nibble uint8) {
+	childBit := uint32(1) << nibble
+	hashBit := childBit << 16
+	for {
+		old := atomic.LoadUint32(&b.childMask)
+		updated := (old | childBit) &^ hashBit
+		if atomic.CompareAndSwapUint32(&b.childMask, old, updated) {
+			return
+		}
+	}
+}
+
 // SetHashChild marks nibble as a hash child with the given 32-byte hash.
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
-	atomic.OrUint32(&b.childMask, 1<<nibble)
+	childBit := uint32(1) << nibble
+	atomic.OrUint32(&b.childMask, childBit|(childBit<<16))
 	b.children[nibble] = branchChild{
 		kind:      kindHash,
 		valueHash: h,
@@ -221,7 +241,7 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 // SetLeafChild marks nibble as a leaf child with the given key and value hash.
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
-	atomic.OrUint32(&b.childMask, 1<<nibble)
+	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
 		kind:      kindLeaf,
 		leafKey:   append([]byte(nil), key...),
@@ -235,7 +255,7 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 // package obeys that contract, so a second defensive copy only adds allocation
 // without strengthening lifetime.
 func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
-	atomic.OrUint32(&b.childMask, 1<<nibble)
+	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
 		kind:      kindLeaf,
 		leafKey:   key,
@@ -259,18 +279,16 @@ func (b *BranchData) Encode() []byte {
 }
 
 func (b *BranchData) encodingLayout() (uint16, int) {
-	mask := b.presentMask()
-	size := 2 // childMask
-	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
+	childBits := atomic.LoadUint32(&b.childMask)
+	mask := uint16(childBits)
+	// Every present child contributes its kind byte and 32-byte hash. Only leaf
+	// children need variable-length accounting on top of that fixed cost.
+	size := 2 + (1+common.HashLength)*bits.OnesCount16(mask)
+	for remaining := mask &^ uint16(childBits>>16); remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
-		size++ // kind byte
-		if c.kind == kindHash {
-			size += common.HashLength
-		} else {
-			// Uvarint for keyLen + key bytes + valHash.
-			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey) + common.HashLength
-		}
+		// The fixed cost above already includes the value hash.
+		size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
 	}
 	return mask, size
 }
@@ -372,22 +390,21 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	// those slices safely because the arena is never mutated. This replaces up
 	// to 16 tiny allocations per decoded branch without retaining the
 	// hash-dominated encoded Pebble value.
+	leafMask := dst.leafMask()
 	totalLeafKeyBytes := 0
-	for remaining := dst.presentMask(); remaining != 0; remaining &= remaining - 1 {
+	for remaining := leafMask; remaining != 0; remaining &= remaining - 1 {
 		i := bits.TrailingZeros16(remaining)
-		if dst.children[i].kind == kindLeaf {
-			totalLeafKeyBytes += len(dst.children[i].leafKey)
-		}
+		totalLeafKeyBytes += len(dst.children[i].leafKey)
 	}
 	if totalLeafKeyBytes == 0 {
 		return nil
 	}
 	arena := make([]byte, totalLeafKeyBytes)
 	offset := 0
-	for remaining := dst.presentMask(); remaining != 0; remaining &= remaining - 1 {
+	for remaining := leafMask; remaining != 0; remaining &= remaining - 1 {
 		i := bits.TrailingZeros16(remaining)
 		child := &dst.children[i]
-		if child.kind != kindLeaf || len(child.leafKey) == 0 {
+		if len(child.leafKey) == 0 {
 			continue
 		}
 		end := offset + copy(arena[offset:], child.leafKey)
@@ -418,21 +435,21 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	// zeroing the whole ~1 KiB BranchData (mostly hashes) on every sparse pooled
 	// read. At ten or more children the fixed-size memclr wins over the bit walk
 	// (BenchmarkDecodeBranchDataIntoNoCopyReuse), so retain it for dense nodes.
-	oldMask := dst.presentMask()
+	oldBits := atomic.LoadUint32(&dst.childMask)
+	oldMask := uint16(oldBits)
 	if bits.OnesCount16(oldMask) >= 10 {
 		*dst = BranchData{}
 	} else {
-		for remaining := oldMask; remaining != 0; remaining &= remaining - 1 {
+		for remaining := oldMask &^ uint16(oldBits>>16); remaining != 0; remaining &= remaining - 1 {
 			i := bits.TrailingZeros16(remaining)
-			if dst.children[i].kind == kindLeaf {
-				dst.children[i].leafKey = nil
-			}
+			dst.children[i].leafKey = nil
 		}
 	}
 	if len(data) < 2 {
 		return errors.New("commitment_tree: input too short for childMask")
 	}
 	mask := uint16(data[0])<<8 | uint16(data[1])
+	var hashMask uint16
 	rest := data[2:]
 	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
@@ -445,6 +462,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 
 		switch kind {
 		case kindHash:
+			hashMask |= 1 << i
 			if len(rest) < common.HashLength {
 				return errors.New("commitment_tree: truncated at hash child")
 			}
@@ -483,7 +501,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	if len(rest) != 0 {
 		return errors.New("commitment_tree: trailing bytes after decode")
 	}
-	atomic.StoreUint32(&dst.childMask, uint32(mask))
+	atomic.StoreUint32(&dst.childMask, uint32(mask)|(uint32(hashMask)<<16))
 	return nil
 }
 
@@ -518,7 +536,8 @@ func (b *BranchData) leafChildAt(nibble uint8) (key []byte, valHash common.Hash)
 
 // clearChild removes any child at nibble.
 func (b *BranchData) clearChild(nibble uint8) {
-	atomic.AndUint32(&b.childMask, ^(uint32(1) << nibble))
+	childBit := uint32(1) << nibble
+	atomic.AndUint32(&b.childMask, ^(childBit | (childBit << 16)))
 	b.children[nibble] = branchChild{}
 }
 

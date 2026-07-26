@@ -2,6 +2,7 @@ package domains
 
 import (
 	"bytes"
+	"math/bits"
 	"strconv"
 	"testing"
 
@@ -16,6 +17,8 @@ type commitmentDBWithoutOwnedValue struct{ CommitmentDB }
 
 var benchmarkDecodedBranch BranchData
 var benchmarkEncodedBranch []byte
+var benchmarkBranchMask uint16
+var benchmarkBranchSize int
 
 func BenchmarkOpsBufReturn(b *testing.B) {
 	key := bytes.Repeat([]byte{0xab}, 64)
@@ -50,6 +53,51 @@ func BenchmarkBranchDataEncodeToLayout(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkBranchDataEncodingLayout(b *testing.B) {
+	for _, children := range []int{1, 4, 16} {
+		var branch BranchData
+		for nibble := 0; nibble < children; nibble++ {
+			hash := common.Hash{byte(nibble + 1)}
+			if nibble&3 == 0 {
+				branch.SetLeafChild(uint8(nibble), bytes.Repeat([]byte{byte(nibble + 1)}, 32+nibble), hash)
+			} else {
+				branch.SetHashChild(uint8(nibble), hash)
+			}
+		}
+		for _, tc := range []struct {
+			name string
+			fn   func(*BranchData) (uint16, int)
+		}{
+			{name: "scan", fn: benchmarkBranchEncodingLayoutScan},
+			{name: "kind-mask", fn: (*BranchData).encodingLayout},
+		} {
+			b.Run(strconv.Itoa(children)+"/"+tc.name, func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					benchmarkBranchMask, benchmarkBranchSize = tc.fn(&branch)
+				}
+			})
+		}
+	}
+}
+
+func benchmarkBranchEncodingLayoutScan(branch *BranchData) (uint16, int) {
+	mask := branch.presentMask()
+	size := 2
+	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
+		i := uint8(bits.TrailingZeros16(remaining))
+		child := &branch.children[i]
+		size++
+		if child.kind == kindHash {
+			size += common.HashLength
+		} else {
+			size += uvarintEncodedLen(uint64(len(child.leafKey))) + len(child.leafKey) + common.HashLength
+		}
+	}
+	return mask, size
 }
 
 func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {
