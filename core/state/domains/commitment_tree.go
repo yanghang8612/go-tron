@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"math/bits"
 	"sort"
 	"sync"
 
@@ -394,10 +395,8 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	}
 	mask := uint16(data[0])<<8 | uint16(data[1])
 	rest := data[2:]
-	for i := uint8(0); i < 16; i++ {
-		if mask&(1<<i) == 0 {
-			continue
-		}
+	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
+		i := uint8(bits.TrailingZeros16(remaining))
 		// Read kind byte.
 		if len(rest) < 1 {
 			return errors.New("commitment_tree: truncated at kind byte")
@@ -410,10 +409,11 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			if len(rest) < common.HashLength {
 				return errors.New("commitment_tree: truncated at hash child")
 			}
-			var h common.Hash
-			copy(h[:], rest[:common.HashLength])
+			child := &dst.children[i]
+			child.present = true
+			child.kind = kindHash
+			copy(child.valueHash[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
-			dst.children[i] = branchChild{present: true, kind: kindHash, valueHash: h}
 
 		case kindLeaf:
 			// Decode keyLen via Uvarint; bound by remaining slice length.
@@ -430,15 +430,12 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			if len(rest) < common.HashLength {
 				return errors.New("commitment_tree: truncated at leaf valHash")
 			}
-			var vh common.Hash
-			copy(vh[:], rest[:common.HashLength])
+			child := &dst.children[i]
+			child.present = true
+			child.kind = kindLeaf
+			child.leafKey = key
+			copy(child.valueHash[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
-			dst.children[i] = branchChild{
-				present:   true,
-				kind:      kindLeaf,
-				leafKey:   key,
-				valueHash: vh,
-			}
 
 		default:
 			return errors.New("commitment_tree: unknown child kind byte")
