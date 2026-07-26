@@ -117,7 +117,14 @@ var branchPool = sync.Pool{
 }
 
 func borrowBranch() *BranchData {
-	b := branchPool.Get().(*BranchData)
+	return branchPool.Get().(*BranchData)
+}
+
+// borrowEmptyBranch returns a zeroed branch for callers constructing a new
+// subtree. Callers that immediately decode or assign a complete BranchData use
+// borrowBranch directly and avoid clearing the ~1 KiB object twice.
+func borrowEmptyBranch() *BranchData {
+	b := borrowBranch()
 	*b = BranchData{}
 	return b
 }
@@ -814,7 +821,7 @@ func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPref
 	default:
 		// Build a fresh child subtree rooted at childPrefix, borrowing the
 		// branch from the pool so the descent doesn't escape to the heap.
-		child := borrowBranch()
+		child := borrowEmptyBranch()
 		defer returnBranch(child)
 		updated, err := t.apply(childPrefix, childDepth, child, puts)
 		if err != nil {
@@ -915,7 +922,7 @@ func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefi
 
 	// sortOps gives a deterministic traversal so apply's bucket sort is stable.
 	sortOps(buf)
-	child := borrowBranch()
+	child := borrowEmptyBranch()
 	defer returnBranch(child)
 	updated, err := t.apply(childPrefix, childDepth, child, buf)
 	if err != nil {
@@ -937,6 +944,10 @@ func (t *commitmentTrie) applyOnHash(branch *BranchData, nb uint8, childPrefix [
 		return err
 	}
 	if !ok {
+		// A missing read may leave the overwrite-only pooled destination
+		// untouched. Clear it before returning it to the pool so malformed state
+		// cannot extend the lifetime of slices retained by its previous owner.
+		*child = BranchData{}
 		return fmt.Errorf("commitment_tree: missing hash child at prefix %x", childPrefix)
 	}
 	updated, err := t.apply(childPrefix, childDepth, child, group)
