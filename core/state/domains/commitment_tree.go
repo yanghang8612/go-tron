@@ -402,11 +402,33 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 // no longer used. rawdbBranchStore satisfies this with owned Get results or
 // immutable-by-replacement blockbuffer/cache values.
 func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
-	return decodeBranchDataInto(data, dst)
+	if err := decodeBranchDataInto(data, dst); err != nil {
+		// The pooled fold reader may have installed partial leaf-key views before
+		// discovering malformed input. Errors are cold; fully clear here so the
+		// next pool borrower cannot retain those views behind an empty mask.
+		*dst = BranchData{}
+		return err
+	}
+	return nil
 }
 
 func decodeBranchDataInto(data []byte, dst *BranchData) error {
-	*dst = BranchData{}
+	// Decoding overwrites every field of each newly-present child. Clear only
+	// pointer-bearing fields from the previous presence mask instead of
+	// zeroing the whole ~1 KiB BranchData (mostly hashes) on every sparse pooled
+	// read. At ten or more children the fixed-size memclr wins over the bit walk
+	// (BenchmarkDecodeBranchDataIntoNoCopyReuse), so retain it for dense nodes.
+	oldMask := dst.presentMask()
+	if bits.OnesCount16(oldMask) >= 10 {
+		*dst = BranchData{}
+	} else {
+		for remaining := oldMask; remaining != 0; remaining &= remaining - 1 {
+			i := bits.TrailingZeros16(remaining)
+			if dst.children[i].kind == kindLeaf {
+				dst.children[i].leafKey = nil
+			}
+		}
+	}
 	if len(data) < 2 {
 		return errors.New("commitment_tree: input too short for childMask")
 	}
@@ -428,6 +450,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			}
 			child := &dst.children[i]
 			child.kind = kindHash
+			child.leafKey = nil
 			copy(child.valueHash[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
 

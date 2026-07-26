@@ -91,6 +91,32 @@ func BenchmarkDecodeBranchDataIntoNoCopy(b *testing.B) {
 	}
 }
 
+func BenchmarkDecodeBranchDataIntoNoCopyReuse(b *testing.B) {
+	for _, children := range []int{1, 4, 8, 10, 12, 16} {
+		b.Run(strconv.Itoa(children), func(b *testing.B) {
+			var branch BranchData
+			for nibble := 0; nibble < children; nibble++ {
+				hash := common.Hash{byte(nibble + 1)}
+				if nibble&1 == 0 {
+					branch.SetHashChild(uint8(nibble), hash)
+				} else {
+					branch.SetLeafChild(uint8(nibble), []byte{byte(nibble + 1)}, hash)
+				}
+			}
+			encoded := branch.Encode()
+			var decoded BranchData
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := decodeBranchDataIntoNoCopy(encoded, &decoded); err != nil {
+					b.Fatal(err)
+				}
+			}
+			benchmarkDecodedBranch = decoded
+		})
+	}
+}
+
 func BenchmarkRawdbBranchStorePutBranch(b *testing.B) {
 	var branch BranchData
 	for nibble := uint8(0); nibble < 16; nibble++ {

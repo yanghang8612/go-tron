@@ -159,6 +159,50 @@ func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	}
 }
 
+func TestDecodeBranchDataIntoNoCopyReuseClearsStaleLeafKeys(t *testing.T) {
+	var dst BranchData
+	dst.SetLeafChild(2, []byte("overwritten-leaf"), common.Hash{0x22})
+	dst.SetLeafChild(7, []byte("absent-old-leaf"), common.Hash{0x77})
+
+	var source BranchData
+	source.SetHashChild(2, common.Hash{0xaa})
+	encoded := source.Encode()
+	if err := decodeBranchDataIntoNoCopy(encoded, &dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dst.presentMask(), uint16(1<<2); got != want {
+		t.Fatalf("presence mask = %#x, want %#x", got, want)
+	}
+	if dst.children[2].leafKey != nil {
+		t.Fatalf("hash replacement retained old leaf key: %q", dst.children[2].leafKey)
+	}
+	if dst.children[7].leafKey != nil {
+		t.Fatalf("absent slot retained old leaf key: %q", dst.children[7].leafKey)
+	}
+}
+
+func TestDecodeBranchDataIntoNoCopyErrorClearsPartialState(t *testing.T) {
+	var source BranchData
+	source.SetLeafChild(1, []byte("first"), common.Hash{0x11})
+	source.SetLeafChild(2, []byte("second"), common.Hash{0x22})
+	encoded := source.Encode()
+
+	var dst BranchData
+	dst.SetLeafChild(9, []byte("old"), common.Hash{0x99})
+	if err := decodeBranchDataIntoNoCopy(encoded[:len(encoded)-1], &dst); err == nil {
+		t.Fatal("truncated no-copy decode unexpectedly succeeded")
+	}
+	if dst.presentMask() != 0 {
+		t.Fatalf("partial decode presence mask = %#x, want 0", dst.presentMask())
+	}
+	for i := range dst.children {
+		child := &dst.children[i]
+		if child.kind != 0 || child.valueHash != (common.Hash{}) || child.leafKey != nil {
+			t.Fatalf("partial decode retained child %d: %+v", i, child)
+		}
+	}
+}
+
 func TestBranchDataDeterministicAndProperty(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
