@@ -107,6 +107,34 @@ var bufferedBranchStorePool = sync.Pool{
 	},
 }
 
+const maxPooledBranchFlushKeys = 4096
+
+var branchFlushKeysPool = sync.Pool{
+	New: func() any {
+		keys := make([]string, 0, 256)
+		return &keys
+	},
+}
+
+func borrowBranchFlushKeys(size int) *[]string {
+	keysPtr := branchFlushKeysPool.Get().(*[]string)
+	if cap(*keysPtr) < size {
+		*keysPtr = make([]string, 0, size)
+	} else {
+		*keysPtr = (*keysPtr)[:0]
+	}
+	return keysPtr
+}
+
+func returnBranchFlushKeys(keysPtr *[]string) {
+	keys := *keysPtr
+	clear(keys)
+	if cap(keys) <= maxPooledBranchFlushKeys {
+		*keysPtr = keys[:0]
+		branchFlushKeysPool.Put(keysPtr)
+	}
+}
+
 // concurrentSiblingFlushStore is an opt-in marker for a branchStore whose
 // PutBranch/DelBranch methods may safely execute concurrently with each other
 // and with reads of disjoint keys. The parallel root fold never reads or writes
@@ -224,29 +252,38 @@ func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
 	// caller reads it again. Return every large BranchData destination even when
 	// the base write fails so the next fold can reuse the storage.
 	defer s.releasePuts()
+	keyCount := len(s.puts)
+	if len(s.dels) > keyCount {
+		keyCount = len(s.dels)
+	}
+	if keyCount == 0 {
+		return nil
+	}
+	keysPtr := borrowBranchFlushKeys(keyCount)
+	defer returnBranchFlushKeys(keysPtr)
 
 	if len(s.dels) > 0 {
-		keys := make([]string, 0, len(s.dels))
 		for k := range s.dels {
-			keys = append(keys, k)
+			*keysPtr = append(*keysPtr, k)
 		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		sort.Strings(*keysPtr)
+		for _, k := range *keysPtr {
 			if err := base.DelBranch([]byte(k)); err != nil {
 				return err
 			}
 		}
+		clear(*keysPtr)
+		*keysPtr = (*keysPtr)[:0]
 	}
 	if len(s.puts) > 0 {
-		keys := make([]string, 0, len(s.puts))
 		for k := range s.puts {
-			keys = append(keys, k)
+			*keysPtr = append(*keysPtr, k)
 		}
-		sort.Strings(keys)
+		sort.Strings(*keysPtr)
 		if batch, ok := base.(branchBatchStore); ok {
-			return batch.putBranchesSorted(keys, s.puts, batchCount)
+			return batch.putBranchesSorted(*keysPtr, s.puts, batchCount)
 		}
-		for _, k := range keys {
+		for _, k := range *keysPtr {
 			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
 				return err
 			}

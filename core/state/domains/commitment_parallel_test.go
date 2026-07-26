@@ -65,6 +65,47 @@ func BenchmarkBufferedBranchStorePutBranchDistinct(b *testing.B) {
 	}
 }
 
+type discardBranchBatchStore struct{}
+
+func (*discardBranchBatchStore) GetBranch([]byte) (BranchData, bool, error) {
+	return BranchData{}, false, nil
+}
+
+func (*discardBranchBatchStore) GetBranchInto([]byte, *BranchData) (bool, error) {
+	return false, nil
+}
+
+func (*discardBranchBatchStore) PutBranch([]byte, BranchData) error { return nil }
+func (*discardBranchBatchStore) DelBranch([]byte) error             { return nil }
+
+var branchFlushBenchmarkSink int
+
+func (*discardBranchBatchStore) putBranchesSorted(keys []string, _ map[string]*BranchData, _ int) error {
+	branchFlushBenchmarkSink = len(keys)
+	return nil
+}
+
+func BenchmarkBufferedBranchStoreFlushSortedKeys(b *testing.B) {
+	for _, count := range []int{16, 256, 1024} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			store := newBufferedBranchStore(&discardBranchBatchStore{})
+			branch := BranchData{}
+			b.ReportAllocs()
+			for b.Loop() {
+				for i := range count {
+					prefix := [2]byte{byte(i >> 8), byte(i)}
+					if err := store.PutBranch(prefix[:], branch); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := store.flush(store.base, 1); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 type concurrentFlushProbe struct {
 	mu      sync.Mutex
 	base    *mapBranchStore
