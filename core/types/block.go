@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 var ErrInvalidTransactionMerkleRoot = errors.New("block transaction merkle root mismatch")
@@ -34,6 +35,9 @@ type decodedWireBlock struct {
 type decodedWireTransaction struct {
 	tx            corepb.Transaction
 	raw           corepb.TransactionRaw
+	result        corepb.Transaction_Result
+	contract      corepb.Transaction_Contract
+	parameter     anypb.Any
 	signatureSlot [1][]byte
 	resultSlot    [1]*corepb.Transaction_Result
 	contractSlot  [1]*corepb.Transaction_Contract
@@ -62,8 +66,20 @@ func verifyBlockDecodeReserveLayout() bool {
 		return false
 	}
 	rawFields := (&corepb.TransactionRaw{}).ProtoReflect().Descriptor().Fields()
-	if rawFields.Len() != 10 || !protoFieldShape(rawFields, 9, protoreflect.MessageKind, true) ||
-		!protoFieldShape(rawFields, 11, protoreflect.MessageKind, true) {
+	if rawFields.Len() != 10 || !protoFieldShape(rawFields, 1, protoreflect.BytesKind, false) ||
+		!protoFieldShape(rawFields, 3, protoreflect.Int64Kind, false) ||
+		!protoFieldShape(rawFields, 4, protoreflect.BytesKind, false) ||
+		!protoFieldShape(rawFields, 8, protoreflect.Int64Kind, false) ||
+		!protoFieldShape(rawFields, 9, protoreflect.MessageKind, true) ||
+		!protoFieldShape(rawFields, 10, protoreflect.BytesKind, false) ||
+		!protoFieldShape(rawFields, 11, protoreflect.MessageKind, true) ||
+		!protoFieldShape(rawFields, 12, protoreflect.BytesKind, false) ||
+		!protoFieldShape(rawFields, 14, protoreflect.Int64Kind, false) ||
+		!protoFieldShape(rawFields, 18, protoreflect.Int64Kind, false) {
+		return false
+	}
+	contractFields := (&corepb.Transaction_Contract{}).ProtoReflect().Descriptor().Fields()
+	if contractFields.Len() != 5 || !protoFieldShape(contractFields, 2, protoreflect.MessageKind, false) {
 		return false
 	}
 	headerFields := (&corepb.BlockHeader{}).ProtoReflect().Descriptor().Fields()
@@ -398,9 +414,7 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 		}
 		data = data[n:]
 		if wireType != protowire.BytesType || (field != 1 && field != 2) {
-			_, _, tagLen := protowire.ConsumeTag(fieldData[:n])
-			unknown = protowire.AppendTag(unknown, field, wireType)
-			unknown = append(unknown, fieldData[tagLen:n]...)
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
 			continue
 		}
 		value, ok := bytesFieldValue(fieldData[:n])
@@ -474,10 +488,130 @@ func unmarshalBlockTransactionReserved(data []byte) (*corepb.Transaction, error)
 	} else if reserve.contracts > 1 {
 		decoded.raw.Contract = make([]*corepb.Transaction_Contract, 0, reserve.contracts)
 	}
-	if err := blockMergeUnmarshal.Unmarshal(data, &decoded.tx); err != nil {
-		return nil, err
+
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return nil, errors.New("malformed transaction wire envelope")
+		}
+		data = data[n:]
+		if wireType != protowire.BytesType {
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+			continue
+		}
+		value, ok := bytesFieldValue(fieldData[:n])
+		if !ok {
+			return nil, errors.New("malformed transaction bytes field")
+		}
+		switch field {
+		case 1:
+			if err := unmarshalTransactionRawReserved(value, decoded); err != nil {
+				return nil, err
+			}
+		case 2:
+			decoded.tx.Signature = append(decoded.tx.Signature, append([]byte{}, value...))
+		case 5:
+			var result *corepb.Transaction_Result
+			if len(decoded.tx.Ret) == 0 {
+				result = &decoded.result
+			} else {
+				result = new(corepb.Transaction_Result)
+			}
+			if err := blockMergeUnmarshal.Unmarshal(value, result); err != nil {
+				return nil, err
+			}
+			decoded.tx.Ret = append(decoded.tx.Ret, result)
+		case 6:
+			pqAuthSig := new(corepb.PQAuthSig)
+			if err := blockMergeUnmarshal.Unmarshal(value, pqAuthSig); err != nil {
+				return nil, err
+			}
+			decoded.tx.PqAuthSig = append(decoded.tx.PqAuthSig, pqAuthSig)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
 	}
+	appendProtoUnknown(&decoded.tx, unknown)
 	return &decoded.tx, nil
+}
+
+func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransaction) error {
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed transaction raw wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case wireType == protowire.BytesType && (field == 1 || field == 4 || field == 10 || field == 12):
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction raw bytes field")
+			}
+			value = append([]byte(nil), value...)
+			switch field {
+			case 1:
+				decoded.raw.RefBlockBytes = value
+			case 4:
+				decoded.raw.RefBlockHash = value
+			case 10:
+				decoded.raw.Data = value
+			case 12:
+				decoded.raw.Scripts = value
+			}
+		case wireType == protowire.VarintType && (field == 3 || field == 8 || field == 14 || field == 18):
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction raw varint field")
+			}
+			switch field {
+			case 3:
+				decoded.raw.RefBlockNum = int64(value)
+			case 8:
+				decoded.raw.Expiration = int64(value)
+			case 14:
+				decoded.raw.Timestamp = int64(value)
+			case 18:
+				decoded.raw.FeeLimit = int64(value)
+			}
+		case field == 9 && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction authority field")
+			}
+			authority := new(corepb.Authority)
+			if err := blockMergeUnmarshal.Unmarshal(value, authority); err != nil {
+				return err
+			}
+			decoded.raw.Auths = append(decoded.raw.Auths, authority)
+		case field == 11 && wireType == protowire.BytesType:
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transaction contract field")
+			}
+			var contract *corepb.Transaction_Contract
+			if len(decoded.raw.Contract) == 0 {
+				contract = &decoded.contract
+				if hasBytesField(value, 2) {
+					contract.Parameter = &decoded.parameter
+				}
+			} else {
+				contract = new(corepb.Transaction_Contract)
+			}
+			if err := blockMergeUnmarshal.Unmarshal(value, contract); err != nil {
+				return err
+			}
+			decoded.raw.Contract = append(decoded.raw.Contract, contract)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(&decoded.raw, unknown)
+	return nil
 }
 
 func scanBlockTransactionReserve(data []byte) (blockTransactionReserve, bool) {
@@ -555,6 +689,21 @@ func bytesFieldValue(fieldData []byte) ([]byte, bool) {
 	}
 	value, valueLen := protowire.ConsumeBytes(fieldData[tagLen:])
 	return value, valueLen >= 0 && tagLen+valueLen == len(fieldData)
+}
+
+func varintFieldValue(fieldData []byte) (uint64, bool) {
+	field, _, tagLen := protowire.ConsumeTag(fieldData)
+	if tagLen < 0 || !field.IsValid() {
+		return 0, false
+	}
+	value, valueLen := protowire.ConsumeVarint(fieldData[tagLen:])
+	return value, valueLen >= 0 && tagLen+valueLen == len(fieldData)
+}
+
+func appendCanonicalUnknown(dst, fieldData []byte, field protowire.Number, wireType protowire.Type) []byte {
+	_, _, tagLen := protowire.ConsumeTag(fieldData)
+	dst = protowire.AppendTag(dst, field, wireType)
+	return append(dst, fieldData[tagLen:]...)
 }
 
 // firstPQBlockVersion is VERSION_4_8_2_PQ1. Blocks below this version were
