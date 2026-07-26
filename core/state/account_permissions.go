@@ -44,10 +44,13 @@ func clearAccountPermissionProto(pb *corepb.Account) {
 	pb.ActivePermission = nil
 }
 
-func clearWitnessPermissionSignerCache(obj *stateObject) {
+func clearAccountPermissionCaches(obj *stateObject) {
 	if obj == nil {
 		return
 	}
+	obj.accountPermissionPoint = nil
+	obj.accountPermissionPointID = 0
+	obj.accountPermissionPointLoaded = false
 	obj.witnessPermissionSigner = common.Address{}
 	obj.witnessPermissionSignerLoaded = false
 }
@@ -113,6 +116,9 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 			return nil, nil
 		}
 	}
+	if obj.accountPermissionPointLoaded && obj.accountPermissionPointID == id {
+		return obj.accountPermissionPoint, nil
+	}
 
 	var key []byte
 	switch id {
@@ -127,8 +133,14 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 		key = accountActivePermissionKey(id)
 	}
 	value, exists, err := s.getAccountKVForDecoding(addr, kvdomains.AccountPermissionAux, key)
-	if err != nil || !exists {
+	if err != nil {
 		return nil, err
+	}
+	if !exists {
+		obj.accountPermissionPoint = nil
+		obj.accountPermissionPointID = id
+		obj.accountPermissionPointLoaded = true
+		return nil, nil
 	}
 	permission, _, err := decodeAccountPermissionRow(key, value)
 	if err != nil {
@@ -139,6 +151,9 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 	if id >= 2 && permission.GetId() != id {
 		return nil, fmt.Errorf("account active permission row %d contains id %d", id, permission.GetId())
 	}
+	obj.accountPermissionPoint = permission
+	obj.accountPermissionPointID = id
+	obj.accountPermissionPointLoaded = true
 	return permission, nil
 }
 
@@ -172,6 +187,9 @@ func (s *StateDB) materializeAccountPermissions(obj *stateObject) error {
 		return pb.ActivePermission[i].GetId() < pb.ActivePermission[j].GetId()
 	})
 	obj.accountPermissionsLoaded = true
+	obj.accountPermissionPoint = nil
+	obj.accountPermissionPointID = 0
+	obj.accountPermissionPointLoaded = false
 	return nil
 }
 
@@ -209,6 +227,6 @@ func (s *StateDB) writeAccountPermissions(obj *stateObject, owner, witness *core
 	}
 	clearAccountPermissionProto(obj.account.Proto())
 	obj.accountPermissionsLoaded = false
-	clearWitnessPermissionSignerCache(obj)
+	clearAccountPermissionCaches(obj)
 	return nil
 }

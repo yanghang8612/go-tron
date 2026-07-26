@@ -1857,7 +1857,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	obj.contractRuntimeLoaded = false
 	obj.contractRuntimeExists = false
 	obj.invalidateStorageKeyLayout()
-	clearWitnessPermissionSignerCache(obj)
+	clearAccountPermissionCaches(obj)
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.accountKVGenerationDirty = true

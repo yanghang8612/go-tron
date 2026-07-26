@@ -119,6 +119,14 @@ type stateObject struct {
 	// the typed mutators that need them.
 	accountMapsLoaded        bool
 	accountPermissionsLoaded bool
+	// accountPermissionPoint caches the last permission id resolved through the
+	// split-domain point path. Transaction validation repeatedly requests the
+	// same owner permission for hot accounts across adjacent blocks; retaining
+	// one read-only decoded row avoids reopening and unmarshaling it each time
+	// without materializing the complete permission set.
+	accountPermissionPoint       *corepb.Permission
+	accountPermissionPointID     int32
+	accountPermissionPointLoaded bool
 	// witnessPermissionSigner caches the point-read block-signing address.
 	// Only 27 active SR accounts normally serve thousands of consecutive
 	// header checks, so retaining this scalar avoids reopening the flat latest

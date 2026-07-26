@@ -141,6 +141,72 @@ func TestAccountPermissionByIDDoesNotMaterializeSplitAccount(t *testing.T) {
 	}
 }
 
+func TestAccountPermissionByIDCachesPointReadAndInvalidates(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x9a)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	owner1 := splitTestPermission(corepb.Permission_Owner, 0, "owner-1", 0x61)
+	owner2 := splitTestPermission(corepb.Permission_Owner, 0, "owner-2", 0x62)
+	sdb.SetPermissions(addr, owner1, nil, nil)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	first, err := reopened.AccountPermissionByID(addr, 0)
+	if err != nil || !proto.Equal(first, owner1) {
+		t.Fatalf("first owner lookup = %+v err=%v", first, err)
+	}
+	second, err := reopened.AccountPermissionByID(addr, 0)
+	if err != nil || second != first {
+		t.Fatalf("cached owner lookup = %+v err=%v, want same pointer", second, err)
+	}
+	if got := index.getsByDomain[kvdomains.AccountPermissionAux]; got != 1 {
+		t.Fatalf("two owner lookups read permission row %d times, want 1", got)
+	}
+	if _, err := reopened.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	third, err := reopened.AccountPermissionByID(addr, 0)
+	if err != nil || third != first {
+		t.Fatalf("adjacent-block cached owner lookup = %+v err=%v, want same pointer", third, err)
+	}
+	if got := index.getsByDomain[kvdomains.AccountPermissionAux]; got != 1 {
+		t.Fatalf("adjacent-block owner lookup read permission row %d times, want 1", got)
+	}
+
+	snapshot := reopened.Snapshot()
+	reopened.SetPermissions(addr, owner2, nil, nil)
+	updated, err := reopened.AccountPermissionByID(addr, 0)
+	if err != nil || !proto.Equal(updated, owner2) || updated == first {
+		t.Fatalf("owner after permission write = %+v err=%v", updated, err)
+	}
+	reopened.RevertToSnapshot(snapshot)
+	reverted, err := reopened.AccountPermissionByID(addr, 0)
+	if err != nil || !proto.Equal(reverted, owner1) || reverted == first {
+		t.Fatalf("owner after permission revert = %+v err=%v", reverted, err)
+	}
+
+	missing1, err := reopened.AccountPermissionByID(addr, 9)
+	if err != nil || missing1 != nil {
+		t.Fatalf("first missing lookup = %+v err=%v", missing1, err)
+	}
+	readsAfterMissing := index.getsByDomain[kvdomains.AccountPermissionAux]
+	missing2, err := reopened.AccountPermissionByID(addr, 9)
+	if err != nil || missing2 != nil {
+		t.Fatalf("cached missing lookup = %+v err=%v", missing2, err)
+	}
+	if got := index.getsByDomain[kvdomains.AccountPermissionAux]; got != readsAfterMissing {
+		t.Fatalf("cached missing lookup added durable read: got %d want %d", got, readsAfterMissing)
+	}
+}
+
 func TestWitnessPermissionAddressCachesPointReadAndInvalidates(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x98)
@@ -331,6 +397,22 @@ func BenchmarkAccountPermissionLookup(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if got := view.WitnessPermissionAddress(addr); got != want {
 				b.Fatalf("cached signer lookup = %x, want %x", got, want)
+			}
+		}
+	})
+	b.Run("cached-point-read", func(b *testing.B) {
+		view, err := New(root, db)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if permission, err := view.AccountPermissionByID(addr, 0); err != nil || permission == nil {
+			b.Fatalf("warm permission lookup: permission=%+v err=%v", permission, err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if permission, err := view.AccountPermissionByID(addr, 0); err != nil || permission == nil {
+				b.Fatalf("cached permission lookup: permission=%+v err=%v", permission, err)
 			}
 		}
 	})
