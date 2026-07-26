@@ -192,6 +192,51 @@ func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	}
 }
 
+func TestDecodeBranchDataIntoArenaReusesStorageAndPreservesValueCopies(t *testing.T) {
+	var firstSource BranchData
+	firstSource.SetLeafChild(2, []byte("first-leaf"), common.Hash{0x22})
+	firstEncoded := firstSource.Encode()
+
+	var arena []byte
+	var decoded BranchData
+	if err := decodeBranchDataIntoArena(firstEncoded, &decoded, &arena); err != nil {
+		t.Fatal(err)
+	}
+	firstCopy := decoded
+	firstKey, _ := firstCopy.leafChildAt(2)
+	if cap(firstKey) != len(firstKey) {
+		t.Fatalf("leaf key capacity = %d, want length %d", cap(firstKey), len(firstKey))
+	}
+
+	// Force arena growth without resetting it. Earlier BranchData value copies
+	// must keep their old immutable backing even if slices.Grow moves the arena.
+	var secondSource BranchData
+	secondSource.SetLeafChild(7, bytes.Repeat([]byte{0x77}, cap(arena)+1), common.Hash{0x77})
+	if err := decodeBranchDataIntoArena(secondSource.Encode(), &decoded, &arena); err != nil {
+		t.Fatal(err)
+	}
+	clear(firstEncoded)
+	if got := string(firstKey); got != "first-leaf" {
+		t.Fatalf("earlier value copy changed after arena growth: %q", got)
+	}
+
+	// Reset is legal only after all prior fold outputs are dead. Once warmed,
+	// repeatedly decoding into the same destination and arena allocates nothing.
+	secondEncoded := secondSource.Encode()
+	arena = arena[:0]
+	if err := decodeBranchDataIntoArena(secondEncoded, &decoded, &arena); err != nil {
+		t.Fatal(err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		arena = arena[:0]
+		if err := decodeBranchDataIntoArena(secondEncoded, &decoded, &arena); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("warmed fold arena allocated %.2f objects, want 0", allocs)
+	}
+}
+
 func TestDecodeBranchDataIntoNoCopyReuseClearsStaleLeafKeys(t *testing.T) {
 	var dst BranchData
 	dst.SetLeafChild(2, []byte("overwritten-leaf"), common.Hash{0x22})

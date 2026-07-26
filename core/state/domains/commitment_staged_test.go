@@ -188,6 +188,9 @@ func TestRawdbBranchStoreTransientViewCopiesOnlyRetainedLeafKeys(t *testing.T) {
 	buffer := blockbuffer.New(invalidatingCommitmentViewReader{KeyValueReader: disk})
 	buffer.SetBaseReadCacheSize(1 << 20)
 	store := newRawdbBranchStore(buffer)
+	if err := store.beginParentRead(); err != nil {
+		t.Fatal(err)
+	}
 	var got BranchData
 	found, err := store.GetBranchInto(prefix, &got)
 	if err != nil || !found {
@@ -195,6 +198,18 @@ func TestRawdbBranchStoreTransientViewCopiesOnlyRetainedLeafKeys(t *testing.T) {
 	}
 	if !got.Equal(want) {
 		t.Fatal("decoded branch retained bytes from the invalidated base View")
+	}
+	arena := store.leafKeyArenas[int(prefix[0])]
+	if arena == nil || len(*arena) == 0 {
+		t.Fatal("transient fold read did not use its reader-owned leaf-key arena")
+	}
+	if err := store.closeParentRead(); err != nil {
+		t.Fatal(err)
+	}
+	for i, retained := range store.leafKeyArenas {
+		if retained != nil {
+			t.Fatalf("reader %d retained a returned leaf-key arena", i)
+		}
 	}
 }
 

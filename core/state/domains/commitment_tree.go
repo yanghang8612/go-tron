@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"math/bits"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -378,6 +379,14 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 // first). Used by GetBranchInto on the bulk-sync hot path to avoid the
 // return-by-value copy of the ~1 KiB BranchData struct.
 func DecodeBranchDataInto(data []byte, dst *BranchData) error {
+	return decodeBranchDataIntoArena(data, dst, nil)
+}
+
+// decodeBranchDataIntoArena is the fold-scoped form of DecodeBranchDataInto.
+// arena remains immutable until every BranchData decoded during that fold has
+// been encoded or discarded, so value copies can safely share its leaf-key
+// slices. A nil arena preserves the public decoder's independent ownership.
+func decodeBranchDataIntoArena(data []byte, dst *BranchData, arena *[]byte) error {
 	if err := decodeBranchDataInto(data, dst); err != nil {
 		// The no-copy parser may have installed views into data before detecting
 		// a later malformed child. Public callers must never observe those
@@ -399,7 +408,15 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	if totalLeafKeyBytes == 0 {
 		return nil
 	}
-	arena := make([]byte, totalLeafKeyBytes)
+	var leafKeys []byte
+	if arena == nil {
+		leafKeys = make([]byte, totalLeafKeyBytes)
+	} else {
+		start := len(*arena)
+		*arena = slices.Grow(*arena, totalLeafKeyBytes)
+		*arena = (*arena)[:start+totalLeafKeyBytes]
+		leafKeys = (*arena)[start : start+totalLeafKeyBytes : start+totalLeafKeyBytes]
+	}
 	offset := 0
 	for remaining := leafMask; remaining != 0; remaining &= remaining - 1 {
 		i := bits.TrailingZeros16(remaining)
@@ -407,8 +424,8 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 		if len(child.leafKey) == 0 {
 			continue
 		}
-		end := offset + copy(arena[offset:], child.leafKey)
-		child.leafKey = arena[offset:end:end]
+		end := offset + copy(leafKeys[offset:], child.leafKey)
+		child.leafKey = leafKeys[offset:end:end]
 		offset = end
 	}
 	return nil

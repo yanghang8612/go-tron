@@ -122,6 +122,28 @@ func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {
 	}
 }
 
+func BenchmarkDecodeBranchDataIntoFoldArena(b *testing.B) {
+	var branch BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		branch.SetLeafChild(nibble, bytes.Repeat([]byte{nibble + 1}, 64+int(nibble)), common.Hash{nibble + 1})
+	}
+	encoded := branch.Encode()
+	var decoded BranchData
+	var arena []byte
+	if err := decodeBranchDataIntoArena(encoded, &decoded, &arena); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		arena = arena[:0]
+		if err := decodeBranchDataIntoArena(encoded, &decoded, &arena); err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkDecodedBranch = decoded
+}
+
 func BenchmarkDecodeBranchDataIntoNoCopy(b *testing.B) {
 	var branch BranchData
 	for nibble := uint8(0); nibble < 16; nibble++ {

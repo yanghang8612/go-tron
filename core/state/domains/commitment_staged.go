@@ -19,6 +19,10 @@ type rawdbBranchStore struct {
 	readParentBranches bool
 	parentView         pointread.CommitmentParentView
 	parentSession      pointread.CommitmentParentSession
+	// One fold-scoped leaf-key arena per exclusive parent reader. Decoder output
+	// may be value-copied into sibling buffers, so arenas remain immutable until
+	// all parallel work and flushes finish and closeParentRead returns them.
+	leafKeyArenas [maxFoldNibbles + 1]*[]byte
 }
 
 // branchDecodeView owns the callback passed through rawdb/blockbuffer's
@@ -28,6 +32,7 @@ type rawdbBranchStore struct {
 // returned immediately after the view call.
 type branchDecodeView struct {
 	dst     *BranchData
+	arena   *[]byte
 	consume func(encoded []byte, stable bool) error
 }
 
@@ -48,7 +53,36 @@ func (v *branchDecodeView) decode(encoded []byte, stable bool) error {
 	// A cold Pebble value is valid only inside this callback. Copy only its
 	// leaf keys into BranchData instead of copying the complete encoded branch
 	// (which is dominated by fixed child hashes) before decoding.
-	return DecodeBranchDataInto(encoded, v.dst)
+	return decodeBranchDataIntoArena(encoded, v.dst, v.arena)
+}
+
+const maxPooledBranchLeafKeyArena = 64 << 10
+
+var branchLeafKeyArenaPool = sync.Pool{
+	New: func() any { return new([]byte) },
+}
+
+func (s *rawdbBranchStore) borrowLeafKeyArenas() {
+	for i := range s.leafKeyArenas {
+		arena := branchLeafKeyArenaPool.Get().(*[]byte)
+		*arena = (*arena)[:0]
+		s.leafKeyArenas[i] = arena
+	}
+}
+
+func (s *rawdbBranchStore) returnLeafKeyArenas() {
+	for i, arena := range s.leafKeyArenas {
+		if arena == nil {
+			continue
+		}
+		if cap(*arena) > maxPooledBranchLeafKeyArena {
+			*arena = nil
+		} else {
+			*arena = (*arena)[:0]
+		}
+		branchLeafKeyArenaPool.Put(arena)
+		s.leafKeyArenas[i] = nil
+	}
 }
 
 var branchEncodingSlicesPool = sync.Pool{
@@ -143,19 +177,22 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
 	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 	decodeView.dst = dst
+	reader := maxFoldNibbles // root branch has no first-nibble owner
+	if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
+		reader = int(prefix[0])
+	}
+	decodeView.arena = s.leafKeyArenas[reader]
 	if s.parentSession != nil {
-		reader := maxFoldNibbles // root branch has no first-nibble owner
-		if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
-			reader = int(prefix[0])
-		}
 		found, err := rawdb.ViewCommitmentParentBranchInSession(s.parentSession, reader, prefix, decodeView.consume)
 		decodeView.dst = nil
+		decodeView.arena = nil
 		branchDecodeViewPool.Put(decodeView)
 		return found, err
 	}
 	if s.parentView != nil {
 		found, err := rawdb.ViewCommitmentParentBranchInView(s.parentView, prefix, decodeView.consume)
 		decodeView.dst = nil
+		decodeView.arena = nil
 		branchDecodeViewPool.Put(decodeView)
 		return found, err
 	}
@@ -165,6 +202,7 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	}
 	found, err := view(s.db, prefix, decodeView.consume)
 	decodeView.dst = nil
+	decodeView.arena = nil
 	branchDecodeViewPool.Put(decodeView)
 	return found, err
 }
@@ -179,12 +217,18 @@ func (s *rawdbBranchStore) beginParentRead() error {
 	}
 	if session != nil {
 		s.parentSession = session
+		s.borrowLeafKeyArenas()
 		return nil
 	}
-	return s.beginParentView()
+	if err := s.beginParentView(); err != nil {
+		return err
+	}
+	s.borrowLeafKeyArenas()
+	return nil
 }
 
 func (s *rawdbBranchStore) closeParentRead() error {
+	defer s.returnLeafKeyArenas()
 	if s.parentSession != nil {
 		err := s.parentSession.Close()
 		s.parentSession = nil
