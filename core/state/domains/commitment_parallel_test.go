@@ -145,7 +145,7 @@ func TestApplyRootParallelFlushesOptedInStoreConcurrently(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		root, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1))
+		root, _, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1))
 		done <- result{root: root, err: err}
 	}()
 	timer := time.NewTimer(2 * time.Second)
@@ -207,7 +207,7 @@ func TestApplyRootParallelJoinsSiblingFlushesAfterError(t *testing.T) {
 	close(probe.release)
 	trie := newCommitmentTrie(probe)
 	trie.parallelLimit = 3
-	if _, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1, 2)); err == nil {
+	if _, _, err := trie.applyRootParallel(nil, siblingFlushOps(0, 1, 2)); err == nil {
 		t.Fatal("parallel flush unexpectedly succeeded")
 	}
 	// Siblings are joined rather than abandoned on the first error, so the two

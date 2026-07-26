@@ -16,8 +16,66 @@ type mapBranchStore struct {
 	m map[string]BranchData
 }
 
+type mutationCountingBranchStore struct {
+	branchStore
+	puts int
+	dels int
+}
+
+func (s *mutationCountingBranchStore) PutBranch(prefix []byte, branch BranchData) error {
+	s.puts++
+	return s.branchStore.PutBranch(prefix, branch)
+}
+
+func (s *mutationCountingBranchStore) DelBranch(prefix []byte) error {
+	s.dels++
+	return s.branchStore.DelBranch(prefix)
+}
+
 func newMapBranchStore() *mapBranchStore {
 	return &mapBranchStore{m: make(map[string]BranchData)}
+}
+
+func TestFoldSkipsPersistingByteIdenticalUpdates(t *testing.T) {
+	base := newMapBranchStore()
+	seed := make([]Update, 256)
+	for i := range seed {
+		seed[i] = Update{
+			Key:   []byte{byte(i >> 8), byte(i), byte(i * 37), 0xa5},
+			Value: []byte{byte(i), byte(i >> 8), 0x5a},
+		}
+	}
+	want, err := newCommitmentTrie(base).Fold(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	counting := &mutationCountingBranchStore{branchStore: base}
+	trie := newCommitmentTrie(counting)
+	trie.parallelMinOps = 1
+	got, err := trie.Fold(seed[:64])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("no-op root = %x, want %x", got, want)
+	}
+	if counting.puts != 0 || counting.dels != 0 {
+		t.Fatalf("no-op branch mutations = puts %d deletes %d, want 0/0", counting.puts, counting.dels)
+	}
+
+	changed := append([]Update(nil), seed[:64]...)
+	changed[0].Value = []byte("changed")
+	changedRoot, err := trie.Fold(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedRoot == want {
+		t.Fatal("real value change preserved the old root")
+	}
+	if counting.puts == 0 {
+		t.Fatal("real value change did not persist any branches")
+	}
 }
 
 func TestFoldDoesNotRetainUpdateBuffers(t *testing.T) {

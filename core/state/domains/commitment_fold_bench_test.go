@@ -154,6 +154,37 @@ func BenchmarkFoldParBlockbufferParallelFlushCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, func() branchStore { return rawdbBlockbufferBase(true) })
 }
 
+// BenchmarkFoldNoopUpdates measures the state-setter pattern where a row is
+// dirtied but its final bytes equal the durable parent. The commitment root and
+// every persisted branch must remain unchanged across iterations.
+func BenchmarkFoldNoopUpdates(b *testing.B) {
+	const baseSize = 10_000
+	seed := buildRandomPuts(rand.New(rand.NewSource(7731)), baseSize)
+	store := rawdbBase()
+	trie := newCommitmentTrie(store)
+	trie.parallelMinOps = 1
+	want, err := trie.Fold(seed)
+	if err != nil {
+		b.Fatal(err)
+	}
+	updates := make([]Update, 64)
+	for i := range updates {
+		updates[i] = seed[(i*137)%len(seed)]
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := trie.Fold(updates)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got != want {
+			b.Fatalf("root = %x, want %x", got, want)
+		}
+	}
+}
+
 // BenchmarkAsyncFoldParentBranchReads measures the complete production-shaped
 // one-block fold: a deep immutable base, a fresh in-flight block layer, and 64
 // incremental updates. The async constructor skips guaranteed misses in that

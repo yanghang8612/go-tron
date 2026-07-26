@@ -659,34 +659,37 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 
 	if len(ops) > 0 {
 		var rootPtr *BranchData
+		var changed bool
 		if hasRoot {
 			rootPtr = &root
 		}
 		if t.parallelMinOps > 0 && len(ops) >= t.parallelMinOps {
-			rootPtr, err = t.applyRootParallel(rootPtr, ops)
+			rootPtr, changed, err = t.applyRootParallel(rootPtr, ops)
 		} else {
 			// Every recursive prefix is at most pathLen bytes. Reusing this
 			// fold-local path stack avoids one allocation at every trie level;
 			// stores consume/copy prefixes synchronously and never retain it.
 			var path [pathLen]byte
-			rootPtr, err = t.apply(path[:0], 0, rootPtr, ops)
+			rootPtr, changed, err = t.apply(path[:0], 0, rootPtr, ops)
 		}
 		if err != nil {
 			return common.Hash{}, err
 		}
-		if rootPtr == nil {
-			if hasRoot {
-				if err := t.store.DelBranch(nil); err != nil {
+		if changed {
+			if rootPtr == nil {
+				if hasRoot {
+					if err := t.store.DelBranch(nil); err != nil {
+						return common.Hash{}, err
+					}
+				}
+				hasRoot = false
+			} else {
+				if err := t.store.PutBranch(nil, *rootPtr); err != nil {
 					return common.Hash{}, err
 				}
+				root = *rootPtr
+				hasRoot = true
 			}
-			hasRoot = false
-		} else {
-			if err := t.store.PutBranch(nil, *rootPtr); err != nil {
-				return common.Hash{}, err
-			}
-			root = *rootPtr
-			hasRoot = true
 		}
 	}
 
@@ -771,11 +774,13 @@ func resolveOp(u Update) op {
 }
 
 // apply processes all ops that pass through the branch at prefix/depth and
-// returns the resulting branch (nil if the branch should not exist).
+// returns the resulting branch (nil if the branch should not exist) plus
+// whether its persisted representation changed. The changed bit lets an
+// identical leaf update unwind without rewriting every ancestor branch.
 //
 // branch is the existing node at this prefix (nil if absent). All ops in the
 // slice share the prefix path nibbles [0:depth).
-func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops []op) (*BranchData, error) {
+func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops []op) (*BranchData, bool, error) {
 	if branch == nil {
 		branch = &BranchData{}
 	}
@@ -794,13 +799,14 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 			}
 		}
 		if singleBucket {
-			if err := t.applyNibble(prefix, depth, branch, nb, ops); err != nil {
-				return nil, err
+			changed, err := t.applyNibble(prefix, depth, branch, nb, ops)
+			if err != nil {
+				return nil, false, err
 			}
 			if branch.childCount() == 0 {
-				return nil, nil
+				return nil, changed, nil
 			}
-			return branch, nil
+			return branch, changed, nil
 		}
 	}
 
@@ -825,15 +831,18 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 		heads[nb]++
 	}
 
+	changed := false
 	for nb := uint8(0); nb < 16; nb++ {
 		n := counts[nb]
 		if n == 0 {
 			continue
 		}
 		group := (*scratch)[starts[nb] : starts[nb]+n]
-		if err := t.applyNibble(prefix, depth, branch, nb, group); err != nil {
-			return nil, err
+		nibbleChanged, err := t.applyNibble(prefix, depth, branch, nb, group)
+		if err != nil {
+			return nil, false, err
 		}
+		changed = changed || nibbleChanged
 	}
 
 	// An emptied branch must not persist. Single-LEAF collapse for non-root
@@ -841,14 +850,14 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 	// single-LEAF form (the root-hash rule special-cases it), so here we only
 	// need to drop fully-empty branches.
 	if branch.childCount() == 0 {
-		return nil, nil
+		return nil, changed, nil
 	}
-	return branch, nil
+	return branch, changed, nil
 }
 
 // applyNibble applies the op group that descends into nibble nb of the branch at
-// prefix/depth, mutating branch in place.
-func (t *commitmentTrie) applyNibble(prefix []byte, depth int, branch *BranchData, nb uint8, group []op) error {
+// prefix/depth, mutating branch in place and reporting whether it changed.
+func (t *commitmentTrie) applyNibble(prefix []byte, depth int, branch *BranchData, nb uint8, group []op) (bool, error) {
 	childPrefix := appendNibble(prefix, nb)
 
 	if !branch.childPresent(nb) {
@@ -863,35 +872,41 @@ func (t *commitmentTrie) applyNibble(prefix []byte, depth int, branch *BranchDat
 	case kindHash:
 		return t.applyOnHash(branch, nb, childPrefix, depth+1, group)
 	default:
-		return fmt.Errorf("commitment_tree: unknown child kind %d", branch.childKindAt(nb))
+		return false, fmt.Errorf("commitment_tree: unknown child kind %d", branch.childKindAt(nb))
 	}
 }
 
 // insertIntoEmpty fills an absent slot nb with the surviving puts in group.
-func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
+func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) (bool, error) {
 	puts := livePutsInPlace(group)
 	switch len(puts) {
 	case 0:
 		// Deletes into an empty slot are no-ops.
-		return nil
+		return false, nil
 	case 1:
 		branch.setLeafChildStable(nb, puts[0].key, puts[0].valHash)
-		return nil
+		return true, nil
 	default:
 		// Build a fresh child subtree rooted at childPrefix, borrowing the
 		// branch from the pool so the descent doesn't escape to the heap.
 		child := borrowEmptyBranch()
 		defer returnBranch(child)
-		updated, err := t.apply(childPrefix, childDepth, child, puts)
+		updated, changed, err := t.apply(childPrefix, childDepth, child, puts)
 		if err != nil {
-			return err
+			return false, err
 		}
-		return t.linkChild(branch, nb, childPrefix, updated)
+		if !changed {
+			return false, nil
+		}
+		if err := t.linkChild(branch, nb, childPrefix, updated); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 }
 
 // applyOnLeaf resolves group against an existing leaf child at nb.
-func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
+func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) (bool, error) {
 	existKey, existVH := branch.leafChildAt(nb)
 
 	// Collect surviving entries under this slot via a small-set linear scan.
@@ -944,12 +959,15 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 	switch len(survivors) {
 	case 0:
 		branch.clearChild(nb)
-		return nil
+		return true, nil
 	case 1:
 		// Exactly one survivor → leaf child.
 		only := survivors[0]
+		if bytes.Equal(only.key, existKey) && only.valHash == existVH {
+			return false, nil
+		}
 		branch.setLeafChildStable(nb, only.key, only.valHash)
-		return nil
+		return true, nil
 	default:
 		if existingNeedsPath {
 			survivors[0].path = keyPath(existKey)
@@ -973,7 +991,7 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 // the caller's stack array, so it is copied into a pooled buffer before the
 // recursive descent (which sorts in place and may retain ordering across the
 // fold); the pooled buffer is returned at frame exit.
-func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, survivors []op) error {
+func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, survivors []op) (bool, error) {
 	bufP := borrowOpsBuf(len(survivors))
 	defer returnOpsBuf(bufP)
 	buf := *bufP
@@ -983,11 +1001,17 @@ func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefi
 	sortOps(buf)
 	child := borrowEmptyBranch()
 	defer returnBranch(child)
-	updated, err := t.apply(childPrefix, childDepth, child, buf)
+	updated, changed, err := t.apply(childPrefix, childDepth, child, buf)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return t.linkChild(branch, nb, childPrefix, updated)
+	if !changed {
+		return false, nil
+	}
+	if err := t.linkChild(branch, nb, childPrefix, updated); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // applyOnHash resolves group against an existing hash child (a child subtree) at
@@ -995,28 +1019,34 @@ func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefi
 // BranchData allocation (formerly the #1 alloc source at ~24% of fold heap
 // pressure) becomes pool reuse. linkChild consumes the data and never retains
 // the pointer past return, so the deferred release is unconditional.
-func (t *commitmentTrie) applyOnHash(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
+func (t *commitmentTrie) applyOnHash(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) (bool, error) {
 	child := borrowBranch()
 	defer returnBranch(child)
 	ok, err := t.store.GetBranchInto(childPrefix, child)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
 		// A missing read may leave the overwrite-only pooled destination
 		// untouched. Clear it before returning it to the pool so malformed state
 		// cannot extend the lifetime of slices retained by its previous owner.
 		*child = BranchData{}
-		return fmt.Errorf("commitment_tree: missing hash child at prefix %x", childPrefix)
+		return false, fmt.Errorf("commitment_tree: missing hash child at prefix %x", childPrefix)
 	}
-	updated, err := t.apply(childPrefix, childDepth, child, group)
+	updated, changed, err := t.apply(childPrefix, childDepth, child, group)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !changed {
+		return false, nil
 	}
 	// updated is either child (mutated) or nil (subtree collapsed). linkChild
 	// handles both. defer returnBranch(child) above releases child after
 	// linkChild returns regardless of which case fired.
-	return t.linkChild(branch, nb, childPrefix, updated)
+	if err := t.linkChild(branch, nb, childPrefix, updated); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // linkChild persists (or deletes) the child subtree at childPrefix and wires the

@@ -271,14 +271,14 @@ func (s *bufferedBranchStore) releasePuts() {
 // depth 0). It buckets ops by their first nibble and folds each non-empty
 // first-nibble subtrie concurrently, each against a private bufferedBranchStore,
 // then flushes the buffers into the shared store (concurrently when it opts in)
-// and returns the updated root branch.
+// and returns the updated root branch plus whether any sibling changed.
 //
 // The shared root branch is safe to mutate concurrently: each subtrie touches
 // only its own children[nb] slot (an independent array element), while
 // BranchData's shared presence mask uses atomic bit updates. errs/WaitGroup
 // establish the happens-before edge that makes those writes visible to the
 // caller after Wait.
-func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*BranchData, error) {
+func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*BranchData, bool, error) {
 	if branch == nil {
 		branch = &BranchData{}
 	}
@@ -329,6 +329,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 
 	var (
 		buffers [maxFoldNibbles]*bufferedBranchStore
+		changed [maxFoldNibbles]bool
 		errs    [maxFoldNibbles]error
 		wg      sync.WaitGroup
 		sem     = make(chan struct{}, limit)
@@ -353,8 +354,9 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 			// The worker owns its path backing array, so recursive appends can
 			// reuse all 64 nibble slots without aliasing sibling workers.
 			var path [pathLen]byte
-			err := sub.applyNibble(path[:0], 0, branch, nb, group)
-			if err == nil && concurrentFlush {
+			nibbleChanged, err := sub.applyNibble(path[:0], 0, branch, nb, group)
+			changed[nb] = nibbleChanged
+			if err == nil && nibbleChanged && concurrentFlush {
 				// This worker only reads/writes prefixes beginning with nb. Publishing
 				// its finished buffer cannot affect any still-running sibling, so overlap
 				// encoding/writes with their computation and avoid a second goroutine wave.
@@ -368,21 +370,25 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if errs[nb] != nil {
 			returnSiblingBuffers(buffers)
-			return nil, errs[nb]
+			return nil, false, errs[nb]
 		}
 	}
 	if !concurrentFlush {
 		if err := flushSiblingBuffersSerial(t.store, buffers, activeBatches); err != nil {
 			returnSiblingBuffers(buffers)
-			return nil, err
+			return nil, false, err
 		}
 	}
 	returnSiblingBuffers(buffers)
 
-	if branch.childCount() == 0 {
-		return nil, nil
+	anyChanged := false
+	for _, nibbleChanged := range changed {
+		anyChanged = anyChanged || nibbleChanged
 	}
-	return branch, nil
+	if branch.childCount() == 0 {
+		return nil, anyChanged, nil
+	}
+	return branch, anyChanged, nil
 }
 
 // flushSiblingBuffersSerial publishes first-nibble buffers in deterministic
