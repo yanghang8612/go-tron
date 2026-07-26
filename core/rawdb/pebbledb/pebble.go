@@ -332,6 +332,18 @@ type pointReadView struct {
 type pointReadSnapshot struct {
 	db       *Database
 	snapshot *pebble.Snapshot
+
+	// Commitment folds know their parallel reader count before opening the
+	// durable snapshot. Reserve their cursor wrappers in one allocation and,
+	// once the common prefix is known, pack all lower/upper bounds into one
+	// immutable arena. NewCursor is called concurrently by fold workers, so the
+	// small reservation index and first-prefix initialization are protected.
+	cursorMu          sync.Mutex
+	reservedCursors   []pointReadCursor
+	reservedBounds    []byte
+	reservedPrefixLen int
+	reservedReady     bool
+	nextReserved      int
 }
 
 type pointReadCursor struct {
@@ -341,6 +353,7 @@ type pointReadCursor struct {
 var _ pointread.Viewer = (*Database)(nil)
 var _ pointread.View = (*pointReadView)(nil)
 var _ pointread.Snapshotter = (*Database)(nil)
+var _ pointread.CapacitySnapshotter = (*Database)(nil)
 var _ pointread.Snapshot = (*pointReadSnapshot)(nil)
 var _ pointread.Cursor = (*pointReadCursor)(nil)
 
@@ -386,28 +399,76 @@ func (v *pointReadView) Close() error {
 // commitment stream, avoiding DB.Get's search setup and closer allocation for
 // every cold branch.
 func (d *Database) NewPointReadSnapshot() (pointread.Snapshot, error) {
+	return d.newPointReadSnapshot(0)
+}
+
+// NewPointReadSnapshotWithCapacity is NewPointReadSnapshot with a cursor-count
+// hint. The returned snapshot has identical MVCC and lifecycle semantics.
+func (d *Database) NewPointReadSnapshotWithCapacity(cursors int) (pointread.Snapshot, error) {
+	return d.newPointReadSnapshot(cursors)
+}
+
+func (d *Database) newPointReadSnapshot(cursors int) (pointread.Snapshot, error) {
 	d.quitLock.RLock()
 	if d.closed {
 		d.quitLock.RUnlock()
 		return nil, pebble.ErrClosed
 	}
-	return &pointReadSnapshot{db: d, snapshot: d.db.NewSnapshot()}, nil
+	s := &pointReadSnapshot{db: d, snapshot: d.db.NewSnapshot()}
+	if cursors > 0 {
+		s.reservedCursors = make([]pointReadCursor, cursors)
+	}
+	return s, nil
 }
 
 func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 	if s == nil || s.snapshot == nil {
 		return nil, pebble.ErrClosed
 	}
-	lower := append([]byte(nil), prefix...)
+	cursor, lower, upper := s.reserveCursor(prefix)
+	if cursor == nil {
+		cursor = new(pointReadCursor)
+		lower = append([]byte(nil), prefix...)
+		upper = upperBound(lower)
+	}
 	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
 		LowerBound: lower,
-		UpperBound: upperBound(lower),
+		UpperBound: upper,
 		KeyTypes:   pebble.IterKeyTypePointsOnly,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &pointReadCursor{iter: iter}, nil
+	cursor.iter = iter
+	return cursor, nil
+}
+
+func (s *pointReadSnapshot) reserveCursor(prefix []byte) (cursor *pointReadCursor, lower, upper []byte) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	if s.nextReserved >= len(s.reservedCursors) {
+		return nil, nil, nil
+	}
+	if !s.reservedReady {
+		s.reservedPrefixLen = len(prefix)
+		s.reservedBounds = make([]byte, len(s.reservedCursors)*2*len(prefix))
+		s.reservedReady = true
+	} else if len(prefix) != s.reservedPrefixLen {
+		// A capacity hint normally serves one commitment prefix. Preserve the
+		// generic Snapshot contract for callers that mix prefix lengths.
+		return nil, nil, nil
+	}
+
+	i := s.nextReserved
+	s.nextReserved++
+	stride := s.reservedPrefixLen
+	lowerStart := i * 2 * stride
+	upperStart := lowerStart + stride
+	lower = s.reservedBounds[lowerStart : lowerStart+stride]
+	copy(lower, prefix)
+	upperStorage := s.reservedBounds[upperStart : upperStart : upperStart+stride]
+	upper = upperBoundInto(upperStorage, lower)
+	return &s.reservedCursors[i], lower, upper
 }
 
 func (s *pointReadSnapshot) Close() error {
@@ -416,6 +477,8 @@ func (s *pointReadSnapshot) Close() error {
 	}
 	err := s.snapshot.Close()
 	s.snapshot = nil
+	s.reservedCursors = nil
+	s.reservedBounds = nil
 	s.db.quitLock.RUnlock()
 	s.db = nil
 	return err
@@ -892,13 +955,16 @@ func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
 
 // upperBound returns the upper bound for the given prefix
 func upperBound(prefix []byte) (limit []byte) {
+	return upperBoundInto(nil, prefix)
+}
+
+func upperBoundInto(dst, prefix []byte) (limit []byte) {
 	for i := len(prefix) - 1; i >= 0; i-- {
 		c := prefix[i]
 		if c == 0xff {
 			continue
 		}
-		limit = make([]byte, i+1)
-		copy(limit, prefix)
+		limit = append(dst, prefix[:i+1]...)
 		limit[i] = c + 1
 		break
 	}

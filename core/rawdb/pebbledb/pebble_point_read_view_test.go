@@ -3,12 +3,15 @@ package pebbledb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 func TestExactPointComparerReopensDefaultDatabase(t *testing.T) {
@@ -74,6 +77,104 @@ func TestPointReadSnapshotCursorIsStableAndExact(t *testing.T) {
 	}
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPointReadSnapshotReservedCursorsAreConcurrentAndExact(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "test/reserved-snapshot/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const readers = 16
+	for i := 0; i < readers; i++ {
+		key := []byte{0x71, byte(i)}
+		if err := db.Put(key, []byte{byte(i + 1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := db.NewPointReadSnapshotWithCapacity(readers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, readers)
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cursor, err := snapshot.NewCursor([]byte{0x71})
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer cursor.Close()
+			found, err := cursor.View([]byte{0x71, byte(i)}, func(value []byte) error {
+				if len(value) != 1 || value[0] != byte(i+1) {
+					return fmt.Errorf("reader %d value %x", i, value)
+				}
+				return nil
+			})
+			if err != nil || !found {
+				errs <- fmt.Errorf("reader %d found=%v: %w", i, found, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	reserved := snapshot.(*pointReadSnapshot)
+	if reserved.nextReserved != readers || len(reserved.reservedBounds) != readers*2 {
+		t.Fatalf("reserved cursors/bounds = %d/%d, want %d/%d", reserved.nextReserved, len(reserved.reservedBounds), readers, readers*2)
+	}
+}
+
+func BenchmarkPebblePointReadSnapshotCursorLifecycle(b *testing.B) {
+	db, err := New(b.TempDir(), 16, 16, "bench/snapshot/", false, Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	const readers = 16
+	prefix := []byte("state-commitment-branch-v1-")
+	for _, reserved := range []bool{false, true} {
+		name := "unreserved"
+		if reserved {
+			name = "reserved"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				var snapshot pointread.Snapshot
+				var err error
+				if reserved {
+					snapshot, err = db.NewPointReadSnapshotWithCapacity(readers)
+				} else {
+					snapshot, err = db.NewPointReadSnapshot()
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				for range readers {
+					cursor, err := snapshot.NewCursor(prefix)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if err := cursor.Close(); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := snapshot.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

@@ -297,7 +297,13 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	if cache != nil {
 		cacheVersion = cache.version.Load()
 	}
-	snapshot, err := factory.NewPointReadSnapshot()
+	var snapshot pointread.Snapshot
+	var err error
+	if capacityFactory, ok := b.base.(pointread.CapacitySnapshotter); ok {
+		snapshot, err = capacityFactory.NewPointReadSnapshotWithCapacity(readers)
+	} else {
+		snapshot, err = factory.NewPointReadSnapshot()
+	}
 	b.mu.RUnlock()
 	b.flushMu.Unlock()
 	if err != nil {

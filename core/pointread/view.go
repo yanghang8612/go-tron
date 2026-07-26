@@ -42,6 +42,14 @@ type Snapshotter interface {
 	NewPointReadSnapshot() (Snapshot, error)
 }
 
+// CapacitySnapshotter optionally reserves storage for the caller's known
+// number of independently owned cursors. It is semantically identical to
+// Snapshotter; the hint only lets an engine coallocate short-lived cursor and
+// bound state for one parallel read session.
+type CapacitySnapshotter interface {
+	NewPointReadSnapshotWithCapacity(cursors int) (Snapshot, error)
+}
+
 // CommitmentParentView resolves split physical keys against the parent state
 // visible to one commitment fold. stable reports whether value may be retained
 // after fn returns.
