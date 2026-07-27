@@ -26,6 +26,38 @@ func (p *stageProgressOwnedWriterProbe) PutStringOwnedValue(key string, value []
 	return nil
 }
 
+type stageProgressMultiWriterProbe struct {
+	stageProgressOwnedWriterProbe
+	values [][]byte
+}
+
+func (p *stageProgressMultiWriterProbe) PutStringOwnedValue(key string, value []byte) error {
+	p.key = key
+	p.value = value
+	p.values = append(p.values, value)
+	return nil
+}
+
+func TestWriteCanonicalStageProgressSharesEncodedValue(t *testing.T) {
+	probe := new(stageProgressMultiWriterProbe)
+	hash := common.Hash{0x43}
+	if err := WriteCanonicalStageProgressWithHash(probe, 124, hash); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.values) != len(CanonicalExecutionStages()) {
+		t.Fatalf("writes = %d, want %d", len(probe.values), len(CanonicalExecutionStages()))
+	}
+	want := encodeStageProgress(124, hash, true)
+	for i, value := range probe.values {
+		if !bytes.Equal(value, want) {
+			t.Fatalf("write %d value = %x, want %x", i, value, want)
+		}
+		if &value[0] != &probe.values[0][0] {
+			t.Fatalf("write %d did not share the canonical encoded value", i)
+		}
+	}
+}
+
 func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	db := NewMemoryDatabase()
 	if _, ok, err := ReadStageProgress(db, StageExecution); err != nil || ok {

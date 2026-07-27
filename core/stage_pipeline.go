@@ -17,6 +17,8 @@ type canonicalStagePipeline struct {
 	blockNum uint64
 	hash     tcommon.Hash
 	last     int
+	value    rawdb.StageProgressValue
+	valueSet bool
 }
 
 func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, hash tcommon.Hash) *canonicalStagePipeline {
@@ -25,6 +27,8 @@ func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, has
 		blockNum: blockNum,
 		hash:     hash,
 		last:     -1,
+		value:    rawdb.NewStageProgressValueWithHash(blockNum, hash),
+		valueSet: true,
 	}
 }
 
@@ -62,7 +66,11 @@ func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 		if p.progress != nil {
 			err = p.progress.WriteWithHash(stage, p.blockNum, p.hash)
 		} else {
-			err = rawdb.WriteStageProgressWithHash(p.writer, stage, p.blockNum, p.hash)
+			if !p.valueSet {
+				p.value = rawdb.NewStageProgressValueWithHash(p.blockNum, p.hash)
+				p.valueSet = true
+			}
+			err = p.value.Write(p.writer, stage)
 		}
 		if err != nil {
 			return fmt.Errorf("write %s stage progress: %w", stage, err)

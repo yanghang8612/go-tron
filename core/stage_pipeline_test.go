@@ -115,6 +115,27 @@ func BenchmarkCanonicalStagePipelineWriterBinding(b *testing.B) {
 	})
 }
 
+type discardStageProgressWriter struct{}
+
+func (discardStageProgressWriter) Put([]byte, []byte) error { return nil }
+func (discardStageProgressWriter) Delete([]byte) error      { return nil }
+
+var benchmarkCanonicalStagePipeline *canonicalStagePipeline
+
+func BenchmarkCanonicalStagePipelineAdvance(b *testing.B) {
+	writer := discardStageProgressWriter{}
+	stages := rawdb.CanonicalExecutionStages()
+	hash := common.Hash{0x42}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		pipeline := newCanonicalStagePipeline(writer, uint64(i), hash)
+		if err := pipeline.Advance(stages...); err != nil {
+			b.Fatal(err)
+		}
+		benchmarkCanonicalStagePipeline = pipeline
+	}
+}
+
 func TestCanonicalStagePipelineRejectsSkippedOrForeignStages(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	pipeline := newCanonicalStagePipeline(db, 3, common.Hash{0x03})

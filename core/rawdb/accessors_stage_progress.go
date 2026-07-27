@@ -43,6 +43,42 @@ type StageProgress struct {
 	HasBlockHash bool
 }
 
+// StageProgressValue owns one encoded progress row that may be written to
+// multiple stage keys. Its bytes are immutable after construction, so writers
+// with ownership-transfer fast paths may safely retain the same backing for
+// every canonical stage of one block.
+type StageProgressValue struct {
+	data [8 + common.HashLength]byte
+	size uint8
+}
+
+func NewStageProgressValue(blockNum uint64) StageProgressValue {
+	var value StageProgressValue
+	binary.BigEndian.PutUint64(value.data[:8], blockNum)
+	value.size = 8
+	return value
+}
+
+func NewStageProgressValueWithHash(blockNum uint64, blockHash common.Hash) StageProgressValue {
+	value := NewStageProgressValue(blockNum)
+	copy(value.data[8:], blockHash[:])
+	value.size = uint8(len(value.data))
+	return value
+}
+
+func (v *StageProgressValue) Write(db ethdb.KeyValueWriter, stage StageID) error {
+	if db == nil {
+		return errors.New("rawdb: nil stage progress writer")
+	}
+	if stage == "" {
+		return errors.New("rawdb: empty stage id")
+	}
+	if v == nil || (v.size != 8 && int(v.size) != len(v.data)) {
+		return errors.New("rawdb: invalid stage progress value")
+	}
+	return writeStageProgressValue(db, stage, v.data[:v.size:v.size])
+}
+
 func CanonicalExecutionStages() []StageID {
 	return []StageID{
 		StageHeaders,
@@ -84,8 +120,9 @@ func writeStageProgressValue(db ethdb.KeyValueWriter, stage StageID, value []byt
 }
 
 func WriteCanonicalStageProgress(db ethdb.KeyValueWriter, blockNum uint64) error {
+	value := NewStageProgressValue(blockNum)
 	for _, stage := range CanonicalExecutionStages() {
-		if err := WriteStageProgress(db, stage, blockNum); err != nil {
+		if err := value.Write(db, stage); err != nil {
 			return err
 		}
 	}
@@ -93,8 +130,9 @@ func WriteCanonicalStageProgress(db ethdb.KeyValueWriter, blockNum uint64) error
 }
 
 func WriteCanonicalStageProgressWithHash(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash) error {
+	value := NewStageProgressValueWithHash(blockNum, blockHash)
 	for _, stage := range CanonicalExecutionStages() {
-		if err := WriteStageProgressWithHash(db, stage, blockNum, blockHash); err != nil {
+		if err := value.Write(db, stage); err != nil {
 			return err
 		}
 	}
@@ -121,12 +159,7 @@ func RewindCanonicalStageProgress(db ethdb.KeyValueWriter, blockNum uint64) erro
 }
 
 func RewindCanonicalStageProgressWithHash(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash) error {
-	for _, stage := range CanonicalExecutionStages() {
-		if err := WriteStageProgressWithHash(db, stage, blockNum, blockHash); err != nil {
-			return err
-		}
-	}
-	return nil
+	return WriteCanonicalStageProgressWithHash(db, blockNum, blockHash)
 }
 
 func ReadStageProgress(db ethdb.KeyValueReader, stage StageID) (uint64, bool, error) {
