@@ -86,6 +86,32 @@ func TestCompactTransactionInfoIDsForBlockValidatesHashes(t *testing.T) {
 	}
 }
 
+func TestTransactionInfoIDsMatchBlockAllowsGenesisStyleMismatch(t *testing.T) {
+	blockData, err := proto.Marshal(&corepb.Block{Transactions: []*corepb.Transaction{
+		{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+		{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+		{RawData: &corepb.TransactionRaw{Timestamp: 3}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retData, err := proto.Marshal(&corepb.TransactionRet{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := TransactionInfoIDsMatchBlock(retData, blockData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("genesis-style 3/0 transaction-info mismatch reported as compactable")
+	}
+	compact, infos, removed, err := CompactTransactionInfoIDsForBlock(retData, blockData)
+	if err != nil || infos != 0 || removed != 0 || !bytes.Equal(compact, retData) {
+		t.Fatalf("genesis-style row changed: infos=%d removed=%d err=%v", infos, removed, err)
+	}
+}
+
 func TestIDLessTransactionInfosRoundTripWithNewAndLegacyIndexes(t *testing.T) {
 	pb := &corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 27, Timestamp: 81_000}},

@@ -133,37 +133,43 @@ func CompactAncientV2Record(kind string, _ uint64, data, body []byte) ([]byte, e
 // block ordinal. A count or hash mismatch returns an error and invokes no
 // callback.
 func VisitValidatedTransactionInfoIDs(retData, blockData []byte, visit func(ordinal int, id []byte) error) error {
-	hashes, err := TransactionHashesFromBlock(blockData)
+	matched, err := TransactionInfoIDsMatchBlock(retData, blockData)
 	if err != nil {
 		return err
+	}
+	if !matched {
+		return fmt.Errorf("transaction infos do not match block transactions")
+	}
+	return VisitTransactionInfoIDs(retData, visit)
+}
+
+// TransactionInfoIDsMatchBlock reports whether the TransactionRet can be
+// compacted and indexed by block ordinal. Historical exceptions such as the
+// mainnet genesis block (three synthetic body transactions, no execution
+// infos) return false without an error so callers can preserve the row and
+// continue rewriting later blocks in the segment.
+func TransactionInfoIDsMatchBlock(retData, blockData []byte) (bool, error) {
+	hashes, err := TransactionHashesFromBlock(blockData)
+	if err != nil {
+		return false, err
 	}
 	infoCount, err := countRepeatedBytesField(retData, 3)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(hashes) != infoCount {
-		return fmt.Errorf("transaction/info count mismatch: %d/%d", len(hashes), infoCount)
+		return false, nil
 	}
-	type location struct {
-		ordinal int
-		id      []byte
-	}
-	locations := make([]location, 0, infoCount)
+	matched := true
 	if err := VisitTransactionInfoIDs(retData, func(ordinal int, id []byte) error {
 		if ordinal >= len(hashes) || !bytes.Equal(id, hashes[ordinal][:]) {
-			return fmt.Errorf("transaction info ID mismatch at ordinal %d", ordinal)
+			matched = false
 		}
-		locations = append(locations, location{ordinal: ordinal, id: id})
 		return nil
 	}); err != nil {
-		return err
+		return false, err
 	}
-	for _, location := range locations {
-		if err := visit(location.ordinal, location.id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return matched, nil
 }
 
 // TransactionHashesFromBlock derives transaction IDs directly from protobuf

@@ -156,7 +156,14 @@ func newTransactionLocationUpgradeWriter(db ethdb.KeyValueStore) *transactionLoc
 }
 
 func (w *transactionLocationUpgradeWriter) addBlock(number uint64, retData, blockData []byte) error {
-	return rawdb.VisitValidatedTransactionInfoIDs(retData, blockData, func(ordinal int, id []byte) error {
+	matched, err := rawdb.TransactionInfoIDsMatchBlock(retData, blockData)
+	if err != nil || !matched {
+		// Malformed and historically exceptional rows are kept byte-for-byte by
+		// the transform. They must not prevent the rest of a 65,536-block
+		// segment from being compacted.
+		return nil
+	}
+	return rawdb.VisitTransactionInfoIDs(retData, func(ordinal int, id []byte) error {
 		if err := rawdb.WriteTransactionLocation(w.batch, id, number, ordinal); err != nil {
 			return err
 		}

@@ -29,19 +29,36 @@ func TestDBCompactAncientTxInfoV2UpgradesIndexesAndPreservesReads(t *testing.T) 
 	wantInfos := make([]*corepb.TransactionInfo, 4)
 	if _, err := ancient.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
 		for number := uint64(0); number < 4; number++ {
+			transactions := []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}}
+			if number == 0 {
+				// Mainnet genesis contains three synthetic body transactions but
+				// no execution infos. Preserve this historical 3/0 exception.
+				transactions = []*corepb.Transaction{
+					{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+					{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+					{RawData: &corepb.TransactionRaw{Timestamp: 3}},
+				}
+			}
 			pb := &corepb.Block{
 				BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number), Timestamp: int64(number * 3000)}},
-				Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}},
+				Transactions: transactions,
 			}
 			block := types.NewBlockFromPB(pb)
 			body, err := block.Marshal()
 			if err != nil {
 				return err
 			}
-			hash := block.Transactions()[0].Hash()
-			info := &corepb.TransactionInfo{Id: append([]byte(nil), hash[:]...), Fee: int64(100 + number), BlockNumber: int64(number)}
-			wantInfos[number] = info
-			ret, err := proto.Marshal(&corepb.TransactionRet{BlockNumber: int64(number), Transactioninfo: []*corepb.TransactionInfo{info}})
+			var infos []*corepb.TransactionInfo
+			if number != 0 {
+				hash := block.Transactions()[0].Hash()
+				info := &corepb.TransactionInfo{Id: append([]byte(nil), hash[:]...), Fee: int64(100 + number), BlockNumber: int64(number)}
+				wantInfos[number] = info
+				infos = []*corepb.TransactionInfo{info}
+				if err := rawdb.WriteTransactionIndex(chaindata, hash[:], number); err != nil {
+					return err
+				}
+			}
+			ret, err := proto.Marshal(&corepb.TransactionRet{BlockNumber: int64(number), Transactioninfo: infos})
 			if err != nil {
 				return err
 			}
@@ -52,9 +69,6 @@ func TestDBCompactAncientTxInfoV2UpgradesIndexesAndPreservesReads(t *testing.T) 
 				return err
 			}
 			if err := op.AppendRaw("state_roots", number, nil); err != nil {
-				return err
-			}
-			if err := rawdb.WriteTransactionIndex(chaindata, hash[:], number); err != nil {
 				return err
 			}
 		}
@@ -91,7 +105,7 @@ func TestDBCompactAncientTxInfoV2UpgradesIndexesAndPreservesReads(t *testing.T) 
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode output: %v\n%s", err, stdout.String())
 	}
-	if output.Segments != 1 || output.Rows != 4 || output.IndexedTransactions != 4 || output.DuplicateBytes == 0 {
+	if output.Segments != 1 || output.Rows != 4 || output.IndexedTransactions != 3 || output.DuplicateBytes == 0 {
 		t.Fatalf("unexpected output: %+v", output)
 	}
 
@@ -114,6 +128,12 @@ func TestDBCompactAncientTxInfoV2UpgradesIndexesAndPreservesReads(t *testing.T) 
 		stored := &corepb.TransactionRet{}
 		if err := proto.Unmarshal(rawRet, stored); err != nil {
 			t.Fatal(err)
+		}
+		if want == nil {
+			if len(stored.Transactioninfo) != 0 {
+				t.Fatalf("genesis transaction infos changed: %v", stored.Transactioninfo)
+			}
+			continue
 		}
 		if len(stored.Transactioninfo) != 1 || len(stored.Transactioninfo[0].Id) != 0 {
 			t.Fatalf("stored tx_infos[%d] still contains ID", number)
