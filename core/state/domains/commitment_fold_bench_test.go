@@ -44,6 +44,21 @@ func buildRandomPuts(rng *rand.Rand, n int) []Update {
 	return ups
 }
 
+func buildFirstNibblePuts(rng *rand.Rand, n int, nibble uint8) []Update {
+	updates := make([]Update, 0, n)
+	for len(updates) < n {
+		key := make([]byte, 32)
+		_, _ = rng.Read(key)
+		if keyPath(key)[0]>>4 != nibble {
+			continue
+		}
+		value := make([]byte, 8)
+		binary.BigEndian.PutUint64(value, rng.Uint64())
+		updates = append(updates, Update{Key: key, Value: value})
+	}
+	return updates
+}
+
 // mapBase / rawdbBase are the two benchmark base stores. mapBase re-encodes on
 // every read (worst case for the parallel split — inflates serial store cost);
 // rawdbBase is the production branchStore over an in-memory KV and is the
@@ -126,6 +141,33 @@ func BenchmarkFoldParRawdb(b *testing.B) { benchFoldIncremental(b, true, rawdbBa
 // last-writer-wins has already run and the raw keys are strictly sorted.
 func BenchmarkFoldParRawdbCoalesced(b *testing.B) {
 	benchFoldIncrementalInput(b, true, true, rawdbBase)
+}
+
+func BenchmarkFoldParSingleRootNibble(b *testing.B) {
+	const base = 100_000
+	store := rawdbBase()
+	trie := newCommitmentTrie(store)
+	trie.parallelMinOps = 1
+	if _, err := trie.Fold(buildRandomPuts(rand.New(rand.NewSource(1)), base)); err != nil {
+		b.Fatal(err)
+	}
+	for _, n := range []int{16, 64} {
+		batch := buildFirstNibblePuts(rand.New(rand.NewSource(int64(9000+n))), n, 0)
+		if _, err := trie.Fold(batch); err != nil {
+			b.Fatal(err)
+		}
+		b.Run(fmt.Sprintf("base=%d/batch=%d", base, n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				for j := range batch {
+					binary.BigEndian.PutUint64(batch[j].Value, uint64(i)<<20|uint64(j))
+				}
+				if _, err := trie.Fold(batch); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkFoldParBlockbufferSerialFlushCoalesced(b *testing.B) {

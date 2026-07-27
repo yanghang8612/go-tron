@@ -326,8 +326,22 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	// (distinct from the short-lived scratch each inner apply borrows/returns),
 	// released at function exit after the flush.
 	var counts [maxFoldNibbles]int
+	activeBatches := 0
+	activeNibble := uint8(0)
 	for i := range ops {
-		counts[pathNibble(ops[i].path, 0)]++
+		nb := pathNibble(ops[i].path, 0)
+		if counts[nb] == 0 {
+			activeBatches++
+			activeNibble = nb
+		}
+		counts[nb]++
+	}
+	// A hash-spread batch can still land in one root nibble, especially at the
+	// 16-op parallel threshold. There is no sibling work to parallelize then:
+	// execute in the caller, retaining the buffered batch-write path while
+	// avoiding a goroutine, semaphore, WaitGroup and grouped-op copy.
+	if activeBatches == 1 {
+		return t.applyRootSingleBatch(branch, activeNibble, ops)
 	}
 	var starts [maxFoldNibbles]int
 	for i := 1; i < maxFoldNibbles; i++ {
@@ -357,13 +371,6 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	if store, ok := t.store.(concurrentSiblingFlushStore); ok && limit > 1 {
 		concurrentFlush = store.concurrentSiblingFlushSafe()
 	}
-	activeBatches := 0
-	for _, count := range counts {
-		if count > 0 {
-			activeBatches++
-		}
-	}
-
 	var (
 		buffers [maxFoldNibbles]*bufferedBranchStore
 		changed [maxFoldNibbles]bool
@@ -426,6 +433,30 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		return nil, anyChanged, nil
 	}
 	return branch, anyChanged, nil
+}
+
+// applyRootSingleBatch is the allocation-light form of applyRootParallel for a
+// fold whose resolved paths all share one first nibble. Writes still pass
+// through a bufferedBranchStore so production keeps sorted, arena-packed branch
+// publication; only the concurrency scaffolding is omitted.
+func (t *commitmentTrie) applyRootSingleBatch(branch *BranchData, nb uint8, ops []op) (*BranchData, bool, error) {
+	buf := borrowBufferedBranchStore(t.store)
+	defer returnBufferedBranchStore(buf)
+	sub := commitmentTrie{store: buf}
+	var path [pathLen]byte
+	changed, err := sub.applyNibble(path[:0], 0, branch, nb, ops)
+	if err != nil {
+		return nil, false, err
+	}
+	if changed {
+		if err := buf.flush(t.store, 1); err != nil {
+			return nil, false, err
+		}
+	}
+	if branch.childCount() == 0 {
+		return nil, changed, nil
+	}
+	return branch, changed, nil
 }
 
 // flushSiblingBuffersSerial publishes first-nibble buffers in deterministic
