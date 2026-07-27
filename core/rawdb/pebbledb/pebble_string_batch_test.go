@@ -180,7 +180,7 @@ func TestBatchBufferClasses(t *testing.T) {
 		{size: (64 << 10) + 1, capacity: 128 << 10, pooled: true},
 		{size: 1 << 20, capacity: 1 << 20, pooled: true},
 		{size: (1 << 20) + 1, capacity: 2 << 20, pooled: true},
-		{size: maxPooledBatchSize, capacity: 8 << 20, pooled: true},
+		{size: maxPooledBatchSize, capacity: 16 << 20, pooled: true},
 		{size: maxPooledBatchSize + 1},
 	}
 	for _, test := range tests {
