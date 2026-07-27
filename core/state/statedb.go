@@ -3152,28 +3152,29 @@ func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex a
 	return nil
 }
 
-func accountCommitPlansByAddress(plans []*accountCommitPlan) []*accountCommitPlan {
-	out := append([]*accountCommitPlan(nil), plans...)
-	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].addr.Bytes(), out[j].addr.Bytes()) < 0
-	})
-	return out
-}
-
+// accountCommitPlanGenerationResolver searches the already address-sorted
+// commit plans produced by dirtyAccountCommitPlans. Keeping the resolver on
+// that immutable slice avoids rebuilding an address->generation map for every
+// block while retaining logarithmic lookups and the same missing-owner check.
 func accountCommitPlanGenerationResolver(plans []*accountCommitPlan) statedomains.GenerationResolver {
-	generations := make(map[tcommon.Address]uint64, len(plans))
-	for _, plan := range plans {
-		if plan == nil || plan.obj == nil {
-			continue
-		}
-		generations[plan.addr] = plan.obj.accountKVGeneration
-	}
 	return func(owner tcommon.Address) (uint64, error) {
-		generation, ok := generations[owner]
-		if !ok {
-			return 0, fmt.Errorf("account kv generation for %s not in commit plan", owner.Hex())
+		low, high := 0, len(plans)
+		for low < high {
+			mid := int(uint(low+high) >> 1)
+			plan := plans[mid]
+			if plan == nil || plan.obj == nil {
+				return 0, errors.New("account kv generation resolver: invalid commit plan")
+			}
+			switch bytes.Compare(plan.addr[:], owner[:]) {
+			case -1:
+				low = mid + 1
+			case 1:
+				high = mid
+			default:
+				return plan.obj.accountKVGeneration, nil
+			}
 		}
-		return generation, nil
+		return 0, fmt.Errorf("account kv generation for %s not in commit plan", owner.Hex())
 	}
 }
 
@@ -3348,7 +3349,10 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 }
 
 func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
-	orderedPlans := accountCommitPlansByAddress(plans)
+	// dirtyAccountCommitPlans already emits address-sorted plans. Reuse that
+	// immutable ordering instead of allocating and sorting a second pointer
+	// slice during every block commit.
+	orderedPlans := plans
 	accountLatestWrites := 0
 	accountLatestValueBytes := 0
 	for _, plan := range orderedPlans {

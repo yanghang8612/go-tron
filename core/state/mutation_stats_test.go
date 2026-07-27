@@ -10,6 +10,7 @@ import (
 )
 
 var prepareStorageCommitPlanBenchmarkSink int
+var accountCommitPlanGenerationBenchmarkSink uint64
 
 func BenchmarkPrepareStorageCommitPlan(b *testing.B) {
 	const slots = 256
@@ -41,6 +42,52 @@ func BenchmarkPrepareStorageCommitPlan(b *testing.B) {
 		prepareStorageCommitPlanBenchmarkSink = len(plan.kvPlan.items)
 		releaseAccountKVCommitPlan(plan.kvPlan)
 		obj.releaseKVDirty()
+	}
+}
+
+func BenchmarkAccountCommitPlanGenerationResolver(b *testing.B) {
+	const accounts = 64
+	storage := make([]accountCommitPlan, accounts)
+	plans := make([]*accountCommitPlan, accounts)
+	for i := range plans {
+		addr := testAddr(byte(i + 1))
+		storage[i] = accountCommitPlan{
+			addr: addr,
+			obj:  &stateObject{accountKVGeneration: uint64(i + 1)},
+		}
+		plans[i] = &storage[i]
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		resolve := accountCommitPlanGenerationResolver(plans)
+		var total uint64
+		for _, plan := range plans {
+			generation, err := resolve(plan.addr)
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += generation
+		}
+		accountCommitPlanGenerationBenchmarkSink = total
+	}
+}
+
+func TestAccountCommitPlanGenerationResolverUsesSortedPlans(t *testing.T) {
+	storage := []accountCommitPlan{
+		{addr: testAddr(1), obj: &stateObject{accountKVGeneration: 11}},
+		{addr: testAddr(2), obj: &stateObject{accountKVGeneration: 22}},
+		{addr: testAddr(3), obj: &stateObject{accountKVGeneration: 33}},
+	}
+	plans := []*accountCommitPlan{&storage[0], &storage[1], &storage[2]}
+	resolve := accountCommitPlanGenerationResolver(plans)
+	for i, want := range []uint64{11, 22, 33} {
+		got, err := resolve(testAddr(byte(i + 1)))
+		if err != nil || got != want {
+			t.Fatalf("resolve %d = %d err=%v, want %d", i+1, got, err, want)
+		}
+	}
+	if _, err := resolve(testAddr(4)); err == nil {
+		t.Fatal("missing owner resolved without error")
 	}
 }
 
