@@ -739,7 +739,15 @@ func (w *accountKVLatestBatch) accountPendingDurable(ownerID tcommon.AccountID, 
 	if w.latestStore == nil {
 		return true
 	}
-	val, exists, err := w.latestStore.ReadAccountLatest(ownerID.Address(tcommon.AddressPrefixMainnet))
+	owner := ownerID.Address(tcommon.AddressPrefixMainnet)
+	var val []byte
+	var exists bool
+	var err error
+	if reader, ok := w.latestStore.(accountLatestNoCopyPhysicalStore); ok {
+		val, exists, err = reader.ReadAccountLatestNoCopy(owner)
+	} else {
+		val, exists, err = w.latestStore.ReadAccountLatest(owner)
+	}
 	if err != nil {
 		return false
 	}

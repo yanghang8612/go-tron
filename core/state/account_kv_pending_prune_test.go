@@ -47,6 +47,86 @@ func zeroGeneration(tcommon.Address) (uint64, error) { return 0, nil }
 
 var benchmarkAccountKVLatestPending accountKVLatestPending
 
+type accountPendingDurableNoCopyProbe struct {
+	accountKVPhysicalLatestStore
+	value       []byte
+	ownedReads  int
+	noCopyReads int
+}
+
+func (p *accountPendingDurableNoCopyProbe) ReadAccountLatest(tcommon.Address) ([]byte, bool, error) {
+	p.ownedReads++
+	return append([]byte(nil), p.value...), true, nil
+}
+
+func (p *accountPendingDurableNoCopyProbe) ReadAccountLatestNoCopy(tcommon.Address) ([]byte, bool, error) {
+	p.noCopyReads++
+	return p.value, true, nil
+}
+
+type accountPendingDurableOwnedProbe struct {
+	accountKVPhysicalLatestStore
+	value      []byte
+	ownedReads int
+}
+
+func (p *accountPendingDurableOwnedProbe) ReadAccountLatest(tcommon.Address) ([]byte, bool, error) {
+	p.ownedReads++
+	return append([]byte(nil), p.value...), true, nil
+}
+
+func TestAccountPendingDurablePrefersNoCopyRead(t *testing.T) {
+	owner := pruneTestOwner(5)
+	value := []byte("immutable-account-envelope")
+	probe := &accountPendingDurableNoCopyProbe{value: value}
+	writer := &accountKVLatestBatch{latestStore: probe}
+	if !writer.accountPendingDurable(owner.AccountID(), accountLatestPending{value: value}) {
+		t.Fatal("matching no-copy account row was not durable")
+	}
+	if probe.noCopyReads != 1 || probe.ownedReads != 0 {
+		t.Fatalf("no-copy/owned reads = %d/%d, want 1/0", probe.noCopyReads, probe.ownedReads)
+	}
+
+	fallback := &accountPendingDurableOwnedProbe{value: value}
+	writer.latestStore = fallback
+	if !writer.accountPendingDurable(owner.AccountID(), accountLatestPending{value: value}) {
+		t.Fatal("generic owned-reader fallback did not recognize durable row")
+	}
+	if fallback.ownedReads != 1 {
+		t.Fatalf("fallback owned reads = %d, want 1", fallback.ownedReads)
+	}
+}
+
+func BenchmarkAccountPendingDurableNoCopy(b *testing.B) {
+	owner := pruneTestOwner(5)
+	value := bytes.Repeat([]byte{0x5a}, 128)
+	probe := &accountPendingDurableNoCopyProbe{value: value}
+	writer := &accountKVLatestBatch{latestStore: probe}
+	entry := accountLatestPending{value: value}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if !writer.accountPendingDurable(owner.AccountID(), entry) {
+			b.Fatal("durable entry not recognized")
+		}
+	}
+}
+
+func BenchmarkAccountPendingDurableOwnedFallback(b *testing.B) {
+	owner := pruneTestOwner(5)
+	value := bytes.Repeat([]byte{0x5a}, 128)
+	probe := &accountPendingDurableOwnedProbe{value: value}
+	writer := &accountKVLatestBatch{latestStore: probe}
+	entry := accountLatestPending{value: value}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if !writer.accountPendingDurable(owner.AccountID(), entry) {
+			b.Fatal("durable entry not recognized")
+		}
+	}
+}
+
 func BenchmarkAccountKVPendingDurable(b *testing.B) {
 	base := ethrawdb.NewMemoryDatabase()
 	owner := pruneTestOwner(2)
