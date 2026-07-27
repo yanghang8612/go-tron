@@ -90,6 +90,43 @@ func TestBuffer_TwoInflightLayers_WriteIsolationAndOverlay(t *testing.T) {
 	}
 }
 
+func TestBuffer_ViewLayerIntoBindsExistingStorage(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	var view LayerView
+	b.ViewLayerInto(h, &view)
+	if err := view.Put([]byte("bound"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("bound"), []byte("value"))
+}
+
+var benchmarkLayerView *LayerView
+
+func BenchmarkViewLayerBinding(b *testing.B) {
+	buffer := New(rawdb.NewMemoryDatabase())
+	buffer.BeginBlock(bufHash(1), 1)
+	h, _ := buffer.NewestInflight()
+	b.Run("allocated", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkLayerView = buffer.ViewLayer(h)
+		}
+	})
+	b.Run("embedded", func(b *testing.B) {
+		var view LayerView
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			buffer.ViewLayerInto(h, &view)
+		}
+		benchmarkLayerView = &view
+	})
+}
+
 // CommitInflight promotes exactly the handle's layer, and only when it is the
 // oldest in-flight (FIFO), keeping the committed stack block-number ordered.
 func TestBuffer_CommitInflight_FIFOOnly(t *testing.T) {

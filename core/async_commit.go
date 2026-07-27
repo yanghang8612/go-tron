@@ -72,6 +72,7 @@ type commitJob struct {
 	blockData         []byte
 	captured          *state.CapturedCommit
 	layer             blockbuffer.InflightHandle
+	index             blockbuffer.LayerView
 	dynProps          *state.DynamicProperties
 	cycleRewards      cycleRewardAccumulatorSnapshot
 	txInfos           []*corepb.TransactionInfo
@@ -201,15 +202,13 @@ func (bc *BlockChain) commitAsync(
 	bc.updateSystemAccountCache(statedb)
 	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
 
-	// 3. Capture the in-flight layer this block owns and re-point the stage
-	//    pipeline at it, so the worker's post-execution stage advances
-	//    (StageCommitment, StageFinish) land in THIS block's layer rather than
-	//    whatever layer is newest when the worker runs.
+	// 3. Capture the in-flight layer this block owns. The job embeds its bound
+	//    view so the stage pipeline and worker fold can share it without two
+	//    separately allocated LayerView wrappers.
 	hN, ok := bc.buffer.NewestInflight()
 	if !ok {
 		return fmt.Errorf("async commit: no in-flight buffer layer to commit")
 	}
-	plan.pipeline.SetWriter(bc.buffer.LayerWriter(hN))
 
 	// 4. Snapshot the foreground-mutable in-memory state the publish tail reads,
 	//    so the worker never observes a LATER block's value:
@@ -232,6 +231,10 @@ func (bc *BlockChain) commitAsync(
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
 	}
+	bc.buffer.ViewLayerInto(hN, &job.index)
+	// The worker's post-execution stage advances (StageCommitment, StageFinish)
+	// must land in THIS block's layer rather than whatever layer is newest then.
+	plan.pipeline.SetWriter(&job.index)
 
 	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
 	//    bounds the pipeline to depth 2). After this returns the foreground may
@@ -331,7 +334,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		return
 	}
 
-	index := bc.buffer.ViewLayer(job.layer)
+	index := &job.index
 
 	// Test seam: simulate a worker-side fold failure for a specific block, to
 	// exercise the speculative-exec unwind without a real disk error. Nil in

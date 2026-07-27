@@ -444,6 +444,16 @@ func (b *Buffer) ViewLayer(h InflightHandle) *LayerView {
 	return &LayerView{b: b, l: h.l}
 }
 
+// ViewLayerInto binds dst to h without allocating a separate view object. The
+// caller must keep dst alive for as long as any reader or writer retains it.
+// This is useful when a longer-lived job already owns suitable storage.
+func (b *Buffer) ViewLayerInto(h InflightHandle, dst *LayerView) {
+	if dst == nil {
+		panic("blockbuffer: ViewLayerInto called with nil destination")
+	}
+	*dst = LayerView{b: b, l: h.l}
+}
+
 // LayerWriter returns just the write half of a LayerView (an
 // ethdb.KeyValueWriter) bound to h's layer. Convenience for tail writers that
 // only Put/Delete (dynProps.Flush, WriteHeadBlockHash, …).
