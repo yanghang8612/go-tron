@@ -42,6 +42,8 @@ const domainStateReorgWindow uint64 = 128
 
 const round141StoredReplayTarget uint64 = 19_349_383
 
+const round141StoredReplayCommitmentCacheMiB = 512
+
 var (
 	round141StoredReplayTargetHash = tcommon.HexToHash("0000000001273f87ac576e31a2705cc8cadfbdb983897c175e304414e7470b58")
 	round141SkippedTxHash          = tcommon.HexToHash("1b894da582bc68dd47e96579e5c362e3de9f50dab862907cd0a21e2649bc1ef5")
@@ -536,6 +538,18 @@ func gtron(ctx *cli.Context) error {
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
 	if !ctx.IsSet("sync.restart-from") && needsRound141StoredReplay(bc) {
+		// The service currently pins the general commitment cache at 128 MiB.
+		// Stored replay at multi-million-block state sizes fills that cache and
+		// spends a material share of all CPU in cold Pebble branch seeks. This
+		// one-shot recovery owns startup exclusively and the host has ample headroom
+		// beside its configured Pebble cache, so widen only this temporary path for
+		// a live A/B without changing ordinary operator flag semantics.
+		if commitmentCacheMiB < round141StoredReplayCommitmentCacheMiB {
+			bc.SetCommitmentBranchCacheSize(round141StoredReplayCommitmentCacheMiB * 1024 * 1024)
+			log.Warn("Stored replay commitment cache enlarged",
+				"configuredMiB", commitmentCacheMiB,
+				"replayMiB", round141StoredReplayCommitmentCacheMiB)
+		}
 		healthServer, err := startStoredReplayHealthServer(fmt.Sprintf(":%d", cfg.HTTPPort), bc)
 		if err != nil {
 			closeStores()
