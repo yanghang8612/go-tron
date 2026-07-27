@@ -707,6 +707,15 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	}
 }
 
+var benchmarkRuntimeMessage []byte
+
+func BenchmarkRuntimeMessageFromRevert(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkRuntimeMessage = runtimeMessageFromError(vm.ErrExecutionReverted)
+	}
+}
+
 func TestCreateActuatorVMTypes(t *testing.T) {
 	// Verify that CreateActuator returns VMActuator for types 30 and 31
 	csc := &contractpb.CreateSmartContract{}

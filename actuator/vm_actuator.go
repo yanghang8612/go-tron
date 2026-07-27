@@ -29,6 +29,11 @@ const contractNameMaxLen = 32
 const vmMinTokenID = 1_000_000
 const creatorDefaultEnergyLimit = 1000 * 10_000
 
+// TransactionInfo only reads ResMessage while marshaling the receipt. Share
+// java-tron's fixed REVERT text instead of allocating identical bytes for
+// every reverted smart-contract call; callers must keep it immutable.
+var revertRuntimeMessage = []byte("REVERT opcode executed")
+
 // VMActuator handles CreateSmartContract (type 30) and TriggerSmartContract (type 31).
 type VMActuator struct{}
 
@@ -196,7 +201,7 @@ func runtimeMessageFromError(err error) []byte {
 		return nil
 	}
 	if err == vm.ErrExecutionReverted {
-		return []byte("REVERT opcode executed")
+		return revertRuntimeMessage
 	}
 	return []byte(err.Error())
 }
