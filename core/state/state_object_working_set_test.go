@@ -35,7 +35,7 @@ func TestCreateAccountKeepsInternalWrapperPoolable(t *testing.T) {
 	}
 }
 
-func TestStateObjectWorkingSetEvictsAccountsNotReusedForTwoBlocks(t *testing.T) {
+func TestStateObjectWorkingSetEvictsAccountsNotReusedForThreeBlocks(t *testing.T) {
 	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
 	if err != nil {
 		t.Fatal(err)
@@ -53,8 +53,8 @@ func TestStateObjectWorkingSetEvictsAccountsNotReusedForTwoBlocks(t *testing.T) 
 		t.Fatalf("first block retained %d accounts, want 2", len(sdb.stateObjects))
 	}
 
-	// The next block reuses only a. The two-generation cache deliberately keeps b
-	// for one more block so alternating-block access does not rehydrate it.
+	// The next block reuses only a. The generational cache deliberately keeps b
+	// across the short idle window so recurring access does not rehydrate it.
 	if got := sdb.GetBalance(a); got != 11 {
 		t.Fatalf("balance(a) = %d, want 11", got)
 	}
@@ -68,15 +68,28 @@ func TestStateObjectWorkingSetEvictsAccountsNotReusedForTwoBlocks(t *testing.T) 
 		t.Fatal("account from the preceding generation was evicted too early")
 	}
 
-	// After a second complete block without b, its oldest generation expires.
+	// A second complete block without b moves it into the oldest retained
+	// generation, but does not expire it yet.
 	if _, err := sdb.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := sdb.stateObjects[a]; !ok {
-		t.Fatal("newer-generation account was evicted with the oldest generation")
+		t.Fatal("newer-generation account was evicted too early")
+	}
+	if _, ok := sdb.stateObjects[b]; !ok {
+		t.Fatal("oldest retained account was evicted too early")
+	}
+
+	// After a third complete block without b, its generation expires. a was
+	// touched one block later, so its duplicate in b's generation is skipped.
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sdb.stateObjects[a]; !ok {
+		t.Fatal("newer-generation account was evicted with the expired generation")
 	}
 	if _, ok := sdb.stateObjects[b]; ok {
-		t.Fatal("account idle for two blocks was retained")
+		t.Fatal("account idle for three blocks was retained")
 	}
 	if got := sdb.GetBalance(b); got != 22 {
 		t.Fatalf("reloaded balance(b) = %d, want 22", got)
@@ -108,6 +121,33 @@ func TestStateObjectWorkingSetCountsOlderGenerationReuse(t *testing.T) {
 	}
 }
 
+func TestStateObjectWorkingSetCountsOldestGenerationReuse(t *testing.T) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := testAddr(0xb4)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddBalance(addr, 44)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// Two untouched blocks move the account from previous -> older -> oldest.
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before := stateObjectCacheOldestReuseCounter.Snapshot().Count()
+	if got := sdb.GetBalance(addr); got != 44 {
+		t.Fatalf("balance = %d, want 44", got)
+	}
+	if got := stateObjectCacheOldestReuseCounter.Snapshot().Count() - before; got != 1 {
+		t.Fatalf("oldest-generation reuse delta = %d, want 1", got)
+	}
+}
+
 func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
 	if err != nil {
@@ -133,7 +173,9 @@ func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 	sdb.lastStateObject = evicted
 	sdb.rotateStateObjectWorkingSet()
 	// The first rotation moves the original working set into the older slot; a
-	// second rotation expires accounts that were not touched in either block.
+	// second moves it into the oldest slot; a third expires accounts that were
+	// not touched in any of the intervening blocks.
+	sdb.rotateStateObjectWorkingSet()
 	sdb.rotateStateObjectWorkingSet()
 
 	if len(sdb.stateObjects) != 1 || sdb.stateObjects[addrs[1]] == nil {
@@ -148,15 +190,15 @@ func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 	if evicted.storage != nil || evicted.storageHighWater != 0 {
 		t.Fatal("evicted account retained its private storage cache")
 	}
-	if len(sdb.retainedStateObjects) != 0 || len(sdb.olderRetainedStateObjects) != 1 || len(sdb.touchedStateObjects) != 0 {
-		t.Fatalf("rotated slices = retained %d older %d touched %d, want 0/1/0",
-			len(sdb.retainedStateObjects), len(sdb.olderRetainedStateObjects), len(sdb.touchedStateObjects))
+	if len(sdb.retainedStateObjects) != 0 || len(sdb.olderRetainedStateObjects) != 0 || len(sdb.oldestRetainedStateObjects) != 1 || len(sdb.touchedStateObjects) != 0 {
+		t.Fatalf("rotated slices = retained %d older %d oldest %d touched %d, want 0/0/1/0",
+			len(sdb.retainedStateObjects), len(sdb.olderRetainedStateObjects), len(sdb.oldestRetainedStateObjects), len(sdb.touchedStateObjects))
 	}
 	if sdb.stateObjects[addrs[1]].cacheTouched {
 		t.Fatal("retained account remained marked as touched after rotation")
 	}
 
-	// An empty following block drops the final retained account after its second
+	// An empty following block drops the final retained account after its third
 	// idle generation.
 	sdb.rotateStateObjectWorkingSet()
 	if len(sdb.stateObjects) != 0 {
