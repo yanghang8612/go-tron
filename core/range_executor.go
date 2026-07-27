@@ -205,10 +205,14 @@ func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonica
 	if bc != nil && bc.asyncCommit {
 		depth = bc.commitDepth
 	}
+	txInfoBatches := newTransactionInfoBatchPool(depth)
+	if bc != nil && bc.txInfoBatches != nil {
+		txInfoBatches = bc.txInfoBatches
+	}
 	return &canonicalRangeExecutor{
 		bc:                bc,
 		allowSharedCommit: allowSharedCommit,
-		txInfoBatches:     newTransactionInfoBatchPool(depth),
+		txInfoBatches:     txInfoBatches,
 	}
 }
 

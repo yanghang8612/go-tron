@@ -261,6 +261,11 @@ type BlockChain struct {
 	commitWorkerWg sync.WaitGroup
 	commitClosed   bool
 	commitErr      atomic.Pointer[error]
+	// txInfoBatches survives individual InsertBlocks/range executors. Receipt
+	// slots own reusable VM result arenas and log shells, so scoping this pool
+	// to a short sync batch would discard their warmed high-water storage at
+	// every batch boundary. Its channel remains bounded by commitDepth.
+	txInfoBatches *transactionInfoBatchPool
 
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
@@ -425,6 +430,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		commitDepth:       commitDepth,
 		commitQueue:       make(chan *commitJob, commitDepth-2),
 		commitPending:     newFlushBarrier(),
+		txInfoBatches:     newTransactionInfoBatchPool(commitDepth),
 		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
 		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
 		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),

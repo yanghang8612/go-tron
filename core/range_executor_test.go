@@ -47,6 +47,25 @@ func advanceToExecution(t *testing.T, pipeline *canonicalStagePipeline) {
 	}
 }
 
+func TestCanonicalRangeExecutorsReuseTransactionInfoBatches(t *testing.T) {
+	pool := newTransactionInfoBatchPool(2)
+	bc := &BlockChain{commitDepth: 2, txInfoBatches: pool}
+	first := newCanonicalRangeExecutor(bc, true)
+	second := newCanonicalRangeExecutor(bc, true)
+	if first.txInfoBatches != pool || second.txInfoBatches != pool {
+		t.Fatal("range executors did not use the chain-owned transaction-info pool")
+	}
+
+	warmed := first.txInfoBatches.acquire()
+	warmed.prepare(8)
+	first.txInfoBatches.release(warmed)
+	if got := second.txInfoBatches.acquire(); got != warmed {
+		t.Fatal("a later range did not reuse the prior range's transaction-info batch")
+	} else {
+		second.txInfoBatches.release(got)
+	}
+}
+
 func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
 	sdb, scope, buf, addr := testRangeState(t)
 	block := testRangeBlock(1, tcommon.Hash{})
