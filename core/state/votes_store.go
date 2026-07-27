@@ -44,8 +44,8 @@ func (s *StateDB) ReadVotes(addr tcommon.Address) *corepb.Votes {
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
-	votes := &corepb.Votes{}
-	if err := proto.Unmarshal(raw, votes); err != nil {
+	votes, err := unmarshalVotesOwned(raw)
+	if err != nil {
 		return nil
 	}
 	return votes
