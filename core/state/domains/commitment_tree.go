@@ -803,64 +803,26 @@ func (t *commitmentTrie) apply(prefix []byte, depth int, branch *BranchData, ops
 		branch = &BranchData{}
 	}
 
-	// Once a group narrows to one next nibble, descend directly. This is the
-	// common shape below the first few levels of a deep trie; building a 16-way
-	// counting sort there would only copy the same group into scratch and scan
-	// fifteen empty buckets at every remaining branch.
-	if len(ops) > 0 {
-		nb := pathNibble(ops[0].path, depth)
-		singleBucket := true
-		for i := 1; i < len(ops); i++ {
-			if pathNibble(ops[i].path, depth) != nb {
-				singleBucket = false
-				break
-			}
-		}
-		if singleBucket {
-			changed, err := t.applyNibble(prefix, depth, branch, nb, ops)
-			if err != nil {
-				return nil, false, err
-			}
-			if branch.childCount() == 0 {
-				return nil, changed, nil
-			}
-			return branch, changed, nil
-		}
-	}
-
-	// Bucket ops by their nibble at this depth via counting sort into one
-	// pooled scratch buffer. Replaces the prior `var buckets [16][]op` +
-	// per-op append, which allocated up to 16 backing arrays per call frame
-	// (recursive depth up to 64 → high churn on dense fold passes).
-	var counts [16]int
-	for _, o := range ops {
-		counts[pathNibble(o.path, depth)]++
-	}
-	var starts [16]int
-	for i := 1; i < 16; i++ {
-		starts[i] = starts[i-1] + counts[i-1]
-	}
-	scratch := borrowOpsBuf(len(ops))
-	defer returnOpsBuf(scratch)
-	heads := starts
-	for _, o := range ops {
-		nb := pathNibble(o.path, depth)
-		(*scratch)[heads[nb]] = o
-		heads[nb]++
-	}
-
+	// buildOps sorts by the complete path, and the leaf-split path re-sorts the
+	// only locally constructed op group before recursing. Therefore every input
+	// to apply is already partitioned into contiguous next-nibble runs. Scan those
+	// runs in place instead of counting-sorting and copying the ~96-byte op values
+	// into a pooled scratch buffer at every trie depth. Filtering deletes may
+	// compact a run in place, but it cannot move the following run's boundary.
 	changed := false
-	for nb := uint8(0); nb < 16; nb++ {
-		n := counts[nb]
-		if n == 0 {
-			continue
+	for start := 0; start < len(ops); {
+		nb := pathNibble(ops[start].path, depth)
+		end := start + 1
+		for end < len(ops) && pathNibble(ops[end].path, depth) == nb {
+			end++
 		}
-		group := (*scratch)[starts[nb] : starts[nb]+n]
+		group := ops[start:end]
 		nibbleChanged, err := t.applyNibble(prefix, depth, branch, nb, group)
 		if err != nil {
 			return nil, false, err
 		}
 		changed = changed || nibbleChanged
+		start = end
 	}
 
 	// An emptied branch must not persist. Single-LEAF collapse for non-root

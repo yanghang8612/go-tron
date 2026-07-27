@@ -324,27 +324,20 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		branch = &BranchData{}
 	}
 
-	// Bucket ops by first nibble via the same counting sort apply uses. The
-	// per-nibble groups must stay alive and isolated for the whole concurrent
-	// phase, so this borrows a SEPARATE long-lived ops buffer from the pool
-	// (distinct from the short-lived scratch each inner apply borrows/returns),
-	// released at function exit after the flush.
+	// buildOps has already sorted the full paths, so first-nibble groups are
+	// contiguous and can be lent directly to workers. Retaining only their
+	// boundaries avoids a second full op copy before every parallel fold.
 	var counts [maxFoldNibbles]int
-	for i := range ops {
-		counts[pathNibble(ops[i].path, 0)]++
-	}
 	var starts [maxFoldNibbles]int
-	for i := 1; i < maxFoldNibbles; i++ {
-		starts[i] = starts[i-1] + counts[i-1]
-	}
-	groupedP := borrowOpsBuf(len(ops))
-	defer returnOpsBuf(groupedP)
-	grouped := *groupedP
-	heads := starts
-	for i := range ops {
-		nb := pathNibble(ops[i].path, 0)
-		grouped[heads[nb]] = ops[i]
-		heads[nb]++
+	for start := 0; start < len(ops); {
+		nb := pathNibble(ops[start].path, 0)
+		end := start + 1
+		for end < len(ops) && pathNibble(ops[end].path, 0) == nb {
+			end++
+		}
+		starts[nb] = start
+		counts[nb] = end - start
+		start = end
 	}
 
 	limit := t.parallelLimit
@@ -395,7 +388,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 				}
 				nb := activeNibbles[task]
 				n := counts[nb]
-				group := grouped[starts[nb] : starts[nb]+n]
+				group := ops[starts[nb] : starts[nb]+n]
 				buf := borrowBufferedBranchStore(t.store)
 				buffers[nb] = buf
 
