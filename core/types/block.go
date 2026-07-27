@@ -483,7 +483,7 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 		}
 	}
 	appendProtoUnknown(&decoded.pb, unknown)
-	ownBlockAnyValues(&decoded.pb)
+	ownBlockByteValues(&decoded.pb)
 	return &decoded.block, nil
 }
 
@@ -608,9 +608,12 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 			case 4:
 				decoded.raw.RefBlockHash = copyBytesInto(value, decoded.refBlockHash[:])
 			case 10:
-				decoded.raw.Data = append([]byte(nil), value...)
+				// Borrow until ownBlockByteValues coalesces every transaction's
+				// final data field into one block-owned arena. This also avoids
+				// allocating discarded storage for duplicate occurrences.
+				decoded.raw.Data = value[:len(value):len(value)]
 			case 12:
-				decoded.raw.Scripts = append([]byte(nil), value...)
+				decoded.raw.Scripts = value[:len(value):len(value)]
 			}
 		case wireType == protowire.VarintType && (field == 3 || field == 8 || field == 14 || field == 18):
 			value, ok := varintFieldValue(fieldData[:n])
@@ -731,7 +734,7 @@ func unmarshalTransactionContractReservedMode(data []byte, contract *corepb.Tran
 
 // unmarshalAnyReserved preserves generated protobuf values, except canonical
 // registered type URLs use immutable process-wide strings. The block fast path
-// may temporarily borrow Value bytes; ownBlockAnyValues replaces every
+// may temporarily borrow Value bytes; ownBlockByteValues replaces every
 // non-empty view before the block becomes observable.
 func unmarshalAnyReserved(data []byte, parameter *anypb.Any, borrowValue bool) error {
 	var unknown []byte
@@ -771,17 +774,18 @@ func unmarshalAnyReserved(data []byte, parameter *anypb.Any, borrowValue bool) e
 	return nil
 }
 
-// ownBlockAnyValues replaces the temporary input-buffer views installed by
-// the fast decoder with one exact-size allocation owned by the decoded block.
-// It runs before unmarshalBlockReserved returns, so callers never observe or
-// retain borrowed wire bytes. Capacity-clamping keeps adjacent values isolated
-// if a caller later appends to one parameter.
-func ownBlockAnyValues(block *corepb.Block) {
+// ownBlockByteValues replaces the temporary input-buffer views installed for
+// TransactionRaw data/scripts and contract Any values with one exact-size arena
+// owned by the decoded block. It runs before unmarshalBlockReserved returns, so
+// callers never observe or retain borrowed wire bytes. Capacity-clamping keeps
+// adjacent values isolated if a caller later appends to one field.
+func ownBlockByteValues(block *corepb.Block) {
 	total := 0
 	for _, transaction := range block.Transactions {
 		if transaction.RawData == nil {
 			continue
 		}
+		total += len(transaction.RawData.Data) + len(transaction.RawData.Scripts)
 		for _, contract := range transaction.RawData.Contract {
 			if contract.Parameter != nil {
 				total += len(contract.Parameter.Value)
@@ -797,7 +801,22 @@ func ownBlockAnyValues(block *corepb.Block) {
 		if transaction.RawData == nil {
 			continue
 		}
-		for _, contract := range transaction.RawData.Contract {
+		raw := transaction.RawData
+		if len(raw.Data) != 0 {
+			end := offset + len(raw.Data)
+			owned := arena[offset:end:end]
+			copy(owned, raw.Data)
+			raw.Data = owned
+			offset = end
+		}
+		if len(raw.Scripts) != 0 {
+			end := offset + len(raw.Scripts)
+			owned := arena[offset:end:end]
+			copy(owned, raw.Scripts)
+			raw.Scripts = owned
+			offset = end
+		}
+		for _, contract := range raw.Contract {
 			if contract.Parameter == nil || len(contract.Parameter.Value) == 0 {
 				continue
 			}

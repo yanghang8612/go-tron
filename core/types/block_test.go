@@ -116,6 +116,7 @@ func BenchmarkBlockHashFromRaw(b *testing.B) {
 func blockDecodeReserveTestBlock(txCount int) *Block {
 	block := blockHashRawTestBlock(txCount, 64)
 	for i, tx := range block.Proto().Transactions {
+		tx.RawData.Data = bytes.Repeat([]byte{byte(i + 1)}, 20)
 		tx.RawData.Contract = []*corepb.Transaction_Contract{{
 			Type: corepb.Transaction_Contract_TransferContract,
 			Parameter: &anypb.Any{
@@ -310,8 +311,12 @@ func TestUnmarshalBlockReservedKeepsMultipleParametersIndependent(t *testing.T) 
 	}
 }
 
-func TestUnmarshalBlockReservedOwnsAnyValues(t *testing.T) {
-	wire, err := blockDecodeReserveTestBlock(3).Marshal()
+func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
+	block := blockDecodeReserveTestBlock(3)
+	for i, transaction := range block.Proto().Transactions {
+		transaction.RawData.Scripts = []byte{byte(i + 11), byte(i + 12)}
+	}
+	wire, err := block.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,13 +325,29 @@ func TestUnmarshalBlockReservedOwnsAnyValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := make([][]byte, len(got.Proto().Transactions))
+	wantData := make([][]byte, len(got.Proto().Transactions))
+	wantScripts := make([][]byte, len(got.Proto().Transactions))
 	for i, transaction := range got.Proto().Transactions {
 		want[i] = bytes.Clone(transaction.RawData.Contract[0].Parameter.Value)
+		wantData[i] = bytes.Clone(transaction.RawData.Data)
+		wantScripts[i] = bytes.Clone(transaction.RawData.Scripts)
 	}
 	clear(wire)
 	for i, transaction := range got.Proto().Transactions {
 		if value := transaction.RawData.Contract[0].Parameter.Value; !bytes.Equal(value, want[i]) {
 			t.Fatalf("transaction %d Any value aliases wire input: got %x, want %x", i, value, want[i])
+		}
+		if !bytes.Equal(transaction.RawData.Data, wantData[i]) {
+			t.Fatalf("transaction %d raw data aliases wire input: got %x, want %x", i, transaction.RawData.Data, wantData[i])
+		}
+		if cap(transaction.RawData.Data) != len(transaction.RawData.Data) {
+			t.Fatalf("transaction %d raw data exposes adjacent arena capacity", i)
+		}
+		if !bytes.Equal(transaction.RawData.Scripts, wantScripts[i]) {
+			t.Fatalf("transaction %d raw scripts alias wire input: got %x, want %x", i, transaction.RawData.Scripts, wantScripts[i])
+		}
+		if cap(transaction.RawData.Scripts) != len(transaction.RawData.Scripts) {
+			t.Fatalf("transaction %d raw scripts expose adjacent arena capacity", i)
 		}
 	}
 }
