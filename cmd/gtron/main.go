@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
@@ -37,6 +39,16 @@ import (
 )
 
 const domainStateReorgWindow uint64 = 128
+
+const round141RecoveryTarget uint64 = 19_349_376
+
+var (
+	round141RecoveryHeadHash   = tcommon.HexToHash("0000000001273f87ac576e31a2705cc8cadfbdb983897c175e304414e7470b58")
+	round141RecoveryTargetHash = tcommon.HexToHash("0000000001273f808bd90c1a06f3dd2410cd12606bc4a734ea4503c731807357")
+	round141SkippedTxHash      = tcommon.HexToHash("1b894da582bc68dd47e96579e5c362e3de9f50dab862907cd0a21e2649bc1ef5")
+	round141StaleSlotTxHash    = tcommon.HexToHash("890b7cec6963e5398010fc8003cf9347da5198fd1ecbd177da7ab8c632860ab5")
+	round141StaleSequenceTopic = tcommon.HexToHash("0000000000000000000000000000000000000000000000000000000000002d68")
+)
 
 var (
 	dataDirFlag = &cli.StringFlag{
@@ -503,8 +515,18 @@ func gtron(ctx *cli.Context) error {
 		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use",
 			"depth", bc.PipelinedCommitDepth())
 	}
-	if ctx.IsSet("sync.restart-from") {
-		target := ctx.Uint64("sync.restart-from")
+	restartRequested := ctx.IsSet("sync.restart-from")
+	restartTarget := ctx.Uint64("sync.restart-from")
+	if !restartRequested && needsRound141Recovery(bc) {
+		restartRequested = true
+		restartTarget = round141RecoveryTarget
+		log.Warn("One-time round 141 state recovery triggered",
+			"currentHead", bc.CurrentBlock().Number(),
+			"target", restartTarget,
+			"reason", "verified commit-workspace stale-read fingerprints")
+	}
+	if restartRequested {
+		target := restartTarget
 		lastProgress := uint64(0)
 		log.Info("Historical sync restart requested", "target", target, "currentHead", bc.CurrentBlock().Number())
 		if err := bc.RestartSyncFromHeight(target, genesis, ancientStore, func(p core.RestartSyncProgress) {
@@ -878,6 +900,31 @@ func gtron(ctx *cli.Context) error {
 	}
 	closeStores()
 	return nil
+}
+
+// needsRound141Recovery is a deliberately narrow one-shot guard for the live
+// mainnet node that briefly ran the unsafe storage-key arena reuse build. It
+// requires the exact affected head, the exact rewind target, and both observed
+// semantic fingerprints before permitting an automatic seven-block rewind.
+// Remove this guard after the repaired node has replayed past the window.
+func needsRound141Recovery(bc *core.BlockChain) bool {
+	if bc == nil || bc.CurrentBlock() == nil || bc.CurrentBlock().Number() != 19_349_383 || bc.CurrentBlock().Hash() != round141RecoveryHeadHash {
+		return false
+	}
+	target := rawdb.ReadBlock(bc.ChainDB(), round141RecoveryTarget)
+	if target == nil || target.Hash() != round141RecoveryTargetHash {
+		return false
+	}
+
+	skipped := rawdb.ReadTransactionInfo(bc.ChainDB(), round141SkippedTxHash.Bytes())
+	if skipped == nil || skipped.GetReceipt() == nil || skipped.GetReceipt().GetEnergyUsage() != 4_089 || len(skipped.GetLog()) != 0 {
+		return false
+	}
+	staleSlot := rawdb.ReadTransactionInfo(bc.ChainDB(), round141StaleSlotTxHash.Bytes())
+	if staleSlot == nil || len(staleSlot.GetLog()) != 1 || len(staleSlot.GetLog()[0].GetTopics()) < 2 {
+		return false
+	}
+	return bytes.Equal(staleSlot.GetLog()[0].GetTopics()[1], round141StaleSequenceTopic.Bytes())
 }
 
 func versionCmd(ctx *cli.Context) error {

@@ -217,15 +217,16 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 // window if the flag changed between runs.
 //
 // The current-cycle reward accumulator is intentionally non-rooted and not part
-// of commitment changesets. If it is non-empty at head, the conservative
-// reset+replay path is required to rebuild it for the target height.
+// of commitment changesets. A same-cycle rewind reverses its per-block voter
+// rewards explicitly; a range crossing a maintenance boundary falls back to
+// reset+replay because maintenance flushes and resets the accumulator.
 //
 // This is a pure optimization gate: false forces the always-correct reset+replay.
 func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	if height >= currentHead {
 		return false // nothing to unwind, or invalid
 	}
-	if _, pending, ok, err := rawdb.ReadCycleRewardPending(bc.buffer); err != nil || ok && len(pending) > 0 {
+	if !bc.canIncrementalUnwindCycleRewards(height, currentHead) {
 		return false
 	}
 	// Use height+1's StateTxRange as a coverage proxy. Pruning deletes both the
@@ -235,6 +236,150 @@ func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	return err == nil && ok
 }
 
+// canIncrementalUnwindCycleRewards reports whether the non-rooted pending
+// reward accumulator can be reversed alongside the rooted commitment. A
+// maintenance boundary flushes and resets the accumulator, so only a range
+// wholly contained in one cycle is safe to unwind arithmetically.
+func (bc *BlockChain) canIncrementalUnwindCycleRewards(height, currentHead uint64) bool {
+	if bc.cycleRewards == nil || len(bc.cycleRewards.rewards) == 0 {
+		return true
+	}
+	target := rawdb.ReadBlock(bc.chaindb, height)
+	current := rawdb.ReadBlock(bc.chaindb, currentHead)
+	if target == nil || current == nil {
+		return false
+	}
+	targetRoot := rawdb.ReadBlockStateRoot(bc.chaindb, target.Hash())
+	currentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
+	if targetRoot == (tcommon.Hash{}) || currentRoot == (tcommon.Hash{}) {
+		return false
+	}
+	targetState, err := bc.openState(targetRoot)
+	if err != nil {
+		return false
+	}
+	currentState, err := bc.openState(currentRoot)
+	if err != nil {
+		return false
+	}
+	targetCycle := state.LoadDynamicProperties(bc.db, targetState).CurrentCycleNumber()
+	currentCycle := state.LoadDynamicProperties(bc.db, currentState).CurrentCycleNumber()
+	return targetCycle == currentCycle && currentCycle == bc.cycleRewards.cycle
+}
+
+// cycleRewardsAfterIncrementalUnwind reconstructs the pending accumulator at
+// target height by subtracting the exact voter portions paid by each removed
+// block. All inputs are read from that block's post-state: proposal parameters,
+// witness votes, and brokerage therefore match the values used by applyBlock.
+// The caller's same-cycle preflight rules out maintenance flush/reset semantics.
+// This function is read-only so any unsupported or inconsistent range fails
+// before incrementalUnwindTo mutates durable state.
+func (bc *BlockChain) cycleRewardsAfterIncrementalUnwind(height, currentHead uint64) (cycleRewardAccumulatorSnapshot, error) {
+	if bc.cycleRewards == nil || len(bc.cycleRewards.rewards) == 0 {
+		return cycleRewardAccumulatorSnapshot{}, nil
+	}
+
+	acc := &cycleRewardAccumulator{
+		cycle:   bc.cycleRewards.cycle,
+		rewards: copyCycleRewardMap(bc.cycleRewards.rewards),
+	}
+	for n := currentHead; n > height; n-- {
+		block := rawdb.ReadBlock(bc.chaindb, n)
+		if block == nil {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d missing", n)
+		}
+		root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash())
+		if root == (tcommon.Hash{}) {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d state root missing", n)
+		}
+		statedb, err := bc.openState(root)
+		if err != nil {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: open block %d state: %w", n, err)
+		}
+		dp := state.LoadDynamicProperties(bc.db, statedb)
+		cycle := dp.CurrentCycleNumber()
+		if cycle != acc.cycle {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d cycle %d differs from pending cycle %d", n, cycle, acc.cycle)
+		}
+		if !dp.ChangeDelegation() {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d has pending rewards with change_delegation disabled", n)
+		}
+
+		witness := block.WitnessAddress()
+		if witness == (tcommon.Address{}) {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d has no witness", n)
+		}
+		if err := subtractPendingVoterReward(acc, statedb, cycle, witness, dp.WitnessPayPerBlock()); err != nil {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d producer reward: %w", n, err)
+		}
+
+		set := buildStandbyWitnessPaySet(bc.buffer, statedb, cycle, dp.ConsensusLogicOptimization())
+		if err := subtractPendingStandbyRewards(acc, set, dp.Witness127PayPerBlock()); err != nil {
+			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d standby reward: %w", n, err)
+		}
+
+		if dp.AllowTransactionFeePool() {
+			infos := rawdb.ReadTransactionInfosByBlock(bc.chaindb, n)
+			if len(infos) != len(block.Transactions()) {
+				return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d transaction infos=%d transactions=%d", n, len(infos), len(block.Transactions()))
+			}
+			var packingFee int64
+			for _, info := range infos {
+				if info != nil {
+					packingFee += info.GetPackingFee()
+				}
+			}
+			if err := subtractPendingVoterReward(acc, statedb, cycle, witness, packingFee); err != nil {
+				return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d fee reward: %w", n, err)
+			}
+		}
+	}
+	return acc.Snapshot(), nil
+}
+
+func subtractPendingVoterReward(acc *cycleRewardAccumulator, statedb *state.StateDB, cycle int64, addr tcommon.Address, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+	brokerage := statedb.ReadCycleBrokerage(cycle, addr.Bytes())
+	brokerageAmount := int64((float64(brokerage) / 100.0) * float64(amount))
+	return subtractPendingCycleReward(acc, addr, amount-brokerageAmount)
+}
+
+func subtractPendingStandbyRewards(acc *cycleRewardAccumulator, set *standbyWitnessPaySet, totalPay int64) error {
+	if totalPay <= 0 || set == nil || set.voteSum < 1 {
+		return nil
+	}
+	eachVotePay := float64(totalPay) / float64(set.voteSum)
+	for _, witness := range set.witnesses {
+		pay := int64(float64(witness.votes) * eachVotePay)
+		if pay <= 0 {
+			continue
+		}
+		brokerageAmount := int64((float64(witness.brokerage) / 100.0) * float64(pay))
+		if err := subtractPendingCycleReward(acc, witness.addr, pay-brokerageAmount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func subtractPendingCycleReward(acc *cycleRewardAccumulator, addr tcommon.Address, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+	current, ok := acc.rewards[addr]
+	if !ok || current < amount {
+		return fmt.Errorf("address %x pending reward %d is below removed amount %d", addr, current, amount)
+	}
+	if current == amount {
+		delete(acc.rewards, addr)
+	} else {
+		acc.rewards[addr] = current - amount
+	}
+	return nil
+}
+
 // incrementalUnwindTo rewinds the chain to target.Number() from currentHead via
 // inverse-delta commitment unwind. It is called only when canIncrementalUnwind
 // returned true and leaves the chain in byte-equivalent end state to the
@@ -242,6 +387,10 @@ func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 // comment on RestartSyncFromHeight).
 func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint64, ancient rawdb.AncientWriter, emit func(string, uint64)) error {
 	height := target.Number()
+	rewoundCycleRewards, err := bc.cycleRewardsAfterIncrementalUnwind(height, currentHead)
+	if err != nil {
+		return err
+	}
 
 	// 1. Flush all buffered layers to disk so UnwindCommitment operates on one
 	//    consistent store. WaitForFlushSettled was called by the caller; the
@@ -312,6 +461,9 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 				return fmt.Errorf("delete tx index %x: %w", h, err)
 			}
 		}
+	}
+	if err := rewoundCycleRewards.Write(batch); err != nil {
+		return fmt.Errorf("write rewound cycle reward accumulator: %w", err)
 	}
 	if err := batch.Write(); err != nil {
 		return fmt.Errorf("write flat-delete batch: %w", err)

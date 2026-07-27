@@ -235,7 +235,11 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 			{Address: witness, VoteCount: 1000, URL: "http://w"},
 		},
 		DynamicProperties: map[string]int64{
-			"next_maintenance_time": 1<<62 - 1,
+			"next_maintenance_time":     1<<62 - 1,
+			"change_delegation":         1,
+			"current_cycle_number":      7,
+			"witness_pay_per_block":     1_000,
+			"witness_127_pay_per_block": 1_000,
 		},
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
@@ -278,6 +282,9 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 	}
 	if got := bc.CurrentBlock().Number(); got != 5 {
 		t.Fatalf("precondition head = %d, want 5", got)
+	}
+	if pending, ok := bc.cycleRewards.PendingCycleReward(7, witness); !ok || pending != 8_000 {
+		t.Fatalf("precondition pending cycle reward = %d ok=%v, want 8000/true", pending, ok)
 	}
 	rawdb.WriteLatestPbftBlockNum(diskdb, 5)
 
@@ -372,6 +379,12 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 	}
 	if got := rawdb.ReadLatestPbftBlockNum(diskdb); got != -1 {
 		t.Fatalf("future latest PBFT survived rewind: %d", got)
+	}
+	if pending, ok := bc.cycleRewards.PendingCycleReward(7, witness); !ok || pending != 3_200 {
+		t.Fatalf("pending cycle reward after rewind = %d ok=%v, want 3200/true", pending, ok)
+	}
+	if cycle, rewards, ok, err := rawdb.ReadCycleRewardPending(diskdb); err != nil || !ok || cycle != 7 || rewards[witness] != 3_200 {
+		t.Fatalf("persisted pending cycle reward after rewind: cycle=%d reward=%d ok=%v err=%v, want 7/3200/true", cycle, rewards[witness], ok, err)
 	}
 	for _, stage := range rawdb.CanonicalExecutionStages() {
 		got, ok, err := rawdb.ReadStageProgress(diskdb, stage)
