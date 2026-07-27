@@ -1061,6 +1061,16 @@ func (s *StateDB) SetTRC10BalanceLegacyAndV2(addr tcommon.Address, name []byte, 
 	s.setTRC10BalanceKey(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
 }
 
+// setTRC10BalanceLegacyAndV2Changed is the arithmetic-mutation counterpart of
+// SetTRC10BalanceLegacyAndV2. The legacy balance was just read to compute
+// amount, while the pre-AllowSameTokenName V2 row is a required mirror. Avoid
+// rereading that mirror only to establish its pre-image; rollback and optional
+// history capture retain their exact semantics through the journal path.
+func (s *StateDB) setTRC10BalanceLegacyAndV2Changed(addr tcommon.Address, name []byte, tokenID int64, amount int64) {
+	s.setTRC10BalanceKey(addr, kvdomains.AccountAsset, name, amount)
+	_ = s.setAccountAuxValueUnconditional(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
+}
+
 func (s *StateDB) GetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) int64 {
 	if allowSameTokenName {
 		return s.GetTRC10Balance(addr, tokenID)
@@ -1074,7 +1084,7 @@ func (s *StateDB) AddTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenI
 		return
 	}
 	current := s.GetTRC10BalanceByName(addr, name)
-	s.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, current+amount)
+	s.setTRC10BalanceLegacyAndV2Changed(addr, name, tokenID, current+amount)
 }
 
 func (s *StateDB) SubTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) error {
@@ -1085,7 +1095,7 @@ func (s *StateDB) SubTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenI
 	if current < amount {
 		return ErrInsufficientBalance
 	}
-	s.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, current-amount)
+	s.setTRC10BalanceLegacyAndV2Changed(addr, name, tokenID, current-amount)
 	return nil
 }
 

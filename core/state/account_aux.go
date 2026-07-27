@@ -262,6 +262,25 @@ func (s *StateDB) setAccountAuxValue(addr tcommon.Address, domain kvdomains.KVDo
 	return nil
 }
 
+// setAccountAuxValueUnconditional stages a transaction-journaled auxiliary
+// write without opening the durable row solely for no-op detection. Reverting
+// the transaction removes the new dirty entry and reveals the unchanged
+// durable value. When state history is enabled, its journal/commit capture
+// still loads the exact pre-image before publishing the change. Callers must
+// use this only when protocol arithmetic requires writing the resulting value;
+// an already-equal durable row may receive a redundant write when history is
+// disabled.
+func (s *StateDB) setAccountAuxValueUnconditional(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) error {
+	if err := s.setAccountKVWithPrev(addr, domain, key, encodeAccountAuxInt64(value), true, nil, false, false); err != nil {
+		return err
+	}
+	if obj := s.stateObjects[addr]; obj != nil && obj.account != nil {
+		clearAccountAuxProto(obj.account.Proto())
+		obj.accountMapsLoaded = false
+	}
+	return nil
+}
+
 func (s *StateDB) materializeAccountAux(obj *stateObject) error {
 	if obj == nil || obj.account == nil || obj.accountMapsLoaded {
 		return nil

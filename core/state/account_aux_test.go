@@ -3,6 +3,7 @@ package state
 import (
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -84,6 +85,76 @@ func TestTRC10BalancePointReadCachesAcrossTransferPhases(t *testing.T) {
 	}
 	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 2 {
 		t.Fatalf("commit did not invalidate durable pre-image: reads=%d, want 2", got)
+	}
+}
+
+func TestTRC10LegacyMirrorMutationSkipsDurableV2PreRead(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x96)
+	name := []byte("TOKEN")
+	const tokenID = int64(1_000_001)
+	sdb.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, 77)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+
+	snapshot := reopened.Snapshot()
+	reopened.AddTRC10BalanceFinal(addr, name, tokenID, 5, false)
+	if got := reopened.GetTRC10BalanceByName(addr, name); got != 82 {
+		t.Fatalf("dirty legacy balance = %d, want 82", got)
+	}
+	if got := reopened.GetTRC10Balance(addr, tokenID); got != 82 {
+		t.Fatalf("dirty V2 mirror = %d, want 82", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAsset]; got != 1 {
+		t.Fatalf("legacy arithmetic opened durable row %d times, want 1", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 0 {
+		t.Fatalf("known-changing V2 mirror opened durable row %d times, want 0", got)
+	}
+
+	reopened.RevertToSnapshot(snapshot)
+	if got := reopened.GetTRC10BalanceByName(addr, name); got != 77 {
+		t.Fatalf("reverted legacy balance = %d, want 77", got)
+	}
+	if got := reopened.GetTRC10Balance(addr, tokenID); got != 77 {
+		t.Fatalf("reverted V2 mirror = %d, want 77", got)
+	}
+}
+
+func TestTRC10LegacyMirrorNoReadPreservesHistoryPreimage(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x97)
+	name := []byte("TOKEN")
+	const tokenID = int64(1_000_001)
+	sdb.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, 77)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := reopened.db.DiskDB()
+	reopened.SetDomainChangeSetWriterRange(disk, 2, tcommon.Hash{0x97}, 2, 2)
+	reopened.AddTRC10BalanceFinal(addr, name, tokenID, 5, false)
+	if _, err := reopened.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	changes := collectStateDomainChanges(t, disk, 2)
+	if !hasDomainChange(changes, addr, kvdomains.AccountAssetV2, []byte("1000001"), true, encodeAccountAuxInt64(77), true, encodeAccountAuxInt64(82)) {
+		t.Fatalf("missing exact V2 mirror history change: %+v", changes)
 	}
 }
 
