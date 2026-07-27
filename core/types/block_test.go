@@ -214,6 +214,15 @@ func BenchmarkUnmarshalBlockReserved(b *testing.B) {
 			}
 		}
 	})
+	b.Run("borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkDecodedBlock, err = UnmarshalBlockBorrowed(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func BenchmarkUnmarshalTransactionContractReserved(b *testing.B) {
@@ -349,6 +358,49 @@ func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
 		if cap(transaction.RawData.Scripts) != len(transaction.RawData.Scripts) {
 			t.Fatalf("transaction %d raw scripts expose adjacent arena capacity", i)
 		}
+	}
+}
+
+func TestUnmarshalBlockBorrowedAliasesImmutableByteValues(t *testing.T) {
+	block := blockDecodeReserveTestBlock(1)
+	tx := block.Proto().Transactions[0]
+	tx.RawData.Data = []byte("unique-borrowed-raw-data")
+	tx.RawData.Scripts = []byte("unique-borrowed-script-data")
+	tx.RawData.Contract[0].Parameter.Value = []byte("unique-borrowed-contract-value")
+	wire, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnmarshalBlockBorrowed(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), block.Proto()) {
+		t.Fatalf("borrowed decoder differs from source\nborrowed: %v\nsource: %v", got.Proto(), block.Proto())
+	}
+	if len(got.wireBacking) != len(wire) {
+		t.Fatalf("borrowed wire backing = %d bytes, want %d", len(got.wireBacking), len(wire))
+	}
+
+	decoded := got.Proto().Transactions[0]
+	for name, value := range map[string][]byte{
+		"raw data":       decoded.RawData.Data,
+		"raw scripts":    decoded.RawData.Scripts,
+		"contract value": decoded.RawData.Contract[0].Parameter.Value,
+	} {
+		if cap(value) != len(value) {
+			t.Fatalf("%s exposes borrowed adjacent capacity: len=%d cap=%d", name, len(value), cap(value))
+		}
+		if bytes.Count(wire, value) != 1 {
+			t.Fatalf("%s marker occurs %d times in wire, want 1", name, bytes.Count(wire, value))
+		}
+		offset := bytes.Index(wire, value)
+		original := value[0]
+		wire[offset] ^= 0xff
+		if value[0] != original^0xff {
+			t.Fatalf("%s does not alias immutable wire input", name)
+		}
+		wire[offset] = original
 	}
 }
 

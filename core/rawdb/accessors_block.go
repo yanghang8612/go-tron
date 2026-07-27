@@ -100,11 +100,10 @@ func ReadBlockReusable(db *ChainDB, number uint64) *types.Block {
 }
 
 // ReadStoredBlockForReplay reads a canonical block for immediate offline
-// execution. V2 freezer frames are immutable and UnmarshalBlock owns every
-// decoded protobuf byte field, so the optional no-copy reader can lend the raw
-// record only for the synchronous decode and avoid the full-block copy that
-// ReadBlock normally returns. Hot-store and generic ancient readers retain the
-// existing owned-copy fallback.
+// execution. V2 freezer frames are immutable and remain Go-reachable through
+// the decoded block, so the optional no-copy reader can lend calldata-like byte
+// fields directly as well as avoid the full-block record copy. Hot-store and
+// generic ancient readers retain the existing owned-copy fallback.
 func ReadStoredBlockForReplay(db *ChainDB, number uint64) *types.Block {
 	if db != nil && db.AncientReader != nil {
 		if reader, ok := db.AncientReader.(interface {
@@ -112,7 +111,7 @@ func ReadStoredBlockForReplay(db *ChainDB, number uint64) *types.Block {
 		}); ok {
 			data, err := reader.AncientNoCopy(ancientBlocks, number)
 			if err == nil {
-				block, decodeErr := types.UnmarshalBlock(data)
+				block, decodeErr := types.UnmarshalBlockBorrowed(data)
 				if decodeErr == nil {
 					return block
 				}

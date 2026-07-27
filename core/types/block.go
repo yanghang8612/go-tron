@@ -145,6 +145,11 @@ type Block struct {
 	hash     common.Hash
 	hashDone bool
 	hashMu   sync.Mutex
+	// wireBacking keeps an immutable borrowed protobuf buffer alive for the
+	// stored-replay decoder. Only calldata-like byte fields alias it, always with
+	// capacity clamped to length; ordinary/network decoders leave this nil and
+	// retain their established independently-owned protobuf graph.
+	wireBacking []byte
 
 	// marshalScratch is an exclusively-owned wire buffer transferred by the
 	// sync pipeline after decode. Commit marshals the protobuf back into this
@@ -424,6 +429,10 @@ var blockMergeUnmarshal = proto.UnmarshalOptions{Merge: true}
 // without reimplementing domain message payloads. A schema guard makes any
 // regenerated envelope layout fall back to the generated decoder automatically.
 func unmarshalBlockReserved(data []byte) (*Block, error) {
+	return unmarshalBlockReservedMode(data, true)
+}
+
+func unmarshalBlockReservedMode(data []byte, ownByteValues bool) (*Block, error) {
 	if !blockDecodeReserveLayoutOK {
 		pb := new(corepb.Block)
 		if err := proto.Unmarshal(data, pb); err != nil {
@@ -483,7 +492,9 @@ func unmarshalBlockReserved(data []byte) (*Block, error) {
 		}
 	}
 	appendProtoUnknown(&decoded.pb, unknown)
-	ownBlockByteValues(&decoded.pb)
+	if ownByteValues {
+		ownBlockByteValues(&decoded.pb)
+	}
 	return &decoded.block, nil
 }
 
@@ -1079,6 +1090,20 @@ func UnmarshalBlockOwned(data []byte) (*Block, error) {
 		return nil, err
 	}
 	block.AdoptMarshalScratch(data)
+	return block, nil
+}
+
+// UnmarshalBlockBorrowed decodes a block while borrowing calldata-like byte
+// fields from immutable data. The caller must keep data immutable for the
+// returned block's lifetime; Block retains the backing allocation explicitly.
+// It is intended for the V2 freezer's immutable record views during one-shot
+// stored replay. Malformed/legacy fallback decoding remains independently owned.
+func UnmarshalBlockBorrowed(data []byte) (*Block, error) {
+	block, err := unmarshalBlockReservedMode(data, false)
+	if err != nil {
+		return UnmarshalBlock(data)
+	}
+	block.wireBacking = data[:len(data):len(data)]
 	return block, nil
 }
 
