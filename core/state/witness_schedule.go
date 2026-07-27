@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -53,6 +54,41 @@ func decodeAddressList(data []byte) []tcommon.Address {
 		out[i] = tcommon.BytesToAddress(data[4+i*tcommon.AddressLength : 4+(i+1)*tcommon.AddressLength])
 	}
 	return out
+}
+
+// appendAddressListEncoded performs the read-modify-write used by the votes
+// index without first materialising every address. Existing voters are the hot
+// path during an epoch: scan the immutable encoded bytes directly and allocate
+// nothing when addr is already present. A new voter needs only the final encoded
+// value, instead of a decoded []Address, its append growth, and the re-encoding.
+// Malformed, empty, and trailing-byte inputs retain decodeAddressList's exact
+// semantics: invalid/zero-count data becomes a one-entry list, while trailing
+// bytes after a valid declared count are discarded on rewrite.
+func appendAddressListEncoded(data []byte, addr tcommon.Address) (encoded []byte, found bool) {
+	count := 0
+	valid := false
+	if len(data) >= 4 {
+		declared := uint64(binary.BigEndian.Uint32(data[:4]))
+		required := uint64(4) + declared*uint64(tcommon.AddressLength)
+		if declared != 0 && required <= uint64(len(data)) {
+			count = int(declared)
+			valid = true
+			needle := addr.Bytes()
+			for offset := 4; offset < int(required); offset += tcommon.AddressLength {
+				if bytes.Equal(data[offset:offset+tcommon.AddressLength], needle) {
+					return nil, true
+				}
+			}
+		}
+	}
+
+	encoded = make([]byte, 4+(count+1)*tcommon.AddressLength)
+	binary.BigEndian.PutUint32(encoded[:4], uint32(count+1))
+	if valid {
+		copy(encoded[4:], data[4:4+count*tcommon.AddressLength])
+	}
+	copy(encoded[4+count*tcommon.AddressLength:], addr.Bytes())
+	return encoded, false
 }
 
 // readAddressList resolves a witness-schedule key, propagating the KV error so

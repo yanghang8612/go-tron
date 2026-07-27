@@ -108,14 +108,12 @@ func (s *StateDB) AppendVotesIndex(addr tcommon.Address) error {
 	if err != nil {
 		return err
 	}
-	var existing []tcommon.Address
-	if ok {
-		existing = decodeAddressList(raw)
+	if !ok {
+		raw = nil
 	}
-	for _, a := range existing {
-		if a == addr {
-			return nil
-		}
+	encoded, found := appendAddressListEncoded(raw, addr)
+	if found {
+		return nil
 	}
-	return s.WriteVotesIndex(append(existing, addr))
+	return s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, encoded)
 }

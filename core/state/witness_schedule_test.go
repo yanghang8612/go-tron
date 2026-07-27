@@ -1,10 +1,77 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
+
+var benchmarkAddressListBytes []byte
+var benchmarkAddressListFound bool
+
+func BenchmarkAddressListAppendDecodeReencode(b *testing.B) {
+	const count = 4096
+	addrs := make([]tcommon.Address, count)
+	for i := range addrs {
+		addrs[i][0] = 0x41
+		addrs[i][tcommon.AddressLength-2] = byte(i >> 8)
+		addrs[i][tcommon.AddressLength-1] = byte(i)
+	}
+	raw := encodeAddressList(addrs)
+	for _, tc := range []struct {
+		name string
+		addr tcommon.Address
+	}{
+		{name: "existing", addr: addrs[count-1]},
+		{name: "missing", addr: tcommon.Address{0x41, 0x99}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(raw)))
+			for b.Loop() {
+				existing := decodeAddressList(raw)
+				found := false
+				for _, addr := range existing {
+					if addr == tc.addr {
+						found = true
+						break
+					}
+				}
+				benchmarkAddressListFound = found
+				if !found {
+					benchmarkAddressListBytes = encodeAddressList(append(existing, tc.addr))
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkAddressListAppendEncoded(b *testing.B) {
+	const count = 4096
+	addrs := make([]tcommon.Address, count)
+	for i := range addrs {
+		addrs[i][0] = 0x41
+		addrs[i][tcommon.AddressLength-2] = byte(i >> 8)
+		addrs[i][tcommon.AddressLength-1] = byte(i)
+	}
+	raw := encodeAddressList(addrs)
+	for _, tc := range []struct {
+		name string
+		addr tcommon.Address
+	}{
+		{name: "existing", addr: addrs[count-1]},
+		{name: "missing", addr: tcommon.Address{0x41, 0x99}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(raw)))
+			for b.Loop() {
+				benchmarkAddressListBytes, benchmarkAddressListFound = appendAddressListEncoded(raw, tc.addr)
+			}
+		})
+	}
+}
 
 func wsAddr(tag byte) tcommon.Address {
 	raw := make([]byte, tcommon.AddressLength)
@@ -41,6 +108,46 @@ func TestAddressListCodec(t *testing.T) {
 	bad := []byte{0, 0, 0, 2, 0x41}
 	if got := decodeAddressList(bad); got != nil {
 		t.Fatalf("truncated data should decode to nil, got %v", got)
+	}
+}
+
+func TestAppendAddressListEncodedMatchesDecodeReencode(t *testing.T) {
+	valid := encodeAddressList([]tcommon.Address{wsAddr(1), wsAddr(2)})
+	trailing := append(append([]byte(nil), valid...), 0xaa, 0xbb)
+	zeroWithTrailing := []byte{0, 0, 0, 0, 0x41}
+	tests := []struct {
+		name string
+		raw  []byte
+		addr tcommon.Address
+	}{
+		{name: "empty", addr: wsAddr(3)},
+		{name: "short", raw: []byte{0, 0}, addr: wsAddr(3)},
+		{name: "truncated", raw: []byte{0, 0, 0, 2, 0x41}, addr: wsAddr(3)},
+		{name: "zero-with-trailing", raw: zeroWithTrailing, addr: wsAddr(3)},
+		{name: "existing", raw: valid, addr: wsAddr(2)},
+		{name: "missing", raw: valid, addr: wsAddr(3)},
+		{name: "existing-with-trailing", raw: trailing, addr: wsAddr(2)},
+		{name: "missing-with-trailing", raw: trailing, addr: wsAddr(3)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := decodeAddressList(tt.raw)
+			wantFound := false
+			for _, addr := range existing {
+				if addr == tt.addr {
+					wantFound = true
+					break
+				}
+			}
+			var want []byte
+			if !wantFound {
+				want = encodeAddressList(append(existing, tt.addr))
+			}
+			got, found := appendAddressListEncoded(tt.raw, tt.addr)
+			if found != wantFound || !bytes.Equal(got, want) {
+				t.Fatalf("got (found=%v, %x), want (found=%v, %x)", found, got, wantFound, want)
+			}
+		})
 	}
 }
 
