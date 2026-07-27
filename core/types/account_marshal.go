@@ -33,7 +33,7 @@ func verifyAccountDirectMapLayout() bool {
 		if isAccountMapField(field.Number()) != field.IsMap() {
 			return false
 		}
-		if field.Number() == 3 && field.Kind() != protoreflect.BytesKind {
+		if isAccountDirectBytesField(field.Number()) && field.Kind() != protoreflect.BytesKind {
 			return false
 		}
 		if field.IsMap() && (field.MapKey().Kind() != protoreflect.StringKind || field.MapValue().Kind() != protoreflect.Int64Kind) {
@@ -57,6 +57,15 @@ func knownAccountField(number protowire.Number) bool {
 func isAccountMapField(number protowire.Number) bool {
 	switch number {
 	case 6, 18, 20, 56, 58, 59:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAccountDirectBytesField(number protowire.Number) bool {
+	switch number {
+	case 1, 3, 13, 17, 23, 30, 57:
 		return true
 	default:
 		return false

@@ -119,7 +119,7 @@ func TestUnmarshalAccountWithoutDirectFieldsUsesGenericPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	pb := new(corepb.Account)
-	if err, handled := unmarshalAccountDirectFieldsInto(data, pb, make([]byte, 21)); handled || err != nil {
+	if err, handled := unmarshalAccountDirectFieldsInto(data, pb, make([]byte, 21), make([]byte, 11)); handled || err != nil {
 		t.Fatalf("direct result = (%v, %v), want generic fallback", err, handled)
 	}
 	got, err := UnmarshalAccount(data)
@@ -183,6 +183,34 @@ func TestUnmarshalAccountDirectAddressLengthsEquivalent(t *testing.T) {
 	}
 }
 
+func TestUnmarshalAccountDirectByteFieldsOwned(t *testing.T) {
+	want := &corepb.Account{
+		AccountName:     []byte("name"),
+		Address:         bytes.Repeat([]byte{0x41}, 21),
+		Code:            []byte{1, 2},
+		AssetIssuedName: []byte("asset"),
+		AccountId:       []byte("account-id"),
+		CodeHash:        bytes.Repeat([]byte{0x55}, 32),
+		AssetIssued_ID:  []byte("1000001"),
+		Balance:         99,
+	}
+	data, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnmarshalAccount(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got.Proto(), want) {
+		t.Fatalf("direct bytes differ\ngot:  %v\nwant: %v", got.Proto(), want)
+	}
+	clear(data)
+	if !proto.Equal(got.Proto(), want) {
+		t.Fatal("decoded account byte fields alias the wire input")
+	}
+}
+
 func FuzzUnmarshalAccountDirectFieldsEquivalent(f *testing.F) {
 	for _, pb := range []*corepb.Account{
 		{},
@@ -197,6 +225,7 @@ func FuzzUnmarshalAccountDirectFieldsEquivalent(f *testing.F) {
 	}
 	f.Add([]byte{0x1a, 0x05, 0x01})
 	f.Add([]byte{0x18, 0x01})
+	f.Add([]byte("2\x1500\xa1\xad\xf9\xfb000000000000000"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		want := new(corepb.Account)
@@ -306,6 +335,37 @@ func BenchmarkUnmarshalAccountNoMaps(b *testing.B) {
 	b.Run("protobuf-generic", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
+			pb := new(corepb.Account)
+			if err := proto.Unmarshal(payload, pb); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkUnmarshalAccountSink = &Account{pb: pb}
+		}
+	})
+}
+
+func BenchmarkUnmarshalAccountDirectBytes(b *testing.B) {
+	payload, err := proto.Marshal(&corepb.Account{
+		AccountName: []byte("plain"),
+		Address:     bytes.Repeat([]byte{0x41}, 21),
+		Balance:     1_000_000,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("direct-owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			account, err := UnmarshalAccount(payload)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkUnmarshalAccountSink = account
+		}
+	})
+	b.Run("protobuf-generic", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
 			pb := new(corepb.Account)
 			if err := proto.Unmarshal(payload, pb); err != nil {
 				b.Fatal(err)

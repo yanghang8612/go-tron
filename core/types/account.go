@@ -26,7 +26,12 @@ type Account struct {
 type decodedAccount struct {
 	account Account
 	pb      corepb.Account
-	address [common.AddressLength]byte
+	// byteArena expands the former 21-byte address slot to consume the remainder
+	// of decodedAccount's existing 640-byte scanned allocator class. The first
+	// 21 bytes own Address and the tail owns common short AccountName/AccountId
+	// values; larger or multiple fields share one exact allocation in the direct
+	// decoder.
+	byteArena [common.AddressLength + 11]byte
 }
 
 func NewAccountFromPB(pb *corepb.Account) *Account {
@@ -804,7 +809,12 @@ func (a *Account) AppendStorageCore(dst []byte) ([]byte, error) {
 func UnmarshalAccount(data []byte) (*Account, error) {
 	decoded := new(decodedAccount)
 	decoded.account.pb = &decoded.pb
-	err, handled := unmarshalAccountDirectFieldsInto(data, &decoded.pb, decoded.address[:])
+	err, handled := unmarshalAccountDirectFieldsInto(
+		data,
+		&decoded.pb,
+		decoded.byteArena[:common.AddressLength],
+		decoded.byteArena[common.AddressLength:],
+	)
 	if !handled {
 		err = proto.Unmarshal(data, &decoded.pb)
 	}

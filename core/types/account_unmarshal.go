@@ -26,6 +26,64 @@ type accountDecodedMaps struct {
 	freeAssetNetUsageV2        map[string]int64
 }
 
+type accountDecodedBytes struct {
+	accountName     []byte
+	code            []byte
+	assetIssuedName []byte
+	accountID       []byte
+	codeHash        []byte
+	assetIssuedID   []byte
+}
+
+func (fields *accountDecodedBytes) set(number protowire.Number, value []byte) {
+	switch number {
+	case 1:
+		fields.accountName = value
+	case 13:
+		fields.code = value
+	case 17:
+		fields.assetIssuedName = value
+	case 23:
+		fields.accountID = value
+	case 30:
+		fields.codeHash = value
+	case 57:
+		fields.assetIssuedID = value
+	}
+}
+
+func (fields *accountDecodedBytes) assign(pb *corepb.Account, inline []byte) {
+	total := len(fields.accountName) + len(fields.code) + len(fields.assetIssuedName) +
+		len(fields.accountID) + len(fields.codeHash) + len(fields.assetIssuedID)
+	if total == 0 {
+		return
+	}
+	var storage []byte
+	if total <= len(inline) {
+		storage = inline[:total]
+	} else {
+		storage = make([]byte, total)
+	}
+	offset := 0
+	pb.AccountName = copyAccountDirectBytes(storage, &offset, fields.accountName)
+	pb.Code = copyAccountDirectBytes(storage, &offset, fields.code)
+	pb.AssetIssuedName = copyAccountDirectBytes(storage, &offset, fields.assetIssuedName)
+	pb.AccountId = copyAccountDirectBytes(storage, &offset, fields.accountID)
+	pb.CodeHash = copyAccountDirectBytes(storage, &offset, fields.codeHash)
+	pb.AssetIssued_ID = copyAccountDirectBytes(storage, &offset, fields.assetIssuedID)
+}
+
+func copyAccountDirectBytes(storage []byte, offset *int, value []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	start := *offset
+	end := start + len(value)
+	copy(storage[start:end], value)
+	*offset = end
+	return storage[start:end:end]
+}
+
 func (maps *accountDecodedMaps) set(number protowire.Number, key string, value int64) {
 	var target *map[string]int64
 	switch number {
@@ -60,24 +118,26 @@ func (maps *accountDecodedMaps) assign(pb *corepb.Account) {
 }
 
 // unmarshalAccountDirectFieldsInto decodes Account's six string→int64 maps
-// without protobuf reflection and moves the common address byte field into
-// caller-owned inline storage. All other fields, including unknown top-level
-// fields, stay on protobuf-go's generated decoder after the specialized records
-// are filtered from a pooled wire buffer. The schema guard is shared with the
-// direct map marshaler so a future Account field/layout change disables both
-// fast paths.
-func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAddress []byte) (error, bool) {
+// without protobuf reflection, moves the common address into caller-owned
+// inline storage, and combines Account's other singular byte fields into one
+// owned span. All remaining fields, including unknown top-level fields, stay
+// on protobuf-go's generated decoder after the specialized records are filtered
+// from a pooled wire buffer. The schema guard is shared with the direct map
+// marshaler so a future Account field/layout change disables both fast paths.
+func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAddress, inlineDirectBytes []byte) (error, bool) {
 	if !accountDirectMapLayoutOK || !accountWireMayContainDirectField(data) {
 		return nil, false
 	}
 
 	var (
 		maps         accountDecodedMaps
+		byteFields   accountDecodedBytes
 		basePtr      *[]byte
 		base         []byte
 		foundDirect  bool
 		foundMap     bool
 		foundAddress bool
+		foundBytes   bool
 		address      []byte
 		wireOffset   int
 	)
@@ -101,7 +161,7 @@ func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAdd
 			return protowire.ParseError(valueSize), true
 		}
 		fieldSize := tagSize + valueSize
-		if number != 3 && !isAccountMapField(number) {
+		if !isAccountDirectBytesField(number) && !isAccountMapField(number) {
 			if foundDirect {
 				base = append(base, rest[:fieldSize]...)
 			}
@@ -134,6 +194,13 @@ func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAdd
 			wireOffset += fieldSize
 			continue
 		}
+		if isAccountDirectBytesField(number) {
+			byteFields.set(number, payload)
+			foundBytes = true
+			rest = rest[fieldSize:]
+			wireOffset += fieldSize
+			continue
+		}
 		key, value, err := consumeAccountMapEntry(payload)
 		if err != nil {
 			return err, true
@@ -152,6 +219,9 @@ func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAdd
 	}
 	if foundMap {
 		maps.assign(pb)
+	}
+	if foundBytes {
+		byteFields.assign(pb, inlineDirectBytes)
 	}
 	if foundAddress {
 		switch {
@@ -175,15 +245,19 @@ func unmarshalAccountDirectFieldsInto(data []byte, pb *corepb.Account, inlineAdd
 func accountWireMayContainDirectField(data []byte) bool {
 	for i, first := range data {
 		switch first {
-		case 0x1a: // field 3, bytes
+		case 0x0a, 0x1a, 0x6a: // fields 1, 3 and 13, bytes
 			return true
+		case 0x8a, 0xba, 0xf2: // fields 17, 23 and 30, bytes
+			if i+1 < len(data) && data[i+1] == 0x01 {
+				return true
+			}
 		case 0x32: // field 6, bytes
 			return true
 		case 0x92, 0xa2: // fields 18 and 20, bytes
 			if i+1 < len(data) && data[i+1] == 0x01 {
 				return true
 			}
-		case 0xc2, 0xd2, 0xda: // fields 56, 58 and 59, bytes
+		case 0xc2, 0xca, 0xd2, 0xda: // fields 56-59, bytes
 			if i+1 < len(data) && data[i+1] == 0x03 {
 				return true
 			}
@@ -197,6 +271,9 @@ func consumeAccountMapEntry(entry []byte) (key string, value int64, err error) {
 		number, wireType, tagSize := protowire.ConsumeTag(entry)
 		if tagSize < 0 {
 			return "", 0, protowire.ParseError(tagSize)
+		}
+		if !number.IsValid() {
+			return "", 0, errors.New("invalid account map field number")
 		}
 		valueSize := protowire.ConsumeFieldValue(number, wireType, entry[tagSize:])
 		if valueSize < 0 {
