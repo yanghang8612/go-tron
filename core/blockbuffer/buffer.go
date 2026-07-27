@@ -111,12 +111,12 @@ type bufferReadView struct {
 }
 
 const (
-	// The Pebble adapter has bounded reusable batch buffers through 16 MiB. Use
+	// The Pebble adapter has bounded reusable batch buffers through 32 MiB. Use
 	// that whole range as the solid-layer merge window: production commitment
 	// writes commonly exceed 1 MiB for one block, so the former 1 MiB limit made
 	// every such layer a single-layer group and defeated cross-block coalescing.
-	maxFlushBatchValueSize   = 16 << 20
-	maxFlushBatchEncodedSize = 16 << 20
+	maxFlushBatchValueSize   = 32 << 20
+	maxFlushBatchEncodedSize = 32 << 20
 )
 
 func newLayer(hash common.Hash, number uint64) *layer {
