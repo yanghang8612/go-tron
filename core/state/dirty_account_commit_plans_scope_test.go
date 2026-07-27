@@ -205,6 +205,72 @@ func TestDirtyObjects_ClearedAfterCommit(t *testing.T) {
 	}
 }
 
+func TestDirtyAccountCommitPlansWorkspaceReusedAfterCommit(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x31)
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetState(addr, tcommon.Hash{0x01}, tcommon.Hash{0x11})
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w := &sdb.accountCommitPlans
+	if cap(w.addrs) == 0 || cap(w.planStorage) == 0 || cap(w.plans) == 0 || cap(w.storageKeyArena) == 0 {
+		t.Fatalf("commit workspace was not retained: addrs=%d storage=%d plans=%d keys=%d", cap(w.addrs), cap(w.planStorage), cap(w.plans), cap(w.storageKeyArena))
+	}
+	addrBase := &w.addrs[:1][0]
+	storageBase := &w.planStorage[:1][0]
+	plansBase := &w.plans[:1][0]
+	keysBase := &w.storageKeyArena[:1][0]
+
+	sdb.SetState(addr, tcommon.Hash{0x02}, tcommon.Hash{0x22})
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := &w.addrs[:1][0]; got != addrBase {
+		t.Fatal("address workspace backing array was not reused")
+	}
+	if got := &w.planStorage[:1][0]; got != storageBase {
+		t.Fatal("plan storage backing array was not reused")
+	}
+	if got := &w.plans[:1][0]; got != plansBase {
+		t.Fatal("plan pointer workspace backing array was not reused")
+	}
+	if got := &w.storageKeyArena[:1][0]; got != keysBase {
+		t.Fatal("storage-key arena backing array was not reused")
+	}
+}
+
+func TestDirtyAccountCommitPlansErrorDropsBorrowedStorageArena(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x32)
+	key := tcommon.Hash{0x01}
+	value := tcommon.Hash{0x42}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetState(addr, key, value)
+	obj := sdb.getStateObject(addr)
+	obj.setKVDirty("x", kvEntry{}) // malformed composite key forces preparation to fail
+
+	if _, err := sdb.dirtyAccountCommitPlans(); err == nil {
+		t.Fatal("malformed composite key unexpectedly prepared")
+	}
+	if sdb.accountCommitPlans.storageKeyArena != nil {
+		t.Fatal("failed preparation retained an arena still borrowed by kvDirty keys")
+	}
+
+	// Removing only the malformed entry and retrying must preserve the storage
+	// key staged before the failure; overwriting its old arena would corrupt the
+	// map and make this commit or subsequent read fail.
+	delete(obj.kvDirty, "x")
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("retry commit: %v", err)
+	}
+	final := reopenStateDB(t, root, sdb.db)
+	if got := final.GetState(addr, key); got != value {
+		t.Fatalf("storage after retry: got %x, want %x", got, value)
+	}
+}
+
 // Core safety invariant: every dirty stateObject is present in the set (the set
 // is a superset of {addr : stateObjects[addr].dirty}); the !dirty guard handles
 // the rest.

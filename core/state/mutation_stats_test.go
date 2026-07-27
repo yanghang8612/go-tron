@@ -11,6 +11,36 @@ import (
 
 var prepareStorageCommitPlanBenchmarkSink int
 var accountCommitPlanGenerationBenchmarkSink uint64
+var dirtyAccountCommitPlansBenchmarkSink int
+
+func BenchmarkDirtyAccountCommitPlansWorkspace(b *testing.B) {
+	const accounts = 64
+	sdb := newTestStateDB(b)
+	for i := byte(1); i <= accounts; i++ {
+		addr := testAddr(i)
+		sdb.stateObjects[addr] = &stateObject{address: addr, dirty: true}
+		sdb.dirtyObjects[addr] = struct{}{}
+	}
+	// Use minimal dirty objects to isolate the address-sort and plan-slice
+	// workspace from account/KV encoding work. Warm its structural slices before
+	// measuring the range-reused StateDB steady state.
+	plans, err := sdb.dirtyAccountCommitPlans()
+	if err != nil {
+		b.Fatal(err)
+	}
+	sdb.releaseAccountCommitPlans(plans, true)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		plans, err = sdb.dirtyAccountCommitPlans()
+		if err != nil {
+			b.Fatal(err)
+		}
+		dirtyAccountCommitPlansBenchmarkSink = len(plans)
+		sdb.releaseAccountCommitPlans(plans, true)
+	}
+}
 
 func BenchmarkPrepareStorageCommitPlan(b *testing.B) {
 	const slots = 256
