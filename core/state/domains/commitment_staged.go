@@ -538,10 +538,6 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 // Update applies the incremental commitment updates through the fold engine
 // using persisted branch state and writes the resulting root row.
 func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
-	foldUpdates := make([]Update, 0, len(updates))
-	for _, u := range updates {
-		foldUpdates = append(foldUpdates, Update{Key: u.Key, Value: u.Value, Delete: u.Delete})
-	}
 	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
 	if s.store.readParentBranches {
 		if err := s.store.beginParentRead(); err != nil {
@@ -549,7 +545,7 @@ func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (c
 			return common.Hash{}, err
 		}
 	}
-	root, err := s.trie.Fold(foldUpdates)
+	root, err := s.trie.Fold(updates)
 	closeErr := s.store.closeParentRead()
 	s.store.readParentBranches = false
 	if err != nil {

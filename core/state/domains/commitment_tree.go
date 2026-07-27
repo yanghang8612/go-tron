@@ -14,6 +14,7 @@ import (
 
 	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // keccakPool reuses Legacy Keccak-256 hashers across fold passes. A
@@ -611,13 +612,10 @@ type branchStore interface {
 	DelBranch(prefix []byte) error
 }
 
-// Update is one touched logical commitment key. Key is the gtron commitment key
-// bytes (treated as opaque); Value is its current value (ignored if Delete).
-type Update struct {
-	Key    []byte
-	Value  []byte
-	Delete bool
-}
+// Update is one touched logical commitment key. Keep it as an alias of the
+// rawdb orchestrator's transport type so staged updates can flow into Fold
+// without allocating and copying an identical intermediate slice.
+type Update = rawdb.StateCommitmentUpdate
 
 // commitmentTrie is a hex-patricia (leaf-short-circuited) commitment trie backed
 // by a branchStore. Branch nodes are keyed by their nibble prefix from the root.
