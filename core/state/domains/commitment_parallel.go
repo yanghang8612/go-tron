@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -360,9 +361,11 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	if store, ok := t.store.(concurrentSiblingFlushStore); ok && limit > 1 {
 		concurrentFlush = store.concurrentSiblingFlushSafe()
 	}
+	var activeNibbles [maxFoldNibbles]uint8
 	activeBatches := 0
-	for _, count := range counts {
+	for nb, count := range counts {
 		if count > 0 {
+			activeNibbles[activeBatches] = uint8(nb)
 			activeBatches++
 		}
 	}
@@ -372,38 +375,47 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		changed [maxFoldNibbles]bool
 		errs    [maxFoldNibbles]error
 		wg      sync.WaitGroup
-		sem     = make(chan struct{}, limit)
+		next    atomic.Uint32
 	)
-	for nb := 0; nb < maxFoldNibbles; nb++ {
-		n := counts[nb]
-		if n == 0 {
-			continue
-		}
-		group := grouped[starts[nb] : starts[nb]+n]
-		buf := borrowBufferedBranchStore(t.store)
-		buffers[nb] = buf
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(nb uint8, buf *bufferedBranchStore, group []op) {
+	// Run at most limit long-lived workers and let each claim successive
+	// first-nibble groups. The prior one-goroutine-per-group loop used a channel
+	// semaphore to cap execution but still created up to 16 goroutine stacks per
+	// fold in waves. A bounded worker set preserves the same maximum parallelism
+	// and dynamic load balancing while removing the semaphore allocation and the
+	// excess short-lived goroutines when limit is below the branching factor.
+	workers := min(limit, activeBatches)
+	wg.Add(workers)
+	for range workers {
+		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-			// Each subtrie folds sequentially against its private buffer. Keep
-			// this tiny owner on the goroutine stack instead of allocating one
-			// beside every spawned worker.
-			sub := commitmentTrie{store: buf}
-			// The worker owns its path backing array, so recursive appends can
-			// reuse all 64 nibble slots without aliasing sibling workers.
-			var path [pathLen]byte
-			nibbleChanged, err := sub.applyNibble(path[:0], 0, branch, nb, group)
-			changed[nb] = nibbleChanged
-			if err == nil && nibbleChanged && concurrentFlush {
-				// This worker only reads/writes prefixes beginning with nb. Publishing
-				// its finished buffer cannot affect any still-running sibling, so overlap
-				// encoding/writes with their computation and avoid a second goroutine wave.
-				err = buf.flush(t.store, activeBatches)
+			for {
+				task := int(next.Add(1)) - 1
+				if task >= activeBatches {
+					return
+				}
+				nb := activeNibbles[task]
+				n := counts[nb]
+				group := grouped[starts[nb] : starts[nb]+n]
+				buf := borrowBufferedBranchStore(t.store)
+				buffers[nb] = buf
+
+				// Each subtrie folds sequentially against its private buffer. Keep
+				// this tiny owner and path on the worker stack; the path can be reused
+				// after each claimed group because recursive stores consume it before
+				// applyNibble returns.
+				sub := commitmentTrie{store: buf}
+				var path [pathLen]byte
+				nibbleChanged, err := sub.applyNibble(path[:0], 0, branch, nb, group)
+				changed[nb] = nibbleChanged
+				if err == nil && nibbleChanged && concurrentFlush {
+					// This worker only reads/writes prefixes beginning with nb. Publishing
+					// its finished buffer cannot affect any still-running sibling, so overlap
+					// encoding/writes with their computation and avoid a second goroutine wave.
+					err = buf.flush(t.store, activeBatches)
+				}
+				errs[nb] = err
 			}
-			errs[nb] = err
-		}(uint8(nb), buf, group)
+		}()
 	}
 	wg.Wait()
 
