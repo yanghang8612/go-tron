@@ -2157,6 +2157,14 @@ type mergedLayerOp struct {
 	shard uint8
 }
 
+// mergedPromotion carries a map entry into its cache-shard bucket. Keeping the
+// operation beside the key avoids hashing and probing the large merged map a
+// second time while the grouped promotion pass holds each cache lock.
+type mergedPromotion struct {
+	key string
+	op  mergedLayerOp
+}
+
 // flushMergedOpsPool reuses the hash table needed to collapse consecutive
 // solidified layers. A flush group has a bounded merge window, so a modest
 // entry cap covers normal groups while preventing an exceptional set of tiny
@@ -2164,9 +2172,9 @@ type mergedLayerOp struct {
 const maxPooledFlushMergedOps = 32768
 
 type flushMergedOps struct {
-	ops           map[string]mergedLayerOp
-	promotionKeys [layerShardCount][]string
-	highWater     int
+	ops        map[string]mergedLayerOp
+	promotions [layerShardCount][]mergedPromotion
+	highWater  int
 }
 
 var flushMergedOpsPool = sync.Pool{
@@ -2186,9 +2194,9 @@ func returnFlushMergedOps(merged *flushMergedOps) {
 		return
 	}
 	clear(merged.ops)
-	for i := range merged.promotionKeys {
-		clear(merged.promotionKeys[i])
-		merged.promotionKeys[i] = merged.promotionKeys[i][:0]
+	for i := range merged.promotions {
+		clear(merged.promotions[i])
+		merged.promotions[i] = merged.promotions[i][:0]
 	}
 	if merged.highWater > maxPooledFlushMergedOps {
 		return

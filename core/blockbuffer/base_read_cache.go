@@ -965,37 +965,37 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 }
 
 // promoteBaseReadCacheMerged applies the already-coalesced final operations
-// from one successfully committed flush group. Grouping keys by their known
+// from one successfully committed flush group. Grouping entries by their known
 // layer shard trades one cache lock per output key for at most one lock per
-// shard. The grouping scratch belongs to the pooled merge object and is reused
-// by later flushes.
+// shard and carries the already-loaded map value into the locked pass. The
+// grouping scratch belongs to the pooled merge object and is reused by later
+// flushes.
 func (b *Buffer) promoteBaseReadCacheMerged(merged *flushMergedOps) {
 	if b == nil || b.baseReadCache == nil || merged == nil {
 		return
 	}
 	for key, op := range merged.ops {
 		shard := int(op.shard)
-		merged.promotionKeys[shard] = append(merged.promotionKeys[shard], key)
+		merged.promotions[shard] = append(merged.promotions[shard], mergedPromotion{key: key, op: op})
 	}
-	for shard, keys := range merged.promotionKeys {
-		if len(keys) == 0 {
+	for shard, promotions := range merged.promotions {
+		if len(promotions) == 0 {
 			continue
 		}
 		cacheShard := &b.baseReadCache.shards[shard]
 		cacheShard.mu.Lock()
-		for _, k := range keys {
-			op := merged.ops[k]
-			b.baseReadCache.advanceInvalidationString(k)
-			if op.delete {
-				b.baseReadCache.delStringLocked(cacheShard, k)
+		for _, promotion := range promotions {
+			b.baseReadCache.advanceInvalidationString(promotion.key)
+			if promotion.op.delete {
+				b.baseReadCache.delStringLocked(cacheShard, promotion.key)
 			} else {
-				b.baseReadCache.setFlushedLocked(cacheShard, k, op.value)
+				b.baseReadCache.setFlushedLocked(cacheShard, promotion.key, promotion.op.value)
 			}
 		}
 		cacheShard.compactIfSparse()
 		cacheShard.mu.Unlock()
-		clear(keys)
-		merged.promotionKeys[shard] = keys[:0]
+		clear(promotions)
+		merged.promotions[shard] = promotions[:0]
 	}
 }
 
