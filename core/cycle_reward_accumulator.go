@@ -10,11 +10,30 @@ import (
 type cycleRewardAccumulator struct {
 	cycle   int64
 	rewards map[tcommon.Address]int64
+
+	// rollbackJournal records the pre-block value of only the rewards that a
+	// block actually changes. Historical sync normally commits every block, so
+	// deep-copying the whole (usually 27-entry) reward map solely for the rare
+	// failure path wastes a map and its buckets on every successful block.
+	rollbackJournal  []cycleRewardRollbackChange
+	rollbackBoundary int
+	rollbackActive   bool
 }
 
 type cycleRewardAccumulatorSnapshot struct {
 	cycle   int64
 	rewards map[tcommon.Address]int64
+}
+
+type cycleRewardAccumulatorRollback struct {
+	cycle    int64
+	boundary int
+}
+
+type cycleRewardRollbackChange struct {
+	addr    tcommon.Address
+	amount  int64
+	existed bool
 }
 
 func newCycleRewardAccumulator(reader ethdb.KeyValueReader) (*cycleRewardAccumulator, error) {
@@ -39,6 +58,7 @@ func (a *cycleRewardAccumulator) AddCycleReward(cycle int64, addr tcommon.Addres
 	if !a.canTrackCycle(cycle) {
 		return false, nil
 	}
+	a.journalReward(addr)
 	next := a.rewards[addr] + delta
 	if next == 0 {
 		delete(a.rewards, addr)
@@ -59,6 +79,7 @@ func (a *cycleRewardAccumulator) AddCycleRewards(cycle int64, deltas map[tcommon
 		if delta == 0 {
 			continue
 		}
+		a.journalReward(addr)
 		next := a.rewards[addr] + delta
 		if next == 0 {
 			delete(a.rewards, addr)
@@ -80,6 +101,84 @@ func (a *cycleRewardAccumulator) PendingCycleReward(cycle int64, addr tcommon.Ad
 	return amount, true
 }
 
+// BeginRollback starts a lazy rollback scope. Only the first pre-mutation
+// value of each address is journaled; taking the snapshot itself is allocation
+// free. The accumulator has one foreground owner, so rollback scopes are not
+// nested.
+func (a *cycleRewardAccumulator) BeginRollback() cycleRewardAccumulatorRollback {
+	if a == nil {
+		return cycleRewardAccumulatorRollback{}
+	}
+	if a.rollbackActive {
+		panic("cycle reward accumulator: nested rollback scope")
+	}
+	a.rollbackActive = true
+	a.rollbackBoundary = len(a.rollbackJournal)
+	return cycleRewardAccumulatorRollback{cycle: a.cycle, boundary: a.rollbackBoundary}
+}
+
+func (a *cycleRewardAccumulator) CommitRollback(snap cycleRewardAccumulatorRollback) {
+	if a == nil {
+		return
+	}
+	a.validateRollback(snap)
+	a.rollbackJournal = a.rollbackJournal[:snap.boundary]
+	a.rollbackActive = false
+}
+
+func (a *cycleRewardAccumulator) Restore(snap cycleRewardAccumulatorRollback) {
+	if a == nil {
+		return
+	}
+	a.validateRollback(snap)
+	if a.rewards == nil {
+		a.rewards = make(map[tcommon.Address]int64)
+	}
+	for i := len(a.rollbackJournal) - 1; i >= snap.boundary; i-- {
+		change := a.rollbackJournal[i]
+		if change.existed {
+			a.rewards[change.addr] = change.amount
+		} else {
+			delete(a.rewards, change.addr)
+		}
+	}
+	a.rollbackJournal = a.rollbackJournal[:snap.boundary]
+	a.cycle = snap.cycle
+	a.rollbackActive = false
+}
+
+func (a *cycleRewardAccumulator) validateRollback(snap cycleRewardAccumulatorRollback) {
+	if !a.rollbackActive || snap.boundary != a.rollbackBoundary || snap.boundary < 0 || snap.boundary > len(a.rollbackJournal) {
+		panic("cycle reward accumulator: invalid rollback scope")
+	}
+}
+
+func (a *cycleRewardAccumulator) journalReward(addr tcommon.Address) {
+	if a == nil || !a.rollbackActive {
+		return
+	}
+	for i := len(a.rollbackJournal) - 1; i >= a.rollbackBoundary; i-- {
+		if a.rollbackJournal[i].addr == addr {
+			return
+		}
+	}
+	amount, existed := a.rewards[addr]
+	a.rollbackJournal = append(a.rollbackJournal, cycleRewardRollbackChange{
+		addr:    addr,
+		amount:  amount,
+		existed: existed,
+	})
+}
+
+func (a *cycleRewardAccumulator) journalAllRewards() {
+	if a == nil || !a.rollbackActive {
+		return
+	}
+	for addr := range a.rewards {
+		a.journalReward(addr)
+	}
+}
+
 func (a *cycleRewardAccumulator) Snapshot() cycleRewardAccumulatorSnapshot {
 	if a == nil {
 		return cycleRewardAccumulatorSnapshot{rewards: make(map[tcommon.Address]int64)}
@@ -90,22 +189,12 @@ func (a *cycleRewardAccumulator) Snapshot() cycleRewardAccumulatorSnapshot {
 	}
 }
 
-func (a *cycleRewardAccumulator) Restore(snap cycleRewardAccumulatorSnapshot) {
-	if a == nil {
-		return
-	}
-	a.cycle = snap.cycle
-	a.rewards = copyCycleRewardMap(snap.rewards)
-	if a.rewards == nil {
-		a.rewards = make(map[tcommon.Address]int64)
-	}
-}
-
 func (a *cycleRewardAccumulator) FlushCycleToState(statedb *state.StateDB, cycle int64) error {
 	if a == nil || statedb == nil || len(a.rewards) == 0 || a.cycle != cycle {
 		return nil
 	}
 	deltas := copyCycleRewardMap(a.rewards)
+	a.journalAllRewards()
 	a.rewards = make(map[tcommon.Address]int64)
 	statedb.SetCycleRewardSink(nil)
 	err := statedb.AddCycleRewardsFinal(cycle, deltas)

@@ -1071,7 +1071,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if bc.cycleRewards == nil {
 		bc.cycleRewards = newEmptyCycleRewardAccumulator()
 	}
-	rewardSnap := bc.cycleRewards.Snapshot()
+	rewardSnap := bc.cycleRewards.BeginRollback()
 	statedb.SetCycleRewardSink(bc.cycleRewards)
 	defer func() {
 		statedb.SetCycleRewardSink(nil)
@@ -1098,7 +1098,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// head root — still the parent here, the state this block never
 			// advanced past.
 			bc.reloadActiveWitnesses(bc.HeadStateRoot())
+			return
 		}
+		bc.cycleRewards.CommitRollback(rewardSnap)
 	}()
 	if err := stagePipeline.Advance(rawdb.StageHeaders, rawdb.StageBodies); err != nil {
 		return err
