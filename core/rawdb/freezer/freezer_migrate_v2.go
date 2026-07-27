@@ -303,12 +303,13 @@ func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64
 		return err
 	}
 	store := &v2Store{
-		segments:   map[string][]*v2SegmentReader{kind: {reader}},
-		decoder:    decoder,
-		cacheList:  list.New(),
-		cacheItems: make(map[v2FrameKey]*list.Element),
-		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
-		cacheLimit: v2DefaultCacheBytes,
+		segments:          map[string][]*v2SegmentReader{kind: {reader}},
+		decoder:           decoder,
+		cacheList:         list.New(),
+		cacheItems:        make(map[v2FrameKey]*list.Element),
+		cacheLoads:        make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit:        v2DefaultCacheBytes,
+		compressedBuffers: make(chan *v2CompressedBuffer, v2DecoderConcurrency),
 	}
 	defer store.Close()
 	for frameIndex, frame := range reader.frames {

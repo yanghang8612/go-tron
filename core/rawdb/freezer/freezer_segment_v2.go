@@ -20,16 +20,17 @@ import (
 )
 
 const (
-	v2Magic              = "gtanv201"
-	v2Version            = uint32(1)
-	v2HeaderSize         = 64
-	v2FrameEntrySize     = 48
-	v2DefaultFrames      = uint32(64)
-	v2DefaultSegments    = uint64(65_536)
-	v2DefaultCacheBytes  = uint64(64 << 20)
-	v2MaxFrameBytes      = uint64(512 << 20)
-	v2MaxCompressedBytes = v2MaxFrameBytes + uint64(1<<20)
-	v2DecoderConcurrency = 4
+	v2Magic               = "gtanv201"
+	v2Version             = uint32(1)
+	v2HeaderSize          = 64
+	v2FrameEntrySize      = 48
+	v2DefaultFrames       = uint32(64)
+	v2DefaultSegments     = uint64(65_536)
+	v2DefaultCacheBytes   = uint64(64 << 20)
+	v2MaxFrameBytes       = uint64(512 << 20)
+	v2MaxCompressedBytes  = v2MaxFrameBytes + uint64(1<<20)
+	v2DecoderConcurrency  = 4
+	v2MaxPooledCompressed = 8 << 20
 )
 
 var v2CRC = crc32.MakeTable(crc32.Castagnoli)
@@ -89,20 +90,25 @@ type v2FrameLoad struct {
 	err   error
 }
 
+type v2CompressedBuffer struct {
+	data []byte
+}
+
 // v2Store is the immutable segment tier below the still-appendable V1 freezer
 // tail. A manifest is the commit marker: unreferenced segment files are ignored
 // after a crash, while every loaded manifest must describe a contiguous prefix.
 type v2Store struct {
-	base       string
-	segments   map[string][]*v2SegmentReader
-	coverage   uint64
-	decoder    *zstd.Decoder
-	cacheMu    sync.Mutex
-	cacheList  *list.List
-	cacheItems map[v2FrameKey]*list.Element
-	cacheLoads map[v2FrameKey]*v2FrameLoad
-	cacheBytes uint64
-	cacheLimit uint64
+	base              string
+	segments          map[string][]*v2SegmentReader
+	coverage          uint64
+	decoder           *zstd.Decoder
+	cacheMu           sync.Mutex
+	cacheList         *list.List
+	cacheItems        map[v2FrameKey]*list.Element
+	cacheLoads        map[v2FrameKey]*v2FrameLoad
+	cacheBytes        uint64
+	cacheLimit        uint64
+	compressedBuffers chan *v2CompressedBuffer
 }
 
 func openV2Store(ancientDir string) (*v2Store, error) {
@@ -112,13 +118,14 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 		return nil, err
 	}
 	store := &v2Store{
-		base:       base,
-		segments:   make(map[string][]*v2SegmentReader),
-		decoder:    decoder,
-		cacheList:  list.New(),
-		cacheItems: make(map[v2FrameKey]*list.Element),
-		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
-		cacheLimit: v2DefaultCacheBytes,
+		base:              base,
+		segments:          make(map[string][]*v2SegmentReader),
+		decoder:           decoder,
+		cacheList:         list.New(),
+		cacheItems:        make(map[v2FrameKey]*list.Element),
+		cacheLoads:        make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit:        v2DefaultCacheBytes,
+		compressedBuffers: make(chan *v2CompressedBuffer, v2DecoderConcurrency),
 	}
 	manifestDir := filepath.Join(base, "manifests")
 	entries, err := os.ReadDir(manifestDir)
@@ -348,7 +355,9 @@ func (s *v2Store) loadFrame(segment *v2SegmentReader, frameIndex int) (*v2Decode
 	if frame.compressedLen > v2MaxCompressedBytes || frame.uncompressedLen > v2MaxFrameBytes || frame.compressedLen > uint64(^uint(0)>>1) || frame.uncompressedLen > uint64(^uint(0)>>1) {
 		return nil, fmt.Errorf("ancient V2 frame too large in %s", segment.path)
 	}
-	compressed := make([]byte, int(frame.compressedLen))
+	compressedBuffer := s.acquireCompressedBuffer(int(frame.compressedLen))
+	defer s.releaseCompressedBuffer(compressedBuffer)
+	compressed := compressedBuffer.data
 	if _, err := segment.file.ReadAt(compressed, int64(frame.compressedStart)); err != nil {
 		return nil, err
 	}
@@ -384,6 +393,36 @@ func (s *v2Store) loadFrame(segment *v2SegmentReader, frameIndex int) (*v2Decode
 		return nil, fmt.Errorf("ancient V2 trailing frame bytes in %s frame %d", segment.path, frameIndex)
 	}
 	return &v2DecodedFrame{data: decoded, records: records}, nil
+}
+
+func (s *v2Store) acquireCompressedBuffer(size int) *v2CompressedBuffer {
+	var buffer *v2CompressedBuffer
+	if s != nil && s.compressedBuffers != nil {
+		select {
+		case buffer = <-s.compressedBuffers:
+		default:
+		}
+	}
+	if buffer == nil {
+		buffer = new(v2CompressedBuffer)
+	}
+	if cap(buffer.data) < size {
+		buffer.data = make([]byte, size)
+	} else {
+		buffer.data = buffer.data[:size]
+	}
+	return buffer
+}
+
+func (s *v2Store) releaseCompressedBuffer(buffer *v2CompressedBuffer) {
+	if s == nil || buffer == nil || s.compressedBuffers == nil || cap(buffer.data) > v2MaxPooledCompressed {
+		return
+	}
+	buffer.data = buffer.data[:0]
+	select {
+	case s.compressedBuffers <- buffer:
+	default:
+	}
 }
 
 func (s *v2Store) size(kind string) uint64 {

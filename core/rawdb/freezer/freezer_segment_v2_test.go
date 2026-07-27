@@ -80,6 +80,59 @@ func TestV2SegmentRoundTripAndChecksum(t *testing.T) {
 	_ = store.Close()
 }
 
+func TestV2LoadFrameReusesCompressedBuffer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bodies", v2SegmentName(0, 64))
+	read := func(number uint64) ([]byte, error) {
+		var suffix [8]byte
+		binary.BigEndian.PutUint64(suffix[:], number)
+		return append(bytes.Repeat([]byte{byte(number), byte(number >> 8), 0xa5}, 1024), suffix[:]...), nil
+	}
+	if err := writeV2Segment(path, 0, 64, 64, read); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openV2Segment(path, "bodies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newTestV2Store(t, "bodies", reader)
+	defer store.Close()
+
+	if _, err := store.loadFrame(reader, 0); err != nil {
+		t.Fatal(err)
+	}
+	first := <-store.compressedBuffers
+	if cap(first.data) == 0 {
+		t.Fatal("pooled compressed buffer has zero capacity")
+	}
+	firstByte := &first.data[:cap(first.data)][0]
+	store.compressedBuffers <- first
+
+	if _, err := store.loadFrame(reader, 0); err != nil {
+		t.Fatal(err)
+	}
+	second := <-store.compressedBuffers
+	secondByte := &second.data[:cap(second.data)][0]
+	store.compressedBuffers <- second
+	if secondByte != firstByte {
+		t.Fatal("second frame load did not reuse compressed buffer backing")
+	}
+}
+
+func TestV2CompressedBufferPoolIsStrictlyBounded(t *testing.T) {
+	store := &v2Store{compressedBuffers: make(chan *v2CompressedBuffer, v2DecoderConcurrency)}
+	store.releaseCompressedBuffer(&v2CompressedBuffer{data: make([]byte, v2MaxPooledCompressed+1)})
+	if got := len(store.compressedBuffers); got != 0 {
+		t.Fatalf("oversized retained buffers = %d, want 0", got)
+	}
+	for i := 0; i < v2DecoderConcurrency+2; i++ {
+		store.releaseCompressedBuffer(&v2CompressedBuffer{data: make([]byte, 1)})
+	}
+	if got := len(store.compressedBuffers); got != v2DecoderConcurrency {
+		t.Fatalf("retained buffers = %d, want %d", got, v2DecoderConcurrency)
+	}
+}
+
 func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 	dir := t.TempDir()
 	tables := map[string]TableConfig{
@@ -426,11 +479,12 @@ func newTestV2Store(t *testing.T, kind string, reader *v2SegmentReader) *v2Store
 		t.Fatal(err)
 	}
 	return &v2Store{
-		segments:   map[string][]*v2SegmentReader{kind: {reader}},
-		decoder:    decoder,
-		cacheList:  list.New(),
-		cacheItems: make(map[v2FrameKey]*list.Element),
-		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
-		cacheLimit: v2DefaultCacheBytes,
+		segments:          map[string][]*v2SegmentReader{kind: {reader}},
+		decoder:           decoder,
+		cacheList:         list.New(),
+		cacheItems:        make(map[v2FrameKey]*list.Element),
+		cacheLoads:        make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit:        v2DefaultCacheBytes,
+		compressedBuffers: make(chan *v2CompressedBuffer, v2DecoderConcurrency),
 	}
 }
