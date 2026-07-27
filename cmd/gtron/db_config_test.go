@@ -39,7 +39,7 @@ func TestMakePebbleConfigDefaults(t *testing.T) {
 	if tune.TargetFileSizeBytes != 8*1024*1024 {
 		t.Fatalf("target file size=%d", tune.TargetFileSizeBytes)
 	}
-	if tune.LBaseMaxBytes != 2048*1024*1024 {
+	if tune.LBaseMaxBytes != 1024*1024*1024 {
 		t.Fatalf("lbase max size=%d", tune.LBaseMaxBytes)
 	}
 	if tune.L0CompactionThreshold != 8 || tune.L0StopWritesThreshold != 64 {
